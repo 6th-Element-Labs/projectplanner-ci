@@ -128,7 +128,7 @@ async def chat(task_id: str, body: dict = Body(...)):
     return {"answer": answer, "proposal": result.get("proposal"), "sources": result.get("sources", [])}
 
 
-def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None):
+def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None, assignee=None):
     """Same filter semantics as the board UI, so 'export = what you see'."""
     p = store.board_payload()
     ql = (q or "").lower()
@@ -137,6 +137,8 @@ def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None
         if workstream and t.get("_wsId") != workstream:
             return False
         if owner and t.get("owner_org") != owner:
+            return False
+        if assignee and t.get("assignee") != assignee:
             return False
         if risk and t.get("risk_level") != risk:
             return False
@@ -154,16 +156,16 @@ def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None
 
 
 @app.get("/api/export.xlsx")
-async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None):
-    data = export.export_xlsx(_filtered_payload(workstream, owner, risk, blocking, q))
+async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, assignee: str = None):
+    data = export.export_xlsx(_filtered_payload(workstream, owner, risk, blocking, q, assignee))
     return Response(content=data,
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": 'attachment; filename="project-plan.xlsx"'})
 
 
 @app.get("/api/export.xml")
-async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None):
-    xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q))
+async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, assignee: str = None):
+    xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, assignee))
     return Response(content=xml, media_type="text/xml",
                     headers={"Content-Disposition": 'attachment; filename="project-plan.xml"'})
 

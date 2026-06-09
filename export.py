@@ -18,43 +18,146 @@ def _ordered(payload: Dict[str, Any]) -> List[Tuple[str, str, Dict[str, Any]]]:
     return rows
 
 
+PHASE_ORDER = ["Kickoff", "Bootstrap", "Build", "Cutover", "Operate"]
+
+
+def _all_tasks(payload):
+    return [t for w in payload.get("workstreams", []) for t in w.get("tasks", [])]
+
+
+def _window(tasks):
+    starts = sorted(t.get("start_date") for t in tasks if t.get("start_date"))
+    fins = sorted(t.get("finish_date") for t in tasks if t.get("finish_date"))
+    return (starts[0] if starts else "—"), (fins[-1] if fins else "—")
+
+
 def export_xlsx(payload: Dict[str, Any]) -> bytes:
+    """Two sheets: Summary (the exec-summary view) first, then Details (the task table).
+    Both reflect whatever filter produced `payload`."""
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
+    NAVY = PatternFill("solid", fgColor="1E3A5F")
+    HDR = Font(bold=True, color="FFFFFF")
+    BOLD = Font(bold=True)
+    WRAP = Alignment(wrap_text=True, vertical="top")
+
+    tasks = _all_tasks(payload)
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Project Plan"
+
+    # ---------- Sheet 1: Summary ----------
+    s = wb.active
+    s.title = "Summary"
+    s.column_dimensions["A"].width = 26
+    for col in "BCDE":
+        s.column_dimensions[col].width = 22
+
+    def line(*vals, bold=False, head=False):
+        s.append(list(vals))
+        r = s.max_row
+        for c in range(1, len(vals) + 1):
+            cell = s.cell(row=r, column=c)
+            if head:
+                cell.font = HDR
+                cell.fill = NAVY
+            elif bold:
+                cell.font = BOLD
+        return r
+
+    def prose(text):
+        s.append([text])
+        r = s.max_row
+        s.cell(row=r, column=1).alignment = WRAP
+        s.merge_cells(start_row=r, start_column=1, end_row=r, end_column=5)
+        s.row_dimensions[r].height = max(30, min(240, (len(text) // 95 + 1) * 15))
+
+    r = line(payload.get("project") or "Project plan")
+    s.cell(row=r, column=1).font = Font(bold=True, size=14)
+    pstart, pend = _window(tasks)
+    line(f"Kickoff: {payload.get('schedule_start') or pstart}    ·    Finish: {pend}")
+    if payload.get("schedule_note"):
+        prose(payload["schedule_note"])
+    line("")
+
+    line("Key numbers", bold=True)
+    kpis = [("Workstreams", len(payload.get("workstreams", []))),
+            ("Tasks", len(tasks)),
+            ("Effort (person-days)", round(sum(t.get("effort_days") or 0 for t in tasks), 1)),
+            ("Milestones", len(payload.get("milestones") or [])),
+            ("Blocking tasks", sum(1 for t in tasks if t.get("is_blocking"))),
+            ("Target finish", pend)]
+    for k, v in kpis:
+        line(k, v, bold=True)
+    line("")
+
+    if payload.get("executive_summary"):
+        line("Executive summary", bold=True)
+        for para in [p for p in payload["executive_summary"].split("\n") if p.strip()]:
+            prose(para)
+        line("")
+    if payload.get("timeline_note"):
+        line("Timeline", bold=True)
+        prose(payload["timeline_note"])
+        line("")
+
+    line("Phases", bold=True)
+    line("Phase", "Tasks", "Effort (d)", "Window", head=True)
+    for ph in PHASE_ORDER:
+        pt = [t for t in tasks if t.get("phase") == ph]
+        if pt:
+            a, b = _window(pt)
+            line(ph, len(pt), round(sum(t.get("effort_days") or 0 for t in pt), 1), f"{a} → {b}")
+    line("")
+
+    if payload.get("milestones"):
+        line("Milestones", bold=True)
+        line("Milestone", "Target", "Gate criteria", head=True)
+        for m in payload["milestones"]:
+            rr = line(m.get("name"), m.get("target_week"), m.get("gate_criteria"))
+            s.cell(row=rr, column=3).alignment = WRAP
+        line("")
+
+    line("Workstreams", bold=True)
+    line("ID", "Name", "Tasks", "Effort (d)", "Window", head=True)
+    for w in payload.get("workstreams", []):
+        a, b = _window(w.get("tasks", []))
+        line(w["workstream_id"], w["name"], len(w.get("tasks", [])),
+             round(sum(t.get("effort_days") or 0 for t in w.get("tasks", [])), 1), f"{a} → {b}")
+
+    # ---------- Sheet 2: Details ----------
+    d = wb.create_sheet("Details")
     headers = ["Workstream", "Task ID", "Task", "Owner Org", "Owner", "Assignee", "Phase",
                "Status", "Start", "Finish", "Duration (d)", "Effort (d)", "Depends On",
                "Risk", "Blocking", "Description"]
-    ws.append(headers)
-    fill = PatternFill("solid", fgColor="1E3A5F")
+    d.append(headers)
     for c in range(1, len(headers) + 1):
-        cell = ws.cell(row=1, column=c)
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = fill
+        cell = d.cell(row=1, column=c)
+        cell.font = HDR
+        cell.fill = NAVY
         cell.alignment = Alignment(vertical="center")
+
+    def _date(v):
+        try:
+            return datetime.date.fromisoformat(v) if v else None
+        except Exception:
+            return None
+
     for wsid, _wsname, t in _ordered(payload):
-        def _d(v):
-            try:
-                return datetime.date.fromisoformat(v) if v else None
-            except Exception:
-                return None
-        ws.append([wsid, t["task_id"], t.get("title"), t.get("owner_org"),
-                   t.get("owner_person_or_role"), t.get("assignee"), t.get("phase"),
-                   t.get("status"), _d(t.get("start_date")), _d(t.get("finish_date")),
-                   t.get("duration_days"), t.get("effort_days"),
-                   ", ".join(t.get("depends_on", [])), t.get("risk_level"),
-                   "Yes" if t.get("is_blocking") else "", t.get("description")])
-    for r in range(2, ws.max_row + 1):
-        ws.cell(row=r, column=9).number_format = "yyyy-mm-dd"
-        ws.cell(row=r, column=10).number_format = "yyyy-mm-dd"
+        d.append([wsid, t["task_id"], t.get("title"), t.get("owner_org"),
+                  t.get("owner_person_or_role"), t.get("assignee"), t.get("phase"),
+                  t.get("status"), _date(t.get("start_date")), _date(t.get("finish_date")),
+                  t.get("duration_days"), t.get("effort_days"),
+                  ", ".join(t.get("depends_on", [])), t.get("risk_level"),
+                  "Yes" if t.get("is_blocking") else "", t.get("description")])
+    for r in range(2, d.max_row + 1):
+        d.cell(row=r, column=9).number_format = "yyyy-mm-dd"
+        d.cell(row=r, column=10).number_format = "yyyy-mm-dd"
     for i, wdt in enumerate([12, 10, 44, 14, 20, 16, 11, 13, 12, 12, 11, 10, 18, 9, 9, 70], 1):
-        ws.column_dimensions[get_column_letter(i)].width = wdt
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
+        d.column_dimensions[get_column_letter(i)].width = wdt
+    d.freeze_panes = "A2"
+    d.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{d.max_row}"
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

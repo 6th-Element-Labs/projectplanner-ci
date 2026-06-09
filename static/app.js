@@ -190,19 +190,31 @@ const TeepPlan = {
         const owners = (this.plan.owner_orgs || []).slice();
         document.getElementById('f-owner').innerHTML = `<option value="">All owners</option>` +
             owners.map((o) => `<option value="${this.esc(o)}">${this.esc(o)}</option>`).join('');
+        this.refreshAssignees();
         document.getElementById('f-risk').innerHTML = `<option value="">All risk</option>` +
             ['High', 'Medium', 'Low'].map((x) => `<option value="${x}">${x} risk</option>`).join('');
+    },
+
+    refreshAssignees() {
+        const sel = document.getElementById('f-assignee');
+        if (!sel) return;
+        const cur = sel.value;
+        const names = [...new Set([...this.tasks.map((t) => t.assignee).filter(Boolean), ...(this.people || [])])].sort();
+        sel.innerHTML = `<option value="">All users</option>` +
+            names.map((a) => `<option value="${this.esc(a)}"${a === cur ? ' selected' : ''}>${this.esc(a)}</option>`).join('');
     },
 
     filtered() {
         const q = (document.getElementById('f-search').value || '').trim().toLowerCase();
         const ws = document.getElementById('f-ws').value;
         const owner = document.getElementById('f-owner').value;
+        const assignee = document.getElementById('f-assignee').value;
         const risk = document.getElementById('f-risk').value;
         const blocking = document.getElementById('f-blocking').checked;
         return this.tasks.filter((t) => {
             if (ws && t._wsId !== ws) return false;
             if (owner && t.owner_org !== owner) return false;
+            if (assignee && t.assignee !== assignee) return false;
             if (risk && t.risk_level !== risk) return false;
             if (blocking && !t.is_blocking) return false;
             if (q) {
@@ -648,7 +660,7 @@ const TeepPlan = {
     exportUrl(kind) {
         const p = new URLSearchParams();
         const set = (id, key) => { const v = (document.getElementById(id).value || '').trim(); if (v) p.set(key, v); };
-        set('f-ws', 'workstream'); set('f-owner', 'owner'); set('f-risk', 'risk'); set('f-search', 'q');
+        set('f-ws', 'workstream'); set('f-owner', 'owner'); set('f-assignee', 'assignee'); set('f-risk', 'risk'); set('f-search', 'q');
         if (document.getElementById('f-blocking').checked) p.set('blocking', '1');
         const qs = p.toString();
         return `api/export.${kind}` + (qs ? `?${qs}` : '');
@@ -656,7 +668,7 @@ const TeepPlan = {
 
     // ---- events ----------------------------------------------------------
     wireEvents() {
-        ['f-search', 'f-ws', 'f-owner', 'f-risk', 'f-blocking'].forEach((id) => {
+        ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking'].forEach((id) => {
             const el = document.getElementById(id);
             const ev = (id === 'f-search') ? 'input' : 'change';
             el.addEventListener(ev, () => { this.renderBoard(); if (this.isGanttVisible()) this.renderGantt(); });
