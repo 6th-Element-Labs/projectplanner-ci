@@ -3,6 +3,7 @@ Microsoft Project (MSPDI .xml). Ported from build_plan_artifacts.py to read the
 store's current rows so exports always reflect edits."""
 import datetime
 import io
+import re
 import xml.sax.saxutils as sx
 from typing import Any, Dict, List, Tuple
 
@@ -29,6 +30,46 @@ def _window(tasks):
     starts = sorted(t.get("start_date") for t in tasks if t.get("start_date"))
     fins = sorted(t.get("finish_date") for t in tasks if t.get("finish_date"))
     return (starts[0] if starts else "—"), (fins[-1] if fins else "—")
+
+
+_DETAIL_HEADERS = ["Workstream", "Task ID", "Task", "Owner Org", "Owner", "Assignee", "Phase",
+                   "Status", "Start", "Finish", "Duration (d)", "Effort (d)", "Depends On",
+                   "Risk", "Blocking", "Description"]
+_DETAIL_WIDTHS = [12, 10, 44, 14, 20, 16, 11, 13, 12, 12, 11, 10, 18, 9, 9, 70]
+
+
+def _write_task_sheet(sheet, rows):
+    """Write a formatted task table. rows = list of (wsid, wsname, task)."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    navy, hdr = PatternFill("solid", fgColor="1E3A5F"), Font(bold=True, color="FFFFFF")
+    sheet.append(_DETAIL_HEADERS)
+    for c in range(1, len(_DETAIL_HEADERS) + 1):
+        cell = sheet.cell(row=1, column=c)
+        cell.font = hdr
+        cell.fill = navy
+        cell.alignment = Alignment(vertical="center")
+
+    def _date(v):
+        try:
+            return datetime.date.fromisoformat(v) if v else None
+        except Exception:
+            return None
+
+    for wsid, _wsname, t in rows:
+        sheet.append([wsid, t["task_id"], t.get("title"), t.get("owner_org"),
+                      t.get("owner_person_or_role"), t.get("assignee"), t.get("phase"),
+                      t.get("status"), _date(t.get("start_date")), _date(t.get("finish_date")),
+                      t.get("duration_days"), t.get("effort_days"),
+                      ", ".join(t.get("depends_on", [])), t.get("risk_level"),
+                      "Yes" if t.get("is_blocking") else "", t.get("description")])
+    for r in range(2, sheet.max_row + 1):
+        sheet.cell(row=r, column=9).number_format = "yyyy-mm-dd"
+        sheet.cell(row=r, column=10).number_format = "yyyy-mm-dd"
+    for i, wdt in enumerate(_DETAIL_WIDTHS, 1):
+        sheet.column_dimensions[get_column_letter(i)].width = wdt
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(_DETAIL_HEADERS))}{sheet.max_row}"
 
 
 def export_xlsx(payload: Dict[str, Any]) -> bytes:
@@ -125,38 +166,20 @@ def export_xlsx(payload: Dict[str, Any]) -> bytes:
         line(w["workstream_id"], w["name"], len(w.get("tasks", [])),
              round(sum(t.get("effort_days") or 0 for t in w.get("tasks", [])), 1), f"{a} → {b}")
 
-    # ---------- Sheet 2: Details ----------
-    d = wb.create_sheet("Details")
-    headers = ["Workstream", "Task ID", "Task", "Owner Org", "Owner", "Assignee", "Phase",
-               "Status", "Start", "Finish", "Duration (d)", "Effort (d)", "Depends On",
-               "Risk", "Blocking", "Description"]
-    d.append(headers)
-    for c in range(1, len(headers) + 1):
-        cell = d.cell(row=1, column=c)
-        cell.font = HDR
-        cell.fill = NAVY
-        cell.alignment = Alignment(vertical="center")
+    # ---------- Sheet 2: Details (all tasks) ----------
+    _write_task_sheet(wb.create_sheet("Details"), _ordered(payload))
 
-    def _date(v):
-        try:
-            return datetime.date.fromisoformat(v) if v else None
-        except Exception:
-            return None
-
-    for wsid, _wsname, t in _ordered(payload):
-        d.append([wsid, t["task_id"], t.get("title"), t.get("owner_org"),
-                  t.get("owner_person_or_role"), t.get("assignee"), t.get("phase"),
-                  t.get("status"), _date(t.get("start_date")), _date(t.get("finish_date")),
-                  t.get("duration_days"), t.get("effort_days"),
-                  ", ".join(t.get("depends_on", [])), t.get("risk_level"),
-                  "Yes" if t.get("is_blocking") else "", t.get("description")])
-    for r in range(2, d.max_row + 1):
-        d.cell(row=r, column=9).number_format = "yyyy-mm-dd"
-        d.cell(row=r, column=10).number_format = "yyyy-mm-dd"
-    for i, wdt in enumerate([12, 10, 44, 14, 20, 16, 11, 13, 12, 12, 11, 10, 18, 9, 9, 70], 1):
-        d.column_dimensions[get_column_letter(i)].width = wdt
-    d.freeze_panes = "A2"
-    d.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{d.max_row}"
+    # ---------- One sheet per workstream ----------
+    used = {"Summary", "Details"}
+    for w in payload.get("workstreams", []):
+        name = (re.sub(r"[:\\/?*\[\]]", "_", str(w["workstream_id"]))[:31] or "WS")
+        base, n = name, 2
+        while name in used:
+            name = f"{base[:28]}_{n}"
+            n += 1
+        used.add(name)
+        rows = [(w["workstream_id"], w["name"], t) for t in sorted(w.get("tasks", []), key=lambda x: x.get("start_day") or 0)]
+        _write_task_sheet(wb.create_sheet(name), rows)
 
     buf = io.BytesIO()
     wb.save(buf)
