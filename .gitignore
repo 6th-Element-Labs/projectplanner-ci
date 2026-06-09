@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+.env
+.venv/
+rag_cache.json
+# build_plan_artifacts.py writes these sample exports to the repo root
+teep-project-plan.xlsx
+teep-project-plan.xml

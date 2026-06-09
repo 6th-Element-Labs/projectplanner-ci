@@ -1,0 +1,2 @@
+# The bundled gateway process only. The app's deps are in ../../requirements.txt.
+litellm[proxy]>=1.40

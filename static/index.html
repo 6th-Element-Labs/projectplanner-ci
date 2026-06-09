@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<!--
+    teep-project-plan.html - Project Maxwell (TEEP Barnett) Phase-1 Pilot Plan board
+
+    Monday-style Kanban board (columns = lifecycle phase) rendering the project plan.
+    Data source: static artifact at data/teep-project-plan.json (generated from
+    docs/customers/teep-barnett/project-plan.json). Read-only viewer.
+
+    Thin client: renders only the fields in the plan JSON. No domain logic, no
+    fabricated data. If the JSON cannot be loaded it shows a Tabler alert.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Project Maxwell Plan | Taikun Atlas</title>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
+</head>
+<body class="layout-fluid">
+    <div class="page">
+        <div class="page-wrapper">
+
+            <!-- Page Header -->
+            <div class="page-header d-print-none">
+                <div class="container-xl">
+                    <div class="row align-items-center">
+                        <div class="col">
+                            <div class="page-pretitle">TEEP Barnett · TotalEnergies E&amp;P</div>
+                            <h2 class="page-title">
+                                <i class="ti ti-layout-kanban me-2"></i>
+                                Project Maxwell — Phase-1 Pilot Plan
+                            </h2>
+                        </div>
+                        <div class="col-auto ms-auto d-print-none">
+                            <div class="btn-list align-items-center">
+                                <span id="data-status" class="badge bg-secondary-lt">Loading…</span>
+                                <span id="plan-generated" class="badge bg-secondary-lt"></span>
+                                <a id="dl-xlsx" href="api/export.xlsx" class="btn btn-outline-primary btn-sm">
+                                    <i class="ti ti-file-spreadsheet me-1"></i>Excel
+                                </a>
+                                <a id="dl-xml" href="api/export.xml" class="btn btn-outline-primary btn-sm">
+                                    <i class="ti ti-brand-windows me-1"></i>MS Project
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page Body -->
+            <div class="page-body">
+                <div class="container-xl">
+
+                    <!-- Error surface (hidden until needed) -->
+                    <div id="plan-error"></div>
+
+                    <!-- Rollup stats -->
+                    <div class="row row-cards mb-3" id="plan-stats"></div>
+
+                    <!-- About (collapsible) -->
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <h3 class="card-title"><i class="ti ti-info-circle me-2"></i>About this plan</h3>
+                            <div class="card-actions">
+                                <a class="btn btn-sm" data-bs-toggle="collapse" href="#about-body" role="button" aria-expanded="false" aria-controls="about-body">
+                                    <i class="ti ti-chevron-down me-1"></i>Executive summary &amp; timeline
+                                </a>
+                            </div>
+                        </div>
+                        <div class="collapse" id="about-body">
+                            <div class="card-body" id="about-content"></div>
+                        </div>
+                    </div>
+
+                    <!-- Filter toolbar -->
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <div class="row g-2 align-items-center">
+                                <div class="col-12 col-md">
+                                    <div class="input-icon">
+                                        <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                                        <input id="f-search" type="text" class="form-control" placeholder="Search tasks…" autocomplete="off"/>
+                                    </div>
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <select id="f-ws" class="form-select"></select>
+                                </div>
+                                <div class="col-6 col-md-2">
+                                    <select id="f-owner" class="form-select"></select>
+                                </div>
+                                <div class="col-6 col-md-2">
+                                    <select id="f-risk" class="form-select"></select>
+                                </div>
+                                <div class="col-6 col-md-auto">
+                                    <label class="form-check form-switch m-0">
+                                        <input id="f-blocking" class="form-check-input" type="checkbox"/>
+                                        <span class="form-check-label">Blocking only</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tabs -->
+                    <ul class="nav nav-tabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link active" data-bs-toggle="tab" href="#tab-board" role="tab"><i class="ti ti-layout-kanban me-1"></i>Board</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-exec" role="tab"><i class="ti ti-presentation me-1"></i>Exec Summary</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-gantt" role="tab"><i class="ti ti-timeline-event me-1"></i>Gantt</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-plan" role="tab"><i class="ti ti-flag me-1"></i>Milestones &amp; Critical Path</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-risks" role="tab"><i class="ti ti-alert-triangle me-1"></i>Risks</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-decisions" role="tab"><i class="ti ti-help-circle me-1"></i>Open Decisions</a>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content">
+                        <!-- Board -->
+                        <div class="tab-pane active show" id="tab-board" role="tabpanel">
+                            <div class="row g-3 mt-1" id="board"></div>
+                        </div>
+                        <!-- Exec Summary (shareable) -->
+                        <div class="tab-pane" id="tab-exec" role="tabpanel">
+                            <div class="mt-2" id="exec-content"></div>
+                        </div>
+                        <!-- Gantt -->
+                        <div class="tab-pane" id="tab-gantt" role="tabpanel">
+                            <div class="card mt-2">
+                                <div class="card-header d-flex flex-wrap gap-2 align-items-center">
+                                    <h3 class="card-title m-0">Schedule (Gantt)</h3>
+                                    <div class="btn-group btn-group-sm" role="group" aria-label="Gantt grouping">
+                                        <input type="radio" class="btn-check" name="gantt-mode" id="gm-ws" value="workstream" autocomplete="off" checked/>
+                                        <label class="btn" for="gm-ws">By workstream</label>
+                                        <input type="radio" class="btn-check" name="gantt-mode" id="gm-task" value="task" autocomplete="off"/>
+                                        <label class="btn" for="gm-task">By task</label>
+                                    </div>
+                                    <div class="ms-auto d-flex flex-wrap gap-1">
+                                        <span class="badge bg-azure-lt">Kickoff</span>
+                                        <span class="badge bg-purple-lt">Bootstrap</span>
+                                        <span class="badge bg-blue-lt">Build</span>
+                                        <span class="badge bg-orange-lt">Cutover</span>
+                                        <span class="badge bg-green-lt">Operate</span>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div class="text-secondary small mb-2" id="gantt-note"></div>
+                                    <div id="gantt"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Milestones & critical path -->
+                        <div class="tab-pane" id="tab-plan" role="tabpanel">
+                            <div class="card mt-2"><div class="card-header"><h3 class="card-title">Milestones</h3></div>
+                                <div id="milestones-table"></div>
+                            </div>
+                            <div class="card mt-3"><div class="card-header"><h3 class="card-title">Critical path</h3></div>
+                                <div id="path-table"></div>
+                            </div>
+                        </div>
+                        <!-- Risks -->
+                        <div class="tab-pane" id="tab-risks" role="tabpanel">
+                            <div class="card mt-2"><div class="card-header"><h3 class="card-title">Consolidated risk register</h3></div>
+                                <div id="risks-table"></div>
+                            </div>
+                        </div>
+                        <!-- Decisions -->
+                        <div class="tab-pane" id="tab-decisions" role="tabpanel">
+                            <div class="card mt-2"><div class="card-header"><h3 class="card-title">Open decisions — close in the kickoff working session</h3></div>
+                                <div id="decisions-table"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task detail modal -->
+    <div class="modal modal-blur fade" id="task-modal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="task-modal-title">Task</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="task-modal-body"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@latest/dist/apexcharts.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

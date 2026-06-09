@@ -1,0 +1,19 @@
+# Minimal LiteLLM gateway for ProjectPlanner (same shape as the ActionEngine
+# gateway, without the platform's audit callback). The app connects through this
+# using the logical model names taikun-chat / taikun-embed, so it never holds the
+# OpenAI key directly and models can be swapped here without touching the app.
+model_list:
+  - model_name: taikun-chat
+    litellm_params:
+      model: openai/gpt-4o-mini          # cheap; bump to gpt-4o if you want stronger reasoning
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: taikun-embed
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LLM_GATEWAY_MASTER_KEY
