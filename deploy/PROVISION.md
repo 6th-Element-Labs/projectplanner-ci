@@ -77,5 +77,5 @@ sudo systemctl restart projectplanner
 ```
 
 ## Cost
-t4g.micro ~$6/mo + 10 GB gp3 ~$0.80/mo + Elastic IP (free while attached) + LLM usage (gpt-4o-mini +
-text-embedding-3-small — cents). Call it **~$7/mo + a few cents of tokens**.
+t4g.micro ~$6/mo + 10 GB gp3 ~$0.80/mo + Elastic IP (free while attached) + LLM usage (gpt-5.5 +
+text-embedding-3-small; low volume, usage-based). Call it **~$7/mo + token usage**.

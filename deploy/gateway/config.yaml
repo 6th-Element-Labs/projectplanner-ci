@@ -5,7 +5,7 @@
 model_list:
   - model_name: taikun-chat
     litellm_params:
-      model: openai/gpt-4o-mini          # cheap; bump to gpt-4o if you want stronger reasoning
+      model: openai/gpt-5.5              # adjust if OpenAI's exact model id is dated/suffixed
       api_key: os.environ/OPENAI_API_KEY
   - model_name: taikun-embed
     litellm_params:
