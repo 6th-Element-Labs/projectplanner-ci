@@ -52,7 +52,8 @@ def _system(task):
 
 
 def _chat(messages):
-    body = {"model": CHAT_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": "auto", "temperature": 0.2}
+    # No temperature: gpt-5.x only supports the default (1). Add back only for models that allow it.
+    body = {"model": CHAT_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": "auto"}
     r = httpx.post(f"{BASE}/chat/completions", headers={"Authorization": f"Bearer {KEY}"}, json=body, timeout=120)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]
