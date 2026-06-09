@@ -27,13 +27,29 @@ TOOLS = [
         "description": "Propose a change to THIS task for the user to confirm. Does NOT apply it — the "
                        "user must click Confirm. Only include fields you actually want to change.",
         "parameters": {"type": "object", "properties": {
+            "title": {"type": "string"},
+            "description": {"type": "string"},
             "status": {"type": "string", "enum": ["Not Started", "In Progress", "Blocked", "Done"]},
             "assignee": {"type": "string"},
+            "owner_org": {"type": "string", "enum": ["Taikun", "TEEP", "Sensirion/Nubo", "IFS Merrick", "Joint"]},
+            "owner_person_or_role": {"type": "string"},
+            "phase": {"type": "string", "enum": ["Kickoff", "Bootstrap", "Build", "Cutover", "Operate"]},
+            "effort_days": {"type": "number"},
             "start_date": {"type": "string", "description": "YYYY-MM-DD"},
             "finish_date": {"type": "string", "description": "YYYY-MM-DD"},
+            "risk_level": {"type": "string", "enum": ["Low", "Medium", "High"]},
+            "is_blocking": {"type": "boolean"},
+            "entry_criteria": {"type": "string"},
+            "exit_criteria": {"type": "string"},
+            "deliverable": {"type": "string"},
             "rationale": {"type": "string", "description": "one short line on why"}},
             "required": ["rationale"]}}},
 ]
+
+# Editable fields the agent may propose (mirrors store.EDITABLE minus internal ones).
+_PROPOSABLE = ["title", "description", "status", "assignee", "owner_org", "owner_person_or_role",
+               "phase", "effort_days", "start_date", "finish_date", "risk_level", "is_blocking",
+               "entry_criteria", "exit_criteria", "deliverable"]
 
 
 def _system(task):
@@ -85,7 +101,7 @@ def run(task, message, history=None):
                 content = "\n\n".join(f"[{h['file']}] {h['text']}" for h in hits) or "no matches"
             elif name == "propose_task_update":
                 proposal = {k: v for k, v in args.items()
-                            if k in ("status", "assignee", "start_date", "finish_date", "rationale") and v not in (None, "")}
+                            if k in (_PROPOSABLE + ["rationale"]) and v not in (None, "")}
                 content = "Proposal recorded; tell the user what you propose and that they must Confirm it."
             else:
                 content = "unknown tool"

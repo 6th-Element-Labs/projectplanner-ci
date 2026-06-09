@@ -65,6 +65,15 @@ async def get_task(task_id: str):
     return t
 
 
+@app.post("/api/tasks")
+async def create_task(body: dict = Body(...)):
+    actor = body.pop("_actor", "user")
+    t = store.create_task(body, actor=actor)
+    if not t:
+        raise HTTPException(400, "workstream_id and title are required")
+    return t
+
+
 @app.patch("/api/tasks/{task_id}")
 async def patch_task(task_id: str, body: dict = Body(...)):
     actor = body.pop("_actor", "user")
@@ -72,6 +81,13 @@ async def patch_task(task_id: str, body: dict = Body(...)):
     if not t:
         raise HTTPException(404, "task not found")
     return t
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    if not store.delete_task(task_id):
+        raise HTTPException(404, "task not found")
+    return {"deleted": task_id}
 
 
 @app.post("/api/tasks/{task_id}/comment")

@@ -29,6 +29,57 @@ const TeepPlan = {
         SEN: '#4299e1', FMP: '#066fd1', SCADA: '#17a2b8', IFS: '#0ca678', SSO: '#4263eb', BEDROCK: '#ae3ec9',
         GW: '#d6336c', REG: '#74b816', AGENT: '#f76707', REPORT: '#f59f00', DATA: '#2fb344', CUTOVER: '#d63939'
     },
+    OWNER_ORGS: ['Taikun', 'TEEP', 'Sensirion/Nubo', 'IFS Merrick', 'Joint'],
+    // Drives the edit + create forms, reading, and applying agent proposals.
+    EDIT_FIELDS: [
+        { k: 'title', label: 'Title', type: 'text', col: 'col-12' },
+        { k: 'description', label: 'Description', type: 'textarea', col: 'col-12' },
+        { k: 'phase', label: 'Phase', type: 'select', opts: ['Kickoff', 'Bootstrap', 'Build', 'Cutover', 'Operate'], col: 'col-6 col-md-3' },
+        { k: 'status', label: 'Status', type: 'select', opts: ['Not Started', 'In Progress', 'Blocked', 'Done'], col: 'col-6 col-md-3' },
+        { k: 'risk_level', label: 'Risk', type: 'select', opts: ['Low', 'Medium', 'High'], col: 'col-6 col-md-3' },
+        { k: 'is_blocking', label: 'Blocking', type: 'switch', col: 'col-6 col-md-3' },
+        { k: 'owner_org', label: 'Owner org', type: 'select', opts: ['Taikun', 'TEEP', 'Sensirion/Nubo', 'IFS Merrick', 'Joint'], col: 'col-6 col-md-4' },
+        { k: 'owner_person_or_role', label: 'Owner', type: 'text', col: 'col-6 col-md-4' },
+        { k: 'assignee', label: 'Assignee', type: 'people', col: 'col-6 col-md-4' },
+        { k: 'effort_days', label: 'Effort (d)', type: 'number', col: 'col-4' },
+        { k: 'start_date', label: 'Start', type: 'date', col: 'col-4' },
+        { k: 'finish_date', label: 'Finish', type: 'date', col: 'col-4' },
+        { k: 'entry_criteria', label: 'Entry criteria', type: 'textarea', col: 'col-12' },
+        { k: 'exit_criteria', label: 'Exit criteria', type: 'textarea', col: 'col-12' },
+        { k: 'deliverable', label: 'Deliverable', type: 'textarea', col: 'col-12' },
+    ],
+
+    _fieldHtml(f, val, prefix) {
+        const id = prefix + f.k;
+        const v = val == null ? '' : val;
+        if (f.type === 'textarea')
+            return `<label class="form-label small mb-1">${f.label}</label><textarea id="${id}" class="form-control form-control-sm" rows="2">${this.esc(v)}</textarea>`;
+        if (f.type === 'select')
+            return `<label class="form-label small mb-1">${f.label}</label><select id="${id}" class="form-select form-select-sm">`
+                + `<option value=""></option>` + f.opts.map((o) => `<option${o === v ? ' selected' : ''}>${this.esc(o)}</option>`).join('') + `</select>`;
+        if (f.type === 'switch')
+            return `<label class="form-label small d-block mb-1">${f.label}</label><label class="form-check form-switch m-0"><input id="${id}" class="form-check-input" type="checkbox"${val ? ' checked' : ''}/></label>`;
+        const itype = f.type === 'people' ? 'text' : f.type;
+        const extra = f.type === 'people' ? ' list="people-list"' : (f.type === 'number' ? ' step="0.5" min="0"' : '');
+        return `<label class="form-label small mb-1">${f.label}</label><input id="${id}" type="${itype}" class="form-control form-control-sm" value="${this.esc(v)}"${extra}/>`;
+    },
+
+    _taskFormHtml(t, prefix) {
+        return `<div class="row g-2">` + this.EDIT_FIELDS.map((f) =>
+            `<div class="${f.col}">${this._fieldHtml(f, t[f.k], prefix)}</div>`).join('') + `</div>`;
+    },
+
+    _readForm(prefix) {
+        const out = {};
+        this.EDIT_FIELDS.forEach((f) => {
+            const el = document.getElementById(prefix + f.k);
+            if (!el) return;
+            if (f.type === 'switch') out[f.k] = el.checked;
+            else if (f.type === 'number') { const n = parseFloat(el.value); out[f.k] = isNaN(n) ? null : n; }
+            else out[f.k] = el.value === '' ? null : el.value;
+        });
+        return out;
+    },
 
     async init() {
         try {
@@ -45,6 +96,8 @@ const TeepPlan = {
         this.renderStats();
         this.renderAbout();
         this.buildFilters();
+        const dl = document.getElementById('people-list');
+        if (dl) dl.innerHTML = (this.people || []).map((p) => `<option value="${this.esc(p)}"></option>`).join('');
         this.renderBoard();
         this.renderTables();
         this.renderExec();
@@ -258,7 +311,7 @@ const TeepPlan = {
             }));
             height = Math.max(280, data.length * 36 + 90);
         } else {
-            const sorted = tasks.slice().sort((a, b) => a._wsId.localeCompare(b._wsId) || (a.start_day - b.start_day));
+            const sorted = tasks.filter((t) => t.start_date && t.finish_date).sort((a, b) => a._wsId.localeCompare(b._wsId) || ((a.start_day || 0) - (b.start_day || 0)));
             data = sorted.map((t) => ({
                 x: t.task_id,
                 y: [new Date(t.start_date).getTime(), new Date(t.finish_date).getTime() + 86400000],
@@ -324,42 +377,19 @@ const TeepPlan = {
         const deps = (t.depends_on || []).map((d) => `<span class="badge bg-secondary-lt me-1">${this.esc(d)}</span>`).join('') || '<span class="text-secondary">none</span>';
         document.getElementById('task-modal-title').innerHTML =
             `<span class="me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
-        const item = (title, content) =>
-            `<div class="datagrid-item"><div class="datagrid-title">${title}</div><div class="datagrid-content">${content}</div></div>`;
-        const STATUSES = ['Not Started', 'In Progress', 'Blocked', 'Done'];
-        const opts = (arr, sel) => arr.map((o) => `<option value="${this.esc(o)}"${o === sel ? ' selected' : ''}>${this.esc(o)}</option>`).join('');
-        const peopleList = (this.people || []).map((p) => `<option value="${this.esc(p)}"></option>`).join('');
         document.getElementById('task-modal-body').innerHTML = `
-            <div class="datagrid mb-3">
-                ${item('Workstream', this.badge(t._wsId, wc) + ' ' + this.esc(t._wsName))}
-                ${item('Owner', this.badge(t.owner_org, oc) + ' ' + this.esc(t.owner_person_or_role))}
-                ${item('Phase', this.badge(t.phase, pc))}
-                ${item('Effort', this.esc(t.effort_days) + ' person-days')}
-                ${item('Risk', this.badge(t.risk_level, rc))}
-                ${item('Depends on', deps)}
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                ${this.badge(t._wsId, wc)}<span class="text-secondary small">${this.esc(t._wsName)}</span>
+                <span class="ms-auto small text-secondary">depends on: ${deps}</span>
             </div>
             <div class="card mb-3"><div class="card-body">
-                <div class="row g-2">
-                    <div class="col-6 col-md-3"><label class="form-label small">Status</label>
-                        <select id="edit-status" class="form-select form-select-sm">${opts(STATUSES, t.status || 'Not Started')}</select></div>
-                    <div class="col-6 col-md-3"><label class="form-label small">Assignee</label>
-                        <input id="edit-assignee" class="form-control form-control-sm" list="people-list" value="${this.esc(t.assignee || '')}" placeholder="Unassigned"/>
-                        <datalist id="people-list">${peopleList}</datalist></div>
-                    <div class="col-6 col-md-3"><label class="form-label small">Start</label>
-                        <input id="edit-start" type="date" class="form-control form-control-sm" value="${this.esc(t.start_date || '')}"/></div>
-                    <div class="col-6 col-md-3"><label class="form-label small">Finish</label>
-                        <input id="edit-finish" type="date" class="form-control form-control-sm" value="${this.esc(t.finish_date || '')}"/></div>
-                </div>
-                <div class="d-flex align-items-center gap-2 mt-2">
+                ${this._taskFormHtml(t, 'edit-')}
+                <div class="d-flex align-items-center gap-2 mt-3">
                     <button id="edit-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy me-1"></i>Save</button>
+                    <button id="edit-delete" class="btn btn-outline-danger btn-sm"><i class="ti ti-trash me-1"></i>Delete</button>
                     <span id="edit-flash" class="small text-secondary"></span>
                 </div>
-            </div>
-            <p><strong>Description.</strong> ${this.esc(t.description)}</p>
-            <p><strong>Entry criteria.</strong> ${this.esc(t.entry_criteria)}</p>
-            <p><strong>Exit criteria.</strong> ${this.esc(t.exit_criteria)}</p>
-            <p><strong>Deliverable.</strong> ${this.esc(t.deliverable)}</p>
-            <hr/>
+            </div></div>
             <div class="d-flex align-items-center mb-1"><strong>Ask Taikun · this task</strong>
                 <span class="badge bg-green-lt ms-2">RAG over plan docs · propose-to-confirm</span></div>
             <div id="chat-log" class="border rounded p-2 mb-2"></div>
@@ -368,6 +398,7 @@ const TeepPlan = {
                 <button id="chat-send" class="btn btn-primary"><i class="ti ti-send"></i></button>
             </div>`;
         this._renderActivity(t);
+        document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
         document.getElementById('chat-send').addEventListener('click', () => this.sendChat(t.task_id));
         document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendChat(t.task_id); });
@@ -385,12 +416,8 @@ const TeepPlan = {
 
     async saveTask(id) {
         const flash = (msg, cls) => { const el = document.getElementById('edit-flash'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
-        const body = {
-            status: document.getElementById('edit-status').value,
-            assignee: document.getElementById('edit-assignee').value || null,
-            start_date: document.getElementById('edit-start').value || null,
-            finish_date: document.getElementById('edit-finish').value || null,
-        };
+        const body = this._readForm('edit-');
+        if (!body.title) { flash('Title is required', 'danger'); return; }
         flash('Saving…');
         try {
             const res = await fetch(`api/tasks/${encodeURIComponent(id)}`, {
@@ -400,9 +427,59 @@ const TeepPlan = {
             const updated = await res.json();
             const i = this.tasks.findIndex((x) => x.task_id === id);
             if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], updated);
+            document.getElementById('task-modal-title').innerHTML = `<span class="me-2">${this.esc(updated.task_id)}</span>${this.esc(updated.title)}`;
             flash('Saved', 'green');
             this.renderBoard();
             if (this.isGanttVisible()) this.renderGantt();
+        } catch (e) { flash(e.message, 'danger'); }
+    },
+
+    async deleteTask(id) {
+        if (!window.confirm(`Delete task ${id}? This cannot be undone.`)) return;
+        try {
+            const res = await fetch(`api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            this.tasks = this.tasks.filter((x) => x.task_id !== id);
+            (this.plan.workstreams || []).forEach((w) => { w.tasks = (w.tasks || []).filter((x) => x.task_id !== id); });
+            window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).hide();
+            this.renderBoard();
+            if (this.isGanttVisible()) this.renderGantt();
+        } catch (e) {
+            const el = document.getElementById('edit-flash');
+            if (el) { el.textContent = 'Delete failed: ' + e.message; el.className = 'small text-danger'; }
+        }
+    },
+
+    openCreate() {
+        const wsOpts = (this.plan.workstreams || []).map((w) =>
+            `<option value="${this.esc(w.workstream_id)}">${this.esc(w.workstream_id)} — ${this.esc(w.name)}</option>`).join('');
+        document.getElementById('create-modal-body').innerHTML = `
+            <div class="mb-2"><label class="form-label small mb-1">Workstream</label>
+                <select id="create-ws" class="form-select form-select-sm">${wsOpts}</select></div>
+            ${this._taskFormHtml({}, 'new-')}`;
+        const flash = document.getElementById('create-flash'); if (flash) flash.textContent = '';
+        document.getElementById('create-save').onclick = () => this.createTask();
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('create-modal')).show();
+    },
+
+    async createTask() {
+        const flash = (msg, cls) => { const el = document.getElementById('create-flash'); if (el) { el.textContent = msg; el.className = 'small me-auto text-' + (cls || 'secondary'); } };
+        const body = this._readForm('new-');
+        body.workstream_id = document.getElementById('create-ws').value;
+        if (!body.workstream_id) { flash('Pick a workstream', 'danger'); return; }
+        if (!body.title) { flash('Title is required', 'danger'); return; }
+        flash('Creating…');
+        try {
+            const res = await fetch('api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${res.status}`); }
+            const created = await res.json();
+            this.tasks.push(created);
+            const w = (this.plan.workstreams || []).find((x) => x.workstream_id === created._wsId);
+            if (w) w.tasks.push(created);
+            flash('Created ' + created.task_id, 'green');
+            this.renderBoard();
+            if (this.isGanttVisible()) this.renderGantt();
+            setTimeout(() => window.bootstrap.Modal.getOrCreateInstance(document.getElementById('create-modal')).hide(), 700);
         } catch (e) { flash(e.message, 'danger'); }
     },
 
@@ -438,9 +515,8 @@ const TeepPlan = {
 
     renderProposal(id, p) {
         const log = document.getElementById('chat-log');
-        const FIELDS = ['status', 'assignee', 'start_date', 'finish_date'];
-        const chips = FIELDS.filter((k) => p[k] != null && p[k] !== '')
-            .map((k) => `<span class="badge bg-azure-lt me-1">${this.esc(k)}: ${this.esc(p[k])}</span>`).join('') || '<span class="text-secondary">no fields</span>';
+        const chips = Object.keys(p).filter((k) => k !== 'rationale' && p[k] != null && p[k] !== '')
+            .map((k) => `<span class="badge bg-azure-lt me-1">${this.esc(k)}: ${this.esc(String(p[k]))}</span>`).join('') || '<span class="text-secondary">no fields</span>';
         const pid = 'prop-' + Math.random().toString(36).slice(2, 9);
         log.insertAdjacentHTML('beforeend', `<div id="${pid}" class="card card-sm mb-2">
             <div class="card-status-start bg-azure"></div>
@@ -458,7 +534,7 @@ const TeepPlan = {
 
     async applyProposal(id, p, pid) {
         const body = { _actor: 'Maxwell (confirmed)' };
-        ['status', 'assignee', 'start_date', 'finish_date'].forEach((k) => { if (p[k] != null && p[k] !== '') body[k] = p[k]; });
+        Object.keys(p).forEach((k) => { if (k !== 'rationale' && p[k] != null && p[k] !== '') body[k] = p[k]; });
         try {
             const res = await fetch(`api/tasks/${encodeURIComponent(id)}`, {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -469,10 +545,13 @@ const TeepPlan = {
             if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], updated);
             const card = document.getElementById(pid);
             if (card) card.querySelector('.card-body').innerHTML = '<span class="text-green"><i class="ti ti-check me-1"></i>Applied</span>';
-            if (p.status && document.getElementById('edit-status')) document.getElementById('edit-status').value = p.status;
-            if (p.assignee && document.getElementById('edit-assignee')) document.getElementById('edit-assignee').value = p.assignee;
-            if (p.start_date && document.getElementById('edit-start')) document.getElementById('edit-start').value = p.start_date;
-            if (p.finish_date && document.getElementById('edit-finish')) document.getElementById('edit-finish').value = p.finish_date;
+            // reflect applied fields back into the open edit form
+            Object.keys(body).forEach((k) => {
+                if (k === '_actor') return;
+                const el = document.getElementById('edit-' + k);
+                if (el) { if (el.type === 'checkbox') el.checked = !!body[k]; else el.value = body[k]; }
+            });
+            if (body.title) document.getElementById('task-modal-title').innerHTML = `<span class="me-2">${this.esc(updated.task_id)}</span>${this.esc(updated.title)}`;
             this.renderBoard();
             if (this.isGanttVisible()) this.renderGantt();
         } catch (e) {
@@ -592,6 +671,8 @@ const TeepPlan = {
             const btn = document.getElementById('dl-' + kind);
             if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); window.location.href = this.exportUrl(kind); });
         });
+        const nb = document.getElementById('btn-new-task');
+        if (nb) nb.addEventListener('click', () => this.openCreate());
     },
 };
 

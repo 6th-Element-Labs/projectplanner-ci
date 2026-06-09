@@ -12,7 +12,8 @@ SEED_PATH = os.environ.get("PM_SEED_PATH", os.path.join(os.path.dirname(__file__
 # Fields a PATCH may change (everything an editor touches in an Asana-style board).
 EDITABLE = ["title", "description", "owner_org", "owner_person_or_role", "assignee",
             "phase", "status", "effort_days", "duration_days", "start_date",
-            "finish_date", "risk_level", "is_blocking", "sort_order"]
+            "finish_date", "risk_level", "is_blocking", "sort_order",
+            "entry_criteria", "exit_criteria", "deliverable", "depends_on"]
 
 # Plan-level sections that are not per-task (kept verbatim from the seed snapshot).
 META_SECTIONS = ["project", "generated", "schedule_start", "schedule_note", "owner_orgs",
@@ -142,6 +143,8 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user") -> Op
             continue
         if k == "is_blocking":
             v = 1 if v else 0
+        if k == "depends_on" and isinstance(v, list):
+            v = json.dumps(v)
         sets.append(f"{k}=?"); vals.append(v); changed[k] = v
     if not sets:
         return get_task(task_id)
@@ -163,6 +166,53 @@ def add_comment(task_id: str, actor: str, text: str, kind: str = "comment") -> O
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, kind, json.dumps({"text": text}), time.time()))
     return get_task(task_id)
+
+
+def create_task(data: Dict[str, Any], actor: str = "user") -> Optional[Dict[str, Any]]:
+    ws = (data.get("workstream_id") or "").strip()
+    title = (data.get("title") or "").strip()
+    if not ws or not title:
+        return None
+    with _conn() as c:
+        wsname = data.get("workstream_name")
+        if not wsname:
+            r = c.execute("SELECT workstream_name FROM tasks WHERE workstream_id=? LIMIT 1", (ws,)).fetchone()
+            wsname = r[0] if r else ws
+        ids = [row[0] for row in c.execute("SELECT task_id FROM tasks WHERE workstream_id=?", (ws,)).fetchall()]
+        mx = 0
+        for t in ids:
+            tail = t.rsplit("-", 1)[-1]
+            if tail.isdigit():
+                mx = max(mx, int(tail))
+        tid = f"{ws}-{mx + 1}"
+        while c.execute("SELECT 1 FROM tasks WHERE task_id=?", (tid,)).fetchone():
+            mx += 1
+            tid = f"{ws}-{mx + 1}"
+        order = c.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks").fetchone()[0]
+        now = time.time()
+        c.execute(
+            """INSERT INTO tasks (task_id, workstream_id, workstream_name, title, description,
+                 owner_org, owner_person_or_role, assignee, phase, status, effort_days, duration_days,
+                 start_date, finish_date, start_day, depends_on, entry_criteria, exit_criteria,
+                 deliverable, risk_level, is_blocking, sort_order, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (tid, ws, wsname, title, data.get("description"), data.get("owner_org"),
+             data.get("owner_person_or_role"), data.get("assignee"), data.get("phase", "Build"),
+             data.get("status", "Not Started"), data.get("effort_days"), data.get("duration_days"),
+             data.get("start_date"), data.get("finish_date"), 0,
+             json.dumps(data.get("depends_on", [])), data.get("entry_criteria"), data.get("exit_criteria"),
+             data.get("deliverable"), data.get("risk_level", "Medium"),
+             1 if data.get("is_blocking") else 0, order, now, now))
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (tid, actor, "create", json.dumps({"title": title}), now))
+    return get_task(tid)
+
+
+def delete_task(task_id: str) -> bool:
+    with _conn() as c:
+        cur = c.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+        c.execute("DELETE FROM activity WHERE task_id=?", (task_id,))
+        return cur.rowcount > 0
 
 
 def get_meta(key: str, default=None):
