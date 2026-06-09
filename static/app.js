@@ -456,7 +456,7 @@ const TeepPlan = {
         document.getElementById('create-modal-body').innerHTML = `
             <div class="mb-2"><label class="form-label small mb-1">Workstream</label>
                 <select id="create-ws" class="form-select form-select-sm">${wsOpts}</select></div>
-            ${this._taskFormHtml({}, 'new-')}`;
+            ${this._taskFormHtml({ phase: 'Build', status: 'Not Started', risk_level: 'Medium' }, 'new-')}`;
         const flash = document.getElementById('create-flash'); if (flash) flash.textContent = '';
         document.getElementById('create-save').onclick = () => this.createTask();
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('create-modal')).show();

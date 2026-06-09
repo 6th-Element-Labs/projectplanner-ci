@@ -197,11 +197,11 @@ def create_task(data: Dict[str, Any], actor: str = "user") -> Optional[Dict[str,
                  deliverable, risk_level, is_blocking, sort_order, created_at, updated_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (tid, ws, wsname, title, data.get("description"), data.get("owner_org"),
-             data.get("owner_person_or_role"), data.get("assignee"), data.get("phase", "Build"),
-             data.get("status", "Not Started"), data.get("effort_days"), data.get("duration_days"),
+             data.get("owner_person_or_role"), data.get("assignee"), (data.get("phase") or "Build"),
+             (data.get("status") or "Not Started"), data.get("effort_days"), data.get("duration_days"),
              data.get("start_date"), data.get("finish_date"), 0,
              json.dumps(data.get("depends_on", [])), data.get("entry_criteria"), data.get("exit_criteria"),
-             data.get("deliverable"), data.get("risk_level", "Medium"),
+             data.get("deliverable"), (data.get("risk_level") or "Medium"),
              1 if data.get("is_blocking") else 0, order, now, now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (tid, actor, "create", json.dumps({"title": title}), now))
