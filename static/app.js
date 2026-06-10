@@ -320,9 +320,16 @@ const TeepPlan = {
     renderTasks() {
         const el = document.getElementById('tasks-content');
         if (!el) return;
+        // When the owner filter is set to one person, show ONLY their section
+        // (co-owned tasks otherwise leak into every co-owner's group).
+        const sel = document.getElementById('f-assignee');
+        const only = sel ? sel.value : '';
         const groups = {};
         this.filtered().forEach((t) => {
-            this._peopleOf(t).forEach((p) => { (groups[p] || (groups[p] = [])).push(t); });
+            this._peopleOf(t).forEach((p) => {
+                if (only && p !== only) return;
+                (groups[p] || (groups[p] = [])).push(t);
+            });
         });
         const names = Object.keys(groups).filter((n) => n !== 'Unassigned')
             .sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b));
