@@ -100,6 +100,7 @@ const TeepPlan = {
         const dl = document.getElementById('people-list');
         if (dl) dl.innerHTML = (this.people || []).map((p) => `<option value="${this.esc(p)}"></option>`).join('');
         this.renderBoard();
+        this.renderTasks();
         this.renderTables();
         this.renderExec();
         this.wireEvents();
@@ -285,6 +286,125 @@ const TeepPlan = {
             </a>`;
     },
 
+    // ---- Tasks (Todoist-style "by person" lens) -------------------------
+    // Same data, regrouped per person. assignee wins; else match the known
+    // people list against owner_person_or_role (a task with two owners shows
+    // under each). Pure presentation — no new data.
+    _peopleOf(t) {
+        if (t.assignee && t.assignee.trim()) return [t.assignee.trim()];
+        const owner = (t.owner_person_or_role || '').toLowerCase();
+        if (!owner) return ['Unassigned'];
+        const matched = (this.people || []).filter((p) => owner.includes(p.toLowerCase()));
+        return matched.length ? matched : ['Unassigned'];
+    },
+
+    fmtDue(dateStr, done) {
+        if (!dateStr) return { text: '', cls: '' };
+        const d = new Date(dateStr + 'T00:00:00');
+        if (isNaN(d.getTime())) return { text: this.esc(dateStr), cls: 'text-secondary' };
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const diff = Math.round((d - today) / 86400000);
+        const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        let text = M[d.getMonth()] + ' ' + d.getDate();
+        if (diff === 0) text = 'Today';
+        else if (diff === 1) text = 'Tomorrow';
+        else if (diff === -1) text = 'Yesterday';
+        let cls = 'text-secondary';
+        if (!done && diff < 0) cls = 'text-red';
+        else if (!done && diff <= 1) cls = 'text-orange';
+        return { text, cls };
+    },
+
+    renderTasks() {
+        const el = document.getElementById('tasks-content');
+        if (!el) return;
+        const groups = {};
+        this.filtered().forEach((t) => {
+            this._peopleOf(t).forEach((p) => { (groups[p] || (groups[p] = [])).push(t); });
+        });
+        const names = Object.keys(groups).filter((n) => n !== 'Unassigned')
+            .sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b));
+        if (groups['Unassigned']) names.push('Unassigned');
+        if (!names.length) {
+            el.innerHTML = `<div class="card"><div class="empty">
+                <div class="empty-icon"><i class="ti ti-checklist"></i></div>
+                <p class="empty-title">Nothing to show</p>
+                <p class="empty-subtitle text-secondary">No tasks match the current filters.</p></div></div>`;
+            return;
+        }
+        const rank = (s) => (s === 'Done' ? 1 : 0);
+        el.innerHTML = names.map((name) => {
+            const list = groups[name].slice().sort((a, b) =>
+                rank(a.status) - rank(b.status) ||
+                ((a.finish_date || '9999') < (b.finish_date || '9999') ? -1 : 1));
+            const done = list.filter((t) => t.status === 'Done').length;
+            const isU = name === 'Unassigned';
+            const avatar = isU
+                ? `<span class="avatar avatar-sm avatar-rounded me-2 bg-secondary-lt"><i class="ti ti-user-question"></i></span>`
+                : `<span class="avatar avatar-sm avatar-rounded me-2">${this.esc(this.initials(name))}</span>`;
+            return `
+                <div class="mb-4">
+                    <div class="d-flex align-items-center mb-2">
+                        ${avatar}
+                        <span class="h3 m-0">${this.esc(name)}</span>
+                        <span class="badge bg-secondary-lt ms-2">${list.length}</span>
+                        <span class="ms-auto text-secondary small">${done}/${list.length} done</span>
+                    </div>
+                    <div class="card">
+                        <div class="list-group list-group-flush">
+                            ${list.map((t) => this.taskRow(t)).join('')}
+                        </div>
+                    </div>
+                </div>`;
+        }).join('');
+    },
+
+    taskRow(t) {
+        const done = t.status === 'Done';
+        const wc = this.WS_COLOR[t._wsId] || 'secondary';
+        const due = this.fmtDue(t.finish_date, done);
+        const id = this.esc(t.task_id);
+        const titleCls = done ? 'text-decoration-line-through text-secondary' : 'text-body';
+        return `
+            <div class="list-group-item d-flex align-items-start gap-2 py-2" data-task-row="${id}">
+                <input class="form-check-input rounded-circle mt-1 flex-shrink-0" type="checkbox" data-check="${id}"${done ? ' checked' : ''} title="Mark done"/>
+                <div class="flex-fill">
+                    <a href="#" class="d-block fw-medium text-reset ${titleCls}" data-task="${id}">${this.esc(t.title)}</a>
+                    <div class="d-flex flex-wrap align-items-center gap-2 mt-1 small">
+                        ${due.text ? `<span class="${due.cls}"><i class="ti ti-calendar-event me-1"></i>${due.text}</span>` : ''}
+                        ${t.risk_level === 'High' ? '<span class="text-red" title="High risk"><i class="ti ti-flag-filled"></i></span>' : ''}
+                        ${t.is_blocking ? '<span class="text-red" title="Blocking"><i class="ti ti-alert-triangle-filled"></i></span>' : ''}
+                        <span class="text-secondary ms-auto"><span class="status-dot bg-${wc} me-1"></span>${id} · ${this.esc(t._wsId)}</span>
+                    </div>
+                </div>
+            </div>`;
+    },
+
+    async toggleDone(id, checked) {
+        const status = checked ? 'Done' : 'In Progress';
+        try {
+            const res = await fetch(`api/tasks/${encodeURIComponent(id)}`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status, _actor: 'checkbox' }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const updated = await res.json();
+            const i = this.tasks.findIndex((x) => x.task_id === id);
+            if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], updated);
+            // in-place: strike the title + sync any duplicate rows (same task, multiple owners)
+            document.querySelectorAll(`#tasks-content a[data-task="${id}"]`).forEach((a) => {
+                a.classList.toggle('text-decoration-line-through', checked);
+                a.classList.toggle('text-secondary', checked);
+                a.classList.toggle('text-body', !checked);
+            });
+            document.querySelectorAll(`#tasks-content input[data-check="${id}"]`).forEach((cb) => { cb.checked = checked; });
+            this.renderBoard();
+            if (this.isGanttVisible()) this.renderGantt();
+        } catch (e) {
+            document.querySelectorAll(`#tasks-content input[data-check="${id}"]`).forEach((cb) => { cb.checked = !checked; });
+        }
+    },
+
     // ---- Gantt (ApexCharts rangeBar) ------------------------------------
     isGanttVisible() {
         const p = document.getElementById('tab-gantt');
@@ -453,6 +573,7 @@ const TeepPlan = {
             document.getElementById('task-modal-title').innerHTML = `<span class="me-2">${this.esc(updated.task_id)}</span>${this.esc(updated.title)}`;
             flash('Saved', 'green');
             this.renderBoard();
+            this.renderTasks();
             if (this.isGanttVisible()) this.renderGantt();
         } catch (e) { flash(e.message, 'danger'); }
     },
@@ -466,6 +587,7 @@ const TeepPlan = {
             (this.plan.workstreams || []).forEach((w) => { w.tasks = (w.tasks || []).filter((x) => x.task_id !== id); });
             window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).hide();
             this.renderBoard();
+            this.renderTasks();
             if (this.isGanttVisible()) this.renderGantt();
         } catch (e) {
             const el = document.getElementById('edit-flash');
@@ -501,6 +623,7 @@ const TeepPlan = {
             if (w) w.tasks.push(created);
             flash('Created ' + created.task_id, 'green');
             this.renderBoard();
+            this.renderTasks();
             if (this.isGanttVisible()) this.renderGantt();
             setTimeout(() => window.bootstrap.Modal.getOrCreateInstance(document.getElementById('create-modal')).hide(), 700);
         } catch (e) { flash(e.message, 'danger'); }
@@ -576,6 +699,7 @@ const TeepPlan = {
             });
             if (body.title) document.getElementById('task-modal-title').innerHTML = `<span class="me-2">${this.esc(updated.task_id)}</span>${this.esc(updated.title)}`;
             this.renderBoard();
+            this.renderTasks();
             if (this.isGanttVisible()) this.renderGantt();
         } catch (e) {
             const card = document.getElementById(pid);
@@ -682,7 +806,7 @@ const TeepPlan = {
         ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking'].forEach((id) => {
             const el = document.getElementById(id);
             const ev = (id === 'f-search') ? 'input' : 'change';
-            el.addEventListener(ev, () => { this.renderBoard(); if (this.isGanttVisible()) this.renderGantt(); });
+            el.addEventListener(ev, () => { this.renderBoard(); this.renderTasks(); if (this.isGanttVisible()) this.renderGantt(); });
         });
         document.getElementById('board').addEventListener('click', (e) => {
             const a = e.target.closest('a[data-task]');
@@ -690,6 +814,21 @@ const TeepPlan = {
             e.preventDefault();
             this.openTask(a.getAttribute('data-task'));
         });
+        const tc = document.getElementById('tasks-content');
+        if (tc) {
+            tc.addEventListener('change', (e) => {
+                const cb = e.target.closest('input[data-check]');
+                if (cb) this.toggleDone(cb.getAttribute('data-check'), cb.checked);
+            });
+            tc.addEventListener('click', (e) => {
+                const a = e.target.closest('a[data-task]');
+                if (!a) return;
+                e.preventDefault();
+                this.openTask(a.getAttribute('data-task'));
+            });
+        }
+        const tt = document.querySelector('a[href="#tab-tasks"]');
+        if (tt) tt.addEventListener('shown.bs.tab', () => this.renderTasks());
         ['xlsx', 'xml'].forEach((kind) => {
             const btn = document.getElementById('dl-' + kind);
             if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); window.location.href = this.exportUrl(kind); });
