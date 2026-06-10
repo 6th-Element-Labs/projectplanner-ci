@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 import agent  # noqa: E402
 import export  # noqa: E402
+import signals  # noqa: E402
 import store  # noqa: E402
 
 app = FastAPI(title="Taikun PM", version="0.1.0")
@@ -153,6 +154,13 @@ async def plan_chat(body: dict = Body(...)):
 @app.get("/api/chat/history")
 async def plan_chat_history(session: str = "plan"):
     return {"messages": store.recent_chat(session, 100)}
+
+
+@app.get("/api/signals")
+async def plan_signals():
+    """Derived plan health: overdue / due-soon / blocked / ready / critical-slip /
+    past-due decisions + each owner's next-best 1-2 tasks."""
+    return signals.compute_plan_signals()
 
 
 def _people_of(t, people):

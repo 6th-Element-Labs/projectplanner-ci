@@ -19,6 +19,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import agent
 import rag
+import signals
 import store
 
 store.init_db()  # self-sufficient: the web app normally creates the schema
@@ -95,6 +96,13 @@ def doc_search(query: str) -> str:
     Returns cited snippets: [{file, text}]."""
     hits = rag.search(query, top_k=5)
     return json.dumps([{"file": h["file"], "text": h["text"]} for h in hits]) if hits else "no matches"
+
+
+@mcp.tool()
+def get_plan_signals() -> str:
+    """Derived plan health: counts + overdue/due-soon/blocked/ready tasks, critical-path slips,
+    past-due decisions, and each owner's next-best 1-2 tasks. Use for 'what's slipping?' or digests."""
+    return json.dumps(signals.compute_plan_signals())
 
 
 @mcp.tool()

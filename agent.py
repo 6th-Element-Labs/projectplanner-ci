@@ -11,6 +11,7 @@ import time
 import httpx
 
 import rag
+import signals
 import store
 
 BASE = os.environ.get("PM_LLM_BASE_URL", "http://127.0.0.1:8095/v1")
@@ -39,6 +40,12 @@ TOOLS = [
         "name": "get_task",
         "description": "Get the FULL detail of one task by id: description, all fields, and recent activity.",
         "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"]}}},
+    {"type": "function", "function": {
+        "name": "plan_signals",
+        "description": "Get derived plan health: counts + lists of overdue / due-soon / blocked / ready tasks, "
+                       "critical-path slips, past-due decisions, and each owner's next-best 1-2 tasks. Use for "
+                       "'what's slipping?', 'what should X do next?', risk summaries, or digests.",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "propose_task_update",
         "description": "Propose a change to a task for the user to confirm. Does NOT apply it — the user must "
@@ -219,6 +226,11 @@ def run(task, message, history=None):
             elif name == "get_task":
                 t = store.get_task(args.get("task_id", ""))
                 content = json.dumps(_task_brief(t, full=True)) if t else "no such task"
+            elif name == "plan_signals":
+                sig = signals.compute_plan_signals()
+                for k in ("overdue", "due_soon", "blocked", "ready", "critical_slip"):
+                    sig[k] = sig[k][:15]
+                content = json.dumps(sig)
             elif name == "propose_task_update":
                 tid = args.get("task_id") or (task and task.get("task_id"))
                 if not tid:

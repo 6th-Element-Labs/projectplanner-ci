@@ -105,6 +105,7 @@ const TeepPlan = {
         this.renderExec();
         this.wireEvents();
         this.setupGantt();
+        this.loadSignals();
         const ds = document.getElementById('data-status');
         if (ds) { ds.className = 'badge bg-green-lt'; ds.textContent = `${this.tasks.length} tasks`; }
     },
@@ -317,6 +318,12 @@ const TeepPlan = {
         return { text, cls };
     },
 
+    async loadSignals() {
+        try { this.signals = await (await fetch('api/signals')).json(); }
+        catch (e) { this.signals = null; }
+        this.renderTasks();
+    },
+
     renderTasks() {
         const el = document.getElementById('tasks-content');
         if (!el) return;
@@ -351,6 +358,11 @@ const TeepPlan = {
             const avatar = isU
                 ? `<span class="avatar avatar-sm avatar-rounded me-2 bg-secondary-lt"><i class="ti ti-user-question"></i></span>`
                 : `<span class="avatar avatar-sm avatar-rounded me-2">${this.esc(this.initials(name))}</span>`;
+            const nextUp = (this.signals && !isU && (this.signals.by_owner_next || {})[name]) || [];
+            const nextHtml = nextUp.length ? `<div class="mb-2 ms-1 small">
+                <span class="text-secondary me-1"><i class="ti ti-player-track-next-filled"></i> Next up:</span>
+                ${nextUp.map((n) => `<a href="#" class="text-reset fw-medium me-3" data-task="${this.esc(n.task_id)}"><span class="status-dot bg-${this.STATUS_COLOR[n.status] || 'secondary'} me-1"></span>${this.esc(n.task_id)} · ${this.esc((n.title || '').slice(0, 42))}</a>`).join('')}
+            </div>` : '';
             return `
                 <div class="mb-4">
                     <div class="d-flex align-items-center mb-2">
@@ -359,6 +371,7 @@ const TeepPlan = {
                         <span class="badge bg-secondary-lt ms-2">${list.length}</span>
                         <span class="ms-auto text-secondary small">${done}/${list.length} done</span>
                     </div>
+                    ${nextHtml}
                     <div class="card">
                         <div class="list-group list-group-flush">
                             ${list.map((t) => this.taskRow(t)).join('')}
@@ -1032,6 +1045,8 @@ const TeepPlan = {
         if (askInput) askInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendAsk(); });
         const askTab = document.querySelector('a[href="#tab-ask"]');
         if (askTab) askTab.addEventListener('shown.bs.tab', () => this.initAsk());
+        const tasksTab = document.querySelector('a[href="#tab-tasks"]');
+        if (tasksTab) tasksTab.addEventListener('shown.bs.tab', () => this.loadSignals());
     },
 };
 
