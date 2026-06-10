@@ -14,13 +14,14 @@ const TeepPlan = {
     tasks: [],          // flattened: every task + _wsId / _wsName
     wsMeta: {},         // workstream_id -> {name, lead_org}
     gantt: null,        // ApexCharts instance
-    ganttMode: 'workstream',  // 'workstream' (12 bars · overview) | 'task' (per-task detail)
+    ganttMode: 'task',  // default 'task' (per-task detail) · 'workstream' = 12-bar overview
 
     PHASES: ['Kickoff', 'Bootstrap', 'Build', 'Cutover', 'Operate'],
     PHASE_COLOR: { Kickoff: 'azure', Bootstrap: 'purple', Build: 'blue', Cutover: 'orange', Operate: 'green' },
     PHASE_HEX: { Kickoff: '#4299e1', Bootstrap: '#ae3ec9', Build: '#066fd1', Cutover: '#f76707', Operate: '#2fb344' },
     OWNER_COLOR: { 'Taikun': 'blue', 'TEEP': 'teal', 'Sensirion/Nubo': 'orange', 'IFS Merrick': 'purple', 'Joint': 'cyan' },
     RISK_COLOR: { Low: 'green', Medium: 'yellow', High: 'red' },
+    STATUS_COLOR: { 'Not Started': 'secondary', 'In Progress': 'blue', 'Blocked': 'red', 'Done': 'green' },
     WS_COLOR: {
         SEN: 'azure', FMP: 'blue', SCADA: 'cyan', IFS: 'teal', SSO: 'indigo', BEDROCK: 'purple',
         GW: 'pink', REG: 'lime', AGENT: 'orange', REPORT: 'yellow', DATA: 'green', CUTOVER: 'red'
@@ -127,6 +128,11 @@ const TeepPlan = {
     badge(text, color, light) {
         const cls = light === false ? `bg-${color}` : `bg-${color}-lt`;
         return `<span class="badge ${cls}">${this.esc(text)}</span>`;
+    },
+    initials(name) {
+        if (!name) return '';
+        return String(name).trim().split(/\s+/).slice(0, 2)
+            .map((p) => (p[0] || '').toUpperCase()).join('');
     },
 
     renderGenerated() {
@@ -235,12 +241,14 @@ const TeepPlan = {
             const color = this.PHASE_COLOR[phase] || 'secondary';
             const cards = col.length
                 ? col.map((t) => this.taskCard(t)).join('')
-                : `<div class="text-secondary text-center py-3 small">No tasks</div>`;
+                : `<div class="text-secondary text-center py-4 small">—</div>`;
             return `
                 <div class="col-12 col-lg">
-                    <div class="d-flex align-items-center mb-2">
-                        <span class="h3 m-0 me-2">${this.esc(phase)}</span>
-                        <span class="badge ${'bg-' + color + '-lt'}">${col.length} · ${Math.round(days)}d</span>
+                    <div class="d-flex align-items-center mb-3 px-1">
+                        <span class="status-dot bg-${color} me-2"></span>
+                        <span class="subheader">${this.esc(phase)}</span>
+                        <span class="badge bg-secondary-lt ms-2">${col.length}</span>
+                        <span class="ms-auto text-secondary small">${Math.round(days)}d</span>
                     </div>
                     <div>${cards}</div>
                 </div>`;
@@ -249,25 +257,28 @@ const TeepPlan = {
 
     taskCard(t) {
         const wc = this.WS_COLOR[t._wsId] || 'secondary';
-        const oc = this.OWNER_COLOR[t.owner_org] || 'secondary';
-        const rc = this.RISK_COLOR[t.risk_level] || 'secondary';
+        const sc = this.STATUS_COLOR[t.status] || 'secondary';
         const deps = (t.depends_on || []).length;
+        const meta = [];
+        if (t.owner_org) meta.push(this.esc(t.owner_org));
+        if (t.effort_days != null) meta.push(this.esc(t.effort_days) + 'd');
+        if (deps) meta.push(`<i class="ti ti-link"></i>${deps}`);
         return `
-            <a href="#" class="text-reset" data-task="${this.esc(t.task_id)}">
+            <a href="#" class="d-block text-reset" data-task="${this.esc(t.task_id)}">
                 <div class="card card-sm mb-2">
                     <div class="card-status-start bg-${wc}"></div>
                     <div class="card-body">
                         <div class="d-flex align-items-center gap-2 mb-1">
-                            ${this.badge(t._wsId, wc)}
-                            <span class="ms-auto small text-secondary">${this.esc(t.task_id)}</span>
+                            <span class="status-dot bg-${sc}" title="${this.esc(t.status || '')}"></span>
+                            <span class="text-secondary small fw-medium text-uppercase">${this.esc(t._wsId)}</span>
+                            <span class="ms-auto text-secondary small font-monospace">${this.esc(t.task_id)}</span>
                         </div>
-                        <div class="fw-bold">${this.esc(t.title)}</div>
-                        <div class="mt-2 d-flex flex-wrap gap-1">
-                            ${this.badge(t.owner_org, oc)}
-                            ${this.badge(t.effort_days + 'd', 'secondary')}
-                            ${this.badge(t.risk_level, rc)}
-                            ${t.is_blocking ? this.badge('Blocking', 'red', false) : ''}
-                            ${deps ? `<span class="badge bg-secondary-lt"><i class="ti ti-link me-1"></i>${deps}</span>` : ''}
+                        <div class="fw-semibold lh-sm text-body">${this.esc(t.title)}</div>
+                        <div class="d-flex align-items-center gap-2 mt-2 text-secondary small">
+                            <span>${meta.join(' · ')}</span>
+                            ${t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High risk</span>' : ''}
+                            ${t.is_blocking ? '<span class="text-red lh-1" title="Blocking"><i class="ti ti-alert-triangle-filled"></i></span>' : ''}
+                            ${t.assignee ? `<span class="avatar avatar-xs ms-auto" title="${this.esc(t.assignee)}">${this.esc(this.initials(t.assignee))}</span>` : ''}
                         </div>
                     </div>
                 </div>
