@@ -136,7 +136,7 @@ Each phase deploys a usable increment to plan.taikunai.com on its own.
 - [x] **Phase 1 — plan-wide chat tab** (`POST /api/chat` + `/api/chat/history`, persisted `chat` table, "Ask Taikun" tab with RAG-cited answers + propose-to-confirm cards) — live on plan.taikunai.com
 - [x] **Phase 1.5 — MCP server v1** (`mcp_server.py`: 8 tools — search_tasks/get_task/board_summary/doc_search/ask_plan + create/update/add_comment; Streamable HTTP at `https://plan.taikunai.com/mcp` via a `projectplanner-mcp` systemd unit + Caddy `/mcp` route; reads open, writes gated by `PM_MCP_TOKEN`). See `docs/MCP.md`.
 - [x] **Phase 2 — bulk / cross-task actions** (`propose_bulk_update` same-change-to-many + `propose_date_shift` server-computed shifts; `/api/chat` returns `proposals[]`; Ask-tab **Confirm-all** card with per-row drop). Verified: 3-task status change in one click, then reverted.
-- [ ] Phase 3 — plan signals + next-best-action
+- [x] **Phase 3 — plan signals + next-best-action** (`signals.py` `compute_plan_signals`: overdue/due-soon/blocked/ready/critical-slip/past-due-decisions + each owner's next-best 1-2; surfaced via `GET /api/signals`, the `plan_signals` agent tool, the `get_plan_signals` MCP tool, and a "Next up" line per owner in the By-person tab). Verified live.
 - [ ] Phase 3.5 — in-app digest
 - [ ] Phase 4 — notify (Slack + Gmail) + scheduler
 - [ ] Phase 5 — draft from live state
