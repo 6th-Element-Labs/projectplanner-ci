@@ -134,7 +134,7 @@ Each phase deploys a usable increment to plan.taikunai.com on its own.
 
 - [x] **Phase 0 — agent foundation** (board-read tools `search_tasks`/`get_task`, global/per-task loop, whole-board summary in the prompt, `task_id` on proposals) — `agent.py`
 - [x] **Phase 1 — plan-wide chat tab** (`POST /api/chat` + `/api/chat/history`, persisted `chat` table, "Ask Taikun" tab with RAG-cited answers + propose-to-confirm cards) — live on plan.taikunai.com
-- [ ] Phase 1.5 — MCP server v1
+- [x] **Phase 1.5 — MCP server v1** (`mcp_server.py`: 8 tools — search_tasks/get_task/board_summary/doc_search/ask_plan + create/update/add_comment; Streamable HTTP at `https://plan.taikunai.com/mcp` via a `projectplanner-mcp` systemd unit + Caddy `/mcp` route; reads open, writes gated by `PM_MCP_TOKEN`). See `docs/MCP.md`.
 - [ ] Phase 2 — bulk actions
 - [ ] Phase 3 — plan signals + next-best-action
 - [ ] Phase 3.5 — in-app digest

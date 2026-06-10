@@ -1,5 +1,11 @@
 # Caddy auto-provisions a Let's Encrypt cert for plan.taikunai.com once DNS
 # points at this VM, and reverse-proxies to the app. That's the whole TLS story.
+# /mcp* -> the MCP server (Streamable HTTP, :8111); everything else -> the web app (:8110).
 plan.taikunai.com {
-    reverse_proxy 127.0.0.1:8110
+    handle /mcp* {
+        reverse_proxy 127.0.0.1:8111
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8110
+    }
 }

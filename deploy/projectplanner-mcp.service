@@ -1,0 +1,17 @@
+# /etc/systemd/system/projectplanner-mcp.service
+[Unit]
+Description=ProjectPlanner MCP server (:8111, localhost)
+After=network-online.target projectplanner-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/mcp_server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
