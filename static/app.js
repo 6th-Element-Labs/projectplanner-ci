@@ -195,7 +195,7 @@ const TeepPlan = {
             (this.plan.workstreams || []).map((w) =>
                 `<option value="${this.esc(w.workstream_id)}">${this.esc(w.workstream_id)} — ${this.esc(w.name)}</option>`).join('');
         const owners = (this.plan.owner_orgs || []).slice();
-        document.getElementById('f-owner').innerHTML = `<option value="">All owners</option>` +
+        document.getElementById('f-owner').innerHTML = `<option value="">All orgs</option>` +
             owners.map((o) => `<option value="${this.esc(o)}">${this.esc(o)}</option>`).join('');
         this.refreshAssignees();
         document.getElementById('f-risk').innerHTML = `<option value="">All risk</option>` +
@@ -206,8 +206,8 @@ const TeepPlan = {
         const sel = document.getElementById('f-assignee');
         if (!sel) return;
         const cur = sel.value;
-        const names = [...new Set([...this.tasks.map((t) => t.assignee).filter(Boolean), ...(this.people || [])])].sort();
-        sel.innerHTML = `<option value="">All users</option>` +
+        const names = [...new Set(this.tasks.flatMap((t) => this._peopleOf(t)).filter((n) => n !== 'Unassigned'))].sort();
+        sel.innerHTML = `<option value="">All owners</option>` +
             names.map((a) => `<option value="${this.esc(a)}"${a === cur ? ' selected' : ''}>${this.esc(a)}</option>`).join('');
     },
 
@@ -215,13 +215,13 @@ const TeepPlan = {
         const q = (document.getElementById('f-search').value || '').trim().toLowerCase();
         const ws = document.getElementById('f-ws').value;
         const owner = document.getElementById('f-owner').value;
-        const assignee = document.getElementById('f-assignee').value;
+        const ownerPerson = document.getElementById('f-assignee').value;
         const risk = document.getElementById('f-risk').value;
         const blocking = document.getElementById('f-blocking').checked;
         return this.tasks.filter((t) => {
             if (ws && t._wsId !== ws) return false;
             if (owner && t.owner_org !== owner) return false;
-            if (assignee && t.assignee !== assignee) return false;
+            if (ownerPerson && !this._peopleOf(t).includes(ownerPerson)) return false;
             if (risk && t.risk_level !== risk) return false;
             if (blocking && !t.is_blocking) return false;
             if (q) {
@@ -290,8 +290,10 @@ const TeepPlan = {
     // Same data, regrouped per person. assignee wins; else match the known
     // people list against owner_person_or_role (a task with two owners shows
     // under each). Pure presentation — no new data.
+    // Group by OWNER (the person/role in owner_person_or_role) for now — NOT the
+    // assignee/user field (which is empty across the plan). Match the canonical
+    // people list against the owner string; a task with two owners shows under each.
     _peopleOf(t) {
-        if (t.assignee && t.assignee.trim()) return [t.assignee.trim()];
         const owner = (t.owner_person_or_role || '').toLowerCase();
         if (!owner) return ['Unassigned'];
         const matched = (this.people || []).filter((p) => owner.includes(p.toLowerCase()));
@@ -795,7 +797,7 @@ const TeepPlan = {
     exportUrl(kind) {
         const p = new URLSearchParams();
         const set = (id, key) => { const v = (document.getElementById(id).value || '').trim(); if (v) p.set(key, v); };
-        set('f-ws', 'workstream'); set('f-owner', 'owner'); set('f-assignee', 'assignee'); set('f-risk', 'risk'); set('f-search', 'q');
+        set('f-ws', 'workstream'); set('f-owner', 'owner'); set('f-assignee', 'person'); set('f-risk', 'risk'); set('f-search', 'q');
         if (document.getElementById('f-blocking').checked) p.set('blocking', '1');
         const qs = p.toString();
         return `api/export.${kind}` + (qs ? `?${qs}` : '');

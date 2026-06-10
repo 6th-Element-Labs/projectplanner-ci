@@ -128,17 +128,28 @@ async def chat(task_id: str, body: dict = Body(...)):
     return {"answer": answer, "proposal": result.get("proposal"), "sources": result.get("sources", [])}
 
 
-def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None, assignee=None):
+def _people_of(t, people):
+    """Owner-person(s) for a task — match the people list against owner_person_or_role.
+    Mirrors the board UI's _peopleOf so 'export = what you see' for the owner filter."""
+    owner = (t.get("owner_person_or_role") or "").lower()
+    if not owner:
+        return ["Unassigned"]
+    m = [p for p in people if p.lower() in owner]
+    return m or ["Unassigned"]
+
+
+def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None, person=None):
     """Same filter semantics as the board UI, so 'export = what you see'."""
     p = store.board_payload()
     ql = (q or "").lower()
+    people = store.get_meta("people", store.DEFAULT_PEOPLE) if person else []
 
     def keep(t):
         if workstream and t.get("_wsId") != workstream:
             return False
         if owner and t.get("owner_org") != owner:
             return False
-        if assignee and t.get("assignee") != assignee:
+        if person and person not in _people_of(t, people):
             return False
         if risk and t.get("risk_level") != risk:
             return False
@@ -156,16 +167,16 @@ def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None
 
 
 @app.get("/api/export.xlsx")
-async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, assignee: str = None):
-    data = export.export_xlsx(_filtered_payload(workstream, owner, risk, blocking, q, assignee))
+async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None):
+    data = export.export_xlsx(_filtered_payload(workstream, owner, risk, blocking, q, person))
     return Response(content=data,
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": 'attachment; filename="project-plan.xlsx"'})
 
 
 @app.get("/api/export.xml")
-async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, assignee: str = None):
-    xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, assignee))
+async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None):
+    xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, person))
     return Response(content=xml, media_type="text/xml",
                     headers={"Content-Disposition": 'attachment; filename="project-plan.xml"'})
 
