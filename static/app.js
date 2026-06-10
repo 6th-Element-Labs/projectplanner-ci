@@ -776,7 +776,9 @@ const TeepPlan = {
             const src = sources.length
                 ? `<div class="text-secondary small mt-1">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
             log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(data.answer)}${src}</div>`);
-            if (data.proposal && data.proposal.task_id) this.renderAskProposal(data.proposal);
+            const props = (data.proposals && data.proposals.length) ? data.proposals : (data.proposal ? [data.proposal] : []);
+            if (props.length === 1) this.renderAskProposal(props[0]);
+            else if (props.length > 1) this.renderAskProposals(props);
             this._askScroll();
         } catch (e) {
             const think = document.getElementById('ask-thinking');
@@ -824,6 +826,75 @@ const TeepPlan = {
             const card = document.getElementById(pid);
             if (card) card.querySelector('.card-body').insertAdjacentHTML('beforeend', `<div class="text-danger small mt-1">${this.esc(e.message)}</div>`);
         }
+    },
+
+    _propChips(p) {
+        const fields = Object.keys(p).filter((k) => !['rationale', 'task_id'].includes(k) && p[k] != null && p[k] !== '');
+        return fields.map((k) => `<span class="badge bg-azure-lt me-1">${this.esc(k)}: ${this.esc(String(p[k]))}</span>`).join('')
+            || '<span class="text-secondary small">no change</span>';
+    },
+
+    renderAskProposals(proposals) {
+        const log = document.getElementById('ask-log');
+        const pid = 'abulk-' + Math.random().toString(36).slice(2, 9);
+        const working = proposals.map((p) => Object.assign({}, p));
+        const rationale = (proposals.find((p) => p.rationale) || {}).rationale || '';
+        const rows = working.map((p, idx) => `
+            <div class="d-flex align-items-center gap-2 py-1" data-prow="${idx}">
+                <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
+                <div class="flex-fill">${this._propChips(p)}</div>
+                <button class="btn btn-sm btn-ghost-secondary p-1" data-drop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+            </div>`).join('');
+        log.insertAdjacentHTML('beforeend', `<div id="${pid}" class="card card-sm mb-2">
+            <div class="card-status-start bg-azure"></div>
+            <div class="card-body">
+                <div class="small text-secondary mb-2"><i class="ti ti-robot me-1"></i>Proposed changes to <strong>${working.length}</strong> tasks${rationale ? ' — ' + this.esc(rationale) : ''}</div>
+                <div data-rows>${rows}</div>
+                <div class="mt-2">
+                    <button class="btn btn-primary btn-sm" data-confirm-all><i class="ti ti-checks me-1"></i>Confirm all</button>
+                    <button class="btn btn-sm" data-dismiss-all>Dismiss</button>
+                    <span class="small text-secondary ms-2" data-bulk-status></span>
+                </div>
+            </div></div>`);
+        const card = document.getElementById(pid);
+        card.querySelectorAll('[data-drop]').forEach((btn) => btn.addEventListener('click', () => {
+            const idx = parseInt(btn.getAttribute('data-drop'), 10);
+            working[idx] = null;
+            const row = card.querySelector(`[data-prow="${idx}"]`);
+            if (row) row.remove();
+            if (!working.some(Boolean)) card.remove();
+        }));
+        card.querySelector('[data-dismiss-all]').addEventListener('click', () => card.remove());
+        card.querySelector('[data-confirm-all]').addEventListener('click', () => this.applyAskBulk(pid, working.filter(Boolean)));
+        this._askScroll();
+    },
+
+    async applyAskBulk(pid, working) {
+        const card = document.getElementById(pid);
+        const statusEl = card ? card.querySelector('[data-bulk-status]') : null;
+        const btn = card ? card.querySelector('[data-confirm-all]') : null;
+        if (btn) btn.disabled = true;
+        let ok = 0, fail = 0;
+        for (const p of working) {
+            const body = { _actor: 'Maxwell (confirmed)' };
+            Object.keys(p).forEach((k) => { if (!['rationale', 'task_id'].includes(k) && p[k] != null && p[k] !== '') body[k] = p[k]; });
+            if (Object.keys(body).length <= 1) continue;
+            try {
+                const res = await fetch(`api/tasks/${encodeURIComponent(p.task_id)}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+                });
+                if (!res.ok) throw new Error();
+                const updated = await res.json();
+                const i = this.tasks.findIndex((x) => x.task_id === p.task_id);
+                if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], updated);
+                ok++;
+            } catch (e) { fail++; }
+            if (statusEl) statusEl.textContent = `applied ${ok}${fail ? ' · ' + fail + ' failed' : ''}…`;
+        }
+        if (card) card.querySelector('.card-body').innerHTML = `<span class="text-green"><i class="ti ti-checks me-1"></i>Applied ${ok} change${ok === 1 ? '' : 's'}${fail ? ' · ' + fail + ' failed' : ''}</span>`;
+        this.renderBoard();
+        this.renderTasks();
+        if (this.isGanttVisible()) this.renderGantt();
     },
 
     // ---- tables (milestones / critical path / risks / decisions) ---------

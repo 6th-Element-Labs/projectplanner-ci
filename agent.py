@@ -3,6 +3,7 @@ shared LLM gateway. Tools: doc_search (RAG over plan docs) + propose_task_update
 (propose-then-confirm; never applies a change directly). Synchronous; the app
 calls it via asyncio.to_thread so it doesn't block the event loop.
 """
+import datetime
 import json
 import os
 import time
@@ -62,6 +63,32 @@ TOOLS = [
             "deliverable": {"type": "string"},
             "rationale": {"type": "string", "description": "one short line on why"}},
             "required": ["rationale"]}}},
+    {"type": "function", "function": {
+        "name": "propose_bulk_update",
+        "description": "Propose the SAME field change to MULTIPLE tasks at once (e.g. mark several Done). "
+                       "Gather the exact task_ids first (from the board list or search_tasks). Each task "
+                       "becomes a separate confirmable proposal. Does NOT apply — the user confirms.",
+        "parameters": {"type": "object", "properties": {
+            "task_ids": {"type": "array", "items": {"type": "string"}},
+            "status": {"type": "string", "enum": ["Not Started", "In Progress", "Blocked", "Done"]},
+            "owner_org": {"type": "string", "enum": ["Taikun", "TEEP", "Sensirion/Nubo", "IFS Merrick", "Joint"]},
+            "owner_person_or_role": {"type": "string"},
+            "assignee": {"type": "string"},
+            "phase": {"type": "string", "enum": ["Kickoff", "Bootstrap", "Build", "Cutover", "Operate"]},
+            "risk_level": {"type": "string", "enum": ["Low", "Medium", "High"]},
+            "is_blocking": {"type": "boolean"},
+            "rationale": {"type": "string", "description": "one short line on why"}},
+            "required": ["task_ids", "rationale"]}}},
+    {"type": "function", "function": {
+        "name": "propose_date_shift",
+        "description": "Propose shifting the start AND finish dates of MULTIPLE tasks by N days (e.g. 'push "
+                       "every Bedrock task out a week' = days 7). The server computes each task's new dates. "
+                       "Each becomes a confirmable proposal. Does NOT apply — the user confirms.",
+        "parameters": {"type": "object", "properties": {
+            "task_ids": {"type": "array", "items": {"type": "string"}},
+            "days": {"type": "integer", "description": "+N moves later, -N earlier"},
+            "rationale": {"type": "string", "description": "one short line on why"}},
+            "required": ["task_ids", "days", "rationale"]}}},
 ]
 
 # Editable fields the agent may propose (mirrors store.EDITABLE minus internal ones).
@@ -169,13 +196,13 @@ def run(task, message, history=None):
             msgs.append({"role": h["role"], "content": h["content"]})
     msgs.append({"role": "user", "content": message})
 
-    sources, proposal, last = [], None, None
+    sources, proposals, last = [], [], None
     for _ in range(MAX_ITERS):
         m = _chat(msgs)
         last = m
         tcs = m.get("tool_calls")
         if not tcs:
-            return {"answer": m.get("content") or "", "proposal": proposal, "sources": list(dict.fromkeys(sources))}
+            return _result(m.get("content") or "", proposals, sources)
         msgs.append({"role": "assistant", "content": m.get("content"), "tool_calls": tcs})
         for tc in tcs:
             name = tc["function"]["name"]
@@ -199,12 +226,52 @@ def run(task, message, history=None):
                 elif not store.get_task(tid):
                     content = f"No task {tid}."
                 else:
-                    proposal = {k: v for k, v in args.items()
-                                if k in (_PROPOSABLE + ["rationale"]) and v not in (None, "")}
-                    proposal["task_id"] = tid
-                    content = f"Proposal for {tid} recorded; tell the user what you propose and that they must Confirm."
+                    prop = {k: v for k, v in args.items()
+                            if k in (_PROPOSABLE + ["rationale"]) and v not in (None, "")}
+                    prop["task_id"] = tid
+                    proposals.append(prop)
+                    content = f"Proposal for {tid} recorded ({len(proposals)} pending); tell the user to Confirm."
+            elif name == "propose_bulk_update":
+                setf = {k: v for k, v in args.items() if k in _PROPOSABLE and v not in (None, "")}
+                rat = args.get("rationale") or "bulk update"
+                n = 0
+                for tid in (args.get("task_ids") or []):
+                    if not store.get_task(tid):
+                        continue
+                    prop = dict(setf)
+                    prop["task_id"] = tid
+                    prop["rationale"] = rat
+                    proposals.append(prop)
+                    n += 1
+                content = f"Proposed {n} updates ({len(proposals)} pending); tell the user to Confirm all."
+            elif name == "propose_date_shift":
+                days = int(args.get("days") or 0)
+                rat = args.get("rationale") or f"shift {days:+d}d"
+                n = 0
+                for tid in (args.get("task_ids") or []):
+                    t = store.get_task(tid)
+                    if not t:
+                        continue
+                    prop = {"task_id": tid, "rationale": rat}
+                    for f in ("start_date", "finish_date"):
+                        d = t.get(f)
+                        if d:
+                            try:
+                                prop[f] = (datetime.date.fromisoformat(d)
+                                           + datetime.timedelta(days=days)).isoformat()
+                            except Exception:
+                                pass
+                    if len(prop) > 2:  # at least one date shifted
+                        proposals.append(prop)
+                        n += 1
+                content = f"Proposed a {days:+d}d shift on {n} tasks ({len(proposals)} pending); tell the user to Confirm all."
             else:
                 content = "unknown tool"
             msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
-    return {"answer": (last or {}).get("content") or "(reached step limit)", "proposal": proposal,
+    return _result((last or {}).get("content") or "(reached step limit)", proposals, sources)
+
+
+def _result(answer, proposals, sources):
+    return {"answer": answer, "proposals": proposals,
+            "proposal": (proposals[-1] if proposals else None),
             "sources": list(dict.fromkeys(sources))}

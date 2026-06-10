@@ -145,8 +145,9 @@ async def plan_chat(body: dict = Body(...)):
         raise HTTPException(502, f"agent error: {e}")
     answer = result.get("answer") or ""
     store.add_chat(session, "assistant", answer,
-                   {"proposal": result.get("proposal"), "sources": result.get("sources", [])})
-    return {"answer": answer, "proposal": result.get("proposal"), "sources": result.get("sources", [])}
+                   {"proposals": result.get("proposals", []), "sources": result.get("sources", [])})
+    return {"answer": answer, "proposal": result.get("proposal"),
+            "proposals": result.get("proposals", []), "sources": result.get("sources", [])}
 
 
 @app.get("/api/chat/history")
