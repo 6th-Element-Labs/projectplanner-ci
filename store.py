@@ -54,8 +54,13 @@ def init_db():
                 task_id TEXT, actor TEXT, kind TEXT, payload TEXT, created_at REAL
             );
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE IF NOT EXISTS chat (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session TEXT, role TEXT, content TEXT, payload TEXT, created_at REAL
+            );
             CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
             CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
+            CREATE INDEX IF NOT EXISTS ix_chat_session ON chat(session);
             """
         )
 
@@ -219,6 +224,24 @@ def get_meta(key: str, default=None):
     with _conn() as c:
         r = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return json.loads(r[0]) if r else default
+
+
+# ---- plan-wide chat (the global "Ask Taikun" session) --------------------
+def add_chat(session: str, role: str, content: str, payload: Optional[Dict[str, Any]] = None):
+    with _conn() as c:
+        c.execute("INSERT INTO chat(session, role, content, payload, created_at) VALUES (?,?,?,?,?)",
+                  (session, role, content, json.dumps(payload or {}), time.time()))
+
+
+def recent_chat(session: str, limit: int = 20) -> List[Dict[str, Any]]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT role, content, payload, created_at FROM chat WHERE session=? ORDER BY id DESC LIMIT ?",
+            (session, limit)).fetchall()
+    out = [{"role": r["role"], "content": r["content"],
+            "payload": json.loads(r["payload"] or "{}"), "created_at": r["created_at"]} for r in rows]
+    out.reverse()
+    return out
 
 
 def board_payload() -> Dict[str, Any]:

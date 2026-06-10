@@ -716,6 +716,116 @@ const TeepPlan = {
         }
     },
 
+    // ---- Ask Taikun (plan-wide agent) -----------------------------------
+    async initAsk() {
+        if (this._askLoaded) return;
+        this._askLoaded = true;
+        try {
+            const data = await (await fetch('api/chat/history?session=plan')).json();
+            if ((data.messages || []).length) {
+                const empty = document.getElementById('ask-empty');
+                if (empty) empty.remove();
+                this.renderAskMessages(data.messages);
+                this._askScroll();
+            }
+        } catch (e) { /* leave the empty hint */ }
+    },
+
+    renderAskMessages(messages) {
+        const log = document.getElementById('ask-log');
+        if (!log) return;
+        log.innerHTML = messages.map((m) => {
+            if (m.role === 'user')
+                return `<div class="mb-2 text-end"><span class="badge bg-blue-lt">you</span> ${this.esc(m.content)}</div>`;
+            const sources = (m.payload && m.payload.sources) || [];
+            const src = sources.length
+                ? `<div class="text-secondary small mt-1">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            return `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(m.content)}${src}</div>`;
+        }).join('');
+    },
+
+    _askScroll() {
+        const log = document.getElementById('ask-log');
+        if (log && log.lastElementChild) log.lastElementChild.scrollIntoView({ block: 'nearest' });
+    },
+
+    async sendAsk() {
+        const input = document.getElementById('ask-input');
+        const log = document.getElementById('ask-log');
+        const msg = (input.value || '').trim();
+        if (!msg) return;
+        input.value = '';
+        const empty = document.getElementById('ask-empty');
+        if (empty) empty.remove();
+        log.insertAdjacentHTML('beforeend', `<div class="mb-2 text-end"><span class="badge bg-blue-lt">you</span> ${this.esc(msg)}</div>`);
+        log.insertAdjacentHTML('beforeend', `<div id="ask-thinking" class="mb-2 text-secondary small"><span class="spinner-border spinner-border-sm me-1"></span>Maxwell is reading the plan…</div>`);
+        this._askScroll();
+        try {
+            const res = await fetch('api/chat', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg, session: 'plan' }),
+            });
+            const data = await res.json().catch(() => ({}));
+            const think = document.getElementById('ask-thinking');
+            if (think) think.remove();
+            if (!res.ok) {
+                log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(data.detail || ('HTTP ' + res.status))}</div>`);
+                return;
+            }
+            const sources = data.sources || [];
+            const src = sources.length
+                ? `<div class="text-secondary small mt-1">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(data.answer)}${src}</div>`);
+            if (data.proposal && data.proposal.task_id) this.renderAskProposal(data.proposal);
+            this._askScroll();
+        } catch (e) {
+            const think = document.getElementById('ask-thinking');
+            if (think) think.remove();
+            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(e.message)}</div>`);
+        }
+    },
+
+    renderAskProposal(p) {
+        const log = document.getElementById('ask-log');
+        const fields = Object.keys(p).filter((k) => k !== 'rationale' && k !== 'task_id' && p[k] != null && p[k] !== '');
+        const chips = fields.map((k) => `<span class="badge bg-azure-lt me-1">${this.esc(k)}: ${this.esc(String(p[k]))}</span>`).join('') || '<span class="text-secondary">no fields</span>';
+        const pid = 'aprop-' + Math.random().toString(36).slice(2, 9);
+        log.insertAdjacentHTML('beforeend', `<div id="${pid}" class="card card-sm mb-2">
+            <div class="card-status-start bg-azure"></div>
+            <div class="card-body">
+                <div class="small text-secondary mb-1"><i class="ti ti-robot me-1"></i>Proposed change to <strong>${this.esc(p.task_id)}</strong>${p.rationale ? ' — ' + this.esc(p.rationale) : ''}</div>
+                <div class="mb-2">${chips}</div>
+                <button class="btn btn-primary btn-sm" data-confirm><i class="ti ti-check me-1"></i>Confirm</button>
+                <button class="btn btn-sm" data-dismiss>Dismiss</button>
+            </div></div>`);
+        const card = document.getElementById(pid);
+        card.querySelector('[data-confirm]').addEventListener('click', () => this.applyAskProposal(p, pid));
+        card.querySelector('[data-dismiss]').addEventListener('click', () => card.remove());
+        this._askScroll();
+    },
+
+    async applyAskProposal(p, pid) {
+        const body = { _actor: 'Maxwell (confirmed)' };
+        Object.keys(p).forEach((k) => { if (!['rationale', 'task_id'].includes(k) && p[k] != null && p[k] !== '') body[k] = p[k]; });
+        try {
+            const res = await fetch(`api/tasks/${encodeURIComponent(p.task_id)}`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const updated = await res.json();
+            const i = this.tasks.findIndex((x) => x.task_id === p.task_id);
+            if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], updated);
+            const card = document.getElementById(pid);
+            if (card) card.querySelector('.card-body').innerHTML = `<span class="text-green"><i class="ti ti-check me-1"></i>Applied to ${this.esc(p.task_id)}</span>`;
+            this.renderBoard();
+            this.renderTasks();
+            if (this.isGanttVisible()) this.renderGantt();
+        } catch (e) {
+            const card = document.getElementById(pid);
+            if (card) card.querySelector('.card-body').insertAdjacentHTML('beforeend', `<div class="text-danger small mt-1">${this.esc(e.message)}</div>`);
+        }
+    },
+
     // ---- tables (milestones / critical path / risks / decisions) ---------
     table(headers, rows) {
         return `<div class="table-responsive"><table class="table table-vcenter card-table">
@@ -844,6 +954,13 @@ const TeepPlan = {
         });
         const nb = document.getElementById('btn-new-task');
         if (nb) nb.addEventListener('click', () => this.openCreate());
+        // Ask Taikun (plan-wide chat)
+        const askSend = document.getElementById('ask-send');
+        if (askSend) askSend.addEventListener('click', () => this.sendAsk());
+        const askInput = document.getElementById('ask-input');
+        if (askInput) askInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendAsk(); });
+        const askTab = document.querySelector('a[href="#tab-ask"]');
+        if (askTab) askTab.addEventListener('shown.bs.tab', () => this.initAsk());
     },
 };
 

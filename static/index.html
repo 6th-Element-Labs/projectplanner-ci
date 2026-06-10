@@ -112,6 +112,9 @@
                             <a class="nav-link active" data-bs-toggle="tab" href="#tab-board" role="tab"><i class="ti ti-layout-kanban me-1"></i>Board</a>
                         </li>
                         <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-ask" role="tab"><i class="ti ti-sparkles me-1"></i>Ask Taikun</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-tasks" role="tab"><i class="ti ti-list-check me-1"></i>By person</a>
                         </li>
                         <li class="nav-item" role="presentation">
@@ -135,6 +138,25 @@
                         <!-- Board -->
                         <div class="tab-pane active show" id="tab-board" role="tabpanel">
                             <div class="row g-3 mt-1" id="board"></div>
+                        </div>
+                        <!-- Ask Taikun (plan-wide agent: RAG + propose-to-confirm) -->
+                        <div class="tab-pane" id="tab-ask" role="tabpanel">
+                            <div class="card mt-3">
+                                <div class="card-header">
+                                    <h3 class="card-title"><i class="ti ti-sparkles me-2"></i>Ask Taikun</h3>
+                                    <div class="card-actions">
+                                        <span class="badge bg-green-lt">whole board · RAG over plan docs · propose-to-confirm</span>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div id="ask-log"></div>
+                                    <div class="text-secondary small mb-3" id="ask-empty">Ask about the whole plan — e.g. <em>"What's blocking SSO?"</em>, <em>"What did Sahir commit to?"</em>, <em>"Summarize this week's risks"</em>, or <em>"mark SSO-7 done"</em>.</div>
+                                    <div class="input-group">
+                                        <input id="ask-input" class="form-control" placeholder="Ask about the plan…" autocomplete="off"/>
+                                        <button id="ask-send" class="btn btn-primary"><i class="ti ti-send me-1"></i>Send</button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         <!-- By person (Todoist-style task lens) -->
                         <div class="tab-pane" id="tab-tasks" role="tabpanel">

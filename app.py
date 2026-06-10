@@ -128,6 +128,32 @@ async def chat(task_id: str, body: dict = Body(...)):
     return {"answer": answer, "proposal": result.get("proposal"), "sources": result.get("sources", [])}
 
 
+@app.post("/api/chat")
+async def plan_chat(body: dict = Body(...)):
+    """Plan-wide Ask Taikun: the global agent sees the whole board + docs; propose-to-confirm."""
+    msg = (body.get("message") or "").strip()
+    if not msg:
+        raise HTTPException(400, "message required")
+    session = body.get("session") or "plan"
+    history = [{"role": m["role"], "content": m["content"]}
+               for m in store.recent_chat(session, 16) if m.get("content")]
+    store.add_chat(session, "user", msg)
+    try:
+        result = await asyncio.to_thread(agent.run, None, msg, history)
+    except Exception as e:
+        store.add_chat(session, "assistant", f"(agent error: {e})")
+        raise HTTPException(502, f"agent error: {e}")
+    answer = result.get("answer") or ""
+    store.add_chat(session, "assistant", answer,
+                   {"proposal": result.get("proposal"), "sources": result.get("sources", [])})
+    return {"answer": answer, "proposal": result.get("proposal"), "sources": result.get("sources", [])}
+
+
+@app.get("/api/chat/history")
+async def plan_chat_history(session: str = "plan"):
+    return {"messages": store.recent_chat(session, 100)}
+
+
 def _people_of(t, people):
     """Owner-person(s) for a task — match the people list against owner_person_or_role.
     Mirrors the board UI's _peopleOf so 'export = what you see' for the owner filter."""
