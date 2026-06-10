@@ -132,8 +132,8 @@ Each phase deploys a usable increment to plan.taikunai.com on its own.
 
 ## Status
 
-- [ ] Phase 0 — agent foundation (board-read tools, global/per-task loop)
-- [ ] Phase 1 — plan-wide chat tab
+- [x] **Phase 0 — agent foundation** (board-read tools `search_tasks`/`get_task`, global/per-task loop, whole-board summary in the prompt, `task_id` on proposals) — `agent.py`
+- [x] **Phase 1 — plan-wide chat tab** (`POST /api/chat` + `/api/chat/history`, persisted `chat` table, "Ask Taikun" tab with RAG-cited answers + propose-to-confirm cards) — live on plan.taikunai.com
 - [ ] Phase 1.5 — MCP server v1
 - [ ] Phase 2 — bulk actions
 - [ ] Phase 3 — plan signals + next-best-action
