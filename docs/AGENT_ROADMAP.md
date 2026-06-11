@@ -27,20 +27,21 @@ Verdict: reactive, single-task. The perfect seed — not yet a teammate.
 
 ---
 
-## The reframe: ~7 primitives, then the features fall out
+## The reframe: ~8 primitives, then the features fall out
 
-The 8 capabilities are thin compositions over a handful of shared primitives. Build
+The 9 capabilities are thin compositions over a handful of shared primitives. Build
 the substrate once; most features become a prompt + a small UI.
 
 | Primitive | Lives in | Feeds capabilities |
 |---|---|---|
-| **Board-read tools** (`search_tasks`, `get_task`, `board_summary`) | agent.py | 1, 2, 3, 4, 6, 7, 8 |
-| **Global agent session** (agent runs with or without a task; own chat store) | new endpoint + table | 1, 2, 5, 8 |
-| **Bulk propose** (agent emits a *list*; confirm-all UI) | agent + UI | 2, 5, 6 |
+| **Board-read tools** (`search_tasks`, `get_task`, `board_summary`) | agent.py | 1, 2, 3, 4, 6, 7, 8, 9 |
+| **Global agent session** (agent runs with or without a task; own chat store) | new endpoint + table | 1, 2, 5, 8, 9 |
+| **Bulk propose** (agent emits a *list*; confirm-all UI) | agent + UI | 2, 5, 6, 9 |
 | **Plan signals** (`compute_plan_signals`) | new module | 3, 4, 6 |
 | **Notify** (`notify.send` → Slack + Gmail adapters) | new module | 3, 4, 5 |
-| **Scheduler** (systemd timer — NOT the workflow engine) | timer + job | 3, 6 |
-| **Risk classifier + autonomy policy** | new function | 7 (informs confirm UX everywhere) |
+| **Scheduler** (systemd timer — NOT the workflow engine) | timer + job | 3, 6, 9 |
+| **Incremental RAG index** (add + persist docs at runtime; emails become citable sources) | `rag.py` upgrade | 9 |
+| **Risk classifier + autonomy policy** | new function | 7, 9 (informs confirm UX everywhere) |
 | **MCP server** (exposure layer wrapping all the above) | FastMCP mount | 8 (cross-cutting) |
 
 Two are nearly free: **deltas** come straight from the existing activity log (no
@@ -49,7 +50,7 @@ snapshot infra), and the **autonomy pattern** is the same `auto_resolve` /
 
 ---
 
-## The 8 capabilities
+## The 9 capabilities
 
 1. **Plan-wide chat** — one "Ask Taikun" that sees the whole plan + docs. "What's
    blocking SSO?", "What did Sahir commit to?", "Summarize this week's risks."
@@ -66,6 +67,11 @@ snapshot infra), and the **autonomy pattern** is the same `auto_resolve` /
    escalate high-impact. **Off by default.**
 8. **MCP server** — expose the plan to Cursor / Claude Desktop / Claude Code as MCP
    tools over Streamable HTTP. A second front door over the same primitives.
+9. **Live Inbox (email-driven plan)** — forward email to `plan@taikunai.com`; the agent
+   ingests each message into the RAG corpus (citable) AND triages it against the plan —
+   updating, closing, or rescheduling tasks as the email dictates (propose-to-confirm, or
+   auto-apply low-risk once the autonomy switch is on). The plan stays live as emails and
+   chats happen. This is the sensing layer pointed at your inbox.
 
 ---
 
@@ -82,6 +88,12 @@ snapshot infra), and the **autonomy pattern** is the same `auto_resolve` /
   scheduled use lands in Phase 4. Setup = one Gmail OAuth scope + one Slack app/webhook.
 - **Autonomy default: OFF.** #7 ships off; opt-in per deployment to auto-apply only
   low-risk status flips, with one-click undo.
+- **Live-Inbox mailbox: `plan@taikunai.com`** (Google Workspace — to be created). The
+  agent reads it via the Gmail API (the *same* OAuth as the Phase-4 Gmail sender, plus a
+  `gmail.readonly`/`modify` scope) and polls on the Phase-4 scheduler. A **sender
+  allowlist** (team addresses) gates who can drive the plan by email while we're public.
+  Email-driven changes are audited as actor **"Maxwell (email)"** and follow the same
+  propose-to-confirm / autonomy rules as every other agent action.
 
 ---
 
@@ -99,6 +111,7 @@ Each phase deploys a usable increment to plan.taikunai.com on its own.
 | **3.5** | #3 digest, **in-app post first** (no delivery) | value before notify lands |
 | **4** | `notify.send` (Slack + Gmail) + systemd scheduler → digests/nudges delivered | "feels alive" moment; the long pole |
 | **5** | #5 draft-from-transcript → bulk-create + Slack/Gmail update | reuses 2 + 4 |
+| **5.5** | #9 **Live Inbox** — Gmail read + incremental RAG + per-email triage (propose-to-confirm) | reuses 4 (Gmail+scheduler), agent, autonomy; new: incremental RAG index |
 | **6** | #6 automated maintenance (dependency-aware reschedule, orphan flags, cleanup) | port the offline scheduler from `build_plan_artifacts.py` |
 | **7** | #7 autonomy switch (**off by default**, low-risk only, undo) | the differentiator, last |
 
@@ -116,6 +129,34 @@ Each phase deploys a usable increment to plan.taikunai.com on its own.
   when login lands. Rate-limit `ask_plan` (it runs the gateway → cost).
 - **Grows as a track:** every new primitive gets a ~10-line MCP wrapper next to its web
   surface. Two doors, one engine.
+
+---
+
+## Live Inbox design (#9)
+
+Email is an event; the agent triages it the way the ActionEngine sensing layer triages
+an alert — ingest → bind to task(s) → disposition. The plan becomes a living record of
+what's actually said in email (and later chat).
+
+- **Mailbox:** `plan@taikunai.com` (Google Workspace). The agent **polls Gmail** on the
+  Phase-4 scheduler (reuses the Phase-4 Gmail OAuth + a read/modify scope); each new,
+  un-processed message is handled exactly once (label it `processed` / mark read).
+- **Ingest → RAG:** the email (from, subject, date, body, text of key attachments) is
+  added to the **incremental RAG index** as a citable source, so `doc_search` / `ask_plan`
+  can answer *"what did Sahir email about the gateway?"* with a citation.
+- **Triage → tasks:** one agent run per email, with the board + RAG in context, proposes
+  the implied changes — update status, **close** a task an email says is done, reschedule
+  on a slip, or create a task from an ask. Propose-to-confirm by default (surfaced in
+  Pulse / an inbox queue); **auto-apply low-risk** once the autonomy switch (#7) is on.
+- **Provenance + safety:** every email-driven change is audited as **"Maxwell (email)"**
+  and links back to the source email; a **sender allowlist** restricts who can drive the
+  plan while we're public.
+- **Chats too:** the same ingest→triage pipeline later takes Slack messages (Events API);
+  email first.
+
+New infra this needs: the **incremental / persistent RAG index** — today's `rag.py` is a
+static startup load of `plan-docs/*.md`; emails require adding + persisting embeddings at
+runtime. Everything else reuses Phase 4 (Gmail + scheduler), the agent, and #7 autonomy.
 
 ---
 
@@ -140,5 +181,6 @@ Each phase deploys a usable increment to plan.taikunai.com on its own.
 - [x] **Phase 3.5 — in-app digest** (`digest.py` `generate_digest` = signals + activity-log deltas since last digest → one LLM chief-of-staff brief; `digests` table; `POST /api/digest` + `GET /api/digests`; MCP `generate_digest`; **Pulse tab** with Generate + latest + collapsible history). Verified: brief reads real activity deltas, renders in the UI, MCP works.
 - [ ] Phase 4 — notify (Slack + Gmail) + scheduler
 - [ ] Phase 5 — draft from live state
+- [ ] Phase 5.5 — Live Inbox (#9): `plan@taikunai.com` → Gmail read + incremental RAG + per-email triage
 - [ ] Phase 6 — automated maintenance
 - [ ] Phase 7 — autonomy switch
