@@ -910,6 +910,73 @@ const TeepPlan = {
         if (this.isGanttVisible()) this.renderGantt();
     },
 
+    // ---- Pulse (weekly digest) ------------------------------------------
+    mdLite(text) {
+        return (text || '').split('\n').map((line) => {
+            const l = this.esc(line).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            const m = l.match(/^\s*(?:[-*]|\d+\.)\s+(.*)$/);
+            if (m) return `<div class="ms-3">• ${m[1]}</div>`;
+            if (!l.trim()) return '<div class="mb-2"></div>';
+            return `<div>${l}</div>`;
+        }).join('');
+    },
+
+    renderDigest(d, el) {
+        if (!el) return;
+        const when = d.created_at ? new Date(d.created_at * 1000).toLocaleString() : '';
+        const c = (d.meta && d.meta.counts) || d.counts || {};
+        const chips = ['overdue', 'critical_slip', 'ready', 'due_soon'].filter((k) => c[k] != null)
+            .map((k) => `<span class="badge bg-secondary-lt me-1">${k.replace('_', ' ')}: ${c[k]}</span>`).join('');
+        el.classList.remove('text-secondary');
+        el.innerHTML = `<div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+            <span class="text-secondary small">${this.esc(when)}</span>${chips}</div>
+            <div>${this.mdLite(d.content)}</div>`;
+    },
+
+    renderDigestHistory(list) {
+        const el = document.getElementById('digest-history');
+        if (!el) return;
+        el.innerHTML = (list || []).map((d) => {
+            const when = d.created_at ? new Date(d.created_at * 1000).toLocaleString() : '';
+            const id = 'dg-' + d.id;
+            return `<div class="card card-sm mb-2">
+                <div class="card-header py-2">
+                    <a class="text-reset" data-bs-toggle="collapse" href="#${id}"><i class="ti ti-chevron-down me-1"></i>Digest · ${this.esc(when)}</a>
+                </div>
+                <div class="collapse" id="${id}"><div class="card-body">${this.mdLite(d.content)}</div></div>
+            </div>`;
+        }).join('');
+    },
+
+    async initPulse() {
+        try {
+            const data = await (await fetch('api/digests')).json();
+            const ds = data.digests || [];
+            if (ds.length) {
+                this.renderDigest(ds[0], document.getElementById('digest-latest'));
+                this.renderDigestHistory(ds.slice(1));
+            }
+        } catch (e) { /* keep the empty hint */ }
+    },
+
+    async genDigest() {
+        const el = document.getElementById('digest-latest');
+        const btn = document.getElementById('digest-gen');
+        if (btn) btn.disabled = true;
+        if (el) { el.classList.add('text-secondary'); el.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Maxwell is writing the brief…'; }
+        try {
+            const d = await (await fetch('api/digest', { method: 'POST' })).json();
+            if (d.detail) throw new Error(d.detail);
+            this.renderDigest(d, el);
+            const data = await (await fetch('api/digests')).json();
+            this.renderDigestHistory((data.digests || []).slice(1));
+        } catch (e) {
+            if (el) el.innerHTML = `<span class="text-danger">Digest failed: ${this.esc(e.message)}</span>`;
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    },
+
     // ---- tables (milestones / critical path / risks / decisions) ---------
     table(headers, rows) {
         return `<div class="table-responsive"><table class="table table-vcenter card-table">
@@ -1047,6 +1114,10 @@ const TeepPlan = {
         if (askTab) askTab.addEventListener('shown.bs.tab', () => this.initAsk());
         const tasksTab = document.querySelector('a[href="#tab-tasks"]');
         if (tasksTab) tasksTab.addEventListener('shown.bs.tab', () => this.loadSignals());
+        const digestGen = document.getElementById('digest-gen');
+        if (digestGen) digestGen.addEventListener('click', () => this.genDigest());
+        const pulseTab = document.querySelector('a[href="#tab-pulse"]');
+        if (pulseTab) pulseTab.addEventListener('shown.bs.tab', () => this.initPulse());
     },
 };
 

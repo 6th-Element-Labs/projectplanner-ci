@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 import agent  # noqa: E402
+import digest  # noqa: E402
 import export  # noqa: E402
 import signals  # noqa: E402
 import store  # noqa: E402
@@ -161,6 +162,20 @@ async def plan_signals():
     """Derived plan health: overdue / due-soon / blocked / ready / critical-slip /
     past-due decisions + each owner's next-best 1-2 tasks."""
     return signals.compute_plan_signals()
+
+
+@app.post("/api/digest")
+async def make_digest():
+    """Generate + post the weekly chief-of-staff brief (signals + activity deltas)."""
+    try:
+        return await asyncio.to_thread(digest.generate_digest)
+    except Exception as e:
+        raise HTTPException(502, f"digest error: {e}")
+
+
+@app.get("/api/digests")
+async def get_digests():
+    return {"digests": store.list_digests(20)}
 
 
 def _people_of(t, people):

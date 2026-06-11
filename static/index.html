@@ -115,6 +115,9 @@
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-ask" role="tab"><i class="ti ti-sparkles me-1"></i>Ask Taikun</a>
                         </li>
                         <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-pulse" role="tab"><i class="ti ti-activity-heartbeat me-1"></i>Pulse</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-tasks" role="tab"><i class="ti ti-list-check me-1"></i>By person</a>
                         </li>
                         <li class="nav-item" role="presentation">
@@ -157,6 +160,21 @@
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                        <!-- Pulse (weekly chief-of-staff digest) -->
+                        <div class="tab-pane" id="tab-pulse" role="tabpanel">
+                            <div class="card mt-3">
+                                <div class="card-header">
+                                    <h3 class="card-title"><i class="ti ti-activity-heartbeat me-2"></i>Pulse — weekly digest</h3>
+                                    <div class="card-actions">
+                                        <button id="digest-gen" class="btn btn-primary btn-sm"><i class="ti ti-sparkles me-1"></i>Generate digest</button>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div id="digest-latest" class="text-secondary">No digest yet — click <strong>Generate digest</strong> for a chief-of-staff brief: what changed, what's slipping, and what to pick up next.</div>
+                                </div>
+                            </div>
+                            <div id="digest-history" class="mt-2"></div>
                         </div>
                         <!-- By person (Todoist-style task lens) -->
                         <div class="tab-pane" id="tab-tasks" role="tabpanel">

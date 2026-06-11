@@ -18,6 +18,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 import agent
+import digest as digest_mod
 import rag
 import signals
 import store
@@ -157,6 +158,14 @@ def add_comment(task_id: str, text: str, ctx: Context) -> str:
     _require_write(ctx)
     t = store.add_comment(task_id, "MCP", text)
     return "ok" if t else "no such task"
+
+
+@mcp.tool()
+def generate_digest(ctx: Context) -> str:
+    """Generate + post the weekly chief-of-staff brief (plan signals + activity deltas since the
+    last digest). Returns the brief text. Creates a digest record."""
+    _require_write(ctx)
+    return digest_mod.generate_digest().get("content", "")
 
 
 if __name__ == "__main__":
