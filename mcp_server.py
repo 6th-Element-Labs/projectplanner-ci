@@ -19,6 +19,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import agent
 import digest as digest_mod
+import notify as notify_mod
 import rag
 import signals
 import store
@@ -166,6 +167,13 @@ def generate_digest(ctx: Context) -> str:
     last digest). Returns the brief text. Creates a digest record."""
     _require_write(ctx)
     return digest_mod.generate_digest().get("content", "")
+
+
+@mcp.tool()
+def notify(subject: str, text: str, ctx: Context) -> str:
+    """Send a message to the wired channels (Slack + Email). Unconfigured channels are dry-run."""
+    _require_write(ctx)
+    return json.dumps(notify_mod.send(subject, text))
 
 
 if __name__ == "__main__":

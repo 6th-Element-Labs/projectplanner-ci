@@ -1,0 +1,12 @@
+# /etc/systemd/system/projectplanner-digest.timer
+# Fires the weekly digest job. Adjust OnCalendar to taste (this is the scheduler —
+# a systemd timer, NOT the workflow engine, per ADR 0007).
+[Unit]
+Description=Weekly Project Maxwell digest (Mon 08:00)
+
+[Timer]
+OnCalendar=Mon 08:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

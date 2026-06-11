@@ -927,10 +927,30 @@ const TeepPlan = {
         const c = (d.meta && d.meta.counts) || d.counts || {};
         const chips = ['overdue', 'critical_slip', 'ready', 'due_soon'].filter((k) => c[k] != null)
             .map((k) => `<span class="badge bg-secondary-lt me-1">${k.replace('_', ' ')}: ${c[k]}</span>`).join('');
+        const ns = this.notifyStatus || {};
+        const channels = [ns.slack && 'Slack', ns.email && 'Email'].filter(Boolean).join(' + ');
+        const sendLabel = channels ? `Send · ${channels}` : 'Send · dry-run';
         el.classList.remove('text-secondary');
         el.innerHTML = `<div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-            <span class="text-secondary small">${this.esc(when)}</span>${chips}</div>
-            <div>${this.mdLite(d.content)}</div>`;
+                <span class="text-secondary small">${this.esc(when)}</span>${chips}
+                <button class="btn btn-sm btn-outline-primary ms-auto" data-send-digest="${d.id}"><i class="ti ti-send me-1"></i>${sendLabel}</button>
+            </div>
+            <div>${this.mdLite(d.content)}</div>
+            <div class="small text-secondary mt-2" data-send-result></div>`;
+        const btn = el.querySelector('[data-send-digest]');
+        if (btn) btn.addEventListener('click', () => this.sendDigest(d.id, el));
+    },
+
+    async sendDigest(id, el) {
+        const out = el ? el.querySelector('[data-send-result]') : null;
+        if (out) out.textContent = 'Sending…';
+        try {
+            const data = await (await fetch(`api/digest/${id}/send`, { method: 'POST' })).json();
+            const parts = (data.results || []).map((x) => `${x.channel}: ${x.sent ? 'sent' : (x.dry_run ? 'dry-run (not configured)' : ('failed' + (x.error ? ' — ' + x.error : '')))}`);
+            if (out) out.textContent = parts.join('  ·  ');
+        } catch (e) {
+            if (out) out.textContent = 'send failed: ' + e.message;
+        }
     },
 
     renderDigestHistory(list) {
@@ -949,6 +969,7 @@ const TeepPlan = {
     },
 
     async initPulse() {
+        try { this.notifyStatus = await (await fetch('api/notify/status')).json(); } catch (e) { /* dry-run */ }
         try {
             const data = await (await fetch('api/digests')).json();
             const ds = data.digests || [];

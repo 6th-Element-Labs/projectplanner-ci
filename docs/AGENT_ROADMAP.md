@@ -134,29 +134,89 @@ Each phase deploys a usable increment to plan.taikunai.com on its own.
 
 ## Live Inbox design (#9)
 
-Email is an event; the agent triages it the way the ActionEngine sensing layer triages
-an alert — ingest → bind to task(s) → disposition. The plan becomes a living record of
-what's actually said in email (and later chat).
+Email (and later chat) is an **event**; the agent triages it the way the ActionEngine
+sensing layer triages an alert — **ingest → ground → classify → decide → act → record** —
+except the "asset" is a task and the "disposition" is a plan change. The plan stops being
+a thing you update and becomes a **living record that updates itself** from what's actually
+said. The point of #9 is that the agent does **complex, multi-step reasoning** per message;
+it must NOT keyword-match ("done" ⇒ close) — that's how you corrupt a plan.
 
-- **Mailbox:** `plan@taikunai.com` (Google Workspace). The agent **polls Gmail** on the
-  Phase-4 scheduler (reuses the Phase-4 Gmail OAuth + a read/modify scope); each new,
-  un-processed message is handled exactly once (label it `processed` / mark read).
-- **Ingest → RAG:** the email (from, subject, date, body, text of key attachments) is
-  added to the **incremental RAG index** as a citable source, so `doc_search` / `ask_plan`
-  can answer *"what did Sahir email about the gateway?"* with a citation.
-- **Triage → tasks:** one agent run per email, with the board + RAG in context, proposes
-  the implied changes — update status, **close** a task an email says is done, reschedule
-  on a slip, or create a task from an ask. Propose-to-confirm by default (surfaced in
-  Pulse / an inbox queue); **auto-apply low-risk** once the autonomy switch (#7) is on.
-- **Provenance + safety:** every email-driven change is audited as **"Maxwell (email)"**
-  and links back to the source email; a **sender allowlist** restricts who can drive the
-  plan while we're public.
-- **Chats too:** the same ingest→triage pipeline later takes Slack messages (Events API);
-  email first.
+### The pipeline
+`plan@taikunai.com` (Gmail) → poll on the scheduler → for each new, allow-listed,
+un-processed message → **dedupe** (message-id) → **clean** (strip signature / quoted-reply
+/ footer) → **ingest to RAG** (always, as a citable source) → **triage ReAct loop** →
+**disposition** (auto-applied / proposed / needs-human / fyi) → **record** (audit
+"Maxwell (email)", link the source, post to the Inbox queue + optional Slack/reply) →
+**label `processed`**.
 
-New infra this needs: the **incremental / persistent RAG index** — today's `rag.py` is a
-static startup load of `plan-docs/*.md`; emails require adding + persisting embeddings at
-runtime. Everything else reuses Phase 4 (Gmail + scheduler), the agent, and #7 autonomy.
+### The triage ReAct loop (per email)
+The agent gets the cleaned email + sender + thread + the board summary, and reasons in a
+loop with tools until it has a *defensible* disposition:
+
+1. **Comprehend** — what is this message actually asserting? Separate fact ("the bucket is
+   provisioned") from request ("can you add…"), opinion, and FYI. Note the sender + role.
+2. **Ground / resolve references** — *which task(s)?* Emails name tasks by id ("GW-3"), by
+   title ("the S3 bucket"), by workstream ("on SSO…"), or implicitly ("it's done" in a
+   thread). The agent uses `search_tasks` / `get_task` + `doc_search` (over docs **and prior
+   emails**) to resolve the antecedent — including "it"/"that" from earlier in the thread.
+   If it can't resolve to a specific task confidently, that's a signal to ask, not guess.
+3. **Classify intent** per resolved task (taxonomy below).
+4. **Verify against ground truth** — before proposing, read the task's `status`,
+   `exit_criteria`, `deliverable`, `depends_on`. Does the email actually *satisfy the exit
+   criteria*, or just sound positive? Is the task already in that state? Does the sender
+   have the standing to close it? Is there a *later* message in the thread that supersedes?
+5. **Reason about blast radius** — if this is a slip/close on a task with dependents or on
+   the critical path (`plan_signals`), does it cascade? Propose the dependent shifts too,
+   or flag the knock-on.
+6. **Decide disposition + confidence** — map (intent × risk × confidence) to auto-apply,
+   propose, or escalate-to-human (autonomy gradient below). Low confidence or unmet exit
+   criteria ⇒ **escalate with the agent's read + a specific question**, never a silent guess.
+7. **Act** — emit the change(s) via `propose_task_update` / `propose_bulk_update` /
+   `propose_date_shift` / `create_task`, or `flag_for_human`, with provenance (the email).
+
+### Intent taxonomy (email → change)
+- **Completion** ("done / shipped / merged / delivered") → close (Done) **iff** exit criteria met.
+- **Progress** ("started / in review / underway") → In Progress.
+- **Blocker** ("blocked on / waiting for / can't until X") → Blocked + capture the blocker.
+- **Schedule** ("slipped to Fri / pushed a week / earlier") → date shift (+ cascade check).
+- **New work / ask** ("we also need… / please add…") → create task (owner inferred from sender/thread).
+- **Decision / answer** ("we'll use OIDC / Sahir confirmed the tenant id") → update the task or open-decision + ingest as the authoritative source.
+- **FYI / context** → ingest to RAG only; no task change.
+- **Ambiguous / insufficient** → ingest + ask a human; no change.
+
+### The hard reasoning (why this needs a real agent, not rules)
+- **Reference resolution** across a thread ("it", "that one", reply chains) using prior emails now in RAG.
+- **Exit-criteria judgement** — "looks done" ≠ "meets the deliverable"; the agent reads the criteria and judges.
+- **Authority** — who may close/​reschedule what (owner-match + allow-list); a vendor "we're done" *proposes*, the owner saying it can *auto-apply*.
+- **Conflict & recency** — a later message overrides an earlier; two emails disagree → escalate.
+- **Multi-task decomposition** — one email → several proposals ("SSO-2 done, GW-1 slips a week, add a task for X") via the bulk primitive.
+- **Uncertainty → human** — the agent must be *willing to be unsure*: surface its best read + the precise question rather than hallucinate a change. Safety-critical.
+- **Idempotency** — the same email forwarded twice must not double-apply (message-id dedupe + `processed` label).
+
+### Tools the inbox agent uses
+Mostly already built: `search_tasks`, `get_task`, `board_summary`, `doc_search` (now over
+docs **+ ingested emails**), `plan_signals`, `propose_task_update` / `propose_bulk_update`
+/ `propose_date_shift`, `create_task`. **New:** `flag_for_human(question, context)`
+(escalate); the **ingest** step is a pipeline side-effect, not a tool (the email is indexed
+before triage so the agent can already cite it).
+
+### TriageResult (what each email produces)
+`{ summary, source_email_id, affected: [{task_id, intent, change, confidence, rationale}],
+new_tasks: [...], disposition: auto|proposed|needs_human|fyi, questions: [...], rag_doc_id }`
+— rendered in an **Inbox queue** (a Pulse-style surface) where a human confirms / edits /
+dismisses, using the same propose-to-confirm UI.
+
+### Autonomy gradient (email) — mirrors the sensing-layer `auto_below` switch; OFF by default
+- **L0 (default):** everything proposes; a human clears the Inbox queue.
+- **L1:** auto-apply *safe* changes (→ In Progress, add note, ingest); propose closes / dates / scope.
+- **L2:** auto-apply most; escalate only low-confidence or destructive (close / big reschedule / cross-task).
+Every auto-applied change is audited and one-click-undoable.
+
+### New infra
+Only one genuinely new piece: an **incremental, persistent RAG index** — today `rag.py`
+loads `plan-docs/*.md` once at startup; emails require **adding + persisting embeddings at
+runtime** (an `email_docs` table with vectors, merged into `doc_search`). Everything else
+reuses Phase 4 (Gmail + scheduler), the agent, the bulk/propose primitives, and #7 autonomy.
 
 ---
 

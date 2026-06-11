@@ -1,0 +1,15 @@
+# /etc/systemd/system/projectplanner-digest.service
+# Oneshot: generate the weekly chief-of-staff digest and deliver it via notify
+# (Slack + Email). Triggered by projectplanner-digest.timer. Unconfigured channels
+# are dry-run (logged), so this is safe to enable before creds land.
+[Unit]
+Description=ProjectPlanner weekly digest + notify (oneshot)
+After=network-online.target projectplanner.service projectplanner-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py weekly_digest

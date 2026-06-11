@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 import agent  # noqa: E402
 import digest  # noqa: E402
 import export  # noqa: E402
+import notify  # noqa: E402
 import signals  # noqa: E402
 import store  # noqa: E402
 
@@ -176,6 +177,26 @@ async def make_digest():
 @app.get("/api/digests")
 async def get_digests():
     return {"digests": store.list_digests(20)}
+
+
+@app.get("/api/notify/status")
+async def notify_status():
+    """Which channels are wired (configured) vs dry-run."""
+    return notify.status()
+
+
+@app.post("/api/notify/test")
+async def notify_test():
+    return {"results": notify.send("Project Maxwell — test", "Notify is wired (test message from plan.taikunai.com).")}
+
+
+@app.post("/api/digest/{digest_id}/send")
+async def send_digest(digest_id: int):
+    d = next((x for x in store.list_digests(50) if x["id"] == digest_id), None)
+    if not d:
+        raise HTTPException(404, "no such digest")
+    proj = store.get_meta("project") or "the plan"
+    return {"results": await asyncio.to_thread(notify.send, f"{proj} — digest", d["content"])}
 
 
 def _people_of(t, people):
