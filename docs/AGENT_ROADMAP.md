@@ -239,7 +239,7 @@ reuses Phase 4 (Gmail + scheduler), the agent, the bulk/propose primitives, and 
 - [x] **Phase 2 — bulk / cross-task actions** (`propose_bulk_update` same-change-to-many + `propose_date_shift` server-computed shifts; `/api/chat` returns `proposals[]`; Ask-tab **Confirm-all** card with per-row drop). Verified: 3-task status change in one click, then reverted.
 - [x] **Phase 3 — plan signals + next-best-action** (`signals.py` `compute_plan_signals`: overdue/due-soon/blocked/ready/critical-slip/past-due-decisions + each owner's next-best 1-2; surfaced via `GET /api/signals`, the `plan_signals` agent tool, the `get_plan_signals` MCP tool, and a "Next up" line per owner in the By-person tab). Verified live.
 - [x] **Phase 3.5 — in-app digest** (`digest.py` `generate_digest` = signals + activity-log deltas since last digest → one LLM chief-of-staff brief; `digests` table; `POST /api/digest` + `GET /api/digests`; MCP `generate_digest`; **Pulse tab** with Generate + latest + collapsible history). Verified: brief reads real activity deltas, renders in the UI, MCP works.
-- [ ] Phase 4 — notify (Slack + Gmail) + scheduler
+- [x] **Phase 4 — notify (Slack + Gmail/SMTP) + scheduler** (`notify.py` send → Slack webhook + Email/SMTP, **dry-run when unconfigured**; `jobs.py weekly_digest` run by `projectplanner-digest.timer`; `/api/notify/{status,test}` + `/api/digest/{id}/send`; MCP `notify`; Pulse **Send** button shows channel/dry-run). Verified end-to-end in dry-run incl. the scheduled job. Go live = add `PM_SLACK_WEBHOOK_URL` / `PM_SMTP_*` to `.env`.
 - [ ] Phase 5 — draft from live state
 - [ ] Phase 5.5 — Live Inbox (#9): `plan@taikunai.com` → Gmail read + incremental RAG + per-email triage
 - [ ] Phase 6 — automated maintenance
