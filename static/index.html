@@ -152,6 +152,29 @@
                                     </div>
                                 </div>
                                 <div class="card-body">
+                                    <!-- Intake: ingest + triage a transcript / email / document -->
+                                    <div class="mb-3">
+                                        <a class="small text-reset" data-bs-toggle="collapse" href="#intake-box" role="button"><i class="ti ti-file-import me-1"></i>Drop a transcript / email / document → ingest &amp; triage against the plan</a>
+                                        <div class="collapse" id="intake-box">
+                                            <div class="row g-2 mt-2">
+                                                <div class="col-6 col-md-3">
+                                                    <select id="intake-kind" class="form-select form-select-sm">
+                                                        <option value="transcript">Transcript</option>
+                                                        <option value="email">Email</option>
+                                                        <option value="document">Document</option>
+                                                        <option value="note">Note</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-6 col-md"><input id="intake-title" class="form-control form-control-sm" placeholder="Title / subject (optional)"/></div>
+                                                <div class="col-12 col-md-auto"><input id="intake-file" type="file" accept=".txt,.md,.vtt,.eml,.csv" class="form-control form-control-sm"/></div>
+                                            </div>
+                                            <textarea id="intake-text" class="form-control form-control-sm mt-2" rows="5" placeholder="Paste the transcript / email / document text…"></textarea>
+                                            <div class="mt-2">
+                                                <button id="intake-go" class="btn btn-primary btn-sm"><i class="ti ti-file-import me-1"></i>Ingest &amp; triage</button>
+                                                <span id="intake-flash" class="small text-secondary ms-1"></span>
+                                            </div>
+                                        </div>
+                                    </div>
                                     <div id="ask-log"></div>
                                     <div class="text-secondary small mb-3" id="ask-empty">Ask about the whole plan — e.g. <em>"What's blocking SSO?"</em>, <em>"What did Sahir commit to?"</em>, <em>"Summarize this week's risks"</em>, or <em>"mark SSO-7 done"</em>.</div>
                                     <div class="input-group">

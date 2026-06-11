@@ -62,6 +62,10 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at REAL, since_ts REAL, content TEXT, meta TEXT
             );
+            CREATE TABLE IF NOT EXISTS rag_docs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_kind TEXT, label TEXT, text TEXT, embedding TEXT, created_at REAL
+            );
             CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
             CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
             CREATE INDEX IF NOT EXISTS ix_activity_ts ON activity(created_at);
@@ -282,6 +286,24 @@ def list_digests(limit: int = 20) -> List[Dict[str, Any]]:
     with _conn() as c:
         rows = c.execute("SELECT * FROM digests ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [_digest_row(r) for r in rows]
+
+
+# ---- incremental RAG corpus (Phase 5) — ingested artifacts, persisted + shared --------
+def add_rag_chunk(source_kind: str, label: str, text: str, embedding: List[float]):
+    with _conn() as c:
+        c.execute("INSERT INTO rag_docs(source_kind, label, text, embedding, created_at) VALUES (?,?,?,?,?)",
+                  (source_kind, label, text, json.dumps(embedding), time.time()))
+
+
+def all_rag_chunks() -> List[Dict[str, Any]]:
+    with _conn() as c:
+        rows = c.execute("SELECT label, text, embedding FROM rag_docs ORDER BY id").fetchall()
+    return [{"label": r["label"], "text": r["text"], "embedding": json.loads(r["embedding"])} for r in rows]
+
+
+def rag_docs_max_id() -> int:
+    with _conn() as c:
+        return c.execute("SELECT COALESCE(MAX(id), 0) FROM rag_docs").fetchone()[0]
 
 
 def board_payload() -> Dict[str, Any]:

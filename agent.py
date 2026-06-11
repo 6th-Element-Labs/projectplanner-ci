@@ -96,6 +96,21 @@ TOOLS = [
             "days": {"type": "integer", "description": "+N moves later, -N earlier"},
             "rationale": {"type": "string", "description": "one short line on why"}},
             "required": ["task_ids", "days", "rationale"]}}},
+    {"type": "function", "function": {
+        "name": "propose_new_task",
+        "description": "Propose creating a NEW task (e.g. an email/transcript asks for work not yet on the "
+                       "plan). Does NOT create it — the user confirms. workstream_id must be an existing "
+                       "workstream (SSO, SEN, BEDROCK, GW, SCADA, IFS, REG, AGENT, REPORT, DATA, CUTOVER, FMP).",
+        "parameters": {"type": "object", "properties": {
+            "workstream_id": {"type": "string"},
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "owner_org": {"type": "string", "enum": ["Taikun", "TEEP", "Sensirion/Nubo", "IFS Merrick", "Joint"]},
+            "owner_person_or_role": {"type": "string"},
+            "phase": {"type": "string", "enum": ["Kickoff", "Bootstrap", "Build", "Cutover", "Operate"]},
+            "risk_level": {"type": "string", "enum": ["Low", "Medium", "High"]},
+            "rationale": {"type": "string", "description": "one short line on why"}},
+            "required": ["workstream_id", "title", "rationale"]}}},
 ]
 
 # Editable fields the agent may propose (mirrors store.EDITABLE minus internal ones).
@@ -194,22 +209,24 @@ def _search_tasks(args):
     return out[:60]
 
 
-def run(task, message, history=None):
-    """task=None runs the PLAN-WIDE agent; a task dict runs the per-task agent."""
-    system = _system(task) if task else _system_global()
+def run(task, message, history=None, system=None):
+    """task=None runs the PLAN-WIDE agent; a task dict runs the per-task agent; pass
+    `system` to override the prompt (used by triage)."""
+    if system is None:
+        system = _system(task) if task else _system_global()
     msgs = [{"role": "system", "content": system}]
     for h in (history or []):
         if h.get("content"):
             msgs.append({"role": h["role"], "content": h["content"]})
     msgs.append({"role": "user", "content": message})
 
-    sources, proposals, last = [], [], None
+    sources, proposals, new_tasks, last = [], [], [], None
     for _ in range(MAX_ITERS):
         m = _chat(msgs)
         last = m
         tcs = m.get("tool_calls")
         if not tcs:
-            return _result(m.get("content") or "", proposals, sources)
+            return _result(m.get("content") or "", proposals, new_tasks, sources)
         msgs.append({"role": "assistant", "content": m.get("content"), "tool_calls": tcs})
         for tc in tcs:
             name = tc["function"]["name"]
@@ -277,13 +294,52 @@ def run(task, message, history=None):
                         proposals.append(prop)
                         n += 1
                 content = f"Proposed a {days:+d}d shift on {n} tasks ({len(proposals)} pending); tell the user to Confirm all."
+            elif name == "propose_new_task":
+                if not (args.get("workstream_id") and args.get("title")):
+                    content = "workstream_id and title are required."
+                else:
+                    nt = {k: v for k, v in args.items()
+                          if k in ("workstream_id", "title", "description", "owner_org",
+                                   "owner_person_or_role", "phase", "risk_level", "rationale")
+                          and v not in (None, "")}
+                    new_tasks.append(nt)
+                    content = f"Proposed new task in {nt['workstream_id']} ({len(new_tasks)} pending); tell the user to Confirm."
             else:
                 content = "unknown tool"
             msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
-    return _result((last or {}).get("content") or "(reached step limit)", proposals, sources)
+    return _result((last or {}).get("content") or "(reached step limit)", proposals, new_tasks, sources)
 
 
-def _result(answer, proposals, sources):
-    return {"answer": answer, "proposals": proposals,
+def _result(answer, proposals, new_tasks, sources):
+    return {"answer": answer, "proposals": proposals, "new_tasks": new_tasks,
             "proposal": (proposals[-1] if proposals else None),
             "sources": list(dict.fromkeys(sources))}
+
+
+def _system_triage():
+    today = time.strftime("%Y-%m-%d")
+    proj = store.get_meta("project") or "Project Maxwell"
+    return (
+        f"You are Maxwell, triaging an INBOUND ARTIFACT (an email, meeting transcript, or document) for "
+        f"{proj} (TEEP Barnett). Today is {today}.\n\n"
+        "CURRENT BOARD — one line per task: ID [workstream] status :: title (owner; start..finish; flags):\n"
+        f"{board_summary_text()}\n\n"
+        "Decide what this artifact means for the plan and propose the implied changes — or NOTHING if it is "
+        "just context/FYI. Reason carefully and DO NOT keyword-match:\n"
+        "- Ground every claim: search_tasks/get_task to find the affected task(s); doc_search for context "
+        "(the artifact itself is already indexed, so you can cite it).\n"
+        "- Before proposing to CLOSE a task (status Done), read its exit_criteria/deliverable and check the "
+        "artifact ACTUALLY satisfies them — 'sounds done' is not 'done'. If you cannot tell which task, or "
+        "whether it is truly done, DO NOT guess: propose nothing and say what you would need to confirm.\n"
+        "- Status change -> propose_task_update; many at once -> propose_bulk_update; a slip -> "
+        "propose_date_shift; genuinely new work -> propose_new_task.\n"
+        "- Everything is a PROPOSAL the user confirms; never say a change was applied.\n"
+        "Finish with a 2-4 sentence summary: what the artifact says and what you propose (or that nothing changes)."
+    )
+
+
+def triage(kind, title, text):
+    """Triage an inbound artifact against the plan. Returns {answer(summary), proposals,
+    new_tasks, sources}. The caller ingests the artifact into RAG first."""
+    artifact = f"INBOUND {kind.upper()}" + (f" — {title}" if title else "") + ":\n\n" + (text or "")
+    return run(None, artifact, system=_system_triage())

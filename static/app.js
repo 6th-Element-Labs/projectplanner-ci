@@ -910,6 +910,94 @@ const TeepPlan = {
         if (this.isGanttVisible()) this.renderGantt();
     },
 
+    // ---- Intake (ingest + triage an artifact) ---------------------------
+    async submitIntake() {
+        const kind = document.getElementById('intake-kind').value;
+        const title = (document.getElementById('intake-title').value || '').trim();
+        const text = (document.getElementById('intake-text').value || '').trim();
+        const flash = document.getElementById('intake-flash');
+        if (!text) { if (flash) flash.textContent = 'Paste some text first.'; return; }
+        if (flash) flash.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Ingesting + triaging…';
+        const log = document.getElementById('ask-log');
+        const empty = document.getElementById('ask-empty'); if (empty) empty.remove();
+        log.insertAdjacentHTML('beforeend', `<div class="mb-2 text-end"><span class="badge bg-blue-lt">intake</span> ${this.esc(kind)}${title ? ' · ' + this.esc(title) : ''}</div>`);
+        this._askScroll();
+        try {
+            const res = await fetch('api/intake', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, title, text }) });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+            if (flash) flash.textContent = `ingested ${data.ingested_chunks} chunk(s) into the corpus`;
+            const src = (data.sources || []).length ? `<div class="text-secondary small mt-1">sources: ${data.sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(data.summary)}${src}</div>`);
+            const props = data.proposals || [];
+            if (props.length === 1) this.renderAskProposal(props[0]);
+            else if (props.length > 1) this.renderAskProposals(props);
+            if ((data.new_tasks || []).length) this.renderAskNewTasks(data.new_tasks);
+            document.getElementById('intake-text').value = '';
+            this._askScroll();
+        } catch (e) {
+            if (flash) flash.textContent = '';
+            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(e.message)}</div>`);
+        }
+    },
+
+    renderAskNewTasks(newTasks) {
+        const log = document.getElementById('ask-log');
+        const pid = 'anew-' + Math.random().toString(36).slice(2, 9);
+        const working = newTasks.map((t) => Object.assign({}, t));
+        const rows = working.map((t, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-nrow="${idx}">
+                <span class="badge bg-azure-lt">${this.esc(t.workstream_id)}</span>
+                <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
+                <span class="text-secondary small">${this.esc(t.owner_person_or_role || '')}</span>
+                <button class="btn btn-sm btn-ghost-secondary p-1" data-ndrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+            </div>`).join('');
+        log.insertAdjacentHTML('beforeend', `<div id="${pid}" class="card card-sm mb-2">
+            <div class="card-status-start bg-green"></div>
+            <div class="card-body">
+                <div class="small text-secondary mb-2"><i class="ti ti-plus me-1"></i>Proposed <strong>${working.length}</strong> new task(s)</div>
+                <div data-nrows>${rows}</div>
+                <div class="mt-2">
+                    <button class="btn btn-primary btn-sm" data-create-all><i class="ti ti-checks me-1"></i>Create all</button>
+                    <button class="btn btn-sm" data-dismiss-all>Dismiss</button>
+                    <span class="small text-secondary ms-2" data-new-status></span>
+                </div>
+            </div></div>`);
+        const card = document.getElementById(pid);
+        card.querySelectorAll('[data-ndrop]').forEach((b) => b.addEventListener('click', () => {
+            const idx = parseInt(b.getAttribute('data-ndrop'), 10);
+            working[idx] = null;
+            const row = card.querySelector(`[data-nrow="${idx}"]`);
+            if (row) row.remove();
+            if (!working.some(Boolean)) card.remove();
+        }));
+        card.querySelector('[data-dismiss-all]').addEventListener('click', () => card.remove());
+        card.querySelector('[data-create-all]').addEventListener('click', () => this.applyAskNewTasks(pid, working.filter(Boolean)));
+        this._askScroll();
+    },
+
+    async applyAskNewTasks(pid, working) {
+        const card = document.getElementById(pid);
+        const statusEl = card ? card.querySelector('[data-new-status]') : null;
+        let ok = 0, fail = 0;
+        for (const t of working) {
+            const body = Object.assign({ _actor: 'Maxwell (confirmed)' }, t);
+            delete body.rationale;
+            try {
+                const res = await fetch('api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                if (!res.ok) throw new Error();
+                const created = await res.json();
+                this.tasks.push(created);
+                const w = (this.plan.workstreams || []).find((x) => x.workstream_id === created._wsId);
+                if (w) w.tasks.push(created);
+                ok++;
+            } catch (e) { fail++; }
+            if (statusEl) statusEl.textContent = `created ${ok}${fail ? ' · ' + fail + ' failed' : ''}…`;
+        }
+        if (card) card.querySelector('.card-body').innerHTML = `<span class="text-green"><i class="ti ti-checks me-1"></i>Created ${ok} task${ok === 1 ? '' : 's'}${fail ? ' · ' + fail + ' failed' : ''}</span>`;
+        this.renderBoard();
+        this.renderTasks();
+    },
+
     // ---- Pulse (weekly digest) ------------------------------------------
     mdLite(text) {
         return (text || '').split('\n').map((line) => {
@@ -1133,6 +1221,20 @@ const TeepPlan = {
         if (askInput) askInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendAsk(); });
         const askTab = document.querySelector('a[href="#tab-ask"]');
         if (askTab) askTab.addEventListener('shown.bs.tab', () => this.initAsk());
+        const intakeGo = document.getElementById('intake-go');
+        if (intakeGo) intakeGo.addEventListener('click', () => this.submitIntake());
+        const intakeFile = document.getElementById('intake-file');
+        if (intakeFile) intakeFile.addEventListener('change', (e) => {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = () => {
+                document.getElementById('intake-text').value = r.result || '';
+                const ti = document.getElementById('intake-title');
+                if (ti && !ti.value) ti.value = f.name;
+            };
+            r.readAsText(f);
+        });
         const tasksTab = document.querySelector('a[href="#tab-tasks"]');
         if (tasksTab) tasksTab.addEventListener('shown.bs.tab', () => this.loadSignals());
         const digestGen = document.getElementById('digest-gen');

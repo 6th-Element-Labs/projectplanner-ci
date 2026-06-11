@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 import agent  # noqa: E402
 import digest  # noqa: E402
 import export  # noqa: E402
+import intake  # noqa: E402
 import notify  # noqa: E402
 import signals  # noqa: E402
 import store  # noqa: E402
@@ -156,6 +157,20 @@ async def plan_chat(body: dict = Body(...)):
 @app.get("/api/chat/history")
 async def plan_chat_history(session: str = "plan"):
     return {"messages": store.recent_chat(session, 100)}
+
+
+@app.post("/api/intake")
+async def intake_artifact(body: dict = Body(...)):
+    """Ingest an artifact (transcript/email/document) into RAG + triage it against the plan.
+    Returns {summary, proposals, new_tasks, sources, ingested_chunks} — propose-to-confirm."""
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "text required")
+    try:
+        return await asyncio.to_thread(
+            intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text)
+    except Exception as e:
+        raise HTTPException(502, f"intake error: {e}")
 
 
 @app.get("/api/signals")

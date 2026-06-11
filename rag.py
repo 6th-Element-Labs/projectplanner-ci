@@ -12,6 +12,8 @@ import os
 
 import httpx
 
+import store
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DOCS_DIR = os.environ.get("PM_DOCS_DIR", os.path.join(_HERE, "plan-docs"))
 CACHE = os.environ.get("PM_RAG_CACHE", os.path.join(_HERE, "rag_cache.json"))
@@ -19,7 +21,9 @@ BASE = os.environ.get("PM_LLM_BASE_URL", "http://127.0.0.1:8095/v1")
 KEY = os.environ.get("PM_LLM_KEY") or os.environ.get("LLM_GATEWAY_MASTER_KEY", "")
 EMBED_MODEL = os.environ.get("PM_LLM_EMBED_MODEL", "taikun-embed")
 
-_index = None  # list of {text, file, embedding}
+_index = None  # static plan-docs: list of {text, file, embedding}
+_dyn = None    # dynamic ingested artifacts (emails/transcripts/docs), from the rag_docs table
+_dyn_ver = -1  # rag_docs max id we last loaded — cheap freshness check across processes
 
 
 def _chunks(text, size=1100, overlap=120):
@@ -83,12 +87,37 @@ def _cos(a, b):
     return s / (na * nb) if na and nb else 0.0
 
 
+def _load_dyn():
+    """Refresh the dynamic corpus from rag_docs only when it changed (cheap MAX(id) check),
+    so the web and MCP processes both see newly-ingested artifacts without a restart."""
+    global _dyn, _dyn_ver
+    ver = store.rag_docs_max_id()
+    if _dyn is None or ver != _dyn_ver:
+        _dyn = [{"file": r["label"], "text": r["text"], "embedding": r["embedding"]}
+                for r in store.all_rag_chunks()]
+        _dyn_ver = ver
+    return _dyn
+
+
+def add_document(source_kind, label, text):
+    """Ingest an artifact (email / transcript / document) into the persistent corpus.
+    Chunks + embeds + stores; searchable immediately (next search reloads the dynamic set)."""
+    chunks = _chunks(text or "")
+    if not chunks:
+        return 0
+    embs = _embed(chunks)
+    for ch, e in zip(chunks, embs):
+        store.add_rag_chunk(source_kind, label, ch, e)
+    return len(chunks)
+
+
 def search(query, top_k=5):
     global _index
     if _index is None:
         build_index()
-    if not _index:
+    pool = list(_index or []) + _load_dyn()
+    if not pool:
         return []
     qe = _embed([query])[0]
-    scored = sorted(((_cos(qe, it["embedding"]), it) for it in _index), key=lambda x: -x[0])[:top_k]
+    scored = sorted(((_cos(qe, it["embedding"]), it) for it in pool), key=lambda x: -x[0])[:top_k]
     return [{"file": it["file"], "text": it["text"][:800], "score": round(s, 3)} for s, it in scored]

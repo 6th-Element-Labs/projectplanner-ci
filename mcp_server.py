@@ -19,6 +19,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import agent
 import digest as digest_mod
+import intake as intake_mod
 import notify as notify_mod
 import rag
 import signals
@@ -174,6 +175,15 @@ def notify(subject: str, text: str, ctx: Context) -> str:
     """Send a message to the wired channels (Slack + Email). Unconfigured channels are dry-run."""
     _require_write(ctx)
     return json.dumps(notify_mod.send(subject, text))
+
+
+@mcp.tool()
+def ingest_and_triage(kind: str, title: str, text: str, ctx: Context) -> str:
+    """Ingest an artifact (email / transcript / document / note) into the RAG corpus AND triage it
+    against the plan. Returns {summary, proposals, new_tasks, sources} — proposals are NOT applied
+    (use update_task / create_task to apply). kind: email|transcript|document|note."""
+    _require_write(ctx)
+    return json.dumps(intake_mod.ingest_and_triage(kind, title, text))
 
 
 if __name__ == "__main__":
