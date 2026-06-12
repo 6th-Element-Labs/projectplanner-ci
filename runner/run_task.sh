@@ -9,11 +9,15 @@ PLAN_URL="${PLAN_URL:-https://plan.taikunai.com}"
 export HOME=/home/claude-runner
 export ANTHROPIC_API_KEY="$(cat /home/claude-runner/.maxwell/key)"
 log(){ echo "[$(date -u +%H:%M:%S)] $*" >> "$JOB/claude.log"; }
-notify_plan(){ MSG="$1" TID="$TASK_ID" python3 -c 'import json,os,urllib.request as u;
-d=json.dumps({"actor":"Maxwell (runner)","text":os.environ["MSG"]}).encode()
-r=u.Request(os.environ["PU"]+"/api/tasks/"+os.environ["TID"]+"/comment",data=d,headers={"Content-Type":"application/json"})
-try: u.urlopen(r,timeout=15)
-except Exception: pass' PU="$PLAN_URL" 2>/dev/null || true; }
+notify_plan(){ MSG="$1" TID="$TASK_ID" PU="$PLAN_URL" python3 -c '
+import json, os, urllib.request as u
+try:
+    d = json.dumps({"actor": "Maxwell (runner)", "text": os.environ["MSG"]}).encode()
+    r = u.Request(os.environ["PU"] + "/api/tasks/" + os.environ["TID"] + "/comment",
+                  data=d, headers={"Content-Type": "application/json"})
+    u.urlopen(r, timeout=15)
+except Exception:
+    pass' 2>/dev/null || true; }
 
 cd "$REPO" || { echo no_repo > "$JOB/status"; exit 1; }
 git fetch -q origin "$BASE" 2>>"$JOB/claude.log" || git fetch -q origin 2>>"$JOB/claude.log"
@@ -23,12 +27,17 @@ git checkout -q -B "$BRANCH" "origin/$BASE" 2>>"$JOB/claude.log" || git checkout
 log "branch $BRANCH off origin/$BASE"
 claude -p "$(cat "$BRIEF_FILE")" --dangerously-skip-permissions --output-format text >> "$JOB/claude.log" 2>&1 || log "claude exited non-zero"
 git add -A
-if git diff --cached --quiet; then
-  echo no_changes > "$JOB/status"; log "no changes"
+# Capture any work Claude left UNcommitted (it usually commits itself; this is a safety net — an
+# empty commit just fails harmlessly).
+git commit -q -m "Maxwell dispatch: $TASK_ID" >> "$JOB/claude.log" 2>&1 || true
+# "no changes" = no commits ahead of base — NOT "nothing staged". Claude commits itself, leaving a
+# clean index, which the old `git diff --cached` check mistook for no changes (so it never pushed).
+AHEAD=$(git rev-list --count "origin/$BASE..HEAD" 2>/dev/null || echo 0)
+if [ "${AHEAD:-0}" -eq 0 ]; then
+  echo no_changes > "$JOB/status"; log "no commits vs origin/$BASE"
   notify_plan "Claude Code ran $TASK_ID but produced no code changes — see the runner log."
   exit 0
 fi
-git commit -q -m "Maxwell dispatch: $TASK_ID" >> "$JOB/claude.log" 2>&1 || true
 if git push -q origin "$BRANCH" 2>>"$JOB/claude.log"; then
   PRURL="https://github.com/6th-Element-Labs/ActionEngine/compare/${BASE}...${BRANCH}?expand=1"
   echo "$BRANCH" > "$JOB/branch"; echo "$PRURL" > "$JOB/pr_url"; echo pushed > "$JOB/status"; log "pushed $BRANCH"

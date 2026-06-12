@@ -34,6 +34,7 @@ def ingest_and_triage(kind, title, text, ingest=True, applied_mode=False, header
         "new_tasks": result.get("new_tasks", []),
         "sources": result.get("sources", []),
         "recipients": result.get("recipients"),
+        "dispatch_targets": result.get("dispatch_targets", []),
         "ingested_chunks": chunks,
         "redacted_secrets": redacted,
         "rag_label": label,

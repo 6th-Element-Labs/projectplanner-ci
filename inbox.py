@@ -84,6 +84,42 @@ def _recipients(sender, headers, agent_recipients):
     return to, cc
 
 
+def _dispatch_enabled():
+    return (os.environ.get("PM_INBOX_DISPATCH", "1").strip().lower() not in ("0", "false", "no"))
+
+
+def _dispatch_dev(targets, applied):
+    """Fire the dev-agent dispatches the email asked for. 'NEW' -> the task(s) just created.
+    Each runs the Claude Code runner (code change -> branch -> PR; never main)."""
+    if not (_dispatch_enabled() and targets):
+        return []
+    created = list((applied or {}).get("created") or [])
+    resolved = []
+    for tg in targets:
+        resolved.extend([tg] if (tg and tg != "NEW") else created)
+    import dispatch as dispatch_mod
+    out = []
+    for tid in dict.fromkeys(resolved):  # dedupe, keep order
+        if not store.get_task(tid):
+            continue
+        dr = dispatch_mod.dispatch(tid, actor="Maxwell (email)")
+        out.append({"task_id": tid, "dispatched": dr.get("dispatched"),
+                    "job_id": dr.get("job_id"), "error": dr.get("error") or dr.get("reason")})
+    return out
+
+
+def _dispatch_note(dispatched):
+    ok = [d for d in (dispatched or []) if d.get("dispatched")]
+    fail = [d for d in (dispatched or []) if not d.get("dispatched")]
+    parts = []
+    if ok:
+        parts.append("Dispatched to Claude Code: " + ", ".join(
+            f"{d['task_id']} (job {d.get('job_id')})" for d in ok)
+            + " — a PR link will post to each task when it's done.")
+    parts += [f"Could not dispatch {d['task_id']}: {d.get('error') or 'unknown'}." for d in fail]
+    return ("\n\n" + "\n".join(parts)) if parts else ""
+
+
 def _compose_reply(summary, applied):
     lines = [summary or "Processed your message."]
     u, c = applied.get("updated", []), applied.get("created", [])
@@ -109,14 +145,16 @@ def process(source, external_id, sender, subject, text, headers=None):
                                       applied_mode=_autonomous(), headers=headers)
     triage = {"proposals": result.get("proposals", []), "new_tasks": result.get("new_tasks", []),
               "sources": result.get("sources", [])}
-    applied, reply_res, status, to, cc = {}, None, "pending", [], []
+    applied, reply_res, status, to, cc, dispatched = {}, None, "pending", [], [], []
     if _autonomous():
         applied = apply(triage["proposals"], triage["new_tasks"])
         status = "applied"
+        dispatched = _dispatch_dev(result.get("dispatch_targets"), applied)
         to, cc = _recipients(sender, headers, result.get("recipients"))
         if to:
             try:
-                body = _compose_reply(result.get("summary"), applied) + _quoted_history(headers, text)
+                body = (_compose_reply(result.get("summary"), applied)
+                        + _dispatch_note(dispatched) + _quoted_history(headers, text))
                 mid = headers.get("message_id")
                 reply_res = notify.reply(to, _re_subject(subject), body, cc=cc,
                                          in_reply_to=mid, references=mid)
@@ -125,6 +163,7 @@ def process(source, external_id, sender, subject, text, headers=None):
     triage["applied"] = applied
     triage["reply"] = reply_res
     triage["recipients"] = {"to": to, "cc": cc}
+    triage["dispatched_dev"] = dispatched
     item_id = store.add_inbox_item(source, external_id, sender, subject, result.get("summary"), triage)
     store.set_inbox_status(item_id, status)
     return store.get_inbox_item(item_id)

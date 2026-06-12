@@ -125,6 +125,18 @@ TOOLS = [
             "cc": {"type": "array", "items": {"type": "string"},
                    "description": "cc recipient email addresses"}},
             "required": ["to"]}}},
+    {"type": "function", "function": {
+        "name": "dispatch_to_dev",
+        "description": "Hand a task to the Claude Code DEVELOPER agent to actually build or fix it. The dev "
+                       "agent makes the code change on a branch and opens a PR — it never merges to main. "
+                       "Call this ONLY when the message EXPLICITLY asks for a Claude Code / dev-agent dispatch "
+                       "(e.g. 'have Claude Code build this', 'dispatch the dev agent to fix SEN-6', 'get the "
+                       "developer on this'). Pass the existing task_id; OMIT task_id to dispatch the NEW task "
+                       "you just proposed in this same reply. Do NOT call it for status / FYI / info emails.",
+        "parameters": {"type": "object", "properties": {
+            "task_id": {"type": "string",
+                        "description": "existing task id; omit/empty to dispatch the new task proposed here"}},
+            "required": []}}},
 ]
 
 # Editable fields the agent may propose (mirrors store.EDITABLE minus internal ones).
@@ -236,12 +248,13 @@ def run(task, message, history=None, system=None):
 
     sources, proposals, new_tasks, last = [], [], [], None
     recipients = None
+    dispatch_targets = []
     for _ in range(MAX_ITERS):
         m = _chat(msgs)
         last = m
         tcs = m.get("tool_calls")
         if not tcs:
-            return _result(m.get("content") or "", proposals, new_tasks, sources, recipients)
+            return _result(m.get("content") or "", proposals, new_tasks, sources, recipients, dispatch_targets)
         msgs.append({"role": "assistant", "content": m.get("content"), "tool_calls": tcs})
         for tc in tcs:
             name = tc["function"]["name"]
@@ -324,16 +337,22 @@ def run(task, message, history=None, system=None):
                 cc = [a.strip() for a in (args.get("cc") or []) if a and a.strip()]
                 recipients = {"to": to, "cc": cc}
                 content = f"Reply recipients set — to: {to or '(none)'}; cc: {cc or '(none)'}."
+            elif name == "dispatch_to_dev":
+                tid = (args.get("task_id") or "").strip()
+                dispatch_targets.append(tid or "NEW")
+                content = (f"Queued a Claude Code dev dispatch for {tid}." if tid
+                           else "Queued a Claude Code dev dispatch for the new task proposed here.")
             else:
                 content = "unknown tool"
             msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
-    return _result((last or {}).get("content") or "(reached step limit)", proposals, new_tasks, sources, recipients)
+    return _result((last or {}).get("content") or "(reached step limit)", proposals, new_tasks, sources,
+                   recipients, dispatch_targets)
 
 
-def _result(answer, proposals, new_tasks, sources, recipients=None):
+def _result(answer, proposals, new_tasks, sources, recipients=None, dispatch_targets=None):
     return {"answer": answer, "proposals": proposals, "new_tasks": new_tasks,
             "proposal": (proposals[-1] if proposals else None),
-            "recipients": recipients,
+            "recipients": recipients, "dispatch_targets": dispatch_targets or [],
             "sources": list(dict.fromkeys(sources))}
 
 
@@ -366,6 +385,10 @@ def _system_triage(applied_mode=False, headers=None):
         "done, do NOT change it; ask in your reply.\n"
         "- Status -> propose_task_update; several -> propose_bulk_update; an explicit slip -> propose_date_shift; "
         "genuinely new work -> propose_new_task. Honor explicit instructions in the message.\n"
+        "- If the message EXPLICITLY asks for a Claude Code / dev-agent dispatch ('have Claude Code build/fix "
+        "this', 'dispatch the dev agent', 'get the developer on X'), call dispatch_to_dev — with the existing "
+        "task_id, or no task_id to dispatch the new task you just proposed. It builds the change + opens a PR "
+        "(never main). Do NOT dispatch for status/FYI emails or when not clearly asked.\n"
         "- BE CONSERVATIVE: change ONLY what the message clearly implies. Do NOT speculatively reschedule "
         "downstream/dependent tasks unless the message explicitly says to — instead MENTION the likely knock-on "
         "in your reply so a human can decide.\n\n"
