@@ -1,19 +1,13 @@
-"""Dispatch a plan task to Claude Code to continue development (the push side of the bridge).
+"""Dispatch a plan task to the Maxwell Claude Code RUNNER (the push side of the bridge).
 
 The pull side (Claude Code asks the plan what to build via MCP) already exists. This is the
-PUSH side: Maxwell hands a ready task to Claude Code, which does the work and opens a PR.
+PUSH side: Maxwell hands a ready task to a self-hosted Claude Code runner (on the demo box —
+full access to the repo, the VMs, and AWS), which does the work in a `claude/<task>` branch,
+pushes it, and hands back a PR compare URL (a human opens the PR — never auto-merged to main).
+See docs/AGENT_ROADMAP.md.
 
-Mechanism (see docs/AGENT_ROADMAP.md): POST the task brief to a Claude Code **Routine**
-`/fire` endpoint. That spins up a CLOUD Claude Code session — watchable + steerable in the
-desktop/mobile apps (claude.ai/code) — which opens a PR on a `claude/…` branch and NEVER
-pushes to main. The `/fire` response returns a session URL we record on the task so the plan
-links straight to the live thread.
-
-Config (.env), all from the Routine Steve creates at claude.ai/code/routines:
-  PM_CC_ROUTINE_URL    the routine's API-trigger /fire endpoint
-  PM_CC_ROUTINE_TOKEN  the bearer token (shown once on creation)
-  PM_CC_ROUTINE_BETA   optional beta header (default below)
-No-op with a clear message until URL + token are set, so it ships safe before the routine exists.
+Config (.env), from the runner on demo: PM_CC_RUNNER_URL (e.g. http://<demo-ip>:8130),
+PM_CC_RUNNER_TOKEN. No-op with a clear reason until both are set.
 """
 import os
 
@@ -22,18 +16,17 @@ import httpx
 import rag
 import store
 
-_DEFAULT_BETA = "experimental-cc-routine-2026-04-01"
 _REPO = os.environ.get("PM_CC_REPO", "ActionEngine")
 
 
+def _cfg():
+    return ((os.environ.get("PM_CC_RUNNER_URL") or "").strip().rstrip("/"),
+            (os.environ.get("PM_CC_RUNNER_TOKEN") or "").strip())
+
+
 def status():
-    return {
-        "configured": bool(
-            (os.environ.get("PM_CC_ROUTINE_URL") or "").strip()
-            and (os.environ.get("PM_CC_ROUTINE_TOKEN") or "").strip()
-        ),
-        "repo": _REPO,
-    }
+    url, token = _cfg()
+    return {"configured": bool(url and token), "repo": _REPO}
 
 
 def build_brief(task_id):
@@ -47,9 +40,8 @@ def build_brief(task_id):
     except Exception:
         hits = []
     ctx = "\n".join(f"- [{h['file']}] {h['text'][:280]}" for h in hits) or "(none)"
-    slug = task_id.lower()
     brief = "\n".join([
-        f"Development task from the Project Maxwell plan: **{task_id} — {t.get('title')}**",
+        f"Development task from the Project Maxwell plan: {task_id} — {t.get('title')}",
         "",
         f"Workstream: {t.get('_wsName')} ({t.get('_wsId')})",
         f"Status: {t.get('status')}   Owner: {t.get('owner_person_or_role') or '—'}",
@@ -58,48 +50,53 @@ def build_brief(task_id):
         f"Exit criteria (definition of done): {t.get('exit_criteria') or '(none)'}",
         f"Deliverable: {t.get('deliverable') or '(none)'}",
         "",
-        "Relevant plan context (retrieved from the plan's RAG corpus):",
+        "Relevant plan context (from the plan's RAG corpus):",
         ctx,
         "",
         "INSTRUCTIONS:",
-        f"- Work in the `{_REPO}` repository.",
-        f"- Create a branch named `claude/{slug}`. **Never push to `main` or `development`.**",
-        "- Implement the task so the exit criteria are met; add or adjust tests where it makes sense.",
-        f"- Open a pull request describing the change and referencing plan task {task_id}.",
-        "- If the task is ambiguous, under-specified, or blocked on something external, open a"
-        " DRAFT PR (or stop and explain) rather than guessing — surface what you need.",
+        f"- You are already on a fresh `claude/...` branch in the `{_REPO}` repo. Make the code "
+        "changes needed to satisfy the exit criteria and COMMIT them to this branch.",
+        "- Do NOT push or open a PR yourself — the dispatch wrapper pushes the branch and produces "
+        "the PR link.",
+        "- Add or adjust tests where it makes sense. If the task is ambiguous, under-specified, or "
+        "blocked on something external, make a minimal honest change (or add a short NOTES file) "
+        "explaining exactly what's needed, rather than guessing.",
     ])
     return brief, t
 
 
 def dispatch(task_id, actor="user"):
-    """Fire the routine for one task; record the session link back on the task."""
-    url = (os.environ.get("PM_CC_ROUTINE_URL") or "").strip()
-    token = (os.environ.get("PM_CC_ROUTINE_TOKEN") or "").strip()
+    url, token = _cfg()
     brief, t = build_brief(task_id)
     if brief is None:
         return {"dispatched": False, "error": "task not found", "task_id": task_id}
     if not (url and token):
         return {"dispatched": False, "disabled": True, "task_id": task_id,
-                "reason": "Claude Code dispatch not configured — set PM_CC_ROUTINE_URL + "
-                          "PM_CC_ROUTINE_TOKEN from a Routine at claude.ai/code/routines."}
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "anthropic-beta": os.environ.get("PM_CC_ROUTINE_BETA", _DEFAULT_BETA),
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-    }
+                "reason": "Claude Code runner not configured — set PM_CC_RUNNER_URL + "
+                          "PM_CC_RUNNER_TOKEN (from the runner on demo)."}
     try:
-        r = httpx.post(url, json={"text": brief}, headers=headers, timeout=30)
+        r = httpx.post(url + "/dispatch", json={"task_id": task_id, "brief": brief},
+                       headers={"Authorization": f"Bearer {token}"}, timeout=30)
         r.raise_for_status()
-        data = r.json() if r.content else {}
+        data = r.json()
     except Exception as e:  # surface, don't mask
         return {"dispatched": False, "task_id": task_id, "error": str(e)[:200]}
-    session_url = data.get("claude_code_session_url") or data.get("session_url")
-    session_id = data.get("claude_code_session_id") or data.get("session_id")
-    note = ("Dispatched to Claude Code to continue development — it will open a PR on a "
-            f"`claude/{task_id.lower()}` branch (never main). "
-            + (f"Watch the live session: {session_url}" if session_url else "Session created."))
-    store.add_comment(task_id, "Maxwell (dispatch)", note)
-    return {"dispatched": True, "task_id": task_id, "session_id": session_id,
-            "session_url": session_url}
+    job_id = data.get("job_id")
+    store.add_comment(task_id, "Maxwell (dispatch)",
+                      f"Dispatched to the Claude Code runner (job {job_id}). Building the change on a "
+                      f"`claude/{task_id.lower()}` branch; a PR link will follow when it finishes.")
+    return {"dispatched": True, "task_id": task_id, "job_id": job_id,
+            "status_url": data.get("status_url")}
+
+
+def job_status(job_id):
+    """Fetch a dispatched job's status (running|pushed|no_changes|…) + PR url + log tail."""
+    url, token = _cfg()
+    if not (url and token):
+        return {"error": "runner not configured"}
+    try:
+        r = httpx.get(f"{url}/job/{job_id}", headers={"Authorization": f"Bearer {token}"}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)[:200]}

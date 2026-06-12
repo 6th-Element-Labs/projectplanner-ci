@@ -115,11 +115,17 @@ async def dispatch_status():
 
 @app.post("/api/tasks/{task_id}/dispatch")
 async def dispatch_task(task_id: str, body: dict = Body(default={})):
-    """Push this task to Claude Code (cloud session → opens a PR). The human-triggered (A) entry."""
-    res = dispatch.dispatch(task_id, actor=(body or {}).get("actor", "user"))
+    """Push this task to the Claude Code runner (→ claude/ branch + PR). The human-triggered (A) entry."""
+    res = await asyncio.to_thread(dispatch.dispatch, task_id, (body or {}).get("actor", "user"))
     if res.get("error") == "task not found":
         raise HTTPException(404, "task not found")
     return res
+
+
+@app.get("/api/dispatch/job/{job_id}")
+async def dispatch_job(job_id: str):
+    """Status of a dispatched runner job (running|pushed|no_changes|…) + PR url + log tail."""
+    return await asyncio.to_thread(dispatch.job_status, job_id)
 
 
 @app.post("/api/tasks/{task_id}/chat")
