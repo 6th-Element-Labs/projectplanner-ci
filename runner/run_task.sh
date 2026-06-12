@@ -43,9 +43,15 @@ if [ "${AHEAD:-0}" -eq 0 ]; then
   echo no_changes > "$JOB/status"; log "no commits vs origin/$BASE"
   notify_plan "Claude Code ran $TASK_ID but produced no code changes — see the runner log."
 elif git push -q origin "$BRANCH" 2>>"$JOB/claude.log"; then
-  PRURL="https://github.com/6th-Element-Labs/ActionEngine/compare/${BASE}...${BRANCH}?expand=1"
-  echo "$BRANCH" > "$JOB/branch"; echo "$PRURL" > "$JOB/pr_url"; echo pushed > "$JOB/status"; log "pushed $BRANCH"
-  notify_plan "Claude Code finished $TASK_ID — branch $BRANCH pushed. Open the PR: $PRURL"
+  # Open a REAL PR via gh (authed by the stored token); fall back to a compare URL if gh fails.
+  SUMMARY=$(git log -1 --pretty=%s)
+  PRURL=$(GH_TOKEN="$(cat /home/claude-runner/.maxwell/gh_token 2>/dev/null)" gh pr create \
+    --repo 6th-Element-Labs/ActionEngine --base "$BASE" --head "$BRANCH" \
+    --title "$TASK_ID: $SUMMARY" \
+    --body "Built by the Maxwell Claude Code runner for plan task **$TASK_ID**. Review the diff and merge (or comment back). Dispatched from Project Maxwell." 2>>"$JOB/claude.log")
+  echo "$PRURL" | grep -q "github.com/.*/pull/" || PRURL="https://github.com/6th-Element-Labs/ActionEngine/compare/${BASE}...${BRANCH}?expand=1"
+  echo "$BRANCH" > "$JOB/branch"; echo "$PRURL" > "$JOB/pr_url"; echo pushed > "$JOB/status"; log "pushed $BRANCH; PR $PRURL"
+  notify_plan "Claude Code finished $TASK_ID — PR opened: $PRURL"
 else
   echo push_failed > "$JOB/status"
   notify_plan "Claude Code made changes for $TASK_ID but the push failed — check the runner."
