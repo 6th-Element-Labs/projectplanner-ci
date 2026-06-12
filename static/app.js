@@ -553,7 +553,7 @@ const TeepPlan = {
                 <div class="d-flex align-items-center gap-2 mt-3">
                     <button id="edit-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy me-1"></i>Save</button>
                     <button id="edit-delete" class="btn btn-outline-danger btn-sm"><i class="ti ti-trash me-1"></i>Delete</button>
-                    <button id="edit-dispatch" class="btn btn-outline-primary btn-sm ms-auto" title="Hand this task to Claude Code — opens a PR on a claude/ branch (never main), watchable in the Claude Code app"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
+                    <button id="edit-dispatch" class="btn btn-outline-primary btn-sm ms-auto" title="Hand this task to the Claude Code runner — it builds the change on a claude/ branch and posts a PR link here (never touches main)"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
                     <span id="edit-flash" class="small text-secondary"></span>
                 </div>
             </div></div>
@@ -567,6 +567,7 @@ const TeepPlan = {
         this._renderActivity(t);
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
+        document.getElementById('edit-dispatch').addEventListener('click', () => this.dispatchTask(t.task_id));
         document.getElementById('chat-send').addEventListener('click', () => this.sendChat(t.task_id));
         document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendChat(t.task_id); });
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).show();
@@ -616,6 +617,34 @@ const TeepPlan = {
         } catch (e) {
             const el = document.getElementById('edit-flash');
             if (el) { el.textContent = 'Delete failed: ' + e.message; el.className = 'small text-danger'; }
+        }
+    },
+
+    async dispatchTask(id) {
+        const flash = (msg, cls) => { const el = document.getElementById('edit-flash'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
+        if (!window.confirm(`Dispatch ${id} to the Claude Code runner? It builds the change on a claude/ branch and posts a PR link to this task — it never touches main.`)) return;
+        flash('Dispatching to Claude Code…');
+        let data;
+        try {
+            const res = await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            data = await res.json();
+        } catch (e) { return flash('Dispatch failed: ' + e.message, 'danger'); }
+        if (data.disabled) return flash(data.reason || 'Runner not configured', 'warning');
+        if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || 'unknown'), 'danger');
+        flash(`Dispatched (job ${data.job_id}) — Claude Code is building it; the PR link will post to this task's activity.`, 'green');
+        if (!data.job_id) return;
+        // poll for the result, refresh the activity log when done
+        for (let i = 0; i < 60; i++) {
+            await new Promise((r) => setTimeout(r, 6000));
+            let j;
+            try { j = await (await fetch(`api/dispatch/job/${data.job_id}`)).json(); } catch (e) { continue; }
+            if (j.status && j.status !== 'running') {
+                try { const fresh = await (await fetch(`api/tasks/${encodeURIComponent(id)}`)).json(); this._renderActivity(fresh); } catch (e) { /* ignore */ }
+                if (j.pr_url) flash('PR ready — see activity below for the link.', 'green');
+                else if (j.status === 'no_changes') flash('Claude Code ran but made no changes (see runner log).', 'warning');
+                else flash('Dispatch finished: ' + j.status, 'secondary');
+                break;
+            }
         }
     },
 
