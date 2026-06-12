@@ -109,34 +109,34 @@
                     <!-- Tabs -->
                     <ul class="nav nav-tabs" role="tablist">
                         <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-exec" role="tab"><i class="ti ti-presentation me-1"></i>Exec Summary</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
                             <a class="nav-link active" data-bs-toggle="tab" href="#tab-board" role="tab"><i class="ti ti-layout-kanban me-1"></i>Board</a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-ask" role="tab"><i class="ti ti-sparkles me-1"></i>Ask Taikun</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-pulse" role="tab"><i class="ti ti-activity-heartbeat me-1"></i>Pulse</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-inbox me-1"></i>Inbox</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-tasks" role="tab"><i class="ti ti-list-check me-1"></i>By person</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-exec" role="tab"><i class="ti ti-presentation me-1"></i>Exec Summary</a>
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-tasks" role="tab"><i class="ti ti-list-check me-1"></i>ToDo</a>
                         </li>
                         <li class="nav-item" role="presentation">
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-gantt" role="tab"><i class="ti ti-timeline-event me-1"></i>Gantt</a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-plan" role="tab"><i class="ti ti-flag me-1"></i>Milestones &amp; Critical Path</a>
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-plan" role="tab"><i class="ti ti-flag me-1"></i>Milestones</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-decisions" role="tab"><i class="ti ti-help-circle me-1"></i>Open Decisions</a>
                         </li>
                         <li class="nav-item" role="presentation">
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-risks" role="tab"><i class="ti ti-alert-triangle me-1"></i>Risks</a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-decisions" role="tab"><i class="ti ti-help-circle me-1"></i>Open Decisions</a>
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-pulse" role="tab"><i class="ti ti-activity-heartbeat me-1"></i>Pulse</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-ask" role="tab"><i class="ti ti-sparkles me-1"></i>Ask Taikun</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-inbox me-1"></i>Inbox</a>
                         </li>
                     </ul>
 
@@ -150,8 +150,9 @@
                             <div class="card mt-3">
                                 <div class="card-header">
                                     <h3 class="card-title"><i class="ti ti-sparkles me-2"></i>Ask Taikun</h3>
-                                    <div class="card-actions">
+                                    <div class="card-actions btn-list align-items-center">
                                         <span class="badge bg-green-lt">whole board · RAG over plan docs · propose-to-confirm</span>
+                                        <button id="ask-clear" class="btn btn-sm"><i class="ti ti-trash me-1"></i>Clear</button>
                                     </div>
                                 </div>
                                 <div class="card-body">

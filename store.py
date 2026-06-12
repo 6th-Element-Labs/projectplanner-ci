@@ -249,6 +249,11 @@ def add_chat(session: str, role: str, content: str, payload: Optional[Dict[str, 
                   (session, role, content, json.dumps(payload or {}), time.time()))
 
 
+def clear_chat(session: str):
+    with _conn() as c:
+        c.execute("DELETE FROM chat WHERE session=?", (session,))
+
+
 def recent_chat(session: str, limit: int = 20) -> List[Dict[str, Any]]:
     with _conn() as c:
         rows = c.execute(

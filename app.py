@@ -160,6 +160,12 @@ async def plan_chat_history(session: str = "plan"):
     return {"messages": store.recent_chat(session, 100)}
 
 
+@app.delete("/api/chat")
+async def clear_plan_chat(session: str = "plan"):
+    store.clear_chat(session)
+    return {"cleared": session}
+
+
 @app.post("/api/intake")
 async def intake_artifact(body: dict = Body(...)):
     """Ingest an artifact (transcript/email/document) into RAG + triage it against the plan.

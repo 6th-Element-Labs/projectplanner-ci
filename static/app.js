@@ -763,6 +763,12 @@ const TeepPlan = {
         if (log && log.lastElementChild) log.lastElementChild.scrollIntoView({ block: 'nearest' });
     },
 
+    async clearAsk() {
+        try { await fetch('api/chat?session=plan', { method: 'DELETE' }); } catch (e) { /* noop */ }
+        const log = document.getElementById('ask-log');
+        if (log) log.innerHTML = '<div class="text-secondary small">Cleared. Ask about the whole plan below.</div>';
+    },
+
     async sendAsk() {
         const input = document.getElementById('ask-input');
         const log = document.getElementById('ask-log');
@@ -1349,6 +1355,8 @@ const TeepPlan = {
         if (askInput) askInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendAsk(); });
         const askTab = document.querySelector('a[href="#tab-ask"]');
         if (askTab) askTab.addEventListener('shown.bs.tab', () => this.initAsk());
+        const askClear = document.getElementById('ask-clear');
+        if (askClear) askClear.addEventListener('click', () => this.clearAsk());
         const intakeGo = document.getElementById('intake-go');
         if (intakeGo) intakeGo.addEventListener('click', () => this.submitIntake());
         const intakeFile = document.getElementById('intake-file');
