@@ -1,13 +1,14 @@
 # /etc/systemd/system/projectplanner-inbox.timer
-# Polls plan@taikunai.com every 5 minutes. ENABLE only once PM_IMAP_* is set in .env:
+# Polls plan@taikunai.com every minute. ENABLE only once PM_IMAP_* is set in .env:
 #   sudo systemctl enable --now projectplanner-inbox.timer
 # Until then it's a no-op (logs "IMAP not configured"), so it's safe to leave disabled.
 [Unit]
-Description=Poll the Live Inbox mailbox every 5 minutes
+Description=Poll the Live Inbox mailbox every minute
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
 
 [Install]
 WantedBy=timers.target
