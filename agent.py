@@ -316,9 +316,13 @@ def _result(answer, proposals, new_tasks, sources):
             "sources": list(dict.fromkeys(sources))}
 
 
-def _system_triage():
+def _system_triage(applied_mode=False):
     today = time.strftime("%Y-%m-%d")
     proj = store.get_meta("project") or "Project Maxwell"
+    frame = ("In this mode your changes are APPLIED IMMEDIATELY — you act autonomously, so write your reply in "
+             "the PAST tense ('I've moved SEN-2 to In Progress', 'I closed GW-3'), never as a proposal.\n"
+             if applied_mode else
+             "These are PROPOSALS the user confirms; do not say a change was applied.\n")
     return (
         f"You are Maxwell, the autonomous PM agent for {proj} (TEEP Barnett), handling an INBOUND MESSAGE "
         f"(an email, forwarded thread, transcript, or document). Today is {today}.\n\n"
@@ -338,13 +342,14 @@ def _system_triage():
         "- BE CONSERVATIVE: change ONLY what the message clearly implies. Do NOT speculatively reschedule "
         "downstream/dependent tasks unless the message explicitly says to — instead MENTION the likely knock-on "
         "in your reply so a human can decide.\n\n"
+        + frame +
         "Your summary is EMAILED BACK to the sender as the reply — write it as a clear, direct reply to them: "
-        "answer their question, and state plainly what you changed (or that nothing changed and why). 2-5 sentences."
+        "answer their question, and state plainly what you did (or that nothing changed and why). 2-5 sentences."
     )
 
 
-def triage(kind, title, text):
+def triage(kind, title, text, applied_mode=False):
     """Triage an inbound artifact against the plan. Returns {answer(summary), proposals,
-    new_tasks, sources}. The caller ingests the artifact into RAG first."""
+    new_tasks, sources}. applied_mode=True frames the reply as already-applied (autonomous inbox)."""
     artifact = f"INBOUND {kind.upper()}" + (f" — {title}" if title else "") + ":\n\n" + (text or "")
-    return run(None, artifact, system=_system_triage())
+    return run(None, artifact, system=_system_triage(applied_mode))

@@ -36,7 +36,7 @@ def process(source, external_id, sender, subject, text):
     """Dedupe -> ingest+triage -> (autonomous) apply + reply, else queue. Returns the item."""
     if store.inbox_exists(source, external_id):
         return None
-    result = intake.ingest_and_triage("email", subject or source, text)
+    result = intake.ingest_and_triage("email", subject or source, text, applied_mode=_autonomous())
     triage = {"proposals": result.get("proposals", []), "new_tasks": result.get("new_tasks", []),
               "sources": result.get("sources", [])}
     applied, reply_res, status = {}, None, "pending"

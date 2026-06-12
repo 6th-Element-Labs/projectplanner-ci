@@ -10,12 +10,12 @@ import agent
 import rag
 
 
-def ingest_and_triage(kind, title, text, ingest=True):
+def ingest_and_triage(kind, title, text, ingest=True, applied_mode=False):
     kind = (kind or "note").strip()
     title = (title or "").strip()
     label = (f"{kind}: {title}" if title else kind)
     chunks = rag.add_document(kind, label, text) if (ingest and (text or "").strip()) else 0
-    result = agent.triage(kind, title, text or "")
+    result = agent.triage(kind, title, text or "", applied_mode=applied_mode)
     return {
         "summary": result.get("answer"),
         "proposals": result.get("proposals", []),
