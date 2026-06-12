@@ -106,6 +106,7 @@ const TeepPlan = {
         this.wireEvents();
         this.setupGantt();
         this.loadSignals();
+        this.initInbox();
         const ds = document.getElementById('data-status');
         if (ds) { ds.className = 'badge bg-green-lt'; ds.textContent = `${this.tasks.length} tasks`; }
     },
@@ -1086,6 +1087,133 @@ const TeepPlan = {
         }
     },
 
+    // ---- Inbox (Live Inbox: email-triaged review queue) -----------------
+    async initInbox() {
+        try {
+            const data = await (await fetch('api/inbox?status=pending')).json();
+            this._renderInboxBadge(data.pending || 0);
+            this.renderInbox(data.items || []);
+        } catch (e) { /* leave hint */ }
+    },
+
+    _renderInboxBadge(n) {
+        const tab = document.querySelector('a[href="#tab-inbox"]');
+        if (!tab) return;
+        let b = tab.querySelector('.badge');
+        if (n > 0) {
+            if (!b) { b = document.createElement('span'); b.className = 'badge bg-red ms-1'; tab.appendChild(b); }
+            b.textContent = n;
+        } else if (b) { b.remove(); }
+    },
+
+    renderInbox(items) {
+        const el = document.getElementById('inbox-content');
+        if (!el) return;
+        if (!items.length) {
+            el.classList.add('text-secondary');
+            el.innerHTML = 'No pending items. Forward email to <strong>plan@taikunai.com</strong> (once live) and the agent triages it here.';
+            return;
+        }
+        el.classList.remove('text-secondary');
+        el.innerHTML = items.map((it) => this._inboxItemHtml(it)).join('');
+        items.forEach((it) => this._wireInboxItem(it));
+    },
+
+    _inboxItemHtml(it) {
+        const tri = it.triage || {};
+        const when = it.received_at ? new Date(it.received_at * 1000).toLocaleString() : '';
+        const propRows = (tri.proposals || []).map((p, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-iprow="${idx}">
+                <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
+                <div class="flex-fill">${this._propChips(p)}</div>
+                <button class="btn btn-sm btn-ghost-secondary p-1" data-ipdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+            </div>`).join('');
+        const ntRows = (tri.new_tasks || []).map((t, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-introw="${idx}">
+                <span class="badge bg-green-lt">new</span><span class="badge bg-azure-lt">${this.esc(t.workstream_id)}</span>
+                <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
+                <button class="btn btn-sm btn-ghost-secondary p-1" data-intdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+            </div>`).join('');
+        const body = (propRows || ntRows) ? `<div class="my-2">${propRows}${ntRows}</div>`
+            : '<div class="text-secondary small my-2">No proposed changes — context only (ingested for reference).</div>';
+        return `<div class="card card-sm mb-2" data-inbox="${it.id}">
+            <div class="card-status-start bg-azure"></div>
+            <div class="card-body">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="ti ti-mail"></i><strong>${this.esc(it.subject || '(no subject)')}</strong>
+                    <span class="text-secondary small">${this.esc(it.sender || '')}</span>
+                    <span class="ms-auto text-secondary small">${this.esc(when)}</span>
+                </div>
+                <div class="small mt-1">${this.mdLite(it.summary || '')}</div>
+                ${body}
+                <div>
+                    <button class="btn btn-primary btn-sm" data-iconfirm><i class="ti ti-checks me-1"></i>Confirm selected</button>
+                    <button class="btn btn-sm" data-idismiss>Dismiss</button>
+                    <span class="small text-secondary ms-2" data-istatus></span>
+                </div>
+            </div></div>`;
+    },
+
+    _wireInboxItem(it) {
+        const card = document.querySelector(`[data-inbox="${it.id}"]`);
+        if (!card) return;
+        const tri = it.triage || {};
+        const props = (tri.proposals || []).map((p) => Object.assign({}, p));
+        const nts = (tri.new_tasks || []).map((t) => Object.assign({}, t));
+        card.querySelectorAll('[data-ipdrop]').forEach((b) => b.addEventListener('click', () => {
+            const idx = parseInt(b.getAttribute('data-ipdrop'), 10); props[idx] = null;
+            const r = card.querySelector(`[data-iprow="${idx}"]`); if (r) r.remove();
+        }));
+        card.querySelectorAll('[data-intdrop]').forEach((b) => b.addEventListener('click', () => {
+            const idx = parseInt(b.getAttribute('data-intdrop'), 10); nts[idx] = null;
+            const r = card.querySelector(`[data-introw="${idx}"]`); if (r) r.remove();
+        }));
+        card.querySelector('[data-idismiss]').addEventListener('click', () => this.dismissInbox(it.id));
+        card.querySelector('[data-iconfirm]').addEventListener('click', () => this.confirmInbox(it.id, props.filter(Boolean), nts.filter(Boolean), card));
+    },
+
+    async confirmInbox(id, proposals, new_tasks, card) {
+        const st = card ? card.querySelector('[data-istatus]') : null;
+        if (st) st.textContent = 'Applying…';
+        try {
+            const res = await fetch(`api/inbox/${id}/confirm`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ proposals, new_tasks }),
+            });
+            const data = await res.json();
+            const a = data.applied || {};
+            if (card) card.querySelector('.card-body').innerHTML = `<span class="text-green"><i class="ti ti-checks me-1"></i>Applied — updated ${(a.updated || []).length}, created ${(a.created || []).length}${(a.failed || []).length ? ', failed ' + a.failed.length : ''}</span>`;
+            await this._reloadBoardData();
+            this.initInbox();
+        } catch (e) { if (st) st.textContent = 'failed: ' + e.message; }
+    },
+
+    async dismissInbox(id) {
+        try { await fetch(`api/inbox/${id}/dismiss`, { method: 'POST' }); this.initInbox(); } catch (e) { /* noop */ }
+    },
+
+    async simulateInbox() {
+        const subject = (document.getElementById('inbox-sim-subject').value || '').trim();
+        const text = (document.getElementById('inbox-sim-text').value || '').trim();
+        const flash = document.getElementById('inbox-sim-flash');
+        if (!text) { if (flash) flash.textContent = 'Paste some email text.'; return; }
+        if (flash) flash.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>triaging…';
+        try {
+            await fetch('api/inbox/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subject, text }) });
+            if (flash) flash.textContent = 'queued';
+            document.getElementById('inbox-sim-text').value = '';
+            this.initInbox();
+        } catch (e) { if (flash) flash.textContent = 'failed: ' + e.message; }
+    },
+
+    async _reloadBoardData() {
+        try {
+            this.plan = await (await fetch('api/board')).json();
+            this.flatten();
+            this.renderBoard();
+            this.renderTasks();
+            this.loadSignals();
+        } catch (e) { /* noop */ }
+    },
+
     // ---- tables (milestones / critical path / risks / decisions) ---------
     table(headers, rows) {
         return `<div class="table-responsive"><table class="table table-vcenter card-table">
@@ -1241,6 +1369,14 @@ const TeepPlan = {
         if (digestGen) digestGen.addEventListener('click', () => this.genDigest());
         const pulseTab = document.querySelector('a[href="#tab-pulse"]');
         if (pulseTab) pulseTab.addEventListener('shown.bs.tab', () => this.initPulse());
+        const inboxTab = document.querySelector('a[href="#tab-inbox"]');
+        if (inboxTab) inboxTab.addEventListener('shown.bs.tab', () => this.initInbox());
+        const inboxRefresh = document.getElementById('inbox-refresh');
+        if (inboxRefresh) inboxRefresh.addEventListener('click', () => this.initInbox());
+        const inboxSim = document.getElementById('inbox-sim');
+        if (inboxSim) inboxSim.addEventListener('click', () => { const box = document.getElementById('inbox-sim-box'); if (window.bootstrap) window.bootstrap.Collapse.getOrCreateInstance(box).toggle(); });
+        const inboxSimGo = document.getElementById('inbox-sim-go');
+        if (inboxSimGo) inboxSimGo.addEventListener('click', () => this.simulateInbox());
     },
 };
 

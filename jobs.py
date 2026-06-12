@@ -23,7 +23,15 @@ def weekly_digest():
     return results
 
 
-JOBS = {"weekly_digest": weekly_digest}
+def poll_inbox():
+    """Poll the Live Inbox mailbox (IMAP) and queue triaged messages. No-op until configured."""
+    import gmail_source
+    res = gmail_source.poll()
+    print(f"inbox poll: {res}")
+    return res
+
+
+JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else "weekly_digest"

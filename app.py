@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 import agent  # noqa: E402
 import digest  # noqa: E402
 import export  # noqa: E402
+import inbox as inbox_mod  # noqa: E402
 import intake  # noqa: E402
 import notify  # noqa: E402
 import signals  # noqa: E402
@@ -171,6 +172,53 @@ async def intake_artifact(body: dict = Body(...)):
             intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text)
     except Exception as e:
         raise HTTPException(502, f"intake error: {e}")
+
+
+# ---- Live Inbox (Phase 5.5) -------------------------------------------------
+@app.get("/api/inbox")
+async def get_inbox(status: str = None):
+    return {"items": store.list_inbox(status), "pending": store.inbox_pending_count()}
+
+
+@app.post("/api/inbox/{item_id}/confirm")
+async def confirm_inbox(item_id: int, body: dict = Body(default={})):
+    item = store.get_inbox_item(item_id)
+    if not item:
+        raise HTTPException(404, "no such inbox item")
+    tri = item.get("triage") or {}
+    applied = inbox_mod.apply(body.get("proposals", tri.get("proposals", [])),
+                              body.get("new_tasks", tri.get("new_tasks", [])))
+    store.set_inbox_status(item_id, "confirmed")
+    return {"applied": applied}
+
+
+@app.post("/api/inbox/{item_id}/dismiss")
+async def dismiss_inbox(item_id: int):
+    if not store.get_inbox_item(item_id):
+        raise HTTPException(404, "no such inbox item")
+    store.set_inbox_status(item_id, "dismissed")
+    return {"dismissed": item_id}
+
+
+@app.post("/api/inbox/simulate")
+async def simulate_inbox(body: dict = Body(...)):
+    """Inject a fake inbound email to exercise the Live Inbox pipeline without a mailbox."""
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "text required")
+    try:
+        item = await asyncio.to_thread(
+            inbox_mod.process, "email-sim", "sim-" + os.urandom(6).hex(),
+            body.get("sender") or "tester@taikunai.com", body.get("subject") or "(simulated)", text)
+    except Exception as e:
+        raise HTTPException(502, f"inbox error: {e}")
+    return item or {"deduped": True}
+
+
+@app.post("/api/inbox/poll")
+async def poll_inbox_now():
+    import gmail_source
+    return await asyncio.to_thread(gmail_source.poll)
 
 
 @app.get("/api/signals")

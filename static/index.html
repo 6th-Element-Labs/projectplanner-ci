@@ -118,6 +118,9 @@
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-pulse" role="tab"><i class="ti ti-activity-heartbeat me-1"></i>Pulse</a>
                         </li>
                         <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-inbox me-1"></i>Inbox</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-tasks" role="tab"><i class="ti ti-list-check me-1"></i>By person</a>
                         </li>
                         <li class="nav-item" role="presentation">
@@ -198,6 +201,27 @@
                                 </div>
                             </div>
                             <div id="digest-history" class="mt-2"></div>
+                        </div>
+                        <!-- Inbox (Live Inbox: email-triaged updates awaiting review) -->
+                        <div class="tab-pane" id="tab-inbox" role="tabpanel">
+                            <div class="card mt-3">
+                                <div class="card-header">
+                                    <h3 class="card-title"><i class="ti ti-inbox me-2"></i>Inbox — email-triaged updates</h3>
+                                    <div class="card-actions btn-list">
+                                        <button id="inbox-sim" class="btn btn-sm">Simulate email</button>
+                                        <button id="inbox-refresh" class="btn btn-sm"><i class="ti ti-refresh"></i></button>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div id="inbox-sim-box" class="collapse mb-3">
+                                        <input id="inbox-sim-subject" class="form-control form-control-sm mb-1" placeholder="Subject"/>
+                                        <textarea id="inbox-sim-text" class="form-control form-control-sm" rows="4" placeholder="Paste a fake inbound email to test the Live Inbox pipeline (no mailbox needed)…"></textarea>
+                                        <button id="inbox-sim-go" class="btn btn-primary btn-sm mt-2"><i class="ti ti-mail-forward me-1"></i>Triage as inbound email</button>
+                                        <span id="inbox-sim-flash" class="small text-secondary ms-1"></span>
+                                    </div>
+                                    <div id="inbox-content" class="text-secondary">No pending items. Forward email to <strong>plan@taikunai.com</strong> (once live) and the agent triages it here.</div>
+                                </div>
+                            </div>
                         </div>
                         <!-- By person (Todoist-style task lens) -->
                         <div class="tab-pane" id="tab-tasks" role="tabpanel">

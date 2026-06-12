@@ -66,7 +66,14 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_kind TEXT, label TEXT, text TEXT, embedding TEXT, created_at REAL
             );
+            CREATE TABLE IF NOT EXISTS inbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT, external_id TEXT, sender TEXT, subject TEXT,
+                summary TEXT, triage TEXT, status TEXT DEFAULT 'pending',
+                received_at REAL, created_at REAL
+            );
             CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
+            CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status);
             CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
             CREATE INDEX IF NOT EXISTS ix_activity_ts ON activity(created_at);
             CREATE INDEX IF NOT EXISTS ix_chat_session ON chat(session);
@@ -304,6 +311,58 @@ def all_rag_chunks() -> List[Dict[str, Any]]:
 def rag_docs_max_id() -> int:
     with _conn() as c:
         return c.execute("SELECT COALESCE(MAX(id), 0) FROM rag_docs").fetchone()[0]
+
+
+# ---- Live Inbox queue (Phase 5.5) — triaged inbound artifacts awaiting review ----------
+def _inbox_row(r):
+    return {"id": r["id"], "source": r["source"], "external_id": r["external_id"],
+            "sender": r["sender"], "subject": r["subject"], "summary": r["summary"],
+            "triage": json.loads(r["triage"] or "{}"), "status": r["status"],
+            "received_at": r["received_at"], "created_at": r["created_at"]}
+
+
+def inbox_exists(source: str, external_id: str) -> bool:
+    if not external_id:
+        return False
+    with _conn() as c:
+        return bool(c.execute("SELECT 1 FROM inbox WHERE source=? AND external_id=?",
+                              (source, external_id)).fetchone())
+
+
+def add_inbox_item(source, external_id, sender, subject, summary, triage, received_at=None) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO inbox(source,external_id,sender,subject,summary,triage,status,received_at,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (source, external_id, sender, subject, summary, json.dumps(triage or {}), "pending",
+             received_at or time.time(), time.time()))
+        return cur.lastrowid
+
+
+def list_inbox(status: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    with _conn() as c:
+        if status:
+            rows = c.execute("SELECT * FROM inbox WHERE status=? ORDER BY id DESC LIMIT ?",
+                             (status, limit)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM inbox ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [_inbox_row(r) for r in rows]
+
+
+def get_inbox_item(item_id: int) -> Optional[Dict[str, Any]]:
+    with _conn() as c:
+        r = c.execute("SELECT * FROM inbox WHERE id=?", (item_id,)).fetchone()
+        return _inbox_row(r) if r else None
+
+
+def set_inbox_status(item_id: int, status: str):
+    with _conn() as c:
+        c.execute("UPDATE inbox SET status=? WHERE id=?", (status, item_id))
+
+
+def inbox_pending_count() -> int:
+    with _conn() as c:
+        return c.execute("SELECT COUNT(*) FROM inbox WHERE status='pending'").fetchone()[0]
 
 
 def board_payload() -> Dict[str, Any]:
