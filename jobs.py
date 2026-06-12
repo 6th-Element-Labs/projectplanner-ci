@@ -6,11 +6,22 @@ workflow engine. Each job is a plain function; the timer invokes this module.
 
 Loads /opt/projectplanner/.env via the systemd EnvironmentFile (same as the web app).
 """
+import os
 import sys
+from pathlib import Path
 
-import digest
-import notify
-import store
+# Load .env so a manual run works like the systemd EnvironmentFile path does.
+_env = Path(__file__).parent / ".env"
+if _env.exists():
+    for _line in _env.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+import digest  # noqa: E402
+import notify  # noqa: E402
+import store  # noqa: E402
 
 
 def weekly_digest():
