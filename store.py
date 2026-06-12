@@ -242,6 +242,40 @@ def get_meta(key: str, default=None):
         return json.loads(r[0]) if r else default
 
 
+def set_meta(key: str, value):
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, json.dumps(value)))
+
+
+# ---- contacts (email -> display name) for inbound-reply routing ----------
+# Seeded with the known TEEP participants so the email agent can resolve "Sahir",
+# "Darko", "Steve" -> the right address; auto-learned from every inbound From/To/Cc.
+_SEED_CONTACTS = {
+    "steve@taikunai.com": "Steve Ridder",
+    "sahir.shah@totalenergies.com": "Sahir Shah",
+    "darko.jankovic@totalenergies.com": "Darko Jankovic",
+}
+
+
+def get_contacts() -> Dict[str, str]:
+    c = get_meta("contacts")
+    if not c:
+        c = dict(_SEED_CONTACTS)
+        set_meta("contacts", c)
+    return c
+
+
+def upsert_contact(email: str, name: Optional[str] = None):
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        return
+    c = get_contacts()
+    name = (name or "").strip()
+    if email not in c or (name and not c.get(email)):
+        c[email] = name or c.get(email) or email
+        set_meta("contacts", c)
+
+
 # ---- plan-wide chat (the global "Ask Taikun" session) --------------------
 def add_chat(session: str, role: str, content: str, payload: Optional[Dict[str, Any]] = None):
     with _conn() as c:

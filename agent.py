@@ -111,6 +111,20 @@ TOOLS = [
             "risk_level": {"type": "string", "enum": ["Low", "Medium", "High"]},
             "rationale": {"type": "string", "description": "one short line on why"}},
             "required": ["workstream_id", "title", "rationale"]}}},
+    {"type": "function", "function": {
+        "name": "set_recipients",
+        "description": "Set WHO your email reply goes to (inbound-message handling only). Call this when the "
+                       "message tells you to send to / copy specific people (e.g. 'send this to Sahir, cc Darko "
+                       "and me') or to reply to everyone. Provide EMAIL ADDRESSES — resolve names using KNOWN "
+                       "CONTACTS and the thread's From/To/Cc shown in your prompt. If you do NOT call this, the "
+                       "reply defaults to everyone already on the thread (reply-all). The sender is always kept "
+                       "copied, so you don't need to add them just to 'copy me'.",
+        "parameters": {"type": "object", "properties": {
+            "to": {"type": "array", "items": {"type": "string"},
+                   "description": "primary recipient email addresses"},
+            "cc": {"type": "array", "items": {"type": "string"},
+                   "description": "cc recipient email addresses"}},
+            "required": ["to"]}}},
 ]
 
 # Editable fields the agent may propose (mirrors store.EDITABLE minus internal ones).
@@ -221,12 +235,13 @@ def run(task, message, history=None, system=None):
     msgs.append({"role": "user", "content": message})
 
     sources, proposals, new_tasks, last = [], [], [], None
+    recipients = None
     for _ in range(MAX_ITERS):
         m = _chat(msgs)
         last = m
         tcs = m.get("tool_calls")
         if not tcs:
-            return _result(m.get("content") or "", proposals, new_tasks, sources)
+            return _result(m.get("content") or "", proposals, new_tasks, sources, recipients)
         msgs.append({"role": "assistant", "content": m.get("content"), "tool_calls": tcs})
         for tc in tcs:
             name = tc["function"]["name"]
@@ -304,21 +319,33 @@ def run(task, message, history=None, system=None):
                           and v not in (None, "")}
                     new_tasks.append(nt)
                     content = f"Proposed new task in {nt['workstream_id']} ({len(new_tasks)} pending); tell the user to Confirm."
+            elif name == "set_recipients":
+                to = [a.strip() for a in (args.get("to") or []) if a and a.strip()]
+                cc = [a.strip() for a in (args.get("cc") or []) if a and a.strip()]
+                recipients = {"to": to, "cc": cc}
+                content = f"Reply recipients set — to: {to or '(none)'}; cc: {cc or '(none)'}."
             else:
                 content = "unknown tool"
             msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
-    return _result((last or {}).get("content") or "(reached step limit)", proposals, new_tasks, sources)
+    return _result((last or {}).get("content") or "(reached step limit)", proposals, new_tasks, sources, recipients)
 
 
-def _result(answer, proposals, new_tasks, sources):
+def _result(answer, proposals, new_tasks, sources, recipients=None):
     return {"answer": answer, "proposals": proposals, "new_tasks": new_tasks,
             "proposal": (proposals[-1] if proposals else None),
+            "recipients": recipients,
             "sources": list(dict.fromkeys(sources))}
 
 
-def _system_triage(applied_mode=False):
+def _system_triage(applied_mode=False, headers=None):
     today = time.strftime("%Y-%m-%d")
     proj = store.get_meta("project") or "Project Maxwell"
+    contacts = store.get_contacts()
+    contacts_text = ", ".join(f"{n} <{e}>" for e, n in
+                              sorted(contacts.items(), key=lambda kv: (kv[1] or kv[0]))) or "(none)"
+    h = headers or {}
+    thread_text = ("\nTHIS MESSAGE'S HEADERS — From: %s | To: %s | Cc: %s\n"
+                   % (h.get("from") or "?", h.get("to") or "-", h.get("cc") or "-")) if headers else ""
     frame = ("In this mode your changes are APPLIED IMMEDIATELY — you act autonomously, so write your reply in "
              "the PAST tense ('I've moved SEN-2 to In Progress', 'I closed GW-3'), never as a proposal.\n"
              if applied_mode else
@@ -343,13 +370,20 @@ def _system_triage(applied_mode=False):
         "downstream/dependent tasks unless the message explicitly says to — instead MENTION the likely knock-on "
         "in your reply so a human can decide.\n\n"
         + frame +
-        "Your summary is EMAILED BACK to the sender as the reply — write it as a clear, direct reply to them: "
-        "answer their question, and state plainly what you did (or that nothing changed and why). 2-5 sentences."
+        f"KNOWN CONTACTS (name <email>): {contacts_text}\n"
+        + thread_text +
+        "\nEMAIL REPLY: your summary is sent as the email reply. By DEFAULT it goes to everyone already on the "
+        "thread (reply-all: the sender plus this message's To/Cc), and the original sender is ALWAYS kept "
+        "copied. If the message asks you to send to / copy specific people (e.g. 'send this to Sahir, cc Darko "
+        "and me'), call set_recipients with their EMAIL ADDRESSES, resolved from KNOWN CONTACTS / the headers "
+        "above. The full prior message is auto-quoted beneath your reply, so do not restate it. Write a clear, "
+        "direct reply: answer the question and state plainly what you did (or that nothing changed and why). "
+        "2-5 sentences."
     )
 
 
-def triage(kind, title, text, applied_mode=False):
-    """Triage an inbound artifact against the plan. Returns {answer(summary), proposals,
-    new_tasks, sources}. applied_mode=True frames the reply as already-applied (autonomous inbox)."""
+def triage(kind, title, text, applied_mode=False, headers=None):
+    """Triage an inbound artifact against the plan. Returns {answer(summary), proposals, new_tasks,
+    recipients, sources}. headers={from,to,cc,date} lets the agent reply-all / route to named people."""
     artifact = f"INBOUND {kind.upper()}" + (f" — {title}" if title else "") + ":\n\n" + (text or "")
-    return run(None, artifact, system=_system_triage(applied_mode))
+    return run(None, artifact, system=_system_triage(applied_mode, headers))

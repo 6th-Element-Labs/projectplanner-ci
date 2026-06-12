@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 import agent  # noqa: E402
 import digest  # noqa: E402
+import dispatch  # noqa: E402
 import export  # noqa: E402
 import inbox as inbox_mod  # noqa: E402
 import intake  # noqa: E402
@@ -104,6 +105,21 @@ async def comment(task_id: str, body: dict = Body(...)):
     if not t:
         raise HTTPException(404, "task not found")
     return t
+
+
+@app.get("/api/dispatch/status")
+async def dispatch_status():
+    """Is Claude Code dispatch wired (PM_CC_ROUTINE_URL + token set)?"""
+    return dispatch.status()
+
+
+@app.post("/api/tasks/{task_id}/dispatch")
+async def dispatch_task(task_id: str, body: dict = Body(default={})):
+    """Push this task to Claude Code (cloud session → opens a PR). The human-triggered (A) entry."""
+    res = dispatch.dispatch(task_id, actor=(body or {}).get("actor", "user"))
+    if res.get("error") == "task not found":
+        raise HTTPException(404, "task not found")
+    return res
 
 
 @app.post("/api/tasks/{task_id}/chat")
@@ -212,10 +228,13 @@ async def simulate_inbox(body: dict = Body(...)):
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text required")
+    sender = body.get("sender") or "tester@taikunai.com"
+    headers = {"from": sender, "to": body.get("to") or "", "cc": body.get("cc") or "",
+               "date": body.get("date") or "", "message_id": body.get("message_id") or ""}
     try:
         item = await asyncio.to_thread(
             inbox_mod.process, "email-sim", "sim-" + os.urandom(6).hex(),
-            body.get("sender") or "tester@taikunai.com", body.get("subject") or "(simulated)", text)
+            sender, body.get("subject") or "(simulated)", text, headers)
     except Exception as e:
         raise HTTPException(502, f"inbox error: {e}")
     return item or {"deduped": True}

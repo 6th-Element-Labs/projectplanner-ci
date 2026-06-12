@@ -110,7 +110,14 @@ def poll(max_msgs=20):
                 continue
             subject = _decode(msg.get("Subject"))
             mid = msg.get("Message-ID") or f"{subject}:{msg.get('Date')}"
-            if inbox.process("email", mid, sender, subject, _message_text(msg)):
+            headers = {
+                "from": sender,
+                "to": _decode(msg.get("To")),
+                "cc": _decode(msg.get("Cc")),
+                "date": _decode(msg.get("Date")),
+                "message_id": msg.get("Message-ID"),
+            }
+            if inbox.process("email", mid, sender, subject, _message_text(msg), headers=headers):
                 queued += 1
         return {"polled": len(ids), "queued": queued, "disabled": False}
     finally:

@@ -31,25 +31,43 @@ def _slack(text):
     return {"channel": "slack", "sent": r.status_code < 300, "status": r.status_code}
 
 
-def _email(subject, text, to=None):
+def _addrs(v):
+    """Normalize a str/list of addresses to a deduped list (case-insensitive)."""
+    items = v if isinstance(v, (list, tuple)) else str(v or "").split(",")
+    out, seen = [], set()
+    for a in items:
+        a = (a or "").strip()
+        if a and a.lower() not in seen:
+            seen.add(a.lower())
+            out.append(a)
+    return out
+
+
+def _email(subject, text, to=None, cc=None, in_reply_to=None, references=None):
     host = (os.environ.get("PM_SMTP_HOST") or "").strip()
-    to = (to or os.environ.get("PM_NOTIFY_EMAIL_TO") or "").strip()
+    to_list = _addrs(to) or _addrs(os.environ.get("PM_NOTIFY_EMAIL_TO"))
+    cc_list = [a for a in _addrs(cc) if a.lower() not in {x.lower() for x in to_list}]
     frm = (os.environ.get("PM_SMTP_FROM") or os.environ.get("PM_SMTP_USER") or "").strip()
-    if not host or not to or not frm:
-        log.info("[dry-run] email '%s' -> %s", subject, to or "(no recipient)")
-        return {"channel": "email", "sent": False, "dry_run": True}
+    if not host or not to_list or not frm:
+        log.info("[dry-run] email '%s' -> to=%s cc=%s", subject, to_list or "(none)", cc_list)
+        return {"channel": "email", "sent": False, "dry_run": True, "to": to_list, "cc": cc_list}
     msg = MIMEText(text, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = frm
-    msg["To"] = to
+    msg["To"] = ", ".join(to_list)
+    if cc_list:
+        msg["Cc"] = ", ".join(cc_list)
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        msg["References"] = references or in_reply_to
     port = int(os.environ.get("PM_SMTP_PORT", "587"))
     user, pw = os.environ.get("PM_SMTP_USER"), os.environ.get("PM_SMTP_PASSWORD")
     with smtplib.SMTP(host, port, timeout=30) as s:
         s.starttls(context=ssl.create_default_context())
         if user and pw:
             s.login(user, pw)
-        s.sendmail(frm, [a.strip() for a in to.split(",") if a.strip()], msg.as_string())
-    return {"channel": "email", "sent": True, "to": to}
+        s.sendmail(frm, to_list + cc_list, msg.as_string())
+    return {"channel": "email", "sent": True, "to": to_list, "cc": cc_list}
 
 
 def send(subject, text, channels=("slack", "email")):
@@ -63,9 +81,9 @@ def send(subject, text, channels=("slack", "email")):
     return out
 
 
-def reply(to, subject, text):
-    """Email a specific recipient (e.g. the sender of an inbound message). Dry-run if SMTP unset."""
-    return _email(subject, text, to=to)
+def reply(to, subject, text, cc=None, in_reply_to=None, references=None):
+    """Email a reply with optional cc + RFC threading headers. Dry-run if SMTP unset."""
+    return _email(subject, text, to=to, cc=cc, in_reply_to=in_reply_to, references=references)
 
 
 def status():

@@ -553,6 +553,7 @@ const TeepPlan = {
                 <div class="d-flex align-items-center gap-2 mt-3">
                     <button id="edit-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy me-1"></i>Save</button>
                     <button id="edit-delete" class="btn btn-outline-danger btn-sm"><i class="ti ti-trash me-1"></i>Delete</button>
+                    <button id="edit-dispatch" class="btn btn-outline-primary btn-sm ms-auto" title="Hand this task to Claude Code — opens a PR on a claude/ branch (never main), watchable in the Claude Code app"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
                     <span id="edit-flash" class="small text-secondary"></span>
                 </div>
             </div></div>

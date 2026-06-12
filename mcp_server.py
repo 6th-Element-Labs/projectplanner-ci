@@ -178,6 +178,18 @@ def notify(subject: str, text: str, ctx: Context) -> str:
 
 
 @mcp.tool()
+def dispatch_to_claude_code(task_id: str, ctx: Context) -> str:
+    """Push a task to Claude Code to CONTINUE DEVELOPMENT (the autonomous-dev bridge). Builds a
+    dev brief (the task's exit criteria + plan-RAG context) and fires a Claude Code cloud session
+    that opens a PR on a `claude/<task>` branch — never main — and is watchable in the desktop/
+    mobile apps. Returns {dispatched, session_url, ...}. Records the session link on the task.
+    No-op with a clear reason until the routine is configured on the plan host."""
+    _require_write(ctx)
+    import dispatch as dispatch_mod
+    return json.dumps(dispatch_mod.dispatch(task_id, actor="MCP"))
+
+
+@mcp.tool()
 def ingest_and_triage(kind: str, title: str, text: str, ctx: Context) -> str:
     """Ingest an artifact (email / transcript / document / note) into the RAG corpus AND triage it
     against the plan. Returns {summary, proposals, new_tasks, sources} — proposals are NOT applied
