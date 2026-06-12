@@ -11,11 +11,14 @@ Config (.env, all optional):
                        (empty = accept all — tighten in prod).
 """
 import email
+import html
 import imaplib
 import logging
 import os
+import re
 from email.header import decode_header
 
+import attachments
 import inbox
 
 log = logging.getLogger("gmail_source")
@@ -36,14 +39,50 @@ def _decode(s):
                    for b, enc in decode_header(s))
 
 
+def _html2text(h):
+    h = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", h)
+    h = re.sub(r"(?i)<br\s*/?>", "\n", h)
+    h = re.sub(r"(?i)</(p|div|tr|li|h[1-6])>", "\n", h)
+    h = re.sub(r"<[^>]+>", "", h)
+    return html.unescape(h).strip()
+
+
 def _body(msg):
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain" and "attachment" not in str(part.get("Content-Disposition")):
-                payload = part.get_payload(decode=True) or b""
-                return payload.decode(part.get_content_charset() or "utf-8", "ignore")
-        return ""
-    return (msg.get_payload(decode=True) or b"").decode(msg.get_content_charset() or "utf-8", "ignore")
+    """Prefer text/plain; fall back to HTML-stripped text if that's all there is."""
+    if not msg.is_multipart():
+        return (msg.get_payload(decode=True) or b"").decode(msg.get_content_charset() or "utf-8", "ignore")
+    plain, html_body = "", ""
+    for part in msg.walk():
+        if "attachment" in str(part.get("Content-Disposition")).lower():
+            continue
+        ct = part.get_content_type()
+        if ct in ("text/plain", "text/html"):
+            text = (part.get_payload(decode=True) or b"").decode(part.get_content_charset() or "utf-8", "ignore")
+            if ct == "text/plain" and not plain:
+                plain = text
+            elif ct == "text/html" and not html_body:
+                html_body = text
+    return plain or _html2text(html_body)
+
+
+def _message_text(msg):
+    """Body + every attachment's extracted text — and EXPLICITLY note any we can't read
+    (fail-and-fix-early: surface the gap in-line so the agent + reply flag it)."""
+    parts = [_body(msg)]
+    for part in msg.walk():
+        fn = part.get_filename()
+        if not fn:
+            continue
+        data = part.get_payload(decode=True)
+        if not data:
+            continue
+        text = attachments.extract(fn, part.get_content_type(), data)
+        if text and text.strip():
+            parts.append(f"\n\n--- ATTACHMENT: {_decode(fn)} ---\n{text.strip()}")
+        else:
+            parts.append(f"\n\n--- ATTACHMENT: {_decode(fn)} — COULD NOT EXTRACT TEXT "
+                         f"({part.get_content_type()}, {len(data)} bytes); flag this to the sender ---")
+    return "\n".join(p for p in parts if p)
 
 
 def poll(max_msgs=20):
@@ -59,16 +98,19 @@ def poll(max_msgs=20):
         m.select("INBOX")
         _typ, data = m.search(None, "UNSEEN")
         ids = (data[0].split() if data and data[0] else [])[:max_msgs]
+        self_addr = (os.environ.get("PM_IMAP_USER") or "").lower()
         queued = 0
         for i in ids:
             _typ, msg_data = m.fetch(i, "(RFC822)")   # fetching marks \Seen -> not re-polled
             msg = email.message_from_bytes(msg_data[0][1])
             sender = _decode(msg.get("From"))
+            if self_addr and self_addr in (sender or "").lower():
+                continue   # never process our own outbound — no self-reply loops
             if not _allow(sender):
                 continue
             subject = _decode(msg.get("Subject"))
             mid = msg.get("Message-ID") or f"{subject}:{msg.get('Date')}"
-            if inbox.process("email", mid, sender, subject, _body(msg)):
+            if inbox.process("email", mid, sender, subject, _message_text(msg)):
                 queued += 1
         return {"polled": len(ids), "queued": queued, "disabled": False}
     finally:
