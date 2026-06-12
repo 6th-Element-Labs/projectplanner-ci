@@ -557,6 +557,7 @@ const TeepPlan = {
                     <span id="edit-flash" class="small text-secondary"></span>
                 </div>
             </div></div>
+            <div id="dispatch-panel" class="mb-3"></div>
             <div class="d-flex align-items-center mb-1"><strong>Ask Taikun · this task</strong>
                 <span class="badge bg-green-lt ms-2">RAG over plan docs · propose-to-confirm</span></div>
             <div id="chat-log" class="border rounded p-2 mb-2"></div>
@@ -565,6 +566,7 @@ const TeepPlan = {
                 <button id="chat-send" class="btn btn-primary"><i class="ti ti-send"></i></button>
             </div>`;
         this._renderActivity(t);
+        this._loadDispatch(t.task_id);
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
         document.getElementById('edit-dispatch').addEventListener('click', () => this.dispatchTask(t.task_id));
@@ -578,7 +580,7 @@ const TeepPlan = {
         if (!log) return;
         const acts = (t.activity || []).filter((a) => a.kind === 'comment' || a.kind === 'chat');
         log.innerHTML = acts.length
-            ? acts.map((a) => `<div class="mb-1"><span class="badge bg-secondary-lt me-1">${this.esc(a.actor)}</span>${this.esc((a.payload && a.payload.text) || '')}</div>`).join('')
+            ? acts.map((a) => `<div class="mb-1"><span class="badge bg-secondary-lt me-1">${this.esc(a.actor)}</span>${this._linkify(this.esc((a.payload && a.payload.text) || ''))}</div>`).join('')
             : '<div class="text-secondary small">No messages yet — ask the agent how to move this task forward.</div>';
     },
 
@@ -631,21 +633,47 @@ const TeepPlan = {
         } catch (e) { return flash('Dispatch failed: ' + e.message, 'danger'); }
         if (data.disabled) return flash(data.reason || 'Runner not configured', 'warning');
         if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || 'unknown'), 'danger');
-        flash(`Dispatched (job ${data.job_id}) — Claude Code is building it; the PR link will post to this task's activity.`, 'green');
-        if (!data.job_id) return;
-        // poll for the result, refresh the activity log when done
-        for (let i = 0; i < 60; i++) {
-            await new Promise((r) => setTimeout(r, 6000));
-            let j;
-            try { j = await (await fetch(`api/dispatch/job/${data.job_id}`)).json(); } catch (e) { continue; }
-            if (j.status && j.status !== 'running') {
-                try { const fresh = await (await fetch(`api/tasks/${encodeURIComponent(id)}`)).json(); this._renderActivity(fresh); } catch (e) { /* ignore */ }
-                if (j.pr_url) flash('PR ready — see activity below for the link.', 'green');
-                else if (j.status === 'no_changes') flash('Claude Code ran but made no changes (see runner log).', 'warning');
-                else flash('Dispatch finished: ' + j.status, 'secondary');
-                break;
-            }
-        }
+        flash(`Dispatched (job ${data.job_id}) — Claude Code is building it now.`, 'green');
+        this._loadDispatch(id);   // render the live panel (status -> Open PR); it self-refreshes
+    },
+
+    async _loadDispatch(id) {
+        const el = document.getElementById('dispatch-panel');
+        if (!el) return;
+        this._dispatchPollId = id;
+        let d;
+        try { d = await (await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch/latest`)).json(); } catch (e) { return; }
+        if (!d || !d.job_id) { el.innerHTML = ''; return; }
+        const st = d.status || 'running';
+        const M = { running: ['Building…', 'azure'], pushed: ['PR ready', 'green'], no_changes: ['No changes', 'yellow'], push_failed: ['Push failed', 'red'], failed_branch: ['Failed', 'red'], no_repo: ['Failed', 'red'] };
+        const [label, color] = M[st] || [st, 'secondary'];
+        const pr = d.pr_url ? `<a href="${this.esc(d.pr_url)}" target="_blank" class="btn btn-success btn-sm"><i class="ti ti-git-pull-request me-1"></i>Open PR ↗</a>` : '';
+        el.innerHTML = `
+            <div class="card"><div class="card-body py-2">
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <i class="ti ti-robot text-azure"></i><strong>Claude Code dev run</strong>
+                    <span class="badge bg-${color}-lt">${this.esc(label)}</span>
+                    ${st === 'running' ? '<span class="spinner-border spinner-border-sm text-azure"></span>' : ''}
+                    <span class="ms-auto"></span>${pr}
+                    <button class="btn btn-sm btn-outline-secondary" id="dispatch-log-btn"><i class="ti ti-file-text me-1"></i>View run log</button>
+                </div>
+                ${st === 'pushed' ? '<div class="small text-secondary mt-1">Next: open the PR, review the diff, and merge it on GitHub (or comment back here).</div>' : ''}
+                ${st === 'running' ? '<div class="small text-secondary mt-1">Building now — the Open PR button appears here when it finishes.</div>' : ''}
+                ${st === 'no_changes' ? '<div class="small text-secondary mt-1">The run produced no code changes — open the log to see why.</div>' : ''}
+                <div id="dispatch-log" class="mt-2" style="display:none"></div>
+            </div></div>`;
+        const lb = document.getElementById('dispatch-log-btn');
+        if (lb) lb.addEventListener('click', () => {
+            const box = document.getElementById('dispatch-log');
+            if (!box) return;
+            if (box.style.display === 'none') { box.style.display = 'block'; box.innerHTML = `<pre class="bg-dark text-light p-2 rounded small" style="max-height:260px;overflow:auto;white-space:pre-wrap">${this.esc(d.log_tail || '(no log captured yet)')}</pre>`; }
+            else { box.style.display = 'none'; }
+        });
+        if (st === 'running') setTimeout(() => { if (this._dispatchPollId === id) this._loadDispatch(id); }, 7000);
+    },
+
+    _linkify(s) {
+        return (s || '').replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank">$1</a>');
     },
 
     openCreate() {

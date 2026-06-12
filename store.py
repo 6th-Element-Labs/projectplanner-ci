@@ -247,6 +247,25 @@ def set_meta(key: str, value):
         c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, json.dumps(value)))
 
 
+# ---- dev dispatches (Claude Code runner) — so the UI can show the latest run per task ----
+def add_dispatch(task_id: str, job_id: str):
+    with _conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS dispatches (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                  "task_id TEXT, job_id TEXT, created_at REAL)")
+        c.execute("INSERT INTO dispatches(task_id, job_id, created_at) VALUES (?,?,?)",
+                  (task_id, job_id, time.time()))
+
+
+def latest_dispatch(task_id: str) -> Optional[Dict[str, Any]]:
+    with _conn() as c:
+        try:
+            r = c.execute("SELECT job_id, created_at FROM dispatches WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                          (task_id,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return {"job_id": r["job_id"], "created_at": r["created_at"]} if r else None
+
+
 # ---- contacts (email -> display name) for inbound-reply routing ----------
 # Seeded with the known TEEP participants so the email agent can resolve "Sahir",
 # "Darko", "Steve" -> the right address; auto-learned from every inbound From/To/Cc.

@@ -128,6 +128,17 @@ async def dispatch_job(job_id: str):
     return await asyncio.to_thread(dispatch.job_status, job_id)
 
 
+@app.get("/api/tasks/{task_id}/dispatch/latest")
+async def task_dispatch_latest(task_id: str):
+    """The latest Claude Code dev run for a task: status + PR url + full run log (for the UI panel)."""
+    d = store.latest_dispatch(task_id)
+    if not d:
+        return {"job_id": None}
+    js = await asyncio.to_thread(dispatch.job_status, d["job_id"])
+    return {"job_id": d["job_id"], "created_at": d.get("created_at"),
+            **(js if isinstance(js, dict) else {})}
+
+
 @app.post("/api/tasks/{task_id}/chat")
 async def chat(task_id: str, body: dict = Body(...)):
     """Per-task Ask Taikun agent: RAG over the plan docs + propose-then-confirm task edits."""

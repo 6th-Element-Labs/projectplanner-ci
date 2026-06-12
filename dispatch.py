@@ -82,6 +82,8 @@ def dispatch(task_id, actor="user"):
     except Exception as e:  # surface, don't mask
         return {"dispatched": False, "task_id": task_id, "error": str(e)[:200]}
     job_id = data.get("job_id")
+    if job_id:
+        store.add_dispatch(task_id, job_id)
     store.add_comment(task_id, "Maxwell (dispatch)",
                       f"Dispatched to the Claude Code runner (job {job_id}). Building the change on a "
                       f"`claude/{task_id.lower()}` branch; a PR link will follow when it finishes.")
