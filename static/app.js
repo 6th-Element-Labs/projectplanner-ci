@@ -1096,7 +1096,7 @@ const TeepPlan = {
     // ---- Inbox (Live Inbox: email-triaged review queue) -----------------
     async initInbox() {
         try {
-            const data = await (await fetch('api/inbox?status=pending')).json();
+            const data = await (await fetch('api/inbox')).json();
             this._renderInboxBadge(data.pending || 0);
             this.renderInbox(data.items || []);
         } catch (e) { /* leave hint */ }
@@ -1117,7 +1117,7 @@ const TeepPlan = {
         if (!el) return;
         if (!items.length) {
             el.classList.add('text-secondary');
-            el.innerHTML = 'No pending items. Forward email to <strong>plan@taikunai.com</strong> (once live) and the agent triages it here.';
+            el.innerHTML = 'Nothing yet. Email <strong>plan@taikunai.com</strong> (once connected) — the agent acts on it autonomously and replies, and a log of what it did shows here. Use <em>Simulate email</em> to try it now.';
             return;
         }
         el.classList.remove('text-secondary');
@@ -1128,37 +1128,51 @@ const TeepPlan = {
     _inboxItemHtml(it) {
         const tri = it.triage || {};
         const when = it.received_at ? new Date(it.received_at * 1000).toLocaleString() : '';
-        const propRows = (tri.proposals || []).map((p, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-iprow="${idx}">
-                <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
-                <div class="flex-fill">${this._propChips(p)}</div>
-                <button class="btn btn-sm btn-ghost-secondary p-1" data-ipdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
-            </div>`).join('');
-        const ntRows = (tri.new_tasks || []).map((t, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-introw="${idx}">
-                <span class="badge bg-green-lt">new</span><span class="badge bg-azure-lt">${this.esc(t.workstream_id)}</span>
-                <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
-                <button class="btn btn-sm btn-ghost-secondary p-1" data-intdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
-            </div>`).join('');
-        const body = (propRows || ntRows) ? `<div class="my-2">${propRows}${ntRows}</div>`
-            : '<div class="text-secondary small my-2">No proposed changes — context only (ingested for reference).</div>';
+        const chip = it.status === 'applied' ? '<span class="badge bg-green-lt">Acted</span>'
+            : it.status === 'pending' ? '<span class="badge bg-yellow-lt">Pending</span>'
+                : `<span class="badge bg-secondary-lt">${this.esc(it.status)}</span>`;
+        let bodyHtml;
+        if (it.status === 'pending') {
+            const propRows = (tri.proposals || []).map((p, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-iprow="${idx}">
+                    <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
+                    <div class="flex-fill">${this._propChips(p)}</div>
+                    <button class="btn btn-sm btn-ghost-secondary p-1" data-ipdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+                </div>`).join('');
+            const ntRows = (tri.new_tasks || []).map((t, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-introw="${idx}">
+                    <span class="badge bg-green-lt">new</span><span class="badge bg-azure-lt">${this.esc(t.workstream_id)}</span>
+                    <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
+                    <button class="btn btn-sm btn-ghost-secondary p-1" data-intdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+                </div>`).join('');
+            bodyHtml = `${(propRows || ntRows) ? `<div class="my-2">${propRows}${ntRows}</div>` : '<div class="text-secondary small my-2">No proposed changes.</div>'}
+                <div><button class="btn btn-primary btn-sm" data-iconfirm><i class="ti ti-checks me-1"></i>Confirm selected</button>
+                <button class="btn btn-sm" data-idismiss>Dismiss</button>
+                <span class="small text-secondary ms-2" data-istatus></span></div>`;
+        } else {
+            const a = tri.applied || {};
+            const u = a.updated || [], c = a.created || [];
+            const rep = tri.reply;
+            const reply = rep ? (rep.sent ? 'replied to sender' : (rep.dry_run ? 'reply: dry-run (SMTP off)' : (rep.error ? 'reply failed' : ''))) : '';
+            const did = (u.length || c.length)
+                ? `${u.length ? 'updated ' + u.map((x) => this.esc(x)).join(', ') : ''}${(u.length && c.length) ? ' · ' : ''}${c.length ? 'created ' + c.map((x) => this.esc(x)).join(', ') : ''}`
+                : 'no task change — answered / ingested for reference';
+            bodyHtml = `<div class="small text-secondary mt-2"><i class="ti ti-checks me-1 text-green"></i>${did}${reply ? ' · ' + reply : ''}</div>`;
+        }
         return `<div class="card card-sm mb-2" data-inbox="${it.id}">
             <div class="card-status-start bg-azure"></div>
             <div class="card-body">
                 <div class="d-flex align-items-center gap-2">
                     <i class="ti ti-mail"></i><strong>${this.esc(it.subject || '(no subject)')}</strong>
                     <span class="text-secondary small">${this.esc(it.sender || '')}</span>
+                    ${chip}
                     <span class="ms-auto text-secondary small">${this.esc(when)}</span>
                 </div>
                 <div class="small mt-1">${this.mdLite(it.summary || '')}</div>
-                ${body}
-                <div>
-                    <button class="btn btn-primary btn-sm" data-iconfirm><i class="ti ti-checks me-1"></i>Confirm selected</button>
-                    <button class="btn btn-sm" data-idismiss>Dismiss</button>
-                    <span class="small text-secondary ms-2" data-istatus></span>
-                </div>
+                ${bodyHtml}
             </div></div>`;
     },
 
     _wireInboxItem(it) {
+        if (it.status !== 'pending') return;
         const card = document.querySelector(`[data-inbox="${it.id}"]`);
         if (!card) return;
         const tri = it.triage || {};

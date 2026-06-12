@@ -63,9 +63,15 @@ def send(subject, text, channels=("slack", "email")):
     return out
 
 
+def reply(to, subject, text):
+    """Email a specific recipient (e.g. the sender of an inbound message). Dry-run if SMTP unset."""
+    return _email(subject, text, to=to)
+
+
 def status():
     return {
         "slack": bool((os.environ.get("PM_SLACK_WEBHOOK_URL") or "").strip()),
         "email": bool((os.environ.get("PM_SMTP_HOST") or "").strip()
                       and (os.environ.get("PM_NOTIFY_EMAIL_TO") or "").strip()),
+        "inbox_send": bool((os.environ.get("PM_SMTP_HOST") or "").strip()),
     }
