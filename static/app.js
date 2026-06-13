@@ -536,43 +536,85 @@ const TeepPlan = {
             const fresh = await (await fetch(`api/tasks/${encodeURIComponent(id)}`)).json();
             if (fresh && fresh.task_id) t = Object.assign({}, t, fresh);
         } catch (e) { /* fall back to in-memory task */ }
-        const wc = this.WS_COLOR[t._wsId] || 'secondary';
-        const oc = this.OWNER_COLOR[t.owner_org] || 'secondary';
-        const rc = this.RISK_COLOR[t.risk_level] || 'secondary';
-        const pc = this.PHASE_COLOR[t.phase] || 'secondary';
-        const deps = (t.depends_on || []).map((d) => `<span class="badge bg-secondary-lt me-1">${this.esc(d)}</span>`).join('') || '<span class="text-secondary">none</span>';
+        const meta = (label, val) => `<div class="col-6 mb-2"><div class="text-secondary" style="font-size:12px">${label}</div><div>${val}</div></div>`;
+        const owner = this.esc(t.owner_org || '—') + (t.owner_person_or_role ? ' · ' + this.esc(t.owner_person_or_role) : '');
+        const dates = `${this.esc(t.start_date || '?')} – ${this.esc(t.finish_date || '?')}`;
+        const risk = this.esc(t.risk_level || '—') + (t.is_blocking ? ' · blocking' : '');
+        const depsText = (t.depends_on || []).map((d) => this.esc(d)).join(', ') || 'none';
+        const statusOpts = ['Not Started', 'In Progress', 'Blocked', 'Done'].map((s) =>
+            `<option ${s === t.status ? 'selected' : ''}>${s}</option>`).join('');
+        const prose = (v) => `<div style="white-space:pre-wrap">${this.esc(v || '—')}</div>`;
         document.getElementById('task-modal-title').innerHTML =
-            `<span class="me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
+            `<span class="text-secondary fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
         document.getElementById('task-modal-body').innerHTML = `
-            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                ${this.badge(t._wsId, wc)}<span class="text-secondary small">${this.esc(t._wsName)}</span>
-                <span class="ms-auto small text-secondary">depends on: ${deps}</span>
+            <ul class="nav nav-tabs mb-3" id="task-tabs">
+                <li class="nav-item"><a href="#" class="nav-link active" data-tab="details">Details</a></li>
+                <li class="nav-item"><a href="#" class="nav-link" data-tab="edit">Edit</a></li>
+                <li class="nav-item"><a href="#" class="nav-link" data-tab="dev">Dev</a></li>
+                <li class="nav-item"><a href="#" class="nav-link" data-tab="activity">Activity</a></li>
+            </ul>
+            <div data-pane="details">
+                <div class="row g-0 mb-3">
+                    <div class="col-6 mb-2"><div class="text-secondary" style="font-size:12px">Status</div>
+                        <select id="details-status" class="form-select form-select-sm" style="max-width:190px">${statusOpts}</select></div>
+                    ${meta('Owner', owner)}${meta('Phase', this.esc(t.phase || '—'))}${meta('Dates', dates)}
+                    ${meta('Risk', risk)}${meta('Depends on', depsText)}
+                </div>
+                <div class="text-secondary mb-1" style="font-size:12px">Description</div>${prose(t.description)}
+                <div class="text-secondary mb-1 mt-3" style="font-size:12px">Exit criteria</div>${prose(t.exit_criteria)}
             </div>
-            <div class="card mb-3"><div class="card-body">
+            <div data-pane="edit" style="display:none">
                 ${this._taskFormHtml(t, 'edit-')}
                 <div class="d-flex align-items-center gap-2 mt-3">
                     <button id="edit-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy me-1"></i>Save</button>
-                    <button id="edit-delete" class="btn btn-outline-danger btn-sm"><i class="ti ti-trash me-1"></i>Delete</button>
-                    <button id="edit-dispatch" class="btn btn-outline-primary btn-sm ms-auto" title="Hand this task to the Claude Code runner — it builds the change on a claude/ branch and posts a PR link here (never touches main)"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
+                    <button id="edit-delete" class="btn btn-ghost-danger btn-sm"><i class="ti ti-trash me-1"></i>Delete</button>
                     <span id="edit-flash" class="small text-secondary"></span>
                 </div>
-            </div></div>
-            <div id="dispatch-panel" class="mb-3"></div>
-            <div class="d-flex align-items-center mb-1"><strong>Ask Taikun · this task</strong>
-                <span class="badge bg-green-lt ms-2">RAG over plan docs · propose-to-confirm</span></div>
-            <div id="chat-log" class="border rounded p-2 mb-2"></div>
-            <div class="input-group input-group-sm">
-                <input id="chat-input" class="form-control" placeholder="Ask how to push this task ahead…" autocomplete="off"/>
-                <button id="chat-send" class="btn btn-primary"><i class="ti ti-send"></i></button>
+            </div>
+            <div data-pane="dev" style="display:none">
+                <button id="edit-dispatch" class="btn btn-primary btn-sm mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
+                <div id="dispatch-panel"></div>
+                <span id="edit-flash-dev" class="small text-secondary"></span>
+            </div>
+            <div data-pane="activity" style="display:none">
+                <div class="text-secondary mb-2" style="font-size:12px">Ask Taikun about this task — grounded in the plan docs.</div>
+                <div id="chat-log" class="border rounded p-2 mb-2"></div>
+                <div class="input-group input-group-sm">
+                    <input id="chat-input" class="form-control" placeholder="Ask how to push this task ahead…" autocomplete="off"/>
+                    <button id="chat-send" class="btn btn-primary"><i class="ti ti-send"></i></button>
+                </div>
             </div>`;
         this._renderActivity(t);
         this._loadDispatch(t.task_id);
+        const links = [...document.querySelectorAll('#task-tabs .nav-link')];
+        const panes = [...document.querySelectorAll('#task-modal-body [data-pane]')];
+        links.forEach((a) => a.addEventListener('click', (e) => {
+            e.preventDefault();
+            links.forEach((x) => x.classList.toggle('active', x === a));
+            panes.forEach((p) => { p.style.display = p.dataset.pane === a.dataset.tab ? 'block' : 'none'; });
+        }));
+        document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
         document.getElementById('edit-dispatch').addEventListener('click', () => this.dispatchTask(t.task_id));
         document.getElementById('chat-send').addEventListener('click', () => this.sendChat(t.task_id));
         document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendChat(t.task_id); });
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).show();
+    },
+
+    async quickStatus(id, status) {
+        try {
+            const res = await fetch(`api/tasks/${encodeURIComponent(id)}`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+            });
+            if (!res.ok) return;
+            const updated = await res.json();
+            const i = this.tasks.findIndex((x) => x.task_id === id);
+            if (i >= 0) this.tasks[i] = Object.assign({}, this.tasks[i], updated);
+            this.renderBoard();
+            this.renderTasks();
+            if (this.isGanttVisible()) this.renderGantt();
+        } catch (e) { /* ignore */ }
     },
 
     _renderActivity(t) {
@@ -623,7 +665,7 @@ const TeepPlan = {
     },
 
     async dispatchTask(id) {
-        const flash = (msg, cls) => { const el = document.getElementById('edit-flash'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
+        const flash = (msg, cls) => { const el = document.getElementById('edit-flash-dev'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
         if (!window.confirm(`Dispatch ${id} to the Claude Code runner? It builds the change on a claude/ branch and posts a PR link to this task — it never touches main.`)) return;
         flash('Dispatching to Claude Code…');
         let data;
