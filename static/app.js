@@ -216,14 +216,18 @@ const TeepPlan = {
             names.map((a) => `<option value="${this.esc(a)}"${a === cur ? ' selected' : ''}>${this.esc(a)}</option>`).join('');
     },
 
-    filtered() {
+    isHideDone() { const hd = document.getElementById('f-hidedone'); return !!(hd && hd.checked); },
+
+    filtered(includeDone) {
         const q = (document.getElementById('f-search').value || '').trim().toLowerCase();
         const ws = document.getElementById('f-ws').value;
         const owner = document.getElementById('f-owner').value;
         const ownerPerson = document.getElementById('f-assignee').value;
         const risk = document.getElementById('f-risk').value;
         const blocking = document.getElementById('f-blocking').checked;
+        const hideDone = !includeDone && this.isHideDone();
         return this.tasks.filter((t) => {
+            if (hideDone && t.status === 'Done') return false;
             if (ws && t._wsId !== ws) return false;
             if (owner && t.owner_org !== owner) return false;
             if (ownerPerson && !this._peopleOf(t).includes(ownerPerson)) return false;
@@ -262,6 +266,7 @@ const TeepPlan = {
     },
 
     taskCard(t) {
+        const done = t.status === 'Done';
         const sc = this.STATUS_COLOR[t.status] || 'secondary';
         const deps = (t.depends_on || []).length;
         const meta = [];
@@ -270,7 +275,7 @@ const TeepPlan = {
         if (deps) meta.push(`<i class="ti ti-link"></i>${deps}`);
         return `
             <a href="#" class="d-block text-reset" data-task="${this.esc(t.task_id)}">
-                <div class="card card-sm mb-2">
+                <div class="card card-sm mb-2"${done ? ' style="opacity:.55"' : ''}>
                     <div class="card-status-start bg-${sc}"></div>
                     <div class="card-body">
                         <div class="d-flex align-items-center gap-2 mb-1">
@@ -278,7 +283,7 @@ const TeepPlan = {
                             <span class="text-secondary small fw-medium text-uppercase">${this.esc(t._wsId)}</span>
                             <span class="ms-auto text-secondary small font-monospace">${this.esc(t.task_id)}</span>
                         </div>
-                        <div class="fw-semibold lh-sm text-body">${this.esc(t.title)}</div>
+                        <div class="fw-semibold lh-sm ${done ? 'text-decoration-line-through text-secondary' : 'text-body'}">${this.esc(t.title)}</div>
                         <div class="d-flex align-items-center gap-2 mt-2 text-secondary small">
                             <span>${meta.join(' · ')}</span>
                             ${t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High risk</span>' : ''}
@@ -330,12 +335,13 @@ const TeepPlan = {
     renderTasks() {
         const el = document.getElementById('tasks-content');
         if (!el) return;
+        const hideDone = this.isHideDone();
         // When the owner filter is set to one person, show ONLY their section
         // (co-owned tasks otherwise leak into every co-owner's group).
         const sel = document.getElementById('f-assignee');
         const only = sel ? sel.value : '';
         const groups = {};
-        this.filtered().forEach((t) => {
+        this.filtered(true).forEach((t) => {
             this._peopleOf(t).forEach((p) => {
                 if (only && p !== only) return;
                 (groups[p] || (groups[p] = [])).push(t);
@@ -344,19 +350,14 @@ const TeepPlan = {
         const names = Object.keys(groups).filter((n) => n !== 'Unassigned')
             .sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b));
         if (groups['Unassigned']) names.push('Unassigned');
-        if (!names.length) {
-            el.innerHTML = `<div class="card"><div class="empty">
-                <div class="empty-icon"><i class="ti ti-checklist"></i></div>
-                <p class="empty-title">Nothing to show</p>
-                <p class="empty-subtitle text-secondary">No tasks match the current filters.</p></div></div>`;
-            return;
-        }
         const rank = (s) => (s === 'Done' ? 1 : 0);
-        el.innerHTML = names.map((name) => {
+        const html = names.map((name) => {
             const list = groups[name].slice().sort((a, b) =>
                 rank(a.status) - rank(b.status) ||
                 ((a.finish_date || '9999') < (b.finish_date || '9999') ? -1 : 1));
             const done = list.filter((t) => t.status === 'Done').length;
+            const visible = hideDone ? list.filter((t) => t.status !== 'Done') : list;
+            if (!visible.length) return '';
             const isU = name === 'Unassigned';
             const avatar = isU
                 ? `<span class="avatar avatar-sm avatar-rounded me-2 bg-secondary-lt"><i class="ti ti-user-question"></i></span>`
@@ -371,17 +372,21 @@ const TeepPlan = {
                     <div class="d-flex align-items-center mb-2">
                         ${avatar}
                         <span class="h3 m-0">${this.esc(name)}</span>
-                        <span class="badge bg-secondary-lt ms-2">${list.length}</span>
+                        <span class="badge bg-secondary-lt ms-2">${visible.length}</span>
                         <span class="ms-auto text-secondary small">${done}/${list.length} done</span>
                     </div>
                     ${nextHtml}
                     <div class="card">
                         <div class="list-group list-group-flush">
-                            ${list.map((t) => this.taskRow(t)).join('')}
+                            ${visible.map((t) => this.taskRow(t)).join('')}
                         </div>
                     </div>
                 </div>`;
         }).join('');
+        el.innerHTML = html || `<div class="card"><div class="empty">
+                <div class="empty-icon"><i class="ti ti-checklist"></i></div>
+                <p class="empty-title">Nothing to show</p>
+                <p class="empty-subtitle text-secondary">No tasks match the current filters.</p></div></div>`;
     },
 
     // ---- Epics (collapsible workstream → phase → tasks lens) ------------
@@ -391,16 +396,19 @@ const TeepPlan = {
     renderEpics() {
         const el = document.getElementById('epics-content');
         if (!el) return;
-        const tasks = this.filtered();
+        const hideDone = this.isHideDone();
+        const tasks = this.filtered(true);
         const order = (this.plan.workstreams || []).map((w) => w.workstream_id);
         const byWs = {};
         tasks.forEach((t) => { (byWs[t._wsId] || (byWs[t._wsId] = [])).push(t); });
         const wsIds = order.filter((id) => byWs[id]);
-        let tOpen = 0, tDone = 0;
+        let tTotal = 0, tDone = 0;
         const cards = wsIds.map((wsId) => {
             const list = byWs[wsId];
             const done = list.filter((t) => t.status === 'Done').length;
-            tDone += done; tOpen += (list.length - done);
+            const total = list.length;
+            const visN = hideDone ? (total - done) : total;
+            tDone += done; tTotal += total;
             const wc = this.WS_COLOR[wsId] || 'secondary';
             const name = (this.wsMeta[wsId] || {}).name || wsId;
             const people = [...new Set(list.map((t) => t.assignee).filter(Boolean))];
@@ -408,7 +416,7 @@ const TeepPlan = {
                 `<span class="avatar avatar-xs" title="${this.esc(p)}">${this.esc(this.initials(p))}</span>`).join('');
             const cid = 'epic-' + wsId;
             const body = this.PHASES.map((phase) => {
-                const ph = list.filter((t) => t.phase === phase);
+                const ph = list.filter((t) => t.phase === phase && (!hideDone || t.status !== 'Done'));
                 if (!ph.length) return '';
                 const pc = this.PHASE_COLOR[phase] || 'secondary';
                 return `<div class="d-flex align-items-center mt-2 mb-1">
@@ -418,28 +426,30 @@ const TeepPlan = {
                     </div>
                     <div class="card"><div class="list-group list-group-flush">${ph.map((t) => this.taskRow(t)).join('')}</div></div>`;
             }).join('');
+            const emptyNote = (!body && hideDone) ? `<div class="text-secondary small px-1 py-2"><i class="ti ti-check me-1"></i>All ${total} task${total !== 1 ? 's' : ''} complete.</div>` : '';
             return `
                 <div class="card mb-2">
                     <div class="card-header epic-head d-flex align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#${cid}" aria-expanded="false" aria-controls="${cid}">
                         <span class="status-dot bg-${wc} me-2"></span>
                         <span class="h3 m-0">${this.esc(wsId)}</span>
                         <span class="text-secondary ms-2 d-none d-md-inline">${this.esc(name)}</span>
-                        <span class="badge bg-secondary-lt ms-2">${list.length} task${list.length > 1 ? 's' : ''}</span>
-                        ${(list.length - done) === 0 ? '<span class="badge bg-green-lt ms-1">done</span>' : ''}
+                        <span class="badge bg-secondary-lt ms-2">${visN} task${visN !== 1 ? 's' : ''}</span>
+                        ${(total - done) === 0 ? '<span class="badge bg-green-lt ms-1">done</span>' : ''}
                         <div class="ms-auto d-flex align-items-center gap-3">
                             <div class="avatar-list avatar-list-stacked d-none d-sm-flex">${avatars}</div>
-                            <span class="text-secondary small">${done}/${list.length}</span>
+                            <span class="text-secondary small">${done}/${total}</span>
                             <i class="ti ti-chevron-down epic-chev text-secondary"></i>
                         </div>
                     </div>
                     <div class="collapse" id="${cid}">
-                        <div class="card-body py-2">${body}</div>
+                        <div class="card-body py-2">${body}${emptyNote}</div>
                     </div>
                 </div>`;
         }).join('');
+        const hint = (hideDone && tDone) ? ` · hiding ${tDone} done` : '';
         const head = `<div class="d-flex flex-wrap align-items-center mb-3 gap-2">
                 <span class="h2 m-0">Pilot view</span>
-                <span class="text-secondary">${wsIds.length} workstreams · ${tOpen + tDone} tasks · ${tDone} done</span>
+                <span class="text-secondary">${wsIds.length} workstreams · ${tTotal} tasks · ${tDone} done${hint}</span>
                 <div class="ms-auto btn-list">
                     <button class="btn btn-sm" id="epic-expand"><i class="ti ti-chevrons-down me-1"></i>Expand all</button>
                     <button class="btn btn-sm" id="epic-collapse"><i class="ti ti-chevrons-up me-1"></i>Collapse all</button>
@@ -1672,7 +1682,7 @@ const TeepPlan = {
 
     // ---- events ----------------------------------------------------------
     wireEvents() {
-        ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking'].forEach((id) => {
+        ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking', 'f-hidedone'].forEach((id) => {
             const el = document.getElementById(id);
             const ev = (id === 'f-search') ? 'input' : 'change';
             el.addEventListener(ev, () => { this.renderBoard(); this.renderTasks(); this.renderEpics(); if (this.isGanttVisible()) this.renderGantt(); });
