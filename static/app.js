@@ -551,7 +551,6 @@ const TeepPlan = {
                 <li class="nav-item"><a href="#" class="nav-link active" data-tab="details">Details</a></li>
                 <li class="nav-item"><a href="#" class="nav-link" data-tab="edit">Edit</a></li>
                 <li class="nav-item"><a href="#" class="nav-link" data-tab="dev">Dev</a></li>
-                <li class="nav-item"><a href="#" class="nav-link" data-tab="activity">Activity</a></li>
             </ul>
             <div data-pane="details">
                 <div class="row g-0 mb-3">
@@ -570,19 +569,22 @@ const TeepPlan = {
                     <button id="edit-delete" class="btn btn-ghost-danger btn-sm"><i class="ti ti-trash me-1"></i>Delete</button>
                     <span id="edit-flash" class="small text-secondary"></span>
                 </div>
-            </div>
-            <div data-pane="dev" style="display:none">
-                <button id="edit-dispatch" class="btn btn-primary btn-sm mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
-                <div id="dispatch-panel"></div>
-                <span id="edit-flash-dev" class="small text-secondary"></span>
-            </div>
-            <div data-pane="activity" style="display:none">
-                <div class="text-secondary mb-2" style="font-size:12px">Ask Taikun about this task — grounded in the plan docs.</div>
+                <hr class="my-3"/>
+                <div class="d-flex align-items-center mb-2">
+                    <i class="ti ti-sparkles me-2 text-primary"></i>
+                    <span class="fw-bold">Ask Taikun · this task</span>
+                    <span class="text-secondary small ms-2">grounded in the plan docs · proposes changes you confirm</span>
+                </div>
                 <div id="chat-log" class="border rounded p-2 mb-2"></div>
                 <div class="input-group input-group-sm">
                     <input id="chat-input" class="form-control" placeholder="Ask how to push this task ahead…" autocomplete="off"/>
                     <button id="chat-send" class="btn btn-primary"><i class="ti ti-send"></i></button>
                 </div>
+            </div>
+            <div data-pane="dev" style="display:none">
+                <button id="edit-dispatch" class="btn btn-primary btn-sm mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
+                <div id="dispatch-panel"></div>
+                <span id="edit-flash-dev" class="small text-secondary"></span>
             </div>`;
         this._renderActivity(t);
         this._loadDispatch(t.task_id);
