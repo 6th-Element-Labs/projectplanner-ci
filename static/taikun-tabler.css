@@ -1,0 +1,27 @@
+/* ============================================================================
+   taikun-tabler.css  —  Taikun brand theme for Tabler
+   RULE-COMPLIANT: sets ONLY Tabler's own --tblr-* custom properties. No custom
+   classes, no overrides, no custom CSS. Load AFTER tabler.min.css. The whole app
+   then inherits the brand red, soft surface, rounded radius and refined type.
+   Same file the agent-console + document-engine wireframes use.
+   ============================================================================ */
+:root{
+  /* brand color (taikun.ai red) */
+  --tblr-primary:#c0392b;
+  --tblr-primary-rgb:192,57,43;
+
+  /* soft canvas so white cards float, not stark gray */
+  --tblr-body-bg:#f5f6f8;
+  --tblr-body-color:#0b1020;
+
+  /* refined hairlines */
+  --tblr-border-color:rgba(15,23,42,.07);
+  --tblr-border-color-translucent:rgba(15,23,42,.07);
+
+  /* rounder, more modern radius */
+  --tblr-border-radius:.5rem;
+  --tblr-border-radius-lg:.85rem;
+
+  /* crisp type */
+  --tblr-font-sans-serif:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}

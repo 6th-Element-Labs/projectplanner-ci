@@ -259,7 +259,6 @@ const TeepPlan = {
     },
 
     taskCard(t) {
-        const wc = this.WS_COLOR[t._wsId] || 'secondary';
         const sc = this.STATUS_COLOR[t.status] || 'secondary';
         const deps = (t.depends_on || []).length;
         const meta = [];
@@ -269,7 +268,7 @@ const TeepPlan = {
         return `
             <a href="#" class="d-block text-reset" data-task="${this.esc(t.task_id)}">
                 <div class="card card-sm mb-2">
-                    <div class="card-status-start bg-${wc}"></div>
+                    <div class="card-status-start bg-${sc}"></div>
                     <div class="card-body">
                         <div class="d-flex align-items-center gap-2 mb-1">
                             <span class="status-dot bg-${sc}" title="${this.esc(t.status || '')}"></span>
@@ -544,8 +543,9 @@ const TeepPlan = {
         const statusOpts = ['Not Started', 'In Progress', 'Blocked', 'Done'].map((s) =>
             `<option ${s === t.status ? 'selected' : ''}>${s}</option>`).join('');
         const prose = (v) => `<div style="white-space:pre-wrap">${this.esc(v || '—')}</div>`;
+        const sc = this.STATUS_COLOR[t.status] || 'secondary';
         document.getElementById('task-modal-title').innerHTML =
-            `<span class="text-secondary fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
+            `<span class="status-dot bg-${sc} me-2" title="${this.esc(t.status || '')}"></span><span class="text-secondary fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
         document.getElementById('task-modal-body').innerHTML = `
             <ul class="nav nav-tabs mb-3" id="task-tabs">
                 <li class="nav-item"><a href="#" class="nav-link active" data-tab="details">Details</a></li>
