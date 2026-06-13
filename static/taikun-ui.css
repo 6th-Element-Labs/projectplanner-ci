@@ -1,0 +1,141 @@
+/* ============================================================================
+   taikun-ui.css  ·  Taikun's Tabler-based design system (v0.1)
+   ----------------------------------------------------------------------------
+   ONE stylesheet that turns stock Tabler into the Taikun look. Load it AFTER
+   @tabler/core's CSS and you get: brand tokens, the premium "polish" layer, and
+   a collapsible icon-rail sidebar. Everything enhances Tabler's OWN classes —
+   no bespoke per-page selectors — so any Tabler page can adopt it as a drop-in.
+
+     <link rel="stylesheet" href=".../@tabler/core/dist/css/tabler.min.css">
+     <link rel="stylesheet" href="taikun-ui.css">
+
+   Pair with taikun-ui.js for the sidebar toggle + Bootstrap data-attr wiring.
+   Layers below are independent: keep §1 only for the strict token theme, add
+   §2 for premium polish, add §3 for the collapsible sidebar.
+   ============================================================================ */
+
+/* ── §1 · BRAND TOKENS — overrides Tabler variables only ────────────────────
+   This block alone is the portable "taikun-tabler.css" theme (red + white). */
+:root{
+  --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
+  --tblr-body-bg:#ffffff; --tblr-body-color:#101114;
+  --tblr-secondary:#6b7280;
+  --tblr-border-color:#eceef1; --tblr-border-color-translucent:#eceef1;
+  --tblr-border-radius:.65rem; --tblr-border-radius-lg:.85rem;
+  --tblr-font-sans-serif:'Inter','Inter Var',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+
+/* ── §2 · POLISH — premium feel over Tabler component classes ───────────────*/
+body{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; letter-spacing:-.005em; }
+
+/* white canvas, light vertical navbar with a hairline seam */
+.page-wrapper{ background:var(--tblr-body-bg); }
+.navbar-vertical{ background:#fff; border-right:1px solid var(--tblr-border-color); box-shadow:none; }
+.navbar-vertical .nav-link{ border-radius:.55rem; }
+
+/* cards — white, border-0, soft layered shadow, generous radius, hover lift */
+.card{
+  background:#fff; border:0;
+  border-radius:.9rem;
+  box-shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.08);
+  transition:box-shadow .16s ease, transform .16s ease;
+}
+.card-sm{ border-radius:.8rem; }
+/* only clickable task cards/rows lift */
+a[data-bs-toggle="modal"] .card,
+tr[data-bs-toggle="modal"]{ transition:box-shadow .16s ease, transform .16s ease; }
+a[data-bs-toggle="modal"]:hover .card{
+  box-shadow:0 4px 12px rgba(16,24,40,.10), 0 12px 28px rgba(16,24,40,.10);
+  transform:translateY(-1px);
+}
+.card-header{ border-bottom:1px solid var(--tblr-border-color); }
+.card-footer{ border-top:1px solid var(--tblr-border-color); background:transparent; }
+
+/* refined sticky page-header — white, hairline base, faint shadow on scroll */
+.page-header{
+  position:sticky; top:0; z-index:20;
+  background:rgba(255,255,255,.92); backdrop-filter:saturate(180%) blur(8px);
+  border-bottom:1px solid var(--tblr-border-color);
+  box-shadow:0 1px 0 rgba(16,24,40,.02), 0 6px 18px -14px rgba(16,24,40,.35);
+  margin-bottom:0; padding-top:1.25rem;
+}
+.page-title{ letter-spacing:-.02em; }
+
+/* nav-tabs — calm, animated thick brand underline on active */
+.nav-tabs{ border-bottom:1px solid var(--tblr-border-color); gap:.1rem; }
+.nav-tabs .nav-link{
+  color:var(--tblr-secondary); font-weight:500; border:0; padding:.6rem .85rem;
+  position:relative; transition:color .12s ease;
+}
+.nav-tabs .nav-link::after{
+  content:""; position:absolute; left:.6rem; right:.6rem; bottom:-1px; height:2.5px;
+  border-radius:3px; background:var(--tblr-primary);
+  transform:scaleX(0); transform-origin:center; transition:transform .2s ease;
+}
+.nav-tabs .nav-link:hover{ color:var(--tblr-body-color); }
+.nav-tabs .nav-link.active{ color:var(--tblr-primary); font-weight:600; background:transparent; border:0; }
+.nav-tabs .nav-link.active::after{ transform:scaleX(1); }
+
+/* buttons — pill-ish, brand shadow on primary */
+.btn{ border-radius:.6rem; font-weight:600; }
+.btn-primary{ box-shadow:0 1px 2px rgba(var(--tblr-primary-rgb),.35); }
+.btn-primary:hover{ box-shadow:0 2px 8px rgba(var(--tblr-primary-rgb),.30); }
+.btn-sm{ border-radius:.5rem; }
+
+/* avatars — crisp thin ring; stacked avatars never collide */
+.avatar{ box-shadow:0 0 0 1.5px #fff, 0 0 0 2.5px var(--tblr-border-color); font-weight:600; }
+.avatar-list-stacked{ --tblr-list-avatar-offset:.55rem; }
+.avatar-list-stacked .avatar{ box-shadow:0 0 0 2px #fff; margin-inline-start:calc(-1 * var(--tblr-list-avatar-offset)); }
+.avatar-list-stacked .avatar:first-child{ margin-inline-start:0; }
+
+/* datagrid + list rows — quiet separation */
+.datagrid{ --tblr-datagrid-padding:1rem; }
+.datagrid-title{ font-size:.7rem; letter-spacing:.04em; text-transform:uppercase; color:var(--tblr-secondary); }
+.list-group-item{ border-color:var(--tblr-border-color); }
+
+/* modal — bigger radius, calm header, soft deep shadow */
+.modal-content{
+  border:0; border-radius:1rem; overflow:hidden;
+  box-shadow:0 24px 60px -12px rgba(16,24,40,.30), 0 8px 24px -8px rgba(16,24,40,.18);
+}
+.modal-header{ border-bottom:1px solid var(--tblr-border-color); padding:1.1rem 1.25rem; }
+.modal-title{ letter-spacing:-.01em; }
+
+.subheader{ letter-spacing:.05em; }
+.table tbody tr{ transition:background .1s ease; }
+
+/* tidy scrollbars */
+::-webkit-scrollbar{ height:11px; width:11px; }
+::-webkit-scrollbar-thumb{ background:#dfe2e7; border-radius:20px; border:3px solid #fff; }
+::-webkit-scrollbar-thumb:hover{ background:#cdd2da; }
+::-webkit-scrollbar-track{ background:transparent; }
+
+/* ── §3 · COLLAPSIBLE SIDEBAR — icon rail on desktop ────────────────────────
+   Toggle by adding/removing `tk-sidebar-collapsed` on <body> (taikun-ui.js does
+   this on click of any [data-tk-sidebar-toggle], and persists it). For a
+   collapsed-by-default page, put class="tk-sidebar-collapsed" on <body>. */
+.navbar-vertical{ transition:width .18s ease; }
+.page-wrapper{ transition:margin-inline-start .18s ease; }
+
+@media (min-width: 992px){
+  body.tk-sidebar-collapsed .navbar-vertical{ width:4.25rem !important; }
+  /* Tabler's responsive .page-wrapper margin lives in its (cross-origin) sheet and
+     out-specifies us, so force both the logical + physical property. */
+  body.tk-sidebar-collapsed .page-wrapper{ margin-inline-start:4.25rem !important; margin-left:4.25rem !important; }
+
+  /* hide everything but the icons */
+  body.tk-sidebar-collapsed .navbar-vertical .nav-link-title,
+  body.tk-sidebar-collapsed .navbar-vertical .subheader,
+  body.tk-sidebar-collapsed .navbar-vertical .badge,
+  body.tk-sidebar-collapsed .navbar-vertical .nav-link-icon.ms-auto,
+  body.tk-sidebar-collapsed .navbar-vertical .navbar-brand a > span:not(.avatar){ display:none !important; }
+
+  /* center the icons + brand mark in the rail */
+  body.tk-sidebar-collapsed .navbar-vertical .nav-link{ justify-content:center; padding-left:.5rem; padding-right:.5rem; }
+  body.tk-sidebar-collapsed .navbar-vertical .navbar-brand a{ justify-content:center !important; }
+  body.tk-sidebar-collapsed .navbar-vertical .navbar-brand .avatar{ margin-right:0 !important; }
+  body.tk-sidebar-collapsed .navbar-vertical .nav-link-icon{ margin-right:0 !important; }
+}
+
+/* the toggle control itself */
+[data-tk-sidebar-toggle]{ cursor:pointer; }
