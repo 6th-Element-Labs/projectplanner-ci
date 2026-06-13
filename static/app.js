@@ -135,8 +135,10 @@ const TeepPlan = {
     },
     initials(name) {
         if (!name) return '';
-        return String(name).trim().split(/\s+/).slice(0, 2)
-            .map((p) => (p[0] || '').toUpperCase()).join('');
+        // drop "(TEEP)"-style org tags and any word without a letter (e.g. "+", "·")
+        const words = String(name).replace(/\([^)]*\)/g, ' ').split(/\s+/)
+            .filter((w) => /[A-Za-z]/.test(w));
+        return words.slice(0, 2).map((p) => (p.match(/[A-Za-z]/) || [''])[0].toUpperCase()).join('');
     },
 
     renderGenerated() {

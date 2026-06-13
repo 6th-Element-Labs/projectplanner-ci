@@ -137,37 +137,7 @@
                         </div>
                     </div>
 
-                    <!-- Filter toolbar -->
-                    <div class="card mb-3">
-                        <div class="card-body">
-                            <div class="row g-2 align-items-center">
-                                <div class="col-12 col-md">
-                                    <div class="input-icon">
-                                        <span class="input-icon-addon"><i class="ti ti-search"></i></span>
-                                        <input id="f-search" type="text" class="form-control" placeholder="Search tasks…" autocomplete="off"/>
-                                    </div>
-                                </div>
-                                <div class="col-6 col-md-2">
-                                    <select id="f-ws" class="form-select"></select>
-                                </div>
-                                <div class="col-6 col-md-2">
-                                    <select id="f-owner" class="form-select"></select>
-                                </div>
-                                <div class="col-6 col-md-2">
-                                    <select id="f-assignee" class="form-select"></select>
-                                </div>
-                                <div class="col-6 col-md-2">
-                                    <select id="f-risk" class="form-select"></select>
-                                </div>
-                                <div class="col-6 col-md-auto">
-                                    <label class="form-check form-switch m-0">
-                                        <input id="f-blocking" class="form-check-input" type="checkbox"/>
-                                        <span class="form-check-label">Blocking only</span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                    <!-- Filter toolbar lives inside the Board tab now (keeps the top clean, like the mock). -->
 
                     <!-- Tabs -->
                     <ul class="nav nav-tabs" role="tablist">
@@ -209,6 +179,29 @@
                     <div class="tab-content">
                         <!-- Board -->
                         <div class="tab-pane" id="tab-board" role="tabpanel">
+                            <!-- board filters (moved here from above the tabs) -->
+                            <div class="card mb-3 mt-2">
+                                <div class="card-body">
+                                    <div class="row g-2 align-items-center">
+                                        <div class="col-12 col-md">
+                                            <div class="input-icon">
+                                                <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                                                <input id="f-search" type="text" class="form-control" placeholder="Search tasks…" autocomplete="off"/>
+                                            </div>
+                                        </div>
+                                        <div class="col-6 col-md-2"><select id="f-ws" class="form-select"></select></div>
+                                        <div class="col-6 col-md-2"><select id="f-owner" class="form-select"></select></div>
+                                        <div class="col-6 col-md-2"><select id="f-assignee" class="form-select"></select></div>
+                                        <div class="col-6 col-md-2"><select id="f-risk" class="form-select"></select></div>
+                                        <div class="col-6 col-md-auto">
+                                            <label class="form-check form-switch m-0">
+                                                <input id="f-blocking" class="form-check-input" type="checkbox"/>
+                                                <span class="form-check-label">Blocking only</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="row g-3 mt-1" id="board"></div>
                         </div>
                         <!-- Epics (collapsible workstream → phase → tasks) -->
@@ -397,5 +390,23 @@
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
     <script src="app.js"></script>
     <script src="taikun-ui.js"></script>
+    <script>
+      // Keep the sidebar nav highlight in sync with the active tab (sidebar + top tabs share tab targets).
+      (function () {
+        function sync(target) {
+          document.querySelectorAll('.navbar-vertical [data-bs-toggle="tab"]').forEach(function (a) {
+            var on = a.getAttribute('href') === target;
+            a.classList.toggle('active', on);
+            var li = a.closest('.nav-item'); if (li) li.classList.toggle('active', on);
+          });
+        }
+        document.addEventListener('shown.bs.tab', function (e) {
+          var t = e.target.getAttribute('href') || (e.target.dataset && e.target.dataset.bsTarget);
+          if (t) sync(t);
+        });
+        var active = document.querySelector('.nav-tabs .nav-link.active');
+        if (active) sync(active.getAttribute('href'));
+      })();
+    </script>
 </body>
 </html>
