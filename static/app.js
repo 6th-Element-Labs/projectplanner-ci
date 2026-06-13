@@ -249,7 +249,7 @@ const TeepPlan = {
                 <div class="col-12 col-lg">
                     <div class="d-flex align-items-center mb-3 px-1">
                         <span class="status-dot bg-${color} me-2"></span>
-                        <span class="subheader">${this.esc(phase)}</span>
+                        <span class="h3 m-0">${this.esc(phase)}</span>
                         <span class="badge bg-secondary-lt ms-2">${col.length}</span>
                         <span class="ms-auto text-secondary small">${Math.round(days)}d</span>
                     </div>
@@ -551,6 +551,7 @@ const TeepPlan = {
                 <li class="nav-item"><a href="#" class="nav-link active" data-tab="details">Details</a></li>
                 <li class="nav-item"><a href="#" class="nav-link" data-tab="edit">Edit</a></li>
                 <li class="nav-item"><a href="#" class="nav-link" data-tab="dev">Dev</a></li>
+                <li class="nav-item"><a href="#" class="nav-link" data-tab="activity">Activity</a></li>
             </ul>
             <div data-pane="details">
                 <div class="row g-0 mb-3">
@@ -585,6 +586,10 @@ const TeepPlan = {
                 <button id="edit-dispatch" class="btn btn-primary btn-sm mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
                 <div id="dispatch-panel"></div>
                 <span id="edit-flash-dev" class="small text-secondary"></span>
+            </div>
+            <div data-pane="activity" style="display:none">
+                <div class="text-secondary mb-2" style="font-size:12px">Full history — comments, agent chats and dispatch events for this task.</div>
+                <div id="activity-log" class="border rounded p-2"></div>
             </div>`;
         this._renderActivity(t);
         this._loadDispatch(t.task_id);
@@ -620,12 +625,12 @@ const TeepPlan = {
     },
 
     _renderActivity(t) {
-        const log = document.getElementById('chat-log');
+        const log = document.getElementById('activity-log');
         if (!log) return;
         const acts = (t.activity || []).filter((a) => a.kind === 'comment' || a.kind === 'chat');
         log.innerHTML = acts.length
             ? acts.map((a) => `<div class="mb-1"><span class="badge bg-secondary-lt me-1">${this.esc(a.actor)}</span>${this._linkify(this.esc((a.payload && a.payload.text) || ''))}</div>`).join('')
-            : '<div class="text-secondary small">No messages yet — ask the agent how to move this task forward.</div>';
+            : '<div class="text-secondary small">No activity yet — comments, agent chats and dispatch events will appear here.</div>';
     },
 
     async saveTask(id) {
