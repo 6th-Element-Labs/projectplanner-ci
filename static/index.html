@@ -17,6 +17,11 @@
     <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
     <link href="taikun-tabler.css" rel="stylesheet"/>
+    <style>
+      .epic-head{cursor:pointer}
+      .epic-head .epic-chev{transition:transform .15s ease}
+      .epic-head[aria-expanded="true"] .epic-chev{transform:rotate(180deg)}
+    </style>
 </head>
 <body class="layout-fluid">
     <div class="page">
@@ -116,6 +121,9 @@
                             <a class="nav-link active" data-bs-toggle="tab" href="#tab-board" role="tab"><i class="ti ti-layout-kanban me-1"></i>Board</a>
                         </li>
                         <li class="nav-item" role="presentation">
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-epics" role="tab"><i class="ti ti-stack-2 me-1"></i>Epics</a>
+                        </li>
+                        <li class="nav-item" role="presentation">
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-tasks" role="tab"><i class="ti ti-list-check me-1"></i>ToDo</a>
                         </li>
                         <li class="nav-item" role="presentation">
@@ -145,6 +153,10 @@
                         <!-- Board -->
                         <div class="tab-pane active show" id="tab-board" role="tabpanel">
                             <div class="row g-3 mt-1" id="board"></div>
+                        </div>
+                        <!-- Epics (collapsible workstream → phase → tasks) -->
+                        <div class="tab-pane" id="tab-epics" role="tabpanel">
+                            <div class="mt-3" id="epics-content"></div>
                         </div>
                         <!-- Ask Taikun (plan-wide agent: RAG + propose-to-confirm) -->
                         <div class="tab-pane" id="tab-ask" role="tabpanel">

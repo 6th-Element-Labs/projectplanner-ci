@@ -101,6 +101,7 @@ const TeepPlan = {
         if (dl) dl.innerHTML = (this.people || []).map((p) => `<option value="${this.esc(p)}"></option>`).join('');
         this.renderBoard();
         this.renderTasks();
+        this.renderEpics();
         this.renderTables();
         this.renderExec();
         this.wireEvents();
@@ -379,6 +380,78 @@ const TeepPlan = {
                     </div>
                 </div>`;
         }).join('');
+    },
+
+    // ---- Epics (collapsible workstream → phase → tasks lens) ------------
+    // Same data, regrouped so the board reads at pilot altitude: each
+    // workstream collapses to one row (count · assignees · progress) and
+    // expands to its tasks grouped by lifecycle phase. Pure presentation.
+    renderEpics() {
+        const el = document.getElementById('epics-content');
+        if (!el) return;
+        const tasks = this.filtered();
+        const order = (this.plan.workstreams || []).map((w) => w.workstream_id);
+        const byWs = {};
+        tasks.forEach((t) => { (byWs[t._wsId] || (byWs[t._wsId] = [])).push(t); });
+        const wsIds = order.filter((id) => byWs[id]);
+        let tOpen = 0, tDone = 0;
+        const cards = wsIds.map((wsId) => {
+            const list = byWs[wsId];
+            const done = list.filter((t) => t.status === 'Done').length;
+            tDone += done; tOpen += (list.length - done);
+            const wc = this.WS_COLOR[wsId] || 'secondary';
+            const name = (this.wsMeta[wsId] || {}).name || wsId;
+            const people = [...new Set(list.map((t) => t.assignee).filter(Boolean))];
+            const avatars = people.slice(0, 6).map((p) =>
+                `<span class="avatar avatar-xs" title="${this.esc(p)}">${this.esc(this.initials(p))}</span>`).join('');
+            const cid = 'epic-' + wsId;
+            const body = this.PHASES.map((phase) => {
+                const ph = list.filter((t) => t.phase === phase);
+                if (!ph.length) return '';
+                const pc = this.PHASE_COLOR[phase] || 'secondary';
+                return `<div class="d-flex align-items-center mt-2 mb-1">
+                        <span class="status-dot bg-${pc} me-2"></span>
+                        <span class="text-uppercase small fw-medium text-secondary">${this.esc(phase)}</span>
+                        <span class="badge bg-secondary-lt ms-2">${ph.length}</span>
+                    </div>
+                    <div class="card"><div class="list-group list-group-flush">${ph.map((t) => this.taskRow(t)).join('')}</div></div>`;
+            }).join('');
+            return `
+                <div class="card mb-2">
+                    <div class="card-header epic-head d-flex align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#${cid}" aria-expanded="false" aria-controls="${cid}">
+                        <span class="status-dot bg-${wc} me-2"></span>
+                        <span class="h3 m-0">${this.esc(wsId)}</span>
+                        <span class="text-secondary ms-2 d-none d-md-inline">${this.esc(name)}</span>
+                        <span class="badge bg-secondary-lt ms-2">${list.length} task${list.length > 1 ? 's' : ''}</span>
+                        ${(list.length - done) === 0 ? '<span class="badge bg-green-lt ms-1">done</span>' : ''}
+                        <div class="ms-auto d-flex align-items-center gap-3">
+                            <div class="avatar-list avatar-list-stacked d-none d-sm-flex">${avatars}</div>
+                            <span class="text-secondary small">${done}/${list.length}</span>
+                            <i class="ti ti-chevron-down epic-chev text-secondary"></i>
+                        </div>
+                    </div>
+                    <div class="collapse" id="${cid}">
+                        <div class="card-body py-2">${body}</div>
+                    </div>
+                </div>`;
+        }).join('');
+        const head = `<div class="d-flex flex-wrap align-items-center mb-3 gap-2">
+                <span class="h2 m-0">Pilot view</span>
+                <span class="text-secondary">${wsIds.length} workstreams · ${tOpen + tDone} tasks · ${tDone} done</span>
+                <div class="ms-auto btn-list">
+                    <button class="btn btn-sm" id="epic-expand"><i class="ti ti-chevrons-down me-1"></i>Expand all</button>
+                    <button class="btn btn-sm" id="epic-collapse"><i class="ti ti-chevrons-up me-1"></i>Collapse all</button>
+                </div>
+            </div>`;
+        el.innerHTML = wsIds.length
+            ? (head + cards)
+            : `<div class="card"><div class="empty"><p class="empty-title">No tasks match the filters</p></div></div>`;
+        const setAll = (show) => el.querySelectorAll('.collapse').forEach((c) => {
+            const inst = window.bootstrap.Collapse.getOrCreateInstance(c, { toggle: false });
+            show ? inst.show() : inst.hide();
+        });
+        const eb = document.getElementById('epic-expand'); if (eb) eb.onclick = () => setAll(true);
+        const cb = document.getElementById('epic-collapse'); if (cb) cb.onclick = () => setAll(false);
     },
 
     taskRow(t) {
@@ -1440,7 +1513,7 @@ const TeepPlan = {
         ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking'].forEach((id) => {
             const el = document.getElementById(id);
             const ev = (id === 'f-search') ? 'input' : 'change';
-            el.addEventListener(ev, () => { this.renderBoard(); this.renderTasks(); if (this.isGanttVisible()) this.renderGantt(); });
+            el.addEventListener(ev, () => { this.renderBoard(); this.renderTasks(); this.renderEpics(); if (this.isGanttVisible()) this.renderGantt(); });
         });
         document.getElementById('board').addEventListener('click', (e) => {
             const a = e.target.closest('a[data-task]');
@@ -1463,6 +1536,21 @@ const TeepPlan = {
         }
         const tt = document.querySelector('a[href="#tab-tasks"]');
         if (tt) tt.addEventListener('shown.bs.tab', () => this.renderTasks());
+        const ec = document.getElementById('epics-content');
+        if (ec) {
+            ec.addEventListener('click', (e) => {
+                const a = e.target.closest('a[data-task]');
+                if (!a) return;
+                e.preventDefault();
+                this.openTask(a.getAttribute('data-task'));
+            });
+            ec.addEventListener('change', async (e) => {
+                const cb = e.target.closest('input[data-check]');
+                if (cb) { await this.toggleDone(cb.getAttribute('data-check'), cb.checked); this.renderEpics(); }
+            });
+        }
+        const epicsTab = document.querySelector('a[href="#tab-epics"]');
+        if (epicsTab) epicsTab.addEventListener('shown.bs.tab', () => this.renderEpics());
         ['xlsx', 'xml'].forEach((kind) => {
             const btn = document.getElementById('dl-' + kind);
             if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); window.location.href = this.exportUrl(kind); });
