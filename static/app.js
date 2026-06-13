@@ -619,6 +619,15 @@ const TeepPlan = {
         const sc = this.STATUS_COLOR[t.status] || 'secondary';
         document.getElementById('task-modal-title').innerHTML =
             `<span class="status-dot bg-${sc} me-2" title="${this.esc(t.status || '')}"></span><span class="text-secondary fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}`;
+        const assignee = this.esc(t.assignee || '—');
+        const blocks = this.tasks.filter((x) => (x.depends_on || []).includes(t.task_id)).map((x) => this.esc(x.task_id)).join(', ') || 'none';
+        const wsLabel = this.esc(t._wsId || '') + (t._wsName ? ' · ' + this.esc(t._wsName) : '');
+        const effort = (t.effort_days != null) ? this.esc(t.effort_days) + 'd' : '—';
+        const dg = (label, val) => `<div class="datagrid-item"><div class="datagrid-title">${label}</div><div class="datagrid-content">${val}</div></div>`;
+        const gate = (label, val) => `<div class="col-md-4"><div class="card card-sm"><div class="card-body">
+            <div class="subheader mb-1">${label}</div>
+            <div class="text-secondary" style="white-space:pre-wrap;font-size:13px">${this.esc(val || '—')}</div>
+        </div></div></div>`;
         document.getElementById('task-modal-body').innerHTML = `
             <ul class="nav nav-tabs mb-3" id="task-tabs">
                 <li class="nav-item"><a href="#" class="nav-link active" data-tab="details">Details</a></li>
@@ -627,14 +636,26 @@ const TeepPlan = {
                 <li class="nav-item"><a href="#" class="nav-link" data-tab="activity">Activity</a></li>
             </ul>
             <div data-pane="details">
-                <div class="row g-0 mb-3">
-                    <div class="col-6 mb-2"><div class="text-secondary" style="font-size:12px">Status</div>
-                        <select id="details-status" class="form-select form-select-sm" style="max-width:190px">${statusOpts}</select></div>
-                    ${meta('Owner', owner)}${meta('Phase', this.esc(t.phase || '—'))}${meta('Dates', dates)}
-                    ${meta('Risk', risk)}${meta('Depends on', depsText)}
+                <div class="datagrid mb-3">
+                    <div class="datagrid-item"><div class="datagrid-title">Status</div>
+                        <div class="datagrid-content"><select id="details-status" class="form-select form-select-sm" style="max-width:190px">${statusOpts}</select></div></div>
+                    ${dg('Owner', owner)}
+                    ${dg('Assignee', assignee)}
+                    ${dg('Phase', this.esc(t.phase || '—'))}
+                    ${dg('Workstream', wsLabel || '—')}
+                    ${dg('Timeline', dates)}
+                    ${dg('Effort', effort)}
+                    ${dg('Risk', risk)}
+                    ${dg('Depends on', depsText)}
+                    ${dg('Blocks', blocks)}
                 </div>
                 <div class="text-secondary mb-1" style="font-size:12px">Description</div>${prose(t.description)}
-                <div class="text-secondary mb-1 mt-3" style="font-size:12px">Exit criteria</div>${prose(t.exit_criteria)}
+                <div class="subheader mt-3 mb-2">Gates</div>
+                <div class="row g-2">
+                    ${gate('Entry criteria', t.entry_criteria)}
+                    ${gate('Exit criteria', t.exit_criteria)}
+                    ${gate('Deliverable', t.deliverable)}
+                </div>
             </div>
             <div data-pane="edit" style="display:none">
                 ${this._taskFormHtml(t, 'edit-')}
@@ -643,6 +664,15 @@ const TeepPlan = {
                     <button id="edit-delete" class="btn btn-ghost-danger btn-sm"><i class="ti ti-trash me-1"></i>Delete</button>
                     <span id="edit-flash" class="small text-secondary"></span>
                 </div>
+            </div>
+            <div data-pane="dev" style="display:none">
+                <button id="edit-dispatch" class="btn btn-primary btn-sm mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
+                <div id="dispatch-panel"></div>
+                <span id="edit-flash-dev" class="small text-secondary"></span>
+            </div>
+            <div data-pane="activity" style="display:none">
+                <div class="text-secondary mb-2" style="font-size:12px">Full history — comments, agent chats and dispatch events for this task.</div>
+                <div id="activity-log" class="border rounded p-2"></div>
                 <hr class="my-3"/>
                 <div class="d-flex align-items-center mb-2">
                     <i class="ti ti-sparkles me-2 text-primary"></i>
@@ -654,15 +684,6 @@ const TeepPlan = {
                     <input id="chat-input" class="form-control" placeholder="Ask how to push this task ahead…" autocomplete="off"/>
                     <button id="chat-send" class="btn btn-primary"><i class="ti ti-send"></i></button>
                 </div>
-            </div>
-            <div data-pane="dev" style="display:none">
-                <button id="edit-dispatch" class="btn btn-primary btn-sm mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
-                <div id="dispatch-panel"></div>
-                <span id="edit-flash-dev" class="small text-secondary"></span>
-            </div>
-            <div data-pane="activity" style="display:none">
-                <div class="text-secondary mb-2" style="font-size:12px">Full history — comments, agent chats and dispatch events for this task.</div>
-                <div id="activity-log" class="border rounded p-2"></div>
             </div>`;
         this._renderActivity(t);
         this._loadDispatch(t.task_id);
@@ -1457,46 +1478,185 @@ const TeepPlan = {
         );
     },
 
-    // ---- exec summary (shareable) ---------------------------------------
+    // ---- exec summary (A-exec: "My work" + Inbox + Pulse) ---------------
+    // Is this task mine? (owned-by / assigned-to Steve Ridder / SR)
+    _isMine(t) {
+        const hay = `${t.assignee || ''} ${t.owner_person_or_role || ''}`.toLowerCase();
+        return hay.includes('steve ridder') || /\bsr\b/.test(hay);
+    },
+
     renderExec() {
         const el = document.getElementById('exec-content');
         if (!el) return;
         const r = this.plan.rollups || {};
         const t = this.tasks;
-        const endDate = t.map((x) => x.finish_date).filter(Boolean).sort().slice(-1)[0] || '—';
+        const mine = t.filter((x) => this._isMine(x));
         const blocking = t.filter((x) => x.is_blocking).length;
-        const stats = [
-            { l: 'Workstreams', v: r.total_workstreams }, { l: 'Tasks', v: r.total_tasks },
-            { l: 'Effort (person-days)', v: r.total_effort_days }, { l: 'Target finish', v: endDate },
-            { l: 'Milestones', v: (this.plan.milestones || []).length }, { l: 'Blocking tasks', v: blocking },
-        ];
-        const win = (arr) => {
-            const s = arr.map((x) => x.start_date).filter(Boolean).sort()[0];
-            const f = arr.map((x) => x.finish_date).filter(Boolean).sort().slice(-1)[0];
-            return (s || '—') + ' → ' + (f || '—');
+        const inboxN = (this.signals || []).length;
+        const all = this.filtered();
+
+        // --- KPI strip ----------------------------------------------------
+        const kpi = (label, value, sub, red) => `
+            <div class="col-6 col-lg">
+                <div class="card"><div class="card-body p-3">
+                    <div class="subheader">${this.esc(label)}</div>
+                    <div class="h1 mb-0 mt-1${red ? ' text-red' : ''}">${this.esc(value)}</div>
+                    <div class="text-secondary small">${this.esc(sub)}</div>
+                </div></div>
+            </div>`;
+        const kpiStrip = `<div class="row row-cards mb-3">
+            ${kpi('Workstreams', r.total_workstreams, 'across the plan')}
+            ${kpi('Tasks', r.total_tasks, (r.total_effort_days != null ? r.total_effort_days + ' effort-days' : ''))}
+            ${kpi('My open work', mine.length, 'SR · Taikun')}
+            ${kpi('Blocking', blocking, 'gating other work', true)}
+            ${kpi('Inbox to triage', inboxN, inboxN ? 'awaiting confirm' : 'all clear')}
+        </div>`;
+
+        // --- LEFT: my work, grouped by phase (blocking-first) -------------
+        const rank = (x) => (x.is_blocking ? 0 : 1);
+        const groups = this.PHASES.map((phase) => {
+            const list = all.filter((x) => x.phase === phase)
+                .sort((a, b) => rank(a) - rank(b) ||
+                    ((a.finish_date || '9999') < (b.finish_date || '9999') ? -1 : 1));
+            return { phase, list };
+        }).filter((g) => g.list.length);
+
+        const row = (x) => {
+            const sc = this.STATUS_COLOR[x.status] || 'secondary';
+            const live = x.status === 'In Progress';
+            const due = this.fmtDue(x.finish_date, x.status === 'Done');
+            const who = x.assignee || x.owner_person_or_role || '';
+            const av = who
+                ? `<span class="avatar avatar-xs rounded-circle bg-secondary-lt" title="${this.esc(who)}">${this.esc(this.initials(who))}</span>`
+                : '<span class="text-secondary small">—</span>';
+            return `
+                <tr data-task="${this.esc(x.task_id)}" style="cursor:pointer">
+                    <td class="w-1"><span class="status-dot${live ? ' status-dot-animated' : ''} bg-${sc}" title="${this.esc(x.status || '')}"></span></td>
+                    <td>
+                        <div class="fw-semibold text-body">${this.esc(x.title)}</div>
+                        ${x.description ? `<div class="text-secondary small">${this.esc(x.description)}</div>` : ''}
+                    </td>
+                    <td><span class="text-secondary small text-uppercase">${this.esc(x._wsId)}</span></td>
+                    <td>${av}</td>
+                    <td>${x.risk_level === 'High' ? '<span class="badge badge-outline text-red">High</span>' : '<span class="text-secondary small">—</span>'}</td>
+                    <td>${x.is_blocking ? '<span class="d-inline-flex align-items-center"><span class="status-dot bg-red me-1"></span><span class="text-secondary small">Blocking</span></span>' : '<span class="text-secondary small">—</span>'}</td>
+                    <td class="text-secondary small text-nowrap ${due.cls}">${due.text || '—'}</td>
+                </tr>`;
         };
-        const phRows = this.PHASES.map((p) => {
-            const pt = t.filter((x) => x.phase === p);
-            return pt.length ? [this.badge(p, this.PHASE_COLOR[p]), pt.length,
-                Math.round(pt.reduce((a, x) => a + (x.effort_days || 0), 0)) + 'd', win(pt)] : null;
-        }).filter(Boolean);
-        const wsRows = (this.plan.workstreams || []).map((w) => [
-            this.badge(w.workstream_id, this.WS_COLOR[w.workstream_id] || 'secondary') + ' ' + this.esc(w.name),
-            (w.tasks || []).length,
-            Math.round((w.tasks || []).reduce((a, x) => a + (x.effort_days || 0), 0)) + 'd', win(w.tasks || []),
-        ]);
-        const card = (s) => `<div class="col-6 col-sm-4 col-xl-2"><div class="card card-sm"><div class="card-body"><div class="subheader">${this.esc(s.l)}</div><div class="h2 mb-0 mt-1">${this.esc(s.v)}</div></div></div></div>`;
-        el.innerHTML = `
-            <div class="row row-cards mb-3">${stats.map(card).join('')}</div>
-            <div class="card mb-3"><div class="card-body">
-                ${(this.plan.executive_summary || '').split('\n').filter(Boolean).slice(0, 2).map((p) => `<p>${this.esc(p)}</p>`).join('')}
-                <p class="text-secondary small mb-0">${this.esc(this.plan.timeline_note || '')}</p>
-            </div></div>
-            <div class="row g-3">
-                <div class="col-12 col-lg-5"><div class="card"><div class="card-header"><h3 class="card-title">Phases</h3></div>${this.table(['Phase', 'Tasks', 'Effort', 'Window'], phRows)}</div></div>
-                <div class="col-12 col-lg-7"><div class="card"><div class="card-header"><h3 class="card-title">Milestones</h3></div>${this.table(['Milestone', 'Target', 'Gate'], (this.plan.milestones || []).map((m) => [this.esc(m.name), this.badge(m.target_week, 'azure'), this.esc(m.gate_criteria)]))}</div></div>
+
+        const groupHtml = groups.map((g) => `
+            <div class="card-body bg-light py-2 border-bottom border-top">
+                <div class="row align-items-center">
+                    <div class="col"><span class="subheader text-body">${this.esc(g.phase)}</span></div>
+                    <div class="col-auto text-secondary small">${g.list.length} task${g.list.length > 1 ? 's' : ''}</div>
+                </div>
             </div>
-            <div class="card mt-3"><div class="card-header"><h3 class="card-title">Workstream summary</h3></div>${this.table(['Workstream', 'Tasks', 'Effort', 'Window'], wsRows)}</div>`;
+            <div class="table-responsive">
+                <table class="table table-vcenter table-borderless mb-0">
+                    <tbody>${g.list.map(row).join('')}</tbody>
+                </table>
+            </div>`).join('');
+
+        const myWork = `
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Work, grouped by phase</h3>
+                        <div class="card-actions d-flex align-items-center">
+                            <span class="text-secondary small me-3">Sorted: blocking first</span>
+                            <span class="badge bg-secondary-lt">${all.length} task${all.length === 1 ? '' : 's'}</span>
+                        </div>
+                    </div>
+                    ${groups.length ? groupHtml : `
+                    <div class="empty">
+                        <div class="empty-icon"><i class="ti ti-check"></i></div>
+                        <p class="empty-title">Nothing assigned to you</p>
+                        <p class="empty-subtitle text-secondary">Open the Board to see all ${this.esc(r.total_tasks)} tasks.</p>
+                    </div>`}
+                    <div class="card-footer text-secondary small">
+                        Grouped by phase · <a href="#tab-board" data-bs-toggle="tab" class="text-reset fw-bold">open the board</a> for the kanban
+                    </div>
+                </div>
+            </div>`;
+
+        // --- RIGHT: Inbox + Latest Pulse ---------------------------------
+        const sig = this.signals || [];
+        const inboxItem = (s) => {
+            const label = s.title || s.subject || s.summary || 'Inbox item';
+            const from = s.sender || s.from || s.source || '';
+            const note = s.proposal_text || s.summary || s.detail || '';
+            const danger = (s.severity === 'high') || s.is_risk;
+            return `
+                <div class="list-group-item">
+                    <div class="row align-items-start g-2">
+                        <div class="col-auto"><span class="avatar avatar-sm rounded ${danger ? 'bg-red-lt text-red' : 'bg-secondary-lt'}"><i class="ti ti-${danger ? 'alert-triangle' : 'mail'}"></i></span></div>
+                        <div class="col">
+                            <div class="fw-semibold text-body">${this.esc(label)}</div>
+                            ${from ? `<div class="text-secondary small">${this.esc(from)}</div>` : ''}
+                            ${note ? `<div class="mt-2 p-2 border rounded bg-secondary-lt">
+                                <div class="subheader text-secondary mb-1"><i class="ti ti-pencil-bolt me-1"></i>Proposed change</div>
+                                <div class="small">${this.esc(note)}</div>
+                            </div>` : ''}
+                            <div class="btn-list mt-2">
+                                <a href="#tab-inbox" data-bs-toggle="tab" class="btn btn-sm btn-primary"><i class="ti ti-check me-1"></i>Confirm</a>
+                                <a href="#tab-inbox" data-bs-toggle="tab" class="btn btn-sm btn-ghost-secondary"><i class="ti ti-x me-1"></i>Dismiss</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+        };
+        const inboxBody = sig.length
+            ? `<div class="card-body py-2 text-secondary small">Email-triaged updates · confirm or dismiss</div>
+               <div class="list-group list-group-flush">${sig.slice(0, 6).map(inboxItem).join('')}</div>`
+            : `<div class="empty py-4">
+                   <div class="empty-icon"><i class="ti ti-inbox"></i></div>
+                   <p class="empty-title">Inbox is clear</p>
+                   <p class="empty-subtitle text-secondary">Forward an email or transcript and the agent triages it here.</p>
+                   <div class="empty-action"><a href="#tab-inbox" data-bs-toggle="tab" class="btn btn-outline-secondary"><i class="ti ti-inbox me-1"></i>Open Inbox</a></div>
+               </div>`;
+
+        const rightRail = `
+            <div class="col-lg-4">
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h3 class="card-title"><i class="ti ti-inbox me-2"></i>Inbox</h3>
+                        <div class="card-actions"><span class="badge bg-secondary-lt">${inboxN} to triage</span></div>
+                    </div>
+                    ${inboxBody}
+                </div>
+
+                <div class="card">
+                    <div class="card-status-top bg-primary"></div>
+                    <div class="card-header">
+                        <span class="avatar avatar-sm rounded bg-primary-lt text-primary me-2"><i class="ti ti-broadcast"></i></span>
+                        <div>
+                            <h3 class="card-title mb-0">Latest Pulse</h3>
+                            <div class="text-secondary small">Weekly chief-of-staff digest</div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="empty py-4">
+                            <div class="empty-icon"><i class="ti ti-activity-heartbeat"></i></div>
+                            <p class="empty-title">No digest yet</p>
+                            <p class="empty-subtitle text-secondary">Generate a chief-of-staff brief: what changed, what's slipping, and what to pick up next.</p>
+                            <div class="empty-action"><a href="#tab-pulse" data-bs-toggle="tab" class="btn btn-primary"><i class="ti ti-sparkles me-1"></i>Generate digest</a></div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+
+        el.innerHTML = kpiStrip + `<div class="row row-cards">${myWork}${rightRail}</div>`;
+
+        // Open the task modal from a clicked row. wireEvents() does not delegate
+        // exec-content, so bind once here (re-renders reuse the same element).
+        if (!this._execWired) {
+            this._execWired = true;
+            el.addEventListener('click', (e) => {
+                const trg = e.target.closest('[data-task]');
+                if (!trg || !el.contains(trg)) return;
+                this.openTask(trg.getAttribute('data-task'));
+            });
+        }
     },
 
     exportUrl(kind) {

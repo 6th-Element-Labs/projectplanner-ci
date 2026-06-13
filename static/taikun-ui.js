@@ -18,9 +18,12 @@
 (function () {
   'use strict';
 
-  /* ── 1 · Bootstrap API alias + data-attr delegation ──────────────────── */
+  /* ── 1 · Bootstrap API alias + data-attr delegation ──────────────────────
+     Only needed for @tabler/core builds that don't auto-wire data-bs-*. Apps
+     that already load the full bootstrap.bundle (which auto-wires) set
+     window.TAIKUN_NO_BS_WIRE = true before this script to avoid double-firing. */
   var bs = window.bootstrap || (window.tabler && window.tabler.bootstrap);
-  if (bs) {
+  if (bs && !window.TAIKUN_NO_BS_WIRE) {
     window.bootstrap = bs;
     document.querySelectorAll('[data-bs-toggle="tab"]').forEach(function (el) {
       el.addEventListener('click', function (e) { e.preventDefault(); bs.Tab.getOrCreateInstance(el).show(); });
