@@ -23,12 +23,14 @@ if _env.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-from fastapi import Body, FastAPI, HTTPException  # noqa: E402
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.responses import JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 import agent  # noqa: E402
+import attachments  # noqa: E402
 import digest  # noqa: E402
+import transcribe  # noqa: E402
 import dispatch  # noqa: E402
 import export  # noqa: E402
 import inbox as inbox_mod  # noqa: E402
@@ -211,6 +213,38 @@ async def intake_artifact(body: dict = Body(...)):
             intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text)
     except Exception as e:
         raise HTTPException(502, f"intake error: {e}")
+
+
+@app.post("/api/intake/upload")
+async def intake_upload(file: UploadFile = File(...), kind: str = Form("document"),
+                        title: str = Form("")):
+    """Drop a file — audio/video, pdf, docx, or text — extract or TRANSCRIBE it, then
+    ingest into the corpus + triage. Media is transcribed via OpenAI (Whisper) through the
+    gateway; everything else uses attachments.extract. Same response shape as /api/intake."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "empty file")
+    fn = file.filename or "upload"
+    label = (title or fn).strip()
+    media = transcribe.is_media(fn, file.content_type)
+    try:
+        if media:
+            text = await asyncio.to_thread(transcribe.transcribe, fn, data, file.content_type)
+        else:
+            text = await asyncio.to_thread(attachments.extract, fn, file.content_type, data)
+    except ValueError as e:                       # size limit etc. — user-facing
+        raise HTTPException(413, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"{'transcription' if media else 'extract'} error: {e}")
+    if not text or not text.strip():
+        raise HTTPException(422, f"could not get text from {fn} (unsupported type or empty)")
+    try:
+        res = await asyncio.to_thread(intake.ingest_and_triage, kind or "document", label, text)
+    except Exception as e:
+        raise HTTPException(502, f"intake error: {e}")
+    res["transcribed"] = media
+    res["chars"] = len(text)
+    return res
 
 
 # ---- Live Inbox (Phase 5.5) -------------------------------------------------

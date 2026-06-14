@@ -11,6 +11,10 @@ model_list:
     litellm_params:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: taikun-transcribe
+    litellm_params:
+      model: openai/whisper-1            # OpenAI speech-to-text; reachable at /v1/audio/transcriptions
+      api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
   drop_params: true

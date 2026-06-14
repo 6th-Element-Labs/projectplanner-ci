@@ -33,6 +33,9 @@ def extract(filename, content_type, data):
     fn = (filename or "").lower()
     ct = (content_type or "").lower()
     try:
+        import transcribe
+        if transcribe.is_media(fn, ct):
+            return transcribe.transcribe(filename, data, content_type)
         if ct.startswith("text/") or fn.endswith(TEXT_EXT):
             return _txt(data)
         if ct == "application/pdf" or fn.endswith(".pdf"):

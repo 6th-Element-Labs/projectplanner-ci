@@ -58,6 +58,7 @@
   var stored = read();
   var collapsed = (stored === null) ? true : (stored === '1'); // DEFAULT: collapsed
 
+  var DESKTOP = '(min-width: 992px)';
   function render() {
     if (!document.body) return;
     document.body.classList.toggle('tk-sidebar-collapsed', collapsed);
@@ -67,6 +68,16 @@
       var i = btn.querySelector('i');
       if (i) i.className = 'ti ' + (collapsed ? 'ti-layout-sidebar-left-expand' : 'ti-layout-sidebar-left-collapse');
     });
+    // Reflow the content beside the icon-rail. Tabler hardcodes the page-wrapper's
+    // margin-inline-start (= sidebar width) with !important in its cross-origin sheet;
+    // only an inline !important on the SAME logical property reliably wins. Always set
+    // it explicitly (never removeProperty — logical-prop removal is flaky): mobile = 0,
+    // desktop collapsed = the 4.25rem rail, desktop expanded = Tabler's 15rem width.
+    var wrap = document.querySelector('.page-wrapper');
+    if (wrap) {
+      var v = !window.matchMedia(DESKTOP).matches ? '0' : (collapsed ? '4.25rem' : '15rem');
+      wrap.style.setProperty('margin-inline-start', v, 'important');
+    }
   }
 
   function toggle() { collapsed = !collapsed; write(collapsed); render(); }
@@ -75,6 +86,10 @@
     var t = e.target.closest('[data-tk-sidebar-toggle]');
     if (t) { e.preventDefault(); toggle(); }
   });
+
+  // Re-apply the desktop margin when the viewport crosses the breakpoint.
+  var _rt;
+  window.addEventListener('resize', function () { clearTimeout(_rt); _rt = setTimeout(render, 120); });
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', render);

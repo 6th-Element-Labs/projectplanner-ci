@@ -1168,10 +1168,45 @@ const TeepPlan = {
         }
     },
 
+    async submitIntakeUpload(f) {
+        const flash = document.getElementById('intake-flash');
+        const kind = (document.getElementById('intake-kind') || {}).value || 'document';
+        const isMedia = /\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr)$/i.test(f.name);
+        const log = document.getElementById('ask-log');
+        const empty = document.getElementById('ask-empty'); if (empty) empty.remove();
+        log.insertAdjacentHTML('beforeend', `<div class="mb-2 text-end"><span class="badge bg-blue-lt">${isMedia ? 'media' : 'file'}</span> ${this.esc(f.name)}</div>`);
+        if (flash) flash.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>' + (isMedia ? 'Transcribing &amp; ingesting…' : 'Extracting &amp; ingesting…');
+        this._askScroll();
+        try {
+            const fd = new FormData();
+            fd.append('file', f);
+            fd.append('kind', isMedia ? 'transcript' : kind);
+            fd.append('title', f.name);
+            const res = await fetch('api/intake/upload', { method: 'POST', body: fd });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+            if (flash) flash.textContent = `${data.transcribed ? 'transcribed + ' : ''}ingested ${data.ingested_chunks} chunk(s) into the corpus`;
+            const src = (data.sources || []).length ? `<div class="text-secondary small mt-1">sources: ${data.sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(data.summary)}${src}</div>`);
+            const props = data.proposals || [];
+            if (props.length === 1) this.renderAskProposal(props[0]);
+            else if (props.length > 1) this.renderAskProposals(props);
+            if ((data.new_tasks || []).length) this.renderAskNewTasks(data.new_tasks);
+            this._askScroll();
+        } catch (e) {
+            if (flash) flash.textContent = '';
+            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(e.message)}</div>`);
+        }
+    },
+
     // ---- Exec-tab corpus upload (drop a doc -> ingest -> agent reacts) ----
     _readFilesThenIngest(files) {
         if (!files || !files.length) return;
         const f = files[0];
+        if (/\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr|pdf|docx)$/i.test(f.name)) {
+            this.submitExecFile(f);
+            return;
+        }
         const reader = new FileReader();
         reader.onload = () => this.submitExecUpload(String(reader.result || ''), f.name);
         reader.onerror = () => { const fl = document.getElementById('exec-upload-flash'); if (fl) fl.textContent = 'Could not read that file.'; };
@@ -1180,15 +1215,32 @@ const TeepPlan = {
 
     async submitExecUpload(text, title) {
         const flash = document.getElementById('exec-upload-flash');
-        const out = document.getElementById('exec-upload-result');
         if (!text || !text.trim()) { if (flash) flash.textContent = 'Drop a file or paste text first.'; return; }
-        if (flash) flash.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Ingesting + reacting…';
+        await this._execIngest(() => fetch('api/intake', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'document', title: title || '', text }) }), false);
+        const paste = document.getElementById('exec-paste'); if (paste) paste.value = '';
+    },
+
+    async submitExecFile(f) {
+        const isMedia = /\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr)$/i.test(f.name);
+        await this._execIngest(() => {
+            const fd = new FormData();
+            fd.append('file', f);
+            fd.append('kind', isMedia ? 'transcript' : 'document');
+            fd.append('title', f.name);
+            return fetch('api/intake/upload', { method: 'POST', body: fd });
+        }, isMedia);
+    },
+
+    async _execIngest(doFetch, isMedia) {
+        const flash = document.getElementById('exec-upload-flash');
+        const out = document.getElementById('exec-upload-result');
+        if (flash) flash.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>' + (isMedia ? 'Transcribing &amp; ingesting… (long audio takes a few minutes)' : 'Ingesting + reacting…');
         if (out) out.innerHTML = '';
         try {
-            const res = await fetch('api/intake', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'document', title: title || '', text }) });
+            const res = await doFetch();
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
-            if (flash) flash.textContent = `ingested ${data.ingested_chunks || 0} chunk(s) into the corpus`;
+            if (flash) flash.textContent = `${data.transcribed ? 'transcribed + ' : ''}ingested ${data.ingested_chunks || 0} chunk(s) into the corpus`;
             const props = data.proposals || [];
             const newTasks = data.new_tasks || [];
             let html = '<div class="card card-sm"><div class="card-body">'
@@ -1695,9 +1747,9 @@ const TeepPlan = {
                     <div class="card-body">
                         <div id="exec-drop" class="border border-2 border-dashed rounded p-3 text-center" style="cursor:pointer">
                             <div class="text-secondary"><i class="ti ti-file-upload" style="font-size:1.5rem"></i></div>
-                            <div class="fw-semibold mt-1">Drop a doc, email or transcript</div>
-                            <div class="text-secondary small">or <span class="text-primary">browse</span> — the agent ingests it and tells you what changes</div>
-                            <input id="exec-file" type="file" accept=".txt,.md,.vtt,.eml,.csv,.json" class="d-none" multiple>
+                            <div class="fw-semibold mt-1">Drop a doc, email, transcript or media file</div>
+                            <div class="text-secondary small">or <span class="text-primary">browse</span> — audio/video is transcribed, then the agent ingests it and tells you what changes</div>
+                            <input id="exec-file" type="file" accept=".txt,.md,.vtt,.eml,.csv,.json,.pdf,.docx,.m4a,.mp3,.mp4,.wav,.webm,.mov,.m4v,.aac,.ogg,.flac,audio/*,video/*" class="d-none" multiple>
                         </div>
                         <textarea id="exec-paste" class="form-control form-control-sm mt-2" rows="2" placeholder="…or paste text"></textarea>
                         <div class="mt-2 d-flex align-items-center">
@@ -1831,6 +1883,11 @@ const TeepPlan = {
         if (intakeFile) intakeFile.addEventListener('change', (e) => {
             const f = e.target.files[0];
             if (!f) return;
+            if (/\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr|pdf|docx)$/i.test(f.name)) {
+                this.submitIntakeUpload(f);
+                e.target.value = '';
+                return;
+            }
             const r = new FileReader();
             r.onload = () => {
                 document.getElementById('intake-text').value = r.result || '';
