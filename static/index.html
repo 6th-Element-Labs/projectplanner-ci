@@ -16,10 +16,10 @@
     <title>Project Maxwell Plan | Taikun Atlas</title>
     <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
-    <link href="taikun-tabler.css" rel="stylesheet"/>
+    <link href="taikun-tabler.css?v=4" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css so it wins. Old UI preserved at /index-legacy.html. -->
-    <link href="taikun-ui.css" rel="stylesheet"/>
+    <link href="taikun-ui.css?v=4" rel="stylesheet"/>
     <style>
       .epic-head{cursor:pointer}
       .epic-head .epic-chev{transition:transform .15s ease}
@@ -84,16 +84,13 @@
             <!-- Page Header -->
             <div class="page-header d-print-none">
                 <div class="container-xl">
-                    <div class="row align-items-center">
+                    <div class="row g-2 align-items-center">
                         <div class="col-auto">
                             <button class="btn btn-icon btn-ghost-secondary" data-tk-sidebar-toggle title="Expand sidebar"><i class="ti ti-layout-sidebar-left-expand"></i></button>
                         </div>
-                        <div class="col">
+                        <div class="col text-center">
                             <div class="page-pretitle">TEEP Barnett · TotalEnergies E&amp;P</div>
-                            <h2 class="page-title">
-                                <i class="ti ti-layout-kanban me-2"></i>
-                                Project Maxwell — Phase-1 Pilot Plan
-                            </h2>
+                            <h2 class="page-title mb-0">Project Maxwell — Phase-1 Pilot Plan</h2>
                         </div>
                         <div class="col-auto ms-auto d-print-none">
                             <div class="btn-list align-items-center">
@@ -394,8 +391,8 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@latest/dist/apexcharts.min.js"></script>
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js"></script>
-    <script src="taikun-ui.js"></script>
+    <script src="app.js?v=4"></script>
+    <script src="taikun-ui.js?v=4"></script>
     <script>
       // Keep the sidebar nav highlight in sync with the active tab (sidebar + top tabs share tab targets).
       (function () {
@@ -409,6 +406,17 @@
         document.addEventListener('shown.bs.tab', function (e) {
           var t = e.target.getAttribute('href') || (e.target.dataset && e.target.dataset.bsTarget);
           if (t) sync(t);
+        });
+        // Tab links outside the top .nav-tabs (sidebar nav, in-content "open the board"
+        // / "review in Ask Taikun" links) can't be driven by Bootstrap's Tab data-api
+        // (it needs a .nav/.list-group parent). Route them to the matching TOP tab.
+        document.addEventListener('click', function (e) {
+          var a = e.target.closest('[data-bs-toggle="tab"]');
+          if (!a || a.closest('.nav-tabs')) return; // the top tabs drive themselves
+          e.preventDefault();
+          var href = a.getAttribute('href');
+          var top = document.querySelector('.nav-tabs [data-bs-toggle="tab"][href="' + href + '"]');
+          if (top && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(top).show();
         });
         var active = document.querySelector('.nav-tabs .nav-link.active');
         if (active) sync(active.getAttribute('href'));

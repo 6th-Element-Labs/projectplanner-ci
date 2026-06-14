@@ -636,76 +636,83 @@ const TeepPlan = {
         const wsLabel = this.esc(t._wsId || '') + (t._wsName ? ' · ' + this.esc(t._wsName) : '');
         const effort = (t.effort_days != null) ? this.esc(t.effort_days) + 'd' : '—';
         const dg = (label, val) => `<div class="datagrid-item"><div class="datagrid-title">${label}</div><div class="datagrid-content">${val}</div></div>`;
-        const gate = (label, val) => `<div class="col-md-4"><div class="card card-sm"><div class="card-body">
-            <div class="subheader mb-1">${label}</div>
-            <div class="text-secondary" style="white-space:pre-wrap;font-size:13px">${this.esc(val || '—')}</div>
+        const gateCard = (icon, label, val, full, accent) => `<div class="col-${full ? '12' : 'md-6'}"><div class="card card-sm">${accent ? '<div class="card-status-start bg-primary"></div>' : ''}<div class="card-body">
+            <div class="subheader text-secondary mb-1"><i class="ti ti-${icon} me-1"></i>${label}</div>
+            <div class="small" style="white-space:pre-wrap">${this.esc(val || '—')}</div>
         </div></div></div>`;
+        const PCT = { 'Not Started': 0, 'In Progress': 50, 'Blocked': 20, 'In Review': 80, 'Done': 100 };
+        const pct = PCT[t.status] != null ? PCT[t.status] : 0;
+        const av = (name) => name ? `<span class="avatar avatar-xs rounded-circle bg-secondary-lt me-1">${this.esc(this.initials(name))}</span>` : '';
+        const badgeList = (arr, icon) => (arr && arr.length) ? arr.map((x) => `<span class="badge bg-secondary-lt me-1"><i class="ti ti-${icon} me-1"></i>${this.esc(x)}</span>`).join('') : '<span class="text-secondary">none</span>';
+        const blockArr = this.tasks.filter((x) => (x.depends_on || []).includes(t.task_id)).map((x) => x.task_id);
+        const riskHtml = t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High</span>' : (t.risk_level ? this.esc(t.risk_level) : '—');
+        document.getElementById('task-modal-title').innerHTML =
+            `<span class="status-dot bg-${sc} me-2"></span><span class="text-secondary font-monospace fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}${t.is_blocking ? ' <span class="badge bg-red-lt ms-2"><i class="ti ti-alert-triangle me-1"></i>Blocking</span>' : ''}`;
         document.getElementById('task-modal-body').innerHTML = `
-            <ul class="nav nav-tabs mb-3" id="task-tabs">
-                <li class="nav-item"><a href="#" class="nav-link active" data-tab="details">Details</a></li>
-                <li class="nav-item"><a href="#" class="nav-link" data-tab="edit">Edit</a></li>
-                <li class="nav-item"><a href="#" class="nav-link" data-tab="dev">Dev</a></li>
-                <li class="nav-item"><a href="#" class="nav-link" data-tab="activity">Activity</a></li>
+            <ul class="nav nav-tabs" role="tablist">
+                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#m-details" role="tab"><i class="ti ti-info-circle me-1"></i>Details</a></li>
+                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#m-edit" role="tab"><i class="ti ti-pencil me-1"></i>Edit</a></li>
+                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#m-dev" role="tab"><i class="ti ti-terminal-2 me-1"></i>Dev</a></li>
+                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#m-activity" role="tab"><i class="ti ti-history me-1"></i>Activity</a></li>
             </ul>
-            <div data-pane="details">
-                <div class="datagrid mb-3">
-                    <div class="datagrid-item"><div class="datagrid-title">Status</div>
-                        <div class="datagrid-content"><select id="details-status" class="form-select form-select-sm" style="max-width:190px">${statusOpts}</select></div></div>
-                    ${dg('Owner', owner)}
-                    ${dg('Assignee', assignee)}
-                    ${dg('Phase', this.esc(t.phase || '—'))}
-                    ${dg('Workstream', wsLabel || '—')}
-                    ${dg('Timeline', dates)}
-                    ${dg('Effort', effort)}
-                    ${dg('Risk', risk)}
-                    ${dg('Depends on', depsText)}
-                    ${dg('Blocks', blocks)}
+            <div class="tab-content mt-3">
+                <div class="tab-pane fade show active" id="m-details" role="tabpanel">
+                    <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
+                    <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(t.status || '—')} · ${pct}% complete</div>
+                    <div class="subheader mb-2">Properties</div>
+                    <div class="datagrid mb-3">
+                        <div class="datagrid-item"><div class="datagrid-title">Status</div>
+                            <div class="datagrid-content"><select id="details-status" class="form-select form-select-sm" style="max-width:200px">${statusOpts}</select></div></div>
+                        ${dg('Owner', av(t.owner_person_or_role || t.owner_org) + owner)}
+                        ${dg('Assignee', t.assignee ? av(t.assignee) + this.esc(t.assignee) : '—')}
+                        ${dg('Phase', this.esc(t.phase || '—'))}
+                        ${dg('Workstream', `<span class="text-uppercase">${this.esc(t._wsId || '—')}</span>${t._wsName ? ' · ' + this.esc(t._wsName) : ''}`)}
+                        ${dg('Timeline', dates)}
+                        ${dg('Effort', effort)}
+                        ${dg('Risk', riskHtml)}
+                        ${dg('Depends on', badgeList(t.depends_on, 'link'))}
+                        ${dg('Blocks', badgeList(blockArr, 'arrow-bar-to-right'))}
+                    </div>
+                    <div class="subheader mb-2">Description</div>
+                    <p class="text-secondary" style="white-space:pre-wrap">${this.esc(t.description || '—')}</p>
+                    <div class="subheader mb-2 mt-3">Gates</div>
+                    <div class="row g-2">
+                        ${gateCard('login', 'Entry criteria', t.entry_criteria, false, false)}
+                        ${gateCard('logout', 'Exit criteria', t.exit_criteria, false, false)}
+                        ${gateCard('package', 'Deliverable', t.deliverable, true, true)}
+                    </div>
                 </div>
-                <div class="text-secondary mb-1" style="font-size:12px">Description</div>${prose(t.description)}
-                <div class="subheader mt-3 mb-2">Gates</div>
-                <div class="row g-2">
-                    ${gate('Entry criteria', t.entry_criteria)}
-                    ${gate('Exit criteria', t.exit_criteria)}
-                    ${gate('Deliverable', t.deliverable)}
+                <div class="tab-pane fade" id="m-edit" role="tabpanel">
+                    ${this._taskFormHtml(t, 'edit-')}
+                    <div class="btn-list mt-3 pt-3 border-top">
+                        <button id="edit-save" class="btn btn-primary"><i class="ti ti-device-floppy me-1"></i>Save changes</button>
+                        <button id="edit-delete" class="btn btn-ghost-danger ms-auto"><i class="ti ti-trash me-1"></i>Delete task</button>
+                        <span id="edit-flash" class="small text-secondary"></span>
+                    </div>
                 </div>
-            </div>
-            <div data-pane="edit" style="display:none">
-                ${this._taskFormHtml(t, 'edit-')}
-                <div class="d-flex align-items-center gap-2 mt-3">
-                    <button id="edit-save" class="btn btn-primary btn-sm"><i class="ti ti-device-floppy me-1"></i>Save</button>
-                    <button id="edit-delete" class="btn btn-ghost-danger btn-sm"><i class="ti ti-trash me-1"></i>Delete</button>
-                    <span id="edit-flash" class="small text-secondary"></span>
+                <div class="tab-pane fade" id="m-dev" role="tabpanel">
+                    <p class="text-secondary">Dispatch hands this task to a Claude Code agent in an isolated worktree. It drafts the change, opens a PR, and reports back here — it never merges or writes to your systems on its own.</p>
+                    ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
+                    <button id="edit-dispatch" class="btn btn-primary mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
+                    <div id="dispatch-panel"></div>
+                    <span id="edit-flash-dev" class="small text-secondary"></span>
                 </div>
-            </div>
-            <div data-pane="dev" style="display:none">
-                <button id="edit-dispatch" class="btn btn-primary btn-sm mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
-                <div id="dispatch-panel"></div>
-                <span id="edit-flash-dev" class="small text-secondary"></span>
-            </div>
-            <div data-pane="activity" style="display:none">
-                <div class="text-secondary mb-2" style="font-size:12px">Full history — comments, agent chats and dispatch events for this task.</div>
-                <div id="activity-log" class="border rounded p-2"></div>
-                <hr class="my-3"/>
-                <div class="d-flex align-items-center mb-2">
-                    <i class="ti ti-sparkles me-2 text-primary"></i>
-                    <span class="fw-bold">Ask Taikun · this task</span>
-                    <span class="text-secondary small ms-2">grounded in the plan docs · proposes changes you confirm</span>
-                </div>
-                <div id="chat-log" class="border rounded p-2 mb-2"></div>
-                <div class="input-group input-group-sm">
-                    <input id="chat-input" class="form-control" placeholder="Ask how to push this task ahead…" autocomplete="off"/>
-                    <button id="chat-send" class="btn btn-primary"><i class="ti ti-send"></i></button>
+                <div class="tab-pane fade" id="m-activity" role="tabpanel">
+                    <div id="activity-log" class="list-group list-group-flush mb-3"></div>
+                    <div class="d-flex align-items-center mb-2 pt-2 border-top">
+                        <span class="avatar avatar-xs rounded bg-primary-lt text-primary me-2"><i class="ti ti-sparkles"></i></span>
+                        <span class="fw-semibold">Ask Taikun · this task</span>
+                        <span class="text-secondary small ms-2">grounded in the plan docs · proposes changes you confirm</span>
+                    </div>
+                    <div id="chat-log" class="mb-2"></div>
+                    <div class="input-group">
+                        <input id="chat-input" class="form-control" placeholder="Ask how to push this task ahead…" autocomplete="off"/>
+                        <button id="chat-send" class="btn btn-primary"><i class="ti ti-send me-1"></i>Send</button>
+                    </div>
                 </div>
             </div>`;
         this._renderActivity(t);
         this._loadDispatch(t.task_id);
-        const links = [...document.querySelectorAll('#task-tabs .nav-link')];
-        const panes = [...document.querySelectorAll('#task-modal-body [data-pane]')];
-        links.forEach((a) => a.addEventListener('click', (e) => {
-            e.preventDefault();
-            links.forEach((x) => x.classList.toggle('active', x === a));
-            panes.forEach((p) => { p.style.display = p.dataset.pane === a.dataset.tab ? 'block' : 'none'; });
-        }));
         document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
@@ -1158,6 +1165,57 @@ const TeepPlan = {
         } catch (e) {
             if (flash) flash.textContent = '';
             log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(e.message)}</div>`);
+        }
+    },
+
+    // ---- Exec-tab corpus upload (drop a doc -> ingest -> agent reacts) ----
+    _readFilesThenIngest(files) {
+        if (!files || !files.length) return;
+        const f = files[0];
+        const reader = new FileReader();
+        reader.onload = () => this.submitExecUpload(String(reader.result || ''), f.name);
+        reader.onerror = () => { const fl = document.getElementById('exec-upload-flash'); if (fl) fl.textContent = 'Could not read that file.'; };
+        reader.readAsText(f);
+    },
+
+    async submitExecUpload(text, title) {
+        const flash = document.getElementById('exec-upload-flash');
+        const out = document.getElementById('exec-upload-result');
+        if (!text || !text.trim()) { if (flash) flash.textContent = 'Drop a file or paste text first.'; return; }
+        if (flash) flash.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Ingesting + reacting…';
+        if (out) out.innerHTML = '';
+        try {
+            const res = await fetch('api/intake', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'document', title: title || '', text }) });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+            if (flash) flash.textContent = `ingested ${data.ingested_chunks || 0} chunk(s) into the corpus`;
+            const props = data.proposals || [];
+            const newTasks = data.new_tasks || [];
+            let html = '<div class="card card-sm"><div class="card-body">'
+                + '<div class="d-flex align-items-center mb-2"><span class="avatar avatar-xs rounded bg-primary-lt text-primary me-2"><i class="ti ti-sparkles"></i></span><span class="fw-semibold">What this changes</span></div>';
+            if (data.summary) html += `<div class="small mb-2">${this.esc(data.summary)}</div>`;
+            if (props.length) {
+                html += '<div class="subheader mb-1">Proposed task changes</div>';
+                html += props.map((p) => {
+                    const id = p.task_id || p.id || '';
+                    const act = p.action || p.change || p.status || p.summary || 'update';
+                    const done = /done|close|complete|resolve/i.test(String(act));
+                    return `<div class="d-flex align-items-start mb-1"><span class="status-dot bg-${done ? 'green' : 'orange'} mt-1 me-2"></span><div class="small">${id ? `<span class="fw-medium">${this.esc(id)}</span> ` : ''}${this.esc(act)}</div></div>`;
+                }).join('');
+            }
+            if (newTasks.length) {
+                html += '<div class="subheader mb-1 mt-2">Suggested new tasks</div>';
+                html += newTasks.map((t) => `<div class="d-flex align-items-start mb-1"><i class="ti ti-plus text-green mt-1 me-2"></i><div class="small">${this.esc(t.title || t.summary || t.task || '')}</div></div>`).join('');
+            }
+            if (!props.length && !newTasks.length) html += '<div class="text-secondary small">No task changes detected — ingested into the corpus for reference.</div>';
+            html += '<div class="mt-2"><a href="#tab-ask" data-bs-toggle="tab" class="btn btn-sm btn-outline-primary"><i class="ti ti-sparkles me-1"></i>Review &amp; confirm in Ask Taikun</a></div>';
+            html += '</div></div>';
+            if (out) out.innerHTML = html;
+            const paste = document.getElementById('exec-paste'); if (paste) paste.value = '';
+            if (this.loadSignals) this.loadSignals(); // refresh inbox so new triage shows up
+        } catch (e) {
+            if (flash) flash.textContent = '';
+            if (out) out.innerHTML = `<div class="alert alert-danger py-2 px-3 small mb-0">${this.esc(e.message)}</div>`;
         }
     },
 
@@ -1631,6 +1689,27 @@ const TeepPlan = {
             <div class="col-lg-4">
                 <div class="card mb-3">
                     <div class="card-header">
+                        <h3 class="card-title"><i class="ti ti-cloud-upload me-2"></i>Add to corpus</h3>
+                        <div class="card-actions"><span class="badge bg-primary-lt">RAG · agent reacts</span></div>
+                    </div>
+                    <div class="card-body">
+                        <div id="exec-drop" class="border border-2 border-dashed rounded p-3 text-center" style="cursor:pointer">
+                            <div class="text-secondary"><i class="ti ti-file-upload" style="font-size:1.5rem"></i></div>
+                            <div class="fw-semibold mt-1">Drop a doc, email or transcript</div>
+                            <div class="text-secondary small">or <span class="text-primary">browse</span> — the agent ingests it and tells you what changes</div>
+                            <input id="exec-file" type="file" accept=".txt,.md,.vtt,.eml,.csv,.json" class="d-none" multiple>
+                        </div>
+                        <textarea id="exec-paste" class="form-control form-control-sm mt-2" rows="2" placeholder="…or paste text"></textarea>
+                        <div class="mt-2 d-flex align-items-center">
+                            <button id="exec-ingest" class="btn btn-primary btn-sm"><i class="ti ti-sparkles me-1"></i>Ingest &amp; react</button>
+                            <span id="exec-upload-flash" class="small text-secondary ms-2"></span>
+                        </div>
+                        <div id="exec-upload-result" class="mt-2"></div>
+                    </div>
+                </div>
+
+                <div class="card mb-3">
+                    <div class="card-header">
                         <h3 class="card-title"><i class="ti ti-inbox me-2"></i>Inbox</h3>
                         <div class="card-actions"><span class="badge bg-secondary-lt">${inboxN} to triage</span></div>
                     </div>
@@ -1664,10 +1743,18 @@ const TeepPlan = {
         if (!this._execWired) {
             this._execWired = true;
             el.addEventListener('click', (e) => {
+                if (e.target.closest('#exec-ingest')) { e.preventDefault(); const ta = document.getElementById('exec-paste'); this.submitExecUpload((ta && ta.value) || '', 'Pasted note'); return; }
+                if (e.target.closest('#exec-drop')) { const fi = document.getElementById('exec-file'); if (fi) fi.click(); return; }
                 const trg = e.target.closest('[data-task]');
                 if (!trg || !el.contains(trg)) return;
                 this.openTask(trg.getAttribute('data-task'));
             });
+            el.addEventListener('change', (e) => {
+                if (e.target && e.target.id === 'exec-file' && e.target.files && e.target.files.length) this._readFilesThenIngest(e.target.files);
+            });
+            el.addEventListener('dragover', (e) => { const z = e.target.closest('#exec-drop'); if (z) { e.preventDefault(); z.classList.add('bg-primary-lt', 'border-primary'); } });
+            el.addEventListener('dragleave', (e) => { const z = e.target.closest('#exec-drop'); if (z) z.classList.remove('bg-primary-lt', 'border-primary'); });
+            el.addEventListener('drop', (e) => { const z = e.target.closest('#exec-drop'); if (z) { e.preventDefault(); z.classList.remove('bg-primary-lt', 'border-primary'); if (e.dataTransfer && e.dataTransfer.files.length) this._readFilesThenIngest(e.dataTransfer.files); } });
         }
     },
 
