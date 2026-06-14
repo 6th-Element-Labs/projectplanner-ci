@@ -1203,7 +1203,7 @@ const TeepPlan = {
     _readFilesThenIngest(files) {
         if (!files || !files.length) return;
         const f = files[0];
-        if (/\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr|pdf|docx)$/i.test(f.name)) {
+        if (/\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr|pdf|docx|pptx)$/i.test(f.name)) {
             this.submitExecFile(f);
             return;
         }
@@ -1749,7 +1749,7 @@ const TeepPlan = {
                             <div class="text-secondary"><i class="ti ti-file-upload" style="font-size:1.5rem"></i></div>
                             <div class="fw-semibold mt-1">Drop a doc, email, transcript or media file</div>
                             <div class="text-secondary small">or <span class="text-primary">browse</span> — audio/video is transcribed, then the agent ingests it and tells you what changes</div>
-                            <input id="exec-file" type="file" accept=".txt,.md,.vtt,.eml,.csv,.json,.pdf,.docx,.m4a,.mp3,.mp4,.wav,.webm,.mov,.m4v,.aac,.ogg,.flac,audio/*,video/*" class="d-none" multiple>
+                            <input id="exec-file" type="file" accept=".txt,.md,.vtt,.eml,.csv,.json,.pdf,.docx,.pptx,.m4a,.mp3,.mp4,.wav,.webm,.mov,.m4v,.aac,.ogg,.flac,audio/*,video/*" class="d-none" multiple>
                         </div>
                         <textarea id="exec-paste" class="form-control form-control-sm mt-2" rows="2" placeholder="…or paste text"></textarea>
                         <div class="mt-2 d-flex align-items-center">
@@ -1883,7 +1883,7 @@ const TeepPlan = {
         if (intakeFile) intakeFile.addEventListener('change', (e) => {
             const f = e.target.files[0];
             if (!f) return;
-            if (/\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr|pdf|docx)$/i.test(f.name)) {
+            if (/\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr|pdf|docx|pptx)$/i.test(f.name)) {
                 this.submitIntakeUpload(f);
                 e.target.value = '';
                 return;

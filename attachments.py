@@ -28,6 +28,25 @@ def _docx(data):
     return "\n".join(p.text for p in document.paragraphs)
 
 
+def _pptx(data):
+    from pptx import Presentation
+    prs = Presentation(io.BytesIO(data))
+    out = []
+    for i, slide in enumerate(prs.slides, 1):
+        out.append("--- slide %d ---" % i)
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                out.append(shape.text_frame.text)
+            if shape.has_table:
+                for row in shape.table.rows:
+                    out.append(" | ".join(c.text for c in row.cells))
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text
+            if notes and notes.strip():
+                out.append("[notes] " + notes)
+    return "\n".join(out)
+
+
 def extract(filename, content_type, data):
     """Text from one attachment, or None if unsupported/unreadable (caller must note it)."""
     fn = (filename or "").lower()
@@ -42,6 +61,8 @@ def extract(filename, content_type, data):
             return _pdf(data)
         if fn.endswith(".docx") or "wordprocessingml" in ct:
             return _docx(data)
+        if fn.endswith(".pptx") or "presentationml" in ct:
+            return _pptx(data)
     except Exception as e:
         log.warning("attachment extract failed for %s (%s): %s", filename, content_type, e)
         return None

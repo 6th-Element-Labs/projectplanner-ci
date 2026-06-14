@@ -74,8 +74,13 @@
     // it explicitly (never removeProperty — logical-prop removal is flaky): mobile = 0,
     // desktop collapsed = the 4.25rem rail, desktop expanded = Tabler's 15rem width.
     var wrap = document.querySelector('.page-wrapper');
-    if (wrap) {
-      var v = !window.matchMedia(DESKTOP).matches ? '0' : (collapsed ? '4.25rem' : '15rem');
+    var aside = document.querySelector('.navbar-vertical');
+    if (wrap && aside) {
+      // Only the desktop fixed sidebar reserves inline-start space. On mobile Tabler
+      // turns the navbar into a normal top bar (position != fixed) with no offset, so
+      // detect by the aside's actual layout rather than a media query.
+      var rail = getComputedStyle(aside).position === 'fixed';
+      var v = !rail ? '0' : (collapsed ? '4.25rem' : '15rem');
       wrap.style.setProperty('margin-inline-start', v, 'important');
     }
   }
