@@ -16,10 +16,10 @@
     <title>Project Maxwell Plan | Taikun Atlas</title>
     <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
-    <link href="taikun-tabler.css?v=4" rel="stylesheet"/>
+    <link href="taikun-tabler.css?v=5" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css so it wins. Old UI preserved at /index-legacy.html. -->
-    <link href="taikun-ui.css?v=4" rel="stylesheet"/>
+    <link href="taikun-ui.css?v=5" rel="stylesheet"/>
     <style>
       .epic-head{cursor:pointer}
       .epic-head .epic-chev{transition:transform .15s ease}
@@ -86,9 +86,9 @@
                 <div class="container-xl">
                     <div class="row g-2 align-items-center">
                         <div class="col-auto">
-                            <button class="btn btn-icon btn-ghost-secondary" data-tk-sidebar-toggle title="Expand sidebar"><i class="ti ti-layout-sidebar-left-expand"></i></button>
+                            <button class="btn btn-icon btn-outline-secondary" data-tk-sidebar-toggle title="Show / hide sidebar" aria-label="Toggle sidebar"><i class="ti ti-layout-sidebar-left-expand"></i></button>
                         </div>
-                        <div class="col text-center">
+                        <div class="col">
                             <div class="page-pretitle">TEEP Barnett · TotalEnergies E&amp;P</div>
                             <h2 class="page-title mb-0">Project Maxwell — Phase-1 Pilot Plan</h2>
                         </div>
@@ -134,7 +134,35 @@
                         </div>
                     </div>
 
-                    <!-- Filter toolbar lives inside the Board tab now (keeps the top clean, like the mock). -->
+                    <!-- Universal filter toolbar — one filter that applies across every tab. -->
+                    <div class="card mb-3">
+                        <div class="card-body py-2">
+                            <div class="row g-2 align-items-center">
+                                <div class="col-12 col-md">
+                                    <div class="input-icon">
+                                        <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                                        <input id="f-search" type="text" class="form-control" placeholder="Search tasks…" autocomplete="off"/>
+                                    </div>
+                                </div>
+                                <div class="col-6 col-md-2"><select id="f-ws" class="form-select"></select></div>
+                                <div class="col-6 col-md-2"><select id="f-owner" class="form-select"></select></div>
+                                <div class="col-6 col-md-2"><select id="f-assignee" class="form-select"></select></div>
+                                <div class="col-6 col-md-2"><select id="f-risk" class="form-select"></select></div>
+                                <div class="col-6 col-md-auto">
+                                    <label class="form-check form-switch m-0">
+                                        <input id="f-blocking" class="form-check-input" type="checkbox"/>
+                                        <span class="form-check-label">Blocking only</span>
+                                    </label>
+                                </div>
+                                <div class="col-6 col-md-auto">
+                                    <label class="form-check form-switch m-0">
+                                        <input id="f-hidedone" class="form-check-input" type="checkbox" checked/>
+                                        <span class="form-check-label">Hide done</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
                     <!-- Tabs -->
                     <ul class="nav nav-tabs" role="tablist">
@@ -176,35 +204,6 @@
                     <div class="tab-content">
                         <!-- Board -->
                         <div class="tab-pane" id="tab-board" role="tabpanel">
-                            <!-- board filters (moved here from above the tabs) -->
-                            <div class="card mb-3 mt-2">
-                                <div class="card-body">
-                                    <div class="row g-2 align-items-center">
-                                        <div class="col-12 col-md">
-                                            <div class="input-icon">
-                                                <span class="input-icon-addon"><i class="ti ti-search"></i></span>
-                                                <input id="f-search" type="text" class="form-control" placeholder="Search tasks…" autocomplete="off"/>
-                                            </div>
-                                        </div>
-                                        <div class="col-6 col-md-2"><select id="f-ws" class="form-select"></select></div>
-                                        <div class="col-6 col-md-2"><select id="f-owner" class="form-select"></select></div>
-                                        <div class="col-6 col-md-2"><select id="f-assignee" class="form-select"></select></div>
-                                        <div class="col-6 col-md-2"><select id="f-risk" class="form-select"></select></div>
-                                        <div class="col-6 col-md-auto">
-                                            <label class="form-check form-switch m-0">
-                                                <input id="f-blocking" class="form-check-input" type="checkbox"/>
-                                                <span class="form-check-label">Blocking only</span>
-                                            </label>
-                                        </div>
-                                        <div class="col-6 col-md-auto">
-                                            <label class="form-check form-switch m-0">
-                                                <input id="f-hidedone" class="form-check-input" type="checkbox" checked/>
-                                                <span class="form-check-label">Hide done</span>
-                                            </label>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
                             <div class="row g-3 mt-1" id="board"></div>
                         </div>
                         <!-- Epics (collapsible workstream → phase → tasks) -->
@@ -391,8 +390,8 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@latest/dist/apexcharts.min.js"></script>
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js?v=4"></script>
-    <script src="taikun-ui.js?v=4"></script>
+    <script src="app.js?v=5"></script>
+    <script src="taikun-ui.js?v=5"></script>
     <script>
       // Keep the sidebar nav highlight in sync with the active tab (sidebar + top tabs share tab targets).
       (function () {

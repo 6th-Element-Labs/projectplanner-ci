@@ -1772,7 +1772,7 @@ const TeepPlan = {
         ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking', 'f-hidedone'].forEach((id) => {
             const el = document.getElementById(id);
             const ev = (id === 'f-search') ? 'input' : 'change';
-            el.addEventListener(ev, () => { this.renderBoard(); this.renderTasks(); this.renderEpics(); if (this.isGanttVisible()) this.renderGantt(); });
+            el.addEventListener(ev, () => { this.renderExec(); this.renderBoard(); this.renderTasks(); this.renderEpics(); if (this.isGanttVisible()) this.renderGantt(); });
         });
         document.getElementById('board').addEventListener('click', (e) => {
             const a = e.target.closest('a[data-task]');
