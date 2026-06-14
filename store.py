@@ -371,6 +371,18 @@ def rag_docs_max_id() -> int:
         return c.execute("SELECT COALESCE(MAX(id), 0) FROM rag_docs").fetchone()[0]
 
 
+def all_rag_rows() -> List[Dict[str, Any]]:
+    """rag_docs rows WITH ids — for re-embedding in place (rag.reembed_dynamic)."""
+    with _conn() as c:
+        rows = c.execute("SELECT id, source_kind, label, text FROM rag_docs ORDER BY id").fetchall()
+    return [{"id": r["id"], "source_kind": r["source_kind"], "label": r["label"], "text": r["text"]} for r in rows]
+
+
+def update_rag_embedding(rag_id: int, embedding: List[float]):
+    with _conn() as c:
+        c.execute("UPDATE rag_docs SET embedding=? WHERE id=?", (json.dumps(embedding), rag_id))
+
+
 # ---- Live Inbox queue (Phase 5.5) — triaged inbound artifacts awaiting review ----------
 def _inbox_row(r):
     return {"id": r["id"], "source": r["source"], "external_id": r["external_id"],

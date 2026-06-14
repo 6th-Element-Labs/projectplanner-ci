@@ -20,6 +20,7 @@ CACHE = os.environ.get("PM_RAG_CACHE", os.path.join(_HERE, "rag_cache.json"))
 BASE = os.environ.get("PM_LLM_BASE_URL", "http://127.0.0.1:8095/v1")
 KEY = os.environ.get("PM_LLM_KEY") or os.environ.get("LLM_GATEWAY_MASTER_KEY", "")
 EMBED_MODEL = os.environ.get("PM_LLM_EMBED_MODEL", "taikun-embed")
+PACK_VERSION = 1  # bump when the contextual-packing format changes -> re-embed the corpus
 
 _index = None  # static plan-docs: list of {text, file, embedding}
 _dyn = None    # dynamic ingested artifacts (emails/transcripts/docs), from the rag_docs table
@@ -70,9 +71,25 @@ def _embed(texts):
     return [d["embedding"] for d in r.json()["data"]]
 
 
+def _pack(label, text):
+    """Contextual embedding (Anthropic 'contextual retrieval', lite deterministic form):
+    prefix each chunk with its source label so the topic/source lives INSIDE the vector.
+    The label (e.g. 'email: Total Energy Con Call', 'project-plan.md') is the context.
+    We store the RAW chunk but embed the packed form, so snippets stay clean."""
+    return ("[%s]\n%s" % (label, text)) if label else (text or "")
+
+
+def _pack_query(query):
+    """Query is left RAW. Packing it with a constant project header (ActionEngine packs the
+    per-query resolved asset; we have no such resolution) over-steered retrieval toward the
+    plan docs whose labels resemble that header — A/B-tested. Chunk-side context is enough."""
+    return query or ""
+
+
 def _signature():
     files = sorted(glob.glob(os.path.join(DOCS_DIR, "*.md")))
-    sig = hashlib.md5("".join(f"{os.path.basename(f)}:{int(os.path.getmtime(f))}" for f in files).encode()).hexdigest()
+    raw = "".join(f"{os.path.basename(f)}:{int(os.path.getmtime(f))}" for f in files) + f"|pack={PACK_VERSION}"
+    sig = hashlib.md5(raw.encode()).hexdigest()
     return sig, files
 
 
@@ -93,7 +110,7 @@ def build_index(force=False):
         for ch in _chunks(open(f, encoding="utf-8").read()):
             items.append({"text": ch, "file": name})
     for i in range(0, len(items), 64):
-        for it, e in zip(items[i:i + 64], _embed([x["text"] for x in items[i:i + 64]])):
+        for it, e in zip(items[i:i + 64], _embed([_pack(x["file"], x["text"]) for x in items[i:i + 64]])):
             it["embedding"] = e
     _index = items
     try:
@@ -128,10 +145,29 @@ def add_document(source_kind, label, text):
     chunks = _chunks(text or "")
     if not chunks:
         return 0
-    embs = _embed(chunks)
+    embs = _embed([_pack(label, ch) for ch in chunks])   # embed packed, store raw
     for ch, e in zip(chunks, embs):
         store.add_rag_chunk(source_kind, label, ch, e)
     return len(chunks)
+
+
+def reembed_dynamic():
+    """Re-embed every dynamic rag_docs row with the CURRENT packing (run once after a
+    packing change). Static plan-docs re-embed on the next build_index via the bumped sig."""
+    rows = store.all_rag_rows()  # [{id, label, text}]
+    n = 0
+    for i in range(0, len(rows), 64):
+        batch = rows[i:i + 64]
+        for r, e in zip(batch, _embed([_pack(r["label"], r["text"]) for r in batch])):
+            store.update_rag_embedding(r["id"], e)
+            n += 1
+    global _dyn, _dyn_ver
+    _dyn, _dyn_ver = None, -1
+    try:
+        store.set_meta("rag_pack_version", str(PACK_VERSION))
+    except Exception:
+        pass
+    return n
 
 
 def search(query, top_k=5):
@@ -141,6 +177,6 @@ def search(query, top_k=5):
     pool = list(_index or []) + _load_dyn()
     if not pool:
         return []
-    qe = _embed([query])[0]
+    qe = _embed([_pack_query(query)])[0]
     scored = sorted(((_cos(qe, it["embedding"]), it) for it in pool), key=lambda x: -x[0])[:top_k]
     return [{"file": it["file"], "text": it["text"][:800], "score": round(s, 3)} for s, it in scored]
