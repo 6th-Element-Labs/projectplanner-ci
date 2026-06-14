@@ -27,14 +27,37 @@ _dyn_ver = -1  # rag_docs max id we last loaded — cheap freshness check across
 
 
 def _chunks(text, size=1100, overlap=120):
-    paras = [p.strip() for p in text.split("\n\n") if p.strip()]
+    # Split on blank-line paragraphs, then HARD-WRAP any block longer than `size`. Markdown
+    # transcripts/notes often have no blank lines between speaker turns -> one giant block that
+    # embeds as a single blurry vector and never retrieves. Wrap on line, then char, boundaries;
+    # finally merge small blocks up to `size` with overlap between emitted chunks.
+    blocks = []
+    for para in (text or "").split("\n\n"):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) <= size:
+            blocks.append(para)
+            continue
+        cur = ""
+        for line in para.split("\n"):
+            while len(line) > size:                 # one pathologically long line
+                blocks.append(line[:size])
+                line = line[size:]
+            if cur and len(cur) + len(line) + 1 > size:
+                blocks.append(cur)
+                cur = line
+            else:
+                cur = (cur + "\n" + line) if cur else line
+        if cur:
+            blocks.append(cur)
     out, cur = [], ""
-    for p in paras:
-        if cur and len(cur) + len(p) > size:
+    for b in blocks:
+        if cur and len(cur) + len(b) > size:
             out.append(cur)
-            cur = (cur[-overlap:] + "\n" + p) if overlap else p
+            cur = (cur[-overlap:] + "\n" + b) if overlap else b
         else:
-            cur = (cur + "\n\n" + p) if cur else p
+            cur = (cur + "\n\n" + b) if cur else b
     if cur:
         out.append(cur)
     return out
