@@ -332,132 +332,145 @@ const TeepPlan = {
         this.renderTasks();
     },
 
-    renderTasks() {
-        const el = document.getElementById('tasks-content');
-        if (!el) return;
-        const hideDone = this.isHideDone();
-        // When the owner filter is set to one person, show ONLY their section
-        // (co-owned tasks otherwise leak into every co-owner's group).
-        const sel = document.getElementById('f-assignee');
-        const only = sel ? sel.value : '';
-        const groups = {};
-        this.filtered(true).forEach((t) => {
-            this._peopleOf(t).forEach((p) => {
-                if (only && p !== only) return;
-                (groups[p] || (groups[p] = [])).push(t);
-            });
-        });
-        const names = Object.keys(groups).filter((n) => n !== 'Unassigned')
-            .sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b));
-        if (groups['Unassigned']) names.push('Unassigned');
-        const rank = (s) => (s === 'Done' ? 1 : 0);
-        const html = names.map((name) => {
-            const list = groups[name].slice().sort((a, b) =>
-                rank(a.status) - rank(b.status) ||
-                ((a.finish_date || '9999') < (b.finish_date || '9999') ? -1 : 1));
-            const done = list.filter((t) => t.status === 'Done').length;
-            const visible = hideDone ? list.filter((t) => t.status !== 'Done') : list;
-            if (!visible.length) return '';
-            const isU = name === 'Unassigned';
-            const avatar = isU
-                ? `<span class="avatar avatar-sm avatar-rounded me-2 bg-secondary-lt"><i class="ti ti-user-question"></i></span>`
-                : `<span class="avatar avatar-sm avatar-rounded me-2">${this.esc(this.initials(name))}</span>`;
-            const nextUp = (this.signals && !isU && (this.signals.by_owner_next || {})[name]) || [];
-            const nextHtml = nextUp.length ? `<div class="mb-2 ms-1 small">
-                <span class="text-secondary me-1"><i class="ti ti-player-track-next-filled"></i> Next up:</span>
-                ${nextUp.map((n) => `<a href="#" class="text-reset fw-medium me-3" data-task="${this.esc(n.task_id)}"><span class="status-dot bg-${this.STATUS_COLOR[n.status] || 'secondary'} me-1"></span>${this.esc(n.task_id)} · ${this.esc((n.title || '').slice(0, 42))}</a>`).join('')}
-            </div>` : '';
-            return `
-                <div class="mb-4">
-                    <div class="d-flex align-items-center mb-2">
-                        ${avatar}
-                        <span class="h3 m-0">${this.esc(name)}</span>
-                        <span class="badge bg-secondary-lt ms-2">${visible.length}</span>
-                        <span class="ms-auto text-secondary small">${done}/${list.length} done</span>
-                    </div>
-                    ${nextHtml}
-                    <div class="card">
-                        <div class="list-group list-group-flush">
-                            ${visible.map((t) => this.taskRow(t)).join('')}
-                        </div>
-                    </div>
-                </div>`;
-        }).join('');
-        el.innerHTML = html || `<div class="card"><div class="empty">
-                <div class="empty-icon"><i class="ti ti-checklist"></i></div>
-                <p class="empty-title">Nothing to show</p>
-                <p class="empty-subtitle text-secondary">No tasks match the current filters.</p></div></div>`;
-    },
+    // Back-compat shim: the old flat "ToDo" per-person tab is merged into the
+    // grouped Tasks view (toggle to "Assignee"). Existing callers (signals,
+    // CRUD handlers, filters) keep working and refresh the unified view.
+    renderTasks() { this.renderEpics(); },
 
-    // ---- Epics (collapsible workstream → phase → tasks lens) ------------
-    // Same data, regrouped so the board reads at pilot altitude: each
-    // workstream collapses to one row (count · assignees · progress) and
-    // expands to its tasks grouped by lifecycle phase. Pure presentation.
+    // ---- Tasks (one collapsible grouped lens) --------------------------
+    // Group by WORKSTREAM (→ phase → tasks) or by ASSIGNEE (→ workstream →
+    // tasks) via the in-view toggle; each group collapses to one row
+    // (count · who/where · progress) and expands. Replaces the old flat
+    // "ToDo" per-person tab. Pure presentation; toggle persists per browser.
+    groupMode() {
+        try { return localStorage.getItem('pm_group_mode') === 'assignee' ? 'assignee' : 'workstream'; }
+        catch (e) { return 'workstream'; }
+    },
+    setGroupMode(m) {
+        try { localStorage.setItem('pm_group_mode', m === 'assignee' ? 'assignee' : 'workstream'); } catch (e) {}
+        this.renderEpics();
+    },
     renderEpics() {
         const el = document.getElementById('epics-content');
         if (!el) return;
         const hideDone = this.isHideDone();
         const tasks = this.filtered(true);
-        const order = (this.plan.workstreams || []).map((w) => w.workstream_id);
-        const byWs = {};
-        tasks.forEach((t) => { (byWs[t._wsId] || (byWs[t._wsId] = [])).push(t); });
-        const wsIds = order.filter((id) => byWs[id]);
+        const mode = this.groupMode();                 // 'workstream' | 'assignee'
+
+        const groups = {};
+        tasks.forEach((t) => {
+            (mode === 'assignee' ? this._peopleOf(t) : [t._wsId]).forEach((k) => {
+                (groups[k] || (groups[k] = [])).push(t);
+            });
+        });
+        let keys;
+        if (mode === 'assignee') {
+            keys = Object.keys(groups).filter((n) => n !== 'Unassigned')
+                .sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b));
+            if (groups['Unassigned']) keys.push('Unassigned');
+        } else {
+            keys = (this.plan.workstreams || []).map((w) => w.workstream_id).filter((id) => groups[id]);
+        }
+
         let tTotal = 0, tDone = 0;
-        const cards = wsIds.map((wsId) => {
-            const list = byWs[wsId];
+        const cards = keys.map((key, idx) => {
+            const list = groups[key];
             const done = list.filter((t) => t.status === 'Done').length;
             const total = list.length;
             const visN = hideDone ? (total - done) : total;
             tDone += done; tTotal += total;
-            const wc = this.WS_COLOR[wsId] || 'secondary';
-            const name = (this.wsMeta[wsId] || {}).name || wsId;
-            const people = [...new Set(list.map((t) => t.assignee).filter(Boolean))];
-            const avatars = people.slice(0, 6).map((p) =>
-                `<span class="avatar avatar-xs" title="${this.esc(p)}">${this.esc(this.initials(p))}</span>`).join('');
-            const cid = 'epic-' + wsId;
-            const body = this.PHASES.map((phase) => {
-                const ph = list.filter((t) => t.phase === phase && (!hideDone || t.status !== 'Done'));
-                if (!ph.length) return '';
-                const pc = this.PHASE_COLOR[phase] || 'secondary';
-                return `<div class="d-flex align-items-center mt-2 mb-1">
-                        <span class="status-dot bg-${pc} me-2"></span>
-                        <span class="text-uppercase small fw-medium text-secondary">${this.esc(phase)}</span>
-                        <span class="badge bg-secondary-lt ms-2">${ph.length}</span>
-                    </div>
-                    <div class="card"><div class="list-group list-group-flush">${ph.map((t) => this.taskRow(t)).join('')}</div></div>`;
-            }).join('');
+            const cid = 'epic-' + mode + '-' + idx;
+            const isU = key === 'Unassigned';
+
+            let dotColor, titleHtml, rightHtml;
+            if (mode === 'assignee') {
+                dotColor = isU ? 'secondary' : 'azure';
+                titleHtml = `<span class="h3 m-0">${this.esc(key)}</span>`;
+                const wss = [...new Set(list.map((t) => t._wsId))];
+                rightHtml = `<div class="d-none d-sm-flex gap-1 flex-wrap justify-content-end">${wss.slice(0, 8).map((w) =>
+                    `<span class="badge bg-${this.WS_COLOR[w] || 'secondary'}-lt" title="${this.esc((this.wsMeta[w] || {}).name || w)}">${this.esc(w)}</span>`).join('')}</div>`;
+            } else {
+                dotColor = this.WS_COLOR[key] || 'secondary';
+                titleHtml = `<span class="h3 m-0">${this.esc(key)}</span>
+                    <span class="text-secondary ms-2 d-none d-md-inline">${this.esc((this.wsMeta[key] || {}).name || key)}</span>`;
+                const ppl = [...new Set(list.flatMap((t) => this._peopleOf(t)).filter((p) => p !== 'Unassigned'))];
+                rightHtml = `<div class="avatar-list avatar-list-stacked d-none d-sm-flex">${ppl.slice(0, 6).map((p) =>
+                    `<span class="avatar avatar-xs" title="${this.esc(p)}">${this.esc(this.initials(p))}</span>`).join('')}</div>`;
+            }
+
+            let body;
+            if (mode === 'assignee') {
+                const innerOrder = (this.plan.workstreams || []).map((w) => w.workstream_id);
+                const byWs = {};
+                list.forEach((t) => { (byWs[t._wsId] || (byWs[t._wsId] = [])).push(t); });
+                body = innerOrder.filter((w) => byWs[w]).map((w) => {
+                    const items = byWs[w].filter((t) => !hideDone || t.status !== 'Done');
+                    if (!items.length) return '';
+                    return `<div class="d-flex align-items-center mt-2 mb-1">
+                            <span class="status-dot bg-${this.WS_COLOR[w] || 'secondary'} me-2"></span>
+                            <span class="text-uppercase small fw-medium text-secondary">${this.esc(w)}</span>
+                            <span class="text-secondary ms-2 small d-none d-md-inline">${this.esc((this.wsMeta[w] || {}).name || '')}</span>
+                            <span class="badge bg-secondary-lt ms-2">${items.length}</span>
+                        </div>
+                        <div class="card"><div class="list-group list-group-flush">${items.map((t) => this.taskRow(t)).join('')}</div></div>`;
+                }).join('');
+            } else {
+                body = this.PHASES.map((phase) => {
+                    const ph = list.filter((t) => t.phase === phase && (!hideDone || t.status !== 'Done'));
+                    if (!ph.length) return '';
+                    return `<div class="d-flex align-items-center mt-2 mb-1">
+                            <span class="status-dot bg-${this.PHASE_COLOR[phase] || 'secondary'} me-2"></span>
+                            <span class="text-uppercase small fw-medium text-secondary">${this.esc(phase)}</span>
+                            <span class="badge bg-secondary-lt ms-2">${ph.length}</span>
+                        </div>
+                        <div class="card"><div class="list-group list-group-flush">${ph.map((t) => this.taskRow(t)).join('')}</div></div>`;
+                }).join('');
+            }
+
+            let nextHtml = '';
+            if (mode === 'assignee' && !isU) {
+                const nx = (this.signals && (this.signals.by_owner_next || {})[key]) || [];
+                if (nx.length) nextHtml = `<div class="mb-2 ms-1 small">
+                    <span class="text-secondary me-1"><i class="ti ti-player-track-next-filled"></i> Next up:</span>
+                    ${nx.map((n) => `<a href="#" class="text-reset fw-medium me-3" data-task="${this.esc(n.task_id)}"><span class="status-dot bg-${this.STATUS_COLOR[n.status] || 'secondary'} me-1"></span>${this.esc(n.task_id)} · ${this.esc((n.title || '').slice(0, 42))}</a>`).join('')}
+                </div>`;
+            }
+
             const emptyNote = (!body && hideDone) ? `<div class="text-secondary small px-1 py-2"><i class="ti ti-check me-1"></i>All ${total} task${total !== 1 ? 's' : ''} complete.</div>` : '';
             return `
                 <div class="card mb-2">
                     <div class="card-header epic-head d-flex align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#${cid}" aria-expanded="false" aria-controls="${cid}">
-                        <span class="status-dot bg-${wc} me-2"></span>
-                        <span class="h3 m-0">${this.esc(wsId)}</span>
-                        <span class="text-secondary ms-2 d-none d-md-inline">${this.esc(name)}</span>
+                        <span class="status-dot bg-${dotColor} me-2"></span>
+                        ${titleHtml}
                         <span class="badge bg-secondary-lt ms-2">${visN} task${visN !== 1 ? 's' : ''}</span>
                         ${(total - done) === 0 ? '<span class="badge bg-green-lt ms-1">done</span>' : ''}
                         <div class="ms-auto d-flex align-items-center gap-3">
-                            <div class="avatar-list avatar-list-stacked d-none d-sm-flex">${avatars}</div>
+                            ${rightHtml}
                             <span class="text-secondary small">${done}/${total}</span>
                             <i class="ti ti-chevron-down epic-chev text-secondary"></i>
                         </div>
                     </div>
                     <div class="collapse" id="${cid}">
-                        <div class="card-body py-2">${body}${emptyNote}</div>
+                        <div class="card-body py-2">${nextHtml}${body}${emptyNote}</div>
                     </div>
                 </div>`;
         }).join('');
+
         const hint = (hideDone && tDone) ? ` · hiding ${tDone} done` : '';
+        const seg = (m, icon, label) => `<button class="btn btn-sm ${mode === m ? 'btn-primary' : ''}" data-gmode="${m}"><i class="ti ${icon} me-1"></i>${label}</button>`;
         const head = `<div class="d-flex flex-wrap align-items-center mb-3 gap-2">
-                <span class="h2 m-0">Pilot view</span>
-                <span class="text-secondary">${wsIds.length} workstreams · ${tTotal} tasks · ${tDone} done${hint}</span>
+                <span class="text-secondary">${keys.length} ${mode === 'assignee' ? 'people' : 'workstreams'} · ${tTotal} tasks · ${tDone} done${hint}</span>
+                <span class="text-secondary small ms-2">Group by</span>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Group by">${seg('workstream', 'ti-stack-2', 'Workstream')}${seg('assignee', 'ti-user', 'Assignee')}</div>
                 <div class="ms-auto btn-list">
                     <button class="btn btn-sm" id="epic-expand"><i class="ti ti-chevrons-down me-1"></i>Expand all</button>
                     <button class="btn btn-sm" id="epic-collapse"><i class="ti ti-chevrons-up me-1"></i>Collapse all</button>
                 </div>
             </div>`;
-        el.innerHTML = wsIds.length
+        el.innerHTML = keys.length
             ? (head + cards)
             : `<div class="card"><div class="empty"><p class="empty-title">No tasks match the filters</p></div></div>`;
+        el.querySelectorAll('[data-gmode]').forEach((b) => { b.onclick = () => this.setGroupMode(b.getAttribute('data-gmode')); });
         const setAll = (show) => el.querySelectorAll('.collapse').forEach((c) => {
             const inst = window.bootstrap.Collapse.getOrCreateInstance(c, { toggle: false });
             show ? inst.show() : inst.hide();
