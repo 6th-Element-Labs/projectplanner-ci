@@ -17,7 +17,11 @@ import store
 BASE = os.environ.get("PM_LLM_BASE_URL", "http://127.0.0.1:8095/v1")
 KEY = os.environ.get("PM_LLM_KEY") or os.environ.get("LLM_GATEWAY_MASTER_KEY", "")
 CHAT_MODEL = os.environ.get("PM_LLM_CHAT_MODEL", "taikun-chat")
-MAX_ITERS = 6
+# Tool-loop budgets. Interactive chat stays snappy at 6; inbound triage (a call transcript,
+# forwarded thread, or document touching many tasks) needs more grounding+propose turns, so it
+# gets a larger budget. Both are env-overridable for tuning without a redeploy.
+MAX_ITERS = int(os.environ.get("PM_AGENT_ITERS", "6"))
+TRIAGE_ITERS = int(os.environ.get("PM_TRIAGE_ITERS", "14"))
 
 TOOLS = [
     {"type": "function", "function": {
@@ -160,9 +164,10 @@ def _system(task):
     )
 
 
-def _chat(messages):
+def _chat(messages, tool_choice="auto"):
     # No temperature: gpt-5.x only supports the default (1). Add back only for models that allow it.
-    body = {"model": CHAT_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": "auto"}
+    # tool_choice="none" forces a tool-free turn (used to flush a final summary when out of steps).
+    body = {"model": CHAT_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": tool_choice}
     r = httpx.post(f"{BASE}/chat/completions", headers={"Authorization": f"Bearer {KEY}"}, json=body, timeout=120)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]
@@ -235,11 +240,13 @@ def _search_tasks(args):
     return out[:60]
 
 
-def run(task, message, history=None, system=None):
+def run(task, message, history=None, system=None, max_iters=None):
     """task=None runs the PLAN-WIDE agent; a task dict runs the per-task agent; pass
-    `system` to override the prompt (used by triage)."""
+    `system` to override the prompt (used by triage). `max_iters` overrides the tool-loop
+    budget — triage passes a larger one since inbound calls/threads need more grounding turns."""
     if system is None:
         system = _system(task) if task else _system_global()
+    iters = max_iters or MAX_ITERS
     msgs = [{"role": "system", "content": system}]
     for h in (history or []):
         if h.get("content"):
@@ -249,7 +256,17 @@ def run(task, message, history=None, system=None):
     sources, proposals, new_tasks, last = [], [], [], None
     recipients = None
     dispatch_targets = []
-    for _ in range(MAX_ITERS):
+    for i in range(iters):
+        # On the final budgeted turn, stop the model from spending it on yet another search:
+        # tell it to commit any remaining proposals and wrap up. Without this, a long artifact
+        # (e.g. a call transcript touching many tasks) burns the whole budget grounding and
+        # returns "(reached step limit)" with zero proposals.
+        if i == iters - 1:
+            msgs.append({"role": "system", "content":
+                         "You are on your LAST step. Do NOT call read-only tools (doc_search/"
+                         "search_tasks/get_task/plan_signals) again. Make any remaining propose_* "
+                         "(and set_recipients/dispatch_to_dev) calls the message clearly implies, "
+                         "then write your final summary."})
         m = _chat(msgs)
         last = m
         tcs = m.get("tool_calls")
@@ -345,8 +362,23 @@ def run(task, message, history=None, system=None):
             else:
                 content = "unknown tool"
             msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
-    return _result((last or {}).get("content") or "(reached step limit)", proposals, new_tasks, sources,
-                   recipients, dispatch_targets)
+    # Budget exhausted with tool calls still pending. Force ONE tool-free closing turn so the user
+    # always gets a real summary (and we keep whatever proposals were already staged), instead of
+    # the old "(reached step limit)" dead-end that surfaced as "No task changes detected".
+    answer = ""
+    try:
+        answer = (_chat(msgs, tool_choice="none").get("content") or "").strip()
+    except Exception:
+        pass
+    if not answer:
+        answer = ((last or {}).get("content") or "").strip()
+    if not answer:
+        answer = ("I reviewed this but ran out of analysis steps before finishing. "
+                  + (f"I staged {len(proposals)} proposed change(s) — review them below, then re-send "
+                     "or ask a focused follow-up so I can continue."
+                     if proposals else
+                     "No changes were staged yet — re-send or ask a focused follow-up so I can finish."))
+    return _result(answer, proposals, new_tasks, sources, recipients, dispatch_targets)
 
 
 def _result(answer, proposals, new_tasks, sources, recipients=None, dispatch_targets=None):
@@ -379,7 +411,10 @@ def _system_triage(applied_mode=False, headers=None):
         "in the board + docs (doc_search; the message itself is already indexed). \n"
         "2) MAKE the plan changes the message clearly and directly implies, via the propose_* tools.\n\n"
         "Reason carefully and DO NOT keyword-match:\n"
-        "- Ground every claim with search_tasks/get_task before acting; resolve which task(s) it refers to.\n"
+        "- The CURRENT BOARD above already lists EVERY task — use it to resolve which task(s) the message "
+        "refers to; do NOT spend steps re-searching for tasks you can already see. Call get_task only when "
+        "you need a task's full description / exit-criteria / activity to judge it, and doc_search only for "
+        "plan facts not on the board. Spend the budget DECIDING and PROPOSING, not browsing.\n"
         "- Before CLOSING a task (status Done), read its exit_criteria/deliverable and confirm the message "
         "ACTUALLY satisfies them — 'sounds done' is not 'done'. If unsure which task or whether it's truly "
         "done, do NOT change it; ask in your reply.\n"
@@ -409,4 +444,4 @@ def triage(kind, title, text, applied_mode=False, headers=None):
     """Triage an inbound artifact against the plan. Returns {answer(summary), proposals, new_tasks,
     recipients, sources}. headers={from,to,cc,date} lets the agent reply-all / route to named people."""
     artifact = f"INBOUND {kind.upper()}" + (f" — {title}" if title else "") + ":\n\n" + (text or "")
-    return run(None, artifact, system=_system_triage(applied_mode, headers))
+    return run(None, artifact, system=_system_triage(applied_mode, headers), max_iters=TRIAGE_ITERS)
