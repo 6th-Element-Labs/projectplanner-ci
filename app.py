@@ -201,16 +201,33 @@ async def clear_plan_chat(session: str = "plan"):
     return {"cleared": session}
 
 
+def _queue_triage(res, source, subject):
+    """Persist a triage result into the Action Queue (Inbox) as a pending item so its proposed
+    changes survive reload and are bulk-confirmable in one place — not just ephemeral chat cards.
+    Only queues when there's something to act on. Mutates + returns `res` with inbox_id."""
+    try:
+        if res and ((res.get("proposals")) or (res.get("new_tasks"))):
+            triage = {"proposals": res.get("proposals", []), "new_tasks": res.get("new_tasks", []),
+                      "sources": res.get("sources", []), "summary": res.get("summary", "")}
+            res["inbox_id"] = store.add_inbox_item(
+                source, source + "-" + os.urandom(6).hex(), "", subject or source,
+                res.get("summary", ""), triage)
+    except Exception:
+        pass  # queueing is best-effort; the chat cards still work
+    return res
+
+
 @app.post("/api/intake")
 async def intake_artifact(body: dict = Body(...)):
     """Ingest an artifact (transcript/email/document) into RAG + triage it against the plan.
-    Returns {summary, proposals, new_tasks, sources, ingested_chunks} — propose-to-confirm."""
+    Returns {summary, proposals, new_tasks, sources, ingested_chunks, inbox_id} — propose-to-confirm."""
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text required")
     try:
-        return await asyncio.to_thread(
+        res = await asyncio.to_thread(
             intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text)
+        return _queue_triage(res, body.get("kind") or "note", body.get("title") or "")
     except Exception as e:
         raise HTTPException(502, f"intake error: {e}")
 
@@ -244,7 +261,7 @@ async def intake_upload(file: UploadFile = File(...), kind: str = Form("document
         raise HTTPException(502, f"intake error: {e}")
     res["transcribed"] = media
     res["chars"] = len(text)
-    return res
+    return _queue_triage(res, "transcript" if media else "upload", label)
 
 
 # ---- Live Inbox (Phase 5.5) -------------------------------------------------
@@ -255,14 +272,63 @@ async def get_inbox(status: str = None):
 
 @app.post("/api/inbox/{item_id}/confirm")
 async def confirm_inbox(item_id: int, body: dict = Body(default={})):
+    """Apply the given proposals/new_tasks (default: all of the item's). `keep_proposals` /
+    `keep_new_tasks` are held back and the item STAYS pending with just those (used to bulk-
+    confirm the safe changes while holding status->Done items that still need evidence).
+    Edited proposals are honored — the client sends the modified field values to apply."""
     item = store.get_inbox_item(item_id)
     if not item:
         raise HTTPException(404, "no such inbox item")
     tri = item.get("triage") or {}
     applied = inbox_mod.apply(body.get("proposals", tri.get("proposals", [])),
                               body.get("new_tasks", tri.get("new_tasks", [])))
-    store.set_inbox_status(item_id, "confirmed")
-    return {"applied": applied}
+    keep_p = body.get("keep_proposals") or []
+    keep_n = body.get("keep_new_tasks") or []
+    tri["applied"] = applied
+    if keep_p or keep_n:
+        tri["proposals"], tri["new_tasks"] = keep_p, keep_n
+        store.update_inbox_triage(item_id, tri)          # stays pending with the held items
+    else:
+        store.update_inbox_triage(item_id, tri)
+        store.set_inbox_status(item_id, "confirmed")
+    return {"applied": applied, "remaining": len(keep_p) + len(keep_n)}
+
+
+@app.post("/api/inbox/confirm_all")
+async def confirm_all_inbox(body: dict = Body(default={})):
+    """Bulk-confirm pending queue items. safe_only=True applies everything EXCEPT status->Done
+    proposals (which need acceptance evidence), holding those back so the item stays pending."""
+    safe_only = bool(body.get("safe_only"))
+    ids = body.get("ids")
+    items = store.list_inbox("pending", limit=500)
+    if ids:
+        idset = set(ids)
+        items = [it for it in items if it["id"] in idset]
+    tot = {"items": 0, "updated": 0, "created": 0, "held": 0}
+    for it in items:
+        tri = it.get("triage") or {}
+        props = tri.get("proposals", []) or []
+        nts = tri.get("new_tasks", []) or []
+        if safe_only:
+            apply_p = [p for p in props if (p.get("status") or "") != "Done"]
+            keep_p = [p for p in props if (p.get("status") or "") == "Done"]
+        else:
+            apply_p, keep_p = props, []
+        if not (apply_p or nts):
+            continue
+        applied = inbox_mod.apply(apply_p, nts)
+        tri["applied"] = applied
+        tot["items"] += 1
+        tot["updated"] += len(applied.get("updated", []))
+        tot["created"] += len(applied.get("created", []))
+        tot["held"] += len(keep_p)
+        if keep_p:
+            tri["proposals"], tri["new_tasks"] = keep_p, []
+            store.update_inbox_triage(it["id"], tri)
+        else:
+            store.update_inbox_triage(it["id"], tri)
+            store.set_inbox_status(it["id"], "confirmed")
+    return tot
 
 
 @app.post("/api/inbox/{item_id}/dismiss")

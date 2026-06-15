@@ -430,6 +430,13 @@ def set_inbox_status(item_id: int, status: str):
         c.execute("UPDATE inbox SET status=? WHERE id=?", (status, item_id))
 
 
+def update_inbox_triage(item_id: int, triage: Dict[str, Any]):
+    """Rewrite an item's stored triage JSON — used after a PARTIAL confirm so the proposals
+    that were held back (e.g. status->Done awaiting evidence) stay in the queue."""
+    with _conn() as c:
+        c.execute("UPDATE inbox SET triage=? WHERE id=?", (json.dumps(triage or {}), item_id))
+
+
 def inbox_pending_count() -> int:
     with _conn() as c:
         return c.execute("SELECT COUNT(*) FROM inbox WHERE status='pending'").fetchone()[0]

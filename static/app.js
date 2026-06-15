@@ -1426,7 +1426,7 @@ const TeepPlan = {
                 html += newTasks.map((t) => `<div class="d-flex align-items-start mb-1"><i class="ti ti-plus text-green mt-1 me-2"></i><div class="small">${this.esc(t.title || t.summary || t.task || '')}</div></div>`).join('');
             }
             if (!props.length && !newTasks.length) html += '<div class="text-secondary small">No task changes detected — ingested into the corpus for reference.</div>';
-            html += '<div class="mt-2"><a href="#tab-ask" data-bs-toggle="tab" class="btn btn-sm btn-outline-primary"><i class="ti ti-sparkles me-1"></i>Review &amp; confirm in Ask Taikun</a></div>';
+            html += '<div class="mt-2"><a href="#tab-inbox" data-bs-toggle="tab" class="btn btn-sm btn-primary"><i class="ti ti-checklist me-1"></i>Review &amp; confirm in the Action Queue</a></div>';
             html += '</div></div>';
             if (out) out.innerHTML = html;
             const paste = document.getElementById('exec-paste'); if (paste) paste.value = '';
@@ -1578,13 +1578,17 @@ const TeepPlan = {
         }
     },
 
-    // ---- Inbox (Live Inbox: email-triaged review queue) -----------------
+    // ---- Action Queue (universal review queue — every triage source lands here) -----
     async initInbox() {
         try {
             const data = await (await fetch('api/inbox')).json();
+            this.inboxItems = data.items || [];
             this._renderInboxBadge(data.pending || 0);
-            this.renderInbox(data.items || []);
-        } catch (e) { /* leave hint */ }
+            this.renderInbox(this.inboxItems);
+        } catch (e) {
+            const el = document.getElementById('inbox-content');
+            if (el) el.innerHTML = '<div class="text-secondary small">Queue unavailable — the plan API is unreachable.</div>';
+        }
     },
 
     _renderInboxBadge(n) {
@@ -1597,62 +1601,166 @@ const TeepPlan = {
         } else if (b) { b.remove(); }
     },
 
+    QUEUE_FILTERS: [
+        { key: 'all', label: 'All', icon: 'ti-list-details' },
+        { key: 'evidence', label: 'Needs evidence', icon: 'ti-alert-triangle' },
+        { key: 'status', label: 'Status', icon: 'ti-progress-check' },
+        { key: 'dates', label: 'Dates', icon: 'ti-calendar-event' },
+        { key: 'new', label: 'New tasks', icon: 'ti-plus' },
+    ],
+
+    // A proposal "needs evidence" if it would CLOSE a task (status -> Done): direction can be
+    // confirmed in bulk, but closing needs acceptance evidence, so we hold those separately.
+    _needsEvidence(p) { return !!(p && p.status === 'Done'); },
+
+    _propMatchesFilter(p, f) {
+        switch (f) {
+            case 'evidence': return this._needsEvidence(p);
+            case 'dates': return !!(p.start_date || p.finish_date);
+            case 'status': return !!p.status && !this._needsEvidence(p);
+            case 'new': return false;
+            default: return true;   // 'all'
+        }
+    },
+
+    _srcMeta(source) {
+        const s = (source || '').toLowerCase();
+        if (s.indexOf('transcript') >= 0) return { icon: 'ti-microphone', label: 'Call' };
+        if (s.indexOf('email') >= 0) return { icon: 'ti-mail', label: 'Email' };
+        if (s.indexOf('note') >= 0 || s.indexOf('paste') >= 0) return { icon: 'ti-clipboard-text', label: 'Note' };
+        if (s.indexOf('upload') >= 0 || s.indexOf('document') >= 0) return { icon: 'ti-file-text', label: 'Upload' };
+        return { icon: 'ti-inbox', label: source || 'Item' };
+    },
+
+    _queueCounts() {
+        let items = 0, props = 0, evidence = 0, news = 0;
+        (this.inboxItems || []).filter((it) => it.status === 'pending').forEach((it) => {
+            const tri = it.triage || {}; items++;
+            (tri.proposals || []).forEach((p) => { props++; if (this._needsEvidence(p)) evidence++; });
+            news += (tri.new_tasks || []).length;
+        });
+        return { items, props, evidence, news, actions: props + news, safe: props + news - evidence };
+    },
+
     renderInbox(items) {
         const el = document.getElementById('inbox-content');
         if (!el) return;
-        if (!items.length) {
-            el.classList.add('text-secondary');
-            el.innerHTML = 'Nothing yet. Email <strong>plan@taikunai.com</strong> (once connected) — the agent acts on it autonomously and replies, and a log of what it did shows here. Use <em>Simulate email</em> to try it now.';
-            return;
-        }
         el.classList.remove('text-secondary');
-        el.innerHTML = items.map((it) => this._inboxItemHtml(it)).join('');
-        items.forEach((it) => this._wireInboxItem(it));
+        const all = items || this.inboxItems || [];
+        const pending = all.filter((it) => it.status === 'pending');
+        const logItems = all.filter((it) => it.status !== 'pending').slice(0, 12);
+        const c = this._queueCounts();
+        const f = this.queueFilter || 'all';
+
+        const bulk = c.actions ? `
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                <button class="btn btn-primary" data-confirm-safe><i class="ti ti-checks me-1"></i>Confirm all safe
+                    <span class="badge bg-white text-primary ms-1">${c.safe}</span></button>
+                <button class="btn btn-outline-primary" data-confirm-all>Confirm everything (${c.actions})</button>
+                <span class="text-secondary small ms-1">${c.items} item${c.items !== 1 ? 's' : ''} · ${c.actions} pending action${c.actions !== 1 ? 's' : ''}${c.evidence ? ` · <span class="text-orange fw-medium">${c.evidence} need evidence</span>` : ''}</span>
+            </div>` : '';
+
+        const filters = `<div class="btn-group btn-group-sm mb-3" role="group">` +
+            this.QUEUE_FILTERS.map((q) => `<button type="button" class="btn ${q.key === f ? 'btn-primary' : 'btn-outline-secondary'}" data-qfilter="${q.key}"><i class="ti ${q.icon} me-1"></i>${q.label}</button>`).join('') + `</div>`;
+
+        const cards = pending.map((it) => this._inboxItemHtml(it, f)).filter(Boolean).join('');
+        const emptyPending = cards ? '' : (c.actions
+            ? `<div class="text-secondary small py-3">Nothing in the “${this.QUEUE_FILTERS.find((q) => q.key === f).label}” lane.</div>`
+            : `<div class="empty py-4"><div class="empty-icon"><i class="ti ti-checks"></i></div><p class="empty-title">Queue is clear</p><p class="empty-subtitle text-secondary">Upload a call, paste notes, or forward an email — the agent's proposed plan changes land here to review and confirm in bulk.</p></div>`);
+
+        const logHtml = logItems.length
+            ? `<div class="hr-text text-secondary mt-4 mb-2">Recently actioned</div>${logItems.map((it) => this._inboxItemHtml(it, 'all')).join('')}`
+            : '';
+
+        const flash = this._queueFlash
+            ? `<div class="alert alert-success py-2 px-3 small mb-3"><i class="ti ti-checks me-1"></i>${this.esc(this._queueFlash)}</div>` : '';
+        this._queueFlash = null;
+        el.innerHTML = flash + bulk + (c.actions ? filters : '') + cards + emptyPending + logHtml;
+
+        const sb = el.querySelector('[data-confirm-safe]'); if (sb) sb.addEventListener('click', () => this.confirmAll(true));
+        const ab = el.querySelector('[data-confirm-all]'); if (ab) ab.addEventListener('click', () => this.confirmAll(false));
+        el.querySelectorAll('[data-qfilter]').forEach((b) => b.addEventListener('click', () => {
+            this.queueFilter = b.getAttribute('data-qfilter'); this.renderInbox(this.inboxItems);
+        }));
+        pending.forEach((it) => this._wireInboxItem(it));
     },
 
-    _inboxItemHtml(it) {
+    _inboxItemHtml(it, filter) {
+        const f = filter || 'all';
         const tri = it.triage || {};
+        const sm = this._srcMeta(it.source);
         const when = it.received_at ? new Date(it.received_at * 1000).toLocaleString() : '';
-        const chip = it.status === 'applied' ? '<span class="badge bg-green-lt">Acted</span>'
-            : it.status === 'pending' ? '<span class="badge bg-yellow-lt">Pending</span>'
-                : `<span class="badge bg-secondary-lt">${this.esc(it.status)}</span>`;
-        let bodyHtml;
+
         if (it.status === 'pending') {
-            const propRows = (tri.proposals || []).map((p, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-iprow="${idx}">
-                    <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
-                    <div class="flex-fill">${this._propChips(p)}</div>
-                    <button class="btn btn-sm btn-ghost-secondary p-1" data-ipdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
-                </div>`).join('');
-            const ntRows = (tri.new_tasks || []).map((t, idx) => `<div class="d-flex align-items-center gap-2 py-1" data-introw="${idx}">
-                    <span class="badge bg-green-lt">new</span><span class="badge bg-azure-lt">${this.esc(t.workstream_id)}</span>
-                    <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
-                    <button class="btn btn-sm btn-ghost-secondary p-1" data-intdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
-                </div>`).join('');
-            bodyHtml = `${(propRows || ntRows) ? `<div class="my-2">${propRows}${ntRows}</div>` : '<div class="text-secondary small my-2">No proposed changes.</div>'}
-                <div><button class="btn btn-primary btn-sm" data-iconfirm><i class="ti ti-checks me-1"></i>Confirm selected</button>
-                <button class="btn btn-sm" data-idismiss>Dismiss</button>
-                <span class="small text-secondary ms-2" data-istatus></span></div>`;
-        } else {
-            const a = tri.applied || {};
-            const u = a.updated || [], c = a.created || [];
-            const rep = tri.reply;
-            const reply = rep ? (rep.sent ? 'replied to sender' : (rep.dry_run ? 'reply: dry-run (SMTP off)' : (rep.error ? 'reply failed' : ''))) : '';
-            const did = (u.length || c.length)
-                ? `${u.length ? 'updated ' + u.map((x) => this.esc(x)).join(', ') : ''}${(u.length && c.length) ? ' · ' : ''}${c.length ? 'created ' + c.map((x) => this.esc(x)).join(', ') : ''}`
-                : 'no task change — answered / ingested for reference';
-            bodyHtml = `<div class="small text-secondary mt-2"><i class="ti ti-checks me-1 text-green"></i>${did}${reply ? ' · ' + reply : ''}</div>`;
+            const props = tri.proposals || [];
+            const nts = tri.new_tasks || [];
+            const propRow = (p, idx) => {
+                const ev = this._needsEvidence(p);
+                return `<div class="list-group-item px-2 py-2" data-iprow="${idx}">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="status-dot bg-${ev ? 'orange' : 'green'} flex-shrink-0"></span>
+                        <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
+                        <div class="flex-fill" data-pchips="${idx}">${this._propChips(p)}</div>
+                        ${ev ? '<span class="badge bg-orange-lt">needs evidence</span>' : ''}
+                        <button class="btn btn-sm btn-ghost-secondary p-1" data-pedit="${idx}" title="Edit"><i class="ti ti-pencil"></i></button>
+                        <button class="btn btn-sm btn-ghost-secondary p-1" data-ipdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+                    </div>
+                    ${p.rationale ? `<div class="text-secondary small mt-1 ms-4">${this.esc(p.rationale)}</div>` : ''}
+                    <div class="mt-2 ms-4 d-none" data-peditor="${idx}"></div>
+                </div>`;
+            };
+            const ntRow = (t, idx) => `<div class="list-group-item px-2 py-2" data-introw="${idx}">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="status-dot bg-azure flex-shrink-0"></span>
+                        <span class="badge bg-azure-lt">new · ${this.esc(t.workstream_id || '?')}</span>
+                        <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
+                        <button class="btn btn-sm btn-ghost-secondary p-1" data-intdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+                    </div>${t.rationale ? `<div class="text-secondary small mt-1 ms-4">${this.esc(t.rationale)}</div>` : ''}
+                </div>`;
+            const propsHtml = (f === 'new') ? '' : props.map((p, idx) => this._propMatchesFilter(p, f) ? propRow(p, idx) : '').join('');
+            const ntsHtml = (f === 'all' || f === 'new') ? nts.map((t, idx) => ntRow(t, idx)).join('') : '';
+            if (!propsHtml && !ntsHtml) return '';   // nothing in this lane for this item → hide its card
+            const nAct = props.length + nts.length;
+            const nEv = props.filter((p) => this._needsEvidence(p)).length;
+            return `<div class="card card-sm mb-2" data-inbox="${it.id}">
+                <div class="card-status-start bg-azure"></div>
+                <div class="card-body">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <span class="avatar avatar-xs rounded bg-azure-lt text-azure"><i class="ti ${sm.icon}"></i></span>
+                        <strong class="text-truncate">${this.esc(it.subject || sm.label)}</strong>
+                        <span class="badge bg-secondary-lt">${this.esc(sm.label)}</span>
+                        <span class="badge bg-yellow-lt">${nAct} action${nAct !== 1 ? 's' : ''}${nEv ? ` · ${nEv} ⚑` : ''}</span>
+                        <span class="ms-auto text-secondary small">${this.esc(when)}</span>
+                    </div>
+                    ${it.summary ? `<details class="mb-2"><summary class="small text-secondary" style="cursor:pointer">Why these changes</summary><div class="small mt-1">${this.md(it.summary)}</div></details>` : ''}
+                    <div class="list-group list-group-flush border rounded">${propsHtml}${ntsHtml}</div>
+                    <div class="mt-2 d-flex flex-wrap gap-2 align-items-center">
+                        <button class="btn btn-primary btn-sm" data-iconfirm-safe><i class="ti ti-checks me-1"></i>Confirm safe</button>
+                        ${nEv ? '<button class="btn btn-outline-primary btn-sm" data-iconfirm-all>Confirm incl. closes</button>' : ''}
+                        <button class="btn btn-sm" data-idismiss>Dismiss</button>
+                        <span class="small text-secondary ms-1" data-istatus></span>
+                    </div>
+                </div></div>`;
         }
+
+        // non-pending → compact log card
+        const a = tri.applied || {};
+        const u = a.updated || [], cr = a.created || [];
+        const did = (u.length || cr.length)
+            ? `${u.length ? 'updated ' + u.map((x) => this.esc(x)).join(', ') : ''}${(u.length && cr.length) ? ' · ' : ''}${cr.length ? 'created ' + cr.map((x) => this.esc(x)).join(', ') : ''}`
+            : 'no task change — ingested for reference';
+        const stChip = (it.status === 'confirmed' || it.status === 'applied')
+            ? `<span class="badge bg-green-lt">${this.esc(it.status)}</span>`
+            : `<span class="badge bg-secondary-lt">${this.esc(it.status)}</span>`;
         return `<div class="card card-sm mb-2" data-inbox="${it.id}">
-            <div class="card-status-start bg-azure"></div>
-            <div class="card-body">
+            <div class="card-body py-2">
                 <div class="d-flex align-items-center gap-2">
-                    <i class="ti ti-mail"></i><strong>${this.esc(it.subject || '(no subject)')}</strong>
-                    <span class="text-secondary small">${this.esc(it.sender || '')}</span>
-                    ${chip}
+                    <span class="avatar avatar-xs rounded bg-secondary-lt"><i class="ti ${sm.icon}"></i></span>
+                    <span class="fw-medium text-truncate">${this.esc(it.subject || sm.label)}</span>
+                    ${stChip}
                     <span class="ms-auto text-secondary small">${this.esc(when)}</span>
                 </div>
-                <div class="small mt-1">${this.mdLite(it.summary || '')}</div>
-                ${bodyHtml}
+                <div class="small text-secondary mt-1 ms-4"><i class="ti ti-checks me-1 text-green"></i>${did}</div>
             </div></div>`;
     },
 
@@ -1671,24 +1779,86 @@ const TeepPlan = {
             const idx = parseInt(b.getAttribute('data-intdrop'), 10); nts[idx] = null;
             const r = card.querySelector(`[data-introw="${idx}"]`); if (r) r.remove();
         }));
+        card.querySelectorAll('[data-pedit]').forEach((b) => b.addEventListener('click', () => {
+            const idx = parseInt(b.getAttribute('data-pedit'), 10);
+            this._togglePropEditor(card, idx, props);
+        }));
+        const confirm = (includeCloses) => {
+            const live = props.filter(Boolean);
+            const apply = includeCloses ? live : live.filter((p) => !this._needsEvidence(p));
+            const keep = includeCloses ? [] : live.filter((p) => this._needsEvidence(p));
+            this.confirmInbox(it.id, apply, nts.filter(Boolean), keep, card);
+        };
+        const cs = card.querySelector('[data-iconfirm-safe]'); if (cs) cs.addEventListener('click', () => confirm(false));
+        const ca = card.querySelector('[data-iconfirm-all]'); if (ca) ca.addEventListener('click', () => confirm(true));
         card.querySelector('[data-idismiss]').addEventListener('click', () => this.dismissInbox(it.id));
-        card.querySelector('[data-iconfirm]').addEventListener('click', () => this.confirmInbox(it.id, props.filter(Boolean), nts.filter(Boolean), card));
     },
 
-    async confirmInbox(id, proposals, new_tasks, card) {
+    _PROP_STATUSES: ['', 'Not Started', 'In Progress', 'Blocked', 'Done'],
+
+    // Inline edit of a queued proposal — mutates the in-memory working copy `props[idx]`; the
+    // edited values are what get sent on Confirm (backend applies whatever fields are present).
+    _togglePropEditor(card, idx, props) {
+        const box = card.querySelector(`[data-peditor="${idx}"]`);
+        if (!box) return;
+        if (!box.classList.contains('d-none')) { box.classList.add('d-none'); box.innerHTML = ''; return; }
+        const p = props[idx] || {};
+        const opts = this._PROP_STATUSES.map((s) => `<option value="${s}"${(p.status || '') === s ? ' selected' : ''}>${s || '— status —'}</option>`).join('');
+        box.innerHTML = `<div class="row g-2">
+            <div class="col-12 col-md-3"><select class="form-select form-select-sm" data-ef="status">${opts}</select></div>
+            <div class="col-6 col-md-3"><input class="form-control form-control-sm" type="date" data-ef="start_date" value="${this.esc(p.start_date || '')}" title="start"></div>
+            <div class="col-6 col-md-3"><input class="form-control form-control-sm" type="date" data-ef="finish_date" value="${this.esc(p.finish_date || '')}" title="finish"></div>
+            <div class="col-12 col-md-3"><input class="form-control form-control-sm" data-ef="assignee" value="${this.esc(p.assignee || '')}" placeholder="owner"></div>
+            <div class="col-12"><input class="form-control form-control-sm" data-ef="title" value="${this.esc(p.title || '')}" placeholder="title (optional)"></div>
+            <div class="col-12"><input class="form-control form-control-sm" data-ef="rationale" value="${this.esc(p.rationale || '')}" placeholder="rationale (optional)"></div>
+            <div class="col-12"><button class="btn btn-sm btn-primary" data-esave><i class="ti ti-check me-1"></i>Save</button>
+                <button class="btn btn-sm" data-ecancel>Cancel</button></div>
+        </div>`;
+        box.classList.remove('d-none');
+        box.querySelector('[data-ecancel]').addEventListener('click', () => { box.classList.add('d-none'); box.innerHTML = ''; });
+        box.querySelector('[data-esave]').addEventListener('click', () => {
+            const tid = props[idx].task_id;
+            box.querySelectorAll('[data-ef]').forEach((inp) => {
+                const k = inp.getAttribute('data-ef'); const v = (inp.value || '').trim();
+                if (v) props[idx][k] = v; else delete props[idx][k];
+            });
+            props[idx].task_id = tid;
+            const chips = card.querySelector(`[data-pchips="${idx}"]`); if (chips) chips.innerHTML = this._propChips(props[idx]);
+            const dot = card.querySelector(`[data-iprow="${idx}"] .status-dot`);
+            if (dot) dot.className = `status-dot bg-${this._needsEvidence(props[idx]) ? 'orange' : 'green'} flex-shrink-0`;
+            box.classList.add('d-none'); box.innerHTML = '';
+        });
+    },
+
+    async confirmInbox(id, proposals, new_tasks, keep, card) {
         const st = card ? card.querySelector('[data-istatus]') : null;
         if (st) st.textContent = 'Applying…';
         try {
             const res = await fetch(`api/inbox/${id}/confirm`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ proposals, new_tasks }),
+                body: JSON.stringify({ proposals, new_tasks, keep_proposals: keep || [] }),
             });
             const data = await res.json();
             const a = data.applied || {};
-            if (card) card.querySelector('.card-body').innerHTML = `<span class="text-green"><i class="ti ti-checks me-1"></i>Applied — updated ${(a.updated || []).length}, created ${(a.created || []).length}${(a.failed || []).length ? ', failed ' + a.failed.length : ''}</span>`;
+            const held = data.remaining || 0;
+            const n = (a.updated || []).length + (a.created || []).length;
+            this._queueFlash = `Applied ${n} change${n !== 1 ? 's' : ''}${held ? ` · ${held} close(s) held for evidence` : ''}.`;
             await this._reloadBoardData();
             this.initInbox();
         } catch (e) { if (st) st.textContent = 'failed: ' + e.message; }
+    },
+
+    async confirmAll(safeOnly) {
+        try {
+            const res = await fetch('api/inbox/confirm_all', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ safe_only: !!safeOnly }),
+            });
+            const d = await res.json();
+            this._queueFlash = `Applied ${d.updated || 0} update(s) + ${d.created || 0} new task(s) across ${d.items || 0} item(s)${d.held ? ` · ${d.held} close(s) held for evidence` : ''}.`;
+            await this._reloadBoardData();
+            this.initInbox();
+        } catch (e) { /* noop */ }
     },
 
     async dismissInbox(id) {
