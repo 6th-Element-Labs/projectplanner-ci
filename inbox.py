@@ -133,6 +133,28 @@ def _compose_reply(summary, applied):
     return "\n".join(lines)
 
 
+def _compose_review_reply(summary, proposals, new_tasks):
+    """Reply for REVIEW mode (PM_INBOX_AUTONOMOUS=0): nothing applied — tell the forwarder
+    what was QUEUED for their confirmation, with a link to the Action Queue."""
+    lines = [summary or "I reviewed your message."]
+    parts = []
+    for p in (proposals or []):
+        chg = p.get("status") or ("reschedule" if (p.get("start_date") or p.get("finish_date")) else "update")
+        parts.append("  • %s → %s%s" % (p.get("task_id"), chg,
+                                        (" — " + p["rationale"]) if p.get("rationale") else ""))
+    for nt in (new_tasks or []):
+        parts.append("  • NEW (%s): %s" % (nt.get("workstream_id"), nt.get("title")))
+    if parts:
+        lines += ["", "Queued %d change(s) + %d new task(s) for your confirmation — NOTHING applied yet:"
+                  % (len(proposals or []), len(new_tasks or []))]
+        lines += parts
+    else:
+        lines += ["", "No plan changes proposed — filed for reference."]
+    lines += ["", "Review, edit & confirm in the Action Queue: https://plan.taikunai.com",
+              "", "— Maxwell · Project Maxwell assistant"]
+    return "\n".join(lines)
+
+
 def process(source, external_id, sender, subject, text, headers=None):
     """Dedupe -> ingest+triage -> (autonomous) apply + reply-all, else queue. Returns the item.
     headers={from,to,cc,date,message_id} drives recipient routing + threading."""
@@ -155,6 +177,20 @@ def process(source, external_id, sender, subject, text, headers=None):
             try:
                 body = (_compose_reply(result.get("summary"), applied)
                         + _dispatch_note(dispatched) + _quoted_history(headers, text))
+                mid = headers.get("message_id")
+                reply_res = notify.reply(to, _re_subject(subject), body, cc=cc,
+                                         in_reply_to=mid, references=mid)
+            except Exception as e:
+                reply_res = {"error": str(e)}
+    else:
+        # Review mode: nothing applied. Send a private heads-up to the FORWARDER only
+        # (not reply-all — we don't email the original thread about un-confirmed proposals).
+        sender_addr = email.utils.parseaddr(sender or "")[1].strip()
+        if sender_addr and sender_addr.lower() not in _self_addrs():
+            to = [sender_addr]
+            try:
+                body = (_compose_review_reply(result.get("summary"), triage["proposals"],
+                                              triage["new_tasks"]) + _quoted_history(headers, text))
                 mid = headers.get("message_id")
                 reply_res = notify.reply(to, _re_subject(subject), body, cc=cc,
                                          in_reply_to=mid, references=mid)
