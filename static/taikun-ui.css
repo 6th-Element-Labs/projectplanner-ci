@@ -139,3 +139,66 @@ a[data-bs-toggle="modal"]:hover .card{
 
 /* the toggle control itself */
 [data-tk-sidebar-toggle]{ cursor:pointer; }
+
+/* ── §4 · RICH CHAT + MARKDOWN — Ask Taikun bubbles & rendered answers ──────
+   Agent replies are rendered to HTML (App.md) and wrapped in .markdown; chat
+   turns use .tk-msg / .tk-bubble. Works the same in the plan-wide Ask tab and
+   inside the task modal's Activity tab. */
+.tk-msg{ display:flex; gap:.5rem; align-items:flex-start; margin-bottom:.75rem; }
+.tk-msg-user{ flex-direction:row-reverse; }
+.tk-msg .avatar{ flex:0 0 auto; width:1.75rem; height:1.75rem; font-size:.95rem; margin-top:.05rem; }
+.tk-bubble{
+  max-width:88%; padding:.5rem .8rem; border-radius:var(--tblr-border-radius-lg,.85rem);
+  background:#fff; border:1px solid var(--tblr-border-color,#eceef1);
+  box-shadow:0 1px 2px rgba(16,17,20,.04); overflow-wrap:anywhere;
+}
+.tk-msg-bot  .tk-bubble{ border-top-left-radius:.25rem; }
+.tk-bubble-user{
+  background:var(--tblr-primary,#c0392b); border-color:var(--tblr-primary,#c0392b);
+  color:#fff; border-top-right-radius:.25rem;
+}
+.tk-bubble-error{
+  background:rgba(var(--tblr-red-rgb,214,57,57),.08);
+  border-color:rgba(var(--tblr-red-rgb,214,57,57),.35); color:var(--tblr-red,#d63939);
+}
+.tk-sources{ margin-top:.4rem; padding-top:.35rem; border-top:1px dashed var(--tblr-border-color,#eceef1);
+  font-size:.75rem; color:var(--tblr-secondary,#6b7280); }
+
+/* compact, readable prose inside bubbles + digest/inbox cards */
+.markdown{ font-size:.875rem; line-height:1.55; }
+.markdown > :first-child{ margin-top:0; }
+.markdown > :last-child{ margin-bottom:0; }
+.markdown p{ margin:0 0 .55rem; }
+.markdown :where(h1,h2,h3,h4,h5,h6){ margin:.75em 0 .35em; line-height:1.25; font-weight:600; }
+.markdown h1{ font-size:1.2rem; } .markdown h2{ font-size:1.08rem; }
+.markdown h3{ font-size:1rem; }   .markdown h4,.markdown h5,.markdown h6{ font-size:.9rem; }
+.markdown ul,.markdown ol{ margin:.3rem 0 .6rem; padding-left:1.35rem; }
+.markdown li{ margin:.15rem 0; }
+.markdown li > ul,.markdown li > ol{ margin:.15rem 0; }
+.markdown li::marker{ color:var(--tblr-secondary,#6b7280); }
+.markdown a{ color:var(--tblr-primary,#c0392b); text-decoration:underline; text-underline-offset:2px; }
+.markdown code{
+  font-family:var(--tblr-font-monospace,ui-monospace,SFMono-Regular,Menlo,monospace);
+  font-size:.84em; padding:.1em .38em; border-radius:.3rem;
+  background:rgba(192,57,43,.08); color:#a5281c;
+}
+.markdown pre.tk-code{
+  margin:.5rem 0; padding:.7rem .85rem; border-radius:.5rem; overflow:auto; line-height:1.45;
+  background:var(--tblr-bg-surface-secondary,#f6f7f9); border:1px solid var(--tblr-border-color,#eceef1);
+  color:var(--tblr-body-color,#101114);
+}
+.markdown pre.tk-code code{ background:none; color:#a5281c; padding:0; font-size:.82em; }
+.tk-bubble-user .markdown pre.tk-code{ background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.25); }
+.tk-bubble-user .markdown pre.tk-code code{ color:#fff; }
+.markdown blockquote{
+  margin:.5rem 0; padding:.15rem .8rem; color:var(--tblr-secondary,#6b7280);
+  border-left:3px solid var(--tblr-primary,#c0392b);
+}
+.markdown hr{ margin:.7rem 0; border:0; border-top:1px solid var(--tblr-border-color,#eceef1); }
+.markdown table.tk-md-table{ margin:.5rem 0; width:100%; font-size:.84em; }
+.markdown table.tk-md-table th{ background:var(--tblr-bg-surface-secondary,#f6f7f9); font-weight:600; }
+
+/* on the red user bubble, recolor links + inline code for contrast */
+.tk-bubble-user .markdown a{ color:#fff; }
+.tk-bubble-user .markdown code{ background:rgba(255,255,255,.18); color:#fff; }
+.tk-bubble-user .markdown li::marker{ color:rgba(255,255,255,.7); }

@@ -742,7 +742,11 @@ const TeepPlan = {
         if (!log) return;
         const acts = (t.activity || []).filter((a) => a.kind === 'comment' || a.kind === 'chat');
         log.innerHTML = acts.length
-            ? acts.map((a) => `<div class="mb-1"><span class="badge bg-secondary-lt me-1">${this.esc(a.actor)}</span>${this._linkify(this.esc((a.payload && a.payload.text) || ''))}</div>`).join('')
+            ? acts.map((a) => {
+                const txt = (a.payload && a.payload.text) || '';
+                const body = a.kind === 'chat' ? this.md(txt) : this._linkify(this.esc(txt));
+                return `<div class="mb-2 d-flex gap-2 align-items-start"><span class="badge bg-secondary-lt flex-shrink-0">${this.esc(a.actor)}</span><div class="flex-fill min-w-0">${body}</div></div>`;
+            }).join('')
             : '<div class="text-secondary small">No activity yet — comments, agent chats and dispatch events will appear here.</div>';
     },
 
@@ -838,6 +842,168 @@ const TeepPlan = {
         return (s || '').replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank">$1</a>');
     },
 
+    // ---- Markdown rendering (XSS-safe: HTML-escapes first, emits only known tags)
+    // Turns an agent answer into rich, Tabler-styled HTML (wrapped in .markdown).
+    md(src) {
+        if (src === null || src === undefined) return '';
+        const s = this.esc(String(src)).replace(/\r\n?/g, '\n');
+        const lines = s.split('\n');
+        return '<div class="markdown">' + this._mdBlocks(lines, 0, lines.length) + '</div>';
+    },
+    _mdItem(line) {
+        const m = /^(\s*)(?:([-*+])|(\d+)[.)])\s+(.*)$/.exec(line);
+        if (!m) return null;
+        return { indent: m[1].length, ordered: m[3] !== undefined, content: m[4] };
+    },
+    _mdInline(text) {
+        // text is already HTML-escaped; stash code/links behind a sentinel so emphasis
+        // and autolink rules can't touch them, then restore. Sentinel = U+FFF9/U+FFFA
+        // (interlinear annotation controls — never present in real chat text).
+        const stash = [];
+        const hide = (html) => { stash.push(html); return '￹' + (stash.length - 1) + '￺'; };
+        let t = String(text);
+        t = t.replace(/`([^`]+)`/g, (m, c) => hide('<code>' + c + '</code>'));
+        t = t.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;[^"]*&quot;)?\)/g, (m, label, url) => {
+            const safe = /^(https?:|mailto:|\/|#|\.\/|\.\.\/)/i.test(url) ? url : '#';
+            return hide('<a href="' + safe + '" target="_blank" rel="noopener">' + label + '</a>');
+        });
+        t = t.replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)])/g, (m, url) => hide('<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>'));
+        t = t.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
+             .replace(/__([^_]+?)__/g, '<strong>$1</strong>')
+             .replace(/(^|[^*])\*(?!\s)([^*]+?)\*/g, '$1<em>$2</em>')
+             .replace(/~~([^~]+?)~~/g, '<del>$1</del>');
+        t = t.replace(/￹(\d+)￺/g, (m, i) => stash[+i]);
+        return t;
+    },
+    _mdBlocks(lines, start, end) {
+        const out = [];
+        let i = start;
+        while (i < end) {
+            const line = lines[i];
+            if (/^\s*$/.test(line)) { i++; continue; }
+            const fence = /^\s*(```|~~~)/.exec(line);
+            if (fence) {
+                const marker = fence[1];
+                const buf = [];
+                i++;
+                while (i < end && lines[i].trim().slice(0, 3) !== marker) { buf.push(lines[i]); i++; }
+                i++;
+                out.push('<pre class="tk-code"><code>' + buf.join('\n') + '</code></pre>');
+                continue;
+            }
+            const h = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+            if (h) { const lvl = h[1].length; out.push('<h' + lvl + '>' + this._mdInline(h[2]) + '</h' + lvl + '>'); i++; continue; }
+            if (/^\s{0,3}([-*_])\s*(\1\s*){2,}$/.test(line)) { out.push('<hr>'); i++; continue; }
+            if (/^\s{0,3}&gt;\s?/.test(line)) {
+                const buf = [];
+                while (i < end && /^\s{0,3}&gt;\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s{0,3}&gt;\s?/, '')); i++; }
+                out.push('<blockquote>' + this._mdBlocks(buf, 0, buf.length) + '</blockquote>');
+                continue;
+            }
+            if (line.indexOf('|') !== -1 && i + 1 < end &&
+                /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(lines[i + 1]) && lines[i + 1].indexOf('-') !== -1) {
+                const tbl = this._mdTable(lines, i, end);
+                if (tbl) { out.push(tbl.html); i = tbl.next; continue; }
+            }
+            if (this._mdItem(line)) {
+                const lst = this._mdList(lines, i, end);
+                out.push(lst.html); i = lst.next; continue;
+            }
+            const buf = [];
+            while (i < end) {
+                const l = lines[i];
+                if (/^\s*$/.test(l) || /^\s*(```|~~~)/.test(l) || /^\s{0,3}#{1,6}\s/.test(l) ||
+                    /^\s{0,3}&gt;\s?/.test(l) || this._mdItem(l) ||
+                    /^\s{0,3}([-*_])\s*(\1\s*){2,}$/.test(l)) break;
+                buf.push(l.trim());
+                i++;
+            }
+            out.push('<p>' + this._mdInline(buf.join(' ')) + '</p>');
+        }
+        return out.join('');
+    },
+    _mdList(lines, start, end) {
+        const first = this._mdItem(lines[start]);
+        const baseIndent = first.indent;
+        const ordered = first.ordered;
+        const items = [];
+        let i = start;
+        while (i < end) {
+            if (/^\s*$/.test(lines[i])) {
+                let j = i + 1; while (j < end && /^\s*$/.test(lines[j])) j++;
+                const nm = j < end ? this._mdItem(lines[j]) : null;
+                if (nm && nm.indent >= baseIndent) { i = j; continue; }
+                break;
+            }
+            const m = this._mdItem(lines[i]);
+            if (!m || m.indent !== baseIndent) break;
+            const body = [m.content];
+            i++;
+            while (i < end) {
+                if (/^\s*$/.test(lines[i])) {
+                    let j = i + 1; while (j < end && /^\s*$/.test(lines[j])) j++;
+                    if (j < end) {
+                        const ind = lines[j].search(/\S/);
+                        const jm = this._mdItem(lines[j]);
+                        if (ind > baseIndent || (jm && jm.indent > baseIndent)) { body.push(''); i = j; continue; }
+                    }
+                    break;
+                }
+                const cm = this._mdItem(lines[i]);
+                const ind = lines[i].search(/\S/);
+                if (cm && cm.indent <= baseIndent) break;
+                if (!cm && ind <= baseIndent) break;
+                body.push(lines[i]);
+                i++;
+            }
+            items.push(this._mdListItem(body));
+        }
+        const tag = ordered ? 'ol' : 'ul';
+        return { html: '<' + tag + '>' + items.join('') + '</' + tag + '>', next: i };
+    },
+    _mdListItem(body) {
+        const head = body[0];
+        const rest = body.slice(1);
+        let min = Infinity;
+        rest.forEach((l) => { if (l.trim()) min = Math.min(min, l.search(/\S/)); });
+        let inner = '';
+        if (rest.length && min !== Infinity) {
+            const ded = rest.map((l) => (l.trim() ? l.slice(min) : ''));
+            inner = this._mdBlocks(ded, 0, ded.length);
+        }
+        return '<li>' + this._mdInline(head.trim()) + inner + '</li>';
+    },
+    _mdTable(lines, start, end) {
+        const splitRow = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+        const header = splitRow(lines[start]);
+        const align = splitRow(lines[start + 1]).map((c) => {
+            const l = c.startsWith(':'), r = c.endsWith(':');
+            return l && r ? 'center' : r ? 'right' : l ? 'left' : '';
+        });
+        let i = start + 2;
+        const rows = [];
+        while (i < end && lines[i].indexOf('|') !== -1 && lines[i].trim() && !this._mdItem(lines[i])) {
+            rows.push(splitRow(lines[i])); i++;
+        }
+        const sty = (idx) => (align[idx] ? ' style="text-align:' + align[idx] + '"' : '');
+        const th = header.map((c, idx) => '<th' + sty(idx) + '>' + this._mdInline(c) + '</th>').join('');
+        const trs = rows.map((r) => '<tr>' + header.map((u, idx) => '<td' + sty(idx) + '>' + this._mdInline(r[idx] || '') + '</td>').join('') + '</tr>').join('');
+        return { html: '<div class="table-responsive"><table class="table table-sm table-bordered tk-md-table"><thead><tr>' + th + '</tr></thead><tbody>' + trs + '</tbody></table></div>', next: i };
+    },
+
+    // ---- Chat bubbles (shared by the task-modal chat and plan-wide Ask Taikun) --
+    _bubble(role, html, sourcesHtml) {
+        if (role === 'user')
+            return '<div class="tk-msg tk-msg-user"><div class="tk-bubble tk-bubble-user">' + html + '</div></div>';
+        if (role === 'error')
+            return '<div class="tk-msg tk-msg-bot"><span class="avatar avatar-sm rounded-circle bg-red-lt text-red"><i class="ti ti-alert-triangle"></i></span><div class="tk-bubble tk-bubble-error">' + html + '</div></div>';
+        return '<div class="tk-msg tk-msg-bot"><span class="avatar avatar-sm rounded-circle bg-primary-lt text-primary"><i class="ti ti-sparkles"></i></span><div class="tk-bubble">' + html + (sourcesHtml || '') + '</div></div>';
+    },
+    _thinking(id) {
+        return '<div id="' + id + '" class="tk-msg tk-msg-bot"><span class="avatar avatar-sm rounded-circle bg-primary-lt text-primary"><i class="ti ti-sparkles"></i></span>'
+            + '<div class="tk-bubble text-secondary d-flex align-items-center"><span class="spinner-border spinner-border-sm me-2"></span>Maxwell is reading the plan…</div></div>';
+    },
+
     openCreate() {
         const wsOpts = (this.plan.workstreams || []).map((w) =>
             `<option value="${this.esc(w.workstream_id)}">${this.esc(w.workstream_id)} — ${this.esc(w.name)}</option>`).join('');
@@ -878,8 +1044,8 @@ const TeepPlan = {
         const msg = (input.value || '').trim();
         if (!msg) return;
         input.value = '';
-        log.innerHTML += `<div class="mb-1 text-end"><span class="badge bg-blue-lt">you</span> ${this.esc(msg)}</div>`;
-        log.insertAdjacentHTML('beforeend', `<div id="chat-thinking" class="mb-1 text-secondary small"><span class="spinner-border spinner-border-sm me-1"></span>Maxwell is reading the plan…</div>`);
+        log.insertAdjacentHTML('beforeend', this._bubble('user', this.esc(msg)));
+        log.insertAdjacentHTML('beforeend', this._thinking('chat-thinking'));
         log.scrollTop = log.scrollHeight;
         try {
             const res = await fetch(`api/tasks/${encodeURIComponent(id)}/chat`, {
@@ -888,17 +1054,17 @@ const TeepPlan = {
             const data = await res.json().catch(() => ({}));
             const think = document.getElementById('chat-thinking'); if (think) think.remove();
             if (!res.ok) {
-                log.innerHTML += `<div class="mb-1"><span class="badge bg-red-lt">error</span> ${this.esc(data.detail || ('HTTP ' + res.status))}</div>`;
+                log.insertAdjacentHTML('beforeend', this._bubble('error', this.esc(data.detail || ('HTTP ' + res.status))));
                 return;
             }
             const src = (data.sources || []).length
-                ? `<div class="text-secondary small mt-1">sources: ${data.sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
-            log.innerHTML += `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(data.answer)}${src}</div>`;
+                ? `<div class="tk-sources">sources: ${data.sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            log.insertAdjacentHTML('beforeend', this._bubble('assistant', this.md(data.answer), src));
             if (data.proposal) this.renderProposal(id, data.proposal);
             log.scrollTop = log.scrollHeight;
         } catch (e) {
             const think = document.getElementById('chat-thinking'); if (think) think.remove();
-            log.innerHTML += `<div class="mb-1"><span class="badge bg-red-lt">error</span> ${this.esc(e.message)}</div>`;
+            log.insertAdjacentHTML('beforeend', this._bubble('error', this.esc(e.message)));
         }
     },
 
@@ -970,11 +1136,11 @@ const TeepPlan = {
         if (!log) return;
         log.innerHTML = messages.map((m) => {
             if (m.role === 'user')
-                return `<div class="mb-2 text-end"><span class="badge bg-blue-lt">you</span> ${this.esc(m.content)}</div>`;
+                return this._bubble('user', this.esc(m.content));
             const sources = (m.payload && m.payload.sources) || [];
             const src = sources.length
-                ? `<div class="text-secondary small mt-1">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
-            return `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(m.content)}${src}</div>`;
+                ? `<div class="tk-sources">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            return this._bubble('assistant', this.md(m.content), src);
         }).join('');
     },
 
@@ -997,8 +1163,8 @@ const TeepPlan = {
         input.value = '';
         const empty = document.getElementById('ask-empty');
         if (empty) empty.remove();
-        log.insertAdjacentHTML('beforeend', `<div class="mb-2 text-end"><span class="badge bg-blue-lt">you</span> ${this.esc(msg)}</div>`);
-        log.insertAdjacentHTML('beforeend', `<div id="ask-thinking" class="mb-2 text-secondary small"><span class="spinner-border spinner-border-sm me-1"></span>Maxwell is reading the plan…</div>`);
+        log.insertAdjacentHTML('beforeend', this._bubble('user', this.esc(msg)));
+        log.insertAdjacentHTML('beforeend', this._thinking('ask-thinking'));
         this._askScroll();
         try {
             const res = await fetch('api/chat', {
@@ -1009,13 +1175,13 @@ const TeepPlan = {
             const think = document.getElementById('ask-thinking');
             if (think) think.remove();
             if (!res.ok) {
-                log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(data.detail || ('HTTP ' + res.status))}</div>`);
+                log.insertAdjacentHTML('beforeend', this._bubble('error', this.esc(data.detail || ('HTTP ' + res.status))));
                 return;
             }
             const sources = data.sources || [];
             const src = sources.length
-                ? `<div class="text-secondary small mt-1">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
-            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(data.answer)}${src}</div>`);
+                ? `<div class="tk-sources">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            log.insertAdjacentHTML('beforeend', this._bubble('assistant', this.md(data.answer), src));
             const props = (data.proposals && data.proposals.length) ? data.proposals : (data.proposal ? [data.proposal] : []);
             if (props.length === 1) this.renderAskProposal(props[0]);
             else if (props.length > 1) this.renderAskProposals(props);
@@ -1023,7 +1189,7 @@ const TeepPlan = {
         } catch (e) {
             const think = document.getElementById('ask-thinking');
             if (think) think.remove();
-            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(e.message)}</div>`);
+            log.insertAdjacentHTML('beforeend', this._bubble('error', this.esc(e.message)));
         }
     },
 
@@ -1147,15 +1313,15 @@ const TeepPlan = {
         if (flash) flash.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Ingesting + triaging…';
         const log = document.getElementById('ask-log');
         const empty = document.getElementById('ask-empty'); if (empty) empty.remove();
-        log.insertAdjacentHTML('beforeend', `<div class="mb-2 text-end"><span class="badge bg-blue-lt">intake</span> ${this.esc(kind)}${title ? ' · ' + this.esc(title) : ''}</div>`);
+        log.insertAdjacentHTML('beforeend', this._bubble('user', `<span class="badge bg-white text-blue me-1">intake</span>${this.esc(kind)}${title ? ' · ' + this.esc(title) : ''}`));
         this._askScroll();
         try {
             const res = await fetch('api/intake', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, title, text }) });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
             if (flash) flash.textContent = `ingested ${data.ingested_chunks} chunk(s) into the corpus`;
-            const src = (data.sources || []).length ? `<div class="text-secondary small mt-1">sources: ${data.sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
-            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(data.summary)}${src}</div>`);
+            const src = (data.sources || []).length ? `<div class="tk-sources">sources: ${data.sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            log.insertAdjacentHTML('beforeend', this._bubble('assistant', this.md(data.summary), src));
             const props = data.proposals || [];
             if (props.length === 1) this.renderAskProposal(props[0]);
             else if (props.length > 1) this.renderAskProposals(props);
@@ -1164,7 +1330,7 @@ const TeepPlan = {
             this._askScroll();
         } catch (e) {
             if (flash) flash.textContent = '';
-            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(e.message)}</div>`);
+            log.insertAdjacentHTML('beforeend', this._bubble('error', this.esc(e.message)));
         }
     },
 
@@ -1174,7 +1340,7 @@ const TeepPlan = {
         const isMedia = /\.(m4a|mp3|mp4|wav|webm|mov|m4v|aac|ogg|oga|flac|mpeg|mpga|amr)$/i.test(f.name);
         const log = document.getElementById('ask-log');
         const empty = document.getElementById('ask-empty'); if (empty) empty.remove();
-        log.insertAdjacentHTML('beforeend', `<div class="mb-2 text-end"><span class="badge bg-blue-lt">${isMedia ? 'media' : 'file'}</span> ${this.esc(f.name)}</div>`);
+        log.insertAdjacentHTML('beforeend', this._bubble('user', `<span class="badge bg-white text-blue me-1">${isMedia ? 'media' : 'file'}</span>${this.esc(f.name)}`));
         if (flash) flash.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>' + (isMedia ? 'Transcribing &amp; ingesting…' : 'Extracting &amp; ingesting…');
         this._askScroll();
         try {
@@ -1186,8 +1352,8 @@ const TeepPlan = {
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
             if (flash) flash.textContent = `${data.transcribed ? 'transcribed + ' : ''}ingested ${data.ingested_chunks} chunk(s) into the corpus`;
-            const src = (data.sources || []).length ? `<div class="text-secondary small mt-1">sources: ${data.sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
-            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-green-lt">Maxwell</span> ${this.esc(data.summary)}${src}</div>`);
+            const src = (data.sources || []).length ? `<div class="tk-sources">sources: ${data.sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
+            log.insertAdjacentHTML('beforeend', this._bubble('assistant', this.md(data.summary), src));
             const props = data.proposals || [];
             if (props.length === 1) this.renderAskProposal(props[0]);
             else if (props.length > 1) this.renderAskProposals(props);
@@ -1195,7 +1361,7 @@ const TeepPlan = {
             this._askScroll();
         } catch (e) {
             if (flash) flash.textContent = '';
-            log.insertAdjacentHTML('beforeend', `<div class="mb-2"><span class="badge bg-red-lt">error</span> ${this.esc(e.message)}</div>`);
+            log.insertAdjacentHTML('beforeend', this._bubble('error', this.esc(e.message)));
         }
     },
 
@@ -1245,7 +1411,7 @@ const TeepPlan = {
             const newTasks = data.new_tasks || [];
             let html = '<div class="card card-sm"><div class="card-body">'
                 + '<div class="d-flex align-items-center mb-2"><span class="avatar avatar-xs rounded bg-primary-lt text-primary me-2"><i class="ti ti-sparkles"></i></span><span class="fw-semibold">What this changes</span></div>';
-            if (data.summary) html += `<div class="small mb-2">${this.esc(data.summary)}</div>`;
+            if (data.summary) html += `<div class="mb-2">${this.md(data.summary)}</div>`;
             if (props.length) {
                 html += '<div class="subheader mb-1">Proposed task changes</div>';
                 html += props.map((p) => {
@@ -1329,14 +1495,10 @@ const TeepPlan = {
     },
 
     // ---- Pulse (weekly digest) ------------------------------------------
+    // Kept for back-compat — digests, digest history and inbox summaries now use
+    // the full rich renderer (nested lists, headings, code, tables, links).
     mdLite(text) {
-        return (text || '').split('\n').map((line) => {
-            const l = this.esc(line).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-            const m = l.match(/^\s*(?:[-*]|\d+\.)\s+(.*)$/);
-            if (m) return `<div class="ms-3">• ${m[1]}</div>`;
-            if (!l.trim()) return '<div class="mb-2"></div>';
-            return `<div>${l}</div>`;
-        }).join('');
+        return this.md(text);
     },
 
     renderDigest(d, el) {
