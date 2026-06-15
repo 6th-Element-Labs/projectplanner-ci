@@ -386,9 +386,7 @@ const TeepPlan = {
             if (mode === 'assignee') {
                 dotColor = isU ? 'secondary' : 'azure';
                 titleHtml = `<span class="h3 m-0">${this.esc(key)}</span>`;
-                const wss = [...new Set(list.map((t) => t._wsId))];
-                rightHtml = `<div class="d-none d-sm-flex gap-1 flex-wrap justify-content-end">${wss.slice(0, 8).map((w) =>
-                    `<span class="badge bg-${this.WS_COLOR[w] || 'secondary'}-lt" title="${this.esc((this.wsMeta[w] || {}).name || w)}">${this.esc(w)}</span>`).join('')}</div>`;
+                rightHtml = '';
             } else {
                 dotColor = this.WS_COLOR[key] || 'secondary';
                 titleHtml = `<span class="h3 m-0">${this.esc(key)}</span>
@@ -457,11 +455,12 @@ const TeepPlan = {
         }).join('');
 
         const hint = (hideDone && tDone) ? ` · hiding ${tDone} done` : '';
-        const seg = (m, icon, label) => `<button class="btn btn-sm ${mode === m ? 'btn-primary' : ''}" data-gmode="${m}"><i class="ti ${icon} me-1"></i>${label}</button>`;
         const head = `<div class="d-flex flex-wrap align-items-center mb-3 gap-2">
                 <span class="text-secondary">${keys.length} ${mode === 'assignee' ? 'people' : 'workstreams'} · ${tTotal} tasks · ${tDone} done${hint}</span>
-                <span class="text-secondary small ms-2">Group by</span>
-                <div class="btn-group btn-group-sm" role="group" aria-label="Group by">${seg('workstream', 'ti-stack-2', 'Workstream')}${seg('assignee', 'ti-user', 'Assignee')}</div>
+                <label class="form-check form-switch m-0 ms-2">
+                    <input id="gmode-switch" class="form-check-input" type="checkbox"${mode === 'assignee' ? ' checked' : ''}/>
+                    <span class="form-check-label">Group by assignee</span>
+                </label>
                 <div class="ms-auto btn-list">
                     <button class="btn btn-sm" id="epic-expand"><i class="ti ti-chevrons-down me-1"></i>Expand all</button>
                     <button class="btn btn-sm" id="epic-collapse"><i class="ti ti-chevrons-up me-1"></i>Collapse all</button>
@@ -470,7 +469,8 @@ const TeepPlan = {
         el.innerHTML = keys.length
             ? (head + cards)
             : `<div class="card"><div class="empty"><p class="empty-title">No tasks match the filters</p></div></div>`;
-        el.querySelectorAll('[data-gmode]').forEach((b) => { b.onclick = () => this.setGroupMode(b.getAttribute('data-gmode')); });
+        const gs = document.getElementById('gmode-switch');
+        if (gs) gs.onchange = () => this.setGroupMode(gs.checked ? 'assignee' : 'workstream');
         const setAll = (show) => el.querySelectorAll('.collapse').forEach((c) => {
             const inst = window.bootstrap.Collapse.getOrCreateInstance(c, { toggle: false });
             show ? inst.show() : inst.hide();
