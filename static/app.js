@@ -787,44 +787,46 @@ const TeepPlan = {
     },
 
     // Render an `edit` payload ({field: newValue, ...}) as "Field → value" chips.
+    // Inline, badge-free change summary: muted label + emphasized value; status carries a dot.
     _fmtEditPayload(payload) {
-        if (!payload || typeof payload !== 'object') return [];
+        if (!payload || typeof payload !== 'object') return '';
         return Object.keys(payload).map((k) => {
             let v = payload[k];
             if (k === 'is_blocking') v = v ? 'blocking' : 'not blocking';
             else if (k === 'depends_on') { try { v = (Array.isArray(v) ? v : JSON.parse(v || '[]')).join(', ') || 'none'; } catch (e) { /* leave as-is */ } }
-            else if (k === 'description' && typeof v === 'string' && v.length > 60) v = v.slice(0, 60) + '…';
+            else if (k === 'description' && typeof v === 'string' && v.length > 48) v = v.slice(0, 48) + '…';
             const label = this._FIELD_LABELS[k] || k;
-            return `<span class="badge bg-secondary-lt fw-normal me-1 mb-1">${this.esc(label)} <i class="ti ti-arrow-right mx-1 text-secondary"></i><span class="text-body">${this.esc(String(v))}</span></span>`;
-        });
+            const dot = (k === 'status') ? `<span class="status-dot bg-${this.STATUS_COLOR[v] || 'secondary'} me-1"></span>` : '';
+            return `<span class="text-nowrap me-3"><span class="text-secondary">${this.esc(label)}</span> ${dot}<span class="text-body fw-medium">${this.esc(String(v))}</span></span>`;
+        }).join('');
     },
 
-    // One timeline entry — handles agent/user edits, creates, comments, chats, dispatch.
+    // One timeline entry — actor shown by the avatar (no badge); changes as clean inline text.
     _activityRow(a) {
         const m = this._actorMeta(a.actor);
         const when = this._relAge(a.created_at);
         let body;
         if (a.kind === 'edit') {
-            const chips = this._fmtEditPayload(a.payload);
-            body = chips.length ? `<div class="d-flex flex-wrap gap-1 mt-1">${chips.join('')}</div>` : '<span class="text-secondary small">updated</span>';
+            body = this._fmtEditPayload(a.payload) || '<span class="text-secondary">updated</span>';
         } else if (a.kind === 'create') {
-            body = '<span class="text-secondary small">created this task</span>';
+            body = '<span class="text-secondary">Created this task</span>';
         } else if (a.kind === 'dispatch') {
-            body = '<span class="text-secondary small"><i class="ti ti-robot me-1"></i>dispatched to Claude Code</span>';
+            body = '<span class="text-secondary">Dispatched to Claude Code</span>';
         } else if (a.kind === 'chat') {
-            body = `<div class="markdown small">${this.md((a.payload && a.payload.text) || '')}</div>`;
-        } else { // comment / note / anything else
-            body = `<div class="small">${this._linkify(this.esc((a.payload && a.payload.text) || a.kind || ''))}</div>`;
+            body = `<div class="markdown text-body">${this.md((a.payload && a.payload.text) || '')}</div>`;
+        } else { // comment / note
+            body = `<span class="text-body">${this._linkify(this.esc((a.payload && a.payload.text) || ''))}</span>`;
         }
-        return `<div class="d-flex gap-2 align-items-start py-2 border-bottom">
-            <span class="avatar avatar-xs rounded ${m.cls} flex-shrink-0"><i class="ti ${m.icon}"></i></span>
-            <div class="flex-fill min-w-0">
-                <div class="d-flex align-items-center gap-2">
-                    <span class="fw-semibold small">${this.esc(m.label)}</span>
-                    ${m.agent ? '<span class="badge bg-azure-lt">agent</span>' : ''}
-                    <span class="text-secondary small ms-auto">${when} ago</span>
+        return `<div class="list-group-item px-0 py-2">
+            <div class="d-flex gap-2 align-items-start">
+                <span class="avatar avatar-xs rounded-circle ${m.cls} flex-shrink-0 mt-1"><i class="ti ${m.icon}"></i></span>
+                <div class="flex-fill min-w-0">
+                    <div class="d-flex align-items-baseline gap-2">
+                        <span class="fw-medium">${this.esc(m.label)}</span>
+                        <span class="text-secondary small ms-auto">${when} ago</span>
+                    </div>
+                    <div class="small mt-1">${body}</div>
                 </div>
-                ${body}
             </div>
         </div>`;
     },
@@ -832,13 +834,17 @@ const TeepPlan = {
     // Unified activity timeline — newest first. Agent edits, your edits, notes, chats all land here.
     _renderActivity(t) {
         const acts = (t.activity || []).slice().reverse();
-        const html = acts.length ? acts.map((a) => this._activityRow(a)).join('') : null;
         const full = document.getElementById('activity-log');
-        if (full) full.innerHTML = html || '<div class="text-secondary small">No activity yet — agent updates, your edits, notes and dispatch events will appear here.</div>';
+        if (full) full.innerHTML = acts.length
+            ? acts.map((a) => this._activityRow(a)).join('')
+            : '<div class="text-secondary small">No activity yet — agent updates, your edits, notes and dispatch events will appear here.</div>';
         const glance = document.getElementById('details-activity');
-        if (glance) glance.innerHTML = acts.length
-            ? acts.slice(0, 3).map((a) => this._activityRow(a)).join('')
-            : '<div class="text-secondary small">No activity yet.</div>';
+        if (glance) {
+            glance.className = acts.length ? 'list-group list-group-flush' : '';
+            glance.innerHTML = acts.length
+                ? acts.slice(0, 3).map((a) => this._activityRow(a)).join('')
+                : '<div class="text-secondary small">No activity yet.</div>';
+        }
     },
 
     async saveTask(id) {
