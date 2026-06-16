@@ -602,10 +602,26 @@ const TeepPlan = {
                 },
             },
             series: [{ data }],
-            plotOptions: { bar: { horizontal: true, borderRadius: 2, barHeight: this.ganttMode === 'workstream' ? '60%' : '72%' } },
-            dataLabels: { enabled: false },
-            xaxis: { type: 'datetime' },
-            yaxis: { labels: { style: { fontSize: '11px' } } },
+            plotOptions: { bar: { horizontal: true, borderRadius: 3, barHeight: this.ganttMode === 'workstream' ? '55%' : '78%',
+                dataLabels: { hideOverflowingLabels: true, position: 'center' } } },
+            dataLabels: {
+                enabled: true,
+                formatter: (val, opts) => {
+                    const d = opts.w.config.series[0].data[opts.dataPointIndex];
+                    return this.ganttMode === 'workstream' ? `${d.meta.ws} · ${d.meta.count} tasks` : d.meta.id;
+                },
+                style: { fontSize: '10px', fontWeight: 600, colors: ['#fff'], fontFamily: 'inherit' },
+            },
+            xaxis: { type: 'datetime', axisBorder: { show: true, color: '#e6e7e9' }, axisTicks: { show: true } },
+            // left pane: task / workstream names
+            yaxis: { labels: { style: { fontSize: '11px', fontFamily: 'inherit' } } },
+            // alternating row stripes + vertical grid lines (the "lines"), Tabler-toned
+            grid: {
+                borderColor: '#eef0f3', strokeDashArray: 0,
+                row: { colors: ['rgba(15,23,42,.025)', 'transparent'], opacity: 1 },
+                xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } },
+                padding: { left: 8, right: 16 },
+            },
             legend: { show: false },
             tooltip: {
                 custom: ({ dataPointIndex, w }) => {
@@ -1851,22 +1867,28 @@ const TeepPlan = {
         const nSafe = props.length - nEv;
         const nAct = props.length + nts.length;
         const when = it.received_at ? new Date(it.received_at * 1000).toLocaleString() : '';
+        // Confirmed/dismissed items open read-only: show what was applied, no edit/drop/confirm.
+        const isPast = !!(it.status && it.status !== 'pending');
+        const dismissed = it.status === 'dismissed';
+        const ap = tri.applied || {};
+        const apUpd = ap.updated || [], apCr = ap.created || [];
 
         // change row (evidence-table style): marker avatar | id | change pill + rationale + inline editor | hover edit/drop
         const propRow = (p, idx) => {
             const ev = this._needsEvidence(p);
+            const mk = isPast ? { c: 'green', i: 'check' } : (ev ? { c: 'orange', i: 'lock' } : { c: 'green', i: 'check' });
             return `<tr class="tk-evrow" data-iprow="${idx}">
-                <td class="w-1"><span class="avatar avatar-xs bg-${ev ? 'orange' : 'green'}-lt text-${ev ? 'orange' : 'green'} rounded-circle"><i class="ti ti-${ev ? 'lock' : 'check'}"></i></span></td>
+                <td class="w-1"><span class="avatar avatar-xs bg-${mk.c}-lt text-${mk.c} rounded-circle"><i class="ti ti-${mk.i}"></i></span></td>
                 <td style="width:104px"><span class="fw-bold font-monospace">${this.esc(p.task_id)}</span></td>
                 <td>
                     <div class="tk-change" data-pchips="${idx}">${this._propChips(p)}</div>
                     ${p.rationale ? `<div class="text-secondary small mt-1">${this.esc(p.rationale)}</div>` : ''}
-                    <div class="mt-2 d-none" data-peditor="${idx}"></div>
+                    ${isPast ? '' : `<div class="mt-2 d-none" data-peditor="${idx}"></div>`}
                 </td>
-                <td class="text-end w-1"><span class="tk-rowctl btn-list">
+                ${isPast ? '' : `<td class="text-end w-1"><span class="tk-rowctl btn-list">
                     <a href="#" class="btn btn-ghost-secondary btn-icon btn-sm" data-pedit="${idx}" onclick="return false" aria-label="Edit"><i class="ti ti-pencil"></i></a>
                     <a href="#" class="btn btn-ghost-secondary btn-icon btn-sm" data-ipdrop="${idx}" onclick="return false" aria-label="Drop"><i class="ti ti-x"></i></a>
-                </span></td>
+                </span></td>`}
             </tr>`;
         };
         const ntRow = (t, idx) => `<tr class="tk-evrow" data-introw="${idx}">
@@ -1874,9 +1896,9 @@ const TeepPlan = {
                 <td style="width:104px"><span class="fw-bold font-monospace">${this.esc(t.workstream_id || 'NEW')}</span></td>
                 <td><div class="tk-change"><span class="badge bg-azure-lt"><i class="ti ti-plus me-1"></i>new task</span> <span class="fw-medium">${this.esc(t.title)}</span></div>
                     ${t.rationale ? `<div class="text-secondary small mt-1">${this.esc(t.rationale)}</div>` : ''}</td>
-                <td class="text-end w-1"><span class="tk-rowctl btn-list">
+                ${isPast ? '' : `<td class="text-end w-1"><span class="tk-rowctl btn-list">
                     <a href="#" class="btn btn-ghost-secondary btn-icon btn-sm" data-intdrop="${idx}" onclick="return false" aria-label="Drop"><i class="ti ti-x"></i></a>
-                </span></td>
+                </span></td>`}
             </tr>`;
 
         const tableWrap = (rows) => `<div class="table-responsive mb-4"><table class="table table-vcenter mb-0"><tbody>${rows}</tbody></table></div>`;
@@ -1905,8 +1927,24 @@ const TeepPlan = {
                 <span class="avatar avatar-sm bg-azure-lt text-azure rounded-3 flex-shrink-0"><i class="ti ti-info-circle"></i></span>
                 <div class="small text-secondary">Nothing is applied until you confirm. <strong class="text-body">→ Done</strong> closes are held until you confirm them with evidence.</div></div>`;
 
+        // read-only "past" view — what was applied when this item was confirmed/dismissed
+        const appliedBanner = dismissed
+            ? `<div class="bg-secondary-lt rounded-3 p-3 mb-4 small text-secondary"><i class="ti ti-x me-1"></i>Dismissed — no changes were applied.</div>`
+            : ((apUpd.length || apCr.length)
+                ? `<div class="bg-green-lt rounded-3 p-3 mb-4 d-flex gap-3"><span class="avatar avatar-sm bg-green-lt text-green rounded-3 flex-shrink-0"><i class="ti ti-checks"></i></span>
+                    <div class="small text-secondary">${apUpd.length ? `Updated <strong class="text-body font-monospace">${apUpd.map((x) => this.esc(x)).join(', ')}</strong>` : ''}${(apUpd.length && apCr.length) ? ' · ' : ''}${apCr.length ? `Created <strong class="text-body font-monospace">${apCr.map((x) => this.esc(x)).join(', ')}</strong>` : ''}</div></div>`
+                : `<div class="bg-secondary-lt rounded-3 p-3 mb-4 small text-secondary">Ingested for reference — no task changes.</div>`);
+        const pastChanges = props.length ? `<div class="d-flex align-items-center gap-2 mb-2"><span class="status-dot bg-green"></span>
+                <span class="subheader text-uppercase fw-bold text-secondary">Changes applied</span>
+                <span class="badge bg-green-lt">${props.length} change${props.length !== 1 ? 's' : ''}</span></div>${tableWrap(props.map((p, i) => propRow(p, i)).join(''))}` : '';
+        const pastNew = nts.length ? `<div class="d-flex align-items-center gap-2 mb-2"><span class="status-dot bg-azure"></span>
+                <span class="subheader text-uppercase fw-bold text-secondary">Tasks created</span></div>${tableWrap(nts.map((t, i) => ntRow(t, i)).join(''))}` : '';
+        const bodyInner = isPast ? (heroSummary + appliedBanner + pastChanges + pastNew) : (heroSummary + safeSection + evSection + ntSection + safety);
+        const statusBadge = isPast ? `<span class="badge bg-${dismissed ? 'secondary' : 'green'}-lt text-${dismissed ? 'secondary' : 'green'}"><i class="ti ti-${dismissed ? 'x' : 'checks'} me-1"></i>${dismissed ? 'Dismissed' : 'Confirmed'}</span>` : '';
+        const topTone = isPast ? (dismissed ? 'secondary' : 'green') : (nEv ? 'orange' : 'primary');
+
         const root = document.getElementById('queue-modal-content');
-        root.innerHTML = `<div class="card-status-top bg-${nEv ? 'orange' : 'primary'}"></div>
+        root.innerHTML = `<div class="card-status-top bg-${topTone}"></div>
             <div class="modal-header align-items-start">
                 <span class="avatar avatar-lg bg-primary-lt text-primary rounded-3 me-3"><i class="ti ${sm.icon} fs-2"></i></span>
                 <div class="flex-fill">
