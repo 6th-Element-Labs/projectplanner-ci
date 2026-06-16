@@ -36,6 +36,7 @@ import export  # noqa: E402
 import inbox as inbox_mod  # noqa: E402
 import intake  # noqa: E402
 import notify  # noqa: E402
+import rebrand  # noqa: E402
 import signals  # noqa: E402
 import store  # noqa: E402
 
@@ -455,6 +456,34 @@ async def export_xml(workstream: str = None, owner: str = None, risk: str = None
     xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, person))
     return Response(content=xml, media_type="text/xml",
                     headers={"Content-Disposition": 'attachment; filename="project-plan.xml"'})
+
+
+# ---- Deck rebrand (one-stop: drop a .pptx, get it back on-brand) ------------
+_REBRAND_MAX = 80 * 1024 * 1024  # 80 MB — protects the small VM
+
+@app.post("/api/rebrand")
+async def rebrand_deck(file: UploadFile = File(...)):
+    """Upload a .pptx -> download it re-skinned into the Taikun brand. Lossless
+    (media/charts/embeds preserved); runs the in-process rebrand.rebrand_bytes."""
+    name = file.filename or "deck.pptx"
+    if not name.lower().endswith(".pptx"):
+        raise HTTPException(400, "Please upload a PowerPoint .pptx file.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "The uploaded file was empty.")
+    if len(data) > _REBRAND_MAX:
+        raise HTTPException(413, f"File too large (max {_REBRAND_MAX // (1024*1024)} MB).")
+    try:
+        out = await asyncio.to_thread(rebrand.rebrand_bytes, data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Rebrand failed: {e}")
+    base = name[:-5] if name.lower().endswith(".pptx") else name
+    dl = f"{base}-Taikun.pptx"
+    return Response(content=out,
+                    media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    headers={"Content-Disposition": f'attachment; filename="{dl}"'})
 
 
 # Static board UI last, so /api/* and /health win. html=True serves index.html at /.
