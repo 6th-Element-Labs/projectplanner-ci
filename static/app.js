@@ -1247,10 +1247,23 @@ const TeepPlan = {
         }
     },
 
+    _STATUS_TONE: { 'In Progress': 'blue', 'Done': 'green', 'Blocked': 'red', 'Not Started': 'secondary' },
+
+    // Compact, low-badge change summary: ONE colored status pill + quiet label→value text
+    // (description truncated). Replaces the old badge-per-field dump.
     _propChips(p) {
-        const fields = Object.keys(p).filter((k) => !['rationale', 'task_id'].includes(k) && p[k] != null && p[k] !== '');
-        return fields.map((k) => `<span class="badge bg-azure-lt me-1">${this.esc(k)}: ${this.esc(String(p[k]))}</span>`).join('')
-            || '<span class="text-secondary small">no change</span>';
+        const out = [];
+        if (p.status) out.push(`<span class="badge bg-${this._STATUS_TONE[p.status] || 'secondary'}-lt">→ ${this.esc(p.status)}</span>`);
+        const txt = [];
+        if (p.start_date || p.finish_date) txt.push('dates ' + this.esc(p.start_date || '…') + ' → ' + this.esc(p.finish_date || '…'));
+        if (p.assignee || p.owner_person_or_role) txt.push('owner ' + this.esc(p.assignee || p.owner_person_or_role));
+        if (p.owner_org) txt.push('org ' + this.esc(p.owner_org));
+        if (p.title) txt.push('title “' + this.esc(p.title) + '”');
+        if (p.description) txt.push('desc “' + this.esc(p.description.slice(0, 60)) + (p.description.length > 60 ? '…' : '') + '”');
+        if (p.risk_level) txt.push('risk ' + this.esc(p.risk_level));
+        if (p.phase) txt.push('phase ' + this.esc(p.phase));
+        if (txt.length) out.push(`<span class="text-secondary small">${txt.join(' · ')}</span>`);
+        return out.join(' ') || '<span class="text-secondary small">no field change</span>';
     },
 
     renderAskProposals(proposals) {
@@ -1780,14 +1793,14 @@ const TeepPlan = {
         const nAct = props.length + nts.length;
         const nEv = props.filter((p) => this._needsEvidence(p)).length;
         const hay = ((it.subject || '') + ' ' + props.map((p) => p.task_id).join(' ') + ' ' + (it.summary || '')).toLowerCase();
-        const chips = props.slice(0, 3).map((p) => `<span class="badge bg-azure-lt me-1 font-monospace">${this.esc(p.task_id)}</span>`).join('')
-            + (nAct > 3 ? `<span class="text-secondary small">+${nAct - 3}</span>` : '');
+        const ids = props.slice(0, 4).map((p) => this.esc(p.task_id)).join(', ') + (nAct > 4 ? `, +${nAct - 4}` : '');
         return `<tr data-qrow data-qopen="${it.id}" data-hay="${this.esc(hay)}" style="cursor:pointer">
             <td><span class="status-dot bg-${nEv ? 'orange' : 'green'}"></span></td>
             <td><div class="fw-bold text-truncate" style="max-width:420px">${this.esc(it.subject || sm.label)}</div>
                 <div class="text-secondary small">${this.esc(sm.label)} · ${this._relAge(it.received_at)} ago</div></td>
-            <td><span class="badge bg-secondary-lt"><i class="ti ${sm.icon} me-1"></i>${this.esc(sm.label)}</span></td>
-            <td><span class="badge bg-yellow-lt">${nAct} action${nAct !== 1 ? 's' : ''}</span>${nEv ? ` <span class="badge bg-orange-lt">${nEv} ⚑</span>` : ''} ${chips}</td>
+            <td><span class="text-secondary"><i class="ti ${sm.icon} me-1"></i>${this.esc(sm.label)}</span></td>
+            <td><span class="badge bg-secondary-lt">${nAct} action${nAct !== 1 ? 's' : ''}</span>${nEv ? ` <span class="text-orange small">· ${nEv} need evidence</span>` : ''}
+                <div class="text-secondary small font-monospace text-truncate" style="max-width:300px">${ids}</div></td>
             <td class="text-secondary">${this._relAge(it.received_at)}</td>
             <td class="text-end"><a href="#" class="btn btn-primary btn-sm" onclick="return false">Review</a></td>
         </tr>`;
@@ -1867,11 +1880,11 @@ const TeepPlan = {
         document.getElementById('queue-modal-title').innerHTML =
             `<span class="avatar avatar-xs rounded bg-azure-lt text-azure me-2"><i class="ti ${sm.icon}"></i></span>${this.esc(it.subject || sm.label)}`;
         const body = document.getElementById('queue-modal-body');
-        body.innerHTML = `<div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
-                <span class="badge bg-secondary-lt">${this.esc(sm.label)}</span>
-                <span class="badge bg-yellow-lt">${nAct} action${nAct !== 1 ? 's' : ''}</span>
-                ${nEv ? `<span class="badge bg-orange-lt">${nEv} need evidence</span>` : ''}
-                <span class="text-secondary small ms-auto">${it.received_at ? new Date(it.received_at * 1000).toLocaleString() : ''}</span>
+        body.innerHTML = `<div class="d-flex align-items-center gap-2 mb-2 flex-wrap text-secondary small">
+                <span><i class="ti ${sm.icon} me-1"></i>${this.esc(sm.label)}</span>
+                <span>· ${nAct} action${nAct !== 1 ? 's' : ''}</span>
+                ${nEv ? `<span class="text-orange">· ${nEv} need evidence</span>` : ''}
+                <span class="ms-auto">${it.received_at ? new Date(it.received_at * 1000).toLocaleString() : ''}</span>
             </div>
             ${it.summary ? `<div class="markdown small mb-3 p-2 bg-secondary-lt rounded">${this.md(it.summary)}</div>` : ''}
             <div class="list-group list-group-flush border rounded">${props.map((p, i) => propRow(p, i)).join('')}${nts.map((t, i) => ntRow(t, i)).join('')}</div>`;
