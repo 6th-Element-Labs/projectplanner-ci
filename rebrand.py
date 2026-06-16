@@ -2,57 +2,75 @@
 """Deck rebrand — turn ANY .pptx into the Taikun black/red/white theme, in-memory
 and LOSSLESS (no python-pptx round-trip; every chart/image/embed is copied through).
 
-This is opinionated and generic — it does not rely on a fixed list of the source
-deck's hexes. For every slide it:
-  * forces a WHITE background (slide + layout + master bg, and any full-bleed
-    background shape);
-  * reclassifies every color by HSL — any saturated hue -> brand red, near-blacks
-    -> ink, near-whites -> white, neutrals -> a slate/gray ramp;
+For every slide it:
+  * forces a WHITE background (slide + layout + master bg, and full-bleed bg shapes,
+    incl. theme-colored ones);
+  * reclassifies color by HSL+HUE — reds/blues/teals/purples -> brand red, but
+    GREEN and AMBER survive (status colors a matrix/dashboard needs), near-black ->
+    ink, near-white -> white, neutrals -> a slate/gray ramp;
   * flips fonts to Poppins (headings) / Roboto (body);
-  * fixes text contrast both ways — light text that lands on the new white
-    background becomes ink; text on a dark/red fill becomes white; text sitting on
-    a photo is left alone.
+  * fixes contrast both ways (light text on the new white bg -> ink; text on a
+    dark/red fill -> white; text over a photo left alone);
+  * stamps the Taikun logo bottom-left on every slide.
 
 Photos/charts/embeds are untouched (raster + ppt/charts/* are not restyled).
 """
 import io
+import os
 import zipfile
 from lxml import etree
 
 A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+PKGREL = 'http://schemas.openxmlformats.org/package/2006/relationships'
+CT = 'http://schemas.openxmlformats.org/package/2006/content-types'
+IMGREL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image'
 def _a(t): return '{%s}%s' % (A, t)
 def _p(t): return '{%s}%s' % (P, t)
 
 # Brand palette
 RED='C0392B'; RED2='E04434'; INK='0B1020'; SLATE='5B6472'; SOFT='F5F6F8'
-HAIR='E8EAEE'; LGRAY='D7DBE0'; WHITE='FFFFFF'
+HAIR='E8EAEE'; LGRAY='D7DBE0'; WHITE='FFFFFF'; GREEN='1F7A4D'; AMBER='C77D11'
 
 BODY_REPLACE = {'Calibri','Arial','Work Sans','Times New Roman','Calibri Light',
                 'Helvetica','Helvetica Neue','Verdana','Tahoma','Segoe UI'}
-# never recolor: white + the macOS traffic-light dots (window-chrome mockups)
-PRESERVE = {'FFFFFF','FF5F57','FEBC2E','28C840'}
-# theme color scheme -> brand (white canvas, ink text, red accent)
+PRESERVE = {'FFFFFF','FF5F57','FEBC2E','28C840'}   # white + macOS traffic-light dots
 THEME_CLR = {'dk1':INK,'dk2':INK,'lt1':WHITE,'lt2':SOFT,'accent1':RED,'accent2':INK,
              'accent3':SLATE,'accent4':RED2,'accent5':SLATE,'accent6':INK,
              'hlink':RED,'folHlink':'8A2A20'}
+DARK_BG = {'0B1020','000000','C0392B','E04434','5B6472','0B2545','07182E','1F2937','1A1A1A',
+           '13335C','13315C','1C3678'}
+
+_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'taikun-logo.png')
+try:
+    with open(_LOGO_PATH, 'rb') as _f:
+        _LOGO_BYTES = _f.read()
+    _LOGO_ASPECT = 4.077   # 1476x362
+except Exception:
+    _LOGO_BYTES = None
+    _LOGO_ASPECT = 4.077
+_LOGO_MEDIA = 'ppt/media/taikun-brand-logo.png'
+_LOGO_RID = 'rIdTaikunLogo'
+_LOGO_NAME = 'Taikun Brand Logo'
 
 
-def _sl(hexv):
-    """(saturation, lightness) in 0..1 from a hex color."""
+def _hsl(hexv):
     h = hexv.lstrip('#')
     try:
         r, g, b = (int(h[i:i+2], 16) / 255.0 for i in (0, 2, 4))
     except Exception:
-        return (0.0, 0.5)
+        return (0.0, 0.0, 0.5)
     mx, mn = max(r, g, b), min(r, g, b)
     l = (mx + mn) / 2
-    if mx == mn:
-        s = 0.0
-    else:
-        d = mx - mn
-        s = d / (2 - mx - mn) if l > 0.5 else d / (mx + mn)
-    return (s, l)
+    d = mx - mn
+    if d == 0:
+        return (0.0, 0.0, l)
+    s = d / (2 - mx - mn) if l > 0.5 else d / (mx + mn)
+    if mx == r:   hue = ((g - b) / d) % 6
+    elif mx == g: hue = (b - r) / d + 2
+    else:         hue = (r - g) / d + 4
+    return (hue * 60, s, l)
 
 def _luma(hexv):
     h = hexv.lstrip('#')
@@ -63,18 +81,20 @@ def _luma(hexv):
     return 0.299 * r + 0.587 * g + 0.114 * b
 
 def classify(hexv):
-    """Map an arbitrary color to the Taikun black/red/white(/slate) palette by HSL."""
+    """Map a color to the Taikun palette. Greens/ambers survive (status colors);
+    all other saturated hues -> brand red; darks -> ink; lights -> white; neutrals -> gray."""
     v = hexv.upper()
     if v in PRESERVE:
         return v
-    s, l = _sl(v)
-    if l <= 0.22:                       # near-black (incl. dark navies) -> ink
+    hue, s, l = _hsl(v)
+    if l <= 0.20:
         return INK
-    if l >= 0.94:                       # near-white -> white
+    if l >= 0.94:
         return WHITE
-    if s >= 0.30 and l <= 0.82:         # any saturated hue -> brand red
-        return RED
-    # low-saturation neutrals -> gray ramp
+    if s >= 0.28 and l <= 0.86:
+        if 80 <= hue <= 168:   return GREEN     # status green
+        if 38 <= hue < 80:     return AMBER     # status amber / yellow
+        return RED                              # red/orange/blue/teal/purple -> brand red
     if l >= 0.84: return SOFT
     if l >= 0.60: return LGRAY
     if l >= 0.34: return SLATE
@@ -101,19 +121,12 @@ def _remap_fonts(root):
             if rpr is None:
                 continue
             bold = rpr.get('b') == '1'
-            caps = rpr.get('cap') == 'all'
             try: szi = int(rpr.get('sz') or 0)
             except Exception: szi = 0
-            head = (szi >= 1800) or (bold and (szi == 0 or szi >= 1300)) or (bold and caps)
+            head = (szi >= 1800) or (bold and (szi == 0 or szi >= 1300)) or (bold and rpr.get('cap') == 'all')
             if head:
                 if tf != 'Poppins':
-                    el.set('typeface', 'Poppins')
-                if tag == 'latin' and szi >= 2000 and not caps:
-                    r = rpr.getparent()
-                    t = r.find(_a('t')) if r is not None else None
-                    txt = (t.text or '') if t is not None else ''
-                    if 0 < len(txt) <= 34:
-                        rpr.set('cap', 'all')
+                    el.set('typeface', 'Poppins')      # no forced uppercase -> avoids overflow
             elif tf in BODY_REPLACE:
                 el.set('typeface', 'Roboto')
 
@@ -136,15 +149,13 @@ def _fix_theme(root):
 
 
 def _white_bg(cSld):
-    """Force a solid white background on a cSld (slide/layout/master)."""
     for bg in cSld.findall(_p('bg')):
         cSld.remove(bg)
     bg = etree.Element(_p('bg'))
     bgPr = etree.SubElement(bg, _p('bgPr'))
-    sf = etree.SubElement(bgPr, _a('solidFill'))
-    etree.SubElement(sf, _a('srgbClr')).set('val', WHITE)
+    etree.SubElement(etree.SubElement(bgPr, _a('solidFill')), _a('srgbClr')).set('val', WHITE)
     etree.SubElement(bgPr, _a('effectLst'))
-    cSld.insert(0, bg)   # bg must precede spTree
+    cSld.insert(0, bg)
 
 
 def _shape_rect(sp):
@@ -163,22 +174,16 @@ def _shape_rect(sp):
     return (x, y, x + cx, y + cy)
 
 def _shape_fill(sp):
-    """The shape's explicit srgb solid fill (hex), for background-darkness checks."""
     spPr = sp.find(_p('spPr'))
-    if spPr is None:
-        return None
-    sf = spPr.find(_a('solidFill'))
+    sf = spPr.find(_a('solidFill')) if spPr is not None else None
     if sf is None:
         return None
     c = sf.find(_a('srgbClr'))
     return c.get('val').upper() if (c is not None and c.get('val')) else None
 
 def _has_solid_fill(sp):
-    """True if the shape has ANY solid fill (srgb or theme/scheme color)."""
     spPr = sp.find(_p('spPr'))
-    if spPr is None:
-        return False
-    sf = spPr.find(_a('solidFill'))
+    sf = spPr.find(_a('solidFill')) if spPr is not None else None
     return sf is not None and len(sf) > 0
 
 def _set_shape_fill_white(sp):
@@ -190,12 +195,10 @@ def _set_shape_fill_white(sp):
         sf.remove(c)
     etree.SubElement(sf, _a('srgbClr')).set('val', WHITE)
 
-# theme color names by tone (after _fix_theme: lt*/bg* are light, dk*/tx* dark, accent1 red)
 _LIGHT_SCHEME = {'lt1', 'lt2', 'bg1', 'bg2'}
 _DARK_SCHEME = {'dk1', 'dk2', 'tx1', 'tx2'}
 
 def _run_tone(rpr):
-    """'light' | 'dark' | 'red' | None for a run's color (srgb or scheme)."""
     if rpr is None:
         return None
     sf = rpr.find(_a('solidFill'))
@@ -204,8 +207,7 @@ def _run_tone(rpr):
     sc = sf.find(_a('srgbClr'))
     if sc is not None and sc.get('val'):
         v = sc.get('val').upper()
-        if v == RED or v == RED2:
-            return 'red'
+        if v in (RED, RED2): return 'red'
         return 'light' if _luma(v) > 150 else 'dark'
     sch = sf.find(_a('schemeClr'))
     if sch is not None:
@@ -214,10 +216,6 @@ def _run_tone(rpr):
         if nm in _DARK_SCHEME: return 'dark'
         if nm == 'accent1': return 'red'
     return None
-
-def _shape_text(sp):
-    tx = sp.find(_p('txBody'))
-    return "".join(t.text or '' for t in tx.iter(_a('t'))) if tx is not None else ""
 
 def _set_run(r_el, hexval):
     rpr = r_el.find(_a('rPr'))
@@ -236,43 +234,89 @@ def _set_run(r_el, hexval):
         rpr.insert(0, sf)
 
 
+def _add_logo(root, slide_w, slide_h):
+    """Append the Taikun logo (bottom-left) to the slide spTree, once."""
+    if not _LOGO_BYTES or not slide_w:
+        return False
+    spTree = root.find('.//' + _p('cSld') + '/' + _p('spTree'))
+    if spTree is None:
+        return False
+    for cNvPr in spTree.iter(_p('cNvPr')):
+        if cNvPr.get('name') == _LOGO_NAME:
+            return False   # already stamped (idempotent)
+    h = int(0.26 * 914400)
+    w = int(0.26 * _LOGO_ASPECT * 914400)
+    x = int(0.5 * 914400)
+    y = slide_h - int(0.5 * 914400)
+    pic = etree.SubElement(spTree, _p('pic'))
+    nv = etree.SubElement(pic, _p('nvPicPr'))
+    cn = etree.SubElement(nv, _p('cNvPr')); cn.set('id', '99001'); cn.set('name', _LOGO_NAME)
+    cp = etree.SubElement(nv, _p('cNvPicPr')); etree.SubElement(cp, _a('picLocks')).set('noChangeAspect', '1')
+    etree.SubElement(nv, _p('nvPr'))
+    bf = etree.SubElement(pic, _p('blipFill'))
+    etree.SubElement(bf, _a('blip')).set('{%s}embed' % R, _LOGO_RID)
+    etree.SubElement(etree.SubElement(bf, _a('stretch')), _a('fillRect'))
+    spPr = etree.SubElement(pic, _p('spPr'))
+    xfrm = etree.SubElement(spPr, _a('xfrm'))
+    etree.SubElement(xfrm, _a('off')).attrib.update({'x': str(x), 'y': str(y)})
+    etree.SubElement(xfrm, _a('ext')).attrib.update({'cx': str(w), 'cy': str(h)})
+    g = etree.SubElement(spPr, _a('prstGeom')); g.set('prst', 'rect'); etree.SubElement(g, _a('avLst'))
+    return True
+
+def _add_logo_rel(rels_bytes):
+    """Add the logo image relationship to a slide's .rels (creating root if needed)."""
+    if rels_bytes:
+        root = etree.fromstring(rels_bytes)
+    else:
+        root = etree.Element('{%s}Relationships' % PKGREL)
+    for rel in root:
+        if rel.get('Id') == _LOGO_RID:
+            return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+    rel = etree.SubElement(root, '{%s}Relationship' % PKGREL)
+    rel.set('Id', _LOGO_RID); rel.set('Type', IMGREL); rel.set('Target', '../media/taikun-brand-logo.png')
+    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+def _ensure_png_ct(ct_bytes):
+    root = etree.fromstring(ct_bytes)
+    for d in root.findall('{%s}Default' % CT):
+        if (d.get('Extension') or '').lower() == 'png':
+            return ct_bytes
+    d = etree.Element('{%s}Default' % CT); d.set('Extension', 'png'); d.set('ContentType', 'image/png')
+    root.insert(0, d)
+    return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+
 def _fix_slide(root, slide_area):
     spTree = root.find('.//' + _p('cSld') + '/' + _p('spTree'))
     if spTree is None:
         return
     shapes = [c for c in spTree if etree.QName(c).localname in ('sp', 'cxnSp', 'pic')]
-
-    # 1) full-bleed background shapes -> white
     if slide_area:
         for sp in shapes:
             if etree.QName(sp).localname == 'pic':
                 continue
             r = _shape_rect(sp)
-            if r and _has_solid_fill(sp):
-                if (r[2]-r[0]) * (r[3]-r[1]) >= 0.82 * slide_area:
-                    _set_shape_fill_white(sp)
-
-    # 2) gather fills (backgrounds) + image rects
+            if r and _has_solid_fill(sp) and (r[2]-r[0]) * (r[3]-r[1]) >= 0.82 * slide_area:
+                _set_shape_fill_white(sp)
     fills, pics = [], []
     for sp in shapes:
         r = _shape_rect(sp)
         if not r:
             continue
-        kind = etree.QName(sp).localname
-        if kind == 'pic':
+        if etree.QName(sp).localname == 'pic':
             pics.append(r)
         else:
             fh = _shape_fill(sp)
             if fh:
-                area = (r[2]-r[0]) * (r[3]-r[1])
-                fills.append((area, r, fh, sp))
+                fills.append(((r[2]-r[0]) * (r[3]-r[1]), r, fh, sp))
     fills.sort(key=lambda x: x[0])
-
-    # 3) bidirectional contrast
     def inside(rect, x, y):
         return rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]
     for sp in shapes:
-        if etree.QName(sp).localname == 'pic' or not _shape_text(sp).strip():
+        if etree.QName(sp).localname == 'pic':
+            continue
+        tx = sp.find(_p('txBody'))
+        if tx is None or not "".join(t.text or '' for t in tx.iter(_a('t'))).strip():
             continue
         r = _shape_rect(sp)
         if not r:
@@ -289,34 +333,35 @@ def _fix_slide(root, slide_area):
             if any(inside(pr, cx, cy) for pr in pics):
                 over_image = True
             else:
-                eff = WHITE      # bare slide background (now white)
+                eff = WHITE
         if over_image or eff is None:
             continue
         bg_dark = _luma(eff) < 128
-        tx = sp.find(_p('txBody'))
         for r_el in tx.iter(_a('r')):
             tone = _run_tone(r_el.find(_a('rPr')))
             if bg_dark:
-                if tone in (None, 'dark', 'red'):   # ensure light text on dark/red
+                if tone in (None, 'dark', 'red'):
                     _set_run(r_el, WHITE)
-            elif tone == 'light':                   # light text on the new white -> ink
+            elif tone == 'light':
                 _set_run(r_el, INK)
 
 
 def _slide_size(zin):
     try:
-        pres = etree.fromstring(zin.read('ppt/presentation.xml'))
-        sz = pres.find(_p('sldSz'))
-        return int(sz.get('cx')) * int(sz.get('cy'))
+        sz = etree.fromstring(zin.read('ppt/presentation.xml')).find(_p('sldSz'))
+        w, h = int(sz.get('cx')), int(sz.get('cy'))
+        return (w * h, w, h)
     except Exception:
-        return 0
+        return (0, 0, 0)
 
 
 def _xml_pass(data: bytes) -> bytes:
     zin = zipfile.ZipFile(io.BytesIO(data), 'r')
-    slide_area = _slide_size(zin)
+    area, sw, sh = _slide_size(zin)
+    names = set(zin.namelist())
     out = io.BytesIO()
     zout = zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED)
+    logo_added_to = []
     for info in zin.infolist():
         raw = zin.read(info.filename)
         fn = info.filename
@@ -324,21 +369,36 @@ def _xml_pass(data: bytes) -> bytes:
             fn.startswith('ppt/slides/') or fn.startswith('ppt/slideLayouts/')
             or fn.startswith('ppt/slideMasters/') or fn.startswith('ppt/theme/')
             or fn.startswith('ppt/notesSlides/') or fn.startswith('ppt/notesMasters/'))
+        is_slide = fn.startswith('ppt/slides/slide') and fn.endswith('.xml')
         if styleable:
             root = etree.fromstring(raw)
             _remap_fonts(root)
             _remap_colors(root)
             if fn.startswith('ppt/theme/'):
                 _fix_theme(root)
-            if (fn.startswith('ppt/slides/slide') or fn.startswith('ppt/slideLayouts/')
-                    or fn.startswith('ppt/slideMasters/')):
+            if (is_slide or fn.startswith('ppt/slideLayouts/') or fn.startswith('ppt/slideMasters/')):
                 cSld = root.find('.//' + _p('cSld'))
                 if cSld is not None:
                     _white_bg(cSld)
-            if fn.startswith('ppt/slides/slide'):
-                _fix_slide(root, slide_area)
+            if is_slide:
+                _fix_slide(root, area)
+                if _add_logo(root, sw, sh):
+                    logo_added_to.append(fn)
             raw = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+        elif fn.startswith('ppt/slides/_rels/') and fn.endswith('.xml.rels') and _LOGO_BYTES:
+            slide_xml = 'ppt/slides/' + os.path.basename(fn)[:-5]   # strip .rels
+            if slide_xml in names:
+                raw = _add_logo_rel(raw)
+        elif fn == '[Content_Types].xml' and _LOGO_BYTES:
+            raw = _ensure_png_ct(raw)
         zout.writestr(info, raw)
+    # any slide that lacked a .rels file entirely -> create one
+    if _LOGO_BYTES:
+        for sfn in logo_added_to:
+            relfn = 'ppt/slides/_rels/' + os.path.basename(sfn) + '.rels'
+            if relfn not in names:
+                zout.writestr(relfn, _add_logo_rel(None))
+        zout.writestr(_LOGO_MEDIA, _LOGO_BYTES)
     zin.close(); zout.close()
     return out.getvalue()
 
@@ -352,8 +412,6 @@ def looks_like_pptx(data: bytes) -> bool:
 
 
 def rebrand_bytes(data: bytes) -> bytes:
-    """Rebrand a .pptx (bytes in) -> branded .pptx (bytes out). Lossless: every
-    non-styling part (media, charts, embeds) is copied through untouched."""
     if not looks_like_pptx(data):
         raise ValueError("That doesn't look like a PowerPoint (.pptx) file.")
     return _xml_pass(data)
