@@ -244,16 +244,16 @@ def _add_logo(root, slide_w, slide_h):
     for cNvPr in spTree.iter(_p('cNvPr')):
         if cNvPr.get('name') == _LOGO_NAME:
             return False   # already stamped (idempotent)
-    # skip if the slide already shows a TAIKUN wordmark/footer in its bottom band
-    band_top = slide_h - int(0.95 * 914400)
+    # skip if the slide already carries a TAIKUN wordmark/footer (a short text shape
+    # mentioning TAIKUN). Geometry-independent so it catches placeholder footers too.
     for sp in spTree:
         if etree.QName(sp).localname != 'sp':
             continue
-        rect = _shape_rect(sp)
         tx = sp.find(_p('txBody'))
-        if tx is None or rect is None or rect[3] < band_top:
+        if tx is None:
             continue
-        if 'TAIKUN' in "".join(t.text or '' for t in tx.iter(_a('t'))).upper():
+        txt = "".join(t.text or '' for t in tx.iter(_a('t'))).strip()
+        if 'TAIKUN' in txt.upper() and len(txt) < 55:
             return False
     h = int(0.26 * 914400)
     w = int(0.26 * _LOGO_ASPECT * 914400)
