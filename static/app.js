@@ -791,18 +791,15 @@ const TeepPlan = {
     // Inline, badge-free change summary: muted label + emphasized value; status carries a dot.
     _fmtEditPayload(payload) {
         if (!payload || typeof payload !== 'object') return '';
-        const LONG = ['description', 'deliverable', 'entry_criteria', 'exit_criteria', 'rationale', 'title', 'summary'];
         return Object.keys(payload).map((k) => {
             let v = payload[k];
             if (k === 'is_blocking') v = v ? 'blocking' : 'not blocking';
             else if (k === 'depends_on') { try { v = (Array.isArray(v) ? v : JSON.parse(v || '[]')).join(', ') || 'none'; } catch (e) { /* leave as-is */ } }
             v = String(v);
-            const max = LONG.indexOf(k) >= 0 ? 60 : 40;   // snippet long-text fields; full short scalars
-            if (v.length > max) v = v.slice(0, max).trim() + '…';
+            if (v.length > 2000) v = v.slice(0, 2000) + '…';   // DOM safety cap only — display is clamped + click-to-expand
             const label = this._FIELD_LABELS[k] || k;
-            // status dot must be computed from the (untruncated) status value
             const dot = (k === 'status') ? `<span class="status-dot bg-${this.STATUS_COLOR[v] || 'secondary'} me-1"></span>` : '';
-            // NO text-nowrap / inline-block — value must flow as inline text so it wraps; me-3 spaces the pairs.
+            // No text-nowrap — value flows inline and wraps; full value kept so the row can expand.
             return `<span class="me-3"><span class="text-secondary">${this.esc(label)}</span> ${dot}<span class="text-body fw-medium">${this.esc(v)}</span></span>`;
         }).join(' ');
     },
@@ -823,7 +820,7 @@ const TeepPlan = {
         } else { // comment / note
             body = `<span class="text-body">${this._linkify(this.esc((a.payload && a.payload.text) || ''))}</span>`;
         }
-        return `<div class="list-group-item px-0 py-2">
+        return `<div class="list-group-item list-group-item-action px-0 py-2" style="cursor:pointer">
             <div class="d-flex gap-2 align-items-start">
                 <span class="avatar avatar-xs rounded-circle ${m.cls} flex-shrink-0 mt-1"><i class="ti ${m.icon}"></i></span>
                 <div class="flex-fill" style="min-width:0">
@@ -831,7 +828,7 @@ const TeepPlan = {
                         <span class="fw-medium text-truncate" style="min-width:0">${this.esc(m.label)}</span>
                         <span class="text-secondary small ms-auto flex-shrink-0">${when} ago</span>
                     </div>
-                    <div class="small mt-1" style="overflow-wrap:anywhere">${body}</div>
+                    <div class="tk-act-body small mt-1" data-clamped="1" style="overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-height:3.4em">${body}</div>
                 </div>
             </div>
         </div>`;
@@ -840,17 +837,24 @@ const TeepPlan = {
     // Unified activity timeline — newest first. Agent edits, your edits, notes, chats all land here.
     _renderActivity(t) {
         const acts = (t.activity || []).slice().reverse();
+        // click a row to expand its 2-line preview to the full update (and back)
+        const wire = (c) => {
+            if (!c) return;
+            c.onclick = (e) => {
+                if (e.target.closest('a')) return;                  // let real links work
+                const item = e.target.closest('.list-group-item'); if (!item || !c.contains(item)) return;
+                const b = item.querySelector('.tk-act-body'); if (!b) return;
+                if (b.getAttribute('data-clamped') !== '0') {        // expand → full
+                    b.style.display = 'block'; b.style.webkitLineClamp = ''; b.style.maxHeight = ''; b.setAttribute('data-clamped', '0');
+                } else {                                             // collapse → 2-line preview
+                    b.style.display = '-webkit-box'; b.style.webkitLineClamp = '2'; b.style.maxHeight = '3.4em'; b.setAttribute('data-clamped', '1');
+                }
+            };
+        };
         const full = document.getElementById('activity-log');
-        if (full) full.innerHTML = acts.length
-            ? acts.map((a) => this._activityRow(a)).join('')
-            : '<div class="text-secondary small">No activity yet — agent updates, your edits, notes and dispatch events will appear here.</div>';
+        if (full) { full.innerHTML = acts.length ? acts.map((a) => this._activityRow(a)).join('') : '<div class="text-secondary small">No activity yet — agent updates, your edits, notes and dispatch events will appear here.</div>'; wire(full); }
         const glance = document.getElementById('details-activity');
-        if (glance) {
-            glance.className = acts.length ? 'list-group list-group-flush' : '';
-            glance.innerHTML = acts.length
-                ? acts.slice(0, 3).map((a) => this._activityRow(a)).join('')
-                : '<div class="text-secondary small">No activity yet.</div>';
-        }
+        if (glance) { glance.className = acts.length ? 'list-group list-group-flush' : ''; glance.innerHTML = acts.length ? acts.slice(0, 3).map((a) => this._activityRow(a)).join('') : '<div class="text-secondary small">No activity yet.</div>'; wire(glance); }
     },
 
     async saveTask(id) {
