@@ -777,7 +777,8 @@ const TeepPlan = {
 
     _FIELD_LABELS: { status: 'Status', start_date: 'Start', finish_date: 'Finish', assignee: 'Assignee',
         owner_person_or_role: 'Owner', owner_org: 'Org', is_blocking: 'Blocking', depends_on: 'Depends on',
-        risk_level: 'Risk', phase: 'Phase', effort_days: 'Effort', duration_days: 'Duration', title: 'Title', description: 'Description' },
+        risk_level: 'Risk', phase: 'Phase', effort_days: 'Effort', duration_days: 'Duration', title: 'Title',
+        description: 'Description', deliverable: 'Deliverable', entry_criteria: 'Entry criteria', exit_criteria: 'Exit criteria' },
 
     _actorMeta(actor) {
         const a = (actor || '').toLowerCase();
@@ -790,14 +791,19 @@ const TeepPlan = {
     // Inline, badge-free change summary: muted label + emphasized value; status carries a dot.
     _fmtEditPayload(payload) {
         if (!payload || typeof payload !== 'object') return '';
+        const LONG = ['description', 'deliverable', 'entry_criteria', 'exit_criteria', 'rationale', 'title', 'summary'];
         return Object.keys(payload).map((k) => {
             let v = payload[k];
             if (k === 'is_blocking') v = v ? 'blocking' : 'not blocking';
             else if (k === 'depends_on') { try { v = (Array.isArray(v) ? v : JSON.parse(v || '[]')).join(', ') || 'none'; } catch (e) { /* leave as-is */ } }
-            else if (k === 'description' && typeof v === 'string' && v.length > 48) v = v.slice(0, 48) + '…';
+            v = String(v);
+            const max = LONG.indexOf(k) >= 0 ? 60 : 40;   // snippet long-text fields; full short scalars
+            if (v.length > max) v = v.slice(0, max).trim() + '…';
             const label = this._FIELD_LABELS[k] || k;
+            // status dot must be computed from the (untruncated) status value
             const dot = (k === 'status') ? `<span class="status-dot bg-${this.STATUS_COLOR[v] || 'secondary'} me-1"></span>` : '';
-            return `<span class="text-nowrap me-3"><span class="text-secondary">${this.esc(label)}</span> ${dot}<span class="text-body fw-medium">${this.esc(String(v))}</span></span>`;
+            // NO text-nowrap / inline-block — value must flow as inline text so it wraps; me-3 spaces the pairs.
+            return `<span class="me-3"><span class="text-secondary">${this.esc(label)}</span> ${dot}<span class="text-body fw-medium">${this.esc(v)}</span></span>`;
         }).join(' ');
     },
 
