@@ -1826,12 +1826,9 @@ const TeepPlan = {
         if (document.getElementById('queue-modal')) return;
         const wrap = document.createElement('div');
         wrap.innerHTML = `<div class="modal modal-blur fade" id="queue-modal" tabindex="-1" aria-hidden="true">
-            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
-                <div class="modal-header"><h3 class="modal-title d-flex align-items-center" id="queue-modal-title">Review</h3>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
-                <div class="modal-body" id="queue-modal-body"></div>
-                <div class="modal-footer" id="queue-modal-footer"></div>
-            </div></div></div>`;
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content" id="queue-modal-content"></div>
+            </div></div>`;
         document.body.appendChild(wrap.firstElementChild);
     },
 
@@ -1851,68 +1848,106 @@ const TeepPlan = {
         const props = (tri.proposals || []).map((p) => Object.assign({}, p));
         const nts = (tri.new_tasks || []).map((t) => Object.assign({}, t));
         const nEv = props.filter((p) => this._needsEvidence(p)).length;
+        const nSafe = props.length - nEv;
         const nAct = props.length + nts.length;
+        const when = it.received_at ? new Date(it.received_at * 1000).toLocaleString() : '';
 
+        // change row (evidence-table style): marker avatar | id | change pill + rationale + inline editor | hover edit/drop
         const propRow = (p, idx) => {
             const ev = this._needsEvidence(p);
-            return `<div class="list-group-item px-2 py-2" data-iprow="${idx}">
-                <div class="d-flex align-items-center gap-2">
-                    <span class="status-dot bg-${ev ? 'orange' : 'green'} flex-shrink-0"></span>
-                    <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
-                    <div class="flex-fill" data-pchips="${idx}">${this._propChips(p)}</div>
-                    ${ev ? '<span class="badge bg-orange-lt">needs evidence</span>' : ''}
-                    <button class="btn btn-sm btn-ghost-secondary p-1" data-pedit="${idx}" title="Edit"><i class="ti ti-pencil"></i></button>
-                    <button class="btn btn-sm btn-ghost-secondary p-1" data-ipdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
-                </div>
-                ${p.rationale ? `<div class="text-secondary small mt-1 ms-4">${this.esc(p.rationale)}</div>` : ''}
-                <div class="mt-2 ms-4 d-none" data-peditor="${idx}"></div>
-            </div>`;
+            return `<tr class="tk-evrow" data-iprow="${idx}">
+                <td class="w-1"><span class="avatar avatar-xs bg-${ev ? 'orange' : 'green'}-lt text-${ev ? 'orange' : 'green'} rounded-circle"><i class="ti ti-${ev ? 'lock' : 'check'}"></i></span></td>
+                <td style="width:104px"><span class="fw-bold font-monospace">${this.esc(p.task_id)}</span></td>
+                <td>
+                    <div class="tk-change" data-pchips="${idx}">${this._propChips(p)}</div>
+                    ${p.rationale ? `<div class="text-secondary small mt-1">${this.esc(p.rationale)}</div>` : ''}
+                    <div class="mt-2 d-none" data-peditor="${idx}"></div>
+                </td>
+                <td class="text-end w-1"><span class="tk-rowctl btn-list">
+                    <a href="#" class="btn btn-ghost-secondary btn-icon btn-sm" data-pedit="${idx}" onclick="return false" aria-label="Edit"><i class="ti ti-pencil"></i></a>
+                    <a href="#" class="btn btn-ghost-secondary btn-icon btn-sm" data-ipdrop="${idx}" onclick="return false" aria-label="Drop"><i class="ti ti-x"></i></a>
+                </span></td>
+            </tr>`;
         };
-        const ntRow = (t, idx) => `<div class="list-group-item px-2 py-2" data-introw="${idx}">
-                <div class="d-flex align-items-center gap-2">
-                    <span class="status-dot bg-azure flex-shrink-0"></span>
-                    <span class="badge bg-azure-lt">new · ${this.esc(t.workstream_id || '?')}</span>
-                    <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
-                    <button class="btn btn-sm btn-ghost-secondary p-1" data-intdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
-                </div>${t.rationale ? `<div class="text-secondary small mt-1 ms-4">${this.esc(t.rationale)}</div>` : ''}
+        const ntRow = (t, idx) => `<tr class="tk-evrow" data-introw="${idx}">
+                <td class="w-1"><span class="avatar avatar-xs bg-azure-lt text-azure rounded-circle"><i class="ti ti-plus"></i></span></td>
+                <td style="width:104px"><span class="fw-bold font-monospace">${this.esc(t.workstream_id || 'NEW')}</span></td>
+                <td><div class="tk-change"><span class="badge bg-azure-lt"><i class="ti ti-plus me-1"></i>new task</span> <span class="fw-medium">${this.esc(t.title)}</span></div>
+                    ${t.rationale ? `<div class="text-secondary small mt-1">${this.esc(t.rationale)}</div>` : ''}</td>
+                <td class="text-end w-1"><span class="tk-rowctl btn-list">
+                    <a href="#" class="btn btn-ghost-secondary btn-icon btn-sm" data-intdrop="${idx}" onclick="return false" aria-label="Drop"><i class="ti ti-x"></i></a>
+                </span></td>
+            </tr>`;
+
+        const tableWrap = (rows) => `<div class="table-responsive mb-4"><table class="table table-vcenter mb-0"><tbody>${rows}</tbody></table></div>`;
+        const safeRows = props.map((p, i) => (!this._needsEvidence(p) ? propRow(p, i) : '')).join('');
+        const evRows = props.map((p, i) => (this._needsEvidence(p) ? propRow(p, i) : '')).join('');
+
+        const safeSection = nSafe ? `<div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="d-flex align-items-center gap-2"><span class="status-dot bg-green"></span>
+                    <span class="subheader text-uppercase fw-bold text-secondary">Safe to apply</span>
+                    <span class="badge bg-green-lt">${nSafe} change${nSafe !== 1 ? 's' : ''}</span></div>
+                <div class="text-secondary small d-none d-sm-block">status moves · date shifts · field updates</div>
+            </div>${tableWrap(safeRows)}` : '';
+        const evSection = nEv ? `<div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="d-flex align-items-center gap-2"><span class="status-dot bg-orange"></span>
+                    <span class="subheader text-uppercase fw-bold text-secondary">Needs evidence</span>
+                    <span class="badge bg-orange-lt">held by default</span></div>
+                <div class="text-secondary small d-none d-sm-block">closes (→ Done) apply only with acceptance evidence</div>
+            </div>${tableWrap(evRows)}` : '';
+        const ntSection = nts.length ? `<div class="d-flex align-items-center gap-2 mb-2"><span class="status-dot bg-azure"></span>
+                <span class="subheader text-uppercase fw-bold text-secondary">New task proposed</span></div>${tableWrap(nts.map((t, i) => ntRow(t, i)).join(''))}` : '';
+        const heroSummary = it.summary ? `<div class="bg-primary-lt rounded-3 p-3 mb-4"><div class="d-flex gap-3">
+                <span class="avatar bg-primary text-white rounded-3 flex-shrink-0"><i class="ti ti-robot fs-2"></i></span>
+                <div class="flex-fill"><div class="subheader text-primary mb-1">Maxwell · agent summary</div>
+                    <div class="markdown small">${this.md(it.summary)}</div></div></div></div>` : '';
+        const safety = `<div class="bg-azure-lt rounded-3 p-3 d-flex gap-3">
+                <span class="avatar avatar-sm bg-azure-lt text-azure rounded-3 flex-shrink-0"><i class="ti ti-info-circle"></i></span>
+                <div class="small text-secondary">Nothing is applied until you confirm. <strong class="text-body">→ Done</strong> closes are held until you confirm them with evidence.</div></div>`;
+
+        const root = document.getElementById('queue-modal-content');
+        root.innerHTML = `<div class="card-status-top bg-${nEv ? 'orange' : 'primary'}"></div>
+            <div class="modal-header align-items-start">
+                <span class="avatar avatar-lg bg-primary-lt text-primary rounded-3 me-3"><i class="ti ${sm.icon} fs-2"></i></span>
+                <div class="flex-fill">
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                        <span class="badge bg-primary text-white">QUEUE-${this.esc(String(it.id))}</span>
+                        <span class="badge bg-secondary-lt">${this.esc(sm.label)}</span>
+                        <span class="badge bg-azure-lt"><i class="ti ti-robot me-1"></i>Triaged by Maxwell</span>
+                        <span class="text-secondary small">${nAct} action${nAct !== 1 ? 's' : ''}${nEv ? ` · <span class="text-orange">${nEv} needs evidence</span>` : ''}</span>
+                    </div>
+                    <h3 class="modal-title mb-1">${this.esc(it.subject || sm.label)}</h3>
+                    <div class="text-secondary small"><i class="ti ${sm.icon} me-1"></i>${this.esc(sm.label)}<span class="mx-2">·</span><i class="ti ti-clock me-1"></i>${this.esc(when)}<span class="mx-2">·</span>${nAct} proposed change${nAct !== 1 ? 's' : ''}</div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">${heroSummary}${safeSection}${evSection}${ntSection}${safety}</div>
+            <div class="modal-footer">
+                <span class="small text-secondary me-auto" data-istatus></span>
+                <a href="#" class="btn btn-link text-secondary px-2" data-idismiss onclick="return false"><i class="ti ti-trash me-1"></i>Dismiss</a>
+                ${nEv ? '<button type="button" class="btn btn-outline-danger btn-pill px-3" data-iconfirm-all><i class="ti ti-lock-open me-1"></i>Confirm incl. closes</button>' : ''}
+                <button type="button" class="btn btn-primary btn-pill px-4" data-iconfirm-safe><i class="ti ti-circle-check me-1"></i>Confirm safe</button>
             </div>`;
 
-        document.getElementById('queue-modal-title').innerHTML =
-            `<span class="avatar avatar-xs rounded bg-azure-lt text-azure me-2"><i class="ti ${sm.icon}"></i></span>${this.esc(it.subject || sm.label)}`;
-        const body = document.getElementById('queue-modal-body');
-        body.innerHTML = `<div class="d-flex align-items-center gap-2 mb-2 flex-wrap text-secondary small">
-                <span><i class="ti ${sm.icon} me-1"></i>${this.esc(sm.label)}</span>
-                <span>· ${nAct} action${nAct !== 1 ? 's' : ''}</span>
-                ${nEv ? `<span class="text-orange">· ${nEv} need evidence</span>` : ''}
-                <span class="ms-auto">${it.received_at ? new Date(it.received_at * 1000).toLocaleString() : ''}</span>
-            </div>
-            ${it.summary ? `<div class="markdown small mb-3 p-2 bg-secondary-lt rounded">${this.md(it.summary)}</div>` : ''}
-            <div class="list-group list-group-flush border rounded">${props.map((p, i) => propRow(p, i)).join('')}${nts.map((t, i) => ntRow(t, i)).join('')}</div>`;
-        const footer = document.getElementById('queue-modal-footer');
-        footer.innerHTML = `<span class="small text-secondary me-auto" data-istatus></span>
-            <button class="btn" data-idismiss>Dismiss</button>
-            ${nEv ? '<button class="btn btn-outline-primary" data-iconfirm-all>Confirm incl. closes</button>' : ''}
-            <button class="btn btn-primary" data-iconfirm-safe><i class="ti ti-checks me-1"></i>Confirm safe</button>`;
-
-        body.querySelectorAll('[data-ipdrop]').forEach((b) => b.addEventListener('click', () => {
+        root.querySelectorAll('[data-ipdrop]').forEach((b) => b.addEventListener('click', () => {
             const idx = parseInt(b.getAttribute('data-ipdrop'), 10); props[idx] = null;
-            const r = body.querySelector(`[data-iprow="${idx}"]`); if (r) r.remove();
+            const r = root.querySelector(`[data-iprow="${idx}"]`); if (r) r.remove();
         }));
-        body.querySelectorAll('[data-intdrop]').forEach((b) => b.addEventListener('click', () => {
+        root.querySelectorAll('[data-intdrop]').forEach((b) => b.addEventListener('click', () => {
             const idx = parseInt(b.getAttribute('data-intdrop'), 10); nts[idx] = null;
-            const r = body.querySelector(`[data-introw="${idx}"]`); if (r) r.remove();
+            const r = root.querySelector(`[data-introw="${idx}"]`); if (r) r.remove();
         }));
-        body.querySelectorAll('[data-pedit]').forEach((b) => b.addEventListener('click', () =>
-            this._togglePropEditor(body, parseInt(b.getAttribute('data-pedit'), 10), props)));
+        root.querySelectorAll('[data-pedit]').forEach((b) => b.addEventListener('click', () =>
+            this._togglePropEditor(root, parseInt(b.getAttribute('data-pedit'), 10), props)));
         const confirm = (includeCloses) => {
             const live = props.filter(Boolean);
             const apply = includeCloses ? live : live.filter((p) => !this._needsEvidence(p));
             const keep = includeCloses ? [] : live.filter((p) => this._needsEvidence(p));
-            this.confirmInbox(it.id, apply, nts.filter(Boolean), keep, footer);
+            this.confirmInbox(it.id, apply, nts.filter(Boolean), keep, root);
         };
-        const cs = footer.querySelector('[data-iconfirm-safe]'); if (cs) cs.addEventListener('click', () => confirm(false));
-        const ca = footer.querySelector('[data-iconfirm-all]'); if (ca) ca.addEventListener('click', () => confirm(true));
-        footer.querySelector('[data-idismiss]').addEventListener('click', () => this.dismissInbox(it.id));
+        const cs = root.querySelector('[data-iconfirm-safe]'); if (cs) cs.addEventListener('click', () => confirm(false));
+        const ca = root.querySelector('[data-iconfirm-all]'); if (ca) ca.addEventListener('click', () => confirm(true));
+        root.querySelector('[data-idismiss]').addEventListener('click', () => this.dismissInbox(it.id));
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('queue-modal')).show();
     },
 

@@ -202,3 +202,11 @@ a[data-bs-toggle="modal"]:hover .card{
 .tk-bubble-user .markdown a{ color:#fff; }
 .tk-bubble-user .markdown code{ background:rgba(255,255,255,.18); color:#fff; }
 .tk-bubble-user .markdown li::marker{ color:rgba(255,255,255,.7); }
+
+/* ── §5 · ACTION QUEUE preview modal (evidence-table) ───────────────────────*/
+.tk-change{ display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; }
+.tk-rowctl{ opacity:.4; transition:opacity .12s ease; white-space:nowrap; }
+.tk-evrow:hover .tk-rowctl, .tk-rowctl:focus-within{ opacity:1; }
+.tk-rowctl .btn{ box-shadow:none; }
+#queue-modal .modal-header{ padding-top:1.25rem; }
+#queue-modal .table td{ vertical-align:middle; }
