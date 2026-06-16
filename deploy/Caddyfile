@@ -9,3 +9,9 @@ plan.taikunai.com {
         reverse_proxy 127.0.0.1:8110
     }
 }
+
+# Vanity URL: format.taikunai.com -> the deck rebrand tool. Caddy auto-issues a
+# Let's Encrypt cert once the format.taikunai.com A record resolves to this VM.
+format.taikunai.com {
+    redir https://plan.taikunai.com/rebrand.html
+}
