@@ -535,11 +535,12 @@ const TeepPlan = {
         const note = document.getElementById('gantt-note');
         if (note) note.textContent = (this.plan.schedule_note || '') + ' Tip: switch By workstream / By task; click a bar to drill in.';
         // The Gantt is reachable from BOTH the sidebar and the nav-tabs. Listen on
-        // EVERY #tab-gantt trigger (querySelector only caught the first → blank chart
-        // when shown from the other), and defer a frame so the just-shown pane is
-        // laid out before ApexCharts measures its width.
+        // EVERY #tab-gantt trigger — querySelector caught only the first (the
+        // sidebar), so showing the tab from the nav-tabs left the chart blank until
+        // a mode toggle. shown.bs.tab fires after the pane is visible + laid out,
+        // so a direct render is safe.
         document.querySelectorAll('a[href="#tab-gantt"]').forEach((tab) =>
-            tab.addEventListener('shown.bs.tab', () => requestAnimationFrame(() => this.renderGantt())));
+            tab.addEventListener('shown.bs.tab', () => this.renderGantt()));
         ['gm-ws', 'gm-task'].forEach((id) => {
             const r = document.getElementById(id);
             if (r) r.addEventListener('change', () => { if (r.checked) { this.ganttMode = r.value; this.renderGantt(); } });
