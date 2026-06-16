@@ -798,7 +798,7 @@ const TeepPlan = {
             const label = this._FIELD_LABELS[k] || k;
             const dot = (k === 'status') ? `<span class="status-dot bg-${this.STATUS_COLOR[v] || 'secondary'} me-1"></span>` : '';
             return `<span class="text-nowrap me-3"><span class="text-secondary">${this.esc(label)}</span> ${dot}<span class="text-body fw-medium">${this.esc(String(v))}</span></span>`;
-        }).join('');
+        }).join(' ');
     },
 
     // One timeline entry — actor shown by the avatar (no badge); changes as clean inline text.
@@ -820,12 +820,12 @@ const TeepPlan = {
         return `<div class="list-group-item px-0 py-2">
             <div class="d-flex gap-2 align-items-start">
                 <span class="avatar avatar-xs rounded-circle ${m.cls} flex-shrink-0 mt-1"><i class="ti ${m.icon}"></i></span>
-                <div class="flex-fill min-w-0">
+                <div class="flex-fill" style="min-width:0">
                     <div class="d-flex align-items-baseline gap-2">
-                        <span class="fw-medium">${this.esc(m.label)}</span>
-                        <span class="text-secondary small ms-auto">${when} ago</span>
+                        <span class="fw-medium text-truncate" style="min-width:0">${this.esc(m.label)}</span>
+                        <span class="text-secondary small ms-auto flex-shrink-0">${when} ago</span>
                     </div>
-                    <div class="small mt-1">${body}</div>
+                    <div class="small mt-1" style="overflow-wrap:anywhere">${body}</div>
                 </div>
             </div>
         </div>`;
