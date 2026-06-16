@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
-"""Deck rebrand — turn any .pptx into the Taikun brand, in-memory and LOSSLESS.
+"""Deck rebrand — turn ANY .pptx into the Taikun black/red/white theme, in-memory
+and LOSSLESS (no python-pptx round-trip; every chart/image/embed is copied through).
 
-Self-contained: no asset files, no LibreOffice, no network, and (deliberately) no
-python-pptx round-trip — that round-trip silently drops parts it doesn't model
-(charts, embeddings, notesMasters, some media). Instead this rewrites the .pptx zip
-member-for-member with lxml, so every chart/image/embed survives untouched.
+This is opinionated and generic — it does not rely on a fixed list of the source
+deck's hexes. For every slide it:
+  * forces a WHITE background (slide + layout + master bg, and any full-bleed
+    background shape);
+  * reclassifies every color by HSL — any saturated hue -> brand red, near-blacks
+    -> ink, near-whites -> white, neutrals -> a slate/gray ramp;
+  * flips fonts to Poppins (headings) / Roboto (body);
+  * fixes text contrast both ways — light text that lands on the new white
+    background becomes ink; text on a dark/red fill becomes white; text sitting on
+    a photo is left alone.
 
-Three edits, all at the XML layer:
-  * colors  — remap off-brand hexes -> the Taikun palette (teal/navy -> ink, accents
-              -> red, grays -> slate, soft bg -> brand soft). Preserves white, the
-              macOS traffic-light dots, and amber.
-  * fonts   — bold/heading text -> Poppins, body -> Roboto; short headlines get
-              UPPERCASE via the cap attribute (long narrative headlines left as-is).
-  * theme   — rewrite the theme color + font scheme. This is what de-tints decks
-              whose "dark text" (dk1) scheme color is actually a brand-foreign hue.
-  * contrast— after recolor, whiten text whose INNERMOST background is dark, so a
-              recolored label never ends up dark-on-dark.
-
-This is the automatic, generic ~80%-there pass. Deck-specific touch-ups (divider
-rebuilds, per-slide nudges) are intentionally out of scope.
+Photos/charts/embeds are untouched (raster + ppt/charts/* are not restyled).
 """
 import io
 import zipfile
@@ -30,35 +25,70 @@ def _a(t): return '{%s}%s' % (A, t)
 def _p(t): return '{%s}%s' % (P, t)
 
 # Brand palette
-RED='C0392B'; RED2='E04434'; INK='0B1020'; SLATE='5B6472'; SOFT='F5F6F8'; HAIR='E8EAEE'
-GREEN='1F7A4D'; GREEN_BG='E3F4E9'; EYE_BG='FAEFEE'; EYE_BD='F0CFCC'; WHITE='FFFFFF'
+RED='C0392B'; RED2='E04434'; INK='0B1020'; SLATE='5B6472'; SOFT='F5F6F8'
+HAIR='E8EAEE'; LGRAY='D7DBE0'; WHITE='FFFFFF'
 
-COLORMAP = {
-    '1F2937':INK,'0B2545':INK,'000000':INK,'0D0D0D':INK,'07182E':INK,
-    '13335C':INK,'13315C':INK,'1A1A1A':INK,'1C3678':INK,'0F4A8A':INK,
-    '27A39B':RED,'1B7F79':RED,'0E5C58':RED,'1A9988':INK,
-    'C00000':RED,'B23A48':RED,'EB5600':RED2,'6AA4C8':RED,
-    '5B6470':SLATE,'8896A8':SLATE,'6B7280':SLATE,'8FAEC6':SLATE,'595959':SLATE,
-    'B7C2CF':'BFC3CB','BCC8DA':'C7CBD2',
-    'F2F4F7':SOFT,'F9F9F9':SOFT,'F8F8F8':SOFT,'E8F1F0':SOFT,'EFF2FF':SOFT,'E9EDEE':SOFT,
-    'DEE2E6':HAIR,'E8ECEF':HAIR,
-    '2F9E44':GREEN,'C3F0D0':GREEN_BG,
-    'FAF3F4':EYE_BG,'A2FFE8':EYE_BG,'FFB8A2':EYE_BD,
-}
-PRESERVE = {'FFFFFF','FF5F57','FEBC2E','28C840','E8B53A'}
-BODY_REPLACE = {'Calibri','Arial','Work Sans','Times New Roman','Calibri Light','Helvetica','Helvetica Neue'}
-THEME_CLR = {'dk1':INK,'dk2':INK,'lt1':WHITE,'lt2':SOFT,'accent1':SLATE,'accent2':RED,
-             'accent3':RED2,'accent4':EYE_BG,'accent5':INK,'accent6':EYE_BD,'hlink':RED,'folHlink':'8A2A20'}
-DARK_BG = {'0B1020','000000','C0392B','E04434','5B6472','0B2545','07182E','1F2937','1A1A1A','13335C','13315C','1C3678'}
+BODY_REPLACE = {'Calibri','Arial','Work Sans','Times New Roman','Calibri Light',
+                'Helvetica','Helvetica Neue','Verdana','Tahoma','Segoe UI'}
+# never recolor: white + the macOS traffic-light dots (window-chrome mockups)
+PRESERVE = {'FFFFFF','FF5F57','FEBC2E','28C840'}
+# theme color scheme -> brand (white canvas, ink text, red accent)
+THEME_CLR = {'dk1':INK,'dk2':INK,'lt1':WHITE,'lt2':SOFT,'accent1':RED,'accent2':INK,
+             'accent3':SLATE,'accent4':RED2,'accent5':SLATE,'accent6':INK,
+             'hlink':RED,'folHlink':'8A2A20'}
+
+
+def _sl(hexv):
+    """(saturation, lightness) in 0..1 from a hex color."""
+    h = hexv.lstrip('#')
+    try:
+        r, g, b = (int(h[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+    except Exception:
+        return (0.0, 0.5)
+    mx, mn = max(r, g, b), min(r, g, b)
+    l = (mx + mn) / 2
+    if mx == mn:
+        s = 0.0
+    else:
+        d = mx - mn
+        s = d / (2 - mx - mn) if l > 0.5 else d / (mx + mn)
+    return (s, l)
+
+def _luma(hexv):
+    h = hexv.lstrip('#')
+    try:
+        r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
+    except Exception:
+        return 128
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+def classify(hexv):
+    """Map an arbitrary color to the Taikun black/red/white(/slate) palette by HSL."""
+    v = hexv.upper()
+    if v in PRESERVE:
+        return v
+    s, l = _sl(v)
+    if l <= 0.22:                       # near-black (incl. dark navies) -> ink
+        return INK
+    if l >= 0.94:                       # near-white -> white
+        return WHITE
+    if s >= 0.30 and l <= 0.82:         # any saturated hue -> brand red
+        return RED
+    # low-saturation neutrals -> gray ramp
+    if l >= 0.84: return SOFT
+    if l >= 0.60: return LGRAY
+    if l >= 0.34: return SLATE
+    return INK
 
 
 def _remap_colors(root):
     for el in root.iter(_a('srgbClr')):
         v = (el.get('val') or '').upper()
-        if v in PRESERVE:
+        if not v:
             continue
-        if v in COLORMAP and COLORMAP[v] != v:
-            el.set('val', COLORMAP[v])
+        nv = classify(v)
+        if nv != v:
+            el.set('val', nv)
 
 
 def _remap_fonts(root):
@@ -105,14 +135,17 @@ def _fix_theme(root):
         if mnr is not None: mnr.set('typeface', 'Roboto')
 
 
-# ---- contrast (pure-XML, geometry parsed from the slide) ----
-def _luma(h):
-    h = h.lstrip('#'); r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return 0.299 * r + 0.587 * g + 0.114 * b
+def _white_bg(cSld):
+    """Force a solid white background on a cSld (slide/layout/master)."""
+    for bg in cSld.findall(_p('bg')):
+        cSld.remove(bg)
+    bg = etree.Element(_p('bg'))
+    bgPr = etree.SubElement(bg, _p('bgPr'))
+    sf = etree.SubElement(bgPr, _a('solidFill'))
+    etree.SubElement(sf, _a('srgbClr')).set('val', WHITE)
+    etree.SubElement(bgPr, _a('effectLst'))
+    cSld.insert(0, bg)   # bg must precede spTree
 
-def _is_light(h):
-    try: return _luma(h) > 140
-    except Exception: return False
 
 def _shape_rect(sp):
     spPr = sp.find(_p('spPr'))
@@ -130,6 +163,7 @@ def _shape_rect(sp):
     return (x, y, x + cx, y + cy)
 
 def _shape_fill(sp):
+    """The shape's explicit srgb solid fill (hex), for background-darkness checks."""
     spPr = sp.find(_p('spPr'))
     if spPr is None:
         return None
@@ -139,69 +173,148 @@ def _shape_fill(sp):
     c = sf.find(_a('srgbClr'))
     return c.get('val').upper() if (c is not None and c.get('val')) else None
 
+def _has_solid_fill(sp):
+    """True if the shape has ANY solid fill (srgb or theme/scheme color)."""
+    spPr = sp.find(_p('spPr'))
+    if spPr is None:
+        return False
+    sf = spPr.find(_a('solidFill'))
+    return sf is not None and len(sf) > 0
+
+def _set_shape_fill_white(sp):
+    spPr = sp.find(_p('spPr'))
+    sf = spPr.find(_a('solidFill')) if spPr is not None else None
+    if sf is None:
+        return
+    for c in list(sf):
+        sf.remove(c)
+    etree.SubElement(sf, _a('srgbClr')).set('val', WHITE)
+
+# theme color names by tone (after _fix_theme: lt*/bg* are light, dk*/tx* dark, accent1 red)
+_LIGHT_SCHEME = {'lt1', 'lt2', 'bg1', 'bg2'}
+_DARK_SCHEME = {'dk1', 'dk2', 'tx1', 'tx2'}
+
+def _run_tone(rpr):
+    """'light' | 'dark' | 'red' | None for a run's color (srgb or scheme)."""
+    if rpr is None:
+        return None
+    sf = rpr.find(_a('solidFill'))
+    if sf is None:
+        return None
+    sc = sf.find(_a('srgbClr'))
+    if sc is not None and sc.get('val'):
+        v = sc.get('val').upper()
+        if v == RED or v == RED2:
+            return 'red'
+        return 'light' if _luma(v) > 150 else 'dark'
+    sch = sf.find(_a('schemeClr'))
+    if sch is not None:
+        nm = sch.get('val')
+        if nm in _LIGHT_SCHEME: return 'light'
+        if nm in _DARK_SCHEME: return 'dark'
+        if nm == 'accent1': return 'red'
+    return None
+
 def _shape_text(sp):
     tx = sp.find(_p('txBody'))
-    if tx is None:
-        return ""
-    return "".join(t.text or '' for t in tx.iter(_a('t')))
+    return "".join(t.text or '' for t in tx.iter(_a('t'))) if tx is not None else ""
 
-def _whiten_run(r_el):
+def _set_run(r_el, hexval):
     rpr = r_el.find(_a('rPr'))
     if rpr is None:
         rpr = etree.Element(_a('rPr'))
         r_el.insert(0, rpr)
-    # already light? leave it
-    sc = rpr.find(_a('solidFill') + '/' + _a('srgbClr'))
-    if sc is not None and sc.get('val') and _is_light(sc.get('val')):
-        return
     for fe in (rpr.findall(_a('solidFill')) + rpr.findall(_a('noFill'))
                + rpr.findall(_a('gradFill')) + rpr.findall(_a('pattFill'))):
         rpr.remove(fe)
     sf = etree.Element(_a('solidFill'))
-    etree.SubElement(sf, _a('srgbClr')).set('val', WHITE)
+    etree.SubElement(sf, _a('srgbClr')).set('val', hexval)
     ln = rpr.find(_a('ln'))
     if ln is not None:
-        ln.addnext(sf)          # fill follows ln in the schema
+        ln.addnext(sf)
     else:
         rpr.insert(0, sf)
 
-def _fix_contrast(slide_root):
-    spTree = slide_root.find('.//' + _p('cSld') + '/' + _p('spTree'))
+
+def _fix_slide(root, slide_area):
+    spTree = root.find('.//' + _p('cSld') + '/' + _p('spTree'))
     if spTree is None:
         return
     shapes = [c for c in spTree if etree.QName(c).localname in ('sp', 'cxnSp', 'pic')]
-    fills = []
+
+    # 1) full-bleed background shapes -> white
+    if slide_area:
+        for sp in shapes:
+            if etree.QName(sp).localname == 'pic':
+                continue
+            r = _shape_rect(sp)
+            if r and _has_solid_fill(sp):
+                if (r[2]-r[0]) * (r[3]-r[1]) >= 0.82 * slide_area:
+                    _set_shape_fill_white(sp)
+
+    # 2) gather fills (backgrounds) + image rects
+    fills, pics = [], []
     for sp in shapes:
-        fh, r = _shape_fill(sp), _shape_rect(sp)
-        if fh and r:
-            area = (r[2]-r[0]) * (r[3]-r[1]) / 914400.0 / 914400.0
-            if area > 0.05:
+        r = _shape_rect(sp)
+        if not r:
+            continue
+        kind = etree.QName(sp).localname
+        if kind == 'pic':
+            pics.append(r)
+        else:
+            fh = _shape_fill(sp)
+            if fh:
+                area = (r[2]-r[0]) * (r[3]-r[1])
                 fills.append((area, r, fh, sp))
-    fills.sort(key=lambda x: x[0])     # smallest (innermost) first
+    fills.sort(key=lambda x: x[0])
+
+    # 3) bidirectional contrast
+    def inside(rect, x, y):
+        return rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]
     for sp in shapes:
-        if not _shape_text(sp).strip():
+        if etree.QName(sp).localname == 'pic' or not _shape_text(sp).strip():
             continue
         r = _shape_rect(sp)
         if not r:
             continue
         cx, cy = (r[0]+r[2]) / 2, (r[1]+r[3]) / 2
         eff = _shape_fill(sp)
+        over_image = False
         if eff is None:
             for area, fr, fh, fs in fills:
-                if fs is sp:
-                    continue
-                if fr[0] <= cx <= fr[2] and fr[1] <= cy <= fr[3]:
+                if fs is not sp and inside(fr, cx, cy):
                     eff = fh
                     break
-        if eff is None or eff not in DARK_BG:
+        if eff is None:
+            if any(inside(pr, cx, cy) for pr in pics):
+                over_image = True
+            else:
+                eff = WHITE      # bare slide background (now white)
+        if over_image or eff is None:
             continue
+        bg_dark = _luma(eff) < 128
         tx = sp.find(_p('txBody'))
         for r_el in tx.iter(_a('r')):
-            _whiten_run(r_el)
+            tone = _run_tone(r_el.find(_a('rPr')))
+            if bg_dark:
+                if tone in (None, 'dark', 'red'):   # ensure light text on dark/red
+                    _set_run(r_el, WHITE)
+            elif tone == 'light':                   # light text on the new white -> ink
+                _set_run(r_el, INK)
+
+
+def _slide_size(zin):
+    try:
+        pres = etree.fromstring(zin.read('ppt/presentation.xml'))
+        sz = pres.find(_p('sldSz'))
+        return int(sz.get('cx')) * int(sz.get('cy'))
+    except Exception:
+        return 0
 
 
 def _xml_pass(data: bytes) -> bytes:
     zin = zipfile.ZipFile(io.BytesIO(data), 'r')
+    slide_area = _slide_size(zin)
     out = io.BytesIO()
     zout = zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED)
     for info in zin.infolist():
@@ -217,8 +330,13 @@ def _xml_pass(data: bytes) -> bytes:
             _remap_colors(root)
             if fn.startswith('ppt/theme/'):
                 _fix_theme(root)
+            if (fn.startswith('ppt/slides/slide') or fn.startswith('ppt/slideLayouts/')
+                    or fn.startswith('ppt/slideMasters/')):
+                cSld = root.find('.//' + _p('cSld'))
+                if cSld is not None:
+                    _white_bg(cSld)
             if fn.startswith('ppt/slides/slide'):
-                _fix_contrast(root)
+                _fix_slide(root, slide_area)
             raw = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
         zout.writestr(info, raw)
     zin.close(); zout.close()
