@@ -270,27 +270,25 @@
                         </div>
                         <!-- Inbox (Live Inbox: email-triaged updates awaiting review) -->
                         <div class="tab-pane" id="tab-inbox" role="tabpanel">
-                            <div class="card mt-3">
-                                <div class="card-header">
-                                    <div>
-                                        <h3 class="card-title"><i class="ti ti-checklist me-2"></i>Action Queue</h3>
-                                        <div class="text-secondary small">Every proposed change — from uploads, pasted notes and email — lands here to confirm, edit or dismiss in bulk.</div>
-                                    </div>
-                                    <div class="card-actions btn-list">
-                                        <button id="inbox-sim" class="btn btn-sm">Simulate email</button>
-                                        <button id="inbox-refresh" class="btn btn-sm"><i class="ti ti-refresh"></i></button>
-                                    </div>
+                            <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
+                                <div>
+                                    <h3 class="m-0"><i class="ti ti-checklist me-2"></i>Action Queue</h3>
+                                    <div class="text-secondary small">Every proposed change — from uploads, pasted notes and email — lands here to review, edit, confirm or dismiss in bulk.</div>
                                 </div>
-                                <div class="card-body">
-                                    <div id="inbox-sim-box" class="collapse mb-3">
-                                        <input id="inbox-sim-subject" class="form-control form-control-sm mb-1" placeholder="Subject"/>
-                                        <textarea id="inbox-sim-text" class="form-control form-control-sm" rows="4" placeholder="Paste a fake inbound email to test the Live Inbox pipeline (no mailbox needed)…"></textarea>
-                                        <button id="inbox-sim-go" class="btn btn-primary btn-sm mt-2"><i class="ti ti-mail-forward me-1"></i>Triage as inbound email</button>
-                                        <span id="inbox-sim-flash" class="small text-secondary ms-1"></span>
-                                    </div>
-                                    <div id="inbox-content" class="text-secondary"><span class="spinner-border spinner-border-sm me-2"></span>Loading queue…</div>
+                                <div class="ms-auto btn-list">
+                                    <button id="inbox-sim" class="btn btn-sm"><i class="ti ti-mail-forward me-1"></i>Simulate email</button>
+                                    <button id="inbox-refresh" class="btn btn-sm"><i class="ti ti-refresh me-1"></i>Refresh</button>
                                 </div>
                             </div>
+                            <div id="inbox-sim-box" class="collapse mb-3">
+                                <div class="card"><div class="card-body">
+                                    <input id="inbox-sim-subject" class="form-control form-control-sm mb-1" placeholder="Subject"/>
+                                    <textarea id="inbox-sim-text" class="form-control form-control-sm" rows="4" placeholder="Paste a fake inbound email to test the Live Inbox pipeline (no mailbox needed)…"></textarea>
+                                    <button id="inbox-sim-go" class="btn btn-primary btn-sm mt-2"><i class="ti ti-mail-forward me-1"></i>Triage as inbound email</button>
+                                    <span id="inbox-sim-flash" class="small text-secondary ms-1"></span>
+                                </div></div>
+                            </div>
+                            <div id="inbox-content"><span class="spinner-border spinner-border-sm me-2"></span>Loading queue…</div>
                         </div>
                         <!-- Exec Summary (shareable) -->
                         <div class="tab-pane active show" id="tab-exec" role="tabpanel">
@@ -389,7 +387,7 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@latest/dist/apexcharts.min.js"></script>
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js?v=12"></script>
+    <script src="app.js?v=13"></script>
     <script src="taikun-ui.js?v=8"></script>
     <script>
       // Keep the sidebar nav highlight in sync with the active tab (sidebar + top tabs share tab targets).

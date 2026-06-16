@@ -1655,156 +1655,252 @@ const TeepPlan = {
         return { items, props, evidence, news, actions: props + news, safe: props + news - evidence };
     },
 
+    // Universal Operator Queue — KPI strip + filter bar + queue table + preview modal,
+    // matching the canonical concept-queue.html on demo.taikunai.com.
     renderInbox(items) {
         const el = document.getElementById('inbox-content');
         if (!el) return;
         el.classList.remove('text-secondary');
+        this._ensureQueueModal();
         const all = items || this.inboxItems || [];
-        const pending = all.filter((it) => it.status === 'pending');
-        const logItems = all.filter((it) => it.status !== 'pending').slice(0, 12);
         const c = this._queueCounts();
+        const confirmedCount = all.filter((it) => it.status === 'confirmed' || it.status === 'applied').length;
         const f = this.queueFilter || 'all';
+        const src = this.queueSource || 'all';
+        const hideDone = this.queueHideConfirmed !== false;   // default: hide the audit log
 
-        const bulk = c.actions ? `
-            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-                <button class="btn btn-primary" data-confirm-safe><i class="ti ti-checks me-1"></i>Confirm all safe
-                    <span class="badge bg-white text-primary ms-1">${c.safe}</span></button>
-                <button class="btn btn-outline-primary" data-confirm-all>Confirm everything (${c.actions})</button>
-                <span class="text-secondary small ms-1">${c.items} item${c.items !== 1 ? 's' : ''} · ${c.actions} pending action${c.actions !== 1 ? 's' : ''}${c.evidence ? ` · <span class="text-orange fw-medium">${c.evidence} need evidence</span>` : ''}</span>
-            </div>` : '';
+        // ---- KPI strip (mirrors the live console KPIs) ----
+        const kpi = `<div class="row row-cards mb-3">
+            ${this._kpiCard('Awaiting review', c.items, 'red', 'items in the queue')}
+            ${this._kpiCard('Pending actions', c.actions, 'orange', 'changes + new tasks')}
+            ${this._kpiCard('Needs evidence', c.evidence, 'red', 'status → Done, held by default', c.evidence > 0)}
+            ${this._kpiCard('Confirmed', confirmedCount, 'green', 'applied from the queue')}
+        </div>`;
 
-        const filters = `<div class="btn-group btn-group-sm mb-3" role="group">` +
-            this.QUEUE_FILTERS.map((q) => `<button type="button" class="btn ${q.key === f ? 'btn-primary' : 'btn-outline-secondary'}" data-qfilter="${q.key}"><i class="ti ${q.icon} me-1"></i>${q.label}</button>`).join('') + `</div>`;
+        // ---- universal filter bar ----
+        const typeOpts = this.QUEUE_FILTERS.map((q) =>
+            `<option value="${q.key}"${q.key === f ? ' selected' : ''}>${q.key === 'all' ? 'Type · any' : q.label}</option>`).join('');
+        const srcOpts = ['all', 'call', 'email', 'upload', 'note'].map((s) =>
+            `<option value="${s}"${s === src ? ' selected' : ''}>${s === 'all' ? 'Source · any' : s[0].toUpperCase() + s.slice(1)}</option>`).join('');
+        const filterBar = `<div class="card mb-3"><div class="card-body py-2"><div class="row g-2 align-items-center">
+            <div class="col-12 col-md"><div class="input-icon">
+                <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                <input id="q-search" type="text" class="form-control" placeholder="Search subject, task id, or text…" autocomplete="off"/>
+            </div></div>
+            <div class="col-6 col-md-auto"><select id="q-type" class="form-select">${typeOpts}</select></div>
+            <div class="col-6 col-md-auto"><select id="q-source" class="form-select">${srcOpts}</select></div>
+            <div class="col-auto"><label class="form-check form-switch m-0">
+                <input id="q-hide" class="form-check-input" type="checkbox"${hideDone ? ' checked' : ''}/>
+                <span class="form-check-label">Hide confirmed</span></label></div>
+        </div></div></div>`;
 
-        const cards = pending.map((it) => this._inboxItemHtml(it, f)).filter(Boolean).join('');
-        const emptyPending = cards ? '' : (c.actions
-            ? `<div class="text-secondary small py-3">Nothing in the “${this.QUEUE_FILTERS.find((q) => q.key === f).label}” lane.</div>`
-            : `<div class="empty py-4"><div class="empty-icon"><i class="ti ti-checks"></i></div><p class="empty-title">Queue is clear</p><p class="empty-subtitle text-secondary">Upload a call, paste notes, or forward an email — the agent's proposed plan changes land here to review and confirm in bulk.</p></div>`);
+        // ---- bulk action bar ----
+        const bulk = c.actions ? `<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <button class="btn btn-primary" data-confirm-safe><i class="ti ti-checks me-1"></i>Confirm all safe
+                <span class="badge bg-white text-primary ms-1">${c.safe}</span></button>
+            <button class="btn btn-outline-primary" data-confirm-all>Confirm everything (${c.actions})</button>
+            <span class="text-secondary small ms-1">${c.items} item${c.items !== 1 ? 's' : ''} · ${c.actions} pending action${c.actions !== 1 ? 's' : ''}${c.evidence ? ` · <span class="text-orange fw-medium">${c.evidence} need evidence</span>` : ''}</span>
+        </div>` : '';
 
-        const logHtml = logItems.length
-            ? `<div class="hr-text text-secondary mt-4 mb-2">Recently actioned</div>${logItems.map((it) => this._inboxItemHtml(it, 'all')).join('')}`
-            : '';
+        // ---- rows (source + type filtered) ----
+        const typeMatch = (it) => {
+            if (f === 'all') return true;
+            const tri = it.triage || {};
+            if (f === 'new') return (tri.new_tasks || []).length > 0;
+            return (tri.proposals || []).some((p) => this._propMatchesFilter(p, f));
+        };
+        const visible = all.filter((it) => it.status === 'pending'
+            && (src === 'all' || this._srcKey(it.source) === src) && typeMatch(it));
+        const logItems = all.filter((it) => it.status !== 'pending'
+            && (src === 'all' || this._srcKey(it.source) === src)).slice(0, 15);
+
+        const rows = visible.map((it) => this._queueRow(it)).join('')
+            || `<tr><td colspan="6" class="text-secondary text-center py-4">${c.actions ? 'No items match the filters.' : 'Queue is clear — upload a call, paste notes, or forward an email and proposals land here.'}</td></tr>`;
+        const tableCard = `<div class="card"><div class="table-responsive">
+            <table class="table table-vcenter card-table table-hover">
+                <thead><tr><th class="w-1"></th><th>Item</th><th>Source</th><th>Proposed changes</th><th>Age</th><th class="w-1"></th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table></div></div>`;
+
+        const audit = (!hideDone && logItems.length) ? `<div class="hr-text text-secondary mt-4 mb-2">Recently actioned</div>
+            <div class="card"><div class="table-responsive"><table class="table table-vcenter card-table">
+                <tbody>${logItems.map((it) => this._queueLogRow(it)).join('')}</tbody></table></div></div>` : '';
 
         const flash = this._queueFlash
             ? `<div class="alert alert-success py-2 px-3 small mb-3"><i class="ti ti-checks me-1"></i>${this.esc(this._queueFlash)}</div>` : '';
         this._queueFlash = null;
-        el.innerHTML = flash + bulk + (c.actions ? filters : '') + cards + emptyPending + logHtml;
+
+        el.innerHTML = flash + kpi + filterBar + bulk + tableCard + audit;
 
         const sb = el.querySelector('[data-confirm-safe]'); if (sb) sb.addEventListener('click', () => this.confirmAll(true));
         const ab = el.querySelector('[data-confirm-all]'); if (ab) ab.addEventListener('click', () => this.confirmAll(false));
-        el.querySelectorAll('[data-qfilter]').forEach((b) => b.addEventListener('click', () => {
-            this.queueFilter = b.getAttribute('data-qfilter'); this.renderInbox(this.inboxItems);
-        }));
-        pending.forEach((it) => this._wireInboxItem(it));
+        const qt = el.querySelector('#q-type'); if (qt) qt.addEventListener('change', () => { this.queueFilter = qt.value; this.renderInbox(this.inboxItems); });
+        const qsrc = el.querySelector('#q-source'); if (qsrc) qsrc.addEventListener('change', () => { this.queueSource = qsrc.value; this.renderInbox(this.inboxItems); });
+        const qh = el.querySelector('#q-hide'); if (qh) qh.addEventListener('change', () => { this.queueHideConfirmed = qh.checked; this.renderInbox(this.inboxItems); });
+        const qsearch = el.querySelector('#q-search');   // in-place filter — no re-render (keeps focus)
+        if (qsearch) qsearch.addEventListener('input', () => {
+            const v = qsearch.value.toLowerCase();
+            el.querySelectorAll('tbody tr[data-qrow]').forEach((tr) => {
+                tr.style.display = (!v || (tr.getAttribute('data-hay') || '').indexOf(v) >= 0) ? '' : 'none';
+            });
+        });
+        el.querySelectorAll('[data-qopen]').forEach((r) => r.addEventListener('click', () => this.openQueueItem(r.getAttribute('data-qopen'))));
     },
 
-    _inboxItemHtml(it, filter) {
-        const f = filter || 'all';
+    _kpiCard(title, value, tone, sub, animated) {
+        return `<div class="col-sm-6 col-lg-3"><div class="card"><div class="card-body">
+            <div class="d-flex align-items-center"><div class="subheader">${title}</div>
+                <div class="ms-auto"><span class="status-dot ${animated ? 'status-dot-animated ' : ''}bg-${tone}"></span></div></div>
+            <div class="h1 mb-0 mt-1">${value}</div>
+            <div class="text-secondary small">${sub}</div></div></div></div>`;
+    },
+
+    _relAge(ts) {
+        if (!ts) return '';
+        const s = Math.max(0, Date.now() / 1000 - ts);
+        if (s < 60) return Math.floor(s) + 's';
+        if (s < 3600) return Math.floor(s / 60) + 'm';
+        if (s < 86400) return Math.floor(s / 3600) + 'h';
+        return Math.floor(s / 86400) + 'd';
+    },
+
+    _srcKey(source) {
+        const s = (source || '').toLowerCase();
+        if (s.indexOf('transcript') >= 0) return 'call';
+        if (s.indexOf('email') >= 0) return 'email';
+        if (s.indexOf('note') >= 0 || s.indexOf('paste') >= 0) return 'note';
+        return 'upload';
+    },
+
+    _queueRow(it) {
         const tri = it.triage || {};
         const sm = this._srcMeta(it.source);
-        const when = it.received_at ? new Date(it.received_at * 1000).toLocaleString() : '';
+        const props = tri.proposals || [];
+        const nts = tri.new_tasks || [];
+        const nAct = props.length + nts.length;
+        const nEv = props.filter((p) => this._needsEvidence(p)).length;
+        const hay = ((it.subject || '') + ' ' + props.map((p) => p.task_id).join(' ') + ' ' + (it.summary || '')).toLowerCase();
+        const chips = props.slice(0, 3).map((p) => `<span class="badge bg-azure-lt me-1 font-monospace">${this.esc(p.task_id)}</span>`).join('')
+            + (nAct > 3 ? `<span class="text-secondary small">+${nAct - 3}</span>` : '');
+        return `<tr data-qrow data-qopen="${it.id}" data-hay="${this.esc(hay)}" style="cursor:pointer">
+            <td><span class="status-dot bg-${nEv ? 'orange' : 'green'}"></span></td>
+            <td><div class="fw-bold text-truncate" style="max-width:420px">${this.esc(it.subject || sm.label)}</div>
+                <div class="text-secondary small">${this.esc(sm.label)} · ${this._relAge(it.received_at)} ago</div></td>
+            <td><span class="badge bg-secondary-lt"><i class="ti ${sm.icon} me-1"></i>${this.esc(sm.label)}</span></td>
+            <td><span class="badge bg-yellow-lt">${nAct} action${nAct !== 1 ? 's' : ''}</span>${nEv ? ` <span class="badge bg-orange-lt">${nEv} ⚑</span>` : ''} ${chips}</td>
+            <td class="text-secondary">${this._relAge(it.received_at)}</td>
+            <td class="text-end"><a href="#" class="btn btn-primary btn-sm" onclick="return false">Review</a></td>
+        </tr>`;
+    },
 
-        if (it.status === 'pending') {
-            const props = tri.proposals || [];
-            const nts = tri.new_tasks || [];
-            const propRow = (p, idx) => {
-                const ev = this._needsEvidence(p);
-                return `<div class="list-group-item px-2 py-2" data-iprow="${idx}">
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="status-dot bg-${ev ? 'orange' : 'green'} flex-shrink-0"></span>
-                        <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
-                        <div class="flex-fill" data-pchips="${idx}">${this._propChips(p)}</div>
-                        ${ev ? '<span class="badge bg-orange-lt">needs evidence</span>' : ''}
-                        <button class="btn btn-sm btn-ghost-secondary p-1" data-pedit="${idx}" title="Edit"><i class="ti ti-pencil"></i></button>
-                        <button class="btn btn-sm btn-ghost-secondary p-1" data-ipdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
-                    </div>
-                    ${p.rationale ? `<div class="text-secondary small mt-1 ms-4">${this.esc(p.rationale)}</div>` : ''}
-                    <div class="mt-2 ms-4 d-none" data-peditor="${idx}"></div>
-                </div>`;
-            };
-            const ntRow = (t, idx) => `<div class="list-group-item px-2 py-2" data-introw="${idx}">
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="status-dot bg-azure flex-shrink-0"></span>
-                        <span class="badge bg-azure-lt">new · ${this.esc(t.workstream_id || '?')}</span>
-                        <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
-                        <button class="btn btn-sm btn-ghost-secondary p-1" data-intdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
-                    </div>${t.rationale ? `<div class="text-secondary small mt-1 ms-4">${this.esc(t.rationale)}</div>` : ''}
-                </div>`;
-            const propsHtml = (f === 'new') ? '' : props.map((p, idx) => this._propMatchesFilter(p, f) ? propRow(p, idx) : '').join('');
-            const ntsHtml = (f === 'all' || f === 'new') ? nts.map((t, idx) => ntRow(t, idx)).join('') : '';
-            if (!propsHtml && !ntsHtml) return '';   // nothing in this lane for this item → hide its card
-            const nAct = props.length + nts.length;
-            const nEv = props.filter((p) => this._needsEvidence(p)).length;
-            return `<div class="card card-sm mb-2" data-inbox="${it.id}">
-                <div class="card-status-start bg-azure"></div>
-                <div class="card-body">
-                    <div class="d-flex align-items-center gap-2 mb-1">
-                        <span class="avatar avatar-xs rounded bg-azure-lt text-azure"><i class="ti ${sm.icon}"></i></span>
-                        <strong class="text-truncate">${this.esc(it.subject || sm.label)}</strong>
-                        <span class="badge bg-secondary-lt">${this.esc(sm.label)}</span>
-                        <span class="badge bg-yellow-lt">${nAct} action${nAct !== 1 ? 's' : ''}${nEv ? ` · ${nEv} ⚑` : ''}</span>
-                        <span class="ms-auto text-secondary small">${this.esc(when)}</span>
-                    </div>
-                    ${it.summary ? `<details class="mb-2"><summary class="small text-secondary" style="cursor:pointer">Why these changes</summary><div class="small mt-1">${this.md(it.summary)}</div></details>` : ''}
-                    <div class="list-group list-group-flush border rounded">${propsHtml}${ntsHtml}</div>
-                    <div class="mt-2 d-flex flex-wrap gap-2 align-items-center">
-                        <button class="btn btn-primary btn-sm" data-iconfirm-safe><i class="ti ti-checks me-1"></i>Confirm safe</button>
-                        ${nEv ? '<button class="btn btn-outline-primary btn-sm" data-iconfirm-all>Confirm incl. closes</button>' : ''}
-                        <button class="btn btn-sm" data-idismiss>Dismiss</button>
-                        <span class="small text-secondary ms-1" data-istatus></span>
-                    </div>
-                </div></div>`;
-        }
-
-        // non-pending → compact log card
+    _queueLogRow(it) {
+        const tri = it.triage || {};
+        const sm = this._srcMeta(it.source);
         const a = tri.applied || {};
         const u = a.updated || [], cr = a.created || [];
         const did = (u.length || cr.length)
             ? `${u.length ? 'updated ' + u.map((x) => this.esc(x)).join(', ') : ''}${(u.length && cr.length) ? ' · ' : ''}${cr.length ? 'created ' + cr.map((x) => this.esc(x)).join(', ') : ''}`
             : 'no task change — ingested for reference';
-        const stChip = (it.status === 'confirmed' || it.status === 'applied')
-            ? `<span class="badge bg-green-lt">${this.esc(it.status)}</span>`
-            : `<span class="badge bg-secondary-lt">${this.esc(it.status)}</span>`;
-        return `<div class="card card-sm mb-2" data-inbox="${it.id}">
-            <div class="card-body py-2">
-                <div class="d-flex align-items-center gap-2">
-                    <span class="avatar avatar-xs rounded bg-secondary-lt"><i class="ti ${sm.icon}"></i></span>
-                    <span class="fw-medium text-truncate">${this.esc(it.subject || sm.label)}</span>
-                    ${stChip}
-                    <span class="ms-auto text-secondary small">${this.esc(when)}</span>
-                </div>
-                <div class="small text-secondary mt-1 ms-4"><i class="ti ti-checks me-1 text-green"></i>${did}</div>
-            </div></div>`;
+        return `<tr>
+            <td class="w-1"><span class="status-dot bg-green"></span></td>
+            <td><span class="fw-medium">${this.esc(it.subject || sm.label)}</span>
+                <span class="text-secondary small">· ${did}</span></td>
+            <td class="text-end"><span class="badge bg-green-lt">${this.esc(it.status)}</span></td>
+        </tr>`;
     },
 
-    _wireInboxItem(it) {
-        if (it.status !== 'pending') return;
-        const card = document.querySelector(`[data-inbox="${it.id}"]`);
-        if (!card) return;
+    _ensureQueueModal() {
+        if (document.getElementById('queue-modal')) return;
+        const wrap = document.createElement('div');
+        wrap.innerHTML = `<div class="modal modal-blur fade" id="queue-modal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
+                <div class="modal-header"><h3 class="modal-title d-flex align-items-center" id="queue-modal-title">Review</h3>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+                <div class="modal-body" id="queue-modal-body"></div>
+                <div class="modal-footer" id="queue-modal-footer"></div>
+            </div></div></div>`;
+        document.body.appendChild(wrap.firstElementChild);
+    },
+
+    _hideQueueModal() {
+        const m = document.getElementById('queue-modal');
+        if (m && window.bootstrap) { const inst = window.bootstrap.Modal.getInstance(m); if (inst) inst.hide(); }
+    },
+
+    // Open one queue item in the preview modal — proposals shown grouped, each editable/droppable,
+    // with Confirm safe / Confirm incl. closes / Dismiss. Working copies so edits/drops are local
+    // until Confirm.
+    openQueueItem(id) {
+        const it = (this.inboxItems || []).find((x) => String(x.id) === String(id));
+        if (!it) return;
         const tri = it.triage || {};
+        const sm = this._srcMeta(it.source);
         const props = (tri.proposals || []).map((p) => Object.assign({}, p));
         const nts = (tri.new_tasks || []).map((t) => Object.assign({}, t));
-        card.querySelectorAll('[data-ipdrop]').forEach((b) => b.addEventListener('click', () => {
+        const nEv = props.filter((p) => this._needsEvidence(p)).length;
+        const nAct = props.length + nts.length;
+
+        const propRow = (p, idx) => {
+            const ev = this._needsEvidence(p);
+            return `<div class="list-group-item px-2 py-2" data-iprow="${idx}">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="status-dot bg-${ev ? 'orange' : 'green'} flex-shrink-0"></span>
+                    <span class="fw-medium font-monospace">${this.esc(p.task_id)}</span>
+                    <div class="flex-fill" data-pchips="${idx}">${this._propChips(p)}</div>
+                    ${ev ? '<span class="badge bg-orange-lt">needs evidence</span>' : ''}
+                    <button class="btn btn-sm btn-ghost-secondary p-1" data-pedit="${idx}" title="Edit"><i class="ti ti-pencil"></i></button>
+                    <button class="btn btn-sm btn-ghost-secondary p-1" data-ipdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+                </div>
+                ${p.rationale ? `<div class="text-secondary small mt-1 ms-4">${this.esc(p.rationale)}</div>` : ''}
+                <div class="mt-2 ms-4 d-none" data-peditor="${idx}"></div>
+            </div>`;
+        };
+        const ntRow = (t, idx) => `<div class="list-group-item px-2 py-2" data-introw="${idx}">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="status-dot bg-azure flex-shrink-0"></span>
+                    <span class="badge bg-azure-lt">new · ${this.esc(t.workstream_id || '?')}</span>
+                    <span class="flex-fill fw-medium">${this.esc(t.title)}</span>
+                    <button class="btn btn-sm btn-ghost-secondary p-1" data-intdrop="${idx}" title="Drop"><i class="ti ti-x"></i></button>
+                </div>${t.rationale ? `<div class="text-secondary small mt-1 ms-4">${this.esc(t.rationale)}</div>` : ''}
+            </div>`;
+
+        document.getElementById('queue-modal-title').innerHTML =
+            `<span class="avatar avatar-xs rounded bg-azure-lt text-azure me-2"><i class="ti ${sm.icon}"></i></span>${this.esc(it.subject || sm.label)}`;
+        const body = document.getElementById('queue-modal-body');
+        body.innerHTML = `<div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                <span class="badge bg-secondary-lt">${this.esc(sm.label)}</span>
+                <span class="badge bg-yellow-lt">${nAct} action${nAct !== 1 ? 's' : ''}</span>
+                ${nEv ? `<span class="badge bg-orange-lt">${nEv} need evidence</span>` : ''}
+                <span class="text-secondary small ms-auto">${it.received_at ? new Date(it.received_at * 1000).toLocaleString() : ''}</span>
+            </div>
+            ${it.summary ? `<div class="markdown small mb-3 p-2 bg-secondary-lt rounded">${this.md(it.summary)}</div>` : ''}
+            <div class="list-group list-group-flush border rounded">${props.map((p, i) => propRow(p, i)).join('')}${nts.map((t, i) => ntRow(t, i)).join('')}</div>`;
+        const footer = document.getElementById('queue-modal-footer');
+        footer.innerHTML = `<span class="small text-secondary me-auto" data-istatus></span>
+            <button class="btn" data-idismiss>Dismiss</button>
+            ${nEv ? '<button class="btn btn-outline-primary" data-iconfirm-all>Confirm incl. closes</button>' : ''}
+            <button class="btn btn-primary" data-iconfirm-safe><i class="ti ti-checks me-1"></i>Confirm safe</button>`;
+
+        body.querySelectorAll('[data-ipdrop]').forEach((b) => b.addEventListener('click', () => {
             const idx = parseInt(b.getAttribute('data-ipdrop'), 10); props[idx] = null;
-            const r = card.querySelector(`[data-iprow="${idx}"]`); if (r) r.remove();
+            const r = body.querySelector(`[data-iprow="${idx}"]`); if (r) r.remove();
         }));
-        card.querySelectorAll('[data-intdrop]').forEach((b) => b.addEventListener('click', () => {
+        body.querySelectorAll('[data-intdrop]').forEach((b) => b.addEventListener('click', () => {
             const idx = parseInt(b.getAttribute('data-intdrop'), 10); nts[idx] = null;
-            const r = card.querySelector(`[data-introw="${idx}"]`); if (r) r.remove();
+            const r = body.querySelector(`[data-introw="${idx}"]`); if (r) r.remove();
         }));
-        card.querySelectorAll('[data-pedit]').forEach((b) => b.addEventListener('click', () => {
-            const idx = parseInt(b.getAttribute('data-pedit'), 10);
-            this._togglePropEditor(card, idx, props);
-        }));
+        body.querySelectorAll('[data-pedit]').forEach((b) => b.addEventListener('click', () =>
+            this._togglePropEditor(body, parseInt(b.getAttribute('data-pedit'), 10), props)));
         const confirm = (includeCloses) => {
             const live = props.filter(Boolean);
             const apply = includeCloses ? live : live.filter((p) => !this._needsEvidence(p));
             const keep = includeCloses ? [] : live.filter((p) => this._needsEvidence(p));
-            this.confirmInbox(it.id, apply, nts.filter(Boolean), keep, card);
+            this.confirmInbox(it.id, apply, nts.filter(Boolean), keep, footer);
         };
-        const cs = card.querySelector('[data-iconfirm-safe]'); if (cs) cs.addEventListener('click', () => confirm(false));
-        const ca = card.querySelector('[data-iconfirm-all]'); if (ca) ca.addEventListener('click', () => confirm(true));
-        card.querySelector('[data-idismiss]').addEventListener('click', () => this.dismissInbox(it.id));
+        const cs = footer.querySelector('[data-iconfirm-safe]'); if (cs) cs.addEventListener('click', () => confirm(false));
+        const ca = footer.querySelector('[data-iconfirm-all]'); if (ca) ca.addEventListener('click', () => confirm(true));
+        footer.querySelector('[data-idismiss]').addEventListener('click', () => this.dismissInbox(it.id));
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('queue-modal')).show();
     },
 
     _PROP_STATUSES: ['', 'Not Started', 'In Progress', 'Blocked', 'Done'],
@@ -1856,6 +1952,7 @@ const TeepPlan = {
             const held = data.remaining || 0;
             const n = (a.updated || []).length + (a.created || []).length;
             this._queueFlash = `Applied ${n} change${n !== 1 ? 's' : ''}${held ? ` · ${held} close(s) held for evidence` : ''}.`;
+            this._hideQueueModal();
             await this._reloadBoardData();
             this.initInbox();
         } catch (e) { if (st) st.textContent = 'failed: ' + e.message; }
@@ -1875,7 +1972,7 @@ const TeepPlan = {
     },
 
     async dismissInbox(id) {
-        try { await fetch(`api/inbox/${id}/dismiss`, { method: 'POST' }); this.initInbox(); } catch (e) { /* noop */ }
+        try { await fetch(`api/inbox/${id}/dismiss`, { method: 'POST' }); this._hideQueueModal(); this.initInbox(); } catch (e) { /* noop */ }
     },
 
     async simulateInbox() {
