@@ -158,6 +158,46 @@ def _white_bg(cSld):
     cSld.insert(0, bg)
 
 
+_CHROME_PH = {'ftr', 'hdr', 'sldNum', 'dt'}
+
+def _strip_chrome(cSld, slide_h):
+    """Remove the deck's own header/footer/slide-number/date chrome so the Taikun
+    branding (logo) is the only chrome — both ph placeholders AND footer/header text
+    boxes parked in the very top/bottom band."""
+    spTree = cSld.find(_p('spTree'))
+    if spTree is None:
+        return
+    for sp in list(spTree):
+        if etree.QName(sp).localname != 'sp':
+            continue
+        ph = sp.find(_p('nvSpPr') + '/' + _p('nvPr') + '/' + _p('ph'))
+        if ph is not None and (ph.get('type') or '') in _CHROME_PH:
+            spTree.remove(sp)
+            continue
+        if slide_h:
+            r = _shape_rect(sp)
+            tx = sp.find(_p('txBody'))
+            if r is not None and tx is not None:
+                cy = (r[1] + r[3]) / 2
+                txt = "".join(t.text or '' for t in tx.iter(_a('t'))).strip()
+                if 0 < len(txt) < 90 and (cy > 0.94 * slide_h or cy < 0.055 * slide_h):
+                    spTree.remove(sp)
+
+def _is_title(sp, slide_w):
+    ph = sp.find(_p('nvSpPr') + '/' + _p('nvPr') + '/' + _p('ph'))
+    if ph is not None and (ph.get('type') or '') in ('title', 'ctrTitle'):
+        return True
+    r = _shape_rect(sp)
+    if r and slide_w and (r[2] - r[0]) >= 0.45 * slide_w:
+        for rpr in sp.iter(_a('rPr')):
+            try:
+                if int(rpr.get('sz') or 0) >= 2000:
+                    return True
+            except Exception:
+                pass
+    return False
+
+
 def _shape_rect(sp):
     spPr = sp.find(_p('spPr'))
     xfrm = spPr.find(_a('xfrm')) if spPr is not None else sp.find(_p('xfrm'))
@@ -244,17 +284,6 @@ def _add_logo(root, slide_w, slide_h):
     for cNvPr in spTree.iter(_p('cNvPr')):
         if cNvPr.get('name') == _LOGO_NAME:
             return False   # already stamped (idempotent)
-    # skip if the slide already carries a TAIKUN wordmark/footer (a short text shape
-    # mentioning TAIKUN). Geometry-independent so it catches placeholder footers too.
-    for sp in spTree:
-        if etree.QName(sp).localname != 'sp':
-            continue
-        tx = sp.find(_p('txBody'))
-        if tx is None:
-            continue
-        txt = "".join(t.text or '' for t in tx.iter(_a('t'))).strip()
-        if 'TAIKUN' in txt.upper() and len(txt) < 55:
-            return False
     h = int(0.26 * 914400)
     w = int(0.26 * _LOGO_ASPECT * 914400)
     x = int(0.5 * 914400)
@@ -297,11 +326,23 @@ def _ensure_png_ct(ct_bytes):
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
 
 
-def _fix_slide(root, slide_area):
+def _fix_slide(root, slide_area, slide_w):
     spTree = root.find('.//' + _p('cSld') + '/' + _p('spTree'))
     if spTree is None:
         return
     shapes = [c for c in spTree if etree.QName(c).localname in ('sp', 'cxnSp', 'pic')]
+    # all-caps Poppins titles (wide headline boxes / title placeholders) — brand style.
+    # Restricted to wide boxes so narrow stat callouts ('Hours','Manual') don't wrap.
+    for sp in shapes:
+        if etree.QName(sp).localname != 'sp' or not _is_title(sp, slide_w):
+            continue
+        tx = sp.find(_p('txBody'))
+        if tx is None:
+            continue
+        for rpr in tx.iter(_a('rPr')):
+            rpr.set('cap', 'all')
+        for lat in tx.iter(_a('latin')):
+            lat.set('typeface', 'Poppins')
     if slide_area:
         for sp in shapes:
             if etree.QName(sp).localname == 'pic':
@@ -391,8 +432,9 @@ def _xml_pass(data: bytes) -> bytes:
                 cSld = root.find('.//' + _p('cSld'))
                 if cSld is not None:
                     _white_bg(cSld)
+                    _strip_chrome(cSld, sh)
             if is_slide:
-                _fix_slide(root, area)
+                _fix_slide(root, area, sw)
                 if _add_logo(root, sw, sh):
                     logo_added_to.append(fn)
             raw = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
