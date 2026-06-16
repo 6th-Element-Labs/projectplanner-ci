@@ -10,8 +10,12 @@ plan.taikunai.com {
     }
 }
 
-# Vanity URL: format.taikunai.com -> the deck rebrand tool. Caddy auto-issues a
-# Let's Encrypt cert once the format.taikunai.com A record resolves to this VM.
+# Vanity URL: format.taikunai.com SERVES the deck rebrand tool in place (the URL
+# stays format.taikunai.com). The root path is internally rewritten to /rebrand.html;
+# everything else (its CSS, POST /api/rebrand) proxies to the app on :8110. Caddy
+# auto-issues the Let's Encrypt cert once the A record resolves to this VM.
 format.taikunai.com {
-    redir https://plan.taikunai.com/rebrand.html
+    @root path /
+    rewrite @root /rebrand.html
+    reverse_proxy 127.0.0.1:8110
 }
