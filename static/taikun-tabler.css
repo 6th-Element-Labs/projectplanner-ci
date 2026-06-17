@@ -1,25 +1,33 @@
 /* ============================================================================
-   taikun-tabler.css  —  Taikun brand theme for Tabler
-   RULE-COMPLIANT: sets ONLY Tabler's own --tblr-* custom properties. No custom
-   classes, no overrides, no custom CSS. Load AFTER tabler.min.css. The whole app
-   then inherits the brand red, soft surface, rounded radius and refined type.
-   Same file the agent-console + document-engine wireframes use.
+   taikun-tabler.css  —  THE single design-token source for Taikun.
+   ----------------------------------------------------------------------------
+   Sets ONLY Tabler's own --tblr-* custom properties + a small --tk-* radius
+   scale. NO custom classes, NO component CSS — that lives in taikun-ui.css (the
+   polish layer). Load AFTER tabler core CSS and BEFORE taikun-ui.css on every
+   page. This is the ONLY place brand :root tokens are declared — the duplicate
+   :root in taikun-ui.css §1 was removed 2026-06-17 to kill the load-order bug.
+   Kept byte-compatible with the ActionEngine HMI copy (one design system).
+   Brand color can be swapped here or at runtime via the theme switcher.
    ============================================================================ */
 :root{
   /* brand color (taikun.ai red) */
   --tblr-primary:#c0392b;
   --tblr-primary-rgb:192,57,43;
 
-  /* soft canvas so white cards float, not stark gray */
-  --tblr-body-bg:#f5f6f8;
-  --tblr-body-color:#0b1020;
+  /* surfaces — white canvas; white cards float on a 1px edge */
+  --tblr-body-bg:#ffffff;
+  --tblr-body-color:#101114;
+  --tblr-secondary:#6b7280;
 
-  /* refined hairlines — visible card/region edge on the white canvas */
+  /* visible card / region edge */
   --tblr-border-color:#e2e5ea;
   --tblr-border-color-translucent:#e2e5ea;
 
-  /* rounder, more modern radius */
-  --tblr-border-radius:.5rem;
+  /* radius scale — components reference these tokens, never hardcode a radius */
+  --tk-radius-sm:.5rem;
+  --tk-radius:.65rem;
+  --tk-radius-lg:.9rem;
+  --tblr-border-radius:.65rem;
   --tblr-border-radius-lg:.85rem;
 
   /* crisp type */

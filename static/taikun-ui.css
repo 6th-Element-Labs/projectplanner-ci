@@ -14,16 +14,10 @@
    §2 for premium polish, add §3 for the collapsible sidebar.
    ============================================================================ */
 
-/* ── §1 · BRAND TOKENS — overrides Tabler variables only ────────────────────
-   This block alone is the portable "taikun-tabler.css" theme (red + white). */
-:root{
-  --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
-  --tblr-body-bg:#ffffff; --tblr-body-color:#101114;
-  --tblr-secondary:#6b7280;
-  --tblr-border-color:#e2e5ea; --tblr-border-color-translucent:#e2e5ea;
-  --tblr-border-radius:.65rem; --tblr-border-radius-lg:.85rem;
-  --tblr-font-sans-serif:'Inter','Inter Var',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-}
+/* ── §1 · brand tokens REMOVED 2026-06-17 ───────────────────────────────────
+   Tokens are declared once in taikun-tabler.css (loaded first). Deleting this
+   duplicate :root fixed the load-order bug (last sheet used to win). Polish only
+   below; it consumes the --tblr-* / --tk-* tokens from taikun-tabler.css. */
 
 /* ── §2 · POLISH — premium feel over Tabler component classes ───────────────*/
 body{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; letter-spacing:-.005em; }
