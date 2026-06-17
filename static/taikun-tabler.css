@@ -14,9 +14,9 @@
   --tblr-body-bg:#f5f6f8;
   --tblr-body-color:#0b1020;
 
-  /* refined hairlines */
-  --tblr-border-color:rgba(15,23,42,.07);
-  --tblr-border-color-translucent:rgba(15,23,42,.07);
+  /* refined hairlines — visible card/region edge on the white canvas */
+  --tblr-border-color:#e2e5ea;
+  --tblr-border-color-translucent:#e2e5ea;
 
   /* rounder, more modern radius */
   --tblr-border-radius:.5rem;

@@ -20,7 +20,7 @@
   --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
   --tblr-body-bg:#ffffff; --tblr-body-color:#101114;
   --tblr-secondary:#6b7280;
-  --tblr-border-color:#eceef1; --tblr-border-color-translucent:#eceef1;
+  --tblr-border-color:#e2e5ea; --tblr-border-color-translucent:#e2e5ea;
   --tblr-border-radius:.65rem; --tblr-border-radius-lg:.85rem;
   --tblr-font-sans-serif:'Inter','Inter Var',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
 }
@@ -33,9 +33,9 @@ body{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; let
 .navbar-vertical{ background:#fff; border-right:1px solid var(--tblr-border-color); box-shadow:none; }
 .navbar-vertical .nav-link{ border-radius:.55rem; }
 
-/* cards — white, border-0, soft layered shadow, generous radius, hover lift */
+/* cards — white, hairline border + soft layered shadow, generous radius, hover lift */
 .card{
-  background:#fff; border:0;
+  background:#fff; border:1px solid var(--tblr-border-color);
   border-radius:.9rem;
   box-shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.08);
   transition:box-shadow .16s ease, transform .16s ease;
