@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<!--
+    format.html — the format.taikunai.com landing: two self-serve "drop a file" boxes
+    on one page. Deck rebrand (.pptx -> /api/rebrand) and PDF OCR (.pdf -> /api/ocr).
+    Each box is independent; all the work is server-side (rebrand.py / ocr.py). The
+    standalone rebrand.html and ocr.html still exist as deep links.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Taikun Tools</title>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
+    <link href="taikun-tabler.css?v=21" rel="stylesheet"/>
+    <link href="taikun-ui.css?v=21" rel="stylesheet"/>
+    <style>
+      body{ background:#0b1020; color:#fff; min-height:100vh; }
+      .rb-wrap{ max-width:1040px; margin:0 auto; padding:44px 20px 64px; }
+      .rb-eyebrow{ display:inline-block; font-size:11px; letter-spacing:.14em; font-weight:700;
+        text-transform:uppercase; color:#E04434; background:#211521; border:1px solid #411C23;
+        border-radius:999px; padding:5px 14px; }
+      .rb-title{ font-weight:800; font-size:40px; line-height:1.05; letter-spacing:-.02em; margin:16px 0 10px; }
+      .rb-title .ac{ color:#E04434; }
+      .rb-lede{ color:#9AA3B7; font-size:16px; line-height:1.5; margin-bottom:34px; max-width:600px; }
+      .rb-glow{ position:fixed; top:-160px; right:-120px; width:480px; height:480px; border-radius:50%;
+        background:#E04434; filter:blur(120px); opacity:.13; pointer-events:none; }
+      /* two-up grid; stacks under 880px */
+      .tools{ display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+      @media (max-width:879px){ .tools{ grid-template-columns:1fr; } }
+      .tool-head{ margin-bottom:12px; }
+      .tool-head .ti{ font-size:26px; color:#E04434; vertical-align:-3px; }
+      .tool-head h2{ display:inline-block; font-weight:800; font-size:21px; margin:0 0 0 8px; color:#fff; }
+      .tool-head p{ color:#9AA3B7; font-size:13.5px; line-height:1.5; margin:8px 0 0; }
+      .rb-card{ background:#15192B; border:1px solid #232838; border-radius:16px; padding:10px; }
+      .rb-drop{ border:2px dashed #39405a; border-radius:12px; padding:40px 20px; text-align:center;
+        cursor:pointer; transition:.15s ease; background:#0f1424; }
+      .rb-drop:hover, .rb-drop.drag{ border-color:#E04434; background:#161c30; }
+      .rb-drop .ti{ font-size:42px; color:#E04434; }
+      .rb-drop h3{ font-weight:700; font-size:17px; margin:12px 0 4px; color:#fff; }
+      .rb-drop p{ color:#9AA3B7; font-size:13px; margin:0; }
+      .rb-status{ text-align:center; padding:36px 20px; }
+      .rb-status .ti{ font-size:40px; }
+      .rb-status h3{ font-weight:700; font-size:17px; margin:12px 0 4px; }
+      .rb-status p{ color:#9AA3B7; font-size:13.5px; margin:0; min-height:20px; }
+      .spinner-border.text-brand{ color:#E04434; width:40px; height:40px; }
+      .btn-ghost{ background:transparent; border:1px solid #39405a; color:#cfd4e0; }
+      .btn-ghost:hover{ background:#1b2236; color:#fff; }
+      .rb-file{ display:inline-flex; align-items:center; gap:8px; background:#0f1424; border:1px solid #232838;
+        border-radius:8px; padding:7px 13px; font-size:13px; color:#cfd4e0; margin-top:4px; }
+      .tool-foot{ color:#5B6472; font-size:11.5px; line-height:1.5; margin-top:12px; }
+      .tool-foot b{ color:#9AA3B7; font-weight:600; }
+    </style>
+</head>
+<body>
+    <div class="rb-glow"></div>
+    <div class="rb-wrap">
+        <div class="d-flex align-items-center gap-2 mb-4">
+            <img src="taikun-logo-dark.png" alt="Taikun" style="height:30px;width:auto"/>
+        </div>
+
+        <span class="rb-eyebrow">One-stop tools</span>
+        <div class="rb-title">DROP A FILE,<br/>GET IT BACK <span class="ac">BETTER</span>.</div>
+        <div class="rb-lede">Two self-serve tools, one page. Re-skin any PowerPoint into the Taikun brand,
+            or turn a scanned PDF into a searchable one. Drop a file into the matching box below.</div>
+
+        <div class="tools">
+            <!-- ============ TOOL 1: DECK REBRAND ============ -->
+            <section class="tool"
+                     data-endpoint="/api/rebrand" data-ext="pptx" data-icon="ti-file-type-ppt"
+                     data-accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                     data-dl="-Taikun.pptx" data-out="branded deck"
+                     data-msgs="Reading slides|Recoloring to the brand palette|Restyling fonts → Poppins / Roboto|Rewriting the theme|Fixing text contrast|Repackaging your deck">
+                <div class="tool-head">
+                    <i class="ti ti-wand"></i><h2>Deck rebrand</h2>
+                    <p>Upload any PowerPoint and download it re-skinned into the Taikun brand — clean white
+                       slides, black-and-red type, Poppins/Roboto. Your images, charts and layout stay intact.</p>
+                </div>
+                <div class="rb-card">
+                    <div class="st-drop rb-drop">
+                        <i class="ti ti-cloud-upload"></i>
+                        <h3>Drop your <b>.pptx</b> here</h3>
+                        <p>or click to choose — up to 80&nbsp;MB</p>
+                        <div class="fileChip rb-file d-none"><i class="ti ti-file-type-ppt"></i><span class="fileName"></span></div>
+                        <input type="file" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation" hidden/>
+                    </div>
+                    <div class="st-working rb-status d-none">
+                        <div class="spinner-border text-brand" role="status"></div>
+                        <h3>Rebranding your deck…</h3><p class="workMsg">Reading slides</p>
+                    </div>
+                    <div class="st-done rb-status d-none">
+                        <i class="ti ti-circle-check" style="color:#16A34A"></i>
+                        <h3>Done — your branded deck is downloading.</h3>
+                        <p class="doneName mb-3"></p>
+                        <button class="btn btn-ghost btn-sm act-reset"><i class="ti ti-refresh me-1"></i>Rebrand another</button>
+                    </div>
+                    <div class="st-error rb-status d-none">
+                        <i class="ti ti-alert-triangle" style="color:#E04434"></i>
+                        <h3>That didn't work.</h3><p class="errMsg mb-3"></p>
+                        <button class="btn btn-ghost btn-sm act-reset"><i class="ti ti-arrow-left me-1"></i>Try again</button>
+                    </div>
+                </div>
+                <div class="tool-foot">Automatic — great for a fast first pass; give a customer-facing deck a quick review.
+                    <b>Fonts:</b> result uses Poppins + Roboto (embed in PowerPoint or open in Google Slides).</div>
+            </section>
+
+            <!-- ============ TOOL 2: PDF OCR ============ -->
+            <section class="tool"
+                     data-endpoint="/api/ocr" data-ext="pdf" data-icon="ti-file-type-pdf"
+                     data-accept=".pdf,application/pdf"
+                     data-dl="-searchable.pdf" data-out="searchable PDF"
+                     data-msgs="Rendering pages|Reading the text with AI|Recognising headings & tables|Aligning the text layer|Embedding searchable text|Repackaging your PDF">
+                <div class="tool-head">
+                    <i class="ti ti-file-text-ai"></i><h2>PDF OCR</h2>
+                    <p>Upload any scanned or printed PDF and download it with a real text layer embedded —
+                       read by AI, so every word becomes selectable, searchable and copy-pasteable. Pages stay pixel-for-pixel intact.</p>
+                </div>
+                <div class="rb-card">
+                    <div class="st-drop rb-drop">
+                        <i class="ti ti-file-text-ai"></i>
+                        <h3>Drop your <b>.pdf</b> here</h3>
+                        <p>or click to choose — up to 40&nbsp;MB</p>
+                        <div class="fileChip rb-file d-none"><i class="ti ti-file-type-pdf"></i><span class="fileName"></span></div>
+                        <input type="file" accept=".pdf,application/pdf" hidden/>
+                    </div>
+                    <div class="st-working rb-status d-none">
+                        <div class="spinner-border text-brand" role="status"></div>
+                        <h3>Reading your document…</h3><p class="workMsg">Rendering pages</p>
+                    </div>
+                    <div class="st-done rb-status d-none">
+                        <i class="ti ti-circle-check" style="color:#16A34A"></i>
+                        <h3>Done — your searchable PDF is downloading.</h3>
+                        <p class="doneName mb-3"></p>
+                        <button class="btn btn-ghost btn-sm act-reset"><i class="ti ti-refresh me-1"></i>OCR another</button>
+                    </div>
+                    <div class="st-error rb-status d-none">
+                        <i class="ti ti-alert-triangle" style="color:#E04434"></i>
+                        <h3>That didn't work.</h3><p class="errMsg mb-3"></p>
+                        <button class="btn btn-ghost btn-sm act-reset"><i class="ti ti-arrow-left me-1"></i>Try again</button>
+                    </div>
+                </div>
+                <div class="tool-foot">AI OCR — the text layer is embedded invisibly over your original pages, so they look unchanged.
+                    For high-stakes docs, give the recognised text a quick check. <b>Tip:</b> clearer scans read better.</div>
+            </section>
+        </div>
+    </div>
+
+<script>
+// One independent state machine per .tool box, configured from its data-* attributes.
+function wireTool(el){
+  const cfg = el.dataset;
+  const msgs = cfg.msgs.split('|');
+  const q = (sel) => el.querySelector(sel);
+  const drop = q('.st-drop'), input = q('input[type=file]');
+  let msgTimer = null;
+
+  const show = (state) => ['drop','working','done','error']
+      .forEach(s => q('.st-'+s).classList.toggle('d-none', s !== state));
+  const reset = () => { input.value=''; q('.fileChip').classList.add('d-none'); show('drop'); };
+  const startMsgs = () => { let i=0; q('.workMsg').textContent = msgs[0];
+      msgTimer = setInterval(() => { i=(i+1)%msgs.length; q('.workMsg').textContent = msgs[i]; }, 1300); };
+  const stopMsgs = () => { if (msgTimer) clearInterval(msgTimer); msgTimer=null; };
+  const fail = (m) => { stopMsgs(); q('.errMsg').textContent = m; show('error'); };
+
+  async function go(file){
+    if (!file.name.toLowerCase().endsWith('.'+cfg.ext)) { fail('Please choose a .'+cfg.ext+' file.'); return; }
+    q('.fileName').textContent = file.name; q('.fileChip').classList.remove('d-none');
+    show('working'); startMsgs();
+    try {
+      const fd = new FormData(); fd.append('file', file, file.name);
+      const res = await fetch(cfg.endpoint, { method:'POST', body: fd });
+      if (!res.ok) {
+        let m = `Server error (${res.status}).`;
+        try { const j = await res.json(); if (j.detail) m = j.detail; } catch(_){}
+        throw new Error(m);
+      }
+      const blob = await res.blob();
+      const stem = file.name.replace(new RegExp('\\.'+cfg.ext+'$','i'), '') || 'file';
+      const dl = stem + cfg.dl;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = dl; document.body.appendChild(a); a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000); a.remove();
+      stopMsgs(); q('.doneName').textContent = dl; show('done');
+    } catch (e) { fail(e.message || 'Something went wrong.'); }
+  }
+
+  drop.addEventListener('click', () => input.click());
+  ['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop', ev => { const f = ev.dataTransfer.files[0]; if (f) go(f); });
+  input.addEventListener('change', () => { if (input.files[0]) go(input.files[0]); });
+  el.querySelectorAll('.act-reset').forEach(b => b.addEventListener('click', reset));
+}
+document.querySelectorAll('.tool').forEach(wireTool);
+</script>
+</body>
+</html>
