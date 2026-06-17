@@ -15,6 +15,10 @@ model_list:
     litellm_params:
       model: openai/whisper-1            # OpenAI speech-to-text; reachable at /v1/audio/transcriptions
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: taikun-ocr
+    litellm_params:
+      model: openai/gpt-4o               # vision model for PDF OCR (ocr.py); swap freely
+      api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
   drop_params: true

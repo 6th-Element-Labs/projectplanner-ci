@@ -36,6 +36,7 @@ import export  # noqa: E402
 import inbox as inbox_mod  # noqa: E402
 import intake  # noqa: E402
 import notify  # noqa: E402
+import ocr  # noqa: E402
 import rebrand  # noqa: E402
 import signals  # noqa: E402
 import store  # noqa: E402
@@ -483,6 +484,34 @@ async def rebrand_deck(file: UploadFile = File(...)):
     dl = f"{base}-Taikun.pptx"
     return Response(content=out,
                     media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    headers={"Content-Disposition": f'attachment; filename="{dl}"'})
+
+
+# ---- PDF OCR (one-stop: drop a scanned PDF, get it back searchable) ---------
+_OCR_MAX = 40 * 1024 * 1024  # 40 MB — protects the small VM
+
+@app.post("/api/ocr")
+async def ocr_pdf(file: UploadFile = File(...)):
+    """Upload a scanned/printed .pdf -> download a searchable PDF: the original
+    pages are kept pixel-for-pixel and an AI-OCR'd invisible text layer is embedded
+    over them. Renders pages -> gateway vision model -> embed, in ocr.ocr_pdf_bytes."""
+    name = file.filename or "document.pdf"
+    if not ocr.is_pdf(name, file.content_type):
+        raise HTTPException(400, "Please upload a PDF file.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "The uploaded file was empty.")
+    if len(data) > _OCR_MAX:
+        raise HTTPException(413, f"File too large (max {_OCR_MAX // (1024*1024)} MB).")
+    try:
+        out, _text = await asyncio.to_thread(ocr.ocr_pdf_bytes, data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"OCR failed: {e}")
+    base = name[:-4] if name.lower().endswith(".pdf") else name
+    dl = f"{base}-searchable.pdf"
+    return Response(content=out, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{dl}"'})
 
 
