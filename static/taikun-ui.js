@@ -106,6 +106,6 @@
 // Load the Taikun theme switcher (brand color + light/dark Settings cog).
 (function () {
   if (document.getElementById('tk-theme-js')) return;
-  var s = document.createElement('script'); s.id = 'tk-theme-js'; s.src = 'taikun-theme.js?v=1';
+  var s = document.createElement('script'); s.id = 'tk-theme-js'; s.src = 'taikun-theme.js?v=2';
   document.head.appendChild(s);
 })();

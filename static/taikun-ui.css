@@ -206,3 +206,13 @@ a[data-bs-toggle="modal"]:hover .card{
 #queue-modal .table td{ vertical-align:middle; }
 
 [data-bs-theme="dark"] .card{ border-color:rgba(255,255,255,.10); }
+
+/* §7 self-hosted Inter (PR-4.2) */
+@font-face{ font-family:'Inter Var'; font-style:normal; font-weight:100 900; font-display:swap; src:url('/vendor/inter/InterVariable.woff2') format('woff2'); }
+
+/* §6 control-room density mode (PR-5.3) — off by default */
+body.tk-density-control .card{ border-radius:.35rem; box-shadow:none; }
+body.tk-density-control .card-body{ padding:.75rem .85rem; }
+body.tk-density-control .btn, body.tk-density-control .btn-sm{ border-radius:.3rem; }
+body.tk-density-control .table > :not(caption) > * > *{ padding-top:.35rem; padding-bottom:.35rem; }
+body.tk-density-control .h1{ font-variant-numeric:tabular-nums; }

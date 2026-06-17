@@ -42,6 +42,7 @@
     return mode || 'light';
   }
   function applyScheme(mode) { root.setAttribute('data-bs-theme', resolveScheme(mode)); }
+  function applyDensity(mode) { if (document.body) document.body.classList.toggle('tk-density-control', mode === 'compact'); }
 
   /* 1 · apply saved prefs immediately (minimise flash) */
   var savedBrand = get(LS_BRAND, null);
@@ -74,6 +75,11 @@
           '<div class="row g-2" id="tk-brands"></div>' +
           '<div class="text-secondary small mt-2">Recolors buttons, links &amp; tabs everywhere. Alarm red stays reserved.</div>' +
         '</div>' +
+        '<div class="mt-4"><div class="subheader mb-2">Density</div>' +
+          '<div class="btn-group w-100" role="group" id="tk-density">' +
+            '<button type="button" class="btn" data-density="comfortable">Comfortable</button>' +
+            '<button type="button" class="btn" data-density="compact"><i class="ti ti-layout-rows me-1"></i>Compact</button>' +
+          '</div></div>' +
       '</div>';
     document.body.appendChild(oc);
 
@@ -112,10 +118,21 @@
         btn.style.outline = on ? '2px solid var(--tblr-primary)' : '';
         btn.style.outlineOffset = '2px';
       });
+      var de = get('tk-density', 'comfortable');
+      oc.querySelectorAll('#tk-density .btn').forEach(function (btn) {
+        var on = btn.getAttribute('data-density') === de;
+        btn.classList.toggle('btn-primary', on);
+        btn.classList.toggle('btn-outline-secondary', !on);
+      });
     }
+    applyDensity(get('tk-density', 'comfortable'));
     oc.querySelector('#tk-scheme').addEventListener('click', function (e) {
       var btn = e.target.closest('[data-scheme]'); if (!btn) return;
       set(LS_SCHEME, btn.getAttribute('data-scheme')); applyScheme(btn.getAttribute('data-scheme')); markActive();
+    });
+    oc.querySelector('#tk-density').addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-density]'); if (!btn) return;
+      set('tk-density', btn.getAttribute('data-density')); applyDensity(btn.getAttribute('data-density')); markActive();
     });
     wrap.addEventListener('click', function (e) {
       var btn = e.target.closest('.tk-swatch'); if (!btn) return;
