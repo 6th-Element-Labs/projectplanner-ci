@@ -820,7 +820,7 @@ const TeepPlan = {
         } else { // comment / note
             body = `<span class="text-body">${this._linkify(this.esc((a.payload && a.payload.text) || ''))}</span>`;
         }
-        return `<div class="list-group-item list-group-item-action px-0 py-2" style="cursor:pointer">
+        return `<div class="list-group-item list-group-item-action tk-act-item px-0 py-2">
             <div class="d-flex gap-2 align-items-start">
                 <span class="avatar avatar-xs rounded-circle ${m.cls} flex-shrink-0 mt-1"><i class="ti ${m.icon}"></i></span>
                 <div class="flex-fill" style="min-width:0">
@@ -828,7 +828,8 @@ const TeepPlan = {
                         <span class="fw-medium text-truncate" style="min-width:0">${this.esc(m.label)}</span>
                         <span class="text-secondary small ms-auto flex-shrink-0">${when} ago</span>
                     </div>
-                    <div class="tk-act-body small mt-1" data-clamped="1" style="overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-height:3.4em">${body}</div>
+                    <div class="tk-act-body tk-clamp small mt-1">${body}</div>
+                    <div class="tk-act-toggle mt-1">Show more</div>
                 </div>
             </div>
         </div>`;
@@ -837,24 +838,35 @@ const TeepPlan = {
     // Unified activity timeline — newest first. Agent edits, your edits, notes, chats all land here.
     _renderActivity(t) {
         const acts = (t.activity || []).slice().reverse();
-        // click a row to expand its 2-line preview to the full update (and back)
+        // Long updates clamp to a few lines; click the row (or "Show more") to
+        // expand to the full text and back. The click ALWAYS toggles the clamp,
+        // so it works even in the initially-hidden Activity tab; the "Show more"
+        // hint is shown only for rows that actually overflow.
+        const detect = (c) => { if (!c) return; c.querySelectorAll('.tk-act-item').forEach((item) => {
+            const b = item.querySelector('.tk-act-body');
+            item.classList.toggle('tk-expandable', !!(b && b.scrollHeight - b.clientHeight > 2));
+        }); };
         const wire = (c) => {
             if (!c) return;
             c.onclick = (e) => {
                 if (e.target.closest('a')) return;                  // let real links work
-                const item = e.target.closest('.list-group-item'); if (!item || !c.contains(item)) return;
+                const item = e.target.closest('.tk-act-item'); if (!item || !c.contains(item)) return;
                 const b = item.querySelector('.tk-act-body'); if (!b) return;
-                if (b.getAttribute('data-clamped') !== '0') {        // expand → full
-                    b.style.display = 'block'; b.style.webkitLineClamp = ''; b.style.maxHeight = ''; b.setAttribute('data-clamped', '0');
-                } else {                                             // collapse → 2-line preview
-                    b.style.display = '-webkit-box'; b.style.webkitLineClamp = '2'; b.style.maxHeight = '3.4em'; b.setAttribute('data-clamped', '1');
-                }
+                const clamped = b.classList.toggle('tk-clamp');     // true = now clamped, false = now full
+                item.classList.add('tk-expandable');                // keep the affordance after interaction
+                const tog = item.querySelector('.tk-act-toggle');
+                if (tog) tog.textContent = clamped ? 'Show more' : 'Show less';
             };
+            detect(c);
         };
         const full = document.getElementById('activity-log');
         if (full) { full.innerHTML = acts.length ? acts.map((a) => this._activityRow(a)).join('') : '<div class="text-secondary small">No activity yet — agent updates, your edits, notes and dispatch events will appear here.</div>'; wire(full); }
         const glance = document.getElementById('details-activity');
         if (glance) { glance.className = acts.length ? 'list-group list-group-flush' : ''; glance.innerHTML = acts.length ? acts.slice(0, 3).map((a) => this._activityRow(a)).join('') : '<div class="text-secondary small">No activity yet.</div>'; wire(glance); }
+        // The Activity tab is hidden at modal-open (0 height → overflow can't be
+        // measured), so re-detect when it's shown.
+        const atab = document.querySelector('a[href="#m-activity"]');
+        if (atab && !atab._actWired) { atab._actWired = true; atab.addEventListener('shown.bs.tab', () => detect(document.getElementById('activity-log'))); }
     },
 
     async saveTask(id) {

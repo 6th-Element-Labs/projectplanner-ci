@@ -14,6 +14,8 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>Project Maxwell Plan | Taikun Atlas</title>
+    <link rel="icon" href="taikun-favicon.png" type="image/png"/>
+    <link rel="shortcut icon" href="taikun-favicon.png" type="image/png"/>
     <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
     <link href="taikun-tabler.css?v=8" rel="stylesheet"/>
@@ -24,6 +26,13 @@
       .epic-head{cursor:pointer}
       .epic-head .epic-chev{transition:transform .15s ease}
       .epic-head[aria-expanded="true"] .epic-chev{transform:rotate(180deg)}
+      /* Activity timeline: long updates clamp to a few lines, click row to expand */
+      .tk-act-item{cursor:pointer}
+      .tk-act-item:hover{background:var(--tblr-bg-surface-secondary,#f6f7f9)}
+      .tk-act-body{overflow-wrap:anywhere}
+      .tk-act-body.tk-clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+      .tk-act-toggle{font-size:.75rem;font-weight:500;color:var(--tblr-primary);cursor:pointer;display:none}
+      .tk-act-item.tk-expandable .tk-act-toggle{display:inline-block}
     </style>
 </head>
 <body class="layout-fluid tk-sidebar-collapsed">
