@@ -353,6 +353,9 @@ const TeepPlan = {
     renderEpics() {
         const el = document.getElementById('epics-content');
         if (!el) return;
+        // Keep groups the user has opened expanded across re-renders (e.g. after
+        // checking a task done) — only an explicit click should collapse one.
+        const openIds = new Set(Array.from(el.querySelectorAll('.collapse.show')).map((c) => c.id));
         const hideDone = this.isHideDone();
         const tasks = this.filtered(true);
         const mode = this.groupMode();                 // 'workstream' | 'assignee'
@@ -381,6 +384,7 @@ const TeepPlan = {
             tDone += done; tTotal += total;
             const cid = 'epic-' + mode + '-' + idx;
             const isU = key === 'Unassigned';
+            const open = openIds.has(cid);
 
             let dotColor, titleHtml, rightHtml;
             if (mode === 'assignee') {
@@ -437,7 +441,7 @@ const TeepPlan = {
             const emptyNote = (!body && hideDone) ? `<div class="text-secondary small px-1 py-2"><i class="ti ti-check me-1"></i>All ${total} task${total !== 1 ? 's' : ''} complete.</div>` : '';
             return `
                 <div class="card mb-2">
-                    <div class="card-header epic-head d-flex align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#${cid}" aria-expanded="false" aria-controls="${cid}">
+                    <div class="card-header epic-head d-flex align-items-center" role="button" data-bs-toggle="collapse" data-bs-target="#${cid}" aria-expanded="${open ? 'true' : 'false'}" aria-controls="${cid}">
                         <span class="status-dot bg-${dotColor} me-2"></span>
                         ${titleHtml}
                         <span class="badge bg-secondary-lt ms-2">${visN} task${visN !== 1 ? 's' : ''}</span>
@@ -448,7 +452,7 @@ const TeepPlan = {
                             <i class="ti ti-chevron-down epic-chev text-secondary"></i>
                         </div>
                     </div>
-                    <div class="collapse" id="${cid}">
+                    <div class="collapse${open ? ' show' : ''}" id="${cid}">
                         <div class="card-body py-2">${nextHtml}${body}${emptyNote}</div>
                     </div>
                 </div>`;
