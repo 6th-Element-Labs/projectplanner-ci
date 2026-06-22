@@ -2272,8 +2272,11 @@ const TeepPlan = {
 
         // --- LEFT: my work, grouped by phase (blocking-first) -------------
         const rank = (x) => (x.is_blocking ? 0 : 1);
+        // Overview = remaining work; never list completed tasks here regardless of
+        // the Hide-done toggle (Done lives on the Board / Tasks tabs).
+        const openWork = all.filter((x) => x.status !== 'Done');
         const groups = this.PHASES.map((phase) => {
-            const list = all.filter((x) => x.phase === phase)
+            const list = openWork.filter((x) => x.phase === phase)
                 .sort((a, b) => rank(a) - rank(b) ||
                     ((a.finish_date || '9999') < (b.finish_date || '9999') ? -1 : 1));
             return { phase, list };
@@ -2322,7 +2325,7 @@ const TeepPlan = {
                         <h3 class="card-title">Work, grouped by phase</h3>
                         <div class="card-actions d-flex align-items-center">
                             <span class="text-secondary small me-3">Sorted: blocking first</span>
-                            <span class="badge bg-secondary-lt">${all.length} task${all.length === 1 ? '' : 's'}</span>
+                            <span class="badge bg-secondary-lt">${openWork.length} task${openWork.length === 1 ? '' : 's'}</span>
                         </div>
                     </div>
                     ${groups.length ? groupHtml : `
