@@ -71,6 +71,17 @@ def _require_write(ctx):
         raise ValueError("unauthorized: provide Authorization: Bearer <PM_MCP_TOKEN>")
 
 
+def _dep_ids(s):
+    """Parse a comma/space/newline-separated list of task ids into a deduped, upper-cased list."""
+    out, seen = [], set()
+    for tok in (s or "").replace("\n", ",").replace(" ", ",").split(","):
+        t = tok.strip().upper()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
 # ---- read tools (open) ---------------------------------------------------
 @mcp.tool()
 def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
@@ -133,9 +144,12 @@ def ask_plan(question: str, project: str = "maxwell") -> str:
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", assignee: str = "",
                 phase: str = "", start_date: str = "", finish_date: str = "",
-                risk_level: str = "", is_blocking: str = "", project: str = "maxwell") -> str:
+                risk_level: str = "", is_blocking: str = "", depends_on: str = "",
+                project: str = "maxwell") -> str:
     """Update only the fields you pass on a task. status: Not Started|In Progress|Blocked|Done;
-    dates: YYYY-MM-DD; is_blocking: 'true'/'false'. Audited as actor 'MCP'.
+    dates: YYYY-MM-DD; is_blocking: 'true'/'false'. depends_on: comma/space-separated task ids that
+    REPLACE this task's dependency list (e.g. 'TOOLS-7, SHELL-1'); pass 'none' to clear it (for an
+    incremental edge use add_dependency/remove_dependency). Audited as actor 'MCP'.
     project selects the board ('maxwell' default, or 'helm') — writes go ONLY to that board."""
     _require_write(ctx)
     fields = {}
@@ -147,6 +161,8 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
             fields[k] = v
     if is_blocking != "":
         fields["is_blocking"] = is_blocking.strip().lower() in ("1", "true", "yes")
+    if depends_on != "":
+        fields["depends_on"] = [] if depends_on.strip().lower() in ("none", "clear", "[]") else _dep_ids(depends_on)
     if not fields:
         return "no fields to update"
     t = store.update_task(task_id, fields, actor="MCP", project=project)
@@ -156,13 +172,16 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
 @mcp.tool()
 def create_task(workstream_id: str, title: str, ctx: Context, description: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", status: str = "",
-                phase: str = "", risk_level: str = "", project: str = "maxwell") -> str:
-    """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm). Returns the
-    created task. Actor 'MCP'. project selects the board ('maxwell' default, or 'helm')."""
+                phase: str = "", risk_level: str = "", depends_on: str = "",
+                project: str = "maxwell") -> str:
+    """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm). depends_on:
+    comma/space-separated task ids this task dependsOn (e.g. 'BOAT-1, WX-10'). Returns the created task.
+    Actor 'MCP'. project selects the board ('maxwell' default, or 'helm')."""
     _require_write(ctx)
     data = {"workstream_id": workstream_id, "title": title, "description": description or None,
             "owner_org": owner_org or None, "owner_person_or_role": owner_person_or_role or None,
-            "status": status or None, "phase": phase or None, "risk_level": risk_level or None}
+            "status": status or None, "phase": phase or None, "risk_level": risk_level or None,
+            "depends_on": _dep_ids(depends_on)}
     t = store.create_task(data, actor="MCP", project=project)
     return json.dumps(agent._task_brief(t)) if t else "workstream_id and title required"
 
@@ -174,6 +193,48 @@ def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell")
     _require_write(ctx)
     t = store.add_comment(task_id, "MCP", text, project=project)
     return "ok" if t else "no such task"
+
+
+@mcp.tool()
+def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "maxwell") -> str:
+    """Add one or more dependency EDGES to a task (task_id dependsOn each id in depends_on,
+    comma/space-separated, e.g. 'TOOLS-7, SHELL-1'). APPENDS without clobbering existing deps
+    (idempotent, deduped) — use this to wire cross-epic edges. Unknown ids are reported in a warning
+    but still added (fail-loud: a typo or a not-yet-created task is surfaced, never silently dropped).
+    project selects the board ('maxwell' default, or 'helm')."""
+    _require_write(ctx)
+    add = _dep_ids(depends_on)
+    if not add:
+        return "no dependency ids given"
+    t = store.get_task(task_id, project=project)
+    if not t:
+        return "no such task: " + task_id
+    merged = list(t.get("depends_on") or [])
+    for d in add:
+        if d not in merged:
+            merged.append(d)
+    store.update_task(task_id, {"depends_on": merged}, actor="MCP", project=project)
+    res = {"task_id": task_id, "depends_on": merged}
+    unknown = [d for d in add if not store.get_task(d, project=project)]
+    if unknown:
+        res["warning"] = "unknown task id(s) on project '%s' (added anyway): %s" % (project, ", ".join(unknown))
+    return json.dumps(res)
+
+
+@mcp.tool()
+def remove_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "maxwell") -> str:
+    """Remove one or more dependency edges from a task (comma/space-separated ids). No-op for ids that
+    aren't present. project selects the board ('maxwell' default, or 'helm')."""
+    _require_write(ctx)
+    rm = set(_dep_ids(depends_on))
+    if not rm:
+        return "no dependency ids given"
+    t = store.get_task(task_id, project=project)
+    if not t:
+        return "no such task: " + task_id
+    merged = [d for d in (t.get("depends_on") or []) if d not in rm]
+    store.update_task(task_id, {"depends_on": merged}, actor="MCP", project=project)
+    return json.dumps({"task_id": task_id, "depends_on": merged})
 
 
 @mcp.tool()
