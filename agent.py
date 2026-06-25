@@ -149,18 +149,26 @@ _PROPOSABLE = ["title", "description", "status", "assignee", "owner_org", "owner
                "entry_criteria", "exit_criteria", "deliverable"]
 
 
-def _system(task):
+def _system(task, project="maxwell"):
     deps = ", ".join(task.get("depends_on") or []) or "none"
+    is_helm = project == "helm"
+    who = "the Helm assistant" if is_helm else "Maxwell"
+    board = "the Helm marine-chartplotter board" if is_helm else "the TEEP Barnett project board"
+    ground = (
+        "Ground claims in this task's description + activity (its code-audit comments carry file-level "
+        "evidence — read them via get_task). doc_search covers the MAXWELL plan's docs only, so do NOT "
+        "use it for Helm."
+        if is_helm else
+        "ALWAYS ground claims about the project in the plan via doc_search before stating them.")
     return (
-        "You are Maxwell, an assistant embedded in the TEEP Barnett project board, scoped to ONE task.\n"
+        f"You are {who}, an assistant embedded in {board}, scoped to ONE task.\n"
         f"Task {task['task_id']}: {task.get('title')}\n"
         f"Workstream {task.get('_wsId')} ({task.get('_wsName')}) · phase {task.get('phase')} · "
         f"owner {task.get('owner_org')}/{task.get('owner_person_or_role')} · assignee {task.get('assignee') or 'unassigned'} · "
         f"status {task.get('status')} · {task.get('start_date')}..{task.get('finish_date')} · depends on: {deps}.\n\n"
-        "Help the operator move this task forward and answer questions about it. ALWAYS ground claims about "
-        "the project in the plan via doc_search before stating them. To change the task, call "
-        "propose_task_update — the user must confirm; never say a change has been applied. Be concise and "
-        "operator-friendly; cite the doc you used when relevant."
+        f"Help the operator move this task forward and answer questions about it. {ground} To change the "
+        "task, call propose_task_update — the user must confirm; never say a change has been applied. Be "
+        "concise and operator-friendly; cite the source you used when relevant."
     )
 
 
@@ -255,7 +263,7 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
     budget — triage passes a larger one since inbound calls/threads need more grounding turns.
     `project` selects the board the plan-wide agent reads/proposes against ('maxwell' default, 'helm')."""
     if system is None:
-        system = _system(task) if task else _system_global(project)
+        system = _system(task, project) if task else _system_global(project)
     iters = max_iters or MAX_ITERS
     msgs = [{"role": "system", "content": system}]
     for h in (history or []):
