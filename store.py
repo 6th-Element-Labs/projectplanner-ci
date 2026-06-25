@@ -329,19 +329,20 @@ def upsert_contact(email: str, name: Optional[str] = None):
 
 
 # ---- plan-wide chat (the global "Ask Taikun" session) --------------------
-def add_chat(session: str, role: str, content: str, payload: Optional[Dict[str, Any]] = None):
-    with _conn() as c:
+def add_chat(session: str, role: str, content: str, payload: Optional[Dict[str, Any]] = None,
+             project: str = DEFAULT_PROJECT):
+    with _conn(project) as c:
         c.execute("INSERT INTO chat(session, role, content, payload, created_at) VALUES (?,?,?,?,?)",
                   (session, role, content, json.dumps(payload or {}), time.time()))
 
 
-def clear_chat(session: str):
-    with _conn() as c:
+def clear_chat(session: str, project: str = DEFAULT_PROJECT):
+    with _conn(project) as c:
         c.execute("DELETE FROM chat WHERE session=?", (session,))
 
 
-def recent_chat(session: str, limit: int = 20) -> List[Dict[str, Any]]:
-    with _conn() as c:
+def recent_chat(session: str, limit: int = 20, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    with _conn(project) as c:
         rows = c.execute(
             "SELECT role, content, payload, created_at FROM chat WHERE session=? ORDER BY id DESC LIMIT ?",
             (session, limit)).fetchall()

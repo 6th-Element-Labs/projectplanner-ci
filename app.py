@@ -169,9 +169,11 @@ async def task_dispatch_latest(task_id: str):
 
 
 @app.post("/api/tasks/{task_id}/chat")
-async def chat(task_id: str, body: dict = Body(...)):
+async def chat(task_id: str, body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
     """Per-task Ask Taikun agent: RAG over the plan docs + propose-then-confirm task edits."""
-    task = store.get_task(task_id)
+    project = _proj(project)
+    assistant = "Helm" if project == "helm" else "Maxwell"
+    task = store.get_task(task_id, project=project)
     if not task:
         raise HTTPException(404, "task not found")
     msg = (body.get("message") or "").strip()
@@ -184,47 +186,49 @@ async def chat(task_id: str, body: dict = Body(...)):
             if text:
                 history.append({"role": "user" if a.get("actor") == "user" else "assistant", "content": text})
     history = history[-8:]
-    store.add_comment(task_id, "user", msg, kind="chat")
+    store.add_comment(task_id, "user", msg, kind="chat", project=project)
     try:
-        result = await asyncio.to_thread(agent.run, task, msg, history)
+        result = await asyncio.to_thread(agent.run, task, msg, history, project=project)
     except Exception as e:
-        store.add_comment(task_id, "Maxwell", f"(agent error: {e})", kind="chat")
+        store.add_comment(task_id, assistant, f"(agent error: {e})", kind="chat", project=project)
         raise HTTPException(502, f"agent error: {e}")
     answer = result.get("answer") or ""
-    store.add_comment(task_id, "Maxwell", answer, kind="chat")
+    store.add_comment(task_id, assistant, answer, kind="chat", project=project)
     return {"answer": answer, "proposal": result.get("proposal"), "sources": result.get("sources", [])}
 
 
 @app.post("/api/chat")
-async def plan_chat(body: dict = Body(...)):
+async def plan_chat(body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
     """Plan-wide Ask Taikun: the global agent sees the whole board + docs; propose-to-confirm."""
+    project = _proj(project)
     msg = (body.get("message") or "").strip()
     if not msg:
         raise HTTPException(400, "message required")
     session = body.get("session") or "plan"
     history = [{"role": m["role"], "content": m["content"]}
-               for m in store.recent_chat(session, 16) if m.get("content")]
-    store.add_chat(session, "user", msg)
+               for m in store.recent_chat(session, 16, project=project) if m.get("content")]
+    store.add_chat(session, "user", msg, project=project)
     try:
-        result = await asyncio.to_thread(agent.run, None, msg, history)
+        result = await asyncio.to_thread(agent.run, None, msg, history, project=project)
     except Exception as e:
-        store.add_chat(session, "assistant", f"(agent error: {e})")
+        store.add_chat(session, "assistant", f"(agent error: {e})", project=project)
         raise HTTPException(502, f"agent error: {e}")
     answer = result.get("answer") or ""
     store.add_chat(session, "assistant", answer,
-                   {"proposals": result.get("proposals", []), "sources": result.get("sources", [])})
+                   {"proposals": result.get("proposals", []), "sources": result.get("sources", [])},
+                   project=project)
     return {"answer": answer, "proposal": result.get("proposal"),
             "proposals": result.get("proposals", []), "sources": result.get("sources", [])}
 
 
 @app.get("/api/chat/history")
-async def plan_chat_history(session: str = "plan"):
-    return {"messages": store.recent_chat(session, 100)}
+async def plan_chat_history(session: str = "plan", project: str = Query(store.DEFAULT_PROJECT)):
+    return {"messages": store.recent_chat(session, 100, project=_proj(project))}
 
 
 @app.delete("/api/chat")
-async def clear_plan_chat(session: str = "plan"):
-    store.clear_chat(session)
+async def clear_plan_chat(session: str = "plan", project: str = Query(store.DEFAULT_PROJECT)):
+    store.clear_chat(session, project=_proj(project))
     return {"cleared": session}
 
 
