@@ -187,19 +187,27 @@ def board_summary_text(project="maxwell"):
     return "\n".join(lines)
 
 
-def _system_global():
+def _system_global(project="maxwell"):
     today = time.strftime("%Y-%m-%d")
-    proj = store.get_meta("project") or "Project Maxwell"
+    proj = store.get_meta("project", project=project) or "the plan"
+    is_helm = project == "helm"
+    who = "the Helm assistant" if is_helm else "Maxwell"
+    ground = (
+        "Ground every answer in the BOARD above — it carries code-audit comments with file-level "
+        "evidence (read them via get_task). doc_search covers the MAXWELL plan's docs only, so do NOT "
+        "use it for Helm. Helm tasks have no dates, so ignore overdue/schedule questions."
+        if is_helm else
+        "ALWAYS ground project claims in the plan docs via doc_search before asserting them. "
+        "Overdue = finish_date before today and status not Done.")
     return (
-        f"You are Maxwell, the assistant for {proj} (TEEP Barnett), with visibility into the ENTIRE plan. "
+        f"You are {who}, the assistant for {proj}, with visibility into the ENTIRE plan. "
         f"Today is {today}.\n\n"
         "CURRENT BOARD — one line per task: ID [workstream] status :: title (owner; start..finish; flags):\n"
-        f"{board_summary_text()}\n\n"
-        "Answer questions about the whole plan (blockers, owners, risks, what's due/overdue, what changed). "
-        "ALWAYS ground project claims in the plan docs via doc_search before asserting them. Use get_task for a "
-        "task's full description + activity, and search_tasks to filter. To change a task, call "
-        "propose_task_update WITH its task_id — the user must Confirm; NEVER say a change was applied. Be concise "
-        "and operator-friendly; cite the doc when relevant. Overdue = finish_date before today and status not Done."
+        f"{board_summary_text(project=project)}\n\n"
+        "Answer questions about the whole plan (blockers, owners, what's ready vs blocked, what changed). "
+        f"{ground} Use get_task for a task's full description + activity, and search_tasks to filter. To "
+        "change a task, call propose_task_update WITH its task_id — the user must Confirm; NEVER say a "
+        "change was applied. Be concise and operator-friendly."
     )
 
 
@@ -241,12 +249,13 @@ def _search_tasks(args, project="maxwell"):
     return out[:60]
 
 
-def run(task, message, history=None, system=None, max_iters=None):
+def run(task, message, history=None, system=None, max_iters=None, project="maxwell"):
     """task=None runs the PLAN-WIDE agent; a task dict runs the per-task agent; pass
     `system` to override the prompt (used by triage). `max_iters` overrides the tool-loop
-    budget — triage passes a larger one since inbound calls/threads need more grounding turns."""
+    budget — triage passes a larger one since inbound calls/threads need more grounding turns.
+    `project` selects the board the plan-wide agent reads/proposes against ('maxwell' default, 'helm')."""
     if system is None:
-        system = _system(task) if task else _system_global()
+        system = _system(task) if task else _system_global(project)
     iters = max_iters or MAX_ITERS
     msgs = [{"role": "system", "content": system}]
     for h in (history or []):
@@ -285,12 +294,12 @@ def run(task, message, history=None, system=None, max_iters=None):
                 sources += [h["file"] for h in hits]
                 content = "\n\n".join(f"[{h['file']}] {h['text']}" for h in hits) or "no matches"
             elif name == "search_tasks":
-                content = json.dumps(_search_tasks(args))
+                content = json.dumps(_search_tasks(args, project))
             elif name == "get_task":
-                t = store.get_task(args.get("task_id", ""))
+                t = store.get_task(args.get("task_id", ""), project=project)
                 content = json.dumps(_task_brief(t, full=True)) if t else "no such task"
             elif name == "plan_signals":
-                sig = signals.compute_plan_signals()
+                sig = signals.compute_plan_signals(project=project)
                 for k in ("overdue", "due_soon", "blocked", "ready", "critical_slip"):
                     sig[k] = sig[k][:15]
                 content = json.dumps(sig)
@@ -298,7 +307,7 @@ def run(task, message, history=None, system=None, max_iters=None):
                 tid = args.get("task_id") or (task and task.get("task_id"))
                 if not tid:
                     content = "Specify task_id to propose a change."
-                elif not store.get_task(tid):
+                elif not store.get_task(tid, project=project):
                     content = f"No task {tid}."
                 else:
                     prop = {k: v for k, v in args.items()
@@ -311,7 +320,7 @@ def run(task, message, history=None, system=None, max_iters=None):
                 rat = args.get("rationale") or "bulk update"
                 n = 0
                 for tid in (args.get("task_ids") or []):
-                    if not store.get_task(tid):
+                    if not store.get_task(tid, project=project):
                         continue
                     prop = dict(setf)
                     prop["task_id"] = tid
@@ -324,7 +333,7 @@ def run(task, message, history=None, system=None, max_iters=None):
                 rat = args.get("rationale") or f"shift {days:+d}d"
                 n = 0
                 for tid in (args.get("task_ids") or []):
-                    t = store.get_task(tid)
+                    t = store.get_task(tid, project=project)
                     if not t:
                         continue
                     prop = {"task_id": tid, "rationale": rat}

@@ -46,7 +46,8 @@ mcp = FastMCP(
         "OWNSHIP/ROUTE/AIS/ALARM/WX/...); omit it (or 'maxwell') for the Maxwell plan. Writes go ONLY "
         "to the named board — they can never cross. Use search_tasks/get_task to read, board_summary "
         "for the at-a-glance board, get_plan_signals for health, and create_task/update_task/add_comment "
-        "to change a plan. (ask_plan/doc_search are Maxwell-only for now.)"
+        "to change a plan. ask_plan also takes project (Helm answers are board-grounded incl. "
+        "code-audit comments); doc_search remains Maxwell-only."
     ),
     host="127.0.0.1",
     port=_PORT,
@@ -117,10 +118,12 @@ def get_plan_signals(project: str = "maxwell") -> str:
 
 
 @mcp.tool()
-def ask_plan(question: str) -> str:
-    """Ask the plan-wide Maxwell agent. Returns a reasoned, doc-grounded answer (with sources)
-    and, when relevant, a proposed task change (NOT applied — call update_task to apply it)."""
-    r = agent.run(None, question)
+def ask_plan(question: str, project: str = "maxwell") -> str:
+    """Ask the plan-wide agent a question about a board. project selects it ('maxwell' default, or
+    'helm'). For 'helm' the answer is grounded in the live board (incl. code-audit comments); for
+    'maxwell' it also grounds in the plan docs via RAG. Returns a reasoned answer (+ sources) and,
+    when relevant, a proposed task change (NOT applied — call update_task to apply it)."""
+    r = agent.run(None, question, project=project)
     return json.dumps({"answer": r.get("answer"), "sources": r.get("sources"),
                        "proposed_change": r.get("proposal")})
 
