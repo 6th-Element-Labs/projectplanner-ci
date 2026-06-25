@@ -174,10 +174,10 @@ def _chat(messages, tool_choice="auto"):
 
 
 # ---- plan-wide (global) context ------------------------------------------
-def board_summary_text():
+def board_summary_text(project="maxwell"):
     """One compact line per task — the whole plan at a glance for the system prompt."""
     lines = []
-    for t in store.list_tasks():
+    for t in store.list_tasks(project=project):
         deps = ",".join(t.get("depends_on") or [])
         flags = ("; BLOCKING" if t.get("is_blocking") else "") + ("; deps " + deps if deps else "")
         lines.append(
@@ -222,12 +222,13 @@ def _task_brief(t, full=False):
     return b
 
 
-def _search_tasks(args):
+def _search_tasks(args, project="maxwell"):
     owner = (args.get("owner_person") or "").lower()
     blocking = args.get("blocking")
     q = (args.get("query") or "").lower()
     out = []
-    for t in store.list_tasks(workstream=args.get("workstream") or None, status=args.get("status") or None):
+    for t in store.list_tasks(workstream=args.get("workstream") or None, status=args.get("status") or None,
+                              project=project):
         if owner and owner not in (t.get("owner_person_or_role") or "").lower():
             continue
         if blocking and not t.get("is_blocking"):

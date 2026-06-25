@@ -25,7 +25,8 @@ import rag
 import signals
 import store
 
-store.init_db()  # self-sufficient: the web app normally creates the schema
+for _pid in store.PROJECTS:  # ensure every project's schema exists (the web app normally seeds them)
+    store.init_db(_pid)
 
 _PORT = int(os.environ.get("PM_MCP_PORT", "8111"))
 _PUBLIC_HOST = (os.environ.get("PM_MCP_PUBLIC_HOST") or "plan.taikunai.com").strip()
@@ -39,10 +40,13 @@ _SECURITY = TransportSecuritySettings(
 mcp = FastMCP(
     "taikun-plan",
     instructions=(
-        "Project Maxwell (TEEP Barnett) Phase-1 pilot plan. Use ask_plan for a reasoned, "
-        "doc-grounded answer about the whole plan; search_tasks/get_task to read tasks; "
-        "board_summary for the at-a-glance board; doc_search for the plan docs; and "
-        "create_task/update_task/add_comment to change the plan."
+        "Multi-project planning board. Every task/board tool takes a `project` arg: 'maxwell' "
+        "(default — TEEP Barnett Phase-1 pilot) or 'helm' (the Helm marine-chartplotter build). "
+        "ALWAYS pass project='helm' to read or update Helm tasks (workstreams ENGINE/CHART/CONTRACT/"
+        "OWNSHIP/ROUTE/AIS/ALARM/WX/...); omit it (or 'maxwell') for the Maxwell plan. Writes go ONLY "
+        "to the named board — they can never cross. Use search_tasks/get_task to read, board_summary "
+        "for the at-a-glance board, get_plan_signals for health, and create_task/update_task/add_comment "
+        "to change a plan. (ask_plan/doc_search are Maxwell-only for now.)"
     ),
     host="127.0.0.1",
     port=_PORT,
@@ -69,28 +73,31 @@ def _require_write(ctx):
 # ---- read tools (open) ---------------------------------------------------
 @mcp.tool()
 def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
-                 blocking: bool = False, query: str = "") -> str:
-    """Filter the live plan's tasks. All args optional: workstream id (SSO/SEN/BEDROCK/...),
-    status (Not Started|In Progress|Blocked|Done), owner_person substring, blocking, free-text
-    query. Returns a JSON list of {task_id,title,status,owner_person_or_role,workstream,...}."""
+                 blocking: bool = False, query: str = "", project: str = "maxwell") -> str:
+    """Filter a plan's tasks. project selects the board ('maxwell' default, or 'helm'). All other
+    args optional: workstream id (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm), status
+    (Not Started|In Progress|Blocked|Done), owner_person substring, blocking, free-text query.
+    Returns a JSON list of {task_id,title,status,owner_person_or_role,workstream,...}."""
     return json.dumps(agent._search_tasks({
         "workstream": workstream, "status": status, "owner_person": owner_person,
-        "blocking": blocking, "query": query}))
+        "blocking": blocking, "query": query}, project=project))
 
 
 @mcp.tool()
-def get_task(task_id: str) -> str:
-    """Full detail of one task: description, all fields, dependencies, and recent activity."""
-    t = store.get_task(task_id)
+def get_task(task_id: str, project: str = "maxwell") -> str:
+    """Full detail of one task: description, all fields, dependencies, and recent activity.
+    project selects the board ('maxwell' default, or 'helm')."""
+    t = store.get_task(task_id, project=project)
     return json.dumps(agent._task_brief(t, full=True)) if t else "no such task"
 
 
 @mcp.tool()
-def board_summary() -> str:
-    """Whole-board summary: project name + rollups, then one line per task."""
-    return (f"Project: {store.get_meta('project')}\n"
-            f"Rollups: {json.dumps(store.get_meta('rollups') or {})}\n\n"
-            f"{agent.board_summary_text()}")
+def board_summary(project: str = "maxwell") -> str:
+    """Whole-board summary: project name + rollups, then one line per task.
+    project selects the board ('maxwell' default, or 'helm')."""
+    return (f"Project: {store.get_meta('project', project=project)}\n"
+            f"Rollups: {json.dumps(store.get_meta('rollups', project=project) or {})}\n\n"
+            f"{agent.board_summary_text(project=project)}")
 
 
 @mcp.tool()
@@ -102,10 +109,11 @@ def doc_search(query: str) -> str:
 
 
 @mcp.tool()
-def get_plan_signals() -> str:
+def get_plan_signals(project: str = "maxwell") -> str:
     """Derived plan health: counts + overdue/due-soon/blocked/ready tasks, critical-path slips,
-    past-due decisions, and each owner's next-best 1-2 tasks. Use for 'what's slipping?' or digests."""
-    return json.dumps(signals.compute_plan_signals())
+    past-due decisions, and each owner's next-best 1-2 tasks. Use for 'what's slipping?' or digests.
+    project selects the board ('maxwell' default, or 'helm')."""
+    return json.dumps(signals.compute_plan_signals(project=project))
 
 
 @mcp.tool()
@@ -122,9 +130,10 @@ def ask_plan(question: str) -> str:
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", assignee: str = "",
                 phase: str = "", start_date: str = "", finish_date: str = "",
-                risk_level: str = "", is_blocking: str = "") -> str:
+                risk_level: str = "", is_blocking: str = "", project: str = "maxwell") -> str:
     """Update only the fields you pass on a task. status: Not Started|In Progress|Blocked|Done;
-    dates: YYYY-MM-DD; is_blocking: 'true'/'false'. Audited as actor 'MCP'."""
+    dates: YYYY-MM-DD; is_blocking: 'true'/'false'. Audited as actor 'MCP'.
+    project selects the board ('maxwell' default, or 'helm') — writes go ONLY to that board."""
     _require_write(ctx)
     fields = {}
     for k, v in (("title", title), ("description", description), ("status", status),
@@ -137,28 +146,30 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
         fields["is_blocking"] = is_blocking.strip().lower() in ("1", "true", "yes")
     if not fields:
         return "no fields to update"
-    t = store.update_task(task_id, fields, actor="MCP")
+    t = store.update_task(task_id, fields, actor="MCP", project=project)
     return json.dumps(agent._task_brief(t)) if t else "no such task"
 
 
 @mcp.tool()
 def create_task(workstream_id: str, title: str, ctx: Context, description: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", status: str = "",
-                phase: str = "", risk_level: str = "") -> str:
-    """Create a task in a workstream (SSO/SEN/BEDROCK/...). Returns the created task. Actor 'MCP'."""
+                phase: str = "", risk_level: str = "", project: str = "maxwell") -> str:
+    """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm). Returns the
+    created task. Actor 'MCP'. project selects the board ('maxwell' default, or 'helm')."""
     _require_write(ctx)
     data = {"workstream_id": workstream_id, "title": title, "description": description or None,
             "owner_org": owner_org or None, "owner_person_or_role": owner_person_or_role or None,
             "status": status or None, "phase": phase or None, "risk_level": risk_level or None}
-    t = store.create_task(data, actor="MCP")
+    t = store.create_task(data, actor="MCP", project=project)
     return json.dumps(agent._task_brief(t)) if t else "workstream_id and title required"
 
 
 @mcp.tool()
-def add_comment(task_id: str, text: str, ctx: Context) -> str:
-    """Add a note to a task's activity log (audited as actor 'MCP')."""
+def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell") -> str:
+    """Add a note to a task's activity log (audited as actor 'MCP').
+    project selects the board ('maxwell' default, or 'helm')."""
     _require_write(ctx)
-    t = store.add_comment(task_id, "MCP", text)
+    t = store.add_comment(task_id, "MCP", text, project=project)
     return "ok" if t else "no such task"
 
 
