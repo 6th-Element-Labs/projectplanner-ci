@@ -8,6 +8,34 @@ from typing import Any, Dict, List, Optional
 
 DB_PATH = os.environ.get("PM_DB_PATH", os.path.join(os.path.dirname(__file__), "taikun_pm.db"))
 SEED_PATH = os.environ.get("PM_SEED_PATH", os.path.join(os.path.dirname(__file__), "seed_plan.json"))
+HELM_DB_PATH = os.environ.get("PM_HELM_DB_PATH", os.path.join(os.path.dirname(__file__), "helm.db"))
+HELM_SEED_PATH = os.environ.get("PM_HELM_SEED_PATH",
+                                os.path.join(os.path.dirname(__file__), "seeds", "helm_seed_plan.json"))
+
+# Multi-project registry. Each project is its OWN sqlite file — physical isolation, so a Helm
+# request can never read or write Maxwell's rows (no shared table, no project_id column). The
+# default is always 'maxwell', so every existing caller behaves exactly as before.
+PROJECTS = {
+    "maxwell": {"db": DB_PATH, "seed": SEED_PATH,
+                "label": "Project Maxwell", "pretitle": "TEEP Barnett · TotalEnergies E&P"},
+    "helm": {"db": HELM_DB_PATH, "seed": HELM_SEED_PATH,
+             "label": "Helm — Marine Nav Companion", "pretitle": "6th Element Labs · web-first chartplotter"},
+}
+DEFAULT_PROJECT = "maxwell"
+
+
+def projects() -> List[Dict[str, Any]]:
+    """The switcher's source of truth — [{id, label, pretitle}]."""
+    return [{"id": k, "label": v["label"], "pretitle": v.get("pretitle", "")} for k, v in PROJECTS.items()]
+
+
+def _resolve(project: Optional[str]) -> Dict[str, str]:
+    """Map a project id -> its config. Fail CLOSED on an unknown id — never silently fall back
+    to Maxwell (which could leak a write across projects)."""
+    p = PROJECTS.get(project or DEFAULT_PROJECT)
+    if not p:
+        raise ValueError(f"unknown project: {project!r}")
+    return p
 
 # Fields a PATCH may change (everything an editor touches in an Asana-style board).
 EDITABLE = ["title", "description", "owner_org", "owner_person_or_role", "assignee",
@@ -25,15 +53,15 @@ DEFAULT_PEOPLE = ["Steve Ridder", "Taikun eng", "Darko", "Sahir", "Sebastian", "
                   "Michelle", "Sierra", "Clovis", "Devin", "Brent", "IFS owner", "Nubo"]
 
 
-def _conn():
-    c = sqlite3.connect(DB_PATH)
+def _conn(project: str = DEFAULT_PROJECT):
+    c = sqlite3.connect(_resolve(project)["db"])
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     return c
 
 
-def init_db():
-    with _conn() as c:
+def init_db(project: str = DEFAULT_PROJECT):
+    with _conn(project) as c:
         c.executescript(
             """
             CREATE TABLE IF NOT EXISTS tasks (
@@ -81,19 +109,21 @@ def init_db():
         )
 
 
-def seed_if_empty():
-    with _conn() as c:
+def seed_if_empty(project: str = DEFAULT_PROJECT):
+    with _conn(project) as c:
         n = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         if n:
             return n
-        if not os.path.exists(SEED_PATH):
+        seed_path = _resolve(project)["seed"]
+        if not os.path.exists(seed_path):
             return 0
-        plan = json.load(open(SEED_PATH))
+        plan = json.load(open(seed_path))
         now = time.time()
         order = 0
         for w in plan.get("workstreams", []):
             for t in w.get("tasks", []):
                 order += 1
+                so = order if t.get("sort_order") is None else t.get("sort_order")
                 c.execute(
                     """INSERT OR REPLACE INTO tasks
                     (task_id, workstream_id, workstream_name, title, description,
@@ -109,7 +139,7 @@ def seed_if_empty():
                      t.get("finish_date"), t.get("start_day"),
                      json.dumps(t.get("depends_on", [])), t.get("entry_criteria"),
                      t.get("exit_criteria"), t.get("deliverable"), t.get("risk_level"),
-                     1 if t.get("is_blocking") else 0, order, now, now),
+                     1 if t.get("is_blocking") else 0, so, now, now),
                 )
         for k in META_SECTIONS:
             if k in plan:
@@ -131,7 +161,7 @@ def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
 
 
 def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
-               assignee: Optional[str] = None) -> List[Dict[str, Any]]:
+               assignee: Optional[str] = None, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     q = "SELECT * FROM tasks WHERE 1=1"
     p: List[Any] = []
     if workstream:
@@ -141,12 +171,12 @@ def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
     if assignee:
         q += " AND assignee=?"; p.append(assignee)
     q += " ORDER BY sort_order"
-    with _conn() as c:
+    with _conn(project) as c:
         return [_task_row(r) for r in c.execute(q, p).fetchall()]
 
 
-def get_task(task_id: str) -> Optional[Dict[str, Any]]:
-    with _conn() as c:
+def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    with _conn(project) as c:
         r = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if not r:
             return None
@@ -157,7 +187,8 @@ def get_task(task_id: str) -> Optional[Dict[str, Any]]:
         return t
 
 
-def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user") -> Optional[Dict[str, Any]]:
+def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
+                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     sets, vals, changed = [], [], {}
     for k, v in fields.items():
         if k not in EDITABLE:
@@ -168,33 +199,35 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user") -> Op
             v = json.dumps(v)
         sets.append(f"{k}=?"); vals.append(v); changed[k] = v
     if not sets:
-        return get_task(task_id)
+        return get_task(task_id, project)
     sets.append("updated_at=?"); vals.append(time.time())
     vals.append(task_id)
-    with _conn() as c:
+    with _conn(project) as c:
         cur = c.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE task_id=?", vals)
         if cur.rowcount == 0:
             return None
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "edit", json.dumps(changed), time.time()))
-    return get_task(task_id)
+    return get_task(task_id, project)
 
 
-def add_comment(task_id: str, actor: str, text: str, kind: str = "comment") -> Optional[Dict[str, Any]]:
-    with _conn() as c:
+def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
+                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    with _conn(project) as c:
         if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
             return None
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, kind, json.dumps({"text": text}), time.time()))
-    return get_task(task_id)
+    return get_task(task_id, project)
 
 
-def create_task(data: Dict[str, Any], actor: str = "user") -> Optional[Dict[str, Any]]:
+def create_task(data: Dict[str, Any], actor: str = "user",
+                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     ws = (data.get("workstream_id") or "").strip()
     title = (data.get("title") or "").strip()
     if not ws or not title:
         return None
-    with _conn() as c:
+    with _conn(project) as c:
         wsname = data.get("workstream_name")
         if not wsname:
             r = c.execute("SELECT workstream_name FROM tasks WHERE workstream_id=? LIMIT 1", (ws,)).fetchone()
@@ -226,24 +259,24 @@ def create_task(data: Dict[str, Any], actor: str = "user") -> Optional[Dict[str,
              1 if data.get("is_blocking") else 0, order, now, now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (tid, actor, "create", json.dumps({"title": title}), now))
-    return get_task(tid)
+    return get_task(tid, project)
 
 
-def delete_task(task_id: str) -> bool:
-    with _conn() as c:
+def delete_task(task_id: str, project: str = DEFAULT_PROJECT) -> bool:
+    with _conn(project) as c:
         cur = c.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
         c.execute("DELETE FROM activity WHERE task_id=?", (task_id,))
         return cur.rowcount > 0
 
 
-def get_meta(key: str, default=None):
-    with _conn() as c:
+def get_meta(key: str, default=None, project: str = DEFAULT_PROJECT):
+    with _conn(project) as c:
         r = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return json.loads(r[0]) if r else default
 
 
-def set_meta(key: str, value):
-    with _conn() as c:
+def set_meta(key: str, value, project: str = DEFAULT_PROJECT):
+    with _conn(project) as c:
         c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, json.dumps(value)))
 
 
@@ -442,12 +475,12 @@ def inbox_pending_count() -> int:
         return c.execute("SELECT COUNT(*) FROM inbox WHERE status='pending'").fetchone()[0]
 
 
-def board_payload() -> Dict[str, Any]:
-    tasks = list_tasks()
+def board_payload(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    tasks = list_tasks(project=project)
     by_ws: Dict[str, Dict[str, Any]] = {}
     for t in tasks:
         ws = by_ws.setdefault(t["_wsId"], {"workstream_id": t["_wsId"], "name": t["_wsName"], "tasks": []})
         ws["tasks"].append(t)
-    payload: Dict[str, Any] = {k: get_meta(k) for k in META_SECTIONS}
+    payload: Dict[str, Any] = {k: get_meta(k, project=project) for k in META_SECTIONS}
     payload["workstreams"] = list(by_ws.values())
     return payload

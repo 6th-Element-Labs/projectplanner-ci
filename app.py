@@ -23,7 +23,7 @@ if _env.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile  # noqa: E402
 from fastapi.responses import JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
@@ -45,67 +45,92 @@ app = FastAPI(title="Taikun PM", version="0.1.0")
 
 store.init_db()
 _seeded = store.seed_if_empty()
+# Additional projects (e.g. Helm) — each in its OWN db file; one-shot seed, guarded so a
+# restart never wipes or re-imports. Maxwell (DEFAULT_PROJECT) is seeded above, untouched.
+for _pid in store.PROJECTS:
+    if _pid != store.DEFAULT_PROJECT:
+        try:
+            store.init_db(_pid)
+            store.seed_if_empty(_pid)
+        except Exception as _e:  # never let a second project block startup
+            print(f"[projects] seed {_pid} skipped: {_e}")
+
+
+def _proj(project: str) -> str:
+    """Validate a project id against the registry — fail closed (400) on anything unknown
+    so a bad/stale id can never be silently routed to (or written into) the wrong db."""
+    if project not in store.PROJECTS:
+        raise HTTPException(400, f"unknown project: {project}")
+    return project
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "taikun-pm", "tasks": len(store.list_tasks())}
+    return {"status": "ok", "service": "taikun-pm", "tasks": len(store.list_tasks()),
+            "projects": list(store.PROJECTS)}
+
+
+@app.get("/api/projects")
+async def list_projects():
+    """The project switcher's source of truth — [{id, label, pretitle}] + the default."""
+    return {"projects": store.projects(), "default": store.DEFAULT_PROJECT}
 
 
 @app.get("/api/board")
-async def board():
-    return store.board_payload()
+async def board(project: str = Query(store.DEFAULT_PROJECT)):
+    return store.board_payload(_proj(project))
 
 
 @app.get("/api/people")
-async def people():
-    return {"people": store.get_meta("people", store.DEFAULT_PEOPLE)}
+async def people(project: str = Query(store.DEFAULT_PROJECT)):
+    return {"people": store.get_meta("people", store.DEFAULT_PEOPLE, project=_proj(project))}
 
 
 @app.get("/api/tasks")
-async def list_tasks(workstream: str = None, status: str = None, assignee: str = None):
-    return {"tasks": store.list_tasks(workstream, status, assignee)}
+async def list_tasks(workstream: str = None, status: str = None, assignee: str = None,
+                     project: str = Query(store.DEFAULT_PROJECT)):
+    return {"tasks": store.list_tasks(workstream, status, assignee, project=_proj(project))}
 
 
 @app.get("/api/tasks/{task_id}")
-async def get_task(task_id: str):
-    t = store.get_task(task_id)
+async def get_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    t = store.get_task(task_id, project=_proj(project))
     if not t:
         raise HTTPException(404, "task not found")
     return t
 
 
 @app.post("/api/tasks")
-async def create_task(body: dict = Body(...)):
+async def create_task(body: dict = Body(...), project: str = Query(...)):
     actor = body.pop("_actor", "user")
-    t = store.create_task(body, actor=actor)
+    t = store.create_task(body, actor=actor, project=_proj(project))
     if not t:
         raise HTTPException(400, "workstream_id and title are required")
     return t
 
 
 @app.patch("/api/tasks/{task_id}")
-async def patch_task(task_id: str, body: dict = Body(...)):
+async def patch_task(task_id: str, body: dict = Body(...), project: str = Query(...)):
     actor = body.pop("_actor", "user")
-    t = store.update_task(task_id, body, actor=actor)
+    t = store.update_task(task_id, body, actor=actor, project=_proj(project))
     if not t:
         raise HTTPException(404, "task not found")
     return t
 
 
 @app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str):
-    if not store.delete_task(task_id):
+async def delete_task(task_id: str, project: str = Query(...)):
+    if not store.delete_task(task_id, project=_proj(project)):
         raise HTTPException(404, "task not found")
     return {"deleted": task_id}
 
 
 @app.post("/api/tasks/{task_id}/comment")
-async def comment(task_id: str, body: dict = Body(...)):
+async def comment(task_id: str, body: dict = Body(...), project: str = Query(...)):
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text required")
-    t = store.add_comment(task_id, body.get("actor", "user"), text)
+    t = store.add_comment(task_id, body.get("actor", "user"), text, project=_proj(project))
     if not t:
         raise HTTPException(404, "task not found")
     return t
@@ -366,10 +391,10 @@ async def poll_inbox_now():
 
 
 @app.get("/api/signals")
-async def plan_signals():
+async def plan_signals(project: str = Query(store.DEFAULT_PROJECT)):
     """Derived plan health: overdue / due-soon / blocked / ready / critical-slip /
     past-due decisions + each owner's next-best 1-2 tasks."""
-    return signals.compute_plan_signals()
+    return signals.compute_plan_signals(project=_proj(project))
 
 
 @app.post("/api/digest")
@@ -416,11 +441,12 @@ def _people_of(t, people):
     return m or ["Unassigned"]
 
 
-def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None, person=None):
+def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None, person=None,
+                      project="maxwell"):
     """Same filter semantics as the board UI, so 'export = what you see'."""
-    p = store.board_payload()
+    p = store.board_payload(_proj(project))
     ql = (q or "").lower()
-    people = store.get_meta("people", store.DEFAULT_PEOPLE) if person else []
+    people = store.get_meta("people", store.DEFAULT_PEOPLE, project=project) if person else []
 
     def keep(t):
         if workstream and t.get("_wsId") != workstream:
@@ -445,16 +471,16 @@ def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None
 
 
 @app.get("/api/export.xlsx")
-async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None):
-    data = export.export_xlsx(_filtered_payload(workstream, owner, risk, blocking, q, person))
+async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None, project: str = Query(store.DEFAULT_PROJECT)):
+    data = export.export_xlsx(_filtered_payload(workstream, owner, risk, blocking, q, person, _proj(project)))
     return Response(content=data,
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": 'attachment; filename="project-plan.xlsx"'})
 
 
 @app.get("/api/export.xml")
-async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None):
-    xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, person))
+async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None, project: str = Query(store.DEFAULT_PROJECT)):
+    xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, person, _proj(project)))
     return Response(content=xml, media_type="text/xml",
                     headers={"Content-Disposition": 'attachment; filename="project-plan.xml"'})
 

@@ -1,3 +1,26 @@
+/* === Multi-project routing (added) ========================================================
+   Resolve the active project ONCE (URL ?project= → localStorage → 'maxwell'), then tag every
+   relative api/* request with it. Reads default to Maxwell server-side; writes are fail-closed
+   (require an explicit project), so a stale selection can never write into the wrong board. */
+(function () {
+    var fromUrl = null;
+    try { fromUrl = new URL(window.location.href).searchParams.get('project'); } catch (e) {}
+    var stored = null;
+    try { stored = localStorage.getItem('pm_project'); } catch (e) {}
+    var proj = ((fromUrl || stored || 'maxwell') + '').trim() || 'maxwell';
+    try { localStorage.setItem('pm_project', proj); } catch (e) {}
+    window.PM_PROJECT = proj;
+    var _fetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+        try {
+            if (typeof input === 'string' && /^\/?api\//.test(input) && !/[?&]project=/.test(input)) {
+                input += (input.indexOf('?') >= 0 ? '&' : '?') + 'project=' + encodeURIComponent(window.PM_PROJECT);
+            }
+        } catch (e) {}
+        return _fetch(input, init);
+    };
+})();
+
 /**
  * Project Maxwell — TEEP Barnett Phase-1 Pilot Plan board
  * ============================================================================
@@ -17,8 +40,10 @@ const TeepPlan = {
     ganttMode: 'task',  // default 'task' (per-task detail) · 'workstream' = 12-bar overview
 
     PHASES: ['Kickoff', 'Bootstrap', 'Build', 'Cutover', 'Operate'],
-    PHASE_COLOR: { Kickoff: 'azure', Bootstrap: 'purple', Build: 'blue', Cutover: 'orange', Operate: 'green' },
-    PHASE_HEX: { Kickoff: '#4299e1', Bootstrap: '#ae3ec9', Build: '#066fd1', Cutover: '#f76707', Operate: '#2fb344' },
+    PHASE_COLOR: { Kickoff: 'azure', Bootstrap: 'purple', Build: 'blue', Cutover: 'orange', Operate: 'green',
+                   'Wave 1': 'azure', 'Wave 2': 'blue', 'Wave 3': 'orange', 'Wave 4': 'green' },
+    PHASE_HEX: { Kickoff: '#4299e1', Bootstrap: '#ae3ec9', Build: '#066fd1', Cutover: '#f76707', Operate: '#2fb344',
+                 'Wave 1': '#4299e1', 'Wave 2': '#066fd1', 'Wave 3': '#f76707', 'Wave 4': '#2fb344' },
     OWNER_COLOR: { 'Taikun': 'blue', 'TEEP': 'teal', 'Sensirion/Nubo': 'orange', 'IFS Merrick': 'purple', 'Joint': 'cyan' },
     RISK_COLOR: { Low: 'green', Medium: 'yellow', High: 'red' },
     STATUS_COLOR: { 'Not Started': 'secondary', 'In Progress': 'blue', 'Blocked': 'red', 'Done': 'green' },
@@ -83,6 +108,7 @@ const TeepPlan = {
     },
 
     async init() {
+        try { await this.applyProject(); } catch (e) { /* switcher is best-effort */ }
         try {
             const res = await fetch('api/board');
             if (!res.ok) throw new Error(`HTTP ${res.status} loading the board`);
@@ -93,6 +119,7 @@ const TeepPlan = {
             return;
         }
         this.flatten();
+        this.PHASES = this.derivePhases();
         this.renderGenerated();
         this.renderStats();
         this.renderAbout();
@@ -120,6 +147,48 @@ const TeepPlan = {
                 this.tasks.push(Object.assign({}, t, { _wsId: w.workstream_id, _wsName: w.name }));
             });
         });
+    },
+
+    // ---- multi-project: populate the switcher, drive the header -----------
+    async applyProject() {
+        const cur = window.PM_PROJECT || 'maxwell';
+        let list = [{ id: 'maxwell', label: 'Project Maxwell', pretitle: '' }];
+        try { list = (await (await fetch('api/projects')).json()).projects || list; } catch (e) { /* offline */ }
+        const sel = document.getElementById('project-switcher');
+        if (sel) {
+            sel.innerHTML = list.map((p) =>
+                `<option value="${this.esc(p.id)}"${p.id === cur ? ' selected' : ''}>${this.esc(p.label)}</option>`).join('');
+            if (!sel._wired) {
+                sel._wired = true;
+                sel.addEventListener('change', () => {
+                    const id = sel.value || 'maxwell';
+                    try { localStorage.setItem('pm_project', id); } catch (e) {}
+                    const u = new URL(window.location.href);
+                    u.searchParams.set('project', id);
+                    window.location.href = u.toString();   // full reload re-renders everything for the picked project
+                });
+            }
+        }
+        // Data-drive the header for non-default projects; leave Maxwell's static header pixel-identical.
+        const meta = list.find((p) => p.id === cur);
+        if (meta && cur !== 'maxwell') {
+            const t = document.querySelector('.page-title'); if (t) t.textContent = meta.label;
+            const pt = document.querySelector('.page-pretitle'); if (pt && meta.pretitle) pt.textContent = meta.pretitle;
+            document.title = `${meta.label} | Taikun Atlas`;
+        }
+    },
+
+    // Board/overview columns come from the phases actually present: Maxwell's 5 lifecycle phases,
+    // or Helm's "Wave 1..4". Falls back to the canonical 5 when a plan has no/standard phases.
+    derivePhases() {
+        const canon = ['Kickoff', 'Bootstrap', 'Build', 'Cutover', 'Operate'];
+        const present = [];
+        ((this.plan && this.plan.workstreams) || []).forEach((w) => {
+            (w.tasks || []).forEach((t) => { if (t.phase && present.indexOf(t.phase) < 0) present.push(t.phase); });
+        });
+        if (!present.length) return canon;
+        if (present.every((p) => canon.indexOf(p) >= 0)) return canon;
+        return present.sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
     },
 
     // ---- small helpers ---------------------------------------------------
@@ -2457,6 +2526,7 @@ const TeepPlan = {
         const set = (id, key) => { const v = (document.getElementById(id).value || '').trim(); if (v) p.set(key, v); };
         set('f-ws', 'workstream'); set('f-owner', 'owner'); set('f-assignee', 'person'); set('f-risk', 'risk'); set('f-search', 'q');
         if (document.getElementById('f-blocking').checked) p.set('blocking', '1');
+        p.set('project', window.PM_PROJECT || 'maxwell');
         const qs = p.toString();
         return `api/export.${kind}` + (qs ? `?${qs}` : '');
     },

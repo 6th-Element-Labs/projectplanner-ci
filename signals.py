@@ -33,8 +33,8 @@ def _people_of(t, people):
     return m or ["Unassigned"]
 
 
-def compute_plan_signals(due_soon_days: int = 7) -> dict:
-    tasks = store.list_tasks()
+def compute_plan_signals(due_soon_days: int = 7, project: str = "maxwell") -> dict:
+    tasks = store.list_tasks(project=project)
     by_id = {t["task_id"]: t for t in tasks}
     today = datetime.date.today()
 
@@ -67,21 +67,21 @@ def compute_plan_signals(due_soon_days: int = 7) -> dict:
             waiting.append(t)
 
     # Critical-path slip: critical-path tasks that are overdue or blocked.
-    cp_ids = {c.get("task_id") for c in (store.get_meta("critical_path") or [])}
+    cp_ids = {c.get("task_id") for c in (store.get_meta("critical_path", project=project) or [])}
     critical_slip = [t for t in tasks if t["task_id"] in cp_ids and not is_done(t)
                      and (t.get("status") == "Blocked"
                           or (_date(t.get("finish_date")) and _date(t.get("finish_date")) < today))]
 
     # Past-due decisions (only when needed_by is a real date).
     past_due_decisions = []
-    for d in (store.get_meta("consolidated_decisions") or []):
+    for d in (store.get_meta("consolidated_decisions", project=project) or []):
         nb = _date(d.get("needed_by"))
         if nb and nb < today:
             past_due_decisions.append({"question": d.get("question"), "owner": d.get("owner"),
                                        "needed_by": d.get("needed_by"), "workstream": d.get("workstream")})
 
     # Next-best per owner: rank the ACTIONABLE tasks each person owns.
-    people = store.get_meta("people") or store.DEFAULT_PEOPLE
+    people = store.get_meta("people", project=project) or store.DEFAULT_PEOPLE
 
     def score(t):
         fd = _date(t.get("finish_date"))
