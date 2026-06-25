@@ -82,6 +82,13 @@ def _dep_ids(s):
     return out
 
 
+def _unknown_ids(ids, project):
+    """Task ids that don't exist on the project. A dependency to a non-existent task is a broken
+    graph edge (invalid input) — callers REJECT it rather than write a dangling reference that would
+    spread into every audit that traverses the graph."""
+    return [d for d in ids if not store.get_task(d, project=project)]
+
+
 # ---- read tools (open) ---------------------------------------------------
 @mcp.tool()
 def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
@@ -162,7 +169,12 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
     if is_blocking != "":
         fields["is_blocking"] = is_blocking.strip().lower() in ("1", "true", "yes")
     if depends_on != "":
-        fields["depends_on"] = [] if depends_on.strip().lower() in ("none", "clear", "[]") else _dep_ids(depends_on)
+        new_deps = [] if depends_on.strip().lower() in ("none", "clear", "[]") else _dep_ids(depends_on)
+        unknown = _unknown_ids(new_deps, project)
+        if unknown:   # FAIL LOUD: don't write a dependency to a task that doesn't exist
+            return json.dumps({"error": "unknown dependency id(s) on project '%s': %s — task NOT updated. "
+                               "Create them first or fix the id." % (project, ", ".join(unknown))})
+        fields["depends_on"] = new_deps
     if not fields:
         return "no fields to update"
     t = store.update_task(task_id, fields, actor="MCP", project=project)
@@ -178,10 +190,15 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
     comma/space-separated task ids this task dependsOn (e.g. 'BOAT-1, WX-10'). Returns the created task.
     Actor 'MCP'. project selects the board ('maxwell' default, or 'helm')."""
     _require_write(ctx)
+    deps = _dep_ids(depends_on)
+    unknown = _unknown_ids(deps, project)
+    if unknown:   # FAIL LOUD: refuse to create a task carrying edges to non-existent tasks
+        return json.dumps({"error": "unknown dependency id(s) on project '%s': %s — task NOT created. "
+                           "Create them first or fix the id." % (project, ", ".join(unknown))})
     data = {"workstream_id": workstream_id, "title": title, "description": description or None,
             "owner_org": owner_org or None, "owner_person_or_role": owner_person_or_role or None,
             "status": status or None, "phase": phase or None, "risk_level": risk_level or None,
-            "depends_on": _dep_ids(depends_on)}
+            "depends_on": deps}
     t = store.create_task(data, actor="MCP", project=project)
     return json.dumps(agent._task_brief(t)) if t else "workstream_id and title required"
 
@@ -199,8 +216,9 @@ def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell")
 def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "maxwell") -> str:
     """Add one or more dependency EDGES to a task (task_id dependsOn each id in depends_on,
     comma/space-separated, e.g. 'TOOLS-7, SHELL-1'). APPENDS without clobbering existing deps
-    (idempotent, deduped) — use this to wire cross-epic edges. Unknown ids are reported in a warning
-    but still added (fail-loud: a typo or a not-yet-created task is surfaced, never silently dropped).
+    (idempotent, deduped) — use this to wire cross-epic edges. FAIL-FAST: if ANY id is not a real
+    task the whole call is REJECTED with an error and nothing is written (a dependency to a
+    non-existent task is a broken graph edge) — fix the id or create the target first, then retry.
     project selects the board ('maxwell' default, or 'helm')."""
     _require_write(ctx)
     add = _dep_ids(depends_on)
@@ -209,32 +227,39 @@ def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "
     t = store.get_task(task_id, project=project)
     if not t:
         return "no such task: " + task_id
+    unknown = _unknown_ids(add, project)
+    if unknown:   # FAIL LOUD: reject the whole batch — never write a dangling edge
+        return json.dumps({"error": "unknown task id(s) on project '%s': %s — NO edge added. "
+                           "Create the target task(s) first or fix the id." % (project, ", ".join(unknown))})
     merged = list(t.get("depends_on") or [])
     for d in add:
         if d not in merged:
             merged.append(d)
     store.update_task(task_id, {"depends_on": merged}, actor="MCP", project=project)
-    res = {"task_id": task_id, "depends_on": merged}
-    unknown = [d for d in add if not store.get_task(d, project=project)]
-    if unknown:
-        res["warning"] = "unknown task id(s) on project '%s' (added anyway): %s" % (project, ", ".join(unknown))
-    return json.dumps(res)
+    return json.dumps({"task_id": task_id, "depends_on": merged})
 
 
 @mcp.tool()
 def remove_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "maxwell") -> str:
-    """Remove one or more dependency edges from a task (comma/space-separated ids). No-op for ids that
-    aren't present. project selects the board ('maxwell' default, or 'helm')."""
+    """Remove one or more dependency edges from a task (comma/space-separated ids). Reports which ids
+    were actually removed vs not present — a no-op removal is SURFACED, not silently swallowed.
+    project selects the board ('maxwell' default, or 'helm')."""
     _require_write(ctx)
-    rm = set(_dep_ids(depends_on))
+    rm = _dep_ids(depends_on)
     if not rm:
         return "no dependency ids given"
     t = store.get_task(task_id, project=project)
     if not t:
         return "no such task: " + task_id
-    merged = [d for d in (t.get("depends_on") or []) if d not in rm]
+    cur = list(t.get("depends_on") or [])
+    rmset = set(rm)
+    merged = [d for d in cur if d not in rmset]
     store.update_task(task_id, {"depends_on": merged}, actor="MCP", project=project)
-    return json.dumps({"task_id": task_id, "depends_on": merged})
+    res = {"task_id": task_id, "depends_on": merged, "removed": [d for d in cur if d in rmset]}
+    not_present = [d for d in rm if d not in cur]
+    if not_present:   # surface the no-op rather than pretend it did something
+        res["note"] = "not present (nothing to remove): " + ", ".join(not_present)
+    return json.dumps(res)
 
 
 @mcp.tool()

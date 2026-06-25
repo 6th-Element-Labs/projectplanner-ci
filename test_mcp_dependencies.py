@@ -63,13 +63,22 @@ ok(deps("SUBJ-1") == ["DEP-1"], "add_dependency is idempotent")
 M.add_dependency("SUBJ-1", "DEP-2", None, project=P)
 ok(deps("SUBJ-1") == ["DEP-1", "DEP-2"], "add_dependency appends without clobber")
 
+# FAIL-FAST: a dependency to a non-existent task is a broken edge -> REJECTED, nothing written.
+before = list(deps("SUBJ-1"))
 r = json.loads(M.add_dependency("SUBJ-1", "GHOST-9", None, project=P))
-ok("GHOST-9" in r["depends_on"] and "warning" in r, "unknown id surfaced (fail-loud) but still added")
-M.remove_dependency("SUBJ-1", "GHOST-9", None, project=P)
-ok("GHOST-9" not in deps("SUBJ-1"), "remove_dependency drops the edge")
+ok("error" in r and "GHOST-9" in r["error"], "unknown dep id is REJECTED with an error (not warned-and-written)")
+ok(deps("SUBJ-1") == before, "rejected unknown id leaves NO dangling edge in the graph")
+r = json.loads(M.add_dependency("SUBJ-1", "DEP-1, GHOST-9", None, project=P))   # mixed valid+unknown
+ok("error" in r and deps("SUBJ-1") == before, "mixed valid+unknown is ATOMICALLY rejected (no partial write)")
+
+# remove_dependency surfaces a no-op instead of silently swallowing it
+r = json.loads(M.remove_dependency("SUBJ-1", "GHOST-9", None, project=P))
+ok("note" in r, "remove of a not-present id is SURFACED (no-op note), not silently swallowed")
 
 M.update_task("SUBJ-1", None, depends_on="DEP-2", project=P)
 ok(deps("SUBJ-1") == ["DEP-2"], "update_task depends_on REPLACES the list")
+r = json.loads(M.update_task("SUBJ-1", None, depends_on="GHOST-9", project=P))
+ok("error" in r and deps("SUBJ-1") == ["DEP-2"], "update_task REJECTS an unknown dep (task left untouched)")
 M.update_task("SUBJ-1", None, depends_on="none", project=P)
 ok(deps("SUBJ-1") == [], "update_task depends_on='none' clears")
 M.update_task("SUBJ-1", None, status="In Progress", project=P)
@@ -77,6 +86,8 @@ ok(deps("SUBJ-1") == [], "update_task without depends_on leaves deps untouched")
 
 nt = json.loads(M.create_task("SUBJ", "with deps", None, depends_on="DEP-1, DEP-2", project=P))["task_id"]
 ok(set(deps(nt)) == {"DEP-1", "DEP-2"}, "create_task persists depends_on")
+r = json.loads(M.create_task("SUBJ", "bad deps", None, depends_on="GHOST-9", project=P))
+ok("error" in r, "create_task REJECTS a task carrying an unknown dep (not created)")
 
 ed = [a for a in store.get_task("SUBJ-1", project=P)["activity"] if a["kind"] == "edit"]
 ok(any("depends_on" in (a.get("payload") or {}) for a in ed), "edge edits recorded in the activity log")
