@@ -109,6 +109,19 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ttl_minutes INTEGER NOT NULL DEFAULT 30,
                 released_at REAL
             );
+            CREATE TABLE IF NOT EXISTS decisions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id     TEXT,
+                author      TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                context     TEXT NOT NULL,
+                decision    TEXT NOT NULL,
+                rationale   TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'accepted',
+                supersedes  INTEGER,
+                created_at  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_decisions_task ON decisions(task_id);
             CREATE TABLE IF NOT EXISTS agent_messages (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 from_agent    TEXT NOT NULL,
@@ -136,6 +149,14 @@ def init_db(project: str = DEFAULT_PROJECT):
             CREATE INDEX IF NOT EXISTS ix_leases_agent ON file_leases(agent_id);
             """
         )
+        # Additive column migrations — safe to run on every startup
+        for col_sql in [
+            "ALTER TABLE tasks ADD COLUMN agent_state TEXT",  # JSON blob per agent
+        ]:
+            try:
+                c.execute(col_sql)
+            except Exception:
+                pass  # column already exists
 
 
 def seed_if_empty(project: str = DEFAULT_PROJECT):
@@ -186,6 +207,8 @@ def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
     d["is_blocking"] = bool(d.get("is_blocking"))
     d["_wsId"] = d.pop("workstream_id")
     d["_wsName"] = d.pop("workstream_name")
+    raw_state = d.pop("agent_state", None)
+    d["agent_state"] = json.loads(raw_state) if raw_state else {}
     return d
 
 
@@ -404,6 +427,74 @@ def check_files(files: List[str], project: str = DEFAULT_PROJECT) -> List[Dict[s
                                  "task_id": lease.get("task_id"),
                                  "expires_at": lease["claimed_at"] + lease["ttl_minutes"] * 60})
     return sorted(results, key=lambda x: x["file"])
+
+
+def record_decision(task_id: Optional[str], author: str, title: str,
+                    context: str, decision: str, rationale: str,
+                    supersedes: Optional[int] = None,
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Append an architectural decision record (ADR-lite) to the decisions log.
+    Immutable once written — to reverse, record a new decision with status='superseded'
+    and reference the old id in supersedes. Returns the full record."""
+    now = time.time()
+    with _conn(project) as c:
+        cur = c.execute(
+            "INSERT INTO decisions(task_id, author, title, context, decision, rationale, "
+            "supersedes, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (task_id, author, title, context, decision, rationale, supersedes, now),
+        )
+        dec_id = cur.lastrowid
+        if supersedes:
+            c.execute("UPDATE decisions SET status='superseded' WHERE id=?", (supersedes,))
+    return {"id": dec_id, "task_id": task_id, "author": author, "title": title,
+            "context": context, "decision": decision, "rationale": rationale,
+            "status": "accepted", "supersedes": supersedes, "created_at": now}
+
+
+def list_decisions(task_id: Optional[str] = None, status: str = "",
+                   project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """List decisions, optionally filtered by task_id and/or status ('accepted',
+    'superseded', 'proposed'). Returns newest-first."""
+    q = "SELECT * FROM decisions WHERE 1=1"
+    p: List[Any] = []
+    if task_id:
+        q += " AND task_id=?"; p.append(task_id)
+    if status:
+        q += " AND status=?"; p.append(status)
+    q += " ORDER BY id DESC"
+    with _conn(project) as c:
+        rows = c.execute(q, p).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_decision(decision_id: int, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    with _conn(project) as c:
+        r = c.execute("SELECT * FROM decisions WHERE id=?", (decision_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def set_agent_state(task_id: str, agent_id: str, state: Dict[str, Any],
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Upsert this agent's state blob inside the task's agent_state JSON map.
+    Other agents' state keys are preserved. Returns the full merged agent_state."""
+    with _conn(project) as c:
+        row = c.execute("SELECT agent_state FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
+            return {"error": "task not found", "task_id": task_id}
+        current = json.loads(row["agent_state"] or "{}") if row["agent_state"] else {}
+        current[agent_id] = state
+        c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
+                  (json.dumps(current, sort_keys=True), time.time(), task_id))
+    return current
+
+
+def get_agent_state(task_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Return the full agent_state map for a task (all agents' state blobs)."""
+    with _conn(project) as c:
+        row = c.execute("SELECT agent_state FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    if not row:
+        return {"error": "task not found", "task_id": task_id}
+    return json.loads(row["agent_state"] or "{}") if row["agent_state"] else {}
 
 
 def send_agent_message(from_agent: str, to_agent: str, message: str,

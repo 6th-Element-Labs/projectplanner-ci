@@ -277,6 +277,86 @@ def get_message_status(message_id: int, project: str = "maxwell") -> str:
     return _dumps(r) if r else "message not found"
 
 
+# ---- agent state (open — lightweight working-state scratchpad per agent) ----
+@mcp.tool()
+def set_agent_state(task_id: str, agent_id: str, state: str,
+                    project: str = "maxwell") -> str:
+    """Write your working state for a task — a small JSON object (max ~500 chars)
+    capturing what you're doing, where you are, and what you plan next. Stored inside
+    the task and visible to all agents via get_agent_state. Good keys to include:
+      "files_open": which files you have staged or modified
+      "next_step": what you're about to do next
+      "blocked_on": what you're waiting for (or null)
+      "progress": e.g. "3/7 tests passing"
+    state: JSON-string object. agent_id: your stable session id (e.g. 'claude/ENGINE-11').
+    project: 'maxwell' (default) or 'helm'."""
+    try:
+        state_obj = json.loads(state)
+    except Exception:
+        return _dumps({"error": "state must be a valid JSON object string"})
+    return _dumps(store.set_agent_state(task_id, agent_id, state_obj, project=project))
+
+
+@mcp.tool()
+def get_agent_state(task_id: str, project: str = "maxwell") -> str:
+    """Read the working-state blobs for all agents currently on a task.
+    Returns {agent_id: {state fields}, ...}. Call this before starting work on a
+    task to see if another agent is already active, what files it has open, and what
+    it plans next — complements list_unacked_messages for live coordination.
+    project: 'maxwell' (default) or 'helm'."""
+    return _dumps(store.get_agent_state(task_id, project=project))
+
+
+# ---- decisions log (open — append-only ADR-lite for multi-agent alignment) --
+@mcp.tool()
+def record_decision(title: str, context: str, decision: str, rationale: str,
+                    author: str, project: str = "maxwell",
+                    task_id: str = "", supersedes: int = 0) -> str:
+    """Append an immutable architectural decision record so all agents share settled
+    conclusions without re-litigating them. Use this when you've just chosen an
+    approach — especially a non-obvious one that another agent might reverse.
+    Examples: choosing a library, fixing an interface contract, deciding NOT to do X.
+
+    Fields:
+      title:     short (≤80 chars) — 'Use advisory leases, not hard file locks'
+      context:   why the decision was needed (1-3 sentences)
+      decision:  exactly what was decided (1-3 sentences, present tense)
+      rationale: why this option was chosen over the alternatives
+      author:    your agent-session id (e.g. 'claude/ENGINE-11')
+      task_id:   related task (optional)
+      supersedes: id of an earlier decision this replaces (optional, set to 0 if none)
+
+    Decisions are append-only. To reverse one, record a new decision with the old id
+    in 'supersedes' — the old record is marked 'superseded' automatically.
+    project: 'maxwell' (default) or 'helm'."""
+    return _dumps(store.record_decision(
+        task_id=task_id or None, author=author, title=title,
+        context=context, decision=decision, rationale=rationale,
+        supersedes=supersedes or None, project=project,
+    ))
+
+
+@mcp.tool()
+def list_decisions(project: str = "maxwell", task_id: str = "",
+                   status: str = "") -> str:
+    """List architectural decisions recorded by any agent.
+    Filter by task_id (decisions about that task) and/or status ('accepted',
+    'superseded', 'proposed'). Returns newest-first.
+    Check this at session start to know what's already been decided before
+    choosing an approach. project: 'maxwell' (default) or 'helm'."""
+    return _dumps(store.list_decisions(task_id=task_id or None,
+                                      status=status, project=project))
+
+
+@mcp.tool()
+def get_decision(decision_id: int, project: str = "maxwell") -> str:
+    """Fetch a single decision record by id. Use when list_decisions refers to a
+    decision you want to read in full (context + rationale).
+    project: 'maxwell' (default) or 'helm'."""
+    r = store.get_decision(decision_id, project=project)
+    return _dumps(r) if r else "decision not found"
+
+
 # ---- write tools (gated by PM_MCP_TOKEN when set) ------------------------
 @mcp.tool()
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
