@@ -109,6 +109,19 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ttl_minutes INTEGER NOT NULL DEFAULT 30,
                 released_at REAL
             );
+            CREATE TABLE IF NOT EXISTS agent_messages (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_agent    TEXT NOT NULL,
+                to_agent      TEXT NOT NULL,
+                task_id       TEXT,
+                message       TEXT NOT NULL,
+                requires_ack  INTEGER NOT NULL DEFAULT 0,
+                ack_deadline  REAL,
+                sent_at       REAL NOT NULL,
+                acked_at      REAL,
+                ack_response  TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_messages_to ON agent_messages(to_agent, acked_at);
             CREATE TABLE IF NOT EXISTS task_summaries (
                 task_id         TEXT PRIMARY KEY,
                 rationale       TEXT NOT NULL,
@@ -391,6 +404,60 @@ def check_files(files: List[str], project: str = DEFAULT_PROJECT) -> List[Dict[s
                                  "task_id": lease.get("task_id"),
                                  "expires_at": lease["claimed_at"] + lease["ttl_minutes"] * 60})
     return sorted(results, key=lambda x: x["file"])
+
+
+def send_agent_message(from_agent: str, to_agent: str, message: str,
+                       task_id: Optional[str] = None, requires_ack: bool = False,
+                       ack_deadline_minutes: Optional[int] = None,
+                       project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Send a directed message from one agent to another. Returns the message record."""
+    now = time.time()
+    deadline = (now + ack_deadline_minutes * 60) if ack_deadline_minutes else None
+    with _conn(project) as c:
+        cur = c.execute(
+            "INSERT INTO agent_messages(from_agent, to_agent, task_id, message, requires_ack, "
+            "ack_deadline, sent_at) VALUES (?,?,?,?,?,?,?)",
+            (from_agent, to_agent, task_id, message, 1 if requires_ack else 0, deadline, now),
+        )
+        msg_id = cur.lastrowid
+    return {"id": msg_id, "from_agent": from_agent, "to_agent": to_agent,
+            "task_id": task_id, "message": message, "requires_ack": requires_ack,
+            "ack_deadline": deadline, "sent_at": now, "acked_at": None}
+
+
+def ack_message(message_id: int, response: str = "",
+                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Mark a message as acknowledged by the receiving agent. Returns updated record."""
+    now = time.time()
+    with _conn(project) as c:
+        cur = c.execute(
+            "UPDATE agent_messages SET acked_at=?, ack_response=? WHERE id=? AND acked_at IS NULL",
+            (now, response or None, message_id),
+        )
+        if cur.rowcount == 0:
+            r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
+            if r:
+                return dict(r) | {"note": "already acked"}
+            return {"error": "message not found", "id": message_id}
+        r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
+    return dict(r)
+
+
+def list_unacked_messages(to_agent: str, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """Messages directed to this agent that have not been acknowledged yet."""
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT * FROM agent_messages WHERE to_agent=? AND acked_at IS NULL ORDER BY id",
+            (to_agent,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_message_status(message_id: int, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    """Sender polls this to see whether a message has been acked."""
+    with _conn(project) as c:
+        r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
+    return dict(r) if r else None
 
 
 def set_task_summary(task_id: str, rationale: str, activity_cursor: int,

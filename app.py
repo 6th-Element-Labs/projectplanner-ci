@@ -11,7 +11,10 @@ Run:
     python -m uvicorn app:app --port 8110
 """
 import asyncio
+import hashlib
+import hmac
 import os
+import re
 from pathlib import Path
 
 # Load a local .env if present (SMTP/gateway config for later slices). No core import.
@@ -23,7 +26,7 @@ if _env.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile  # noqa: E402
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile  # noqa: E402
 from fastapi.responses import JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
@@ -543,6 +546,155 @@ async def ocr_pdf(file: UploadFile = File(...)):
     dl = f"{base}-searchable.pdf"
     return Response(content=out, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{dl}"'})
+
+
+# ---- GitHub webhook — §1.2 board↔git auto-sync + §1.3 "main moved" notify ----
+# Configure in GitHub → repo Settings → Webhooks:
+#   Payload URL: https://<your-host>/api/github/webhook
+#   Content type: application/json
+#   Secret: match PM_GITHUB_WEBHOOK_SECRET in .env
+#   Events: push + pull_request (merged)
+#
+# Behaviour:
+#   push to main/master   → find active leases on changed files, send directed IM
+#                           to each lease holder; also auto-advance task status if
+#                           a commit message contains "closes TASK-ID" / "fixes TASK-ID".
+#   PR merged             → same task-id extraction; mark matched tasks Done.
+
+_GH_SECRET = os.environ.get("PM_GITHUB_WEBHOOK_SECRET", "")
+_CLOSES_RE = re.compile(r"\b(?:closes?|fixes?|resolves?)\s+([A-Z]+-\d+)\b", re.I)
+_TASKID_RE = re.compile(r"\b([A-Z]+-\d+)\b")
+
+
+def _verify_gh_signature(body: bytes, sig_header: str) -> bool:
+    """HMAC-SHA256 signature check — skip if no secret configured (dev mode)."""
+    if not _GH_SECRET:
+        return True
+    if not sig_header or not sig_header.startswith("sha256="):
+        return False
+    expected = hmac.new(_GH_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", sig_header)
+
+
+def _extract_task_ids(text: str) -> list:
+    return list(dict.fromkeys(_TASKID_RE.findall(text or "")))  # dedup, preserve order
+
+
+def _closing_task_ids(text: str) -> list:
+    return list(dict.fromkeys(m.group(1).upper() for m in _CLOSES_RE.finditer(text or "")))
+
+
+async def _handle_push(payload: dict, project: str):
+    """Push to default branch: notify active lease holders + auto-advance task status."""
+    ref = payload.get("ref", "")
+    default = payload.get("repository", {}).get("default_branch", "main")
+    if ref != f"refs/heads/{default}":
+        return {"action": "ignored", "reason": f"push to {ref!r}, not default branch"}
+
+    repo = payload.get("repository", {}).get("full_name", "?")
+    commits = payload.get("commits") or []
+    head_sha = payload.get("after", "")[:8]
+
+    # Collect all changed files across the push
+    changed_files: list = []
+    for c in commits:
+        for key in ("added", "modified", "removed"):
+            changed_files.extend(c.get(key) or [])
+    changed_files = list(dict.fromkeys(changed_files))  # dedup
+
+    # Notify agents with active leases on affected files
+    notified: list = []
+    if changed_files:
+        held_records = await asyncio.to_thread(store.check_files, changed_files, project)
+        # Group by holder so each agent gets one message listing all their affected files
+        by_holder: dict = {}
+        for rec in held_records:
+            holder = rec["held_by"]
+            by_holder.setdefault(holder, []).append(rec["file"])
+        for holder, their_files in by_holder.items():
+            await asyncio.to_thread(
+                store.send_agent_message,
+                "github-webhook", holder,
+                f"main advanced on {repo} @ {head_sha}. "
+                f"Files you hold a lease on were changed: {', '.join(their_files[:10])}. "
+                "Rebase or release your lease before merging.",
+                requires_ack=False, project=project,
+            )
+            notified.append(holder)
+
+    # Auto-advance tasks mentioned with closes/fixes/resolves
+    closed: list = []
+    for c in commits:
+        msg = c.get("message", "")
+        for task_id in _closing_task_ids(msg):
+            t = await asyncio.to_thread(store.get_task, task_id, project)
+            if t and t.get("status") not in ("Done", "Cancelled"):
+                await asyncio.to_thread(
+                    store.update_task, task_id, {"status": "Done"}, "github-webhook", project
+                )
+                await asyncio.to_thread(
+                    store.add_comment, task_id, "github-webhook",
+                    f"Auto-closed by commit {c['id'][:8]} on {repo}: {msg[:120]}",
+                    "git", project
+                )
+                closed.append(task_id)
+
+    return {"action": "push_processed", "repo": repo, "sha": head_sha,
+            "changed_files": len(changed_files), "notified_agents": notified,
+            "auto_closed_tasks": closed}
+
+
+async def _handle_pr(payload: dict, project: str):
+    """PR merged: auto-close tasks referenced in the PR title/body/branch."""
+    pr = payload.get("pull_request") or {}
+    if payload.get("action") != "closed" or not pr.get("merged"):
+        return {"action": "ignored", "reason": "not a merged PR"}
+
+    repo = payload.get("repository", {}).get("full_name", "?")
+    pr_num = pr.get("number")
+    text = f"{pr.get('title','')} {pr.get('body','')} {pr.get('head',{}).get('ref','')}"
+    closed: list = []
+    for task_id in _closing_task_ids(text):
+        t = await asyncio.to_thread(store.get_task, task_id, project)
+        if t and t.get("status") not in ("Done", "Cancelled"):
+            await asyncio.to_thread(
+                store.update_task, task_id, {"status": "Done"}, "github-webhook", project
+            )
+            await asyncio.to_thread(
+                store.add_comment, task_id, "github-webhook",
+                f"Auto-closed by PR #{pr_num} merge on {repo}: {pr.get('title','')[:120]}",
+                "git", project
+            )
+            closed.append(task_id)
+
+    return {"action": "pr_processed", "repo": repo, "pr": pr_num,
+            "auto_closed_tasks": closed}
+
+
+@app.post("/api/github/webhook")
+async def github_webhook(request: Request, project: str = "helm"):
+    """Receive GitHub push/pull_request events. project selects the board to update.
+    Set PM_GITHUB_WEBHOOK_SECRET in .env and configure the matching secret in GitHub."""
+    body = await request.body()
+    sig = request.headers.get("X-Hub-Signature-256", "")
+    if not _verify_gh_signature(body, sig):
+        raise HTTPException(401, "invalid webhook signature")
+
+    event = request.headers.get("X-GitHub-Event", "")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON payload")
+
+    _proj(project)  # fail-closed on unknown project
+    if event == "push":
+        result = await _handle_push(payload, project)
+    elif event == "pull_request":
+        result = await _handle_pr(payload, project)
+    else:
+        result = {"action": "ignored", "event": event}
+
+    return JSONResponse(result)
 
 
 # Static board UI last, so /api/* and /health win. html=True serves index.html at /.

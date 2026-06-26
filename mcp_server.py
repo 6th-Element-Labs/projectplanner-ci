@@ -224,6 +224,59 @@ def list_active_leases(project: str = "maxwell") -> str:
     return _dumps(store.list_active_leases(project=project))
 
 
+# ---- directed agent IM (open — no token required) -----------------------
+@mcp.tool()
+def send_agent_message(from_agent: str, to_agent: str, message: str,
+                       project: str = "maxwell", task_id: str = "",
+                       requires_ack: bool = False,
+                       ack_deadline_minutes: int = 0) -> str:
+    """Send a directed message to another agent session. Unlike add_comment (bulletin
+    board, fire-and-forget), this has an ack/read-receipt so the sender can confirm
+    the message landed before acting on the assumption it was received.
+
+    from_agent / to_agent: stable agent-session identifiers (e.g. 'claude/ENGINE-11').
+    task_id: the task this message is about (optional).
+    requires_ack: if true, the receiving agent should call ack_message to confirm receipt.
+    ack_deadline_minutes: how long the sender will wait for an ack (0 = no deadline).
+
+    Returns the message record including its id. Pass the id to get_message_status to
+    check whether the recipient has acked."""
+    return _dumps(store.send_agent_message(
+        from_agent, to_agent, message,
+        task_id=task_id or None,
+        requires_ack=requires_ack,
+        ack_deadline_minutes=ack_deadline_minutes or None,
+        project=project,
+    ))
+
+
+@mcp.tool()
+def ack_message(message_id: int, project: str = "maxwell", response: str = "") -> str:
+    """Acknowledge a directed message. Call this when you have received and understood a
+    message that has requires_ack=true. response is optional — include it to give the
+    sender a one-line confirmation (e.g. 'seen — will rebase before merging').
+    project selects the board ('maxwell' default, or 'helm')."""
+    return _dumps(store.ack_message(message_id, response=response, project=project))
+
+
+@mcp.tool()
+def list_unacked_messages(to_agent: str, project: str = "maxwell") -> str:
+    """Your incoming message inbox — messages directed to you that have not been acked.
+    Call at session start and after completing a task to check for coordination messages
+    from other agents. to_agent: your agent-session id (e.g. 'claude/CHART-8').
+    project selects the board ('maxwell' default, or 'helm')."""
+    return _dumps(store.list_unacked_messages(to_agent, project=project))
+
+
+@mcp.tool()
+def get_message_status(message_id: int, project: str = "maxwell") -> str:
+    """Check whether a message you sent has been acked. Returns the full message record
+    including acked_at and ack_response if the recipient has responded.
+    project selects the board ('maxwell' default, or 'helm')."""
+    r = store.get_message_status(message_id, project=project)
+    return _dumps(r) if r else "message not found"
+
+
 # ---- write tools (gated by PM_MCP_TOKEN when set) ------------------------
 @mcp.tool()
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
