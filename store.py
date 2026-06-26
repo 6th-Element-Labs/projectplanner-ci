@@ -429,6 +429,37 @@ def check_files(files: List[str], project: str = DEFAULT_PROJECT) -> List[Dict[s
     return sorted(results, key=lambda x: x["file"])
 
 
+def request_unblock(requesting_agent: str, blocking_task_id: str,
+                    blocked_task_id: str, message: str,
+                    owner_agent: str, ack_deadline_minutes: int = 60,
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Send a blocking dep request: agent on blocked_task_id asks owner_agent (working
+    on blocking_task_id) to unblock. Returns message record with id to poll via
+    get_message_status. Records the request as a 'dep_request' activity on both tasks."""
+    payload = (f"[DEP REQUEST] Agent {requesting_agent} is blocked on {blocking_task_id} "
+               f"while working on {blocked_task_id}. {message}")
+    msg = send_agent_message(requesting_agent, owner_agent, payload,
+                             task_id=blocked_task_id,
+                             requires_ack=True,
+                             ack_deadline_minutes=ack_deadline_minutes,
+                             project=project)
+    # Activity trail on both tasks
+    for tid in (blocked_task_id, blocking_task_id):
+        add_comment(tid, requesting_agent,
+                    f"Unblock request sent to {owner_agent} re {blocking_task_id}: {message[:120]}",
+                    kind="dep_request", project=project)
+    return {"request_id": msg["id"], "from": requesting_agent, "to": owner_agent,
+            "blocking_task_id": blocking_task_id, "blocked_task_id": blocked_task_id,
+            "poll_with": "get_message_status"}
+
+
+def list_unblock_requests(owner_agent: str,
+                          project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """Return unacked blocking dep requests directed to this agent."""
+    msgs = list_unacked_messages(owner_agent, project=project)
+    return [m for m in msgs if "[DEP REQUEST]" in (m.get("message") or "")]
+
+
 def record_decision(task_id: Optional[str], author: str, title: str,
                     context: str, decision: str, rationale: str,
                     supersedes: Optional[int] = None,

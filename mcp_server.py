@@ -277,6 +277,48 @@ def get_message_status(message_id: int, project: str = "maxwell") -> str:
     return _dumps(r) if r else "message not found"
 
 
+# ---- blocking dep requests (§2.2 — requires_ack IM with dep semantics) ------
+@mcp.tool()
+def request_unblock(requesting_agent: str, owner_agent: str,
+                    blocking_task_id: str, blocked_task_id: str,
+                    message: str, project: str = "maxwell",
+                    ack_deadline_minutes: int = 60) -> str:
+    """Ask the agent working on a blocking task to unblock your work. Use this when
+    your task has a direct dependency that hasn't been resolved and you need the
+    owning agent to act — more urgent and structured than add_comment.
+
+    How it works:
+    - Sends a directed, ack-required message to owner_agent.
+    - Records the request as 'dep_request' activity on BOTH tasks for the board trail.
+    - Returns {request_id, ...}. Poll get_message_status(request_id) to see when the
+      owning agent has acked (i.e., picked up and acknowledged the request).
+
+    Fields:
+      requesting_agent: your agent-session id ('claude/ROUTE-3')
+      owner_agent:      the agent working on the blocker ('claude/ENGINE-11')
+      blocking_task_id: the task that is blocking you ('ENGINE-11')
+      blocked_task_id:  your task ('ROUTE-3')
+      message:          what you need / why it's urgent (1-3 sentences)
+      ack_deadline_minutes: how long you'll wait (default 60)
+    project: 'maxwell' (default) or 'helm'."""
+    return _dumps(store.request_unblock(
+        requesting_agent=requesting_agent, blocking_task_id=blocking_task_id,
+        blocked_task_id=blocked_task_id, message=message,
+        owner_agent=owner_agent, ack_deadline_minutes=ack_deadline_minutes,
+        project=project,
+    ))
+
+
+@mcp.tool()
+def list_unblock_requests(owner_agent: str, project: str = "maxwell") -> str:
+    """Check your queue of unacked blocking dep requests — tasks whose owners are
+    waiting on you. Call at session start alongside list_unacked_messages.
+    Returns the same structure as list_unacked_messages but filtered to DEP REQUEST
+    messages. Ack each with ack_message(request_id, response='unblocked') when done.
+    project: 'maxwell' (default) or 'helm'."""
+    return _dumps(store.list_unblock_requests(owner_agent, project=project))
+
+
 # ---- agent state (open — lightweight working-state scratchpad per agent) ----
 @mcp.tool()
 def set_agent_state(task_id: str, agent_id: str, state: str,
