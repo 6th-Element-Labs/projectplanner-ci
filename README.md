@@ -53,3 +53,14 @@ that drops user edits). See PROVISION.md.
 ## Deploy to a VM at plan.taikunai.com
 See [deploy/PROVISION.md](deploy/PROVISION.md). Roughly: a t4g.micro (~$6/mo), one venv,
 two systemd units, Caddy, and a Route 53 A record.
+
+## Docs
+
+| Doc | What it covers |
+|---|---|
+| [`docs/AGENT_ROADMAP.md`](docs/AGENT_ROADMAP.md) | Phased build plan (Phases 0–7, single-agent operator) |
+| [`docs/AGENT_OPERATOR_FEATURES.md`](docs/AGENT_OPERATOR_FEATURES.md) | Operator-level agent features (autonomous delivery loop, action queue, outcome tracker, live-meeting agent) |
+| [`docs/MULTI_AGENT_COORDINATION.md`](docs/MULTI_AGENT_COORDINATION.md) | Multi-agent coordination layer — file leases, git↔board sync, directed IM, decisions log (derived from first-hand six-agent session data) |
+| [`docs/decisions/0001-…`](docs/decisions/0001-multi-agent-coordination-primitives.md) | ADR: build order for the multi-agent coordination primitives |
+| [`docs/MCP.md`](docs/MCP.md) | MCP server design and tool reference |
+| [`docs/UNIVERSAL_WORKFLOW_UI.md`](docs/UNIVERSAL_WORKFLOW_UI.md) | Universal workflow UI spec |
