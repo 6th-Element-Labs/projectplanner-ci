@@ -9,8 +9,9 @@
 Description=ProjectPlanner Haiku task summarizer (every 15 min)
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=15min
+# Every 15 minutes, wall-clock. Robust across long uptimes (an OnBootSec+
+# OnUnitActiveSec pair leaves NextElapse=infinity once boot is far in the past).
+OnCalendar=*:0/15
 Persistent=true
 
 [Install]
