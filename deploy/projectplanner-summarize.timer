@@ -1,0 +1,17 @@
+# /etc/systemd/system/projectplanner-summarize.timer
+# Fires the Haiku task summarizer every 15 minutes.
+# Matches PM_SUMMARIZE_INTERVAL default (900 s) in summarize.py.
+# To enable:
+#   sudo cp projectplanner-summarize.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now projectplanner-summarize.timer
+[Unit]
+Description=ProjectPlanner Haiku task summarizer (every 15 min)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

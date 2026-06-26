@@ -1,0 +1,15 @@
+# /etc/systemd/system/projectplanner-summarize.service
+# One-shot service: run the Haiku epistemic summarizer for all projects.
+# Triggered by projectplanner-summarize.timer every 15 minutes.
+# Set PM_SUMMARIZE_MODEL=taikun-haiku in .env once ANTHROPIC_API_KEY is configured.
+[Unit]
+Description=ProjectPlanner Haiku task summarizer
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+ExecStart=/opt/projectplanner/venv/bin/python jobs.py summarize_pending
+StandardOutput=journal
+StandardError=journal
