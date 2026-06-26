@@ -232,6 +232,7 @@ def _task_brief(t, full=False):
         b["entry_criteria"] = t.get("entry_criteria")
         b["exit_criteria"] = t.get("exit_criteria")
         b["deliverable"] = t.get("deliverable")
+        b["rationale"] = t.get("rationale")  # Haiku-generated activity summary; None until first run
         b["recent_activity"] = [{"actor": a.get("actor"), "kind": a.get("kind"),
                                  "text": (a.get("payload") or {}).get("text") or (a.get("payload") or {})}
                                 for a in (t.get("activity") or [])[-6:]]

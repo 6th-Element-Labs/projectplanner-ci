@@ -19,6 +19,10 @@ model_list:
     litellm_params:
       model: openai/gpt-4o               # vision model for PDF OCR (ocr.py); swap freely
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: taikun-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001  # cheap background summarizer (summarize.py)
+      api_key: os.environ/ANTHROPIC_API_KEY        # add to .env; set PM_SUMMARIZE_MODEL=taikun-haiku
 
 litellm_settings:
   drop_params: true

@@ -109,6 +109,12 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ttl_minutes INTEGER NOT NULL DEFAULT 30,
                 released_at REAL
             );
+            CREATE TABLE IF NOT EXISTS task_summaries (
+                task_id         TEXT PRIMARY KEY,
+                rationale       TEXT NOT NULL,
+                generated_at    REAL NOT NULL,
+                activity_cursor INTEGER NOT NULL DEFAULT 0
+            );
             CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
             CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status);
             CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
@@ -194,6 +200,9 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["activity"] = [dict(a) | {"payload": json.loads(a["payload"] or "{}")}
                          for a in c.execute(
                              "SELECT * FROM activity WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]
+        s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
+        if s:
+            t["rationale"] = s["rationale"]
         return t
 
 
@@ -382,6 +391,51 @@ def check_files(files: List[str], project: str = DEFAULT_PROJECT) -> List[Dict[s
                                  "task_id": lease.get("task_id"),
                                  "expires_at": lease["claimed_at"] + lease["ttl_minutes"] * 60})
     return sorted(results, key=lambda x: x["file"])
+
+
+def set_task_summary(task_id: str, rationale: str, activity_cursor: int,
+                     project: str = DEFAULT_PROJECT) -> None:
+    """Upsert the Haiku-generated rationale for a task."""
+    with _conn(project) as c:
+        c.execute(
+            "INSERT OR REPLACE INTO task_summaries(task_id, rationale, generated_at, activity_cursor) "
+            "VALUES (?,?,?,?)",
+            (task_id, rationale, time.time(), activity_cursor),
+        )
+
+
+def get_task_summary(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    with _conn(project) as c:
+        r = c.execute("SELECT * FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
+        return dict(r) if r else None
+
+
+def get_tasks_needing_summary(project: str = DEFAULT_PROJECT,
+                              min_interval: int = 900) -> List[str]:
+    """Task IDs that have activity AND either no summary yet or new activity since the last
+    summary (and enough time has passed to re-run — min_interval seconds)."""
+    now = time.time()
+    cutoff = now - min_interval
+    with _conn(project) as c:
+        rows = c.execute(
+            """SELECT t.task_id,
+                      MAX(a.id) AS max_act,
+                      s.activity_cursor,
+                      s.generated_at
+               FROM tasks t
+               JOIN activity a ON a.task_id = t.task_id
+               LEFT JOIN task_summaries s ON s.task_id = t.task_id
+               GROUP BY t.task_id""",
+        ).fetchall()
+    result = []
+    for row in rows:
+        task_id, max_act, cursor, gen_at = row[0], row[1], row[2], row[3]
+        no_summary = cursor is None
+        new_activity = (not no_summary) and (max_act > cursor)
+        interval_ok = gen_at is None or gen_at < cutoff
+        if (no_summary or new_activity) and interval_ok:
+            result.append(task_id)
+    return result
 
 
 def list_active_leases(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:

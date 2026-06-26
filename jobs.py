@@ -42,7 +42,21 @@ def poll_inbox():
     return res
 
 
-JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox}
+def summarize_pending():
+    """Summarize task activity trails for all projects (runs every 15 min via systemd timer).
+    PM_SUMMARIZE_MODEL controls the model (default: taikun-chat; set taikun-haiku for cheapest)."""
+    import summarize as summarize_mod
+    total = 0
+    for project_id in store.PROJECTS:
+        results = summarize_mod.run_pending(project=project_id)
+        print(f"  [{project_id}] summarized {len(results)} task(s)")
+        total += len(results)
+    print(f"summarize_pending: {total} total")
+    return total
+
+
+JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
+        "summarize_pending": summarize_pending}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else "weekly_digest"
