@@ -29,6 +29,60 @@ worktree list, lsof, board comments) should be replaced by a single structured b
 
 ---
 
+## Claude Code desktop app compatibility
+
+All features in this spec are request-response MCP tools and server-side background processes.
+Claude Code's MCP client (desktop and CLI — same binary) is request-response only: it makes
+point-in-time tool calls; it does not open an SSE subscription between calls to receive
+server-push events. The practical consequence per feature:
+
+| Feature | Works with Claude Code? | Notes |
+|---|---|---|
+| Deterministic serialization (§T0) | ✅ fully | Server-side only; agent never sees the change |
+| `get_lane_delta` (§1.4) | ✅ fully | Standard request-response tool |
+| `retry_after_seconds` on lease conflict (§1.1) | ✅ advisory | LLM reads the hint, uses `Bash(sleep N)`; no protocol enforcement |
+| Haiku epistemic summarizer (§3.4) | ✅ fully | Server-side background job; agent sees result via `get_task` |
+| MCP SSE push notifications (§3.2) | ⚠️ no | Claude Code doesn't subscribe to SSE stream; use scheduler+notify instead |
+
+---
+
+## Tier 0 — Deterministic serialization (token economics, cross-cutting)
+
+This is the cheapest change with the widest impact. Applies to every MCP tool response.
+
+**The problem:** Anthropic's prompt cache is keyed on exact bytes. If `board_summary` returns
+`{"updated_at": "2 minutes ago", ...}` on one call and `{"updated_at": "3 minutes ago", ...}`
+on the next, the cache misses on every call. On a six-agent session where each agent polls
+`board_summary` at startup, that's six separate full-payload API charges instead of five
+cache hits.
+
+**The fix — three rules enforced in `mcp_server.py` response serialization:**
+
+1. **`sort_keys=True` on all JSON responses.** `json.dumps(obj, sort_keys=True)` everywhere.
+   One-line fix; makes key order deterministic across calls and Python dict hashing.
+
+2. **Strip all volatile fields before serialization.** Fields that change between calls without
+   carrying semantic value must be removed or normalized:
+   - ❌ `updated_at_human: "2 minutes ago"` → omit entirely (raw ISO timestamp is fine)
+   - ❌ `generated_at: datetime.utcnow()` → omit from tool responses
+   - ❌ `server_version: "1.0.3-dev+abc1234"` → normalize to stable release tag only
+   - ✅ `updated_at: "2026-06-27T07:30:00Z"` — stable ISO timestamp, keep it
+
+3. **Static data before dynamic data in every response.** Tool definitions and schema
+   descriptions (the stable portion) must appear before per-task status fields (the dynamic
+   portion). This maximizes the cacheable prefix length.
+
+**Where the cache hit actually lands:** Claude Code caches the conversation prefix — system
+prompt + tool definitions + early turns. If two agent sessions start with the same system
+prompt, the same tool definition schemas, and the same early `board_summary` response, they
+share a cache hit on every subsequent API call that includes those early turns. Deterministic
+serialization is what makes "same response" true across sessions and agents.
+
+**Implementation:** wrap the FastMCP tool response serializer; don't modify individual tools.
+One place, covers all tools.
+
+---
+
 ## Tier 1 — Collision prevention (highest ROI)
 
 ### 1.1 · Live presence + soft file locks
@@ -56,10 +110,17 @@ CREATE TABLE file_leases (
 ```
 
 **MCP tools to add:**
-- `claim_files(task_id, files, ttl_minutes)` → lease id or `{conflict: agent_id, task_id}`
+- `claim_files(task_id, files, ttl_minutes)` → lease id or `{conflict: agent_id, task_id, retry_after_seconds: 60}`
 - `release_files(lease_id)`
 - `check_files(files)` → list of `{file, held_by, task_id, expires_at}` for any held files
 - `list_active_leases()` → board-wide presence view
+
+**`retry_after_seconds` on conflict responses:** when `claim_files` returns a conflict, the
+response explicitly includes `retry_after_seconds` (default 60). Claude Code's LLM reads this
+field and uses `Bash(sleep 60)` before retrying — eliminating the spin-retry reasoning loop
+where the agent has to invent its own backoff. This is advisory (no protocol enforcement), but
+it removes the "what should I do?" token burn. The board computes `retry_after_seconds` from
+the conflicting lease's remaining TTL: `max(30, remaining_ttl_seconds / 2)`.
 
 **Enforcement model:** advisory, not hard. An agent that calls `claim_files` and gets a
 conflict decides what to do (wait, post a comment, pick a different scope). The board does
@@ -106,6 +167,45 @@ yours." The push inverts it: silence means nothing relevant changed; a notificat
 **Implementation:** the scheduler (already in Phase 4 as `systemd timer`) runs `git fetch` +
 `git diff --name-only` every N minutes and compares against active leases. Hits get a
 `notify` to the claiming agent_id's channel.
+
+---
+
+### 1.4 · `get_lane_delta(lane, since_cursor)` — efficient poll replacement
+
+**What:** instead of calling `board_summary` (full board) or `get_task` per task to detect
+changes, agents call `get_lane_delta` with their workstream and a sequence cursor:
+
+```json
+// Request: get_lane_delta(lane="ENGINE", since_cursor=4821)
+// Response (when nothing changed): {"cursor": 4821, "updates": []}
+// Response (when something changed):
+{
+  "cursor": 4847,
+  "updates": [
+    {"task_id": "ENGINE-11", "status": "Done", "pr": 43, "merged_sha": "4fc3dc3"},
+    {"task_id": "ENGINE-8",  "status": "In Review", "pr": 35}
+  ]
+}
+```
+
+**Why a cursor, not a timestamp:** timestamps have clock-skew across agent sessions and the
+board backend. A monotonic sequence cursor (the activity log's `rowid`) is unambiguous: "give
+me everything after event 4821" is a single indexed `WHERE rowid > 4821` query. The agent
+stores its cursor between polls; the response includes the new cursor to advance to.
+
+**Token savings:** a `board_summary` response is ~2,000–5,000 tokens for a 200-task board.
+A `get_lane_delta` response is 0 tokens when nothing changed (empty `updates` array) and
+~50–200 tokens when something did. Agents polling every 5 minutes over a 2-hour session:
+`board_summary` = 24 × 3,500 = 84,000 tokens; `get_lane_delta` = ~22 zero-updates + 2
+small payloads ≈ 2,000 tokens.
+
+**Tool description (what agents see):**
+> Use `get_lane_delta` for routine "has anything changed?" checks. Use `board_summary` only
+> once at session start for full orientation. Never use `board_summary` in a polling loop.
+
+**Implementation:** `SELECT rowid, task_id, field, old_val, new_val FROM activity_log
+WHERE rowid > ? AND task_id LIKE 'ENGINE-%' ORDER BY rowid` — the activity log already
+exists (Phase 0); this is a filtered query over it.
 
 ---
 
@@ -234,8 +334,14 @@ waste and latency.
 
 **Implementation:** a lightweight `subscriptions` table (agent_id, event_type, filter, channel).
 The scheduler (already running) emits events; `notify.send` delivers them to the channel
-(Slack webhook / board notification). Or: server-sent events (SSE) on a `/api/events` stream
-for agents running in the same process.
+(Slack webhook / board notification).
+
+**Claude Code compatibility note:** MCP SSE push (server-to-client notifications over the
+`GET /mcp` SSE stream) does NOT work with Claude Code — its MCP client is request-response
+only and does not subscribe to the SSE stream between tool calls. Use the scheduler+notify
+path (Slack/Gmail delivery) as the push channel, not MCP notifications. The `subscriptions`
+table registers which channel to deliver to per agent; MCP notifications are not the delivery
+mechanism.
 
 ---
 
@@ -262,6 +368,58 @@ every new agent session starts from zero context.
 
 **Not a replacement for comments.** Comments are the narrative audit trail. Agent state is a
 snapshot of the agent's working memory — queryable by other agents planning their next move.
+
+---
+
+### 3.4 · Haiku epistemic summarizer (context squashing)
+
+**What:** a background job (systemd timer, already running from Phase 4) that runs after
+every batch of task activity and compresses the activity trail into a dense, pre-chewed
+truth matrix per task. Stored in a `task_summaries` table and returned by `get_task` as a
+`rationale` field.
+
+**The problem it solves:** when agents try to understand *why* a task is in its current state
+— why the alarm schema is frozen, why CONTRACT-10 is a blocker, why a particular guard was
+chosen — they resort to reading comment threads, git logs, and ADR files. In the six-agent
+session, "why is the alarm schema frozen?" required cross-referencing five separate sources.
+The Haiku summarizer pre-digests that trail so `get_task` returns a 50-word answer.
+
+**Model choice:** Claude Haiku 4.5 — cheap enough to run on every task update without
+budget concern; fast enough to run in the background without delaying tool responses.
+
+**What it summarizes** (inputs per task):
+- Last N comments (capped at 20)
+- PR titles/descriptions linked to the task
+- Dep-change events from the activity log
+- Any `decisions` log entries (§2.3) attached to the task
+
+**Output format** (stored in `task_summaries.rationale`):
+```
+Current state: In Review. Waiting on ENGINE-11 containment-check.sh extension.
+Key decision: guard is map.getStyle() not map.isStyleLoaded() — latter also waits on
+all raster sources and can stay false indefinitely, suppressing the overlay permanently.
+Blocker: CHART must merge first (owns helm_server.cpp). No scope changes since 2026-06-26.
+```
+
+**NOT a replacement for the decisions log.** The decisions log (§2.3) is agent-written,
+structured, and authoritative — it captures "why this choice was made" with explicit rejected
+alternatives. The Haiku summary captures "what has happened" from the activity trail. They
+are complementary. The summarizer indexes the decisions log as an input; the decisions log
+is not replaced by the summary.
+
+**`get_task` response addition:**
+```json
+{
+  "id": "ENGINE-11",
+  "status": "In Review",
+  "rationale": "..50-word Haiku summary..",
+  "rationale_generated_at": "2026-06-27T08:15:00Z"
+}
+```
+
+**Trigger:** run after any batch of activity on a task (scheduler polls activity log for
+tasks with unprocessed events since last summary run). Cap at one summarizer run per task
+per 15 minutes to avoid Haiku cost on rapid-fire updates.
 
 ---
 
@@ -299,15 +457,18 @@ These constraints are why a standard PM tool's coordination layer doesn't work f
 
 | P | Feature | Effort | Addresses |
 |---|---|---|---|
+| P0 | **Deterministic serialization** (§T0) | XS — `sort_keys=True` + strip volatile in serializer | Cross-cutting cache-hit improvement; 30 min, immediate payoff |
 | P0 | **Board↔git auto-sync** (§1.2) | S — webhook + regex + status advance | Single biggest board-quality failure; affects every agent every session |
-| P0 | **File leases + `claim_files`/`check_files`** (§1.1) | M — new table + 4 MCP tools | The collision vector that required most manual reconciliation |
+| P0 | **File leases + `retry_after_seconds`** (§1.1) | M — new table + 4 MCP tools | Collision prevention + backoff hint eliminates spin-retry |
+| P0 | **`get_lane_delta`** (§1.4) | S — filtered activity log query + 1 tool | Replaces polling `board_summary`; 40× token reduction on unchanged state |
 | P1 | **Directed IM + ack** (§2.1) | M — new table + 4 MCP tools | Handshake before cross-lane edits |
 | P1 | **"Main moved" push** (§1.3) | S — scheduler delta + notify | Eliminate constant re-fetch |
 | P2 | **Decisions log** (§2.3) | S — append-only table + RAG index | Prevent re-derivation of same choices |
 | P2 | **Blocking dep requests** (§2.2) | S — extends deps model | Surface unplanned cross-epic deps |
+| P2 | **Haiku epistemic summarizer** (§3.4) | M — background job + `rationale` field | Pre-digests activity trail; eliminates 5-source cross-referencing |
 | P3 | **Agent state field** (§3.3) | S — one JSON column + 2 tools | Session continuity across context resets |
 | P3 | **Resource broker** (§3.1) | M — new table, same lease model | Port / build-dir contention |
-| P4 | **Event subscriptions** (§3.2) | L — SSE or notify-fan-out | Structural poll elimination |
+| P4 | **Event subscriptions** (§3.2) | L — scheduler+notify fan-out (not MCP SSE) | Structural poll elimination; use notify channel not SSE |
 
 ---
 
