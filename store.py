@@ -262,6 +262,50 @@ def create_task(data: Dict[str, Any], actor: str = "user",
     return get_task(tid, project)
 
 
+def get_activity_delta(since_cursor: int = 0, lane: str = "",
+                       project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Return activity newer than since_cursor (activity.id rowid — monotonic, clock-skew-safe).
+    lane filters to one workstream (e.g. 'ENGINE'). Returns
+    {cursor, updates: [{task_id, status, title, workstream_id, kinds}]}.
+    Use this for polling instead of list_tasks/board_summary — empty updates = zero tokens wasted."""
+    lane_upper = lane.strip().upper() if lane else ""
+    with _conn(project) as c:
+        if lane_upper:
+            rows = c.execute(
+                """SELECT a.id, a.task_id, a.kind, a.actor,
+                          t.status, t.title, t.workstream_id
+                   FROM activity a
+                   JOIN tasks t ON t.task_id = a.task_id
+                   WHERE a.id > ? AND t.workstream_id = ?
+                   ORDER BY a.id""",
+                (since_cursor, lane_upper),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                """SELECT a.id, a.task_id, a.kind, a.actor,
+                          t.status, t.title, t.workstream_id
+                   FROM activity a
+                   JOIN tasks t ON t.task_id = a.task_id
+                   WHERE a.id > ?
+                   ORDER BY a.id""",
+                (since_cursor,),
+            ).fetchall()
+    if not rows:
+        return {"cursor": since_cursor, "updates": []}
+    new_cursor = rows[-1]["id"]
+    by_task: Dict[str, Any] = {}
+    for row in rows:
+        tid = row["task_id"]
+        if tid not in by_task:
+            by_task[tid] = {"task_id": tid, "status": row["status"],
+                            "title": row["title"], "workstream_id": row["workstream_id"],
+                            "kinds": []}
+        by_task[tid]["status"] = row["status"]
+        if row["kind"] not in by_task[tid]["kinds"]:
+            by_task[tid]["kinds"].append(row["kind"])
+    return {"cursor": new_cursor, "updates": list(by_task.values())}
+
+
 def delete_task(task_id: str, project: str = DEFAULT_PROJECT) -> bool:
     with _conn(project) as c:
         cur = c.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))

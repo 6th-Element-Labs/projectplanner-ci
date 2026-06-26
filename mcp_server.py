@@ -57,6 +57,12 @@ mcp = FastMCP(
 )
 
 
+def _dumps(obj) -> str:
+    """json.dumps with sort_keys=True — deterministic serialization for prompt-cache hits.
+    Stable key order means identical responses share a cache hit across agent sessions."""
+    return json.dumps(obj, sort_keys=True)
+
+
 def _require_write(ctx):
     """Gate writes when PM_MCP_TOKEN is set; open otherwise (matches the public web API)."""
     token = (os.environ.get("PM_MCP_TOKEN") or "").strip()
@@ -97,7 +103,7 @@ def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
     args optional: workstream id (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm), status
     (Not Started|In Progress|Blocked|Done), owner_person substring, blocking, free-text query.
     Returns a JSON list of {task_id,title,status,owner_person_or_role,workstream,...}."""
-    return json.dumps(agent._search_tasks({
+    return _dumps(agent._search_tasks({
         "workstream": workstream, "status": status, "owner_person": owner_person,
         "blocking": blocking, "query": query}, project=project))
 
@@ -107,16 +113,34 @@ def get_task(task_id: str, project: str = "maxwell") -> str:
     """Full detail of one task: description, all fields, dependencies, and recent activity.
     project selects the board ('maxwell' default, or 'helm')."""
     t = store.get_task(task_id, project=project)
-    return json.dumps(agent._task_brief(t, full=True)) if t else "no such task"
+    return _dumps(agent._task_brief(t, full=True)) if t else "no such task"
 
 
 @mcp.tool()
 def board_summary(project: str = "maxwell") -> str:
-    """Whole-board summary: project name + rollups, then one line per task.
-    project selects the board ('maxwell' default, or 'helm')."""
+    """Full board snapshot: project name + rollups, then one line per task.
+    Use ONCE at session start for orientation. For recurring 'has anything changed?' checks
+    use get_lane_delta instead — it returns only what changed and costs ~50 tokens when nothing
+    did vs ~3000-5000 tokens here. project selects the board ('maxwell' default, or 'helm')."""
     return (f"Project: {store.get_meta('project', project=project)}\n"
-            f"Rollups: {json.dumps(store.get_meta('rollups', project=project) or {})}\n\n"
+            f"Rollups: {_dumps(store.get_meta('rollups', project=project) or {})}\n\n"
             f"{agent.board_summary_text(project=project)}")
+
+
+@mcp.tool()
+def get_lane_delta(project: str = "maxwell", lane: str = "", since_cursor: int = 0) -> str:
+    """Efficient poll replacement — returns ONLY tasks that changed since your last call.
+    Use this instead of board_summary in any polling loop. Costs ~50 tokens when nothing
+    changed (empty updates list) vs 3000-5000 tokens for a full board_summary.
+
+    project: 'maxwell' or 'helm'. lane: workstream id to filter (e.g. 'ENGINE', 'CHART',
+    'OWNSHIP') — leave blank for all workstreams. since_cursor: the cursor value from your
+    last response; pass 0 on first call.
+
+    Returns {cursor, updates: [{task_id, status, title, workstream_id, kinds}]}.
+    Save the returned cursor and pass it on your next call. kinds lists the activity types
+    that occurred (edit, comment, create). Call get_task for full detail on any changed task."""
+    return _dumps(store.get_activity_delta(since_cursor=since_cursor, lane=lane, project=project))
 
 
 @mcp.tool()
@@ -124,7 +148,7 @@ def doc_search(query: str) -> str:
     """Search the plan docs (PRD, architecture, integrations, security, the full plan).
     Returns cited snippets: [{file, text}]."""
     hits = rag.search(query, top_k=5)
-    return json.dumps([{"file": h["file"], "text": h["text"]} for h in hits]) if hits else "no matches"
+    return _dumps([{"file": h["file"], "text": h["text"]} for h in hits]) if hits else "no matches"
 
 
 @mcp.tool()
@@ -132,7 +156,7 @@ def get_plan_signals(project: str = "maxwell") -> str:
     """Derived plan health: counts + overdue/due-soon/blocked/ready tasks, critical-path slips,
     past-due decisions, and each owner's next-best 1-2 tasks. Use for 'what's slipping?' or digests.
     project selects the board ('maxwell' default, or 'helm')."""
-    return json.dumps(signals.compute_plan_signals(project=project))
+    return _dumps(signals.compute_plan_signals(project=project))
 
 
 @mcp.tool()
@@ -142,8 +166,8 @@ def ask_plan(question: str, project: str = "maxwell") -> str:
     'maxwell' it also grounds in the plan docs via RAG. Returns a reasoned answer (+ sources) and,
     when relevant, a proposed task change (NOT applied — call update_task to apply it)."""
     r = agent.run(None, question, project=project)
-    return json.dumps({"answer": r.get("answer"), "sources": r.get("sources"),
-                       "proposed_change": r.get("proposal")})
+    return _dumps({"answer": r.get("answer"), "sources": r.get("sources"),
+                   "proposed_change": r.get("proposal")})
 
 
 # ---- write tools (gated by PM_MCP_TOKEN when set) ------------------------
@@ -172,13 +196,13 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
         new_deps = [] if depends_on.strip().lower() in ("none", "clear", "[]") else _dep_ids(depends_on)
         unknown = _unknown_ids(new_deps, project)
         if unknown:   # FAIL LOUD: don't write a dependency to a task that doesn't exist
-            return json.dumps({"error": "unknown dependency id(s) on project '%s': %s — task NOT updated. "
-                               "Create them first or fix the id." % (project, ", ".join(unknown))})
+            return _dumps({"error": "unknown dependency id(s) on project '%s': %s — task NOT updated. "
+                           "Create them first or fix the id." % (project, ", ".join(unknown))})
         fields["depends_on"] = new_deps
     if not fields:
         return "no fields to update"
     t = store.update_task(task_id, fields, actor="MCP", project=project)
-    return json.dumps(agent._task_brief(t)) if t else "no such task"
+    return _dumps(agent._task_brief(t)) if t else "no such task"
 
 
 @mcp.tool()
@@ -193,14 +217,14 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
     deps = _dep_ids(depends_on)
     unknown = _unknown_ids(deps, project)
     if unknown:   # FAIL LOUD: refuse to create a task carrying edges to non-existent tasks
-        return json.dumps({"error": "unknown dependency id(s) on project '%s': %s — task NOT created. "
-                           "Create them first or fix the id." % (project, ", ".join(unknown))})
+        return _dumps({"error": "unknown dependency id(s) on project '%s': %s — task NOT created. "
+                       "Create them first or fix the id." % (project, ", ".join(unknown))})
     data = {"workstream_id": workstream_id, "title": title, "description": description or None,
             "owner_org": owner_org or None, "owner_person_or_role": owner_person_or_role or None,
             "status": status or None, "phase": phase or None, "risk_level": risk_level or None,
             "depends_on": deps}
     t = store.create_task(data, actor="MCP", project=project)
-    return json.dumps(agent._task_brief(t)) if t else "workstream_id and title required"
+    return _dumps(agent._task_brief(t)) if t else "workstream_id and title required"
 
 
 @mcp.tool()
@@ -229,14 +253,14 @@ def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "
         return "no such task: " + task_id
     unknown = _unknown_ids(add, project)
     if unknown:   # FAIL LOUD: reject the whole batch — never write a dangling edge
-        return json.dumps({"error": "unknown task id(s) on project '%s': %s — NO edge added. "
-                           "Create the target task(s) first or fix the id." % (project, ", ".join(unknown))})
+        return _dumps({"error": "unknown task id(s) on project '%s': %s — NO edge added. "
+                       "Create the target task(s) first or fix the id." % (project, ", ".join(unknown))})
     merged = list(t.get("depends_on") or [])
     for d in add:
         if d not in merged:
             merged.append(d)
     store.update_task(task_id, {"depends_on": merged}, actor="MCP", project=project)
-    return json.dumps({"task_id": task_id, "depends_on": merged})
+    return _dumps({"task_id": task_id, "depends_on": merged})
 
 
 @mcp.tool()
@@ -259,7 +283,7 @@ def remove_dependency(task_id: str, depends_on: str, ctx: Context, project: str 
     not_present = [d for d in rm if d not in cur]
     if not_present:   # surface the no-op rather than pretend it did something
         res["note"] = "not present (nothing to remove): " + ", ".join(not_present)
-    return json.dumps(res)
+    return _dumps(res)
 
 
 @mcp.tool()
@@ -274,7 +298,7 @@ def generate_digest(ctx: Context) -> str:
 def notify(subject: str, text: str, ctx: Context) -> str:
     """Send a message to the wired channels (Slack + Email). Unconfigured channels are dry-run."""
     _require_write(ctx)
-    return json.dumps(notify_mod.send(subject, text))
+    return _dumps(notify_mod.send(subject, text))
 
 
 @mcp.tool()
@@ -286,7 +310,7 @@ def dispatch_to_claude_code(task_id: str, ctx: Context) -> str:
     No-op with a clear reason until the routine is configured on the plan host."""
     _require_write(ctx)
     import dispatch as dispatch_mod
-    return json.dumps(dispatch_mod.dispatch(task_id, actor="MCP"))
+    return _dumps(dispatch_mod.dispatch(task_id, actor="MCP"))
 
 
 @mcp.tool()
@@ -295,7 +319,7 @@ def ingest_and_triage(kind: str, title: str, text: str, ctx: Context) -> str:
     against the plan. Returns {summary, proposals, new_tasks, sources} — proposals are NOT applied
     (use update_task / create_task to apply). kind: email|transcript|document|note."""
     _require_write(ctx)
-    return json.dumps(intake_mod.ingest_and_triage(kind, title, text))
+    return _dumps(intake_mod.ingest_and_triage(kind, title, text))
 
 
 if __name__ == "__main__":
