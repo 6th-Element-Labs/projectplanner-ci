@@ -10,6 +10,6 @@ After=network.target
 Type=oneshot
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
-ExecStart=/opt/projectplanner/venv/bin/python jobs.py summarize_pending
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py summarize_pending
 StandardOutput=journal
 StandardError=journal
