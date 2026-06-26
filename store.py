@@ -100,11 +100,21 @@ def init_db(project: str = DEFAULT_PROJECT):
                 summary TEXT, triage TEXT, status TEXT DEFAULT 'pending',
                 received_at REAL, created_at REAL
             );
+            CREATE TABLE IF NOT EXISTS file_leases (
+                id          TEXT PRIMARY KEY,
+                agent_id    TEXT NOT NULL,
+                task_id     TEXT,
+                files       TEXT NOT NULL,
+                claimed_at  REAL NOT NULL,
+                ttl_minutes INTEGER NOT NULL DEFAULT 30,
+                released_at REAL
+            );
             CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
             CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status);
             CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
             CREATE INDEX IF NOT EXISTS ix_activity_ts ON activity(created_at);
             CREATE INDEX IF NOT EXISTS ix_chat_session ON chat(session);
+            CREATE INDEX IF NOT EXISTS ix_leases_agent ON file_leases(agent_id);
             """
         )
 
@@ -304,6 +314,88 @@ def get_activity_delta(since_cursor: int = 0, lane: str = "",
         if row["kind"] not in by_task[tid]["kinds"]:
             by_task[tid]["kinds"].append(row["kind"])
     return {"cursor": new_cursor, "updates": list(by_task.values())}
+
+
+def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:
+    """Active leases using an existing connection — not released and not TTL-expired."""
+    rows = c.execute("SELECT * FROM file_leases WHERE released_at IS NULL").fetchall()
+    return [dict(r) for r in rows if now < r["claimed_at"] + r["ttl_minutes"] * 60]
+
+
+def claim_files(agent_id: str, files: List[str], task_id: Optional[str] = None,
+                ttl_minutes: int = 30, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Claim a set of file paths for an agent. Returns {lease_id, files, expires_at} on
+    success, or {conflict, task_id, files, retry_after_seconds} if any file is held by
+    another active lease. Same agent claiming its own files is idempotent (no conflict)."""
+    now = time.time()
+    file_set = set(files)
+    with _conn(project) as c:
+        for lease in _active_leases_in(c, now):
+            if lease["agent_id"] == agent_id:
+                continue
+            held = set(json.loads(lease["files"] or "[]"))
+            overlap = file_set & held
+            if overlap:
+                expires_at = lease["claimed_at"] + lease["ttl_minutes"] * 60
+                remaining = max(0.0, expires_at - now)
+                return {"conflict": lease["agent_id"], "task_id": lease.get("task_id"),
+                        "files": sorted(overlap),
+                        "retry_after_seconds": max(30, int(remaining / 2))}
+        lease_id = f"lease-{agent_id}-{int(now)}"
+        c.execute(
+            "INSERT OR REPLACE INTO file_leases(id, agent_id, task_id, files, claimed_at, ttl_minutes) "
+            "VALUES (?,?,?,?,?,?)",
+            (lease_id, agent_id, task_id, json.dumps(sorted(files)), now, ttl_minutes),
+        )
+    expires_at = now + ttl_minutes * 60
+    return {"lease_id": lease_id, "agent_id": agent_id, "task_id": task_id,
+            "files": sorted(files), "expires_at": expires_at, "ttl_minutes": ttl_minutes}
+
+
+def release_files(lease_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Release a lease by id. Returns {released: true} or {error: ...}."""
+    now = time.time()
+    with _conn(project) as c:
+        cur = c.execute(
+            "UPDATE file_leases SET released_at=? WHERE id=? AND released_at IS NULL",
+            (now, lease_id),
+        )
+        if cur.rowcount == 0:
+            r = c.execute("SELECT id FROM file_leases WHERE id=?", (lease_id,)).fetchone()
+            if r:
+                return {"error": "lease already released", "lease_id": lease_id}
+            return {"error": "lease not found", "lease_id": lease_id}
+    return {"released": True, "lease_id": lease_id}
+
+
+def check_files(files: List[str], project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """For each file path, return its holder if held by an active lease. Files not held
+    are omitted. [{file, held_by, task_id, expires_at}]."""
+    now = time.time()
+    file_set = set(files)
+    results = []
+    with _conn(project) as c:
+        for lease in _active_leases_in(c, now):
+            held = set(json.loads(lease["files"] or "[]"))
+            for f in file_set & held:
+                results.append({"file": f, "held_by": lease["agent_id"],
+                                 "task_id": lease.get("task_id"),
+                                 "expires_at": lease["claimed_at"] + lease["ttl_minutes"] * 60})
+    return sorted(results, key=lambda x: x["file"])
+
+
+def list_active_leases(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """All active leases board-wide (not released, not TTL-expired)."""
+    now = time.time()
+    with _conn(project) as c:
+        leases = _active_leases_in(c, now)
+    out = []
+    for lease in leases:
+        out.append({"lease_id": lease["id"], "agent_id": lease["agent_id"],
+                    "task_id": lease.get("task_id"),
+                    "files": json.loads(lease["files"] or "[]"),
+                    "expires_at": lease["claimed_at"] + lease["ttl_minutes"] * 60})
+    return sorted(out, key=lambda x: x["lease_id"])
 
 
 def delete_task(task_id: str, project: str = DEFAULT_PROJECT) -> bool:

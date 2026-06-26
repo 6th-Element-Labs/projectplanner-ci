@@ -170,6 +170,60 @@ def ask_plan(question: str, project: str = "maxwell") -> str:
                    "proposed_change": r.get("proposal")})
 
 
+# ---- file lease tools (open — advisory, no token required) ---------------
+@mcp.tool()
+def claim_files(agent_id: str, files: str, project: str = "maxwell",
+                task_id: str = "", ttl_minutes: int = 30) -> str:
+    """Claim file paths before editing them (advisory soft lock — prevents parallel agents
+    from clobbering each other). Call before writing; call release_files when done.
+
+    agent_id: a stable string identifying this agent session (e.g. 'claude/ENGINE-11').
+    files: comma or newline-separated list of paths (relative to repo root).
+    task_id: the board task you're working on (optional but recommended).
+    ttl_minutes: auto-expire after this many minutes if release_files is never called (default 30).
+
+    On success: {lease_id, files, expires_at, ttl_minutes}
+    On conflict: {conflict, task_id, files, retry_after_seconds} — use Bash(sleep N) before retrying."""
+    file_list = [f.strip() for f in files.replace("\n", ",").split(",") if f.strip()]
+    if not file_list:
+        return _dumps({"error": "no files given"})
+    return _dumps(store.claim_files(agent_id, file_list,
+                                    task_id=task_id or None,
+                                    ttl_minutes=max(1, ttl_minutes),
+                                    project=project))
+
+
+@mcp.tool()
+def release_files(lease_id: str, project: str = "maxwell") -> str:
+    """Release a file lease when you are done editing. Pass the lease_id returned by
+    claim_files. Idempotent — releasing an already-released lease returns an error but does
+    not corrupt state. project selects the board ('maxwell' default, or 'helm')."""
+    return _dumps(store.release_files(lease_id, project=project))
+
+
+@mcp.tool()
+def check_files(files: str, project: str = "maxwell") -> str:
+    """Check whether any of the given file paths are held by an active lease.
+    files: comma or newline-separated list of paths.
+    Returns a list of {file, held_by, task_id, expires_at} for files that ARE held.
+    Empty list means all files are free — safe to edit without claiming first (though
+    calling claim_files is strongly preferred to avoid races).
+    project selects the board ('maxwell' default, or 'helm')."""
+    file_list = [f.strip() for f in files.replace("\n", ",").split(",") if f.strip()]
+    if not file_list:
+        return _dumps([])
+    return _dumps(store.check_files(file_list, project=project))
+
+
+@mcp.tool()
+def list_active_leases(project: str = "maxwell") -> str:
+    """All active file leases on the board — who holds what, and when it expires.
+    Use to see which agents are currently active and which files they have claimed.
+    Expired and released leases are not shown.
+    project selects the board ('maxwell' default, or 'helm')."""
+    return _dumps(store.list_active_leases(project=project))
+
+
 # ---- write tools (gated by PM_MCP_TOKEN when set) ------------------------
 @mcp.tool()
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
