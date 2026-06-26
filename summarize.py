@@ -6,8 +6,9 @@ calls a cheap LLM to compress the activity trail into a ≤50-word rationale. St
 in task_summaries; returned by store.get_task as the 'rationale' field so agents
 get pre-digested context from get_task without reading comments/ADRs/git logs.
 
-Model: PM_SUMMARIZE_MODEL (default: taikun-chat via the gateway; set to taikun-haiku
-once PM_ANTHROPIC_KEY is configured in the gateway — see deploy/gateway/config.yaml).
+Model: PM_SUMMARIZE_MODEL (default: taikun-summarize = gpt-4o-mini, a cheap non-reasoning
+model that respects the 120-token output cap; ~50-100x cheaper than taikun-chat/gpt-5.5).
+Override to taikun-haiku once ANTHROPIC_API_KEY is configured — see deploy/gateway/config.yaml.
 
 Run via: python jobs.py summarize_pending
 Or directly: python summarize.py [task_id [project]]  (for one-shot / debugging)
@@ -24,7 +25,7 @@ import store
 
 BASE = os.environ.get("PM_LLM_BASE_URL", "http://127.0.0.1:8095/v1")
 KEY = os.environ.get("PM_LLM_KEY") or os.environ.get("LLM_GATEWAY_MASTER_KEY", "")
-SUMMARIZE_MODEL = os.environ.get("PM_SUMMARIZE_MODEL", "taikun-chat")
+SUMMARIZE_MODEL = os.environ.get("PM_SUMMARIZE_MODEL", "taikun-summarize")  # cheap gpt-4o-mini
 MIN_INTERVAL = int(os.environ.get("PM_SUMMARIZE_INTERVAL", "900"))  # seconds between re-runs per task
 MAX_TOKENS = 120   # enough for ~50 words with some headroom
 
