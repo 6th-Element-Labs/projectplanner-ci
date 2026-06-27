@@ -161,6 +161,12 @@ The protocol is a small, stable ABI. Everything else is built from these.
 > Every tool is exposed identically over **MCP** and **REST**. All writes are idempotent
 > and carry `actor`/`agent_id` + timestamp into the append-only activity log. Responses use
 > deterministic serialization (`sort_keys`, volatile fields stripped) for prompt-cache hits.
+>
+> **The wire-level contract for the core of these (presence · leases · messages/signals ·
+> delta · handshake) is normatively specified in [`IXP-SPEC.md`](IXP-SPEC.md) — the
+> `IXP-core` profile.** This section is the product-level ABI; the spec is the implementable
+> protocol. Dispatch (FR-12/13) and cost (FR-20/21/22) are the `TXP` / `OXP` profiles, not
+> yet specced (§17).
 
 ### 8.1 Identity & presence
 - **FR-1** `register_agent(agent_id, runtime, model, lane?, task?)` → registers a live
@@ -430,6 +436,25 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
 ---
 
 ## 17. Risks & open questions
+
+### Open items (tracked status)
+
+- 🔴 **Auth gap — reference impl is NOT `IXP-core` conformant (today risk, not roadmap).**
+  [`IXP-SPEC.md`](IXP-SPEC.md) §12 / R-2 and PRD NFR-5 require authenticated writes, but the
+  reference implementation leaves writes **open by default** (`app.py` task CRUD has no auth;
+  `mcp_server.py` writes gate only if `PM_MCP_TOKEN` is set). **If `plan.taikunai.com` is
+  network-reachable, anyone can rewrite the board, impersonate agents, and trigger spend —
+  this is a *today* security risk, not a future feature.** *Fix:* per-agent bearer auth on
+  every write surface; record the authenticated identity as `actor`. **Owner/ETA: TBD —
+  treat as P0.**
+- 🟡 **`TXP` / `OXP` specs — deferred, intentionally.** Only the `IXP-core` signaling profile
+  is specified. Work-dispatch (`TXP`: `claim_next`, dependency-aware routing) and
+  outcome-settlement (`OXP`: the **Tally** ledger, budgets, verification) are **not** specced
+  yet — and **should not be** until a real adopter is pulling for them. Writing them now is
+  speculative surface area; the minimal core is what wins adoption. *Trigger: first adopter
+  asking for dispatch or cost accounting.*
+
+### Strategic risks
 
 1. **Platform encroachment:** Anthropic/OpenAI/Linear ship native coordination. *Mitigation:*
    be narrowly excellent at the coordination + oversight + cost triangle and be the
