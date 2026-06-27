@@ -575,6 +575,7 @@ adoptable: cost is the *why they'll pull.*
 
 ## 21. See also
 
+- [`IXP-SPEC.md`](IXP-SPEC.md) — **the protocol spec** (`IXP-core`): the wire contract (the IP)
 - [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md) — positioning, competitive read, the three bets
 - [`MULTI_AGENT_COORDINATION.md`](MULTI_AGENT_COORDINATION.md) — the primitives, derived from session data
 - [`MCP.md`](MCP.md) — MCP server design and tool reference
