@@ -69,6 +69,18 @@ durable substrate, no human window, no cross-runtime/cross-session coordination.
   agents speak, the **accumulated cross-session state**, the **two-sided habit**, and the
   **cost-economics framing**. Win protocol adoption → become the default.
 
+**Beachhead ICP — high-intelligence knowledge work (deliberate, for now).** The initial
+target is *knowledge work*: software, consulting, investment-banking deliverables (pitch
+decks, models, memos), sales proposals/RFPs, and other large orchestrated high-intelligence
+motions. This work is **natively agentic** (judgment, not rule-execution), **decomposable
+and parallelizable** (one big deliverable → many sub-pieces worked at once), and
+**coordination-hungry** (the pieces share context, depend on each other, and must converge
+to one voice). Mesh fits this *without forcing it* — it is the same profile as the coding
+case, generalized. Industrial / streaming / high-volume operational work (telco anomaly
+draining, SRE) is a real **adjacent generalization** (see §19) but is explicitly **not the
+wedge** — that work is mostly decidable, where a workflow engine wins, and the agentic tail
+is thinner. Land knowledge work first; generalize down to operations later.
+
 ---
 
 ## 4. Goals / Non-goals
@@ -280,24 +292,59 @@ that's seconds — enough for stop/redirect/heads-up, not a freeze.
 
 ---
 
-## 13. The protocol as moat — adoption strategy
+## 13. Standardization & adoption — escaping SIP's grave
 
-The durable advantage is the **convention**, so treat the protocol as a published artifact:
+The durable advantage is the **convention**. But a coordination standard can die (SIP) or
+win (MCP, Kubernetes) depending on *who pulls adoption*. Be precise about which kind we are.
 
-1. **Publish the spec** (the syscalls in §7–8, the session-start sequence, lease/ack
-   semantics) under an open name — aim for it to become *the* way agents coordinate.
-2. **Ship dead-simple onboarding:** a one-liner to load the toolset into each runtime
-   (MCP config + `AGENTS.md`/`CLAUDE.md` session-start protocol + REST shim).
-3. **Reference adapters** for Claude Code (hooks), the Agent SDK (events), and a generic
-   REST loop — so "load us first" is minutes, not a project.
-4. **Lead with the lived story** (the six-agent session) and the **cost-per-outcome**
-   number — the two things competitors can't fake.
-5. **Stay neutral Switzerland:** cross-vendor by design. No single platform will build the
-   cross-vendor layer well, because each wants lock-in. That's the opening.
+**Two kinds of standard:**
+
+- **Vertical** (model → tools): **MCP**. Spread like wildfire because it serves the
+  *sponsor's own interest* — Anthropic wants Claude to use more tools. Adoption is **pulled
+  by the beneficiary.**
+- **Horizontal** (vendor ↔ vendor, rivals must interoperate): **SIP**. RCS-vs-iMessage.
+  Federated everything. These **fight incentives** — the big players want walled gardens, so
+  the open standard stalls. *Vendors don't want open coordination.*
+
+Cross-vendor agent coordination is *shaped* like SIP. So **"vendors, please coordinate"
+dies.** We escape it with four moves — the first is the key one:
+
+1. **Single-player value first.** SIP was useless to the first adopter — you needed a
+   network. Mesh coordinates **one team's own fleet on day one, zero cooperation required**,
+   then compounds. That's the property MCP had and SIP lacked: value *before* the network.
+2. **Buyer-pull, not vendor-blessing.** The *customer* feels the LLM-islands pain and the
+   runaway bill — **they** mandate the layer for their own fleets. This is how Kubernetes
+   beat cloud lock-in, OpenTelemetry beat locked-in observability, USB-C went universal:
+   the demand side had leverage where the vendors didn't.
+3. **Cost is the adoption wedge.** Nobody adopts a standard for elegance (SIP was elegant).
+   They adopt it to stop bleeding money and to get control. Lead with cost governance; the
+   coordination protocol rides in *underneath*. **The trojan horse is the invoice.**
+4. **Neutral governance, eventually.** A published spec under a neutral home (foundation) so
+   buyers don't fear trading vendor lock-in for *ours*. That's what made K8s/OTel trusted.
+
+**So: "can we be a standard like MCP?"** Not the way MCP became one (vertical,
+vendor-pulled) — **the way Kubernetes became one** (horizontal, buyer-pulled, neutral,
+useful single-player on day one). **Coordination is the *what*; cost control is the *why
+they'll adopt it.*** The cost-per-outcome story (see §20) is what gives the buyer a reason
+to pull.
+
+**The spear (anti-tokenmax positioning — put it on the homepage):**
+
+> *Your model vendor profits when your agents waste tokens. We're the neutral layer that
+> manages across your LLM islands and shapes agents toward outcomes — not someone else's
+> revenue.*
+
+No model vendor can credibly say this (they're structurally incentivized toward tokenmax),
+which is exactly why the neutral cross-island position is the defensible one.
+
+**Execution checklist:** publish the spec (the §7–8 syscalls + session-start sequence +
+lease/ack semantics); dead-simple onboarding (one-liner to load the toolset per runtime —
+MCP config + `AGENTS.md`/`CLAUDE.md` protocol + REST shim); reference adapters (Claude Code
+hooks, Agent SDK events, generic REST loop) so "load us first" is minutes; lead the story
+with the six-agent session + the cost number — the two things competitors can't fake.
 
 > Naming: *Mesh* (fabric/pub-sub), *Switchboard* (directed), *Conductor* (orchestration),
-> or keep it boring and protocol-forward (e.g. "ACP — Agent Coordination Protocol").
-> Decide before the public spec drops.
+> or protocol-forward ("ACP — Agent Coordination Protocol"). Decide before the spec drops.
 
 ---
 
@@ -355,7 +402,133 @@ The durable advantage is the **convention**, so treat the protocol as a publishe
 
 ---
 
-## 18. See also
+## 18. Mesh vs orchestration frameworks (LangGraph, workflow engines)
+
+The recurring confusion is the word "orchestrate." Split the job into three layers and
+the boundaries become exact:
+
+1. **Plan / decompose** — turn a goal into work items + a dependency graph.
+2. **Dispatch / schedule** — decide *which worker* gets *which item*, when, at what cost.
+3. **Execute** — the *steps* to do one item (the "how").
+
+| | Plan/decompose | Dispatch/schedule | Execute (the "how") |
+|---|---|---|---|
+| **LangGraph** | — | a little, within its *closed* authored node set (supervisor pattern) | ✅ **its main job** — control flow of one task's execution, one run, one process |
+| **Workflow engine** | author draws it once | assign to a worker pool | ✅ for *decidable* work (fixed, knowable steps) |
+| **Mesh** | ✅ holds the plan + dependency graph (the board) | ✅ **across an open, durable, multi-vendor fleet, with cost-per-outcome as the objective** | ❌ **never** — delegated to the autonomous agent's judgment |
+
+**The resolving statement:** *Mesh orchestrates the **plan** and the **dispatch** — what
+work exists, what depends on what, who does it, at what cost. It does NOT orchestrate the
+**execution.** LangGraph and workflow engines orchestrate the execution (they dictate the
+steps); Mesh delegates that to the agents.* This is why Mesh is simultaneously "coordination
+not orchestration" (it never dictates the steps) and "it routes/orchestrates complex work"
+(it owns the plan + dispatch) — the two are true at different layers.
+
+**Altitude:** LangGraph routes *within one task's execution* (within-task). Mesh routes
+*work to workers across the fleet* (across-fleet). They **compose** — a LangGraph app (or a
+workflow engine) is just one *worker* Mesh dispatches to. LangGraph correction for the
+record: it *can* route (conditional edges; an LLM supervisor routing to worker nodes). The
+difference is **scope** (one authored run, one vendor, ephemeral vs. an open durable
+multi-vendor fleet), **routing function** (coded state/logic vs. cost-per-verified-outcome +
+reliability + load as a substrate primitive), and **model** (push to known nodes — a
+flowchart — vs. pull-based `claim_next` to a self-selecting pool — a scheduler/market).
+
+Analogy: **LangGraph is a program; Mesh is the cost-aware cluster scheduler the programs run
+under** — the K8s-scheduler / FinOps layer for a datacenter of agents.
+
+---
+
+## 19. The parallel work profile — knowledge work first
+
+The coding template — *huge plan → decompose → run agents in parallel on independent
+branches → they coordinate (leases, dedup, handoff, decisions) → converge* — is the general
+shape. The value is **not parallelism per se**; it is **safe, cost-bounded parallelism over
+shared, contended, dependency-linked state where the workers have judgment.** Mesh is what
+*unlocks* the parallel mode: without it, parallel agents collide, redo work, and blow the
+budget; with it, a serial backlog becomes a coordinated swarm.
+
+**The beachhead is high-intelligence knowledge work (see §3), where this profile is native —
+not industrial/operational, where it is the exception.** Knowledge-work deliverables are
+*one big artifact decomposed into interdependent pieces worked in parallel by agents with
+judgment, that must converge to one coherent voice* — exactly the coding profile:
+
+- **Software** — the canonical case: an epic → parallel agents on branches, leases + the
+  decisions log + `claim_next`, converge to a merged feature.
+- **Consulting engagements** — a diagnostic → parallel workstreams (market scan, ops review,
+  financial model, recommendations) that depend on each other and must reconcile to one deck.
+- **Investment-banking deliverables** — a pitch: parallel agents on the model, the comps,
+  the industry section, the precedent transactions — shared assumptions (one WACC, one set of
+  comps) enforced via the decisions log so the sections don't contradict; converge to one
+  book.
+- **Sales proposals / RFPs** — decompose the RFP into requirement-sections, parallel agents
+  draft each, dedup boilerplate, enforce one win-theme and one price via shared state,
+  converge to a single submission.
+
+In every case the decisions log becomes **shared institutional memory** — one settled
+assumption (the WACC, the win-theme, the architecture choice) propagates so the *N*-th piece
+is cheaper and more consistent than the first. That's the **cost-per-outcome flywheel: the
+fleet gets cheaper and more coherent as it learns** — something neither a workflow engine nor
+a single-run LangGraph app can give you.
+
+### Adjacent generalization — operational / streaming work (later, NOT the wedge)
+
+The same profile *generalizes* to high-volume operational work (telco anomaly draining, SRE
+incident response, large remediation/migration), but that is a **later** market, not the
+beachhead: most of that work is rule-*decidable* (a workflow engine wins) and only a thin
+*investigative* tail is agentic. In that world Mesh sits **above** a workflow engine as the
+cost-aware triage-and-dispatch layer, with the engine as its cheapest worker tier:
+
+```
+work / anomalies →
+  Mesh triage (cheap classifier: decidable vs investigative?)
+    ├─ decidable      → workflow engine   (cheapest, deterministic, billions/day)
+    └─ investigative  → agent fleet       (parallel, coordinated, cost-routed)
+                           ↳ leases · dedup-to-root-cause · handoff · claim_next
+  └─ cost-per-outcome ledger spanning BOTH tiers
+```
+
+Dumb (rule-decidable) work stays on the workflow engine — Mesh only *routes* it there and
+never agentifies it. The parallel-fleet value appears **only on the investigative tail**
+(e.g. an incident/root-cause swarm where the cause isn't knowable in advance). Pursue this
+only after knowledge work is landed.
+
+**The honest boundary (scope guard):** dumb + independent → workflow engine, full
+stop. High *volume* alone is a *scaling* problem (Kafka consumer groups + elastic workers),
+NOT a coordination problem — do not justify Mesh by queue size. Mesh earns its place only
+when the work is **investigative AND the parallel workers must coordinate** (dedup, deps,
+shared resources, handoff). The signal that work has crossed the line: *you keep adding
+branches to the workflow engine to handle cases it can't really decide* — that growing tail
+is the Mesh-shaped hole.
+
+---
+
+## 20. Cost-per-outcome *direction* (the six levers)
+
+§8.7 *measures* cost; this section is how Mesh *directs* it. **You don't ask agents to be
+frugal — you change the economics they run in.** Tokenmax is Goodhart's law: optimize the
+*numerator* (tokens) because it looks like progress, and the bill is the hangover. The fix
+is to make the **unit of account the verified outcome** and **dollars the constraint**, then
+push six levers — most of which only a coordination layer can pull, because it is the one
+thing sitting in the middle of every agent's context *and* spend.
+
+| Lever | Mechanism | Why only the layer can do it |
+|---|---|---|
+| **Budget governor** | Each task carries a token/$ cap; `remaining_budget` on every tool response; near the cap fire the **IRQ** ("wrap up"), at the cap the **NMI** (halt + escalate) | reuses the interrupt path (FR-14/16); nobody else has it cross-runtime |
+| **Model right-sizing** | `claim_next` returns the task **and a recommended model tier** from `risk_level`/complexity — Haiku for mechanical, Opus only for the gnarly | the single biggest $ lever (5–10×); vendors won't (it cuts their bill) |
+| **Context economy** | Hand the agent its *minimal optimal context* — delta-poll not full-board, cache-stable serialization, the Haiku pre-digest, a context-pack | uniquely the substrate's job — it controls what the agent sees |
+| **Kill re-work** | Presence + leases + decisions log stop two agents doing the same thing or re-deriving a settled choice | only the layer sees the whole fleet |
+| **Verified denominator** | "Done" doesn't count until exit_criteria are verified (cheap Haiku / CI check) — stop *paying for plausible-but-wrong* | outcome-per-dollar, not tokens-per-task |
+| **Reliability-weighted dispatch** | route work to the agent/model with the best historical cost-per-verified-outcome on similar tasks | a market mechanism only a dispatcher can run |
+
+**The alignment claim (the spear restated):** the **model vendor is structurally
+incentivized toward tokenmax** — every wasted token is their revenue. **Only a neutral,
+buyer-aligned layer is incentivized toward cost-per-outcome.** That is why this cannot come
+from Anthropic or OpenAI, and why it is the wedge that makes the standards play (§13)
+adoptable: cost is the *why they'll pull.*
+
+---
+
+## 21. See also
 
 - [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md) — positioning, competitive read, the three bets
 - [`MULTI_AGENT_COORDINATION.md`](MULTI_AGENT_COORDINATION.md) — the primitives, derived from session data
