@@ -347,6 +347,16 @@ MCP config + `AGENTS.md`/`CLAUDE.md` protocol + REST shim); reference adapters (
 hooks, Agent SDK events, generic REST loop) so "load us first" is minutes; lead the story
 with the six-agent session + the cost number — the two things competitors can't fake.
 
+**Conformance over decoration — the only load-bearing use of the `_XP` family.** The IP is
+the **wire semantics** of each primitive (§7–8) — the lease state machine, the delta cursor,
+atomic `claim_next`, the ack/message model, the budget-governor IRQ/NMI, Tab÷Tally accounting
+— *not* the names or the networking analogies (those are positioning/pedagogy, freely
+copyable). The `_XP` layering earns its keep **only as conformance profiles**: an agent is
+*IXP-core conformant* by implementing just the signaling core (presence + leases + messages +
+interrupts), and adds **TXP** (work/dispatch) and **OXP** (outcome/Tally) later. This
+**partial, layered adoptability** — minimal core in minutes, grow into the rest — is what let
+MCP and Kubernetes spread, and is the property worth specifying and (eventually) certifying.
+
 > **Naming — decided (2026-06-27).**
 >
 > **Product: Switchboard** — directed routing, operator-in-the-loop, telco/SIP heritage;
