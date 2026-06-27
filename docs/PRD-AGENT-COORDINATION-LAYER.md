@@ -1,10 +1,10 @@
-# PRD — Taikun Mesh: the model-agnostic agent coordination layer
+# PRD — Switchboard: the model-agnostic agent coordination layer
 
 - **Status:** Draft v0.1 (for review)
 - **Date:** 2026-06-27
 - **Author:** Steve (Taikun) · drafted from the multi-agent build sessions and the
   product-roadmap thesis
-- **Codename:** *Taikun Mesh* (naming open — see §13)
+- **Name:** **Switchboard** (chosen 2026-06-27 — see §13)
 - **One-line:** The narrow waist for agent coordination — any agent, behind any model,
   coordinates through one neutral substrate as long as it loads our tools first.
 
@@ -75,7 +75,7 @@ decks, models, memos), sales proposals/RFPs, and other large orchestrated high-i
 motions. This work is **natively agentic** (judgment, not rule-execution), **decomposable
 and parallelizable** (one big deliverable → many sub-pieces worked at once), and
 **coordination-hungry** (the pieces share context, depend on each other, and must converge
-to one voice). Mesh fits this *without forcing it* — it is the same profile as the coding
+to one voice). Switchboard fits this *without forcing it* — it is the same profile as the coding
 case, generalized. Industrial / streaming / high-volume operational work (telco anomaly
 draining, SRE) is a real **adjacent generalization** (see §19) but is explicitly **not the
 wedge** — that work is mostly decidable, where a workflow engine wins, and the agentic tail
@@ -310,7 +310,7 @@ Cross-vendor agent coordination is *shaped* like SIP. So **"vendors, please coor
 dies.** We escape it with four moves — the first is the key one:
 
 1. **Single-player value first.** SIP was useless to the first adopter — you needed a
-   network. Mesh coordinates **one team's own fleet on day one, zero cooperation required**,
+   network. Switchboard coordinates **one team's own fleet on day one, zero cooperation required**,
    then compounds. That's the property MCP had and SIP lacked: value *before* the network.
 2. **Buyer-pull, not vendor-blessing.** The *customer* feels the LLM-islands pain and the
    runaway bill — **they** mandate the layer for their own fleets. This is how Kubernetes
@@ -343,8 +343,13 @@ MCP config + `AGENTS.md`/`CLAUDE.md` protocol + REST shim); reference adapters (
 hooks, Agent SDK events, generic REST loop) so "load us first" is minutes; lead the story
 with the six-agent session + the cost number — the two things competitors can't fake.
 
-> Naming: *Mesh* (fabric/pub-sub), *Switchboard* (directed), *Conductor* (orchestration),
-> or protocol-forward ("ACP — Agent Coordination Protocol"). Decide before the spec drops.
+> **Naming — decided (2026-06-27):** the product is **Switchboard** — it evokes directed
+> routing, the human-operator-in-the-loop, and the telco/SIP heritage, and it names what the
+> thing *does* (connect the right caller to the right line). Per the product-vs-protocol
+> split (MCP-style), keep a distinct **protocol** name for the published spec (working title
+> "ACP — Agent Coordination Protocol"); decide that before the spec drops. *Rejected:* Switchboard
+> (crowded by service/data mesh — generic, hard to own), Conductor (Netflix Conductor is a
+> workflow engine — the category we position against), Fabric (Microsoft Fabric).
 
 ---
 
@@ -402,7 +407,7 @@ with the six-agent session + the cost number — the two things competitors can'
 
 ---
 
-## 18. Mesh vs orchestration frameworks (LangGraph, workflow engines)
+## 18. Switchboard vs orchestration frameworks (LangGraph, workflow engines)
 
 The recurring confusion is the word "orchestrate." Split the job into three layers and
 the boundaries become exact:
@@ -415,25 +420,25 @@ the boundaries become exact:
 |---|---|---|---|
 | **LangGraph** | — | a little, within its *closed* authored node set (supervisor pattern) | ✅ **its main job** — control flow of one task's execution, one run, one process |
 | **Workflow engine** | author draws it once | assign to a worker pool | ✅ for *decidable* work (fixed, knowable steps) |
-| **Mesh** | ✅ holds the plan + dependency graph (the board) | ✅ **across an open, durable, multi-vendor fleet, with cost-per-outcome as the objective** | ❌ **never** — delegated to the autonomous agent's judgment |
+| **Switchboard** | ✅ holds the plan + dependency graph (the board) | ✅ **across an open, durable, multi-vendor fleet, with cost-per-outcome as the objective** | ❌ **never** — delegated to the autonomous agent's judgment |
 
-**The resolving statement:** *Mesh orchestrates the **plan** and the **dispatch** — what
+**The resolving statement:** *Switchboard orchestrates the **plan** and the **dispatch** — what
 work exists, what depends on what, who does it, at what cost. It does NOT orchestrate the
 **execution.** LangGraph and workflow engines orchestrate the execution (they dictate the
-steps); Mesh delegates that to the agents.* This is why Mesh is simultaneously "coordination
+steps); Switchboard delegates that to the agents.* This is why Switchboard is simultaneously "coordination
 not orchestration" (it never dictates the steps) and "it routes/orchestrates complex work"
 (it owns the plan + dispatch) — the two are true at different layers.
 
-**Altitude:** LangGraph routes *within one task's execution* (within-task). Mesh routes
+**Altitude:** LangGraph routes *within one task's execution* (within-task). Switchboard routes
 *work to workers across the fleet* (across-fleet). They **compose** — a LangGraph app (or a
-workflow engine) is just one *worker* Mesh dispatches to. LangGraph correction for the
+workflow engine) is just one *worker* Switchboard dispatches to. LangGraph correction for the
 record: it *can* route (conditional edges; an LLM supervisor routing to worker nodes). The
 difference is **scope** (one authored run, one vendor, ephemeral vs. an open durable
 multi-vendor fleet), **routing function** (coded state/logic vs. cost-per-verified-outcome +
 reliability + load as a substrate primitive), and **model** (push to known nodes — a
 flowchart — vs. pull-based `claim_next` to a self-selecting pool — a scheduler/market).
 
-Analogy: **LangGraph is a program; Mesh is the cost-aware cluster scheduler the programs run
+Analogy: **LangGraph is a program; Switchboard is the cost-aware cluster scheduler the programs run
 under** — the K8s-scheduler / FinOps layer for a datacenter of agents.
 
 ---
@@ -443,7 +448,7 @@ under** — the K8s-scheduler / FinOps layer for a datacenter of agents.
 The coding template — *huge plan → decompose → run agents in parallel on independent
 branches → they coordinate (leases, dedup, handoff, decisions) → converge* — is the general
 shape. The value is **not parallelism per se**; it is **safe, cost-bounded parallelism over
-shared, contended, dependency-linked state where the workers have judgment.** Mesh is what
+shared, contended, dependency-linked state where the workers have judgment.** Switchboard is what
 *unlocks* the parallel mode: without it, parallel agents collide, redo work, and blow the
 budget; with it, a serial backlog becomes a coordinated swarm.
 
@@ -475,36 +480,36 @@ a single-run LangGraph app can give you.
 The same profile *generalizes* to high-volume operational work (telco anomaly draining, SRE
 incident response, large remediation/migration), but that is a **later** market, not the
 beachhead: most of that work is rule-*decidable* (a workflow engine wins) and only a thin
-*investigative* tail is agentic. In that world Mesh sits **above** a workflow engine as the
+*investigative* tail is agentic. In that world Switchboard sits **above** a workflow engine as the
 cost-aware triage-and-dispatch layer, with the engine as its cheapest worker tier:
 
 ```
 work / anomalies →
-  Mesh triage (cheap classifier: decidable vs investigative?)
+  Switchboard triage (cheap classifier: decidable vs investigative?)
     ├─ decidable      → workflow engine   (cheapest, deterministic, billions/day)
     └─ investigative  → agent fleet       (parallel, coordinated, cost-routed)
                            ↳ leases · dedup-to-root-cause · handoff · claim_next
   └─ cost-per-outcome ledger spanning BOTH tiers
 ```
 
-Dumb (rule-decidable) work stays on the workflow engine — Mesh only *routes* it there and
+Dumb (rule-decidable) work stays on the workflow engine — Switchboard only *routes* it there and
 never agentifies it. The parallel-fleet value appears **only on the investigative tail**
 (e.g. an incident/root-cause swarm where the cause isn't knowable in advance). Pursue this
 only after knowledge work is landed.
 
 **The honest boundary (scope guard):** dumb + independent → workflow engine, full
 stop. High *volume* alone is a *scaling* problem (Kafka consumer groups + elastic workers),
-NOT a coordination problem — do not justify Mesh by queue size. Mesh earns its place only
+NOT a coordination problem — do not justify Switchboard by queue size. Switchboard earns its place only
 when the work is **investigative AND the parallel workers must coordinate** (dedup, deps,
 shared resources, handoff). The signal that work has crossed the line: *you keep adding
 branches to the workflow engine to handle cases it can't really decide* — that growing tail
-is the Mesh-shaped hole.
+is the Switchboard-shaped hole.
 
 ---
 
 ## 20. Cost-per-outcome *direction* (the six levers)
 
-§8.7 *measures* cost; this section is how Mesh *directs* it. **You don't ask agents to be
+§8.7 *measures* cost; this section is how Switchboard *directs* it. **You don't ask agents to be
 frugal — you change the economics they run in.** Tokenmax is Goodhart's law: optimize the
 *numerator* (tokens) because it looks like progress, and the bill is the hangover. The fix
 is to make the **unit of account the verified outcome** and **dollars the constraint**, then
