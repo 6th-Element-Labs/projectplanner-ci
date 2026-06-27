@@ -4,9 +4,13 @@
 - **Date:** 2026-06-27
 - **Author:** Steve (Taikun) · drafted from the multi-agent build sessions and the
   product-roadmap thesis
-- **Name:** **Switchboard** (chosen 2026-06-27 — see §13)
+- **Product:** **Switchboard** (chosen 2026-06-27 — see §13)
+- **Protocol:** **IXP — Instruction Exchange Protocol** (the open spec; `_XP` family —
+  A/T/I/O = Agent/Task/Instruction/Outcome; IXP canonical)
+- **Ledger:** **Tally** — the cost-per-outcome accounting feature (motif: 正)
 - **One-line:** The narrow waist for agent coordination — any agent, behind any model,
   coordinates through one neutral substrate as long as it loads our tools first.
+  *Switchboard speaks IXP and keeps a Tally.*
 
 > Builds on what already ships: the coordination primitives in
 > [`MULTI_AGENT_COORDINATION.md`](MULTI_AGENT_COORDINATION.md), the MCP surface in
@@ -209,7 +213,7 @@ The protocol is a small, stable ABI. Everything else is built from these.
 ### 8.7 Oversight & cost
 - **FR-20** **Approval gates:** an agent hits a `needs_human` decision → it pauses, the
   layer pings the human (Slack/Gmail), and resumes on approval. "Peek in *and* step in."
-- **FR-21** **Cost-per-outcome ledger:** record tokens/$ per task, per agent, per epic;
+- **FR-21** **Cost-per-outcome ledger (Tally):** record tokens/$ per task, per agent, per epic;
   surface "this feature cost 340k tokens / \$4.20 across 3 agents." Per-task/epic budgets
   that warn or halt. (Two honest streams: gateway-metered vs agent-reported.)
 - **FR-22** **Reliability scoring:** which agents complete vs abandon vs get reverted.
@@ -343,13 +347,39 @@ MCP config + `AGENTS.md`/`CLAUDE.md` protocol + REST shim); reference adapters (
 hooks, Agent SDK events, generic REST loop) so "load us first" is minutes; lead the story
 with the six-agent session + the cost number — the two things competitors can't fake.
 
-> **Naming — decided (2026-06-27):** the product is **Switchboard** — it evokes directed
-> routing, the human-operator-in-the-loop, and the telco/SIP heritage, and it names what the
-> thing *does* (connect the right caller to the right line). Per the product-vs-protocol
-> split (MCP-style), keep a distinct **protocol** name for the published spec (working title
-> "ACP — Agent Coordination Protocol"); decide that before the spec drops. *Rejected:* Switchboard
-> (crowded by service/data mesh — generic, hard to own), Conductor (Netflix Conductor is a
-> workflow engine — the category we position against), Fabric (Microsoft Fabric).
+> **Naming — decided (2026-06-27).**
+>
+> **Product: Switchboard** — directed routing, operator-in-the-loop, telco/SIP heritage;
+> names what it *does* (connect the right caller to the right line).
+>
+> **Protocol: IXP — Instruction Exchange Protocol.** Deliberately echoes an *Internet
+> Exchange Point* (IXP) — the neutral interconnect where independent networks peer and
+> exchange traffic with no middleman owning it — which is exactly the thesis: the neutral
+> exchange where agent islands swap work. It **follows Switchboard**'s telephony/interconnect
+> heritage. "Instruction" also fixes the unit at the **fine grain** — the agent's tool-call /
+> IRQ boundary (§8.5). The overlap with *Internet Exchange Point* is intentional positioning,
+> not confusion: same domain, same concept (neutral exchange), so it reinforces — unlike
+> ISP/IDP/ICP, which point at the *wrong* domain.
+>
+> **Naming family — `_XP` (Exchange Protocol):** the lead letter selects the unit —
+> **A**XP (Agent) · **T**XP (Task) · **I**XP (Instruction, canonical) · **O**XP (Outcome).
+> IXP is the canonical name; the others are lenses for emphasizing a specific unit.
+>
+> **Feature: Tally** — the cost-per-outcome ledger (FR-21). Mark/motif: the kanji **正**
+> (Japanese tally character, 5 strokes) which also means *correct* — encoding the *verified*
+> outcome. Framing: tokens go on the **Tab** (spend), outcomes on the **Tally** (value);
+> cost-per-outcome = Tab ÷ Tally.
+>
+> **Tagline:** *"Switchboard speaks IXP and keeps a Tally — one protocol, from epic to the
+> instruction boundary (the agent's IRQ)."*
+>
+> *Rejected:* Mesh (crowded — service/data mesh), Conductor (Netflix Conductor = a workflow
+> engine, the category we oppose), Fabric (Microsoft Fabric); and "Instruction-*" acronyms
+> that point to the wrong domain — ISP (Internet Service Provider), IDP (Identity Provider),
+> ICP (Insane Clown Posse / China ICP license).
+>
+> *To do:* protocol/product availability check (trademark · domain · GitHub · npm) before the
+> public spec drops — **not yet verified.**
 
 ---
 
