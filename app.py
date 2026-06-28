@@ -184,6 +184,37 @@ async def delete_task(task_id: str, project: str = Query(...)):
     return {"deleted": task_id}
 
 
+@app.post("/api/tasks/{task_id}/archive")
+async def archive_task(request: Request, task_id: str, body: dict = Body(default={}),
+                       project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, "switchboard", ("write:system",), dev_actor="web")
+    result = store.archive_task(
+        task_id, reason=(body or {}).get("reason") or "",
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/api/tasks/{task_id}/move")
+async def move_task(request: Request, task_id: str, body: dict = Body(...),
+                    project: str = Query(...)):
+    project_from = _proj(project)
+    project_to = _proj((body or {}).get("project_to") or (body or {}).get("destination_project") or "")
+    principal = _principal(request, "switchboard", ("write:system",), dev_actor="web")
+    result = store.move_task(
+        task_id, project_from=project_from, project_to=project_to,
+        reason=(body or {}).get("reason") or "",
+        actor=auth.actor(principal),
+        new_task_id=(body or {}).get("new_task_id") or "",
+        dependency_policy=(body or {}).get("dependency_policy") or "fail",
+    )
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.post("/api/tasks/{task_id}/comment")
 async def comment(request: Request, task_id: str, body: dict = Body(...), project: str = Query(...)):
     text = (body.get("text") or "").strip()

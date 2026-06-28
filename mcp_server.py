@@ -1332,6 +1332,42 @@ def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell")
 
 
 @mcp.tool()
+def archive_task(task_id: str, ctx: Context, project: str = "maxwell",
+                 reason: str = "") -> str:
+    """Archive a task instead of raw-deleting it.
+
+    Requires the system write scope because this removes the active task row. The archived
+    snapshot preserves task fields, activity, git/provenance, Tally rows, claims/leases, and
+    related decision records where possible. Fails if the task has active claims or leases.
+    project selects the board ('maxwell' default, 'helm', 'switchboard', or dynamic projects).
+    """
+    principal = _require_write(ctx, "switchboard", ("write:system",))
+    result = store.archive_task(task_id, reason=reason, actor=auth.actor(principal),
+                                project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def move_task(task_id: str, project_from: str, project_to: str, ctx: Context,
+              reason: str = "", new_task_id: str = "",
+              dependency_policy: str = "fail") -> str:
+    """Move one task between isolated project boards with an audit trail.
+
+    This is for cleanup of project-boundary mistakes. It fails closed on unknown projects,
+    refuses active claims/leases, and refuses destination task-id conflicts. By default it
+    also refuses dangling dependencies in the destination; pass dependency_policy='clear'
+    only when intentionally cleaning up leaked tasks and the missing dependency edges should
+    be removed during the move.
+    """
+    principal = _require_write(ctx, "switchboard", ("write:system",))
+    result = store.move_task(
+        task_id, project_from=project_from, project_to=project_to,
+        reason=reason, actor=auth.actor(principal), new_task_id=new_task_id,
+        dependency_policy=dependency_policy)
+    return _dumps(result)
+
+
+@mcp.tool()
 def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "maxwell") -> str:
     """Add one or more dependency EDGES to a task (task_id dependsOn each id in depends_on,
     comma/space-separated, e.g. 'TOOLS-7, SHELL-1'). APPENDS without clobbering existing deps

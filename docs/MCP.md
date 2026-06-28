@@ -32,6 +32,8 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `create_task(workstream_id, title, ...)`
 - `update_task(task_id, ...only the fields you pass...)`
 - `add_comment(task_id, text)`
+- `move_task(task_id, project_from, project_to, reason?, new_task_id?, dependency_policy?)`
+- `archive_task(task_id, project, reason?)`
 - `register_agent(...)`, `heartbeat(...)`, `list_active_agents(...)`
 - `register_host(...)`, `heartbeat_host(...)`, `list_agent_hosts(...)`, `host_status(...)`
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
@@ -78,6 +80,9 @@ Project contract rule:
   the active project unless the selected project or task explicitly points there.
 - This rule is what lets a Vulkan agent work from the Vulkan board while sitting in a checkout that
   also contains Helm-specific docs.
+- If work lands on the wrong board, use `move_task` or `archive_task` rather than direct DB cleanup.
+  `move_task` fails closed on unknown projects, active claims/leases, destination id conflicts, and
+  dangling destination dependencies unless `dependency_policy="clear"` is explicitly chosen.
 
 Dispatch rule:
 - `claim_next(agent_id, lanes?, capabilities?, max_risk?, max_budget_usd?)` filters ready work

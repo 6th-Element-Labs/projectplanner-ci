@@ -475,6 +475,19 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ON wake_intents(claimed_by_host, status);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_wake_intents_idem
                 ON wake_intents(idem_key) WHERE idem_key IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS archived_tasks (
+                archive_id          TEXT PRIMARY KEY,
+                task_id             TEXT NOT NULL,
+                operation           TEXT NOT NULL,
+                actor               TEXT NOT NULL,
+                reason              TEXT,
+                source_project      TEXT NOT NULL,
+                destination_project TEXT,
+                snapshot_json       TEXT NOT NULL,
+                created_at          REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_archived_tasks_task
+                ON archived_tasks(task_id, created_at);
             CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
             CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status);
             CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
@@ -2811,6 +2824,283 @@ def delete_task(task_id: str, project: str = DEFAULT_PROJECT) -> bool:
         cur = c.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
         c.execute("DELETE FROM activity WHERE task_id=?", (task_id,))
         return cur.rowcount > 0
+
+
+TASK_MOVE_TABLES = (
+    "activity",
+    "task_git_state",
+    "task_summaries",
+    "llm_spend",
+    "outcomes",
+    "task_claims",
+    "file_leases",
+    "resource_leases",
+    "decisions",
+)
+AUTOINCREMENT_TASK_TABLES = {"activity", "llm_spend", "decisions"}
+
+
+def _table_columns(c: sqlite3.Connection, table: str) -> List[str]:
+    return [r["name"] for r in c.execute(f"PRAGMA table_info({table})").fetchall()]
+
+
+def _insert_row(c: sqlite3.Connection, table: str, row: Dict[str, Any],
+                skip_columns: Optional[set] = None) -> None:
+    skip_columns = skip_columns or set()
+    cols = [col for col in _table_columns(c, table) if col in row and col not in skip_columns]
+    if not cols:
+        return
+    placeholders = ",".join("?" for _ in cols)
+    c.execute(
+        f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+        [row[col] for col in cols],
+    )
+
+
+def _rows_for_task(c: sqlite3.Connection, table: str, task_id: str) -> List[Dict[str, Any]]:
+    return [dict(r) for r in c.execute(f"SELECT * FROM {table} WHERE task_id=?",
+                                       (task_id,)).fetchall()]
+
+
+def _task_snapshot_in(c: sqlite3.Connection, task_id: str) -> Optional[Dict[str, Any]]:
+    task = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    if not task:
+        return None
+    snapshot: Dict[str, Any] = {"task": dict(task)}
+    for table in TASK_MOVE_TABLES:
+        snapshot[table] = _rows_for_task(c, table, task_id)
+    outcome_ids = [r["id"] for r in snapshot.get("outcomes", [])]
+    if outcome_ids:
+        placeholders = ",".join("?" for _ in outcome_ids)
+        snapshot["outcome_kpi_links"] = [
+            dict(r) for r in c.execute(
+                f"SELECT * FROM outcome_kpi_links WHERE outcome_id IN ({placeholders})",
+                outcome_ids,
+            ).fetchall()
+        ]
+    else:
+        snapshot["outcome_kpi_links"] = []
+    kpi_ids = sorted({r["kpi_id"] for r in snapshot.get("outcome_kpi_links", [])
+                      if r.get("kpi_id")})
+    if kpi_ids:
+        placeholders = ",".join("?" for _ in kpi_ids)
+        snapshot["kpis"] = [
+            dict(r) for r in c.execute(
+                f"SELECT * FROM kpis WHERE id IN ({placeholders})", kpi_ids,
+            ).fetchall()
+        ]
+    else:
+        snapshot["kpis"] = []
+    snapshot["agent_messages"] = _rows_for_task(c, "agent_messages", task_id)
+    snapshot["coordination_monitors"] = _rows_for_task(c, "coordination_monitors", task_id)
+    return snapshot
+
+
+def _active_task_state_in(c: sqlite3.Connection, task_id: str, now: float) -> Dict[str, Any]:
+    active_claims = [dict(r) for r in c.execute(
+        "SELECT id, agent_id, expires_at FROM task_claims "
+        "WHERE task_id=? AND status='active' AND expires_at>?",
+        (task_id, now),
+    ).fetchall()]
+    active_resource_leases = [dict(r) for r in c.execute(
+        "SELECT id, agent_id, resource_type, names, claimed_at, ttl_seconds FROM resource_leases "
+        "WHERE task_id=? AND released_at IS NULL AND claimed_at + ttl_seconds > ?",
+        (task_id, now),
+    ).fetchall()]
+    active_file_leases = [dict(r) for r in c.execute(
+        "SELECT id, agent_id, files, claimed_at, ttl_minutes FROM file_leases "
+        "WHERE task_id=? AND released_at IS NULL AND claimed_at + (ttl_minutes * 60) > ?",
+        (task_id, now),
+    ).fetchall()]
+    return {"claims": active_claims, "resource_leases": active_resource_leases,
+            "file_leases": active_file_leases}
+
+
+def _insert_archive_in(c: sqlite3.Connection, task_id: str, operation: str, actor: str,
+                       reason: str, source_project: str, destination_project: str,
+                       snapshot: Dict[str, Any], now: float) -> str:
+    archive_id = "archive-" + uuid.uuid4().hex[:16]
+    c.execute(
+        "INSERT INTO archived_tasks(archive_id, task_id, operation, actor, reason, "
+        "source_project, destination_project, snapshot_json, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (archive_id, task_id, operation, actor, reason or None, source_project,
+         destination_project or None, json.dumps(snapshot, sort_keys=True), now),
+    )
+    return archive_id
+
+
+def _delete_task_related_in(c: sqlite3.Connection, task_id: str, snapshot: Dict[str, Any]) -> None:
+    outcome_ids = [r["id"] for r in snapshot.get("outcomes", [])]
+    if outcome_ids:
+        placeholders = ",".join("?" for _ in outcome_ids)
+        c.execute(f"DELETE FROM outcome_kpi_links WHERE outcome_id IN ({placeholders})",
+                  outcome_ids)
+    for table in (
+        "activity",
+        "task_git_state",
+        "task_summaries",
+        "llm_spend",
+        "outcomes",
+        "task_claims",
+        "file_leases",
+        "resource_leases",
+        "decisions",
+        "agent_messages",
+        "coordination_monitors",
+    ):
+        c.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
+    c.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+
+
+def _apply_task_id(row: Dict[str, Any], old_task_id: str, new_task_id: str) -> Dict[str, Any]:
+    out = dict(row)
+    if out.get("task_id") == old_task_id:
+        out["task_id"] = new_task_id
+    return out
+
+
+def _missing_dependencies(depends_on: List[str], project: str) -> List[str]:
+    return [dep for dep in depends_on if not get_task(dep, project=project)]
+
+
+def get_archived_task(archive_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM archived_tasks WHERE archive_id=?",
+                        (archive_id,)).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        out["snapshot"] = json.loads(out.pop("snapshot_json") or "{}")
+        return out
+
+
+def archive_task(task_id: str, reason: str = "", actor: str = "system",
+                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    if not has_project(project):
+        return {"error": f"unknown project: {project}", "project": project}
+    now = time.time()
+    with _conn(project) as c:
+        snapshot = _task_snapshot_in(c, task_id)
+        if not snapshot:
+            return {"error": "task not found", "task_id": task_id, "project": project}
+        active = _active_task_state_in(c, task_id, now)
+        if active["claims"] or active["resource_leases"] or active["file_leases"]:
+            return {"error": "task has active claims or leases", "task_id": task_id,
+                    "project": project, "active": active}
+        archive_id = _insert_archive_in(
+            c, task_id, "archive", actor, reason, project, "", snapshot, now)
+        _delete_task_related_in(c, task_id, snapshot)
+    return {"archived": True, "archive_id": archive_id, "task_id": task_id,
+            "project": project, "reason": reason or None}
+
+
+def move_task(task_id: str, project_from: str, project_to: str, reason: str = "",
+              actor: str = "system", new_task_id: str = "",
+              dependency_policy: str = "fail") -> Dict[str, Any]:
+    if not has_project(project_from):
+        return {"error": f"unknown source project: {project_from}", "project": project_from}
+    if not has_project(project_to):
+        return {"error": f"unknown destination project: {project_to}", "project": project_to}
+    if project_from == project_to:
+        return {"error": "source and destination projects must differ",
+                "project": project_from, "task_id": task_id}
+    now = time.time()
+    new_task_id = (new_task_id or task_id).strip()
+    dependency_policy = (dependency_policy or "fail").strip().lower()
+    if dependency_policy not in {"fail", "clear"}:
+        return {"error": "dependency_policy must be 'fail' or 'clear'",
+                "dependency_policy": dependency_policy}
+
+    with _conn(project_from) as source:
+        snapshot = _task_snapshot_in(source, task_id)
+        if not snapshot:
+            return {"error": "task not found", "task_id": task_id,
+                    "project": project_from}
+        active = _active_task_state_in(source, task_id, now)
+        if active["claims"] or active["resource_leases"] or active["file_leases"]:
+            return {"error": "task has active claims or leases", "task_id": task_id,
+                    "project": project_from, "active": active}
+
+    task_row = dict(snapshot["task"])
+    depends_on = json.loads(task_row.get("depends_on") or "[]")
+    missing_deps = _missing_dependencies(depends_on, project_to)
+    cleared_deps: List[str] = []
+    if missing_deps:
+        if dependency_policy == "fail":
+            return {"error": "destination is missing dependency id(s)",
+                    "task_id": task_id, "project_from": project_from,
+                    "project_to": project_to, "missing_dependencies": missing_deps,
+                    "hint": "create dependencies first or pass dependency_policy='clear'"}
+        cleared_deps = missing_deps
+        depends_on = [dep for dep in depends_on if dep not in set(missing_deps)]
+
+    try:
+        with _conn(project_to) as dest:
+            if dest.execute("SELECT 1 FROM tasks WHERE task_id=?",
+                            (new_task_id,)).fetchone():
+                return {"error": "destination task id already exists",
+                        "task_id": new_task_id, "project_to": project_to}
+            outcome_ids = [r["id"] for r in snapshot.get("outcomes", [])]
+            if outcome_ids:
+                placeholders = ",".join("?" for _ in outcome_ids)
+                conflicts = [r["id"] for r in dest.execute(
+                    f"SELECT id FROM outcomes WHERE id IN ({placeholders})",
+                    outcome_ids,
+                ).fetchall()]
+                if conflicts:
+                    return {"error": "destination outcome id conflict",
+                            "project_to": project_to, "outcome_ids": conflicts}
+            moved_task = _apply_task_id(task_row, task_id, new_task_id)
+            moved_task["depends_on"] = json.dumps(depends_on)
+            moved_task["updated_at"] = now
+            _insert_row(dest, "tasks", moved_task)
+            for table in TASK_MOVE_TABLES:
+                skip = {"id"} if table in AUTOINCREMENT_TASK_TABLES else set()
+                for row in snapshot.get(table, []):
+                    moved_row = _apply_task_id(row, task_id, new_task_id)
+                    if table == "outcomes":
+                        moved_row["project"] = project_to
+                    _insert_row(dest, table, moved_row, skip_columns=skip)
+            for row in snapshot.get("kpis", []):
+                if dest.execute("SELECT 1 FROM kpis WHERE id=?", (row["id"],)).fetchone():
+                    continue
+                moved_kpi = dict(row)
+                moved_kpi["project"] = project_to
+                _insert_row(dest, "kpis", moved_kpi)
+            for row in snapshot.get("outcome_kpi_links", []):
+                moved_link = dict(row)
+                moved_link["project"] = project_to
+                _insert_row(dest, "outcome_kpi_links", moved_link)
+            dest.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (new_task_id, actor, "task.moved_in", json.dumps({
+                    "from_project": project_from,
+                    "original_task_id": task_id,
+                    "task_id": new_task_id,
+                    "reason": reason or None,
+                    "cleared_dependencies": cleared_deps,
+                }, sort_keys=True), now),
+            )
+    except sqlite3.IntegrityError as e:
+        return {"error": "destination insert failed", "detail": str(e),
+                "task_id": task_id, "project_to": project_to}
+
+    with _conn(project_from) as source:
+        source_snapshot = _task_snapshot_in(source, task_id)
+        if not source_snapshot:
+            return {"moved": True, "warning": "source task already absent after destination copy",
+                    "task_id": task_id, "new_task_id": new_task_id,
+                    "project_from": project_from, "project_to": project_to}
+        archive_id = _insert_archive_in(
+            source, task_id, "move_out", actor, reason, project_from,
+            project_to, source_snapshot, now)
+        _delete_task_related_in(source, task_id, source_snapshot)
+
+    return {"moved": True, "archive_id": archive_id, "task_id": task_id,
+            "new_task_id": new_task_id, "project_from": project_from,
+            "project_to": project_to, "cleared_dependencies": cleared_deps}
 
 
 def get_meta(key: str, default=None, project: str = DEFAULT_PROJECT):
