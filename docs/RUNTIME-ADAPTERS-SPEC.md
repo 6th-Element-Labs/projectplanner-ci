@@ -1,0 +1,411 @@
+# Runtime Adapters Spec - Switchboard agent packs
+
+- **Status:** Draft v0.1
+- **Date:** 2026-06-28
+- **Product:** Switchboard
+- **Protocol target:** `IXP-core` plus optional `+IRQ`, `+TXP`, and `+OXP` hooks
+- **Purpose:** make the coordination protocol automatic inside real agent runtimes, so the
+  operator does not depend on every prompt remembering to register, poll, claim, and release.
+
+> MCP tools are necessary but not sufficient. The product works only when each runtime
+> reliably performs the session lifecycle: register presence, drain inbox, claim resources,
+> poll deltas, honor stop/redirect, report usage, and release on exit. Runtime adapters are
+> the small pieces of glue that make that lifecycle the default path.
+
+---
+
+## 1. Product thesis
+
+Switchboard is cross-LLM and cross-runtime only if agents can join from Claude Code, Codex,
+Cursor, LangGraph, raw OpenAI loops, local scripts, and future cloud agents without a human
+copying a protocol checklist into every prompt.
+
+An adapter pack is the "load us first" kit for one runtime:
+
+- credential and identity setup;
+- `IXP-core` handshake automation;
+- boundary polling for messages, signals, and deltas;
+- resource-claim helpers around risky writes;
+- advertised interrupt/control fidelity;
+- optional spend/outcome reporting into Tally;
+- a conformance smoke test proving the pack does the minimum.
+
+The goal is not to own agent execution. The goal is to make Switchboard the coordination
+control plane every runtime can safely call into.
+
+---
+
+## 2. Adapter contract
+
+An adapter is conformant when it can perform this lifecycle without relying on the model to
+remember it:
+
+1. Build a stable `agent_id`.
+2. Authenticate with a per-agent credential.
+3. Call `register_agent`.
+4. Drain `inbox` and handle or ack pending signals.
+5. Call `get_delta` from the last cursor.
+6. Claim required resources before writes or task execution.
+7. Heartbeat and poll at every supported boundary.
+8. Release owned leases on normal completion.
+9. Report completion, abandon, and usage where supported.
+10. Advertise the runtime's actual control fidelity.
+
+The adapter may be a hook bundle, SDK middleware, wrapper script, local daemon, library, or
+MCP configuration. The packaging differs per runtime; the behavioral contract does not.
+
+---
+
+## 3. Universal session lifecycle
+
+### 3.1 Required configuration
+
+Every adapter pack must support these values by environment variable, config file, or runtime
+settings:
+
+| Setting | Required | Meaning |
+|---|---:|---|
+| `SWITCHBOARD_URL` | yes | Base URL for REST or MCP transport |
+| `SWITCHBOARD_TOKEN` | yes | Bearer credential for the authenticated principal |
+| `SWITCHBOARD_PROJECT` | yes | Workspace/project boundary |
+| `SWITCHBOARD_AGENT_ID` | optional | Explicit session id; generated if absent |
+| `SWITCHBOARD_RUNTIME` | yes | Runtime name, e.g. `claude-code`, `codex`, `cursor` |
+| `SWITCHBOARD_MODEL` | optional | Current model name when known |
+| `SWITCHBOARD_LANE` | optional | Board lane/workstream |
+| `SWITCHBOARD_TASK_ID` | optional | Active task |
+| `SWITCHBOARD_POLL_INTERVAL_S` | optional | Advisory background poll interval |
+| `SWITCHBOARD_CONTROL_FIDELITY` | optional | Declared or detected interrupt tier |
+
+Generated `agent_id` format:
+
+```text
+<runtime>/<lane-or-task>#<short-session-id>
+```
+
+Examples:
+
+```text
+claude-code/ENGINE-11#a7c4
+codex/CHART-8#b12e
+cursor/REVIEW#9f31
+langgraph/triage#run-487
+openai-loop/RFP-12#20260628T1512
+```
+
+### 3.2 Startup sequence
+
+On session start:
+
+```text
+detect runtime/model/task/lane
+derive agent_id
+authenticate
+register_agent(project, agent_id, runtime, model, lane, task, ttl_s)
+inbox(to_agent=agent_id, unacked=true)
+ack or surface pending heads_up/redirect/stop
+get_delta(since_cursor=last_cursor)
+advertise control fidelity
+```
+
+If a startup `stop` is pending, the adapter must prevent work from beginning when it has a
+hook-level or runner-level enforcement mechanism. If it only has advisory polling, it must
+surface the stop prominently and ack only after the agent or wrapper confirms handling.
+
+### 3.3 Boundary sequence
+
+At every supported boundary:
+
+```text
+heartbeat(agent_id)
+inbox(to_agent=agent_id, unacked=true, priority_desc=true)
+if stop or redirect:
+  save state when supported
+  deny/redirect/kill according to control fidelity
+  ack with handling status
+get_delta(since_cursor)
+refresh or release leases as needed
+optionally report usage
+```
+
+Boundaries include pre-tool hooks, post-tool hooks, SDK step boundaries, graph node
+boundaries, command wrappers, model-turn boundaries, or timed background polls.
+
+### 3.4 Exit sequence
+
+On normal exit:
+
+```text
+report final task status if the adapter owns the task claim
+report usage if available
+release all owned leases
+ack any handled terminal signals
+write final heartbeat/state
+```
+
+On crash or forced kill, TTL expiry is the fallback cleanup path. Runner-aware adapters
+should emit a final "killed" or "crashed" status from the supervisor process when possible.
+
+---
+
+## 4. Adapter pack contents
+
+Each runtime pack should ship:
+
+| File or component | Purpose |
+|---|---|
+| `README.md` | install and runtime-specific behavior |
+| `switchboard.config.example.*` | minimal config/env example |
+| `adapter` library or script | common lifecycle calls |
+| hook/middleware/wrapper | runtime integration point |
+| `conformance.*` | smoke test against a local Switchboard |
+| `control-profile.json` | advertised control fidelity capabilities |
+| examples | smallest working session |
+
+The pack should be small enough to inspect. It should not hide a new agent framework inside
+the adapter.
+
+---
+
+## 5. Control fidelity advertisement
+
+Every `register_agent` call from an adapter must include a `control` object:
+
+```json
+{
+  "mode": "hook_deny",
+  "poll": true,
+  "poll_interval_s": 10,
+  "hook_deny": true,
+  "runner_kill": false,
+  "state_save": "adapter",
+  "max_signal_latency": "next_tool_call",
+  "verified_by": "adapter-smoke:claude-code-pretool-v0.1"
+}
+```
+
+Allowed `mode` values:
+
+| Mode | Meaning |
+|---|---|
+| `observe_only` | Registers presence but cannot reliably interrupt |
+| `advisory_poll` | Polls and surfaces messages; cannot deny a pending action |
+| `hook_deny` | Can block a tool/action at the next boundary |
+| `runner_kill` | Can terminate the managed process/session out of band |
+| `managed` | Supports hook deny plus runner kill and supervised restart/resume |
+
+The adapter must not overclaim. If Codex, Cursor, or any runtime cannot currently expose a
+pre-tool deny hook, the adapter advertises `advisory_poll` or `runner_kill`, not `hook_deny`.
+
+---
+
+## 6. Resource claim helpers
+
+Adapters should make claims ergonomic because humans and models will forget exact lease
+calls under pressure.
+
+Minimum helpers:
+
+- `claim_files(paths[], task_id?)`
+- `claim_port(port, task_id?)`
+- `claim_worktree(path, task_id?)`
+- `release_all()`
+- `with_claim(resource_type, names[], fn)`
+
+Hook-capable adapters should detect high-risk write tools and require a claim first:
+
+| Action | Suggested resource |
+|---|---|
+| edit repo file | `file:<repo-relative-path>` |
+| run dev server | `port:<port>` |
+| rebuild shared binary | `binary:<name>` or `build_dir:<path>` |
+| switch branch | `branch:<branch>` |
+| mutate shared workspace | `worktree:<path>` |
+
+Enforcement may begin as warnings, but hook-capable packs should eventually deny writes that
+lack a valid lease for configured protected resources.
+
+---
+
+## 7. Runtime pack targets
+
+### 7.1 Claude Code adapter
+
+Integration shape:
+
+- MCP server config for tool access.
+- `CLAUDE.md`/runtime instruction snippet for human-readable behavior.
+- hook bundle for pre-tool and post-tool boundaries.
+- optional launcher wrapper that owns process metadata and release-on-exit.
+
+Expected fidelity:
+
+- `hook_deny` when a pre-tool hook can deny pending tool calls.
+- `runner_kill` only when launched under a Switchboard-managed runner.
+
+Required behaviors:
+
+- pre-tool: heartbeat, inbox, stop/redirect handling, resource-claim check;
+- post-tool: delta cursor update, usage report when available, heartbeat;
+- stop: deny pending tool with the stop reason and ack;
+- redirect: deny pending tool or inject/surface new instruction according to runtime support.
+
+### 7.2 Codex adapter
+
+Integration shape:
+
+- MCP config when available, REST fallback always available.
+- wrapper script or local daemon that registers the session and supervises command execution.
+- instruction snippet for the agent-facing protocol.
+- optional CLI/plugin hook if the host exposes one.
+
+Expected fidelity:
+
+- default: `advisory_poll`;
+- upgrade: `hook_deny` only after a real pre-tool/pre-command deny surface is verified;
+- `runner_kill` when the adapter starts and owns the process.
+
+Required behaviors:
+
+- register on session start;
+- poll before long-running shell/tool work when the integration point exists;
+- surface pending stop/redirect in the session;
+- release leases on wrapper-managed exit;
+- never claim mid-token or hook-level guarantees unless verified in the runtime.
+
+### 7.3 Cursor adapter
+
+Integration shape:
+
+- MCP config for agent/tool access.
+- project rules snippet for the handshake.
+- optional extension or command wrapper for boundary polling.
+
+Expected fidelity:
+
+- `advisory_poll` with MCP-only usage;
+- `hook_deny` only if an extension can reliably intercept tool/file operations;
+- `runner_kill` for managed background agents or external process supervisors.
+
+Required behaviors:
+
+- register active editing/review sessions;
+- claim files before edits where file-operation interception exists;
+- surface directed messages in the IDE/workspace;
+- send usage and outcome reports when Cursor exposes token/cost metadata or the user enters
+  estimates.
+
+### 7.4 LangGraph adapter
+
+Integration shape:
+
+- Python middleware or node wrapper around graph steps.
+- checkpointer integration for state save/restore.
+- REST client library; MCP optional.
+
+Expected fidelity:
+
+- `hook_deny` at graph node/tool boundaries;
+- `managed` when the graph runner is owned by Switchboard and can cancel runs.
+
+Required behaviors:
+
+- register one `agent_id` per graph run or worker;
+- call inbox/delta before node execution;
+- map `redirect` to graph state update or supervisor route;
+- map `stop` to cancellation before the next node/tool;
+- report usage from model callbacks;
+- record outcomes when a run completes verified work.
+
+### 7.5 Raw OpenAI loop adapter
+
+Integration shape:
+
+- TypeScript and Python libraries wrapping the model/tool loop.
+- REST-first transport.
+
+Expected fidelity:
+
+- `hook_deny` for tool execution inside the loop because the adapter owns the dispatch point;
+- `runner_kill` only when the parent process is supervised.
+
+Required behaviors:
+
+- register at loop start;
+- check inbox before each model call and before each tool dispatch;
+- deny tool execution on stop;
+- convert redirect into a new developer/user instruction at the next turn;
+- report usage from API responses with request ids;
+- link usage to task/outcome metadata.
+
+### 7.6 Generic REST adapter
+
+Integration shape:
+
+- minimal shell/Python/Node clients for runtimes with no MCP support.
+
+Expected fidelity:
+
+- `advisory_poll` unless embedded around a real execution boundary.
+
+Required behaviors:
+
+- expose simple commands: `switchboard register`, `switchboard inbox`, `switchboard claim`,
+  `switchboard release`, `switchboard report-usage`;
+- return deterministic JSON for easy model consumption;
+- never require a runtime-specific plugin.
+
+---
+
+## 8. Adapter conformance
+
+Each pack must pass a smoke test against a clean local Switchboard:
+
+1. Invalid token cannot register.
+2. Valid token registers presence with correct runtime/model.
+3. Startup drains an existing inbox message and acks it.
+4. Adapter claims and releases a test file.
+5. Adapter persists and reuses a delta cursor.
+6. Adapter advertises truthful control fidelity.
+7. A `stop` signal is handled according to the advertised fidelity.
+8. Exit releases leases or proves TTL cleanup.
+9. Optional: usage report lands in Tally with `source=agent_report`.
+
+The result should be written as an adapter capability statement:
+
+```json
+{
+  "adapter": "claude-code",
+  "version": "0.1.0",
+  "ixp_core": true,
+  "control_mode": "hook_deny",
+  "txp_claim_next": false,
+  "tally_usage_report": true,
+  "verified_at": "2026-06-28T00:00:00Z"
+}
+```
+
+---
+
+## 9. Implementation order
+
+1. Shared adapter SDK: auth, REST client, deterministic JSON, lifecycle helpers.
+2. Raw OpenAI loop adapter: easiest full-control reference.
+3. Claude Code adapter: strongest current hook story and most urgent customer surface.
+4. Codex adapter: REST/MCP plus truthful fidelity discovery.
+5. LangGraph middleware: proves Switchboard composes with orchestration frameworks.
+6. Cursor adapter: IDE/team adoption path.
+7. Pack registry UI: show connected sessions and their verified fidelity.
+
+---
+
+## 10. Exit criteria
+
+Runtime adapters are product-ready when:
+
+- two different LLM runtimes can start from clean config and perform the full handshake;
+- at least one hook-capable adapter proves `stop` is denied before the next tool action;
+- every active session displays runtime, task, heartbeat, leases, and control fidelity;
+- a missing adapter is visible as a lower-fidelity session, not invisible risk;
+- adapter smoke tests run in CI for the shared SDK and at least one reference pack;
+- docs say exactly which guarantees each runtime has today.
+

@@ -63,13 +63,14 @@ Meter tokens/$ per **task**, per **agent**, per **epic** — surface "this featu
 tokens / $4.20 across 3 agents." Add per-task/per-epic budgets that warn or halt. Nobody
 shows **cost per outcome accomplished**; everyone shows raw token graphs.
 Design + the honest two-stream reality (gateway-tracked vs agent-reported) is in
-[ADR-0002](decisions/0002-llm-cost-attribution.md).
+[ADR-0002](decisions/0002-llm-cost-attribution.md). Product/runtime spec:
+[`TALLY-SPEC.md`](TALLY-SPEC.md).
 
 ### Bet 2 — Dependency-aware work dispatch
 We already have the `depends_on` graph and leases. Add `claim_next(agent, lane)` → returns
 the highest-priority task that is unblocked, unclaimed, and in-lane, and atomically leases it.
 Flips the board from a passive ledger into an **active dispatcher** — the single feature that
-most makes it feel like a real PM.
+most makes it feel like a real PM. Spec: [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md).
 
 ### Bet 3 — Human approval gates + audit trail  (the safety-critical wedge)
 An agent hits a decision flagged `needs_human` → it pauses, pings the human (Slack/Gmail

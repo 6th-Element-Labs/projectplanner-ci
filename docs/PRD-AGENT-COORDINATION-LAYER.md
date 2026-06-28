@@ -426,12 +426,12 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
 
 | Phase | Ships | Why first |
 |---|---|---|
-| **P0 — Close the floor** | authn on all writes; deterministic serialization (done); REST shim parity with MCP | can't be a public substrate while writes are open |
-| **P1 — Presence + dispatch** | `register_agent`/heartbeat/`list_active_agents`; `claim_next` (RVDQ) | makes it an *active* coordinator; finishes the "switch" |
-| **P2 — Interrupts** | `signal` field; Claude Code hook bundle (IRQ); runner `kill` (NMI); state save/resume | the live stop/redirect the operator wants |
-| **P3 — Oversight + cost** | approval gates; cost-per-outcome ledger; reliability scoring | the commercial wedge for serious/regulated buyers |
+| **P0 — Close the floor** | authn on all writes; deterministic serialization (done); REST shim parity with MCP; see [`P0-SPEC.md`](P0-SPEC.md) | can't be a public substrate while writes are open |
+| **P1 — Presence + dispatch** | `register_agent`/heartbeat/`list_active_agents`; `claim_next` (RVDQ); see [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) | makes it an *active* coordinator; finishes the "switch" |
+| **P2 — Interrupts** | `signal` field; hook-level deny (IRQ); runner `kill` (NMI); state save/resume; see [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) | the live stop/redirect the operator wants |
+| **P3 — Oversight + cost** | approval gates; cost-per-outcome ledger; reliability scoring; see [`TALLY-SPEC.md`](TALLY-SPEC.md) | the commercial wedge for serious/regulated buyers |
 | **P4 — Subjects + scale** | explicit subject addressing + wildcards; kernel extraction (Go/NATS) behind the interface | scale + the pub/sub north star |
-| **P5 — Protocol + ecosystem** | published spec; reference adapters; multi-tenant workspaces, RBAC, self-serve | turn the convention into the moat |
+| **P5 — Protocol + ecosystem** | published spec; reference adapters; multi-tenant workspaces, RBAC, self-serve; see [`RUNTIME-ADAPTERS-SPEC.md`](RUNTIME-ADAPTERS-SPEC.md) | turn the convention into the moat |
 
 ---
 
@@ -446,19 +446,15 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
   network-reachable, anyone can rewrite the board, impersonate agents, and trigger spend —
   this is a *today* security risk, not a future feature.** *Fix:* per-agent bearer auth on
   every write surface; record the authenticated identity as `actor`. **Owner/ETA: TBD —
-  treat as P0.**
-- 🟡 **`TXP` / `OXP` specs — deferred, intentionally.** Only the `IXP-core` signaling profile
-  is specified. Work-dispatch (`TXP`: `claim_next`, dependency-aware routing) and
-  outcome-settlement (`OXP`: the **Tally** ledger, budgets, verification) are **not** specced
-  yet — and **should not be** until a real adopter is pulling for them. Writing them now is
-  speculative surface area; the minimal core is what wins adoption. *Trigger: first adopter
-  asking for dispatch or cost accounting.*
-  - *Design note (carry into the OXP spec):* model **Tally/OXP as a read-side projection
-    over the append-only activity log — a metering tap, not new mutating wire ops.** Cost/
-    outcome accounting *observes* every layer (a management plane, not a stack layer), so the
-    `actor`/timestamp/idempotency discipline `IXP-core` already mandates is what makes it
-    possible for free. (`TXP`'s `claim_next` is the opposite — it builds *on* the lease
-    primitive, a true layer above the core.)
+  treat as P0.** See [`P0-SPEC.md`](P0-SPEC.md).
+- 🟡 **`TXP` / `OXP` specs — drafted, implementation gated behind P0.** Work-dispatch
+  (`TXP`: `claim_next`, dependency-aware routing) is now scoped in
+  [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md). Outcome-settlement (`OXP`: **Tally**, budgets,
+  verification, KPI links) is now scoped in [`TALLY-SPEC.md`](TALLY-SPEC.md). Keep both
+  narrow: `claim_next` builds on the lease primitive as a true dispatch layer, while Tally
+  remains a read-side projection over the append-only activity log plus spend/outcome
+  ingestion. Do not broaden either into a general workflow engine or finance-grade billing
+  system before P0 auth/identity is solid.
 
 ### Strategic risks
 
@@ -607,6 +603,11 @@ adoptable: cost is the *why they'll pull.*
 ## 21. See also
 
 - [`IXP-SPEC.md`](IXP-SPEC.md) — **the protocol spec** (`IXP-core`): the wire contract (the IP)
+- [`P0-SPEC.md`](P0-SPEC.md) — the implementation floor: auth, REST/MCP parity, idempotency, presence, conformance
+- [`RUNTIME-ADAPTERS-SPEC.md`](RUNTIME-ADAPTERS-SPEC.md) — runtime packs that automate the agent handshake
+- [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) — visible stop/redirect/kill guarantees by runtime
+- [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) — `+TXP` dispatch profile: active scheduler semantics
+- [`TALLY-SPEC.md`](TALLY-SPEC.md) — `+OXP` cost-to-outcome and KPI ledger
 - [`SWITCHBOARD-DESIGN-LOG.md`](SWITCHBOARD-DESIGN-LOG.md) — the reasoning trail + decision log (incl. the original code review)
 - [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md) — positioning, competitive read, the three bets
 - [`MULTI_AGENT_COORDINATION.md`](MULTI_AGENT_COORDINATION.md) — the primitives, derived from session data

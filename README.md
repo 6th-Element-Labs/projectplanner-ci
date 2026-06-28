@@ -61,6 +61,11 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/AGENT_ROADMAP.md`](docs/AGENT_ROADMAP.md) | Phased build plan (Phases 0–7, single-agent operator) |
 | [`docs/AGENT_OPERATOR_FEATURES.md`](docs/AGENT_OPERATOR_FEATURES.md) | Operator-level agent features (autonomous delivery loop, action queue, outcome tracker, live-meeting agent) |
 | [`docs/MULTI_AGENT_COORDINATION.md`](docs/MULTI_AGENT_COORDINATION.md) | Multi-agent coordination layer — file leases, git↔board sync, directed IM, decisions log (derived from first-hand six-agent session data) |
+| [`docs/P0-SPEC.md`](docs/P0-SPEC.md) | Switchboard P0 implementation floor: authenticated writes, agent identity, REST/MCP parity, idempotency, and `IXP-core` conformance |
+| [`docs/RUNTIME-ADAPTERS-SPEC.md`](docs/RUNTIME-ADAPTERS-SPEC.md) | Runtime adapter packs for Claude Code, Codex, Cursor, LangGraph, raw OpenAI loops, and generic REST clients |
+| [`docs/INTERRUPT-TIERS-SPEC.md`](docs/INTERRUPT-TIERS-SPEC.md) | Visible stop/redirect guarantees: advisory poll, hook-level deny, runner kill, and managed control |
+| [`docs/CLAIM-NEXT-SPEC.md`](docs/CLAIM-NEXT-SPEC.md) | `claim_next` / `+TXP` dispatch profile: atomic task assignment, task claims, budget/model guidance |
+| [`docs/TALLY-SPEC.md`](docs/TALLY-SPEC.md) | Tally / `+OXP` cost-to-outcome and KPI ledger: gateway-measured plus agent-reported spend |
 | [`docs/decisions/0001-…`](docs/decisions/0001-multi-agent-coordination-primitives.md) | ADR: build order for the multi-agent coordination primitives |
 | [`docs/MCP.md`](docs/MCP.md) | MCP server design and tool reference |
 | [`docs/UNIVERSAL_WORKFLOW_UI.md`](docs/UNIVERSAL_WORKFLOW_UI.md) | Universal workflow UI spec |

@@ -5,7 +5,8 @@
 - **Layer:** signaling core (presence · leases · messages/signals · delta · handshake)
 - **Profiles:** this document specifies **`IXP-core`**. Work-dispatch (`TXP`) and
   outcome-settlement (`OXP`) are separate profiles layered on this core (out of scope here;
-  see PRD §8.4, §8.7).
+  see [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md), [`TALLY-SPEC.md`](TALLY-SPEC.md), and
+  PRD §8.4, §8.7).
 - **One-line:** the model-agnostic wire contract any agent — behind any LLM, in any runtime
   — speaks to coordinate with other agents over a shared, durable substrate.
 
@@ -80,7 +81,8 @@ Binding requirements:
 - **R-2 (auth).** Every **write** operation **MUST** be authenticated when the substrate is
   network-reachable. The binding **MUST** support a per-agent bearer credential; the
   authenticated identity **MUST** be recorded as `actor`. Reads **MAY** be open within a
-  workspace. *(Reference impl gap: writes are currently open by default — see PRD NFR-5.)*
+  workspace. *(Reference impl gap: writes are currently open by default — see PRD NFR-5 and
+  [`P0-SPEC.md`](P0-SPEC.md).)*
 - **R-3 (idempotency).** Mutating operations that a client may retry (`claim`, `send`)
   **MUST** accept a client-supplied `idem_key` and **MUST** deduplicate on it within the
   workspace: a repeated `idem_key` returns the original result and performs no second effect.
@@ -296,8 +298,9 @@ An implementation is `IXP-core` conformant iff:
 - [ ] `get_delta` cursor feed; empty when unchanged; monotonic id cursor. (§9)
 - [ ] Append-only activity log with `actor` + UTC timestamp on every mutation. (§2)
 
-**Out of scope (other profiles):** `claim_next` / dependency-aware dispatch (`TXP`);
-cost-per-outcome ledger / verification / budgets (`OXP`, the **Tally** feature). An
+**Out of scope (other profiles):** `claim_next` / dependency-aware dispatch (`TXP`, see
+[`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md)); cost-per-outcome ledger / verification /
+budgets (`OXP`, the **Tally** feature, see [`TALLY-SPEC.md`](TALLY-SPEC.md)). An
 implementation **MAY** advertise `IXP-core`, `+TXP`, `+OXP` independently.
 
 ---
@@ -306,7 +309,7 @@ implementation **MAY** advertise `IXP-core`, `+TXP`, `+OXP` independently.
 
 - Open writes on a network-reachable substrate allow any caller to rewrite the board,
   impersonate agents, and trigger spend. Production deployments **MUST** require per-agent
-  credentials on writes (R-2).
+  credentials on writes (R-2). The reference hardening plan is [`P0-SPEC.md`](P0-SPEC.md).
 - `agent_id` is self-asserted unless bound to a credential; an authenticated binding
   **SHOULD** be enforced so an agent cannot spoof another's `actor`, `ack`, or leases.
 - Message bodies are untrusted input to the receiving agent's context; recipients **SHOULD**

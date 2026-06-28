@@ -7,7 +7,10 @@
   every major decision with a pointer to where it's formalized.
 
 > Formal artifacts: [`PRD-AGENT-COORDINATION-LAYER.md`](PRD-AGENT-COORDINATION-LAYER.md)
-> (product + strategy) · [`IXP-SPEC.md`](IXP-SPEC.md) (the `IXP-core` wire contract, the IP).
+> (product + strategy) · [`IXP-SPEC.md`](IXP-SPEC.md) (the `IXP-core` wire contract, the IP)
+> · [`P0-SPEC.md`](P0-SPEC.md) · [`RUNTIME-ADAPTERS-SPEC.md`](RUNTIME-ADAPTERS-SPEC.md)
+> · [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) ·
+> [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) · [`TALLY-SPEC.md`](TALLY-SPEC.md).
 > This file is the narrative; those are the source of truth.
 
 ---
@@ -100,7 +103,9 @@ makers are weakest; the moat is the protocol becoming a convention, not the code
 
 - 🔴 **Auth gap — P0, today-risk.** Reference impl is *not* `IXP-core` conformant (writes open
   by default). Fix: per-agent bearer auth on every write surface; record identity as `actor`.
-- 🟡 **`TXP` / `OXP` specs — deferred** until a real adopter pulls for them.
+  Implementation floor: [`P0-SPEC.md`](P0-SPEC.md).
+- 🟡 **`TXP` / `OXP` specs — drafted, implement after P0.** `claim_next` lives in
+  [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md); Tally lives in [`TALLY-SPEC.md`](TALLY-SPEC.md).
 - **Codex enforcement surface** — verify `PreToolUse`-style deny vs convention+kill.
 - **Engine extraction timing** (Go/NATS) — trigger: first real multi-tenant write load.
 - **Name/availability check** (trademark · domain · GitHub · npm) before the public spec drops.
