@@ -81,6 +81,9 @@ try:
     ok(calls[-1][2]["lanes"] == ["ADAPTER", "PROTO"], "claim-next serializes lane list")
     ok(calls[-1][2]["capabilities"] == ["python", "docs"],
        "claim-next serializes capability list")
+    ok("idem_key" not in calls[-1][2], "claim-next omits stale default idem key")
+    codex_adapter.claim_next(lanes="ADAPTER", idem_key="retry-1")
+    ok(calls[-1][2]["idem_key"] == "retry-1", "claim-next preserves explicit idem key")
 
     complete = codex_adapter.complete_claim("taskclaim-test", {"head_sha": "abc"})
     ok(complete["status"] == "In Review", "complete calls TXP complete_claim")

@@ -139,8 +139,9 @@ def claim_next(lanes="", capabilities="", max_risk="", max_budget_usd=None,
         "capabilities": _split_csv(capabilities),
         "max_risk": max_risk,
         "ttl_seconds": ttl_seconds,
-        "idem_key": idem_key or f"{me}-claim-next",
     }
+    if idem_key:
+        body["idem_key"] = idem_key
     if max_budget_usd is not None:
         body["max_budget_usd"] = max_budget_usd
     return sb._http("POST", "/txp/v1/claim_next", body)
