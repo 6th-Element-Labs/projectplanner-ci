@@ -1,6 +1,6 @@
 # Tally Spec - cost-to-outcome and KPI ledger
 
-- **Status:** Draft v0.1
+- **Status:** P0 implemented through TALLY-2
 - **Date:** 2026-06-28
 - **Product:** Switchboard
 - **Protocol profile:** `+OXP` - outcome exchange / cost settlement, projected over the
@@ -449,3 +449,20 @@ Tally is product-ready for the first commercial wedge when:
 - Stream B is clearly labeled by confidence/source;
 - the product can answer: "What did this outcome cost, and which KPI did it move?"
 
+## 14. Implementation Notes
+
+TALLY-1 shipped the two-stream `llm_spend` ledger and task spend rollup. TALLY-2 adds the
+outcome/KPI denominator:
+
+- `outcomes`, `kpis`, and `outcome_kpi_links` tables;
+- REST endpoints under `/tally/v1/outcomes`, `/tally/v1/kpis`, `/tally/v1/outcome_kpi_links`,
+  `/tally/v1/task/{task_id}`, and `/tally/v1/kpi/{kpi_id}`;
+- MCP tools `record_outcome`, `verify_outcome`, `reject_outcome`, `create_kpi`,
+  `update_kpi_value`, `link_outcome_to_kpi`, `get_task_tally`, and `get_kpi_tally`;
+- proposed outcomes remain pending value and do not count in cost-per-outcome;
+- verified outcomes count in the denominator;
+- KPI links preserve measured/estimated/directional confidence and expose cost per contribution
+  unit when contribution is numeric;
+- spend reported with only `outcome_id` resolves back to the owning task.
+
+The remaining Tally work is TALLY-3: board/UI surfaces, budget chips, and dashboard placement.

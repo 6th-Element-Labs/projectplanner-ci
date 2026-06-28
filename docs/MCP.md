@@ -33,7 +33,9 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `request_wake(...)`, `list_wake_intents(...)`, `claim_wake(...)`, `complete_wake(...)`,
   `cancel_wake(...)`
 - `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`
-- `report_usage(...)`, `get_task_tally(...)`
+- `report_usage(...)`, `record_outcome(...)`, `verify_outcome(...)`, `reject_outcome(...)`
+- `create_kpi(...)`, `update_kpi_value(...)`, `link_outcome_to_kpi(...)`
+- `get_task_tally(...)`, `get_kpi_tally(...)`
 - `reconcile(project)` — provenance drift report; always flags board contradictions like
   `Done` without `merged_sha`, and when canonical main / GitHub config is available, checks
   recorded SHAs and PR state against git/GitHub.
@@ -66,6 +68,16 @@ Agent Host wake rule:
 - `list_wake_intents` distinguishes `pending`, `claimed`, `completed`, `failed`, and
   `cancelled` wakes. A host daemon should poll pending wakes and launch/reuse a supervised
   runtime.
+
+Tally outcome/KPI rule:
+- `report_usage` records gateway-measured or agent-reported spend. Spend can attach to a
+  `task_id`, `claim_id`, or `outcome_id`; outcome-attached spend resolves back to the outcome's
+  owning task for task-level rollups.
+- `record_outcome` creates pending value. `verify_outcome` moves it into the denominator;
+  `reject_outcome` keeps the record auditable but excluded.
+- `create_kpi` and `link_outcome_to_kpi` map verified outcomes to business movement. Task and
+  KPI tallies report cost per verified outcome and, when contribution is numeric, cost per KPI
+  contribution unit.
 
 Protocol compatibility:
 - `get_working_agreement` includes `protocol.version`, `protocol.profile`,

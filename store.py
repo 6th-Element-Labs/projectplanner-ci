@@ -381,6 +381,52 @@ def init_db(project: str = DEFAULT_PROJECT):
             CREATE INDEX IF NOT EXISTS ix_spend_agent ON llm_spend(agent_id);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_spend_request
                 ON llm_spend(request_id) WHERE request_id IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS outcomes (
+                id             TEXT PRIMARY KEY,
+                project        TEXT NOT NULL,
+                task_id        TEXT,
+                epic_id        TEXT,
+                claim_id       TEXT,
+                type           TEXT NOT NULL,
+                title          TEXT NOT NULL,
+                status         TEXT NOT NULL DEFAULT 'proposed',
+                verifier       TEXT,
+                verification   TEXT,
+                evidence_json  TEXT NOT NULL DEFAULT '{}',
+                value_json     TEXT NOT NULL DEFAULT '{}',
+                created_at     REAL NOT NULL,
+                verified_at    REAL
+            );
+            CREATE INDEX IF NOT EXISTS ix_outcomes_task ON outcomes(task_id, status);
+            CREATE INDEX IF NOT EXISTS ix_outcomes_claim ON outcomes(claim_id);
+            CREATE TABLE IF NOT EXISTS kpis (
+                id             TEXT PRIMARY KEY,
+                project        TEXT NOT NULL,
+                name           TEXT NOT NULL,
+                unit           TEXT NOT NULL,
+                direction      TEXT NOT NULL,
+                owner          TEXT,
+                baseline_value REAL,
+                current_value  REAL,
+                target_value   REAL,
+                period         TEXT,
+                created_at     REAL NOT NULL,
+                updated_at     REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_kpis_project ON kpis(project);
+            CREATE TABLE IF NOT EXISTS outcome_kpi_links (
+                id                TEXT PRIMARY KEY,
+                project           TEXT NOT NULL,
+                outcome_id        TEXT NOT NULL,
+                kpi_id            TEXT NOT NULL,
+                contribution      REAL,
+                contribution_unit TEXT,
+                confidence        TEXT NOT NULL,
+                rationale         TEXT,
+                created_at        REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_outcome_kpi_outcome ON outcome_kpi_links(outcome_id);
+            CREATE INDEX IF NOT EXISTS ix_outcome_kpi_kpi ON outcome_kpi_links(kpi_id);
             CREATE TABLE IF NOT EXISTS task_summaries (
                 task_id         TEXT PRIMARY KEY,
                 rationale       TEXT NOT NULL,
@@ -1685,6 +1731,10 @@ def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
     total = int(total_tokens if total_tokens is not None else prompt_tokens + completion_tokens)
     now = time.time()
     with _conn(project) as c:
+        if outcome_id and not task_id:
+            outcome = c.execute("SELECT task_id FROM outcomes WHERE id=?", (outcome_id,)).fetchone()
+            if outcome:
+                task_id = outcome["task_id"]
         if request_id:
             old = c.execute("SELECT * FROM llm_spend WHERE request_id=?", (request_id,)).fetchone()
             if old:
@@ -1713,11 +1763,222 @@ def _spend_row(row: sqlite3.Row) -> Dict[str, Any]:
     return out
 
 
-def task_tally(task_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+def _jsonish(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {"value": parsed}
+        except Exception:
+            return {"text": value}
+    return {"value": value}
+
+
+def _outcome_row(row: sqlite3.Row) -> Dict[str, Any]:
+    out = dict(row)
+    out["evidence"] = json.loads(out.pop("evidence_json") or "{}")
+    out["value"] = json.loads(out.pop("value_json") or "{}")
+    return out
+
+
+def _kpi_row(row: sqlite3.Row) -> Dict[str, Any]:
+    return dict(row)
+
+
+def _outcome_kpi_link_row(row: sqlite3.Row) -> Dict[str, Any]:
+    return dict(row)
+
+
+def record_outcome(outcome_type: str, title: str,
+                   task_id: Optional[str] = None, claim_id: Optional[str] = None,
+                   epic_id: Optional[str] = None, status: str = "proposed",
+                   verifier: str = "", verification: str = "",
+                   evidence: Optional[Dict[str, Any]] = None,
+                   value: Optional[Dict[str, Any]] = None,
+                   actor: str = "tally",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    status = (status or "proposed").strip().lower()
+    if status not in ("proposed", "verified", "rejected", "superseded"):
+        return {"error": "invalid outcome status", "status": status}
+    if not outcome_type or not title:
+        return {"error": "outcome_type and title required"}
+    now = time.time()
+    outcome_id = "outcome-" + uuid.uuid4().hex[:16]
+    verified_at = now if status == "verified" else None
     with _conn(project) as c:
-        rows = c.execute("SELECT * FROM llm_spend WHERE task_id=?", (task_id,)).fetchall()
+        c.execute(
+            "INSERT INTO outcomes(id, project, task_id, epic_id, claim_id, type, title, status, "
+            "verifier, verification, evidence_json, value_json, created_at, verified_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (outcome_id, project, task_id or None, epic_id or None, claim_id or None,
+             outcome_type, title, status, verifier or None, verification or None,
+             json.dumps(_jsonish(evidence), sort_keys=True),
+             json.dumps(_jsonish(value), sort_keys=True), now, verified_at),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "tally.outcome_recorded",
+                   json.dumps({"outcome_id": outcome_id, "status": status,
+                               "type": outcome_type, "title": title}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM outcomes WHERE id=?", (outcome_id,)).fetchone()
+    return _outcome_row(row)
+
+
+def verify_outcome(outcome_id: str, verifier: str, verification: str = "",
+                   evidence: Optional[Dict[str, Any]] = None,
+                   actor: str = "tally",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM outcomes WHERE id=?", (outcome_id,)).fetchone()
+        if not row:
+            return {"error": "outcome not found", "outcome_id": outcome_id}
+        merged_evidence = json.loads(row["evidence_json"] or "{}")
+        merged_evidence.update(_jsonish(evidence))
+        c.execute(
+            "UPDATE outcomes SET status='verified', verifier=?, verification=?, "
+            "evidence_json=?, verified_at=? WHERE id=?",
+            (verifier or actor, verification or None,
+             json.dumps(merged_evidence, sort_keys=True), now, outcome_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (row["task_id"], actor, "tally.outcome_verified",
+                   json.dumps({"outcome_id": outcome_id, "verifier": verifier or actor,
+                               "verification": verification or None}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM outcomes WHERE id=?", (outcome_id,)).fetchone()
+    return _outcome_row(row)
+
+
+def reject_outcome(outcome_id: str, verifier: str, reason: str,
+                   actor: str = "tally",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM outcomes WHERE id=?", (outcome_id,)).fetchone()
+        if not row:
+            return {"error": "outcome not found", "outcome_id": outcome_id}
+        evidence = json.loads(row["evidence_json"] or "{}")
+        evidence["rejection_reason"] = reason
+        c.execute(
+            "UPDATE outcomes SET status='rejected', verifier=?, verification='rejected', "
+            "evidence_json=? WHERE id=?",
+            (verifier or actor, json.dumps(evidence, sort_keys=True), outcome_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (row["task_id"], actor, "tally.outcome_rejected",
+                   json.dumps({"outcome_id": outcome_id, "reason": reason}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM outcomes WHERE id=?", (outcome_id,)).fetchone()
+    return _outcome_row(row)
+
+
+def create_kpi(name: str, unit: str, direction: str,
+               owner: str = "", baseline_value: Optional[float] = None,
+               current_value: Optional[float] = None,
+               target_value: Optional[float] = None,
+               period: str = "", actor: str = "tally",
+               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    direction = (direction or "").strip().lower()
+    if direction not in ("increase", "decrease", "maintain"):
+        return {"error": "direction must be increase, decrease, or maintain"}
+    if not name or not unit:
+        return {"error": "name and unit required"}
+    now = time.time()
+    kpi_id = "kpi-" + uuid.uuid4().hex[:16]
+    if current_value is None:
+        current_value = baseline_value
+    with _conn(project) as c:
+        c.execute(
+            "INSERT INTO kpis(id, project, name, unit, direction, owner, baseline_value, "
+            "current_value, target_value, period, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (kpi_id, project, name, unit, direction, owner or None, baseline_value,
+             current_value, target_value, period or None, now, now),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "tally.kpi_created",
+                   json.dumps({"kpi_id": kpi_id, "name": name, "unit": unit,
+                               "direction": direction}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM kpis WHERE id=?", (kpi_id,)).fetchone()
+    return _kpi_row(row)
+
+
+def update_kpi_value(kpi_id: str, current_value: float,
+                     evidence: Optional[Dict[str, Any]] = None,
+                     actor: str = "tally",
+                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM kpis WHERE id=?", (kpi_id,)).fetchone()
+        if not row:
+            return {"error": "kpi not found", "kpi_id": kpi_id}
+        c.execute("UPDATE kpis SET current_value=?, updated_at=? WHERE id=?",
+                  (current_value, now, kpi_id))
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "tally.kpi_updated",
+                   json.dumps({"kpi_id": kpi_id, "current_value": current_value,
+                               "evidence": _jsonish(evidence)}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM kpis WHERE id=?", (kpi_id,)).fetchone()
+    return _kpi_row(row)
+
+
+def link_outcome_to_kpi(outcome_id: str, kpi_id: str,
+                        contribution: Optional[float] = None,
+                        contribution_unit: str = "",
+                        confidence: str = "directional",
+                        rationale: str = "",
+                        actor: str = "tally",
+                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    confidence = (confidence or "directional").strip().lower()
+    if confidence not in ("measured", "estimated", "directional"):
+        return {"error": "confidence must be measured, estimated, or directional"}
+    now = time.time()
+    link_id = "okpi-" + uuid.uuid4().hex[:16]
+    with _conn(project) as c:
+        outcome = c.execute("SELECT * FROM outcomes WHERE id=?", (outcome_id,)).fetchone()
+        if not outcome:
+            return {"error": "outcome not found", "outcome_id": outcome_id}
+        kpi = c.execute("SELECT * FROM kpis WHERE id=?", (kpi_id,)).fetchone()
+        if not kpi:
+            return {"error": "kpi not found", "kpi_id": kpi_id}
+        c.execute(
+            "INSERT INTO outcome_kpi_links(id, project, outcome_id, kpi_id, contribution, "
+            "contribution_unit, confidence, rationale, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (link_id, project, outcome_id, kpi_id, contribution, contribution_unit or kpi["unit"],
+             confidence, rationale or None, now),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (outcome["task_id"], actor, "tally.outcome_kpi_linked",
+                   json.dumps({"link_id": link_id, "outcome_id": outcome_id, "kpi_id": kpi_id,
+                               "contribution": contribution, "confidence": confidence},
+                              sort_keys=True), now))
+        row = c.execute("SELECT * FROM outcome_kpi_links WHERE id=?", (link_id,)).fetchone()
+    return _outcome_kpi_link_row(row)
+
+
+def _spend_for_task(c: sqlite3.Connection, task_id: str,
+                    outcomes: List[Dict[str, Any]]) -> List[sqlite3.Row]:
+    outcome_ids = [o["id"] for o in outcomes]
+    claim_ids = [o["claim_id"] for o in outcomes if o.get("claim_id")]
+    clauses = ["task_id=?"]
+    params: List[Any] = [task_id]
+    if outcome_ids:
+        clauses.append("outcome_id IN (%s)" % ",".join("?" for _ in outcome_ids))
+        params.extend(outcome_ids)
+    if claim_ids:
+        clauses.append("claim_id IN (%s)" % ",".join("?" for _ in claim_ids))
+        params.extend(claim_ids)
+    return c.execute("SELECT * FROM llm_spend WHERE " + " OR ".join(clauses), params).fetchall()
+
+
+def _spend_summary(rows: List[sqlite3.Row]) -> Dict[str, Any]:
     spend = {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}}
+    seen = set()
     for row in rows:
+        if row["id"] in seen:
+            continue
+        seen.add(row["id"])
         source = row["source"]
         bucket = spend["by_source"].setdefault(source, {"cost_usd": 0.0, "total_tokens": 0,
                                                         "confidence": row["confidence"]})
@@ -1728,9 +1989,108 @@ def task_tally(task_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     spend["cost_usd"] = round(spend["cost_usd"], 6)
     for bucket in spend["by_source"].values():
         bucket["cost_usd"] = round(bucket["cost_usd"], 6)
+    return spend
+
+
+def task_tally(task_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    with _conn(project) as c:
+        outcome_rows = c.execute("SELECT * FROM outcomes WHERE task_id=? ORDER BY created_at",
+                                 (task_id,)).fetchall()
+        outcomes = [_outcome_row(r) for r in outcome_rows]
+        rows = _spend_for_task(c, task_id, outcomes)
+        links: List[Dict[str, Any]] = []
+        if outcomes:
+            outcome_ids = [o["id"] for o in outcomes]
+            link_rows = c.execute(
+                "SELECT l.*, k.name, k.unit, k.direction FROM outcome_kpi_links l "
+                "JOIN kpis k ON k.id=l.kpi_id WHERE l.outcome_id IN (%s)"
+                % ",".join("?" for _ in outcome_ids), outcome_ids).fetchall()
+            links = [dict(r) for r in link_rows]
+    spend = _spend_summary(rows)
+    outcome_counts = {"verified": 0, "proposed": 0, "rejected": 0, "superseded": 0}
+    by_outcome = {o["id"]: o for o in outcomes}
+    for outcome in outcomes:
+        outcome_counts[outcome["status"]] = outcome_counts.get(outcome["status"], 0) + 1
+    verified_count = outcome_counts.get("verified", 0)
+    cost_per_outcome = (round(spend["cost_usd"] / verified_count, 6)
+                        if verified_count else None)
+    kpi_groups: Dict[str, Dict[str, Any]] = {}
+    for link in links:
+        outcome = by_outcome.get(link["outcome_id"]) or {}
+        group = kpi_groups.setdefault(link["kpi_id"], {
+            "kpi_id": link["kpi_id"],
+            "name": link["name"],
+            "unit": link["unit"],
+            "direction": link["direction"],
+            "verified_contribution": 0.0,
+            "links": [],
+            "cost_per_contribution_unit": None,
+        })
+        link_payload = {k: link.get(k) for k in ("id", "outcome_id", "contribution",
+                                                 "contribution_unit", "confidence", "rationale")}
+        link_payload["outcome_status"] = outcome.get("status")
+        group["links"].append(link_payload)
+        if outcome.get("status") == "verified" and link.get("contribution") is not None:
+            group["verified_contribution"] += float(link["contribution"] or 0.0)
+    for group in kpi_groups.values():
+        if group["verified_contribution"]:
+            group["cost_per_contribution_unit"] = round(
+                spend["cost_usd"] / group["verified_contribution"], 6)
     return {"task_id": task_id, "spend": spend,
-            "unit_cost": {"cost_per_verified_outcome": None},
-            "outcomes": {"verified": 0, "proposed": 0, "rejected": 0}}
+            "unit_cost": {"cost_per_verified_outcome": cost_per_outcome},
+            "outcomes": outcome_counts,
+            "outcome_records": outcomes,
+            "kpis": list(kpi_groups.values())}
+
+
+def kpi_tally(kpi_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    with _conn(project) as c:
+        kpi = c.execute("SELECT * FROM kpis WHERE id=?", (kpi_id,)).fetchone()
+        if not kpi:
+            return {"error": "kpi not found", "kpi_id": kpi_id}
+        rows = c.execute(
+            "SELECT o.*, l.id link_id, l.contribution, l.contribution_unit, "
+            "l.confidence link_confidence, l.rationale "
+            "FROM outcome_kpi_links l JOIN outcomes o ON o.id=l.outcome_id "
+            "WHERE l.kpi_id=? ORDER BY l.created_at",
+            (kpi_id,),
+        ).fetchall()
+    outcomes = []
+    verified_contribution = 0.0
+    task_ids = set()
+    for row in rows:
+        outcome = _outcome_row(row)
+        outcome["link"] = {
+            "id": row["link_id"],
+            "contribution": row["contribution"],
+            "contribution_unit": row["contribution_unit"],
+            "confidence": row["link_confidence"],
+            "rationale": row["rationale"],
+        }
+        outcomes.append(outcome)
+        if outcome["status"] == "verified" and row["contribution"] is not None:
+            verified_contribution += float(row["contribution"] or 0.0)
+        if outcome.get("task_id"):
+            task_ids.add(outcome["task_id"])
+    spend_rows = []
+    for task_id in task_ids:
+        with _conn(project) as c:
+            task_outcomes = [_outcome_row(r) for r in c.execute(
+                "SELECT * FROM outcomes WHERE task_id=?", (task_id,)).fetchall()]
+            spend_rows.extend(_spend_for_task(c, task_id, task_outcomes))
+    spend = _spend_summary(spend_rows)
+    return {
+        "kpi": _kpi_row(kpi),
+        "spend": spend,
+        "outcomes": outcomes,
+        "verified_contribution": round(verified_contribution, 6),
+        "unit_cost": {
+            "cost_per_contribution_unit": (
+                round(spend["cost_usd"] / verified_contribution, 6)
+                if verified_contribution else None
+            )
+        },
+    }
 
 
 def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:

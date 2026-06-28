@@ -363,6 +363,54 @@ try:
     ok(tally["spend"]["cost_usd"] == 0.42, "task_tally sums cost")
     ok(tally["spend"]["by_source"]["agent_report"]["total_tokens"] == 1200,
        "task_tally preserves spend source")
+    proposed = store.record_outcome(
+        outcome_type="feature",
+        title="claim_next unblocks dependent work",
+        task_id=second["task_id"],
+        claim_id=next_claim["claim_id"],
+        evidence={"test": "runtime smoke"},
+        project=P,
+    )
+    pending_tally = store.task_tally(second["task_id"], project=P)
+    ok(pending_tally["outcomes"]["proposed"] == 1 and
+       pending_tally["unit_cost"]["cost_per_verified_outcome"] is None,
+       "proposed outcomes do not count in Tally denominator")
+    verified = store.verify_outcome(
+        proposed["id"], verifier="test", verification="unit",
+        evidence={"verified_by": "test_switchboard_runtime"}, project=P)
+    ok(verified["status"] == "verified" and verified["verified_at"],
+       "verify_outcome marks outcome verified")
+    kpi = store.create_kpi(
+        name="verified scheduler outcomes", unit="items", direction="increase",
+        baseline_value=0, target_value=10, project=P)
+    link = store.link_outcome_to_kpi(
+        verified["id"], kpi["id"], contribution=1, confidence="measured",
+        rationale="one verified runtime outcome", project=P)
+    ok(link["confidence"] == "measured", "KPI links preserve confidence")
+    outcome_usage = store.report_usage(
+        source="gateway",
+        confidence="exact",
+        outcome_id=verified["id"],
+        agent_id="gateway/test",
+        runtime="gateway",
+        model="gpt-5-mini",
+        cost_usd=0.08,
+        request_id="outcome-spend-1",
+        project=P,
+    )
+    ok(outcome_usage["task_id"] == second["task_id"],
+       "outcome-attached spend resolves back to the owning task")
+    tally = store.task_tally(second["task_id"], project=P)
+    ok(tally["outcomes"]["verified"] == 1 and
+       tally["unit_cost"]["cost_per_verified_outcome"] == 0.5,
+       "verified outcomes count in Tally denominator")
+    ok(tally["kpis"][0]["verified_contribution"] == 1.0 and
+       tally["kpis"][0]["cost_per_contribution_unit"] == 0.5,
+       "task_tally reports cost per KPI movement")
+    kt = store.kpi_tally(kpi["id"], project=P)
+    ok(kt["verified_contribution"] == 1.0 and
+       kt["unit_cost"]["cost_per_contribution_unit"] == 0.5,
+       "kpi_tally reports spend per verified contribution unit")
 
     bad = store.create_task({"workstream_id": "TEST", "title": "bad done"}, actor="seed", project=P)
     store.update_task(bad["task_id"], {"status": "Done"}, actor="legacy", project=P)
