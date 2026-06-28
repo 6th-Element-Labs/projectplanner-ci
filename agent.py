@@ -249,9 +249,13 @@ def _task_brief(t, full=False):
         b["exit_criteria"] = t.get("exit_criteria")
         b["deliverable"] = t.get("deliverable")
         b["rationale"] = t.get("rationale")  # Haiku-generated activity summary; None until first run
-        b["recent_activity"] = [{"actor": a.get("actor"), "kind": a.get("kind"),
-                                 "text": (a.get("payload") or {}).get("text") or (a.get("payload") or {})}
-                                for a in (t.get("activity") or [])[-6:]]
+        recent = []
+        for a in (t.get("activity") or [])[-6:]:
+            payload = a.get("payload") or {}
+            text = payload.get("text") if isinstance(payload, dict) else payload
+            recent.append({"actor": a.get("actor"), "kind": a.get("kind"),
+                           "text": text if text is not None else payload})
+        b["recent_activity"] = recent
     return b
 
 

@@ -555,6 +555,16 @@ def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
     return d
 
 
+def _json_payload(raw: str) -> Any:
+    """Parse payload JSON while preserving legacy scalar payloads."""
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"text": raw}
+
+
 def _git_state_row(r: Optional[sqlite3.Row]) -> Dict[str, Any]:
     if not r:
         return {"branch": None, "head_sha": None, "pushed_at": None, "pr_number": None,
@@ -642,7 +652,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         if not r:
             return None
         t = _task_row(r)
-        t["activity"] = [dict(a) | {"payload": json.loads(a["payload"] or "{}")}
+        t["activity"] = [dict(a) | {"payload": _json_payload(a["payload"])}
                          for a in c.execute(
                              "SELECT * FROM activity WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]
         t["git_state"] = _load_git_state(c, task_id)
