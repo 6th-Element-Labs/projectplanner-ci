@@ -12,6 +12,8 @@ the thin Codex-specific wiring. Authored as a scaffold by `claude-code` per deci
 | Enforce: FR-14 interrupt-consume, self-Done deny, lease-conflict deny | ✅ in `switchboard_core.evaluate_tool()` (live-verified via the Claude adapter) |
 | Wire handshake to a Codex session/launcher | ✅ `codex_adapter.py session-start` prints first-turn context JSON, registers, and drains unacked inbox |
 | Wire `evaluate_tool` to a Codex pre-tool hook | ✅ `codex_adapter.py pre-tool` accepts pending tool JSON and prints allow/deny verdicts |
+| Claim ready scheduler work | ✅ `codex_adapter.py claim-next` and `session-start --claim-next` call `/txp/v1/claim_next` |
+| Report completion evidence | ✅ `codex_adapter.py complete <claim_id>` calls `/txp/v1/complete_claim` with git evidence |
 | Prove native Codex hook lifecycle blocks tools | 🔲 still TBD; set `PM_CODEX_PRETOOL_MODE=deny` only when a runner actually honors denials |
 
 The Codex-specific surface is now a stable JSON stdin/stdout shim. A native Codex hook, wrapper,
@@ -63,6 +65,13 @@ The output includes `additional_context` plus `unacked_messages`. A Codex launch
 that into first-turn context before model work begins. The adapter reads the inbox but does not
 auto-ack; the agent should ack after it understands or acts on the message.
 
+To start and immediately ask the scheduler for work:
+
+```bash
+PM_PROJECT=switchboard PM_AGENT_ID=codex/current \
+  python3 adapters/codex/codex_adapter.py session-start --claim-next --lanes ADAPTER
+```
+
 ## Pre-tool verdict
 ```bash
 printf '%s\n' '{"toolCall":{"name":"mcp__taikun_plan__update_task","arguments":{"status":"Done"}}}' \
@@ -79,3 +88,18 @@ The output is neutral JSON:
   "tool_name": "mcp__taikun_plan__update_task"
 }
 ```
+
+## Scheduler lifecycle
+```bash
+PM_PROJECT=switchboard PM_AGENT_ID=codex/current \
+  python3 adapters/codex/codex_adapter.py claim-next --lanes ADAPTER --capabilities python,docs
+
+PM_PROJECT=switchboard PM_AGENT_ID=codex/current \
+  python3 adapters/codex/codex_adapter.py complete taskclaim-abc123 --pr-url https://github.com/org/repo/pull/1
+
+PM_PROJECT=switchboard PM_AGENT_ID=codex/current \
+  python3 adapters/codex/codex_adapter.py abandon taskclaim-abc123 --reason "blocked on credentials"
+```
+
+`complete` records the current git branch and `HEAD` SHA by default, plus any PR fields supplied.
+It moves the task to `In Review`; the GitHub webhook remains the only writer of `Done`.

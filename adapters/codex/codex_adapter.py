@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.parse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -99,6 +100,66 @@ def _inbox_context(messages):
             bits.append(f"signal {m['signal']}")
         lines.append(f"- {'; '.join(bits)}: {m.get('message') or ''}")
     return "\n".join(lines)
+
+
+def _split_csv(value):
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return [x.strip() for x in str(value or "").replace("\n", ",").split(",") if x.strip()]
+
+
+def _git_value(args, cwd=None):
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=3, cwd=cwd or None)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def git_evidence(cwd=None, **overrides):
+    """Best-effort completion evidence for complete_claim."""
+    evidence = {
+        "branch": _git_value(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd),
+        "head_sha": _git_value(["git", "rev-parse", "HEAD"], cwd=cwd),
+        "pushed_at": time.time(),
+    }
+    for key, value in overrides.items():
+        if value not in (None, ""):
+            evidence[key] = value
+    return {k: v for k, v in evidence.items() if v not in (None, "")}
+
+
+def claim_next(lanes="", capabilities="", max_risk="", max_budget_usd=None,
+               ttl_seconds=1800, idem_key="", cwd=None):
+    me = codex_agent_id(cwd)
+    body = {
+        "project": PROJECT,
+        "agent_id": me,
+        "lanes": _split_csv(lanes),
+        "capabilities": _split_csv(capabilities),
+        "max_risk": max_risk,
+        "ttl_seconds": ttl_seconds,
+        "idem_key": idem_key or f"{me}-claim-next",
+    }
+    if max_budget_usd is not None:
+        body["max_budget_usd"] = max_budget_usd
+    return sb._http("POST", "/txp/v1/claim_next", body)
+
+
+def complete_claim(claim_id, evidence=None):
+    return sb._http("POST", "/txp/v1/complete_claim", {
+        "project": PROJECT,
+        "claim_id": claim_id,
+        "evidence": evidence or {},
+    })
+
+
+def abandon_claim(claim_id, reason):
+    return sb._http("POST", "/txp/v1/abandon_claim", {
+        "project": PROJECT,
+        "claim_id": claim_id,
+        "reason": reason or "unspecified",
+    })
 
 
 def on_session_start(cwd=None):
@@ -188,9 +249,38 @@ def _emit_json(payload):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Switchboard Codex adapter harness")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("session-start", help="register and print first-turn context JSON")
+    start = sub.add_parser("session-start", help="register and print first-turn context JSON")
+    start.add_argument("--claim-next", action="store_true",
+                       help="also atomically claim ready work after registration")
+    start.add_argument("--lanes", default=os.environ.get("PM_LANE", ""))
+    start.add_argument("--capabilities", default=os.environ.get("PM_CAPABILITIES", ""))
+    start.add_argument("--max-risk", default=os.environ.get("PM_MAX_RISK", ""))
+    start.add_argument("--max-budget-usd", type=float, default=None)
+    start.add_argument("--ttl-seconds", type=int, default=1800)
+    start.add_argument("--idem-key", default=os.environ.get("PM_IDEM_KEY", ""))
+
     sub.add_parser("pre-tool", help="read pending tool JSON on stdin and print allow/deny verdict")
     sub.add_parser("fidelity", help="print advertised control fidelity")
+    claim = sub.add_parser("claim-next", help="atomically claim ready TXP work")
+    claim.add_argument("--lanes", default=os.environ.get("PM_LANE", ""))
+    claim.add_argument("--capabilities", default=os.environ.get("PM_CAPABILITIES", ""))
+    claim.add_argument("--max-risk", default=os.environ.get("PM_MAX_RISK", ""))
+    claim.add_argument("--max-budget-usd", type=float, default=None)
+    claim.add_argument("--ttl-seconds", type=int, default=1800)
+    claim.add_argument("--idem-key", default=os.environ.get("PM_IDEM_KEY", ""))
+
+    complete = sub.add_parser("complete", help="complete a TXP claim with git evidence")
+    complete.add_argument("claim_id")
+    complete.add_argument("--evidence-json", default="")
+    complete.add_argument("--branch", default="")
+    complete.add_argument("--head-sha", default="")
+    complete.add_argument("--pr-url", default="")
+    complete.add_argument("--pr-number", type=int, default=None)
+
+    abandon = sub.add_parser("abandon", help="abandon a TXP claim")
+    abandon.add_argument("claim_id")
+    abandon.add_argument("--reason", default="abandoned by Codex adapter")
+
     smoke = sub.add_parser("smoke", help="run local normalization/deny smoke")
     smoke.add_argument("--skip-session", action="store_true",
                        help="do not call the live session-start handshake")
@@ -199,7 +289,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.command == "session-start":
-        _emit_json(on_session_start())
+        payload = on_session_start()
+        if args.claim_next:
+            payload["claim_next"] = claim_next(args.lanes, args.capabilities, args.max_risk,
+                                               args.max_budget_usd, args.ttl_seconds, args.idem_key)
+        _emit_json(payload)
         return 0
     if args.command == "pre-tool":
         verdict = on_pre_tool(_read_stdin_json())
@@ -207,6 +301,30 @@ def main(argv=None):
         return args.deny_exit_code if verdict.get("decision") == "deny" else 0
     if args.command == "fidelity":
         _emit_json(control_fidelity())
+        return 0
+    if args.command == "claim-next":
+        _emit_json(claim_next(args.lanes, args.capabilities, args.max_risk,
+                              args.max_budget_usd, args.ttl_seconds, args.idem_key))
+        return 0
+    if args.command == "complete":
+        try:
+            evidence = json.loads(args.evidence_json) if args.evidence_json else {}
+        except Exception:
+            evidence = {"note": args.evidence_json}
+        overrides = dict(evidence)
+        for key, value in {
+            "branch": args.branch,
+            "head_sha": args.head_sha,
+            "pr_url": args.pr_url,
+            "pr_number": args.pr_number,
+        }.items():
+            if value not in (None, ""):
+                overrides[key] = value
+        evidence = git_evidence(**overrides)
+        _emit_json(complete_claim(args.claim_id, evidence))
+        return 0
+    if args.command == "abandon":
+        _emit_json(abandon_claim(args.claim_id, args.reason))
         return 0
 
     sample = {"toolCall": {"name": "mcp__taikun_plan__update_task",

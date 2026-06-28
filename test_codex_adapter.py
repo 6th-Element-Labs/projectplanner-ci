@@ -57,6 +57,30 @@ try:
     inbox = codex_adapter.drain_inbox("codex/test")
     ok(inbox and inbox[0]["id"] == 42, "session-start drain reads unacked inbox")
 
+    calls = []
+
+    def fake_http(method, path, body=None, **kwargs):
+        calls.append((method, path, body or {}))
+        if path.endswith("/claim_next"):
+            return {"claimed": False, "reason": "no_unblocked_work"}
+        if path.endswith("/complete_claim"):
+            return {"completed": True, "claim_id": body["claim_id"], "status": "In Review"}
+        if path.endswith("/abandon_claim"):
+            return {"abandoned": True, "claim_id": body["claim_id"]}
+        return {"messages": []}
+
+    codex_adapter.sb._http = fake_http
+    claim = codex_adapter.claim_next(lanes="ADAPTER, PROTO", capabilities="python, docs")
+    ok(claim["claimed"] is False, "claim-next returns scheduler response")
+    ok(calls[-1][2]["lanes"] == ["ADAPTER", "PROTO"], "claim-next serializes lane list")
+    ok(calls[-1][2]["capabilities"] == ["python", "docs"],
+       "claim-next serializes capability list")
+
+    complete = codex_adapter.complete_claim("taskclaim-test", {"head_sha": "abc"})
+    ok(complete["status"] == "In Review", "complete calls TXP complete_claim")
+    abandoned = codex_adapter.abandon_claim("taskclaim-test", "blocked")
+    ok(abandoned["abandoned"] is True, "abandon calls TXP abandon_claim")
+
     verdict = codex_adapter.on_pre_tool({
         "toolCall": {
             "name": "mcp__taikun_plan__update_task",
