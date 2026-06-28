@@ -4,6 +4,7 @@ workflow engine. Each job is a plain function; the timer invokes this module.
 
   python jobs.py weekly_digest    # generate the digest + deliver via notify (Slack+Email)
   python jobs.py sweep_monitors   # evaluate Switchboard durable coordination monitors
+  python jobs.py reconcile_alerts # run reconcile and send deduped drift alerts
   python jobs.py backfill_default_branch_provenance
                                    # bootstrap direct-default commit provenance
 
@@ -82,6 +83,48 @@ def sweep_monitors():
     return {"checked": total_checked, "fired": total_fired, "resolved": total_resolved}
 
 
+def _configured_projects(env_name: str, default: str):
+    raw = os.environ.get(env_name, default).strip() or default
+    if raw.lower() in ("all", "*"):
+        return store.project_ids()
+    projects = store.coerce_csv_list(raw)
+    unknown = [p for p in projects if not store.has_project(p)]
+    if unknown:
+        raise ValueError(f"unknown project(s) for {env_name}: {', '.join(unknown)}")
+    return projects
+
+
+def reconcile_alerts():
+    """Run reconcile and send deduped actionable drift alerts.
+
+    Defaults to the Switchboard dogfood board. Set PM_RECON_ALERT_PROJECTS=all to run every
+    registered project, or a comma list to run a deliberate subset.
+    """
+    projects = _configured_projects("PM_RECON_ALERT_PROJECTS", "switchboard")
+    alert_to = os.environ.get("PM_RECON_ALERT_TO", "switchboard/operator")
+    min_severity = os.environ.get("PM_RECON_ALERT_MIN_SEVERITY", "medium")
+    dedupe_s = int(os.environ.get("PM_RECON_ALERT_DEDUPE_SECONDS", "3600"))
+    sent = deduped = findings = 0
+    results = []
+    for project_id in projects:
+        store.init_db(project_id)
+        store.seed_if_empty(project_id)
+        res = store.run_reconcile_alerts(
+            project=project_id, alert_to=alert_to,
+            min_severity=min_severity, dedupe_window_s=dedupe_s)
+        results.append(res)
+        sent += 1 if res.get("alert_sent") else 0
+        deduped += 1 if res.get("deduped") else 0
+        findings += int(res.get("finding_count") or 0)
+        print(f"  [{project_id}] findings={res.get('finding_count', 0)} "
+              f"alert_sent={res.get('alert_sent')} deduped={res.get('deduped')} "
+              f"message_id={res.get('message_id')}")
+    print(f"reconcile_alerts: projects={len(projects)} findings={findings} "
+          f"sent={sent} deduped={deduped} alert_to={alert_to}")
+    return {"projects": projects, "findings": findings, "sent": sent,
+            "deduped": deduped, "results": results}
+
+
 def _default_branch_commits(ref: str, limit: int):
     cmd = ["git", "log", f"--max-count={int(limit)}", "--format=%H%x00%s", ref]
     out = subprocess.check_output(cmd, cwd=Path(__file__).parent, text=True)
@@ -142,6 +185,7 @@ def backfill_default_branch_provenance(project_id: str = "", ref: str = "",
 
 JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "summarize_pending": summarize_pending, "sweep_monitors": sweep_monitors,
+        "reconcile_alerts": reconcile_alerts,
         "backfill_default_branch_provenance": backfill_default_branch_provenance}
 
 if __name__ == "__main__":

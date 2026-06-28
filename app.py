@@ -791,6 +791,16 @@ async def ixp_sweep_monitors(request: Request, body: dict = Body(default={})):
     return store.sweep_coordination_monitors(project=project)
 
 
+@app.post("/ixp/v1/reconcile_alerts")
+async def ixp_reconcile_alerts(request: Request, body: dict = Body(default={})):
+    project = _body_project(body or {})
+    _principal(request, project, ("write:ixp",), dev_actor="switchboard/reconcile")
+    return store.run_reconcile_alerts(
+        project=project,
+        alert_to=body.get("alert_to") or "switchboard/operator",
+        min_severity=body.get("min_severity") or "medium")
+
+
 @app.post("/ixp/v1/resolve_monitor")
 async def ixp_resolve_monitor(request: Request, body: dict = Body(...)):
     project = _body_project(body)

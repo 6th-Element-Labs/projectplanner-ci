@@ -1,0 +1,14 @@
+# /etc/systemd/system/projectplanner-reconcile.service
+# One-shot service: run Switchboard reconcile and send deduped drift alerts.
+# Triggered by projectplanner-reconcile.timer.
+[Unit]
+Description=ProjectPlanner Switchboard reconcile alerts
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py reconcile_alerts
+StandardOutput=journal
+StandardError=journal

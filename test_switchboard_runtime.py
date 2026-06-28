@@ -490,6 +490,20 @@ try:
     report = store.reconcile(project=P)
     ok(any(f["code"] == "done_without_merged_sha" and f["task_id"] == bad["task_id"]
            for f in report["findings"]), "reconcile flags Done without merged_sha")
+    alert = store.run_reconcile_alerts(
+        project=P, alert_to="codex/test", actor="test/reconcile",
+        dedupe_window_s=3600, now=123456)
+    ok(alert["alert_sent"] and alert["finding_count"] >= 1,
+       "reconcile_alerts sends an actionable alert when drift exists")
+    alert_msgs = [m for m in store.list_unacked_messages("codex/test", project=P)
+                  if m.get("signal") == "reconcile_alert"]
+    ok(any(bad["task_id"] in m["message"] and "done_without_merged_sha" in m["message"]
+           for m in alert_msgs), "reconcile_alert message names the drifting task")
+    duplicate_alert = store.run_reconcile_alerts(
+        project=P, alert_to="codex/test", actor="test/reconcile",
+        dedupe_window_s=3600, now=123456)
+    ok(duplicate_alert["deduped"] and not duplicate_alert["alert_sent"],
+       "reconcile_alerts dedupes repeat findings inside the window")
     fixed = store.mark_task_merged(bad["task_id"], "legacyfix", actor="github-webhook", project=P)
     ok(fixed["git_state"]["merged_sha"] == "legacyfix",
        "merge webhook can stamp provenance onto a legacy Done task")
@@ -498,6 +512,17 @@ try:
                for f in fixed_report["findings"]), "reconcile clears Done task after merge provenance")
     ok(fixed_report["external_checks"]["git_reachability"] == "not_configured",
        "reconcile skips git reachability until canonical main is known")
+    stale_task = store.create_task({"workstream_id": "TEST", "title": "stale active claim"},
+                                   actor="seed", project=P)
+    with store._conn(P) as c:
+        c.execute(
+            "INSERT INTO task_claims(id, task_id, agent_id, status, claimed_at, expires_at) "
+            "VALUES (?,?,?,?,?,?)",
+            ("claim-stale-test", stale_task["task_id"], "codex/stale", "active", 1, 2),
+        )
+    stale_report = store.reconcile(project=P)
+    ok(any(f["code"] == "stale_task_claim" and f["task_id"] == stale_task["task_id"]
+           for f in stale_report["findings"]), "reconcile flags stale active task claims")
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     store.update_canonical_main_sha(head, actor="test", project=P)
     real_git = store.create_task({"workstream_id": "TEST", "title": "real git proof"},

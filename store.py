@@ -2995,6 +2995,39 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
     return findings, checks
 
 
+SEVERITY_VALUE = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _severity_value(severity: str) -> int:
+    return SEVERITY_VALUE.get((severity or "").strip().lower(), 0)
+
+
+def _reconcile_signature(findings: List[Dict[str, Any]]) -> str:
+    material = [{
+        "severity": f.get("severity") or "",
+        "task_id": f.get("task_id") or "",
+        "code": f.get("code") or "",
+        "detail": f.get("detail") or "",
+    } for f in sorted(findings, key=lambda x: (
+        x.get("task_id") or "", x.get("code") or "", x.get("severity") or ""))]
+    return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _format_reconcile_alert(project: str, findings: List[Dict[str, Any]],
+                            signature: str, limit: int = 12) -> str:
+    lines = [
+        f"Reconcile alert for project `{project}`: {len(findings)} actionable finding(s).",
+        f"signature={signature}",
+    ]
+    for f in findings[:limit]:
+        task = f.get("task_id") or "board"
+        lines.append(f"- [{f.get('severity')}] {task} {f.get('code')}: {f.get('detail')}")
+    if len(findings) > limit:
+        lines.append(f"- ... {len(findings) - limit} more; run reconcile(project={project!r}) for full detail.")
+    lines.append("Treat this as a Switchboard-owned drift interrupt: fix provenance, release stale claims, or document the exception.")
+    return "\n".join(lines)
+
+
 def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Local drift report for board provenance.
 
@@ -3035,6 +3068,35 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                                  "code": "progress_without_pushed_head",
                                  "detail": "Task is In Progress with no reported pushed head SHA."})
             _upsert_git_state(c, task["task_id"], {"last_reconciled_at": now})
+        stale_task_claims = c.execute(
+            "SELECT id, task_id, agent_id, expires_at FROM task_claims "
+            "WHERE status='active' AND expires_at<=? ORDER BY expires_at",
+            (now,),
+        ).fetchall()
+        for claim in stale_task_claims:
+            findings.append({"severity": "medium", "task_id": claim["task_id"],
+                             "code": "stale_task_claim",
+                             "detail": f"Active task claim {claim['id']} by {claim['agent_id']} expired without completion or abandon."})
+        stale_file_leases = c.execute(
+            "SELECT id, task_id, agent_id, claimed_at, ttl_minutes FROM file_leases "
+            "WHERE released_at IS NULL ORDER BY claimed_at"
+        ).fetchall()
+        for lease in stale_file_leases:
+            expires_at = float(lease["claimed_at"] or 0) + int(lease["ttl_minutes"] or 0) * 60
+            if expires_at <= now:
+                findings.append({"severity": "medium", "task_id": lease["task_id"],
+                                 "code": "stale_file_lease",
+                                 "detail": f"File lease {lease['id']} by {lease['agent_id']} expired without release."})
+        stale_resource_leases = c.execute(
+            "SELECT id, task_id, agent_id, resource_type, claimed_at, ttl_seconds FROM resource_leases "
+            "WHERE released_at IS NULL ORDER BY claimed_at"
+        ).fetchall()
+        for lease in stale_resource_leases:
+            expires_at = float(lease["claimed_at"] or 0) + int(lease["ttl_seconds"] or 0)
+            if expires_at <= now:
+                findings.append({"severity": "medium", "task_id": lease["task_id"],
+                                 "code": "stale_resource_lease",
+                                 "detail": f"{lease['resource_type']} lease {lease['id']} by {lease['agent_id']} expired without release."})
         cursor = c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0]
     if not agreement.get("canonical_main_sha"):
         findings.append({"severity": "medium", "task_id": None,
@@ -3048,6 +3110,78 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     return {"project": project, "ok": not findings, "findings": findings,
             "activity_cursor": cursor, "checked_at": now,
             "external_checks": external_checks}
+
+
+def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
+                         alert_to: str = "switchboard/operator",
+                         actor: str = "switchboard/reconcile",
+                         min_severity: str = "medium",
+                         dedupe_window_s: int = 3600,
+                         now: Optional[float] = None) -> Dict[str, Any]:
+    """Run reconcile and send a deduped directed alert for actionable findings.
+
+    The dedupe key is project + severity floor + finding signature + time bucket, so a
+    persistent unresolved issue alerts at most once per bucket while a new drift shape alerts
+    immediately.
+    """
+    now = time.time() if now is None else float(now)
+    alert_to = (alert_to or "switchboard/operator").strip()
+    min_severity = (min_severity or "medium").strip().lower()
+    floor = _severity_value(min_severity)
+    if floor <= 0:
+        min_severity = "medium"
+        floor = _severity_value(min_severity)
+    dedupe_window_s = max(60, int(dedupe_window_s or 3600))
+    report = reconcile(project=project)
+    findings = [f for f in report["findings"]
+                if _severity_value(str(f.get("severity") or "")) >= floor]
+    if not findings:
+        return {"project": project, "ok": True, "alert_sent": False, "deduped": False,
+                "finding_count": 0, "min_severity": min_severity,
+                "checked_at": report["checked_at"], "external_checks": report["external_checks"]}
+
+    signature = _reconcile_signature(findings)
+    window = int(now // dedupe_window_s)
+    idem_key = f"reconcile-alert:{project}:{min_severity}:{alert_to}:{window}:{signature}"
+    payload = {"project": project, "alert_to": alert_to, "min_severity": min_severity,
+               "dedupe_window_s": dedupe_window_s, "signature": signature,
+               "finding_count": len(findings)}
+    with _conn(project) as c:
+        hit = _idem_hit(c, "reconcile_alert", idem_key, actor, payload)
+    if hit is not None:
+        if "error" in hit:
+            return hit
+        out = dict(hit)
+        out["alert_sent"] = False
+        out["deduped"] = True
+        return out
+
+    message = _format_reconcile_alert(project, findings, signature)
+    msg = send_agent_message(
+        from_agent=actor,
+        to_agent=alert_to,
+        task_id=None,
+        message=message,
+        requires_ack=False,
+        signal="reconcile_alert",
+        priority=90,
+        idem_key=f"{idem_key}:message",
+        project=project,
+    )
+    response = {"project": project, "ok": False, "alert_sent": True,
+                "deduped": False, "message_id": msg["id"],
+                "finding_count": len(findings), "min_severity": min_severity,
+                "signature": signature, "dedupe_window_s": dedupe_window_s,
+                "checked_at": report["checked_at"],
+                "external_checks": report["external_checks"],
+                "findings": findings}
+    with _conn(project) as c:
+        _idem_store(c, "reconcile_alert", idem_key, actor, payload, response)
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "reconcile.alert",
+                   json.dumps({k: v for k, v in response.items() if k != "findings"},
+                              sort_keys=True), now))
+    return response
 
 
 # ---- dev dispatches (Claude Code runner) — so the UI can show the latest run per task ----

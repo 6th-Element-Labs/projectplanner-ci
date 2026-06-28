@@ -1,0 +1,16 @@
+# /etc/systemd/system/projectplanner-reconcile.timer
+# Runs Switchboard reconcile alerts every 15 minutes.
+# To enable:
+#   sudo cp projectplanner-reconcile.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now projectplanner-reconcile.timer
+[Unit]
+Description=ProjectPlanner Switchboard reconcile alerts (every 15 minutes)
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

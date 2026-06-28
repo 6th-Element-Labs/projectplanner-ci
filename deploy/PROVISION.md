@@ -45,11 +45,13 @@ sudo chown -R ubuntu /opt/projectplanner
 ```bash
 sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-mcp.service deploy/projectplanner-monitors.service \
-  deploy/projectplanner-monitors.timer deploy/projectplanner-agent-host.service \
+  deploy/projectplanner-monitors.timer deploy/projectplanner-reconcile.service \
+  deploy/projectplanner-reconcile.timer deploy/projectplanner-agent-host.service \
   /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp
 sudo systemctl enable --now projectplanner-monitors.timer
+sudo systemctl enable --now projectplanner-reconcile.timer
 # Optional but recommended for Switchboard dogfood: consumes message-only wake intents.
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
 sudo systemctl enable --now projectplanner-agent-host
@@ -62,6 +64,7 @@ Caddy fetches the TLS cert automatically once DNS resolves. Visit https://plan.t
 curl -s http://127.0.0.1:8110/health            # {"status":"ok",...}
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
 systemctl list-timers projectplanner-monitors.timer
+systemctl list-timers projectplanner-reconcile.timer
 systemctl is-active projectplanner-agent-host
 ```
 
@@ -70,6 +73,10 @@ systemctl is-active projectplanner-agent-host
 cd /opt/projectplanner && git pull && .venv/bin/pip install -r requirements.txt
 sudo systemctl restart projectplanner projectplanner-mcp
 sudo systemctl restart projectplanner-monitors.timer
+sudo cp deploy/projectplanner-reconcile.service deploy/projectplanner-reconcile.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now projectplanner-reconcile.timer
+sudo systemctl restart projectplanner-reconcile.timer
 sudo cp deploy/projectplanner-agent-host.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-agent-host

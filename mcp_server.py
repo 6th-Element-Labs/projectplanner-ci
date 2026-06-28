@@ -1003,6 +1003,17 @@ def reconcile(project: str = "maxwell") -> str:
     return _dumps(store.reconcile(project=project))
 
 
+@mcp.tool()
+def reconcile_alerts(ctx: Context, project: str = "maxwell",
+                     alert_to: str = "switchboard/operator",
+                     min_severity: str = "medium") -> str:
+    """Run the scheduled reconcile alert path now: reconcile, filter actionable findings,
+    dedupe inside the configured window, and emit a directed agent message when needed."""
+    _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.run_reconcile_alerts(
+        project=project, alert_to=alert_to, min_severity=min_severity))
+
+
 # ---- directed agent IM (IXP write-authenticated) -----------------------
 @mcp.tool()
 def send_agent_message(from_agent: str, to_agent: str, message: str,

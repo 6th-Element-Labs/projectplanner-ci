@@ -37,6 +37,7 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
 - `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
+- `reconcile_alerts(project, alert_to?, min_severity?)`
 - `request_wake(...)`, `list_wake_intents(...)`, `claim_wake(...)`, `complete_wake(...)`,
   `cancel_wake(...)`
 - `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`
@@ -45,7 +46,8 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `get_task_tally(...)`, `get_kpi_tally(...)`
 - `reconcile(project)` — provenance drift report; always flags board contradictions like
   naked `Done` without merge SHA or agent completion evidence, and when canonical main / GitHub
-  config is available, checks recorded SHAs and PR state against git/GitHub.
+  config is available, checks recorded SHAs and PR state against git/GitHub. It also reports
+  expired active task claims and unreleased resource/file leases as stale claims.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
@@ -57,6 +59,16 @@ Agent completion rule:
 - Bootstrap repair: `jobs.py backfill_default_branch_provenance` can stamp legacy direct-to-default
   commits that already landed before PR-only flow was enforced. It is a system/reconcile action,
   not a normal agent completion path. Use `PM_BACKFILL_DRY_RUN=1` first to inspect candidates.
+
+Scheduled reconcile alert rule:
+- `jobs.py reconcile_alerts` runs `reconcile` and emits a directed `reconcile_alert` IXP message
+  when findings at or above `PM_RECON_ALERT_MIN_SEVERITY` exist.
+- The job defaults to `PM_RECON_ALERT_PROJECTS=switchboard`; set a comma-separated list or `all`
+  deliberately. Unknown project ids fail closed.
+- Alerts are deduped by project, severity floor, alert recipient, finding signature, and
+  `PM_RECON_ALERT_DEDUPE_SECONDS` bucket, so unresolved drift does not spam every timer tick.
+- Production runs this through `projectplanner-reconcile.timer`; agents/operators can trigger the
+  same path with `reconcile_alerts(project, alert_to?, min_severity?)`.
 
 Project contract rule:
 - At boot, agents should call `prepare_agent_session(...)` before registration and use the returned
