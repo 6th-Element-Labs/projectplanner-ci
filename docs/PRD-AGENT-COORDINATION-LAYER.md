@@ -152,7 +152,7 @@ The protocol is a small, stable ABI. Everything else is built from these.
 | **Durable subscription** | durable consumer / cursor | `get_lane_delta(since_cursor)` | keep; generalize to any subject |
 | **Work queue** (one-of-N) | TIBCO RVDQ / JetStream work-queue | — | `claim_next(lane)` atomic lease-on-claim |
 | **Interrupt** | IRQ checked at instruction boundary | — | `signal` consumed at tool-call boundary (hook) |
-| **Hard stop** | NMI (unmaskable) | — | runner process-kill (`/job/{id}/kill`) |
+| **Hard stop** | NMI (unmaskable) | — | managed runner kill (`/runner/v1/sessions/{runner_session_id}/kill`) with snapshot + audit |
 | **Decision record** | append-only ledger | `record_decision`/`list_decisions` | keep; index into RAG |
 | **Working state** | saved registers (for IRET) | `set_agent_state`/`get_agent_state` | keep; the "stack" for resume-after-interrupt |
 | **Work provenance** (lifecycle) | a process table (PID → state) | task `status` only (self-reported) | per-task `{branch, head_sha, pushed, pr, merged_sha, in_main, published}`; `Done` git-derived |
@@ -214,7 +214,10 @@ The protocol is a small, stable ABI. Everything else is built from these.
 - **FR-15** Before servicing an interrupt, the agent snapshots `set_agent_state` (context
   save); after, it restores and resumes (IRET). Heads-ups deliver at a `Stop`/turn boundary.
 - **FR-16** **NMI:** an operator (or watchdog on budget/time/ignored-stops) triggers
-  `kill(agent_id|job_id)` at the runner — the guaranteed, unmaskable stop.
+  `kill(runner_session_id)` at a Switchboard-managed runner — the guaranteed, unmaskable stop.
+  The runner must snapshot state, write `runner.*` audit events, and leave task/lease cleanup
+  explicit (`leave_in_progress`, `abandon_claim`, `release_leases`) rather than silently
+  declaring work complete.
 
 ### 8.6 Decisions, state, audit
 - **FR-17** `record_decision(...)` (append-only, supersede-only), `list_decisions`,

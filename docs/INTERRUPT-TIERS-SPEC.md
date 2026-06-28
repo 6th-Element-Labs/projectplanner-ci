@@ -112,6 +112,25 @@ band.
 This is the NMI tier. It is guaranteed to halt execution, but may lose local context or skip
 normal cleanup unless the runner records a crash/kill event.
 
+Runner kill is only available for **managed sessions**: processes, cloud jobs, or SDK sessions
+that Switchboard launched or that explicitly registered a `runner_session_id`. A session that
+only connects over MCP from an operator's desktop can advertise `hook_deny` or `advisory_poll`,
+but not `runner_kill`, because Switchboard has no process handle to terminate.
+
+Safety limits:
+
+- kill is project-scoped; an actor in one project cannot kill a session in another project;
+- self-kill is allowed for cleanup, but killing another agent requires `operator`,
+  `system/watchdog`, or an authenticated principal with runner-control scope;
+- the runner first sends the soft stop path when available (`stop` signal or native cancel),
+  then waits `grace_s`, then terminates;
+- `SIGKILL`/hard terminate is only used after grace expiry or when policy says immediate hard
+  stop (`reason=budget_exhausted`, `reason=secret_exposure`, `reason=operator_emergency`);
+- before kill, the runner must snapshot any available state: task id, claim id, leases, cwd,
+  branch/head SHA, last stdout/stderr tail, and adapter-reported `agent_state`;
+- after kill, task claims are not silently completed; they remain `In Progress` or are moved by
+  an explicit abandon/requeue policy recorded in the same audit trail.
+
 ### Tier 4 - `managed`
 
 The runtime is launched under Switchboard control and supports both boundary deny and runner
@@ -277,12 +296,42 @@ Runner kill is not `IXP-core`; it belongs to a deployment/runner binding.
 Minimum managed runner operations:
 
 - `POST /runner/v1/sessions` - start a supervised session.
-- `GET /runner/v1/sessions/{agent_id}` - inspect process/job state.
-- `POST /runner/v1/sessions/{agent_id}/kill` - terminate.
-- `POST /runner/v1/sessions/{agent_id}/signal` - optional native runtime signal.
+- `GET /runner/v1/sessions/{runner_session_id}` - inspect process/job state.
+- `POST /runner/v1/sessions/{runner_session_id}/kill` - terminate.
+- `POST /runner/v1/sessions/{runner_session_id}/signal` - optional native runtime signal.
 - `GET /runner/v1/events?since_cursor=` - runner lifecycle feed.
 
 The runner must authenticate writes and record all actions in the Switchboard activity log.
+
+### 8.1 Session object
+
+```json
+{
+  "project": "switchboard",
+  "agent_id": "codex/ADAPTER-2#b12e",
+  "runner_session_id": "run_01J...",
+  "runtime": "codex",
+  "pid": 41231,
+  "task_id": "ADAPTER-2",
+  "claim_id": "taskclaim-...",
+  "cwd": "/work/projectplanner",
+  "started_at": "2026-06-28T00:00:00Z",
+  "state": "running",
+  "control": {
+    "mode": "managed",
+    "hook_deny": true,
+    "runner_kill": true,
+    "state_save": "adapter",
+    "resume": "manual"
+  }
+}
+```
+
+`runner_session_id` is the stable kill target. `agent_id` is still the human-readable bus
+address and may be reused across sessions; the runner must not kill a newer session because an
+old `agent_id` matched.
+
+### 8.2 Kill request policy
 
 Kill request:
 
@@ -290,22 +339,90 @@ Kill request:
 {
   "project": "helm",
   "agent_id": "claude-code/ENGINE-11#a7c4",
+  "runner_session_id": "run_01J...",
   "reason": "operator_stop",
-  "grace_s": 5
+  "grace_s": 5,
+  "requeue": false,
+  "release_leases": false
 }
 ```
+
+Required fields:
+
+| Field | Rule |
+|---|---|
+| `project` | Required isolation boundary |
+| `runner_session_id` | Preferred kill target; required when more than one session has used the same `agent_id` |
+| `agent_id` | Bus identity; used for audit and fallback lookup |
+| `reason` | One of `operator_stop`, `stop_ack_deadline_missed`, `budget_exhausted`, `secret_exposure`, `session_stuck`, `self_cleanup` |
+| `grace_s` | 0-60 seconds; default 5 |
+| `requeue` | If true, abandon the active task claim after kill |
+| `release_leases` | If true, release leases held by this agent after kill |
 
 Kill response:
 
 ```json
 {
   "agent_id": "claude-code/ENGINE-11#a7c4",
+  "runner_session_id": "run_01J...",
   "status": "killed",
   "signal": "SIGTERM",
   "escalated_signal": "SIGKILL",
-  "killed_at": "2026-06-28T00:00:00Z"
+  "killed_at": "2026-06-28T00:00:00Z",
+  "snapshot_id": "snapshot_01J...",
+  "claim_action": "left_in_progress",
+  "leases_action": "left_held_until_ttl"
 }
 ```
+
+### 8.3 Mandatory audit events
+
+Every runner operation writes activity rows, even when the agent process is already wedged:
+
+| Event | When |
+|---|---|
+| `runner.session_started` | Session launch/register under runner control |
+| `runner.stop_requested` | Operator/watchdog requests soft stop or hard kill |
+| `runner.state_snapshot` | Runner captures cwd, branch, claim, leases, stdout/stderr tail |
+| `runner.killed` | Process/session terminated |
+| `runner.kill_failed` | Runner could not terminate or could not identify the target |
+| `runner.claim_abandoned` | Optional requeue policy abandoned the active claim |
+| `runner.leases_released` | Optional cleanup released leases |
+
+Kill audit payload:
+
+```json
+{
+  "kind": "runner.killed",
+  "project": "switchboard",
+  "agent_id": "codex/ADAPTER-2#b12e",
+  "runner_session_id": "run_01J...",
+  "task_id": "ADAPTER-2",
+  "claim_id": "taskclaim-...",
+  "reason": "stop_ack_deadline_missed",
+  "actor": "switchboard/monitor",
+  "grace_s": 5,
+  "signal": "SIGTERM",
+  "escalated_signal": "SIGKILL",
+  "snapshot_id": "snapshot_01J..."
+}
+```
+
+### 8.4 Requeue and cleanup policy
+
+Default is conservative: killing a process **does not** imply the work is safe to requeue and
+does not imply file leases are safe to release. The task remains visible as interrupted until
+an operator or verifier chooses one:
+
+| Policy | Effect |
+|---|---|
+| `leave_in_progress` | Default; preserves forensic state |
+| `abandon_claim` | Releases task claim and returns task to scheduler |
+| `release_leases` | Releases resource leases after snapshot |
+| `archive_session` | Keeps task state but hides dead runner from active sessions |
+
+Automatic `abandon_claim` is allowed only when the runner proves no unpushed/local-only work
+exists or when the killed session was launched in a disposable worktree.
 
 ---
 
@@ -362,4 +479,3 @@ Interrupt enforcement is product-ready when:
 - stop/redirect status is visible to both sender and operator;
 - budget governor can use the same signal path;
 - docs and UI never imply mid-token interruption.
-

@@ -47,6 +47,12 @@ Durable ack rule:
   acked messages and fires timed-out monitors. The production host should run
   `jobs.py sweep_monitors` through `projectplanner-monitors.timer`.
 
+Runner kill rule:
+- Runner kill is outside `IXP-core`. Only Switchboard-managed sessions with a
+  `runner_session_id` may advertise `runner_kill=true`.
+- Kill requests target the runner session, snapshot state first, write `runner.*` audit events,
+  and do not silently mark work complete. See `docs/INTERRUPT-TIERS-SPEC.md`.
+
 ## Connect
 
 **Claude Code (CLI):**
