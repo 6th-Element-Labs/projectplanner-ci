@@ -35,6 +35,7 @@
 const TeepPlan = {
     plan: null,
     tasks: [],          // flattened: every task + _wsId / _wsName
+    tally: null,        // project-level spend/outcome/KPI rollup
     wsMeta: {},         // workstream_id -> {name, lead_org}
     gantt: null,        // ApexCharts instance
     ganttMode: 'task',  // default 'task' (per-task detail) · 'workstream' = 12-bar overview
@@ -114,6 +115,7 @@ const TeepPlan = {
             if (!res.ok) throw new Error(`HTTP ${res.status} loading the board`);
             this.plan = await res.json();
             try { this.people = (await (await fetch('api/people')).json()).people || []; } catch (e) { this.people = []; }
+            try { this.tally = await (await fetch(`tally/v1/project?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`)).json(); } catch (e) { this.tally = null; }
         } catch (err) {
             this.showError(err.message);
             return;
@@ -131,6 +133,7 @@ const TeepPlan = {
         this.renderEpics();
         this.renderTables();
         this.renderExec();
+        this.renderTallyPulse();
         this.wireEvents();
         this.setupGantt();
         this.loadSignals();
@@ -197,6 +200,54 @@ const TeepPlan = {
         return String(s).replace(/[&<>"']/g, (c) => (
             { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
         ));
+    },
+    money(v) {
+        if (v === null || v === undefined || v === '') return '—';
+        const n = Number(v);
+        if (!isFinite(n)) return '—';
+        return '$' + n.toLocaleString(undefined, { maximumFractionDigits: n >= 100 ? 0 : 2 });
+    },
+    compact(v) {
+        const n = Number(v || 0);
+        return n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    },
+    taskTally(id) {
+        const rows = (this.tally && this.tally.by_task) || [];
+        return rows.find((x) => x.task_id === id) || null;
+    },
+    tallyMini(tally) {
+        if (!tally) return '';
+        const spend = tally.spend || {};
+        const outcomes = tally.outcomes || {};
+        const cost = Number(spend.cost_usd || 0);
+        const verified = Number(outcomes.verified || 0);
+        if (!cost && !verified) return '';
+        const bits = [];
+        if (cost) bits.push(`<span title="Tally spend"><i class="ti ti-cash me-1"></i>${this.money(cost)}</span>`);
+        if (verified) bits.push(`<span title="Verified outcomes"><i class="ti ti-target-arrow me-1"></i>${this.compact(verified)}</span>`);
+        const cpo = tally.unit_cost && tally.unit_cost.cost_per_verified_outcome;
+        if (cpo != null) bits.push(`<span title="Cost per verified outcome">${this.money(cpo)}/outcome</span>`);
+        return bits.join(' · ');
+    },
+    tallyDetailHtml(tally) {
+        if (!tally) return `<div class="text-secondary small mb-3">No spend or outcomes recorded.</div>`;
+        const spend = tally.spend || {};
+        const outcomes = tally.outcomes || {};
+        const unit = tally.unit_cost || {};
+        const kpis = tally.kpis || [];
+        const metric = (label, value, sub, icon) => `<div class="col-6 col-lg-3"><div class="card card-sm"><div class="card-body p-3">
+            <div class="subheader text-secondary"><i class="ti ti-${icon} me-1"></i>${label}</div>
+            <div class="h2 mb-0">${value}</div>
+            <div class="text-secondary small">${sub}</div>
+        </div></div></div>`;
+        const kpiLine = kpis.length ? `<div class="small text-secondary mt-2">${kpis.map((k) =>
+            `${this.esc(k.name || k.kpi_id || 'KPI')}: ${this.compact(k.verified_contribution || 0)} ${this.esc(k.unit || '')}`).join(' · ')}</div>` : '';
+        return `<div class="row g-2 mb-2">
+            ${metric('Spend', this.money(spend.cost_usd || 0), `${this.compact(spend.total_tokens || 0)} tokens`, 'cash')}
+            ${metric('Verified', this.compact(outcomes.verified || 0), `${this.compact(outcomes.proposed || 0)} proposed`, 'target-arrow')}
+            ${metric('Cost / outcome', this.money(unit.cost_per_verified_outcome), 'verified only', 'receipt-2')}
+            ${metric('KPI movement', this.compact(tally.verified_kpi_contribution || 0), `${kpis.length} linked KPI${kpis.length === 1 ? '' : 's'}`, 'chart-arrows-vertical')}
+        </div>${kpiLine}`;
     },
     badge(text, color, light) {
         const cls = light === false ? `bg-${color}` : `bg-${color}-lt`;
@@ -338,6 +389,8 @@ const TeepPlan = {
         const done = t.status === 'Done';
         const sc = this.STATUS_COLOR[t.status] || 'secondary';
         const deps = (t.depends_on || []).length;
+        const tally = this.taskTally(t.task_id);
+        const econ = this.tallyMini(tally);
         const meta = [];
         if (t.owner_org) meta.push(this.esc(t.owner_org));
         if (t.effort_days != null) meta.push(this.esc(t.effort_days) + 'd');
@@ -359,6 +412,7 @@ const TeepPlan = {
                             ${t.is_blocking ? '<span class="text-red lh-1" title="Blocking"><i class="ti ti-alert-triangle-filled"></i></span>' : ''}
                             ${t.assignee ? `<span class="avatar avatar-xs ms-auto" title="${this.esc(t.assignee)}">${this.esc(this.initials(t.assignee))}</span>` : ''}
                         </div>
+                        ${econ ? `<div class="text-secondary small mt-2 border-top pt-2">${econ}</div>` : ''}
                     </div>
                 </div>
             </a>`;
@@ -753,6 +807,7 @@ const TeepPlan = {
         const badgeList = (arr, icon) => (arr && arr.length) ? arr.map((x) => `<span class="badge bg-secondary-lt me-1"><i class="ti ti-${icon} me-1"></i>${this.esc(x)}</span>`).join('') : '<span class="text-secondary">none</span>';
         const blockArr = this.tasks.filter((x) => (x.depends_on || []).includes(t.task_id)).map((x) => x.task_id);
         const riskHtml = t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High</span>' : (t.risk_level ? this.esc(t.risk_level) : '—');
+        const tally = this.taskTally(t.task_id);
         document.getElementById('task-modal-title').innerHTML =
             `<span class="status-dot bg-${sc} me-2"></span><span class="text-secondary font-monospace fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}${t.is_blocking ? ' <span class="badge bg-red-lt ms-2"><i class="ti ti-alert-triangle me-1"></i>Blocking</span>' : ''}`;
         document.getElementById('task-modal-body').innerHTML = `
@@ -766,6 +821,8 @@ const TeepPlan = {
                 <div class="tab-pane fade show active" id="m-details" role="tabpanel">
                     <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
                     <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(t.status || '—')} · ${pct}% complete</div>
+                    <div class="subheader mb-2">Economics</div>
+                    ${this.tallyDetailHtml(tally)}
                     <div class="subheader mb-2">Properties</div>
                     <div class="datagrid mb-3">
                         <div class="datagrid-item"><div class="datagrid-title">Status</div>
@@ -1756,6 +1813,7 @@ const TeepPlan = {
 
     async initPulse() {
         try { this.notifyStatus = await (await fetch('api/notify/status')).json(); } catch (e) { /* dry-run */ }
+        this.renderTallyPulse();
         try {
             const data = await (await fetch('api/digests')).json();
             const ds = data.digests || [];
@@ -1764,6 +1822,57 @@ const TeepPlan = {
                 this.renderDigestHistory(ds.slice(1));
             }
         } catch (e) { /* keep the empty hint */ }
+    },
+
+    renderTallyPulse() {
+        const el = document.getElementById('tally-pulse');
+        if (!el) return;
+        const tally = this.tally || {};
+        const totals = tally.totals || {};
+        const spend = totals.spend || {};
+        const unit = totals.unit_cost || {};
+        const kpiUnitCost = unit.cost_per_kpi_contribution_unit != null ? this.money(unit.cost_per_kpi_contribution_unit) + ' / unit' : '—';
+        const ws = (tally.by_workstream || []).filter((w) => (w.spend || {}).cost_usd || w.verified_outcomes).slice(0, 6);
+        const kpis = (tally.kpis || []).filter((k) => k.verified_contribution || ((k.spend || {}).cost_usd)).slice(0, 5);
+        const metric = (label, value, sub, icon) => `<div class="col-6 col-lg-3"><div class="card"><div class="card-body p-3">
+            <div class="subheader"><i class="ti ti-${icon} me-1"></i>${label}</div>
+            <div class="h1 mb-0 mt-1">${value}</div>
+            <div class="text-secondary small">${sub}</div>
+        </div></div></div>`;
+        const wsRows = ws.length ? ws.map((w) => `<tr>
+            <td><span class="fw-semibold">${this.esc(w.workstream_id)}</span><div class="text-secondary small">${this.esc(w.name || '')}</div></td>
+            <td class="text-end">${this.money((w.spend || {}).cost_usd || 0)}</td>
+            <td class="text-end">${this.compact(w.verified_outcomes || 0)}</td>
+            <td class="text-end">${this.money((w.unit_cost || {}).cost_per_verified_outcome)}</td>
+        </tr>`).join('') : `<tr><td colspan="4" class="text-secondary text-center py-3">No Tally records yet.</td></tr>`;
+        const kpiRows = kpis.length ? kpis.map((k) => `<tr>
+            <td><span class="fw-semibold">${this.esc((k.kpi || {}).name || 'KPI')}</span><div class="text-secondary small">${this.esc((k.kpi || {}).unit || '')}</div></td>
+            <td class="text-end">${this.compact(k.verified_contribution || 0)}</td>
+            <td class="text-end">${this.money((k.spend || {}).cost_usd || 0)}</td>
+            <td class="text-end">${this.money((k.unit_cost || {}).cost_per_contribution_unit)}</td>
+        </tr>`).join('') : `<tr><td colspan="4" class="text-secondary text-center py-3">No KPI movement yet.</td></tr>`;
+        el.innerHTML = `<div class="row row-cards mt-3 mb-3">
+            ${metric('Spend', this.money(spend.cost_usd || 0), `${this.compact(spend.total_tokens || 0)} tokens`, 'cash')}
+            ${metric('Verified outcomes', this.compact(totals.verified_outcomes || 0), `${this.compact(totals.proposed_outcomes || 0)} proposed`, 'target-arrow')}
+            ${metric('Cost / outcome', this.money(unit.cost_per_verified_outcome), 'verified only', 'receipt-2')}
+            ${metric('KPI movement', this.compact(totals.verified_kpi_contribution || 0), kpiUnitCost, 'chart-arrows-vertical')}
+        </div>
+        <div class="row row-cards mb-3">
+            <div class="col-lg-6"><div class="card">
+                <div class="card-header"><h3 class="card-title"><i class="ti ti-stack-2 me-2"></i>Workstream economics</h3></div>
+                <div class="table-responsive"><table class="table table-vcenter mb-0">
+                    <thead><tr><th>Workstream</th><th class="text-end">Spend</th><th class="text-end">Verified</th><th class="text-end">Cost / outcome</th></tr></thead>
+                    <tbody>${wsRows}</tbody>
+                </table></div>
+            </div></div>
+            <div class="col-lg-6"><div class="card">
+                <div class="card-header"><h3 class="card-title"><i class="ti ti-chart-arrows-vertical me-2"></i>KPI economics</h3></div>
+                <div class="table-responsive"><table class="table table-vcenter mb-0">
+                    <thead><tr><th>KPI</th><th class="text-end">Movement</th><th class="text-end">Spend</th><th class="text-end">Cost / unit</th></tr></thead>
+                    <tbody>${kpiRows}</tbody>
+                </table></div>
+            </div></div>
+        </div>`;
     },
 
     async genDigest() {
@@ -2321,6 +2430,9 @@ const TeepPlan = {
         const qHist = qitems.filter((it) => it.status && it.status !== 'pending').slice(0, 8);
         const inboxN = qActive.length;
         const all = this.filtered();
+        const tt = (this.tally && this.tally.totals) || {};
+        const spend = tt.spend || {};
+        const unit = tt.unit_cost || {};
 
         // --- KPI strip ----------------------------------------------------
         const kpi = (label, value, sub, red) => `
@@ -2336,6 +2448,8 @@ const TeepPlan = {
             ${kpi('Tasks', r.total_tasks, (r.total_effort_days != null ? r.total_effort_days + ' effort-days' : ''))}
             ${kpi('My open work', mine.length, 'SR · Taikun')}
             ${kpi('Blocking', blocking, 'gating other work', true)}
+            ${kpi('Spend', this.money(spend.cost_usd || 0), `${this.compact(tt.verified_outcomes || 0)} verified outcomes`)}
+            ${kpi('Cost / outcome', this.money(unit.cost_per_verified_outcome), 'verified denominator')}
             ${kpi('Inbox to triage', inboxN, inboxN ? 'awaiting confirm' : 'all clear')}
         </div>`;
 

@@ -2246,6 +2246,146 @@ def kpi_tally(kpi_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     }
 
 
+def _merge_spend_totals(target: Dict[str, Any], spend: Dict[str, Any]) -> None:
+    target["cost_usd"] = round(float(target.get("cost_usd") or 0.0) +
+                              float(spend.get("cost_usd") or 0.0), 6)
+    target["total_tokens"] = int(target.get("total_tokens") or 0) + int(spend.get("total_tokens") or 0)
+    by_source = target.setdefault("by_source", {})
+    for source, bucket in (spend.get("by_source") or {}).items():
+        dst = by_source.setdefault(source, {
+            "cost_usd": 0.0,
+            "total_tokens": 0,
+            "confidence": bucket.get("confidence"),
+        })
+        dst["cost_usd"] = round(float(dst.get("cost_usd") or 0.0) +
+                                float(bucket.get("cost_usd") or 0.0), 6)
+        dst["total_tokens"] = int(dst.get("total_tokens") or 0) + int(bucket.get("total_tokens") or 0)
+        if bucket.get("confidence"):
+            dst["confidence"] = bucket["confidence"]
+
+
+def project_tally(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Project-level economic surface for TALLY-3.
+
+    This intentionally derives from task_tally/kpi_tally so the board UI and API present the
+    same semantics as the lower-level OXP/Tally primitives: verified outcomes are the denominator,
+    proposed outcomes stay visible but do not count, and spend remains separated by source.
+    """
+    tasks = list_tasks(project=project)
+    totals = {
+        "task_count": len(tasks),
+        "tasks_with_spend": 0,
+        "tasks_with_verified_outcomes": 0,
+        "verified_outcomes": 0,
+        "proposed_outcomes": 0,
+        "rejected_outcomes": 0,
+        "superseded_outcomes": 0,
+        "verified_kpi_contribution": 0.0,
+        "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}},
+        "unit_cost": {
+            "cost_per_verified_outcome": None,
+            "cost_per_kpi_contribution_unit": None,
+        },
+    }
+    by_workstream: Dict[str, Dict[str, Any]] = {}
+    by_task: List[Dict[str, Any]] = []
+
+    for task in tasks:
+        tid = task["task_id"]
+        tally = task_tally(tid, project=project)
+        spend = tally.get("spend") or {}
+        outcomes = tally.get("outcomes") or {}
+        verified = int(outcomes.get("verified") or 0)
+        proposed = int(outcomes.get("proposed") or 0)
+        rejected = int(outcomes.get("rejected") or 0)
+        superseded = int(outcomes.get("superseded") or 0)
+        cost = float(spend.get("cost_usd") or 0.0)
+        tokens = int(spend.get("total_tokens") or 0)
+        kpi_groups = tally.get("kpis") or []
+        kpi_contribution = round(sum(float(k.get("verified_contribution") or 0.0)
+                                     for k in kpi_groups), 6)
+        _merge_spend_totals(totals["spend"], spend)
+        totals["verified_outcomes"] += verified
+        totals["proposed_outcomes"] += proposed
+        totals["rejected_outcomes"] += rejected
+        totals["superseded_outcomes"] += superseded
+        totals["verified_kpi_contribution"] = round(
+            totals["verified_kpi_contribution"] + kpi_contribution, 6)
+        if cost:
+            totals["tasks_with_spend"] += 1
+        if verified:
+            totals["tasks_with_verified_outcomes"] += 1
+
+        ws_id = task.get("_wsId") or task.get("workstream_id") or "UNKNOWN"
+        ws = by_workstream.setdefault(ws_id, {
+            "workstream_id": ws_id,
+            "name": task.get("_wsName") or task.get("workstream_name") or ws_id,
+            "task_count": 0,
+            "tasks_with_spend": 0,
+            "verified_outcomes": 0,
+            "proposed_outcomes": 0,
+            "verified_kpi_contribution": 0.0,
+            "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}},
+            "unit_cost": {"cost_per_verified_outcome": None},
+        })
+        ws["task_count"] += 1
+        if cost:
+            ws["tasks_with_spend"] += 1
+        ws["verified_outcomes"] += verified
+        ws["proposed_outcomes"] += proposed
+        ws["verified_kpi_contribution"] = round(ws["verified_kpi_contribution"] + kpi_contribution, 6)
+        _merge_spend_totals(ws["spend"], spend)
+
+        if cost or tokens or verified or proposed or rejected or superseded or kpi_groups:
+            by_task.append({
+                "task_id": tid,
+                "title": task.get("title"),
+                "workstream_id": ws_id,
+                "workstream_name": task.get("_wsName") or task.get("workstream_name"),
+                "status": task.get("status"),
+                "spend": spend,
+                "outcomes": outcomes,
+                "unit_cost": tally.get("unit_cost") or {},
+                "verified_kpi_contribution": kpi_contribution,
+                "kpis": kpi_groups,
+            })
+
+    if totals["verified_outcomes"]:
+        totals["unit_cost"]["cost_per_verified_outcome"] = round(
+            totals["spend"]["cost_usd"] / totals["verified_outcomes"], 6)
+    if totals["verified_kpi_contribution"]:
+        totals["unit_cost"]["cost_per_kpi_contribution_unit"] = round(
+            totals["spend"]["cost_usd"] / totals["verified_kpi_contribution"], 6)
+    for ws in by_workstream.values():
+        if ws["verified_outcomes"]:
+            ws["unit_cost"]["cost_per_verified_outcome"] = round(
+                ws["spend"]["cost_usd"] / ws["verified_outcomes"], 6)
+
+    with _conn(project) as c:
+        kpi_ids = [r["id"] for r in c.execute("SELECT id FROM kpis ORDER BY name").fetchall()]
+    kpis = []
+    for kpi_id in kpi_ids:
+        kt = kpi_tally(kpi_id, project=project)
+        kpis.append({
+            "kpi": kt.get("kpi"),
+            "spend": kt.get("spend"),
+            "outcomes": kt.get("outcomes"),
+            "verified_contribution": kt.get("verified_contribution"),
+            "unit_cost": kt.get("unit_cost"),
+        })
+
+    return {
+        "project": project,
+        "totals": totals,
+        "by_workstream": sorted(by_workstream.values(),
+                                key=lambda x: (-float(x["spend"]["cost_usd"] or 0.0),
+                                               x["workstream_id"])),
+        "by_task": sorted(by_task, key=lambda x: (-float(x["spend"]["cost_usd"] or 0.0),
+                                                  x["task_id"])),
+        "kpis": kpis,
+    }
+
+
 def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:
     """Active leases using an existing connection — not released and not TTL-expired."""
     rows = c.execute("SELECT * FROM file_leases WHERE released_at IS NULL").fetchall()

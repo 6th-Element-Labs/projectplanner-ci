@@ -461,6 +461,19 @@ try:
     ok(kt["verified_contribution"] == 1.0 and
        kt["unit_cost"]["cost_per_contribution_unit"] == 0.5,
        "kpi_tally reports spend per verified contribution unit")
+    pt = store.project_tally(project=P)
+    ok(pt["totals"]["spend"]["cost_usd"] == 3.0 and
+       pt["totals"]["unit_cost"]["cost_per_verified_outcome"] == 3.0,
+       "project_tally reports project-level cost per verified outcome")
+    ok(pt["totals"]["verified_kpi_contribution"] == 1.0 and
+       pt["totals"]["unit_cost"]["cost_per_kpi_contribution_unit"] == 3.0,
+       "project_tally reports cost per KPI contribution")
+    ok(any(w["workstream_id"] == "TEST" and w["verified_outcomes"] == 1
+           for w in pt["by_workstream"]),
+       "project_tally groups economics by workstream")
+    ok(any(t["task_id"] == second["task_id"] and t["outcomes"]["verified"] == 1
+           for t in pt["by_task"]),
+       "project_tally exposes task-level economics for the board surface")
     empty_done = store.complete_claim(
         next_claim["claim_id"],
         evidence={},

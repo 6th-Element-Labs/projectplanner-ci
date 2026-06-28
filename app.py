@@ -1071,6 +1071,11 @@ async def tally_kpi(kpi_id: str, project: str = Query(store.DEFAULT_PROJECT)):
     return store.kpi_tally(kpi_id, project=_proj(project))
 
 
+@app.get("/tally/v1/project")
+async def tally_project(project: str = Query(store.DEFAULT_PROJECT)):
+    return store.project_tally(project=_proj(project))
+
+
 @app.get("/ixp/v1/reconcile")
 async def ixp_reconcile(project: str = Query(store.DEFAULT_PROJECT)):
     return store.reconcile(project=_proj(project))
