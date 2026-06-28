@@ -1,9 +1,11 @@
 """SQLite store for the taikun-pm satellite — tasks + activity, seeded from a
 bundled plan snapshot. One file, zero ops (see ADR 0007). No shared DB touched."""
 import json
+import hashlib
 import os
 import sqlite3
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 DB_PATH = os.environ.get("PM_DB_PATH", os.path.join(os.path.dirname(__file__), "taikun_pm.db"))
@@ -22,6 +24,11 @@ PROJECTS = {
              "label": "Helm — Marine Nav Companion", "pretitle": "6th Element Labs · web-first chartplotter"},
 }
 DEFAULT_PROJECT = "maxwell"
+
+
+def hash_token(token: str) -> str:
+    """Stable one-way token hash for principal lookup."""
+    return hashlib.sha256(("switchboard:" + (token or "")).encode("utf-8")).hexdigest()
 
 
 def projects() -> List[Dict[str, Any]]:
@@ -135,6 +142,93 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ack_response  TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_messages_to ON agent_messages(to_agent, acked_at);
+            CREATE TABLE IF NOT EXISTS principals (
+                id            TEXT PRIMARY KEY,
+                kind          TEXT NOT NULL,
+                display_name  TEXT NOT NULL,
+                project       TEXT NOT NULL,
+                scopes        TEXT NOT NULL,
+                token_hash    TEXT NOT NULL,
+                created_at    REAL NOT NULL,
+                revoked_at    REAL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_principals_token ON principals(token_hash);
+            CREATE TABLE IF NOT EXISTS agent_presence (
+                agent_id      TEXT PRIMARY KEY,
+                runtime       TEXT NOT NULL,
+                model         TEXT,
+                lane          TEXT,
+                task_id       TEXT,
+                control       TEXT NOT NULL DEFAULT '{}',
+                principal_id  TEXT,
+                registered_at REAL NOT NULL,
+                heartbeat_at  REAL NOT NULL,
+                ttl_s         INTEGER NOT NULL DEFAULT 120
+            );
+            CREATE INDEX IF NOT EXISTS ix_presence_lane ON agent_presence(lane, heartbeat_at);
+            CREATE TABLE IF NOT EXISTS resource_leases (
+                id            TEXT PRIMARY KEY,
+                agent_id      TEXT NOT NULL,
+                principal_id  TEXT,
+                task_id       TEXT,
+                resource_type TEXT NOT NULL,
+                names         TEXT NOT NULL,
+                claimed_at    REAL NOT NULL,
+                ttl_seconds   INTEGER NOT NULL DEFAULT 1800,
+                released_at   REAL
+            );
+            CREATE INDEX IF NOT EXISTS ix_resource_leases_agent ON resource_leases(agent_id);
+            CREATE INDEX IF NOT EXISTS ix_resource_leases_type ON resource_leases(resource_type, released_at);
+            CREATE TABLE IF NOT EXISTS task_claims (
+                id             TEXT PRIMARY KEY,
+                task_id        TEXT NOT NULL,
+                agent_id       TEXT NOT NULL,
+                principal_id   TEXT,
+                status         TEXT NOT NULL,
+                claimed_at     REAL NOT NULL,
+                expires_at     REAL NOT NULL,
+                completed_at   REAL,
+                abandon_reason TEXT,
+                idem_key       TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_task_claims_active
+                ON task_claims(task_id, status, expires_at);
+            CREATE TABLE IF NOT EXISTS idempotency_keys (
+                idem_key      TEXT NOT NULL,
+                operation     TEXT NOT NULL,
+                actor         TEXT NOT NULL,
+                request_hash  TEXT NOT NULL,
+                response_json TEXT NOT NULL,
+                created_at    REAL NOT NULL,
+                PRIMARY KEY (idem_key, operation)
+            );
+            CREATE TABLE IF NOT EXISTS llm_spend (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id        TEXT,
+                source            TEXT NOT NULL,
+                confidence        TEXT NOT NULL DEFAULT 'unknown',
+                task_id           TEXT,
+                claim_id          TEXT,
+                outcome_id        TEXT,
+                agent_id          TEXT,
+                principal_id      TEXT,
+                runtime           TEXT,
+                call_site         TEXT,
+                provider          TEXT,
+                model             TEXT,
+                prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens      INTEGER NOT NULL DEFAULT 0,
+                cost_usd          REAL NOT NULL DEFAULT 0.0,
+                latency_ms        REAL,
+                status            TEXT NOT NULL DEFAULT 'ok',
+                metadata_json     TEXT NOT NULL DEFAULT '{}',
+                created_at        REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_spend_task ON llm_spend(task_id);
+            CREATE INDEX IF NOT EXISTS ix_spend_agent ON llm_spend(agent_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_spend_request
+                ON llm_spend(request_id) WHERE request_id IS NOT NULL;
             CREATE TABLE IF NOT EXISTS task_summaries (
                 task_id         TEXT PRIMARY KEY,
                 rationale       TEXT NOT NULL,
@@ -152,11 +246,20 @@ def init_db(project: str = DEFAULT_PROJECT):
         # Additive column migrations — safe to run on every startup
         for col_sql in [
             "ALTER TABLE tasks ADD COLUMN agent_state TEXT",  # JSON blob per agent
+            "ALTER TABLE agent_messages ADD COLUMN signal TEXT",
+            "ALTER TABLE agent_messages ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE agent_messages ADD COLUMN idem_key TEXT",
+            "ALTER TABLE agent_messages ADD COLUMN principal_id TEXT",
         ]:
             try:
                 c.execute(col_sql)
             except Exception:
                 pass  # column already exists
+        try:
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_idem "
+                      "ON agent_messages(idem_key) WHERE idem_key IS NOT NULL")
+        except Exception:
+            pass
 
 
 def seed_if_empty(project: str = DEFAULT_PROJECT):
@@ -361,6 +464,442 @@ def get_activity_delta(since_cursor: int = 0, lane: str = "",
     return {"cursor": new_cursor, "updates": list(by_task.values())}
 
 
+def _request_hash(payload: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _idem_hit(c: sqlite3.Connection, operation: str, idem_key: str,
+              actor: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not idem_key:
+        return None
+    row = c.execute("SELECT request_hash, response_json FROM idempotency_keys "
+                    "WHERE idem_key=? AND operation=?", (idem_key, operation)).fetchone()
+    if not row:
+        return None
+    if row["request_hash"] != _request_hash(payload):
+        return {"error": "idempotency conflict", "idem_key": idem_key, "operation": operation}
+    return json.loads(row["response_json"])
+
+
+def _idem_store(c: sqlite3.Connection, operation: str, idem_key: str,
+                actor: str, payload: Dict[str, Any], response: Dict[str, Any]) -> None:
+    if not idem_key:
+        return
+    c.execute(
+        "INSERT OR REPLACE INTO idempotency_keys"
+        "(idem_key, operation, actor, request_hash, response_json, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (idem_key, operation, actor, _request_hash(payload), json.dumps(response, sort_keys=True), time.time()),
+    )
+
+
+def append_activity(kind: str, actor: str, payload: Optional[Dict[str, Any]] = None,
+                    task_id: Optional[str] = None,
+                    project: str = DEFAULT_PROJECT) -> int:
+    with _conn(project) as c:
+        cur = c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                        "VALUES (?,?,?,?,?)",
+                        (task_id, actor, kind, json.dumps(payload or {}, sort_keys=True), time.time()))
+        return cur.lastrowid
+
+
+def create_principal(kind: str, display_name: str, token: str, scopes: List[str],
+                     principal_id: Optional[str] = None,
+                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    principal_id = principal_id or f"{kind}-{uuid.uuid4().hex[:12]}"
+    now = time.time()
+    scopes_json = json.dumps(scopes, sort_keys=True)
+    with _conn(project) as c:
+        c.execute(
+            "INSERT INTO principals(id, kind, display_name, project, scopes, token_hash, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (principal_id, kind, display_name, project, scopes_json, hash_token(token), now),
+        )
+    return {"id": principal_id, "kind": kind, "display_name": display_name,
+            "project": project, "scopes": scopes, "created_at": now}
+
+
+def get_principal_by_token(project: str, token: str) -> Optional[Dict[str, Any]]:
+    if not token:
+        return None
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM principals WHERE token_hash=?",
+                        (hash_token(token),)).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    out["scopes"] = json.loads(out.get("scopes") or "[]")
+    return out
+
+
+def revoke_principal(principal_id: str, project: str = DEFAULT_PROJECT) -> bool:
+    with _conn(project) as c:
+        cur = c.execute("UPDATE principals SET revoked_at=? WHERE id=?",
+                        (time.time(), principal_id))
+        return cur.rowcount > 0
+
+
+def register_agent(agent_id: str, runtime: str, model: str = "", lane: str = "",
+                   task_id: str = "", ttl_s: int = 120,
+                   control: Optional[Dict[str, Any]] = None,
+                   principal_id: str = "",
+                   actor: str = "system",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    ttl_s = max(10, int(ttl_s or 120))
+    control_json = json.dumps(control or {}, sort_keys=True)
+    with _conn(project) as c:
+        c.execute(
+            "INSERT OR REPLACE INTO agent_presence"
+            "(agent_id, runtime, model, lane, task_id, control, principal_id, "
+            "registered_at, heartbeat_at, ttl_s) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (agent_id, runtime, model or None, lane or None, task_id or None, control_json,
+             principal_id or None, now, now, ttl_s),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id or None, actor, "agent.registered",
+                   json.dumps({"agent_id": agent_id, "runtime": runtime, "lane": lane,
+                               "control": control or {}}, sort_keys=True), now))
+    return {"agent_id": agent_id, "runtime": runtime, "model": model or None,
+            "lane": lane or None, "task_id": task_id or None,
+            "control": control or {}, "registered_at": now,
+            "heartbeat_at": now, "expires_at": now + ttl_s, "ttl_s": ttl_s}
+
+
+def heartbeat(agent_id: str, project: str = DEFAULT_PROJECT,
+              actor: str = "system") -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        cur = c.execute("UPDATE agent_presence SET heartbeat_at=? WHERE agent_id=?",
+                        (now, agent_id))
+        row = c.execute("SELECT * FROM agent_presence WHERE agent_id=?", (agent_id,)).fetchone()
+        if cur.rowcount:
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"] if row else None, actor, "agent.heartbeat",
+                       json.dumps({"agent_id": agent_id}, sort_keys=True), now))
+    if not row:
+        return {"error": "agent not registered", "agent_id": agent_id}
+    return _presence_row(row, now=now)
+
+
+def _presence_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    ttl_s = row["ttl_s"]
+    expires_at = row["heartbeat_at"] + ttl_s
+    return {"agent_id": row["agent_id"], "runtime": row["runtime"], "model": row["model"],
+            "lane": row["lane"], "task_id": row["task_id"],
+            "control": json.loads(row["control"] or "{}"),
+            "registered_at": row["registered_at"], "heartbeat_at": row["heartbeat_at"],
+            "expires_at": expires_at, "ttl_s": ttl_s, "stale": now >= expires_at}
+
+
+def list_active_agents(lane: str = "", project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    now = time.time()
+    with _conn(project) as c:
+        if lane:
+            rows = c.execute("SELECT * FROM agent_presence WHERE lane=? ORDER BY heartbeat_at DESC",
+                             (lane,)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM agent_presence ORDER BY heartbeat_at DESC").fetchall()
+    return [p for p in (_presence_row(r, now=now) for r in rows) if not p["stale"]]
+
+
+def _active_resource_leases_in(c: sqlite3.Connection, now: float,
+                               resource_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    if resource_type:
+        rows = c.execute("SELECT * FROM resource_leases WHERE released_at IS NULL "
+                         "AND resource_type=?", (resource_type,)).fetchall()
+    else:
+        rows = c.execute("SELECT * FROM resource_leases WHERE released_at IS NULL").fetchall()
+    return [dict(r) for r in rows if now < r["claimed_at"] + r["ttl_seconds"]]
+
+
+def claim_resources(agent_id: str, resource_type: str, names: List[str],
+                    task_id: Optional[str] = None, ttl_seconds: int = 1800,
+                    principal_id: str = "", actor: str = "system",
+                    idem_key: str = "",
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    clean_names = sorted({n.strip() for n in names if n and n.strip()})
+    payload = {"agent_id": agent_id, "resource_type": resource_type, "names": clean_names,
+               "task_id": task_id, "ttl_seconds": ttl_seconds}
+    if not clean_names:
+        return {"error": "no resource names given"}
+    with _conn(project) as c:
+        hit = _idem_hit(c, "claim", idem_key, actor, payload)
+        if hit is not None:
+            return hit
+        wanted = set(clean_names)
+        for lease in _active_resource_leases_in(c, now, resource_type):
+            if lease["agent_id"] == agent_id:
+                continue
+            overlap = wanted & set(json.loads(lease["names"] or "[]"))
+            if overlap:
+                expires_at = lease["claimed_at"] + lease["ttl_seconds"]
+                response = {"conflict": lease["agent_id"], "resource_type": resource_type,
+                            "names": sorted(overlap), "task_id": lease.get("task_id"),
+                            "retry_after_seconds": max(5, int((expires_at - now) / 2))}
+                _idem_store(c, "claim", idem_key, actor, payload, response)
+                return response
+        lease_id = "lease-" + uuid.uuid4().hex[:16]
+        c.execute(
+            "INSERT INTO resource_leases(id, agent_id, principal_id, task_id, resource_type, "
+            "names, claimed_at, ttl_seconds) VALUES (?,?,?,?,?,?,?,?)",
+            (lease_id, agent_id, principal_id or None, task_id, resource_type,
+             json.dumps(clean_names), now, max(1, int(ttl_seconds or 1800))),
+        )
+        response = {"lease_id": lease_id, "agent_id": agent_id, "resource_type": resource_type,
+                    "names": clean_names, "task_id": task_id, "claimed_at": now,
+                    "expires_at": now + max(1, int(ttl_seconds or 1800))}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "lease.claimed", json.dumps(response, sort_keys=True), now))
+        _idem_store(c, "claim", idem_key, actor, payload, response)
+        return response
+
+
+def check_resources(resource_type: str, names: List[str],
+                    project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    now = time.time()
+    wanted = {n.strip() for n in names if n and n.strip()}
+    out: List[Dict[str, Any]] = []
+    with _conn(project) as c:
+        for lease in _active_resource_leases_in(c, now, resource_type):
+            for name in wanted & set(json.loads(lease["names"] or "[]")):
+                out.append({"resource_type": resource_type, "name": name,
+                            "held_by": lease["agent_id"], "lease_id": lease["id"],
+                            "task_id": lease.get("task_id"),
+                            "expires_at": lease["claimed_at"] + lease["ttl_seconds"]})
+    return sorted(out, key=lambda x: x["name"])
+
+
+def release_resource_lease(lease_id: str, actor: str = "system",
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM resource_leases WHERE id=?", (lease_id,)).fetchone()
+        if not row:
+            return {"error": "lease not found", "lease_id": lease_id}
+        if row["released_at"] is not None:
+            return {"released": False, "lease_id": lease_id, "note": "already released"}
+        c.execute("UPDATE resource_leases SET released_at=? WHERE id=?", (now, lease_id))
+        payload = {"lease_id": lease_id, "agent_id": row["agent_id"],
+                   "resource_type": row["resource_type"], "names": json.loads(row["names"] or "[]")}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (row["task_id"], actor, "lease.released", json.dumps(payload, sort_keys=True), now))
+    return {"released": True, "lease_id": lease_id}
+
+
+def list_active_resource_leases(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    now = time.time()
+    with _conn(project) as c:
+        leases = _active_resource_leases_in(c, now)
+    return [{"lease_id": l["id"], "agent_id": l["agent_id"], "task_id": l.get("task_id"),
+             "resource_type": l["resource_type"], "names": json.loads(l["names"] or "[]"),
+             "expires_at": l["claimed_at"] + l["ttl_seconds"]} for l in leases]
+
+
+def _deps_done(task: Dict[str, Any], by_id: Dict[str, Dict[str, Any]]) -> bool:
+    for dep in task.get("depends_on") or []:
+        if by_id.get(dep, {}).get("status") != "Done":
+            return False
+    return True
+
+
+def claim_next(agent_id: str, lanes: Optional[List[str]] = None,
+               capabilities: Optional[List[str]] = None,
+               max_risk: str = "", max_budget_usd: Optional[float] = None,
+               principal_id: str = "", actor: str = "system",
+               ttl_seconds: int = 1800, idem_key: str = "",
+               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Atomically claim the highest-priority unblocked task for an agent.
+
+    This is the first TXP slice: deterministic, dependency-aware, and intentionally
+    conservative. More sophisticated cost/reliability scoring can layer onto the same
+    task_claims/activity records.
+    """
+    now = time.time()
+    lane_set = {x.strip().upper() for x in (lanes or []) if x and x.strip()}
+    payload = {"agent_id": agent_id, "lanes": sorted(lane_set),
+               "capabilities": sorted(capabilities or []), "max_risk": max_risk,
+               "max_budget_usd": max_budget_usd, "ttl_seconds": ttl_seconds}
+    ready_statuses = {"Not Started", "Ready", "Todo", "Backlog"}
+    with _conn(project) as c:
+        hit = _idem_hit(c, "claim_next", idem_key, actor, payload)
+        if hit is not None:
+            return hit
+        active_claims = {
+            r["task_id"] for r in c.execute(
+                "SELECT task_id FROM task_claims WHERE status='active' AND expires_at>?",
+                (now,),
+            ).fetchall()
+        }
+        rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
+        tasks = [_task_row(r) for r in rows]
+        by_id = {t["task_id"]: t for t in tasks}
+        eligible = []
+        for t in tasks:
+            if t["task_id"] in active_claims:
+                continue
+            if t.get("status") not in ready_statuses:
+                continue
+            if lane_set and (t.get("_wsId") or "").upper() not in lane_set:
+                continue
+            if not _deps_done(t, by_id):
+                continue
+            priority = int(t.get("sort_order") or 0)
+            if t.get("is_blocking"):
+                priority -= 10000
+            eligible.append((priority, t["task_id"], t))
+        if not eligible:
+            response = {"claimed": False, "reason": "no_unblocked_work",
+                        "retry_after_seconds": 60,
+                        "cursor": c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0]}
+            _idem_store(c, "claim_next", idem_key, actor, payload, response)
+            return response
+        _, _, task = sorted(eligible, key=lambda x: (x[0], x[1]))[0]
+        claim_id = "taskclaim-" + uuid.uuid4().hex[:16]
+        lease_id = "lease-" + uuid.uuid4().hex[:16]
+        expires_at = now + max(60, int(ttl_seconds or 1800))
+        c.execute(
+            "INSERT INTO task_claims(id, task_id, agent_id, principal_id, status, claimed_at, "
+            "expires_at, idem_key) VALUES (?,?,?,?,?,?,?,?)",
+            (claim_id, task["task_id"], agent_id, principal_id or None, "active",
+             now, expires_at, idem_key or None),
+        )
+        c.execute(
+            "INSERT INTO resource_leases(id, agent_id, principal_id, task_id, resource_type, "
+            "names, claimed_at, ttl_seconds) VALUES (?,?,?,?,?,?,?,?)",
+            (lease_id, agent_id, principal_id or None, task["task_id"], "task",
+             json.dumps([task["task_id"]]), now, max(60, int(ttl_seconds or 1800))),
+        )
+        c.execute("UPDATE tasks SET status='In Progress', assignee=?, updated_at=? WHERE task_id=?",
+                  (agent_id, now, task["task_id"]))
+        payload_event = {"claim_id": claim_id, "lease_id": lease_id,
+                         "task_id": task["task_id"], "agent_id": agent_id}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task["task_id"], actor, "task.claimed",
+                   json.dumps(payload_event, sort_keys=True), now))
+        claimed_task = _task_row(c.execute("SELECT * FROM tasks WHERE task_id=?",
+                                           (task["task_id"],)).fetchone())
+        spend = task_tally(task["task_id"], project=project)
+        response = {
+            "claimed": True,
+            "claim_id": claim_id,
+            "task": claimed_task,
+            "lease": {"lease_id": lease_id, "resource_type": "task",
+                      "names": [task["task_id"]], "expires_at": expires_at},
+            "budget": {"spent_usd": spend["spend"]["cost_usd"],
+                       "remaining_usd": max_budget_usd - spend["spend"]["cost_usd"]
+                       if max_budget_usd is not None else None},
+            "recommendation": {"model_tier": "balanced",
+                               "reason": "initial deterministic dispatcher"},
+        }
+        _idem_store(c, "claim_next", idem_key, actor, payload, response)
+        return response
+
+
+def complete_claim(claim_id: str, evidence: str = "",
+                   actor: str = "system",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
+        if not row:
+            return {"error": "claim not found", "claim_id": claim_id}
+        c.execute("UPDATE task_claims SET status='completed', completed_at=? WHERE id=?",
+                  (now, claim_id))
+        c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
+                  "AND task_id=? AND agent_id=? AND released_at IS NULL",
+                  (now, row["task_id"], row["agent_id"]))
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (row["task_id"], actor, "task.claim.completed",
+                   json.dumps({"claim_id": claim_id, "evidence": evidence}, sort_keys=True), now))
+    return {"completed": True, "claim_id": claim_id, "task_id": row["task_id"]}
+
+
+def abandon_claim(claim_id: str, reason: str,
+                  actor: str = "system",
+                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
+        if not row:
+            return {"error": "claim not found", "claim_id": claim_id}
+        c.execute("UPDATE task_claims SET status='abandoned', abandon_reason=? WHERE id=?",
+                  (reason, claim_id))
+        c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
+                  "AND task_id=? AND agent_id=? AND released_at IS NULL",
+                  (now, row["task_id"], row["agent_id"]))
+        c.execute("UPDATE tasks SET status='Not Started', updated_at=? WHERE task_id=? "
+                  "AND status='In Progress'",
+                  (now, row["task_id"]))
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (row["task_id"], actor, "task.claim.abandoned",
+                   json.dumps({"claim_id": claim_id, "reason": reason}, sort_keys=True), now))
+    return {"abandoned": True, "claim_id": claim_id, "task_id": row["task_id"]}
+
+
+def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
+                 claim_id: Optional[str] = None, outcome_id: Optional[str] = None,
+                 agent_id: Optional[str] = None, principal_id: str = "",
+                 runtime: str = "", call_site: str = "", provider: str = "",
+                 model: str = "", prompt_tokens: int = 0,
+                 completion_tokens: int = 0, total_tokens: Optional[int] = None,
+                 cost_usd: float = 0.0, latency_ms: Optional[float] = None,
+                 status: str = "ok", metadata: Optional[Dict[str, Any]] = None,
+                 request_id: Optional[str] = None,
+                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    total = int(total_tokens if total_tokens is not None else prompt_tokens + completion_tokens)
+    now = time.time()
+    with _conn(project) as c:
+        if request_id:
+            old = c.execute("SELECT * FROM llm_spend WHERE request_id=?", (request_id,)).fetchone()
+            if old:
+                return _spend_row(old)
+        cur = c.execute(
+            "INSERT INTO llm_spend(request_id, source, confidence, task_id, claim_id, outcome_id, "
+            "agent_id, principal_id, runtime, call_site, provider, model, prompt_tokens, "
+            "completion_tokens, total_tokens, cost_usd, latency_ms, status, metadata_json, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (request_id, source, confidence, task_id, claim_id, outcome_id, agent_id,
+             principal_id or None, runtime or None, call_site or None, provider or None, model or None,
+             int(prompt_tokens or 0), int(completion_tokens or 0), total, float(cost_usd or 0.0),
+             latency_ms, status or "ok", json.dumps(metadata or {}, sort_keys=True), now),
+        )
+        row = c.execute("SELECT * FROM llm_spend WHERE id=?", (cur.lastrowid,)).fetchone()
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, agent_id or principal_id or "tally", "tally.usage_reported",
+                   json.dumps({"spend_id": cur.lastrowid, "source": source,
+                               "cost_usd": float(cost_usd or 0.0)}, sort_keys=True), now))
+    return _spend_row(row)
+
+
+def _spend_row(row: sqlite3.Row) -> Dict[str, Any]:
+    out = dict(row)
+    out["metadata"] = json.loads(out.pop("metadata_json") or "{}")
+    return out
+
+
+def task_tally(task_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    with _conn(project) as c:
+        rows = c.execute("SELECT * FROM llm_spend WHERE task_id=?", (task_id,)).fetchall()
+    spend = {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}}
+    for row in rows:
+        source = row["source"]
+        bucket = spend["by_source"].setdefault(source, {"cost_usd": 0.0, "total_tokens": 0,
+                                                        "confidence": row["confidence"]})
+        bucket["cost_usd"] += float(row["cost_usd"] or 0.0)
+        bucket["total_tokens"] += int(row["total_tokens"] or 0)
+        spend["cost_usd"] += float(row["cost_usd"] or 0.0)
+        spend["total_tokens"] += int(row["total_tokens"] or 0)
+    spend["cost_usd"] = round(spend["cost_usd"], 6)
+    for bucket in spend["by_source"].values():
+        bucket["cost_usd"] = round(bucket["cost_usd"], 6)
+    return {"task_id": task_id, "spend": spend,
+            "unit_cost": {"cost_per_verified_outcome": None},
+            "outcomes": {"verified": 0, "proposed": 0, "rejected": 0}}
+
+
 def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:
     """Active leases using an existing connection — not released and not TTL-expired."""
     rows = c.execute("SELECT * FROM file_leases WHERE released_at IS NULL").fetchall()
@@ -531,23 +1070,40 @@ def get_agent_state(task_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, A
 def send_agent_message(from_agent: str, to_agent: str, message: str,
                        task_id: Optional[str] = None, requires_ack: bool = False,
                        ack_deadline_minutes: Optional[int] = None,
+                       signal: Optional[str] = None, priority: int = 0,
+                       principal_id: str = "", idem_key: str = "",
                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Send a directed message from one agent to another. Returns the message record."""
     now = time.time()
     deadline = (now + ack_deadline_minutes * 60) if ack_deadline_minutes else None
+    payload = {"from_agent": from_agent, "to_agent": to_agent, "message": message,
+               "task_id": task_id, "requires_ack": requires_ack,
+               "ack_deadline_minutes": ack_deadline_minutes,
+               "signal": signal, "priority": priority}
     with _conn(project) as c:
+        hit = _idem_hit(c, "send", idem_key, from_agent, payload)
+        if hit is not None:
+            return hit
         cur = c.execute(
             "INSERT INTO agent_messages(from_agent, to_agent, task_id, message, requires_ack, "
-            "ack_deadline, sent_at) VALUES (?,?,?,?,?,?,?)",
-            (from_agent, to_agent, task_id, message, 1 if requires_ack else 0, deadline, now),
+            "ack_deadline, sent_at, signal, priority, idem_key, principal_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (from_agent, to_agent, task_id, message, 1 if requires_ack else 0, deadline, now,
+             signal or None, int(priority or 0), idem_key or None, principal_id or None),
         )
         msg_id = cur.lastrowid
-    return {"id": msg_id, "from_agent": from_agent, "to_agent": to_agent,
-            "task_id": task_id, "message": message, "requires_ack": requires_ack,
-            "ack_deadline": deadline, "sent_at": now, "acked_at": None}
+        response = {"id": msg_id, "from_agent": from_agent, "to_agent": to_agent,
+                    "task_id": task_id, "message": message, "requires_ack": requires_ack,
+                    "ack_deadline": deadline, "sent_at": now, "acked_at": None,
+                    "signal": signal, "priority": int(priority or 0)}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, from_agent, "message.sent", json.dumps(response, sort_keys=True), now))
+        _idem_store(c, "send", idem_key, from_agent, payload, response)
+        return response
 
 
 def ack_message(message_id: int, response: str = "",
+                actor: str = "system",
                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Mark a message as acknowledged by the receiving agent. Returns updated record."""
     now = time.time()
@@ -562,6 +1118,9 @@ def ack_message(message_id: int, response: str = "",
                 return dict(r) | {"note": "already acked"}
             return {"error": "message not found", "id": message_id}
         r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (r["task_id"], actor, "message.acked",
+                   json.dumps({"message_id": message_id, "response": response}, sort_keys=True), now))
     return dict(r)
 
 
@@ -569,7 +1128,8 @@ def list_unacked_messages(to_agent: str, project: str = DEFAULT_PROJECT) -> List
     """Messages directed to this agent that have not been acknowledged yet."""
     with _conn(project) as c:
         rows = c.execute(
-            "SELECT * FROM agent_messages WHERE to_agent=? AND acked_at IS NULL ORDER BY id",
+            "SELECT * FROM agent_messages WHERE to_agent=? AND acked_at IS NULL "
+            "ORDER BY priority DESC, id",
             (to_agent,),
         ).fetchall()
     return [dict(r) for r in rows]

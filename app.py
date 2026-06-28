@@ -32,6 +32,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 import agent  # noqa: E402
 import attachments  # noqa: E402
+import auth  # noqa: E402
 import digest  # noqa: E402
 import transcribe  # noqa: E402
 import dispatch  # noqa: E402
@@ -65,6 +66,43 @@ def _proj(project: str) -> str:
     if project not in store.PROJECTS:
         raise HTTPException(400, f"unknown project: {project}")
     return project
+
+
+def _principal(request: Request, project: str, scopes=("write:ixp",), dev_actor: str = "web"):
+    try:
+        return auth.authenticate(_proj(project), auth.bearer_from_request(request), scopes, dev_actor=dev_actor)
+    except PermissionError as e:
+        status = 403 if "forbidden" in str(e) else 401
+        raise HTTPException(status, str(e))
+
+
+def _actor_from_request(request: Request, fallback: str = "user") -> str:
+    p = getattr(request.state, "principal", None)
+    return auth.actor(p) if p else fallback
+
+
+@app.middleware("http")
+async def _write_auth_boundary(request: Request, call_next):
+    """Gate state-changing web/API writes when PM_AUTH_MODE=required.
+
+    Protocol endpoints authenticate inside their handlers because their project lives in the
+    JSON body. GitHub webhooks keep their HMAC check.
+    """
+    if request.method.upper() not in {"POST", "PATCH", "DELETE"}:
+        return await call_next(request)
+    path = request.url.path
+    if path.startswith(("/ixp/", "/txp/", "/tally/")) or path == "/api/github/webhook":
+        return await call_next(request)
+    project = request.query_params.get("project") or store.DEFAULT_PROJECT
+    if project not in store.PROJECTS:
+        return JSONResponse({"detail": f"unknown project: {project}"}, status_code=400)
+    try:
+        request.state.principal = auth.authenticate(
+            project, auth.bearer_from_request(request), ("write:tasks",), dev_actor="web")
+    except PermissionError as e:
+        status = 403 if "forbidden" in str(e) else 401
+        return JSONResponse({"detail": str(e)}, status_code=status)
+    return await call_next(request)
 
 
 @app.get("/health")
@@ -104,8 +142,8 @@ async def get_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
 
 
 @app.post("/api/tasks")
-async def create_task(body: dict = Body(...), project: str = Query(...)):
-    actor = body.pop("_actor", "user")
+async def create_task(request: Request, body: dict = Body(...), project: str = Query(...)):
+    actor = _actor_from_request(request, body.pop("_actor", "user"))
     t = store.create_task(body, actor=actor, project=_proj(project))
     if not t:
         raise HTTPException(400, "workstream_id and title are required")
@@ -113,8 +151,8 @@ async def create_task(body: dict = Body(...), project: str = Query(...)):
 
 
 @app.patch("/api/tasks/{task_id}")
-async def patch_task(task_id: str, body: dict = Body(...), project: str = Query(...)):
-    actor = body.pop("_actor", "user")
+async def patch_task(request: Request, task_id: str, body: dict = Body(...), project: str = Query(...)):
+    actor = _actor_from_request(request, body.pop("_actor", "user"))
     t = store.update_task(task_id, body, actor=actor, project=_proj(project))
     if not t:
         raise HTTPException(404, "task not found")
@@ -129,11 +167,12 @@ async def delete_task(task_id: str, project: str = Query(...)):
 
 
 @app.post("/api/tasks/{task_id}/comment")
-async def comment(task_id: str, body: dict = Body(...), project: str = Query(...)):
+async def comment(request: Request, task_id: str, body: dict = Body(...), project: str = Query(...)):
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text required")
-    t = store.add_comment(task_id, body.get("actor", "user"), text, project=_proj(project))
+    t = store.add_comment(task_id, _actor_from_request(request, body.get("actor", "user")),
+                          text, project=_proj(project))
     if not t:
         raise HTTPException(404, "task not found")
     return t
@@ -546,6 +585,187 @@ async def ocr_pdf(file: UploadFile = File(...)):
     dl = f"{base}-searchable.pdf"
     return Response(content=out, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{dl}"'})
+
+
+# ---- Switchboard runtime protocol (IXP core + first TXP/OXP slices) ---------
+
+def _body_project(body: dict) -> str:
+    return _proj((body or {}).get("project") or store.DEFAULT_PROJECT)
+
+
+@app.post("/ixp/v1/register_agent")
+async def ixp_register_agent(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "agent")
+    agent_id = (body.get("agent_id") or "").strip()
+    runtime = (body.get("runtime") or "").strip()
+    if not agent_id or not runtime:
+        raise HTTPException(400, "agent_id and runtime required")
+    return store.register_agent(
+        agent_id=agent_id, runtime=runtime, model=body.get("model") or "",
+        lane=body.get("lane") or "", task_id=body.get("task") or body.get("task_id") or "",
+        ttl_s=int(body.get("ttl_s") or 120), control=body.get("control") or {},
+        principal_id=principal["id"], actor=auth.actor(principal), project=project)
+
+
+@app.post("/ixp/v1/heartbeat")
+async def ixp_heartbeat(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "agent")
+    return store.heartbeat((body.get("agent_id") or "").strip(),
+                           actor=auth.actor(principal), project=project)
+
+
+@app.get("/ixp/v1/agents")
+async def ixp_agents(project: str = Query(store.DEFAULT_PROJECT), lane: str = ""):
+    return {"agents": store.list_active_agents(lane=lane, project=_proj(project))}
+
+
+@app.post("/ixp/v1/claim")
+async def ixp_claim(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "agent")
+    names = body.get("names") or body.get("files") or []
+    if isinstance(names, str):
+        names = [x.strip() for x in names.replace("\n", ",").split(",") if x.strip()]
+    return store.claim_resources(
+        agent_id=(body.get("agent_id") or auth.actor(principal)).strip(),
+        resource_type=(body.get("resource_type") or "file").strip(),
+        names=names, task_id=body.get("task") or body.get("task_id"),
+        ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or
+                        (int(body.get("ttl_min") or 30) * 60)),
+        principal_id=principal["id"], actor=auth.actor(principal),
+        idem_key=body.get("idem_key") or "", project=project)
+
+
+@app.post("/ixp/v1/check")
+async def ixp_check(body: dict = Body(...)):
+    project = _body_project(body)
+    names = body.get("names") or body.get("files") or []
+    if isinstance(names, str):
+        names = [x.strip() for x in names.replace("\n", ",").split(",") if x.strip()]
+    return {"held": store.check_resources((body.get("resource_type") or "file").strip(),
+                                           names, project=project)}
+
+
+@app.post("/ixp/v1/release")
+async def ixp_release(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
+    return store.release_resource_lease((body.get("lease_id") or "").strip(),
+                                        actor=auth.actor(principal), project=project)
+
+
+@app.get("/ixp/v1/leases")
+async def ixp_leases(project: str = Query(store.DEFAULT_PROJECT)):
+    return {"leases": store.list_active_resource_leases(project=_proj(project))}
+
+
+@app.post("/ixp/v1/send")
+async def ixp_send(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("from_agent") or "agent")
+    return store.send_agent_message(
+        from_agent=body.get("from_agent") or auth.actor(principal),
+        to_agent=body.get("to_agent") or body.get("to") or "",
+        message=body.get("message") or "",
+        task_id=body.get("task") or body.get("task_id"),
+        requires_ack=bool(body.get("requires_ack")),
+        ack_deadline_minutes=body.get("ack_deadline_minutes"),
+        signal=body.get("signal"), priority=int(body.get("priority") or 0),
+        principal_id=principal["id"], idem_key=body.get("idem_key") or "",
+        project=project)
+
+
+@app.get("/ixp/v1/inbox")
+async def ixp_inbox(project: str = Query(store.DEFAULT_PROJECT),
+                    to_agent: str = "", unacked: bool = True, signal: str = ""):
+    msgs = store.list_unacked_messages(to_agent, project=_proj(project)) if unacked else []
+    if signal:
+        msgs = [m for m in msgs if m.get("signal") == signal]
+    return {"messages": msgs}
+
+
+@app.post("/ixp/v1/ack")
+async def ixp_ack(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
+    return store.ack_message(int(body.get("message_id") or body.get("id")),
+                             response=body.get("response") or "",
+                             actor=auth.actor(principal), project=project)
+
+
+@app.get("/ixp/v1/message_status")
+async def ixp_message_status(message_id: int, project: str = Query(store.DEFAULT_PROJECT)):
+    msg = store.get_message_status(message_id, project=_proj(project))
+    if not msg:
+        raise HTTPException(404, "message not found")
+    return msg
+
+
+@app.get("/ixp/v1/delta")
+async def ixp_delta(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
+                    since_cursor: int = 0):
+    return store.get_activity_delta(since_cursor=since_cursor, lane=lane, project=_proj(project))
+
+
+@app.post("/txp/v1/claim_next")
+async def txp_claim_next(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor=body.get("agent_id") or "agent")
+    return store.claim_next(
+        agent_id=body.get("agent_id") or auth.actor(principal),
+        lanes=body.get("lanes") or ([body.get("lane")] if body.get("lane") else []),
+        capabilities=body.get("capabilities") or [],
+        max_risk=body.get("max_risk") or "",
+        max_budget_usd=body.get("max_budget_usd"),
+        principal_id=principal["id"], actor=auth.actor(principal),
+        ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
+        idem_key=body.get("idem_key") or "", project=project)
+
+
+@app.post("/txp/v1/complete_claim")
+async def txp_complete_claim(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
+    return store.complete_claim(body.get("claim_id") or "", evidence=body.get("evidence") or "",
+                                actor=auth.actor(principal), project=project)
+
+
+@app.post("/txp/v1/abandon_claim")
+async def txp_abandon_claim(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
+    return store.abandon_claim(body.get("claim_id") or "", reason=body.get("reason") or "unspecified",
+                               actor=auth.actor(principal), project=project)
+
+
+@app.post("/tally/v1/spend/ingest")
+async def tally_spend_ingest(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor=body.get("agent_id") or "tally")
+    return store.report_usage(
+        source=body.get("source") or "agent_report",
+        confidence=body.get("confidence") or "reported",
+        task_id=body.get("task_id"), claim_id=body.get("claim_id"),
+        outcome_id=body.get("outcome_id"), agent_id=body.get("agent_id"),
+        principal_id=principal["id"], runtime=body.get("runtime") or "",
+        call_site=body.get("call_site") or "", provider=body.get("provider") or "",
+        model=body.get("model") or "", prompt_tokens=int(body.get("prompt_tokens") or 0),
+        completion_tokens=int(body.get("completion_tokens") or 0),
+        total_tokens=body.get("total_tokens"), cost_usd=float(body.get("cost_usd") or 0.0),
+        latency_ms=body.get("latency_ms"), status=body.get("status") or "ok",
+        metadata=body.get("metadata") or {}, request_id=body.get("request_id"),
+        project=project)
+
+
+@app.get("/tally/v1/task/{task_id}")
+async def tally_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    return store.task_tally(task_id, project=_proj(project))
 
 
 # ---- GitHub webhook — §1.2 board↔git auto-sync + §1.3 "main moved" notify ----

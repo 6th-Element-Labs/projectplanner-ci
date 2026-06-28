@@ -7,9 +7,9 @@ Code, etc. Runs as its own process (Streamable HTTP on 127.0.0.1:8111); Caddy ro
 https://plan.taikunai.com/mcp here. Reuses store/rag/agent in-process and shares the
 SQLite file (WAL) with the web app.
 
-Auth: reads are open. Writes are open too UNLESS PM_MCP_TOKEN is set, in which case
-the write tools require `Authorization: Bearer <PM_MCP_TOKEN>`. This matches the
-public web API today; tighten when real login lands.
+Auth: reads are open. Writes use the shared Switchboard bearer-principal path when
+PM_AUTH_MODE=required. Existing PM_MCP_TOKEN deployments keep working as an env-token
+principal; explicit principals can be created in the SQLite store.
 """
 import json
 import os
@@ -18,6 +18,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 import agent
+import auth
 import digest as digest_mod
 import intake as intake_mod
 import notify as notify_mod
@@ -63,18 +64,13 @@ def _dumps(obj) -> str:
     return json.dumps(obj, sort_keys=True)
 
 
-def _require_write(ctx):
-    """Gate writes when PM_MCP_TOKEN is set; open otherwise (matches the public web API)."""
-    token = (os.environ.get("PM_MCP_TOKEN") or "").strip()
-    if not token:
-        return
-    auth = ""
+def _require_write(ctx, project: str = "maxwell", scopes=("write:tasks",)):
+    """Gate writes through the shared Switchboard bearer-principal path."""
     try:
-        auth = ctx.request_context.request.headers.get("authorization", "") or ""
-    except Exception:
-        auth = ""
-    if auth.replace("Bearer ", "").strip() != token:
-        raise ValueError("unauthorized: provide Authorization: Bearer <PM_MCP_TOKEN>")
+        return auth.authenticate(project, auth.bearer_from_mcp_context(ctx),
+                                 scopes, dev_actor="MCP")
+    except PermissionError as e:
+        raise ValueError(str(e))
 
 
 def _dep_ids(s):
@@ -172,7 +168,7 @@ def ask_plan(question: str, project: str = "maxwell") -> str:
 
 # ---- file lease tools (open — advisory, no token required) ---------------
 @mcp.tool()
-def claim_files(agent_id: str, files: str, project: str = "maxwell",
+def claim_files(agent_id: str, files: str, ctx: Context, project: str = "maxwell",
                 task_id: str = "", ttl_minutes: int = 30) -> str:
     """Claim file paths before editing them (advisory soft lock — prevents parallel agents
     from clobbering each other). Call before writing; call release_files when done.
@@ -187,6 +183,7 @@ def claim_files(agent_id: str, files: str, project: str = "maxwell",
     file_list = [f.strip() for f in files.replace("\n", ",").split(",") if f.strip()]
     if not file_list:
         return _dumps({"error": "no files given"})
+    _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.claim_files(agent_id, file_list,
                                     task_id=task_id or None,
                                     ttl_minutes=max(1, ttl_minutes),
@@ -194,10 +191,11 @@ def claim_files(agent_id: str, files: str, project: str = "maxwell",
 
 
 @mcp.tool()
-def release_files(lease_id: str, project: str = "maxwell") -> str:
+def release_files(lease_id: str, ctx: Context, project: str = "maxwell") -> str:
     """Release a file lease when you are done editing. Pass the lease_id returned by
     claim_files. Idempotent — releasing an already-released lease returns an error but does
     not corrupt state. project selects the board ('maxwell' default, or 'helm')."""
+    _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.release_files(lease_id, project=project))
 
 
@@ -224,12 +222,146 @@ def list_active_leases(project: str = "maxwell") -> str:
     return _dumps(store.list_active_leases(project=project))
 
 
-# ---- directed agent IM (open — no token required) -----------------------
+# ---- IXP-core runtime lifecycle -----------------------------------------
+@mcp.tool()
+def register_agent(agent_id: str, runtime: str, ctx: Context, model: str = "",
+                   lane: str = "", task_id: str = "", ttl_s: int = 120,
+                   control_json: str = "{}", project: str = "maxwell") -> str:
+    """Register a live agent session. Call at session start before claiming work.
+    control_json advertises truthful control fidelity, e.g. {"mode":"advisory_poll"}."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        control = json.loads(control_json or "{}")
+    except Exception:
+        return _dumps({"error": "control_json must be a JSON object string"})
+    return _dumps(store.register_agent(
+        agent_id=agent_id, runtime=runtime, model=model, lane=lane, task_id=task_id,
+        ttl_s=ttl_s, control=control, principal_id=principal["id"],
+        actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def heartbeat(agent_id: str, ctx: Context, project: str = "maxwell") -> str:
+    """Renew presence for a registered agent session."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.heartbeat(agent_id, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def list_active_agents(project: str = "maxwell", lane: str = "") -> str:
+    """List active registered agents and their advertised control fidelity."""
+    return _dumps(store.list_active_agents(lane=lane, project=project))
+
+
+@mcp.tool()
+def claim_resource(agent_id: str, resource_type: str, names: str, ctx: Context,
+                   task_id: str = "", ttl_seconds: int = 1800,
+                   idem_key: str = "", project: str = "maxwell") -> str:
+    """Generic IXP resource claim. resource_type can be file, port, build_dir, worktree,
+    binary, branch, task, etc. names is comma/newline-separated."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    name_list = [n.strip() for n in names.replace("\n", ",").split(",") if n.strip()]
+    return _dumps(store.claim_resources(
+        agent_id=agent_id, resource_type=resource_type, names=name_list,
+        task_id=task_id or None, ttl_seconds=ttl_seconds, principal_id=principal["id"],
+        actor=auth.actor(principal), idem_key=idem_key, project=project))
+
+
+@mcp.tool()
+def check_resource(resource_type: str, names: str, project: str = "maxwell") -> str:
+    """Check whether generic IXP resources are held by active leases."""
+    name_list = [n.strip() for n in names.replace("\n", ",").split(",") if n.strip()]
+    return _dumps(store.check_resources(resource_type, name_list, project=project))
+
+
+@mcp.tool()
+def release_resource(lease_id: str, ctx: Context, project: str = "maxwell") -> str:
+    """Release a generic IXP resource lease."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.release_resource_lease(
+        lease_id, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def list_active_resource_leases(project: str = "maxwell") -> str:
+    """All active generic IXP resource leases."""
+    return _dumps(store.list_active_resource_leases(project=project))
+
+
+@mcp.tool()
+def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str = "",
+               max_risk: str = "", max_budget_usd: float = 0.0,
+               ttl_seconds: int = 1800, idem_key: str = "",
+               project: str = "maxwell") -> str:
+    """Atomically claim the next unblocked task for this agent. This is the first +TXP
+    scheduler primitive: dependency-aware, idempotent, and returns budget/model guidance."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    lane_list = [x.strip().upper() for x in lanes.replace("\n", ",").split(",") if x.strip()]
+    cap_list = [x.strip() for x in capabilities.replace("\n", ",").split(",") if x.strip()]
+    return _dumps(store.claim_next(
+        agent_id=agent_id, lanes=lane_list, capabilities=cap_list,
+        max_risk=max_risk, max_budget_usd=max_budget_usd or None,
+        principal_id=principal["id"], actor=auth.actor(principal),
+        ttl_seconds=ttl_seconds, idem_key=idem_key, project=project))
+
+
+@mcp.tool()
+def complete_claim(claim_id: str, ctx: Context, evidence: str = "",
+                   project: str = "maxwell") -> str:
+    """Mark a task claim completed and release its task lease."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.complete_claim(claim_id, evidence=evidence,
+                                      actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def abandon_claim(claim_id: str, reason: str, ctx: Context,
+                  project: str = "maxwell") -> str:
+    """Abandon a task claim, release its task lease, and return the task to the ready queue."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.abandon_claim(claim_id, reason=reason,
+                                     actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def report_usage(ctx: Context, source: str = "agent_report", confidence: str = "reported",
+                 task_id: str = "", claim_id: str = "", agent_id: str = "",
+                 runtime: str = "", provider: str = "", model: str = "",
+                 prompt_tokens: int = 0, completion_tokens: int = 0,
+                 total_tokens: int = 0, cost_usd: float = 0.0,
+                 call_site: str = "coding", request_id: str = "",
+                 metadata_json: str = "{}", project: str = "maxwell") -> str:
+    """Report usage/cost into Tally. Gateway-measured calls should use source='gateway';
+    external coding agents should use source='agent_report' and honest confidence."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        metadata = json.loads(metadata_json or "{}")
+    except Exception:
+        return _dumps({"error": "metadata_json must be a JSON object string"})
+    return _dumps(store.report_usage(
+        source=source, confidence=confidence, task_id=task_id or None,
+        claim_id=claim_id or None, agent_id=agent_id or None,
+        principal_id=principal["id"], runtime=runtime, call_site=call_site,
+        provider=provider, model=model, prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens or None, cost_usd=cost_usd,
+        metadata=metadata, request_id=request_id or None, project=project))
+
+
+@mcp.tool()
+def get_task_tally(task_id: str, project: str = "maxwell") -> str:
+    """Tally rollup for one task: spend by source, total tokens/cost, and outcome denominator."""
+    return _dumps(store.task_tally(task_id, project=project))
+
+
+# ---- directed agent IM (IXP write-authenticated) -----------------------
 @mcp.tool()
 def send_agent_message(from_agent: str, to_agent: str, message: str,
-                       project: str = "maxwell", task_id: str = "",
+                       ctx: Context, project: str = "maxwell", task_id: str = "",
                        requires_ack: bool = False,
-                       ack_deadline_minutes: int = 0) -> str:
+                       ack_deadline_minutes: int = 0,
+                       signal: str = "", priority: int = 0,
+                       idem_key: str = "") -> str:
     """Send a directed message to another agent session. Unlike add_comment (bulletin
     board, fire-and-forget), this has an ack/read-receipt so the sender can confirm
     the message landed before acting on the assumption it was received.
@@ -241,22 +373,29 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
 
     Returns the message record including its id. Pass the id to get_message_status to
     check whether the recipient has acked."""
+    principal = _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.send_agent_message(
         from_agent, to_agent, message,
         task_id=task_id or None,
         requires_ack=requires_ack,
         ack_deadline_minutes=ack_deadline_minutes or None,
+        signal=signal or None,
+        priority=priority,
+        principal_id=principal["id"],
+        idem_key=idem_key,
         project=project,
     ))
 
 
 @mcp.tool()
-def ack_message(message_id: int, project: str = "maxwell", response: str = "") -> str:
+def ack_message(message_id: int, ctx: Context, project: str = "maxwell", response: str = "") -> str:
     """Acknowledge a directed message. Call this when you have received and understood a
     message that has requires_ack=true. response is optional — include it to give the
     sender a one-line confirmation (e.g. 'seen — will rebase before merging').
     project selects the board ('maxwell' default, or 'helm')."""
-    return _dumps(store.ack_message(message_id, response=response, project=project))
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.ack_message(message_id, response=response,
+                                    actor=auth.actor(principal), project=project))
 
 
 @mcp.tool()
@@ -281,7 +420,7 @@ def get_message_status(message_id: int, project: str = "maxwell") -> str:
 @mcp.tool()
 def request_unblock(requesting_agent: str, owner_agent: str,
                     blocking_task_id: str, blocked_task_id: str,
-                    message: str, project: str = "maxwell",
+                    message: str, ctx: Context, project: str = "maxwell",
                     ack_deadline_minutes: int = 60) -> str:
     """Ask the agent working on a blocking task to unblock your work. Use this when
     your task has a direct dependency that hasn't been resolved and you need the
@@ -301,6 +440,7 @@ def request_unblock(requesting_agent: str, owner_agent: str,
       message:          what you need / why it's urgent (1-3 sentences)
       ack_deadline_minutes: how long you'll wait (default 60)
     project: 'maxwell' (default) or 'helm'."""
+    _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.request_unblock(
         requesting_agent=requesting_agent, blocking_task_id=blocking_task_id,
         blocked_task_id=blocked_task_id, message=message,
@@ -322,7 +462,7 @@ def list_unblock_requests(owner_agent: str, project: str = "maxwell") -> str:
 # ---- agent state (open — lightweight working-state scratchpad per agent) ----
 @mcp.tool()
 def set_agent_state(task_id: str, agent_id: str, state: str,
-                    project: str = "maxwell") -> str:
+                    ctx: Context, project: str = "maxwell") -> str:
     """Write your working state for a task — a small JSON object (max ~500 chars)
     capturing what you're doing, where you are, and what you plan next. Stored inside
     the task and visible to all agents via get_agent_state. Good keys to include:
@@ -336,6 +476,7 @@ def set_agent_state(task_id: str, agent_id: str, state: str,
         state_obj = json.loads(state)
     except Exception:
         return _dumps({"error": "state must be a valid JSON object string"})
+    _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.set_agent_state(task_id, agent_id, state_obj, project=project))
 
 
@@ -352,7 +493,7 @@ def get_agent_state(task_id: str, project: str = "maxwell") -> str:
 # ---- decisions log (open — append-only ADR-lite for multi-agent alignment) --
 @mcp.tool()
 def record_decision(title: str, context: str, decision: str, rationale: str,
-                    author: str, project: str = "maxwell",
+                    author: str, ctx: Context, project: str = "maxwell",
                     task_id: str = "", supersedes: int = 0) -> str:
     """Append an immutable architectural decision record so all agents share settled
     conclusions without re-litigating them. Use this when you've just chosen an
@@ -371,8 +512,9 @@ def record_decision(title: str, context: str, decision: str, rationale: str,
     Decisions are append-only. To reverse one, record a new decision with the old id
     in 'supersedes' — the old record is marked 'superseded' automatically.
     project: 'maxwell' (default) or 'helm'."""
+    principal = _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.record_decision(
-        task_id=task_id or None, author=author, title=title,
+        task_id=task_id or None, author=author or auth.actor(principal), title=title,
         context=context, decision=decision, rationale=rationale,
         supersedes=supersedes or None, project=project,
     ))
@@ -399,7 +541,7 @@ def get_decision(decision_id: int, project: str = "maxwell") -> str:
     return _dumps(r) if r else "decision not found"
 
 
-# ---- write tools (gated by PM_MCP_TOKEN when set) ------------------------
+# ---- task write tools (Switchboard bearer-principal authenticated) -------
 @mcp.tool()
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", assignee: str = "",
@@ -409,9 +551,10 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
     """Update only the fields you pass on a task. status: Not Started|In Progress|Blocked|Done;
     dates: YYYY-MM-DD; is_blocking: 'true'/'false'. depends_on: comma/space-separated task ids that
     REPLACE this task's dependency list (e.g. 'TOOLS-7, SHELL-1'); pass 'none' to clear it (for an
-    incremental edge use add_dependency/remove_dependency). Audited as actor 'MCP'.
+    incremental edge use add_dependency/remove_dependency). Audited as the authenticated actor.
     project selects the board ('maxwell' default, or 'helm') — writes go ONLY to that board."""
-    _require_write(ctx)
+    principal = _require_write(ctx, project)
+    actor_name = auth.actor(principal)
     fields = {}
     for k, v in (("title", title), ("description", description), ("status", status),
                  ("owner_org", owner_org), ("owner_person_or_role", owner_person_or_role),
@@ -430,7 +573,7 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
         fields["depends_on"] = new_deps
     if not fields:
         return "no fields to update"
-    t = store.update_task(task_id, fields, actor="MCP", project=project)
+    t = store.update_task(task_id, fields, actor=actor_name, project=project)
     return _dumps(agent._task_brief(t)) if t else "no such task"
 
 
@@ -442,7 +585,8 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
     """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm). depends_on:
     comma/space-separated task ids this task dependsOn (e.g. 'BOAT-1, WX-10'). Returns the created task.
     Actor 'MCP'. project selects the board ('maxwell' default, or 'helm')."""
-    _require_write(ctx)
+    principal = _require_write(ctx, project)
+    actor_name = auth.actor(principal)
     deps = _dep_ids(depends_on)
     unknown = _unknown_ids(deps, project)
     if unknown:   # FAIL LOUD: refuse to create a task carrying edges to non-existent tasks
@@ -452,7 +596,7 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
             "owner_org": owner_org or None, "owner_person_or_role": owner_person_or_role or None,
             "status": status or None, "phase": phase or None, "risk_level": risk_level or None,
             "depends_on": deps}
-    t = store.create_task(data, actor="MCP", project=project)
+    t = store.create_task(data, actor=actor_name, project=project)
     return _dumps(agent._task_brief(t)) if t else "workstream_id and title required"
 
 
@@ -460,8 +604,8 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
 def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell") -> str:
     """Add a note to a task's activity log (audited as actor 'MCP').
     project selects the board ('maxwell' default, or 'helm')."""
-    _require_write(ctx)
-    t = store.add_comment(task_id, "MCP", text, project=project)
+    principal = _require_write(ctx, project)
+    t = store.add_comment(task_id, auth.actor(principal), text, project=project)
     return "ok" if t else "no such task"
 
 
@@ -473,7 +617,8 @@ def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "
     task the whole call is REJECTED with an error and nothing is written (a dependency to a
     non-existent task is a broken graph edge) — fix the id or create the target first, then retry.
     project selects the board ('maxwell' default, or 'helm')."""
-    _require_write(ctx)
+    principal = _require_write(ctx, project)
+    actor_name = auth.actor(principal)
     add = _dep_ids(depends_on)
     if not add:
         return "no dependency ids given"
@@ -488,7 +633,7 @@ def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "
     for d in add:
         if d not in merged:
             merged.append(d)
-    store.update_task(task_id, {"depends_on": merged}, actor="MCP", project=project)
+    store.update_task(task_id, {"depends_on": merged}, actor=actor_name, project=project)
     return _dumps({"task_id": task_id, "depends_on": merged})
 
 
@@ -497,7 +642,8 @@ def remove_dependency(task_id: str, depends_on: str, ctx: Context, project: str 
     """Remove one or more dependency edges from a task (comma/space-separated ids). Reports which ids
     were actually removed vs not present — a no-op removal is SURFACED, not silently swallowed.
     project selects the board ('maxwell' default, or 'helm')."""
-    _require_write(ctx)
+    principal = _require_write(ctx, project)
+    actor_name = auth.actor(principal)
     rm = _dep_ids(depends_on)
     if not rm:
         return "no dependency ids given"
@@ -507,7 +653,7 @@ def remove_dependency(task_id: str, depends_on: str, ctx: Context, project: str 
     cur = list(t.get("depends_on") or [])
     rmset = set(rm)
     merged = [d for d in cur if d not in rmset]
-    store.update_task(task_id, {"depends_on": merged}, actor="MCP", project=project)
+    store.update_task(task_id, {"depends_on": merged}, actor=actor_name, project=project)
     res = {"task_id": task_id, "depends_on": merged, "removed": [d for d in cur if d in rmset]}
     not_present = [d for d in rm if d not in cur]
     if not_present:   # surface the no-op rather than pretend it did something
@@ -537,9 +683,9 @@ def dispatch_to_claude_code(task_id: str, ctx: Context) -> str:
     that opens a PR on a `claude/<task>` branch — never main — and is watchable in the desktop/
     mobile apps. Returns {dispatched, session_url, ...}. Records the session link on the task.
     No-op with a clear reason until the routine is configured on the plan host."""
-    _require_write(ctx)
+    principal = _require_write(ctx)
     import dispatch as dispatch_mod
-    return _dumps(dispatch_mod.dispatch(task_id, actor="MCP"))
+    return _dumps(dispatch_mod.dispatch(task_id, actor=auth.actor(principal)))
 
 
 @mcp.tool()
