@@ -453,6 +453,12 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
   yet — and **should not be** until a real adopter is pulling for them. Writing them now is
   speculative surface area; the minimal core is what wins adoption. *Trigger: first adopter
   asking for dispatch or cost accounting.*
+  - *Design note (carry into the OXP spec):* model **Tally/OXP as a read-side projection
+    over the append-only activity log — a metering tap, not new mutating wire ops.** Cost/
+    outcome accounting *observes* every layer (a management plane, not a stack layer), so the
+    `actor`/timestamp/idempotency discipline `IXP-core` already mandates is what makes it
+    possible for free. (`TXP`'s `claim_next` is the opposite — it builds *on* the lease
+    primitive, a true layer above the core.)
 
 ### Strategic risks
 
