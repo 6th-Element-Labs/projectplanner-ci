@@ -36,7 +36,7 @@ TOOLS = [
                        "matches. Use to find tasks by workstream, status, owner person, blocking flag, or text.",
         "parameters": {"type": "object", "properties": {
             "workstream": {"type": "string", "description": "workstream id, e.g. SSO, SEN, BEDROCK, GW"},
-            "status": {"type": "string", "enum": ["Not Started", "In Progress", "Blocked", "Done"]},
+            "status": {"type": "string", "enum": ["Not Started", "In Progress", "In Review", "Blocked", "Done"]},
             "owner_person": {"type": "string", "description": "substring match on owner_person_or_role"},
             "blocking": {"type": "boolean"},
             "query": {"type": "string", "description": "free-text match on title/description/owner"}}}}},
@@ -59,7 +59,7 @@ TOOLS = [
             "task_id": {"type": "string", "description": "which task to change (required in plan-wide chat)"},
             "title": {"type": "string"},
             "description": {"type": "string"},
-            "status": {"type": "string", "enum": ["Not Started", "In Progress", "Blocked", "Done"]},
+            "status": {"type": "string", "enum": ["Not Started", "In Progress", "In Review", "Blocked", "Done"]},
             "assignee": {"type": "string"},
             "owner_org": {"type": "string", "enum": ["Taikun", "TEEP", "Sensirion/Nubo", "IFS Merrick", "Joint"]},
             "owner_person_or_role": {"type": "string"},
@@ -81,7 +81,7 @@ TOOLS = [
                        "becomes a separate confirmable proposal. Does NOT apply — the user confirms.",
         "parameters": {"type": "object", "properties": {
             "task_ids": {"type": "array", "items": {"type": "string"}},
-            "status": {"type": "string", "enum": ["Not Started", "In Progress", "Blocked", "Done"]},
+            "status": {"type": "string", "enum": ["Not Started", "In Progress", "In Review", "Blocked", "Done"]},
             "owner_org": {"type": "string", "enum": ["Taikun", "TEEP", "Sensirion/Nubo", "IFS Merrick", "Joint"]},
             "owner_person_or_role": {"type": "string"},
             "assignee": {"type": "string"},
@@ -149,24 +149,48 @@ _PROPOSABLE = ["title", "description", "status", "assignee", "owner_org", "owner
                "entry_criteria", "exit_criteria", "deliverable"]
 
 
+def _project_voice(project: str):
+    if project == "helm":
+        return {
+            "who": "the Helm assistant",
+            "board": "the Helm marine-chartplotter board",
+            "ground": ("Ground claims in this task's description + activity (its code-audit comments "
+                       "carry file-level evidence — read them via get_task). doc_search covers the "
+                       "MAXWELL plan's docs only, so do NOT use it for Helm."),
+            "global_ground": ("Ground every answer in the BOARD above — it carries code-audit comments "
+                              "with file-level evidence (read them via get_task). doc_search covers the "
+                              "MAXWELL plan's docs only, so do NOT use it for Helm. Helm tasks have no "
+                              "dates, so ignore overdue/schedule questions."),
+        }
+    if project == "switchboard":
+        return {
+            "who": "Switchboard",
+            "board": "the Switchboard dogfood board for the agent coordination layer",
+            "ground": ("Ground claims in this task's description + activity and the live board state. "
+                       "doc_search covers the MAXWELL plan's docs only, so do NOT use it for Switchboard."),
+            "global_ground": ("Ground every answer in the BOARD above and task activity (read full tasks "
+                              "via get_task). doc_search covers the MAXWELL plan's docs only, so do NOT "
+                              "use it for Switchboard."),
+        }
+    return {
+        "who": "Maxwell",
+        "board": "the TEEP Barnett project board",
+        "ground": "ALWAYS ground claims about the project in the plan via doc_search before stating them.",
+        "global_ground": ("ALWAYS ground project claims in the plan docs via doc_search before asserting them. "
+                          "Overdue = finish_date before today and status not Done."),
+    }
+
+
 def _system(task, project="maxwell"):
     deps = ", ".join(task.get("depends_on") or []) or "none"
-    is_helm = project == "helm"
-    who = "the Helm assistant" if is_helm else "Maxwell"
-    board = "the Helm marine-chartplotter board" if is_helm else "the TEEP Barnett project board"
-    ground = (
-        "Ground claims in this task's description + activity (its code-audit comments carry file-level "
-        "evidence — read them via get_task). doc_search covers the MAXWELL plan's docs only, so do NOT "
-        "use it for Helm."
-        if is_helm else
-        "ALWAYS ground claims about the project in the plan via doc_search before stating them.")
+    voice = _project_voice(project)
     return (
-        f"You are {who}, an assistant embedded in {board}, scoped to ONE task.\n"
+        f"You are {voice['who']}, an assistant embedded in {voice['board']}, scoped to ONE task.\n"
         f"Task {task['task_id']}: {task.get('title')}\n"
         f"Workstream {task.get('_wsId')} ({task.get('_wsName')}) · phase {task.get('phase')} · "
         f"owner {task.get('owner_org')}/{task.get('owner_person_or_role')} · assignee {task.get('assignee') or 'unassigned'} · "
         f"status {task.get('status')} · {task.get('start_date')}..{task.get('finish_date')} · depends on: {deps}.\n\n"
-        f"Help the operator move this task forward and answer questions about it. {ground} To change the "
+        f"Help the operator move this task forward and answer questions about it. {voice['ground']} To change the "
         "task, call propose_task_update — the user must confirm; never say a change has been applied. Be "
         "concise and operator-friendly; cite the source you used when relevant."
     )
@@ -198,22 +222,14 @@ def board_summary_text(project="maxwell"):
 def _system_global(project="maxwell"):
     today = time.strftime("%Y-%m-%d")
     proj = store.get_meta("project", project=project) or "the plan"
-    is_helm = project == "helm"
-    who = "the Helm assistant" if is_helm else "Maxwell"
-    ground = (
-        "Ground every answer in the BOARD above — it carries code-audit comments with file-level "
-        "evidence (read them via get_task). doc_search covers the MAXWELL plan's docs only, so do NOT "
-        "use it for Helm. Helm tasks have no dates, so ignore overdue/schedule questions."
-        if is_helm else
-        "ALWAYS ground project claims in the plan docs via doc_search before asserting them. "
-        "Overdue = finish_date before today and status not Done.")
+    voice = _project_voice(project)
     return (
-        f"You are {who}, the assistant for {proj}, with visibility into the ENTIRE plan. "
+        f"You are {voice['who']}, the assistant for {proj}, with visibility into the ENTIRE plan. "
         f"Today is {today}.\n\n"
         "CURRENT BOARD — one line per task: ID [workstream] status :: title (owner; start..finish; flags):\n"
         f"{board_summary_text(project=project)}\n\n"
         "Answer questions about the whole plan (blockers, owners, what's ready vs blocked, what changed). "
-        f"{ground} Use get_task for a task's full description + activity, and search_tasks to filter. To "
+        f"{voice['global_ground']} Use get_task for a task's full description + activity, and search_tasks to filter. To "
         "change a task, call propose_task_update WITH its task_id — the user must Confirm; NEVER say a "
         "change was applied. Be concise and operator-friendly."
     )
@@ -262,7 +278,8 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
     """task=None runs the PLAN-WIDE agent; a task dict runs the per-task agent; pass
     `system` to override the prompt (used by triage). `max_iters` overrides the tool-loop
     budget — triage passes a larger one since inbound calls/threads need more grounding turns.
-    `project` selects the board the plan-wide agent reads/proposes against ('maxwell' default, 'helm')."""
+    `project` selects the board the plan-wide agent reads/proposes against ('maxwell' default,
+    'helm', or 'switchboard')."""
     if system is None:
         system = _system(task, project) if task else _system_global(project)
     iters = max_iters or MAX_ITERS

@@ -13,6 +13,11 @@ SEED_PATH = os.environ.get("PM_SEED_PATH", os.path.join(os.path.dirname(__file__
 HELM_DB_PATH = os.environ.get("PM_HELM_DB_PATH", os.path.join(os.path.dirname(__file__), "helm.db"))
 HELM_SEED_PATH = os.environ.get("PM_HELM_SEED_PATH",
                                 os.path.join(os.path.dirname(__file__), "seeds", "helm_seed_plan.json"))
+SWITCHBOARD_DB_PATH = os.environ.get("PM_SWITCHBOARD_DB_PATH",
+                                     os.path.join(os.path.dirname(__file__), "switchboard.db"))
+SWITCHBOARD_SEED_PATH = os.environ.get("PM_SWITCHBOARD_SEED_PATH",
+                                       os.path.join(os.path.dirname(__file__), "seeds",
+                                                    "switchboard_seed_plan.json"))
 
 # Multi-project registry. Each project is its OWN sqlite file — physical isolation, so a Helm
 # request can never read or write Maxwell's rows (no shared table, no project_id column). The
@@ -22,6 +27,9 @@ PROJECTS = {
                 "label": "Project Maxwell", "pretitle": "TEEP Barnett · TotalEnergies E&P"},
     "helm": {"db": HELM_DB_PATH, "seed": HELM_SEED_PATH,
              "label": "Helm — Marine Nav Companion", "pretitle": "6th Element Labs · web-first chartplotter"},
+    "switchboard": {"db": SWITCHBOARD_DB_PATH, "seed": SWITCHBOARD_SEED_PATH,
+                    "label": "Switchboard — Agent Coordination Layer",
+                    "pretitle": "6th Element Labs · live dogfood control plane"},
 }
 DEFAULT_PROJECT = "maxwell"
 
@@ -53,7 +61,8 @@ EDITABLE = ["title", "description", "owner_org", "owner_person_or_role", "assign
 # Plan-level sections that are not per-task (kept verbatim from the seed snapshot).
 META_SECTIONS = ["project", "generated", "schedule_start", "schedule_note", "owner_orgs",
                  "rollups", "executive_summary", "timeline_note", "critical_path",
-                 "milestones", "consolidated_risks", "consolidated_decisions", "people"]
+                 "milestones", "consolidated_risks", "consolidated_decisions", "people",
+                 "working_agreement"]
 
 # A sensible default people list for the assignee picker (the real names in the plan).
 DEFAULT_PEOPLE = ["Steve Ridder", "Taikun eng", "Darko", "Sahir", "Sebastian", "Mike",

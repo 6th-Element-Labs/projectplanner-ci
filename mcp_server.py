@@ -28,6 +28,7 @@ import store
 
 for _pid in store.PROJECTS:  # ensure every project's schema exists (the web app normally seeds them)
     store.init_db(_pid)
+    store.seed_if_empty(_pid)
 
 _PORT = int(os.environ.get("PM_MCP_PORT", "8111"))
 _PUBLIC_HOST = (os.environ.get("PM_MCP_PUBLIC_HOST") or "plan.taikunai.com").strip()
@@ -42,9 +43,11 @@ mcp = FastMCP(
     "taikun-plan",
     instructions=(
         "Multi-project planning board. Every task/board tool takes a `project` arg: 'maxwell' "
-        "(default — TEEP Barnett Phase-1 pilot) or 'helm' (the Helm marine-chartplotter build). "
+        "(default — TEEP Barnett Phase-1 pilot), 'helm' (the Helm marine-chartplotter build), "
+        "or 'switchboard' (the live dogfood board for the agent coordination layer). "
         "ALWAYS pass project='helm' to read or update Helm tasks (workstreams ENGINE/CHART/CONTRACT/"
-        "OWNSHIP/ROUTE/AIS/ALARM/WX/...); omit it (or 'maxwell') for the Maxwell plan. Writes go ONLY "
+        "OWNSHIP/ROUTE/AIS/ALARM/WX/...). ALWAYS pass project='switchboard' for Switchboard/"
+        "projectplanner product work. Omit project (or use 'maxwell') only for the Maxwell plan. Writes go ONLY "
         "to the named board — they can never cross. Use search_tasks/get_task to read, board_summary "
         "for the at-a-glance board, get_plan_signals for health, and create_task/update_task/add_comment "
         "to change a plan. ask_plan also takes project (Helm answers are board-grounded incl. "
@@ -101,9 +104,10 @@ def _unknown_ids(ids, project):
 @mcp.tool()
 def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
                  blocking: bool = False, query: str = "", project: str = "maxwell") -> str:
-    """Filter a plan's tasks. project selects the board ('maxwell' default, or 'helm'). All other
-    args optional: workstream id (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm), status
-    (Not Started|In Progress|Blocked|Done), owner_person substring, blocking, free-text query.
+    """Filter a plan's tasks. project selects the board ('maxwell' default, 'helm', or
+    'switchboard'). All other args optional: workstream id (SSO/SEN/... for Maxwell;
+    ENGINE/CHART/... for Helm; PROTO/ADAPTER/ENFORCE/... for Switchboard), status
+    (Not Started|In Progress|In Review|Blocked|Done), owner_person substring, blocking, free-text query.
     Returns a JSON list of {task_id,title,status,owner_person_or_role,workstream,...}."""
     return _dumps(agent._search_tasks({
         "workstream": workstream, "status": status, "owner_person": owner_person,
@@ -113,7 +117,7 @@ def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
 @mcp.tool()
 def get_task(task_id: str, project: str = "maxwell") -> str:
     """Full detail of one task: description, all fields, dependencies, and recent activity.
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     t = store.get_task(task_id, project=project)
     return _dumps(agent._task_brief(t, full=True)) if t else "no such task"
 
@@ -123,7 +127,8 @@ def board_summary(project: str = "maxwell") -> str:
     """Full board snapshot: project name + rollups, then one line per task.
     Use ONCE at session start for orientation. For recurring 'has anything changed?' checks
     use get_lane_delta instead — it returns only what changed and costs ~50 tokens when nothing
-    did vs ~3000-5000 tokens here. project selects the board ('maxwell' default, or 'helm')."""
+    did vs ~3000-5000 tokens here. project selects the board ('maxwell' default, 'helm',
+    or 'switchboard')."""
     return (f"Project: {store.get_meta('project', project=project)}\n"
             f"Rollups: {_dumps(store.get_meta('rollups', project=project) or {})}\n\n"
             f"{agent.board_summary_text(project=project)}")
@@ -135,8 +140,8 @@ def get_lane_delta(project: str = "maxwell", lane: str = "", since_cursor: int =
     Use this instead of board_summary in any polling loop. Costs ~50 tokens when nothing
     changed (empty updates list) vs 3000-5000 tokens for a full board_summary.
 
-    project: 'maxwell' or 'helm'. lane: workstream id to filter (e.g. 'ENGINE', 'CHART',
-    'OWNSHIP') — leave blank for all workstreams. since_cursor: the cursor value from your
+    project: 'maxwell', 'helm', or 'switchboard'. lane: workstream id to filter (e.g. 'ENGINE',
+    'CHART', 'OWNSHIP', 'ADAPTER') — leave blank for all workstreams. since_cursor: the cursor value from your
     last response; pass 0 on first call.
 
     Returns {cursor, updates: [{task_id, status, title, workstream_id, kinds}]}.
@@ -157,7 +162,7 @@ def doc_search(query: str) -> str:
 def get_plan_signals(project: str = "maxwell") -> str:
     """Derived plan health: counts + overdue/due-soon/blocked/ready tasks, critical-path slips,
     past-due decisions, and each owner's next-best 1-2 tasks. Use for 'what's slipping?' or digests.
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     return _dumps(signals.compute_plan_signals(project=project))
 
 
@@ -170,10 +175,10 @@ def get_working_agreement(project: str = "maxwell") -> str:
 
 @mcp.tool()
 def ask_plan(question: str, project: str = "maxwell") -> str:
-    """Ask the plan-wide agent a question about a board. project selects it ('maxwell' default, or
-    'helm'). For 'helm' the answer is grounded in the live board (incl. code-audit comments); for
-    'maxwell' it also grounds in the plan docs via RAG. Returns a reasoned answer (+ sources) and,
-    when relevant, a proposed task change (NOT applied — call update_task to apply it)."""
+    """Ask the plan-wide agent a question about a board. project selects it ('maxwell' default,
+    'helm', or 'switchboard'). Helm and Switchboard answers are grounded in the live board; Maxwell
+    also grounds in the plan docs via RAG. Returns a reasoned answer (+ sources) and, when relevant,
+    a proposed task change (NOT applied — call update_task to apply it)."""
     r = agent.run(None, question, project=project)
     return _dumps({"answer": r.get("answer"), "sources": r.get("sources"),
                    "proposed_change": r.get("proposal")})
@@ -207,7 +212,7 @@ def claim_files(agent_id: str, files: str, ctx: Context, project: str = "maxwell
 def release_files(lease_id: str, ctx: Context, project: str = "maxwell") -> str:
     """Release a file lease when you are done editing. Pass the lease_id returned by
     claim_files. Idempotent — releasing an already-released lease returns an error but does
-    not corrupt state. project selects the board ('maxwell' default, or 'helm')."""
+    not corrupt state. project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.release_files(lease_id, project=project))
 
@@ -219,7 +224,7 @@ def check_files(files: str, project: str = "maxwell") -> str:
     Returns a list of {file, held_by, task_id, expires_at} for files that ARE held.
     Empty list means all files are free — safe to edit without claiming first (though
     calling claim_files is strongly preferred to avoid races).
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     file_list = [f.strip() for f in files.replace("\n", ",").split(",") if f.strip()]
     if not file_list:
         return _dumps([])
@@ -231,7 +236,7 @@ def list_active_leases(project: str = "maxwell") -> str:
     """All active file leases on the board — who holds what, and when it expires.
     Use to see which agents are currently active and which files they have claimed.
     Expired and released leases are not shown.
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     return _dumps(store.list_active_leases(project=project))
 
 
@@ -414,7 +419,7 @@ def ack_message(message_id: int, ctx: Context, project: str = "maxwell", respons
     """Acknowledge a directed message. Call this when you have received and understood a
     message that has requires_ack=true. response is optional — include it to give the
     sender a one-line confirmation (e.g. 'seen — will rebase before merging').
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     principal = _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.ack_message(message_id, response=response,
                                     actor=auth.actor(principal), project=project))
@@ -425,7 +430,7 @@ def list_unacked_messages(to_agent: str, project: str = "maxwell") -> str:
     """Your incoming message inbox — messages directed to you that have not been acked.
     Call at session start and after completing a task to check for coordination messages
     from other agents. to_agent: your agent-session id (e.g. 'claude/CHART-8').
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     return _dumps(store.list_unacked_messages(to_agent, project=project))
 
 
@@ -433,7 +438,7 @@ def list_unacked_messages(to_agent: str, project: str = "maxwell") -> str:
 def get_message_status(message_id: int, project: str = "maxwell") -> str:
     """Check whether a message you sent has been acked. Returns the full message record
     including acked_at and ack_response if the recipient has responded.
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     r = store.get_message_status(message_id, project=project)
     return _dumps(r) if r else "message not found"
 
@@ -461,7 +466,7 @@ def request_unblock(requesting_agent: str, owner_agent: str,
       blocked_task_id:  your task ('ROUTE-3')
       message:          what you need / why it's urgent (1-3 sentences)
       ack_deadline_minutes: how long you'll wait (default 60)
-    project: 'maxwell' (default) or 'helm'."""
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
     _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.request_unblock(
         requesting_agent=requesting_agent, blocking_task_id=blocking_task_id,
@@ -477,7 +482,7 @@ def list_unblock_requests(owner_agent: str, project: str = "maxwell") -> str:
     waiting on you. Call at session start alongside list_unacked_messages.
     Returns the same structure as list_unacked_messages but filtered to DEP REQUEST
     messages. Ack each with ack_message(request_id, response='unblocked') when done.
-    project: 'maxwell' (default) or 'helm'."""
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
     return _dumps(store.list_unblock_requests(owner_agent, project=project))
 
 
@@ -493,7 +498,7 @@ def set_agent_state(task_id: str, agent_id: str, state: str,
       "blocked_on": what you're waiting for (or null)
       "progress": e.g. "3/7 tests passing"
     state: JSON-string object. agent_id: your stable session id (e.g. 'claude/ENGINE-11').
-    project: 'maxwell' (default) or 'helm'."""
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
     try:
         state_obj = json.loads(state)
     except Exception:
@@ -508,7 +513,7 @@ def get_agent_state(task_id: str, project: str = "maxwell") -> str:
     Returns {agent_id: {state fields}, ...}. Call this before starting work on a
     task to see if another agent is already active, what files it has open, and what
     it plans next — complements list_unacked_messages for live coordination.
-    project: 'maxwell' (default) or 'helm'."""
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
     return _dumps(store.get_agent_state(task_id, project=project))
 
 
@@ -533,7 +538,7 @@ def record_decision(title: str, context: str, decision: str, rationale: str,
 
     Decisions are append-only. To reverse one, record a new decision with the old id
     in 'supersedes' — the old record is marked 'superseded' automatically.
-    project: 'maxwell' (default) or 'helm'."""
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
     principal = _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.record_decision(
         task_id=task_id or None, author=author or auth.actor(principal), title=title,
@@ -549,7 +554,7 @@ def list_decisions(project: str = "maxwell", task_id: str = "",
     Filter by task_id (decisions about that task) and/or status ('accepted',
     'superseded', 'proposed'). Returns newest-first.
     Check this at session start to know what's already been decided before
-    choosing an approach. project: 'maxwell' (default) or 'helm'."""
+    choosing an approach. project: 'maxwell' (default), 'helm', or 'switchboard'."""
     return _dumps(store.list_decisions(task_id=task_id or None,
                                       status=status, project=project))
 
@@ -558,7 +563,7 @@ def list_decisions(project: str = "maxwell", task_id: str = "",
 def get_decision(decision_id: int, project: str = "maxwell") -> str:
     """Fetch a single decision record by id. Use when list_decisions refers to a
     decision you want to read in full (context + rationale).
-    project: 'maxwell' (default) or 'helm'."""
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
     r = store.get_decision(decision_id, project=project)
     return _dumps(r) if r else "decision not found"
 
@@ -570,11 +575,11 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
                 phase: str = "", start_date: str = "", finish_date: str = "",
                 risk_level: str = "", is_blocking: str = "", depends_on: str = "",
                 project: str = "maxwell") -> str:
-    """Update only the fields you pass on a task. status: Not Started|In Progress|Blocked|Done;
+    """Update only the fields you pass on a task. status: Not Started|In Progress|In Review|Blocked|Done;
     dates: YYYY-MM-DD; is_blocking: 'true'/'false'. depends_on: comma/space-separated task ids that
     REPLACE this task's dependency list (e.g. 'TOOLS-7, SHELL-1'); pass 'none' to clear it (for an
     incremental edge use add_dependency/remove_dependency). Audited as the authenticated actor.
-    project selects the board ('maxwell' default, or 'helm') — writes go ONLY to that board."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard') — writes go ONLY to that board."""
     principal = _require_write(ctx, project)
     actor_name = auth.actor(principal)
     fields = {}
@@ -604,9 +609,10 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
                 owner_org: str = "", owner_person_or_role: str = "", status: str = "",
                 phase: str = "", risk_level: str = "", depends_on: str = "",
                 project: str = "maxwell") -> str:
-    """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm). depends_on:
+    """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm;
+    PROTO/ADAPTER/ENFORCE/... for Switchboard). depends_on:
     comma/space-separated task ids this task dependsOn (e.g. 'BOAT-1, WX-10'). Returns the created task.
-    Actor 'MCP'. project selects the board ('maxwell' default, or 'helm')."""
+    Actor 'MCP'. project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     principal = _require_write(ctx, project)
     actor_name = auth.actor(principal)
     deps = _dep_ids(depends_on)
@@ -625,7 +631,7 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
 @mcp.tool()
 def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell") -> str:
     """Add a note to a task's activity log (audited as actor 'MCP').
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     principal = _require_write(ctx, project)
     t = store.add_comment(task_id, auth.actor(principal), text, project=project)
     return "ok" if t else "no such task"
@@ -638,7 +644,7 @@ def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "
     (idempotent, deduped) — use this to wire cross-epic edges. FAIL-FAST: if ANY id is not a real
     task the whole call is REJECTED with an error and nothing is written (a dependency to a
     non-existent task is a broken graph edge) — fix the id or create the target first, then retry.
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     principal = _require_write(ctx, project)
     actor_name = auth.actor(principal)
     add = _dep_ids(depends_on)
@@ -663,7 +669,7 @@ def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "
 def remove_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "maxwell") -> str:
     """Remove one or more dependency edges from a task (comma/space-separated ids). Reports which ids
     were actually removed vs not present — a no-op removal is SURFACED, not silently swallowed.
-    project selects the board ('maxwell' default, or 'helm')."""
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     principal = _require_write(ctx, project)
     actor_name = auth.actor(principal)
     rm = _dep_ids(depends_on)

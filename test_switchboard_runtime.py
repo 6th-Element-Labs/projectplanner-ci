@@ -11,6 +11,7 @@ import tempfile
 _TMP = tempfile.mkdtemp(prefix="switchboard-runtime-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
 os.environ["PM_HELM_DB_PATH"] = os.path.join(_TMP, "helm.db")
+os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_AUTH_MODE"] = "required"
 
 import auth  # noqa: E402
@@ -20,6 +21,7 @@ P = "maxwell"
 TOKEN = "test-token"
 
 store.init_db(P)
+store.init_db("switchboard")
 principal = store.create_principal(
     kind="agent",
     display_name="codex/test",
@@ -48,6 +50,16 @@ try:
 
     p = auth.authenticate(P, TOKEN, ("write:ixp",))
     ok(p["id"] == principal["id"], "principal authenticates by bearer token")
+    project_ids = [p["id"] for p in store.projects()]
+    ok("switchboard" in project_ids, "project registry exposes the Switchboard dogfood board")
+    seeded = store.seed_if_empty("switchboard")
+    ok(seeded >= 20, "Switchboard seed loads a P0 dogfood board")
+    switch_tasks = store.list_tasks(project="switchboard")
+    ok(any(t["task_id"] == "DOGFOOD-1" for t in switch_tasks),
+       "Switchboard seed includes DOGFOOD-1")
+    switch_agreement = store.get_working_agreement("switchboard")
+    ok("codex/<TASK-ID>" in switch_agreement["branch_convention"],
+       "Switchboard working agreement serves project-specific branch convention")
     agreement = store.get_working_agreement(P)
     ok("get_working_agreement" in agreement["session_start_sequence"][0],
        "working agreement is step zero of the handshake")

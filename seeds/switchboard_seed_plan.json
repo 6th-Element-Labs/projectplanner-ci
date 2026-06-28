@@ -1,0 +1,635 @@
+{
+  "project": "Switchboard - Agent Coordination Layer Dogfood",
+  "generated": "2026-06-28",
+  "schedule_start": "2026-06-28",
+  "schedule_note": "Live dogfood board for building Switchboard with Switchboard. This project is intentionally isolated from Maxwell and Helm. It starts as an experiment: humans may still commit normally, but agents should use the working agreement, presence, claim_next, evidence-backed completion, and reconcile loop wherever possible.",
+  "owner_orgs": [
+    "6th Element Labs",
+    "Agents",
+    "Human operators"
+  ],
+  "people": [
+    "Steve Ridder",
+    "Codex",
+    "Claude Code",
+    "Cursor Agent",
+    "LangGraph Runner",
+    "Switchboard Operator"
+  ],
+  "rollups": {
+    "total_workstreams": 7,
+    "total_tasks": 24,
+    "total_effort_days": 28.5
+  },
+  "executive_summary": "Switchboard is the control plane for cross-LLM and cloud-agent collaboration: a small protocol and runtime that lets heterogeneous agents register presence, claim resources, receive interrupts, take scheduled work, report cost, and prove work through git-backed provenance. This board is the live lab for making the product coordinate its own development.",
+  "timeline_note": "P0 focuses on proving the loop end to end before treating it as production infrastructure: isolated board namespace, protocol surface, adapters, enforcement tiers, claim_next dispatch, Tally, and reconciliation. The board should expose missing primitives quickly rather than hide them behind docs.",
+  "working_agreement": {
+    "branch_convention": "codex/<TASK-ID>-<slug> or claude/<TASK-ID>-<slug>",
+    "definition_of_done": "merged to master with a recorded merge SHA; agents never self-set Done",
+    "main_writes": "PR preferred; direct master commits require a reconcile note and recorded SHA",
+    "merge_strategy": "squash or fast-forward; record the resulting master SHA",
+    "ports_doc": "docs/MCP.md",
+    "session_start_sequence": [
+      "get_working_agreement(project)",
+      "register_agent",
+      "inbox(unacked)",
+      "claim_next before first write",
+      "complete_claim with branch/head_sha/pr evidence when finished"
+    ],
+    "agent_completion_rule": "complete_claim moves work to In Review; only merge/reconcile authority sets Done"
+  },
+  "workstreams": [
+    {
+      "workstream_id": "DOGFOOD",
+      "name": "Live Dogfood Experiment",
+      "tasks": [
+        {
+          "task_id": "DOGFOOD-1",
+          "title": "Add isolated Switchboard project namespace and seed live P0 board",
+          "description": "Create a third physical project namespace for Switchboard so product-planner work can be tracked without polluting Maxwell or Helm. Seed a compact P0 board that mirrors the primitives being built: protocol, adapters, enforcement, dispatch, Tally, reconcile, and dogfood operations.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Steve Ridder + Codex",
+          "phase": "P0 Now",
+          "effort_days": 0.5,
+          "depends_on": [],
+          "entry_criteria": "Projectplanner already supports isolated project registries and seed files.",
+          "exit_criteria": "store.PROJECTS exposes switchboard; startup seeds switchboard.db from seeds/switchboard_seed_plan.json; /api/projects and MCP can address project=switchboard; tests prove the seed loads.",
+          "deliverable": "Switchboard project registry entry plus seed board.",
+          "risk_level": "Low",
+          "is_blocking": true,
+          "status": "In Review",
+          "sort_order": 100
+        },
+        {
+          "task_id": "DOGFOOD-2",
+          "title": "Deploy and verify project=switchboard on plan.taikunai.com",
+          "description": "After the registry lands, refresh the live planner service and MCP service, then verify the project switcher, board payload, MCP search_tasks, board_summary, get_working_agreement, claim_next, and reconcile all work against project=switchboard.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Switchboard Operator",
+          "phase": "P0 Next",
+          "effort_days": 0.5,
+          "depends_on": [
+            "DOGFOOD-1"
+          ],
+          "entry_criteria": "DOGFOOD-1 is merged or otherwise present on the host.",
+          "exit_criteria": "Live web and MCP endpoints show the Switchboard board and do not route Switchboard writes into Maxwell or Helm.",
+          "deliverable": "Live verification note on DOGFOOD-2.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "Not Started",
+          "sort_order": 110
+        },
+        {
+          "task_id": "DOGFOOD-3",
+          "title": "Run the first full dogfood agent session",
+          "description": "Use the Switchboard board to coordinate a real Switchboard change: get_working_agreement, register_agent, drain inbox, claim_next, complete_claim with branch/SHA/PR evidence, then reconcile. Capture every mismatch between desired and actual agent behavior.",
+          "owner_org": "Agents",
+          "owner_person_or_role": "Codex + Claude Code",
+          "phase": "P0 Next",
+          "effort_days": 1.0,
+          "depends_on": [
+            "DOGFOOD-2",
+            "RECON-1",
+            "DISPATCH-1"
+          ],
+          "entry_criteria": "Live switchboard board is reachable through MCP and has at least one ready task.",
+          "exit_criteria": "One real change is coordinated through the loop and its evidence is visible on the task.",
+          "deliverable": "Dogfood transcript and reconcile findings.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "Not Started",
+          "sort_order": 120
+        },
+        {
+          "task_id": "DOGFOOD-4",
+          "title": "Write the operator runbook for Switchboard self-coordination",
+          "description": "Document how humans and agents use the Switchboard project safely: when to claim, how to report evidence, when direct master commits are allowed, how reconcile findings get cleared, and how not to cross-write Maxwell or Helm.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Switchboard Operator",
+          "phase": "P1 Harden",
+          "effort_days": 1.0,
+          "depends_on": [
+            "DOGFOOD-3"
+          ],
+          "entry_criteria": "At least one dogfood session has exposed the actual rough edges.",
+          "exit_criteria": "A runbook exists and is referenced by the working agreement.",
+          "deliverable": "docs/SWITCHBOARD-RUNBOOK.md.",
+          "risk_level": "Low",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 130
+        },
+        {
+          "task_id": "DOGFOOD-5",
+          "title": "Backfill provenance for pre-dogfood Switchboard work",
+          "description": "Record the commits and evidence for Switchboard primitives that landed before the live dogfood board existed. This gives the new board a first ready task without pretending historical work was completed through the protocol.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Switchboard Operator",
+          "phase": "P0 Next",
+          "effort_days": 0.5,
+          "depends_on": [],
+          "entry_criteria": "Switchboard seed board exists and earlier commits are visible in git history.",
+          "exit_criteria": "Relevant pre-dogfood commits are noted on the right tasks and reconcile has a known baseline.",
+          "deliverable": "Provenance backfill comments/evidence.",
+          "risk_level": "Low",
+          "is_blocking": true,
+          "status": "Not Started",
+          "sort_order": 135
+        }
+      ]
+    },
+    {
+      "workstream_id": "PROTO",
+      "name": "Protocol Surface",
+      "tasks": [
+        {
+          "task_id": "PROTO-1",
+          "title": "Lock IXP/TXP/OXP minimum conformance profile",
+          "description": "Turn the PRD and specs into the smallest profile an adapter must satisfy: working agreement, presence, inbox, resource leases, claim_next, completion evidence, Tally reporting, and reconcile visibility.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Steve Ridder + Codex",
+          "phase": "P0 Now",
+          "effort_days": 1.0,
+          "depends_on": [],
+          "entry_criteria": "PRD, IXP, runtime adapter, claim_next, interrupt, and Tally specs exist in docs.",
+          "exit_criteria": "A conformance matrix names required, optional, and experimental operations for P0 adapters.",
+          "deliverable": "Protocol conformance profile in docs.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "In Review",
+          "sort_order": 200
+        },
+        {
+          "task_id": "PROTO-2",
+          "title": "Version protocol envelopes and compatibility policy",
+          "description": "Add explicit protocol versioning, capability negotiation, and compatibility rules so older adapters can coexist with new server features without silent breakage.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Codex",
+          "phase": "P0 Next",
+          "effort_days": 1.0,
+          "depends_on": [
+            "PROTO-1"
+          ],
+          "entry_criteria": "P0 conformance profile is written.",
+          "exit_criteria": "Every handshake response includes protocol/profile identifiers and adapters know how to fail closed on incompatible versions.",
+          "deliverable": "Versioned profile fields plus docs.",
+          "risk_level": "Medium",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 210
+        },
+        {
+          "task_id": "PROTO-3",
+          "title": "Build conformance fixtures for protocol adapters",
+          "description": "Create a reusable test fixture that can exercise register, inbox, claim resource, claim_next, complete_claim evidence, Tally report, and reconcile against a throwaway project database.",
+          "owner_org": "Agents",
+          "owner_person_or_role": "Codex",
+          "phase": "P1 Harden",
+          "effort_days": 1.0,
+          "depends_on": [
+            "PROTO-2"
+          ],
+          "entry_criteria": "Protocol versioning and profile requirements are stable enough to test.",
+          "exit_criteria": "Adapters can run a single smoke command and get pass/fail output against the P0 profile.",
+          "deliverable": "Adapter conformance smoke suite.",
+          "risk_level": "Medium",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 220
+        }
+      ]
+    },
+    {
+      "workstream_id": "ADAPTER",
+      "name": "Runtime Adapters",
+      "tasks": [
+        {
+          "task_id": "ADAPTER-1",
+          "title": "Claude Code adapter pack",
+          "description": "Package the session-start ritual for Claude Code: working agreement, register, inbox drain, claim_next, resource claims, completion evidence, and reconcile summary. The goal is to make correct protocol behavior automatic instead of prompt-dependent.",
+          "owner_org": "Agents",
+          "owner_person_or_role": "Claude Code",
+          "phase": "P0 Now",
+          "effort_days": 1.0,
+          "depends_on": [
+            "PROTO-1"
+          ],
+          "entry_criteria": "P0 handshake and completion semantics are documented.",
+          "exit_criteria": "Claude Code sessions can opt into a small adapter pack that performs the P0 handshake reliably.",
+          "deliverable": "Claude Code adapter docs/scripts.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "In Review",
+          "sort_order": 300
+        },
+        {
+          "task_id": "ADAPTER-2",
+          "title": "Codex adapter pack",
+          "description": "Create the Codex-side wrapper/instructions that automatically loads the working agreement, registers session fidelity, checks inbox, claims ready work, and reports evidence on completion.",
+          "owner_org": "Agents",
+          "owner_person_or_role": "Codex",
+          "phase": "P0 Next",
+          "effort_days": 1.5,
+          "depends_on": [
+            "DOGFOOD-2",
+            "ADAPTER-1"
+          ],
+          "entry_criteria": "Switchboard board is live and Claude Code adapter shape is known.",
+          "exit_criteria": "Codex can start a Switchboard task without a human manually reciting the protocol.",
+          "deliverable": "Codex adapter instructions and smoke test.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "Not Started",
+          "sort_order": 310
+        },
+        {
+          "task_id": "ADAPTER-3",
+          "title": "Cursor and raw OpenAI loop adapters",
+          "description": "Provide minimal adapter packs for Cursor and raw OpenAI agent loops so the protocol is not tied to one vendor runner.",
+          "owner_org": "Agents",
+          "owner_person_or_role": "Cursor Agent + Codex",
+          "phase": "P0 Next",
+          "effort_days": 1.5,
+          "depends_on": [
+            "ADAPTER-2"
+          ],
+          "entry_criteria": "Codex adapter shows the expected wrapper shape.",
+          "exit_criteria": "Cursor and raw OpenAI loops can pass the P0 conformance fixture.",
+          "deliverable": "Cursor/raw OpenAI adapter packs.",
+          "risk_level": "Medium",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 320
+        },
+        {
+          "task_id": "ADAPTER-4",
+          "title": "LangGraph runtime adapter",
+          "description": "Map Switchboard primitives into a LangGraph runner without confusing LangGraph's in-process graph semantics with cross-agent coordination.",
+          "owner_org": "Agents",
+          "owner_person_or_role": "LangGraph Runner",
+          "phase": "P1 Harden",
+          "effort_days": 2.0,
+          "depends_on": [
+            "ADAPTER-2",
+            "PROTO-2"
+          ],
+          "entry_criteria": "Version/profile negotiation exists and one simpler adapter is proven.",
+          "exit_criteria": "A LangGraph workflow can register, claim, report progress, and respect interrupts through Switchboard.",
+          "deliverable": "LangGraph adapter pack.",
+          "risk_level": "High",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 330
+        }
+      ]
+    },
+    {
+      "workstream_id": "ENFORCE",
+      "name": "Interrupts and Control Fidelity",
+      "tasks": [
+        {
+          "task_id": "ENFORCE-1",
+          "title": "Control fidelity registry and session advertisement",
+          "description": "Every registered session should advertise the highest interrupt/control tier it can honor: advisory poll, hook-level deny, or runner kill. The board should make weak-control sessions visible instead of pretending all agents are equally steerable.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Codex",
+          "phase": "P0 Now",
+          "effort_days": 1.0,
+          "depends_on": [
+            "PROTO-1"
+          ],
+          "entry_criteria": "register_agent stores a control/fidelity blob.",
+          "exit_criteria": "Active-agent views and protocol responses expose control tier consistently.",
+          "deliverable": "Control fidelity fields in runtime and docs.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "In Review",
+          "sort_order": 400
+        },
+        {
+          "task_id": "ENFORCE-2",
+          "title": "Hook-level deny enforcement prototype",
+          "description": "Implement a real deny point for runtimes that support pre-tool hooks: denied file/resource actions should be blocked before the risky tool call, with an inbox message and audit event.",
+          "owner_org": "Agents",
+          "owner_person_or_role": "Claude Code + Codex",
+          "phase": "P0 Next",
+          "effort_days": 1.5,
+          "depends_on": [
+            "ENFORCE-1",
+            "ADAPTER-1"
+          ],
+          "entry_criteria": "At least one adapter can call a pre-tool coordination hook.",
+          "exit_criteria": "A conflicting file/resource action is denied in a real adapter smoke test and the task records the event.",
+          "deliverable": "Hook deny prototype.",
+          "risk_level": "High",
+          "is_blocking": true,
+          "status": "Not Started",
+          "sort_order": 410
+        },
+        {
+          "task_id": "ENFORCE-3",
+          "title": "Runner kill tier design and guardrails",
+          "description": "Design the strongest interrupt tier for managed runners: what can be killed, who can kill it, how partial work is preserved, and what audit/event trail is required.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Switchboard Operator",
+          "phase": "P1 Harden",
+          "effort_days": 2.0,
+          "depends_on": [
+            "ENFORCE-2"
+          ],
+          "entry_criteria": "Hook-level deny semantics are proven in at least one adapter.",
+          "exit_criteria": "Runner kill policy and API shape are documented with safety limits.",
+          "deliverable": "Runner kill tier spec.",
+          "risk_level": "High",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 420
+        }
+      ]
+    },
+    {
+      "workstream_id": "DISPATCH",
+      "name": "Active Dispatch",
+      "tasks": [
+        {
+          "task_id": "DISPATCH-1",
+          "title": "Dependency-aware claim_next scheduler",
+          "description": "Keep claim_next as the moment Switchboard becomes an active scheduler: it must hand agents ready work, respect dependencies and active claims, and avoid turning the board into a passive reporting surface.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Codex",
+          "phase": "P0 Now",
+          "effort_days": 1.0,
+          "depends_on": [
+            "PROTO-1"
+          ],
+          "entry_criteria": "Tasks have depends_on and claim leases.",
+          "exit_criteria": "claim_next returns only unblocked work and blocks dependents until merge-derived Done.",
+          "deliverable": "claim_next runtime and tests.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "In Review",
+          "sort_order": 500
+        },
+        {
+          "task_id": "DISPATCH-2",
+          "title": "Priority, capability, and budget scoring for claim_next",
+          "description": "Move beyond deterministic first-ready selection. Score candidate tasks by lane, capability match, risk, budget, blocking status, and current fleet load.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Codex",
+          "phase": "P0 Next",
+          "effort_days": 1.5,
+          "depends_on": [
+            "DISPATCH-1",
+            "TALLY-1"
+          ],
+          "entry_criteria": "Basic claim_next and rough task tally exist.",
+          "exit_criteria": "claim_next explains why a task was selected and respects at least capability and budget constraints.",
+          "deliverable": "Scored claim_next selection.",
+          "risk_level": "Medium",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 510
+        },
+        {
+          "task_id": "DISPATCH-3",
+          "title": "Human override and revoke-claim flow",
+          "description": "Let a human operator revoke, reassign, or reprioritize claimed work without corrupting task state or losing evidence.",
+          "owner_org": "Human operators",
+          "owner_person_or_role": "Switchboard Operator",
+          "phase": "P1 Harden",
+          "effort_days": 1.0,
+          "depends_on": [
+            "DISPATCH-2",
+            "ENFORCE-1"
+          ],
+          "entry_criteria": "Claim scoring and control fidelity are visible.",
+          "exit_criteria": "Operators can revoke a claim, notify the agent, and preserve partial evidence.",
+          "deliverable": "Claim override path.",
+          "risk_level": "Medium",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 520
+        }
+      ]
+    },
+    {
+      "workstream_id": "TALLY",
+      "name": "Cost and Outcome Ledger",
+      "tasks": [
+        {
+          "task_id": "TALLY-1",
+          "title": "Two-stream cost ledger projection",
+          "description": "Implement the rough but useful Tally wedge early: gateway-measured spend and agent-reported spend should both attach to project/task/claim/agent and remain visibly separated by confidence.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Codex",
+          "phase": "P0 Now",
+          "effort_days": 1.0,
+          "depends_on": [
+            "PROTO-1"
+          ],
+          "entry_criteria": "Activity log and claim IDs exist.",
+          "exit_criteria": "report_usage and task_tally show cost by source and confidence for a claimed task.",
+          "deliverable": "Initial Tally ledger API.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "In Review",
+          "sort_order": 600
+        },
+        {
+          "task_id": "TALLY-2",
+          "title": "Outcome and KPI mapping primitives",
+          "description": "Add the missing commercial wedge: outcomes must link to KPIs so Switchboard can say what a task achieved and what it cost, not just that tokens were spent.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Steve Ridder + Codex",
+          "phase": "P0 Next",
+          "effort_days": 2.0,
+          "depends_on": [
+            "TALLY-1"
+          ],
+          "entry_criteria": "Spend records attach cleanly to tasks and claims.",
+          "exit_criteria": "A task can record an outcome, link it to a KPI, and show cost per KPI movement.",
+          "deliverable": "Outcome/KPI schema and APIs.",
+          "risk_level": "High",
+          "is_blocking": true,
+          "status": "Not Started",
+          "sort_order": 610
+        },
+        {
+          "task_id": "TALLY-3",
+          "title": "Cost-per-outcome board surface",
+          "description": "Expose Tally where operators actually look: task detail, board rollups, and project-level KPI movement. Even rough economics should be visible early.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Switchboard Operator",
+          "phase": "P1 Harden",
+          "effort_days": 1.5,
+          "depends_on": [
+            "TALLY-2"
+          ],
+          "entry_criteria": "Outcome/KPI mapping APIs exist.",
+          "exit_criteria": "Operators can inspect cost per outcome without querying raw tables.",
+          "deliverable": "Tally board surface.",
+          "risk_level": "Medium",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 620
+        }
+      ]
+    },
+    {
+      "workstream_id": "RECON",
+      "name": "Provenance and Reconciliation",
+      "tasks": [
+        {
+          "task_id": "RECON-1",
+          "title": "Working agreement and git provenance lifecycle",
+          "description": "Make the board the source of truth for where work is: step-zero working agreement, In Review completion, PR-open evidence, merge-SHA Done transition, and local reconcile findings for drift.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Codex",
+          "phase": "P0 Now",
+          "effort_days": 1.0,
+          "depends_on": [
+            "PROTO-1"
+          ],
+          "entry_criteria": "Tasks and GitHub webhook path exist.",
+          "exit_criteria": "Agents cannot honestly claim Done without merge evidence; reconcile flags legacy or drifted task states.",
+          "deliverable": "Working agreement, git_state, PR webhook lifecycle, reconcile.",
+          "risk_level": "Medium",
+          "is_blocking": true,
+          "status": "In Review",
+          "sort_order": 700
+        },
+        {
+          "task_id": "RECON-2",
+          "title": "GitHub reachability and content reconciliation",
+          "description": "Extend local reconcile with external checks: branch/head reachability, PR state, merge commit presence on master, and optionally content proof that files changed as claimed.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Codex",
+          "phase": "P0 Next",
+          "effort_days": 1.5,
+          "depends_on": [
+            "RECON-1",
+            "DOGFOOD-2"
+          ],
+          "entry_criteria": "Local git_state table and GitHub webhook lifecycle exist.",
+          "exit_criteria": "reconcile can distinguish local board contradictions from external GitHub drift.",
+          "deliverable": "GitHub-backed reconcile checks.",
+          "risk_level": "High",
+          "is_blocking": true,
+          "status": "Not Started",
+          "sort_order": 710
+        },
+        {
+          "task_id": "RECON-3",
+          "title": "Scheduled reconcile and alerting",
+          "description": "Run reconcile automatically and notify humans/agents when the board lies, a claim is stale, or a task is In Review without branch/PR evidence.",
+          "owner_org": "6th Element Labs",
+          "owner_person_or_role": "Switchboard Operator",
+          "phase": "P1 Harden",
+          "effort_days": 1.0,
+          "depends_on": [
+            "RECON-2"
+          ],
+          "entry_criteria": "External reconcile checks exist.",
+          "exit_criteria": "Drift findings are scheduled, surfaced, and actionable.",
+          "deliverable": "Scheduled reconcile job and notification path.",
+          "risk_level": "Medium",
+          "is_blocking": false,
+          "status": "Not Started",
+          "sort_order": 720
+        }
+      ]
+    }
+  ],
+  "critical_path": [
+    {
+      "task_id": "DOGFOOD-1",
+      "workstream": "DOGFOOD",
+      "why": "Without an isolated project namespace, Switchboard work either pollutes Maxwell/Helm or remains invisible."
+    },
+    {
+      "task_id": "DOGFOOD-2",
+      "workstream": "DOGFOOD",
+      "why": "The live host must expose project=switchboard before agents can dogfood against it."
+    },
+    {
+      "task_id": "ADAPTER-2",
+      "workstream": "ADAPTER",
+      "why": "Codex is part of the daily development loop; the protocol is not real until Codex stops relying on memory."
+    },
+    {
+      "task_id": "TALLY-2",
+      "workstream": "TALLY",
+      "why": "Cost-per-outcome is the commercial wedge; spend without KPI/outcome mapping is only telemetry."
+    },
+    {
+      "task_id": "RECON-2",
+      "workstream": "RECON",
+      "why": "A board that cannot prove GitHub truth will drift the moment multiple agents touch the repo."
+    }
+  ],
+  "milestones": [
+    {
+      "name": "Switchboard board live",
+      "target_week": "Week 0",
+      "gate_criteria": "project=switchboard appears in the web switcher and MCP; DOGFOOD-1/DOGFOOD-2 evidence is recorded."
+    },
+    {
+      "name": "First dogfood loop",
+      "target_week": "Week 1",
+      "gate_criteria": "One real Switchboard change is claimed, completed with evidence, merged, and reconciled."
+    },
+    {
+      "name": "Adapter P0",
+      "target_week": "Week 1",
+      "gate_criteria": "Claude Code and Codex adapters can pass the P0 handshake without relying on a human prompt ritual."
+    },
+    {
+      "name": "Economics visible",
+      "target_week": "Week 2",
+      "gate_criteria": "At least one outcome is linked to a KPI and a task-level cost tally."
+    }
+  ],
+  "consolidated_risks": [
+    {
+      "risk": "Dogfood can become circular theatre if the board records ceremony but does not block or reveal bad behavior.",
+      "likelihood": "Medium",
+      "impact": "High",
+      "mitigation": "Keep the experiment small and evidence-driven: adapters must perform the handshake, completion must carry branch/SHA/PR evidence, and reconcile must surface contradictions."
+    },
+    {
+      "risk": "Adding Switchboard to the same planner app could accidentally cross-write Maxwell or Helm.",
+      "likelihood": "Low",
+      "impact": "High",
+      "mitigation": "Use a separate SQLite file, fail closed on unknown projects, and require explicit project=switchboard for product work."
+    },
+    {
+      "risk": "Tally slips behind protocol work and the product loses its cost-per-outcome wedge.",
+      "likelihood": "Medium",
+      "impact": "High",
+      "mitigation": "Keep TALLY-1 and TALLY-2 on the critical path; expose rough economics before polishing dashboards."
+    }
+  ],
+  "consolidated_decisions": [
+    {
+      "question": "Should Switchboard be tracked inside Maxwell, Helm, or its own project?",
+      "owner": "Steve Ridder",
+      "recommended_default": "Use its own project=switchboard namespace with a separate SQLite file and seed.",
+      "decision_by": "Now",
+      "status": "Accepted in seed"
+    },
+    {
+      "question": "Is the dogfood board production infrastructure?",
+      "owner": "Switchboard Operator",
+      "recommended_default": "No. Treat it as a live experiment until adapters and reconcile prove the loop.",
+      "decision_by": "P0",
+      "status": "Accepted in seed"
+    },
+    {
+      "question": "Can agents set tasks Done?",
+      "owner": "Switchboard Operator",
+      "recommended_default": "No. Agents complete to In Review with evidence; merge/reconcile authority sets Done.",
+      "decision_by": "P0",
+      "status": "Accepted in working agreement"
+    }
+  ]
+}

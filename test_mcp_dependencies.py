@@ -8,7 +8,9 @@ REAL tool functions in mcp_server.py are exercised against the temp store."""
 import os, sys, json, types, tempfile
 
 _TMP = tempfile.mkdtemp(prefix="dep-test-")
+os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")     # isolate default project too
 os.environ["PM_HELM_DB_PATH"] = os.path.join(_TMP, "helm.db")   # isolated throwaway board
+os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ.pop("PM_MCP_TOKEN", None)                            # writes open -> ctx may be None
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

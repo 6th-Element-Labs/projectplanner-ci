@@ -49,8 +49,8 @@ app = FastAPI(title="Taikun PM", version="0.1.0")
 
 store.init_db()
 _seeded = store.seed_if_empty()
-# Additional projects (e.g. Helm) — each in its OWN db file; one-shot seed, guarded so a
-# restart never wipes or re-imports. Maxwell (DEFAULT_PROJECT) is seeded above, untouched.
+# Additional projects — each in its OWN db file; one-shot seed, guarded so a restart never
+# wipes or re-imports. Maxwell (DEFAULT_PROJECT) is seeded above, untouched.
 for _pid in store.PROJECTS:
     if _pid != store.DEFAULT_PROJECT:
         try:
@@ -214,7 +214,7 @@ async def task_dispatch_latest(task_id: str):
 async def chat(task_id: str, body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
     """Per-task Ask Taikun agent: RAG over the plan docs + propose-then-confirm task edits."""
     project = _proj(project)
-    assistant = "Helm" if project == "helm" else "Maxwell"
+    assistant = {"helm": "Helm", "switchboard": "Switchboard"}.get(project, "Maxwell")
     task = store.get_task(task_id, project=project)
     if not task:
         raise HTTPException(404, "task not found")

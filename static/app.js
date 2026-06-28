@@ -46,7 +46,7 @@ const TeepPlan = {
                  'Wave 1': '#4299e1', 'Wave 2': '#066fd1', 'Wave 3': '#f76707', 'Wave 4': '#2fb344' },
     OWNER_COLOR: { 'Taikun': 'blue', 'TEEP': 'teal', 'Sensirion/Nubo': 'orange', 'IFS Merrick': 'purple', 'Joint': 'cyan' },
     RISK_COLOR: { Low: 'green', Medium: 'yellow', High: 'red' },
-    STATUS_COLOR: { 'Not Started': 'secondary', 'In Progress': 'blue', 'Blocked': 'red', 'Done': 'green' },
+    STATUS_COLOR: { 'Not Started': 'secondary', 'In Progress': 'blue', 'In Review': 'azure', 'Blocked': 'red', 'Done': 'green' },
     WS_COLOR: {
         SEN: 'azure', FMP: 'blue', SCADA: 'cyan', IFS: 'teal', SSO: 'indigo', BEDROCK: 'purple',
         GW: 'pink', REG: 'lime', AGENT: 'orange', REPORT: 'yellow', DATA: 'green', CUTOVER: 'red'
@@ -61,7 +61,7 @@ const TeepPlan = {
         { k: 'title', label: 'Title', type: 'text', col: 'col-12' },
         { k: 'description', label: 'Description', type: 'textarea', col: 'col-12' },
         { k: 'phase', label: 'Phase', type: 'select', opts: ['Kickoff', 'Bootstrap', 'Build', 'Cutover', 'Operate'], col: 'col-6 col-md-3' },
-        { k: 'status', label: 'Status', type: 'select', opts: ['Not Started', 'In Progress', 'Blocked', 'Done'], col: 'col-6 col-md-3' },
+        { k: 'status', label: 'Status', type: 'select', opts: ['Not Started', 'In Progress', 'In Review', 'Blocked', 'Done'], col: 'col-6 col-md-3' },
         { k: 'risk_level', label: 'Risk', type: 'select', opts: ['Low', 'Medium', 'High'], col: 'col-6 col-md-3' },
         { k: 'is_blocking', label: 'Blocking', type: 'switch', col: 'col-6 col-md-3' },
         { k: 'owner_org', label: 'Owner org', type: 'select', opts: ['Taikun', 'TEEP', 'Sensirion/Nubo', 'IFS Merrick', 'Joint'], col: 'col-6 col-md-4' },
@@ -732,7 +732,7 @@ const TeepPlan = {
         const dates = `${this.esc(t.start_date || '?')} – ${this.esc(t.finish_date || '?')}`;
         const risk = this.esc(t.risk_level || '—') + (t.is_blocking ? ' · blocking' : '');
         const depsText = (t.depends_on || []).map((d) => this.esc(d)).join(', ') || 'none';
-        const statusOpts = ['Not Started', 'In Progress', 'Blocked', 'Done'].map((s) =>
+        const statusOpts = ['Not Started', 'In Progress', 'In Review', 'Blocked', 'Done'].map((s) =>
             `<option ${s === t.status ? 'selected' : ''}>${s}</option>`).join('');
         const prose = (v) => `<div style="white-space:pre-wrap">${this.esc(v || '—')}</div>`;
         const sc = this.STATUS_COLOR[t.status] || 'secondary';
@@ -1427,7 +1427,7 @@ const TeepPlan = {
         }
     },
 
-    _STATUS_TONE: { 'In Progress': 'blue', 'Done': 'green', 'Blocked': 'red', 'Not Started': 'secondary' },
+    _STATUS_TONE: { 'In Progress': 'blue', 'In Review': 'azure', 'Done': 'green', 'Blocked': 'red', 'Not Started': 'secondary' },
 
     // Compact, low-badge change summary: ONE colored status pill + quiet label→value text
     // (description truncated). Replaces the old badge-per-field dump.
@@ -2162,7 +2162,7 @@ const TeepPlan = {
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('queue-modal')).show();
     },
 
-    _PROP_STATUSES: ['', 'Not Started', 'In Progress', 'Blocked', 'Done'],
+    _PROP_STATUSES: ['', 'Not Started', 'In Progress', 'In Review', 'Blocked', 'Done'],
 
     // Inline edit of a queued proposal — mutates the in-memory working copy `props[idx]`; the
     // edited values are what get sent on Confirm (backend applies whatever fields are present).

@@ -7,6 +7,10 @@ Claude Desktop, Cursor, or any MCP client and drive the plan without opening the
 
 ## Tools
 
+Every task/board tool accepts `project`. Use `maxwell` for the TEEP Barnett plan, `helm` for
+the marine chartplotter board, and `switchboard` for the live dogfood board that coordinates this
+agent-collaboration product itself.
+
 Reads (open):
 - `search_tasks(workstream?, status?, owner_person?, blocking?, query?)` — filter the live plan.
 - `get_task(task_id)` — full detail (description, fields, recent activity).
