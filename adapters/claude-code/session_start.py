@@ -1,47 +1,24 @@
 #!/usr/bin/env python3
-"""Claude Code SessionStart hook — Switchboard Tier-2 adapter (ADR-0004).
+"""Claude Code SessionStart hook — THIN SHIM over adapters/switchboard_core.py (ADR-0004).
 
-Runs deterministically at session start (the harness runs it, not the model). It:
-  1. fetches the live working agreement (get_working_agreement / REST) for the project,
-     falling back to the bundled docs/WORKING-AGREEMENT.md when the endpoint is unavailable;
-  2. best-effort registers this session as an agent (so it shows in list_active_agents);
-  3. injects the agreement into the conversation as first-turn context — so the agent starts
-     in-contract without being relied on to remember the handshake.
+All handshake logic (fetch working agreement + register) lives in the shared core, so Claude
+Code and Codex provably run the *same* contract. This file only maps Claude Code's SessionStart
+I/O: stdin event JSON in, `additionalContext` out. Fail-open (the core never raises; a missing
+live agreement falls back to the bundled copy here for presentation).
 
-Fail-open: any network/parse error still injects the bundled agreement; a session is never
-blocked by this hook. Config via env: PM_BASE, PM_PROJECT, PM_MCP_TOKEN.
+Config via env: PM_BASE, PM_PROJECT, PM_MCP_TOKEN, PM_AGENT_ID, PM_LANE, PM_AGENT_MODEL.
 """
 import json
 import os
 import sys
-import urllib.request
 
-PM_BASE = os.environ.get("PM_BASE", "https://plan.taikunai.com").rstrip("/")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import switchboard_core as sb  # noqa: E402
+
 PROJECT = os.environ.get("PM_PROJECT", "helm")
-TOKEN = os.environ.get("PM_MCP_TOKEN", "")
-TIMEOUT = 4
 
 
-def _read_event():
-    try:
-        return json.load(sys.stdin)
-    except Exception:
-        return {}
-
-
-def _http(method, path, body=None):
-    url = f"{PM_BASE}{path}"
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Content-Type", "application/json")
-    if TOKEN:
-        req.add_header("Authorization", f"Bearer {TOKEN}")
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        return json.loads(r.read().decode())
-
-
-def _fallback_agreement():
-    # bundled copy: <repo>/docs/WORKING-AGREEMENT.md (this file is adapters/claude-code/*)
+def _bundled_agreement():
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.normpath(os.path.join(here, "..", "..", "docs", "WORKING-AGREEMENT.md"))
     try:
@@ -49,66 +26,33 @@ def _fallback_agreement():
             return f.read()
     except Exception:
         return ("Working agreement unavailable. Core rule: you MUST NOT set a task to 'Done' "
-                "— move only to 'In Review'; the merge webhook marks Done. Push before you "
-                "claim progress. Main writes via PR only.")
-
-
-def _live_agreement():
-    # Codex's live contract (1af1b9c): GET /ixp/v1/working_agreement?project=.
-    return _http("GET", f"/ixp/v1/working_agreement?project={PROJECT}")
-
-
-def _agent_id(event):
-    # stable id: explicit PM_AGENT_ID wins (must match the PreToolUse hook), else git branch,
-    # else the session id.
-    if os.environ.get("PM_AGENT_ID"):
-        return os.environ["PM_AGENT_ID"]
-    import subprocess
-    try:
-        b = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                            capture_output=True, text=True, timeout=3,
-                            cwd=event.get("cwd") or None)
-        if b.returncode == 0 and b.stdout.strip():
-            return f"claude/{b.stdout.strip()}"
-    except Exception:
-        pass
-    return f"claude/{event.get('session_id', 'session')[:12]}"
+                "— move only to 'In Review'; the merge webhook marks Done.")
 
 
 def main():
-    event = _read_event()
-    agent_id = _agent_id(event)
-
-    # 1. live agreement, else bundled fallback
     try:
-        live = _live_agreement()
-        agreement = live.get("text") or json.dumps(live, indent=2)
-        source = "live (get_working_agreement)"
+        event = json.load(sys.stdin)
     except Exception:
-        agreement = _fallback_agreement()
-        source = "bundled fallback (live endpoint unavailable)"
+        event = {}
+    cwd = event.get("cwd") or os.getcwd()
+    me = sb.agent_id(cwd)
 
-    # 2. best-effort registration via Codex's live contract (1af1b9c):
-    #    POST /ixp/v1/register_agent {agent_id, runtime, model, lane, control}.
-    #    control advertises this adapter's fidelity (PRD §10): we can deny at the tool boundary
-    #    (PreToolUse hook) but not mid-token — declare it honestly.
-    reg = "registration skipped"
-    try:
-        _http("POST", "/ixp/v1/register_agent",
-              {"project": PROJECT, "agent_id": agent_id, "runtime": "claude-code",
-               "model": os.environ.get("PM_AGENT_MODEL", ""),
-               "lane": os.environ.get("PM_LANE", ""),
-               "control": {"interrupt": "tool_boundary", "deny": "PreToolUse", "kill": "runner"}})
-        reg = f"registered as {agent_id}"
-    except Exception:
-        reg = f"registration unavailable (would be {agent_id})"
+    agreement = sb.handshake(PROJECT, me, "claude-code",
+                             lane=os.environ.get("PM_LANE", ""),
+                             model=os.environ.get("PM_AGENT_MODEL", ""))
+    if isinstance(agreement, dict):
+        text = agreement.get("text") or json.dumps(agreement, indent=2, sort_keys=True)
+        src = "live (get_working_agreement)"
+    else:
+        text = _bundled_agreement()
+        src = "bundled fallback (live endpoint unavailable)"
 
     context = (
-        f"## Switchboard working agreement — project '{PROJECT}'  [{source}; {reg}]\n\n"
-        f"{agreement}\n\n"
-        f"_This hook enforces the hard rule at the tool boundary: attempts to set a task to "
-        f"'Done' are denied (only the merge webhook may). Move tasks to 'In Review' via "
-        f"complete(evidence)._"
+        f"## Switchboard working agreement — project '{PROJECT}'  [{src}; registered as {me}]\n\n"
+        f"{text}\n\n"
+        f"_This session is governed at the tool boundary by the PreToolUse hook "
+        f"(adapters/switchboard_core.evaluate_tool): inbound stop/redirect interrupts are "
+        f"consumed, and self-Done + lease-conflict edits are denied._"
     )
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "SessionStart",

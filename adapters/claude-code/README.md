@@ -5,6 +5,11 @@ two deterministic Claude Code hooks that make the IXP session-start handshake a 
 rather than a suggestion. The harness runs these — not the model — so adoption doesn't depend
 on the agent remembering anything.
 
+Both hooks are **thin shims over [`../switchboard_core.py`](../switchboard_core.py)** — the
+same handshake + `evaluate_tool` the Codex adapter uses. The runtime-specific scripts only map
+Claude Code's hook I/O to/from the shared core, so Claude and Codex provably run *one*
+contract (no per-runtime drift — the class of bug that bit ADAPTER-1 on `/ixp` vs `/ixp/v1`).
+
 ## What it does
 
 | Hook | File | Effect |
