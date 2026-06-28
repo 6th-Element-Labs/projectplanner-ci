@@ -240,6 +240,8 @@ If `requires_ack=true`, `send` **MUST** create a durable `ack_deadline` monitor 
 `monitor_id`. `requires_ack` is not just metadata: if no agent acks before `ack_deadline`, the
 monitor sweep writes a `monitor.timeout` activity event and sends an `ack_timeout` notice to the
 sender. A production Switchboard deployment SHOULD run monitor sweep on a durable host timer.
+Waking an absent runtime is outside `IXP-core`; see
+[`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md) for host registration and wake intents.
 
 ### 7.2 Signals
 
@@ -275,6 +277,9 @@ The substrate is **pull-based**: it **MUST NOT** be assumed able to push into a 
   the model mid-token. Implementations **MUST NOT** claim finer-than-boundary delivery.
 - A recipient that acts on a `stop`/`redirect` **MUST** `ack` (optionally with a one-line
   `response`) so the sender can confirm the signal landed before proceeding.
+- If the recipient is absent, the message is only durably stored. Delivery requires an agent
+  session to start or resume and poll the inbox. The optional Agent Host layer can create that
+  session, but the bus itself cannot.
 
 ### 7.5 Escalation to hard stop (informative)
 

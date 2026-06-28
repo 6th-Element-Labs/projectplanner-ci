@@ -11,6 +11,10 @@
 > REST/MCP parity for the core protocol, idempotent mutations, presence/handshake support,
 > and a conformance smoke test. After P0, Switchboard can safely claim "IXP-core reference
 > implementation." Before P0, it is a useful prototype with an open-write security gap.
+>
+> P0 does not by itself wake an absent runtime. Always-on host registration, wake intents, and
+> supervised runtime launch are specified separately in
+> [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
 
 ---
 
@@ -65,6 +69,8 @@ P0 is done when a fresh deployment can truthfully advertise:
 - REST shim for `IXP-core`.
 - Conformance smoke tests and deployment checks.
 - Documentation updates showing current conformance.
+- Protocol hooks needed by the Agent Host layer: authenticated presence, messages, monitors,
+  and runner-compatible audit fields.
 
 ### Out of scope
 
@@ -72,6 +78,8 @@ P0 is done when a fresh deployment can truthfully advertise:
 - Full OAuth/user-login UI and RBAC beyond the minimum write credential model.
 - `TXP` work dispatch (`claim_next`, see [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md)) except
   for reserving compatible auth/idempotency shapes.
+- Agent Host wake/launch control (see [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md)) except for
+  preserving compatible auth, monitor, and runner shapes.
 - `OXP`/Tally cost ledger (see [`TALLY-SPEC.md`](TALLY-SPEC.md)) except for preserving
   actor/timestamp data it will need.
 - Go/NATS/Postgres kernel extraction.

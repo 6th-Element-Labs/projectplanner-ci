@@ -151,6 +151,7 @@ The protocol is a small, stable ABI. Everything else is built from these.
 | **Subjects / topics** | TIBCO RV subject + wildcards | per-task activity log (implicit) | explicit `lane.ENGINE.>` subject addressing |
 | **Durable subscription** | durable consumer / cursor | `get_lane_delta(since_cursor)` | keep; generalize to any subject |
 | **Work queue** (one-of-N) | TIBCO RVDQ / JetStream work-queue | — | `claim_next(lane)` atomic lease-on-claim |
+| **Agent Host wake** | autoscaler / worker pool | manual thread launch | registered hosts + wake intents; starts absent runtimes or reports no eligible host |
 | **Interrupt** | IRQ checked at instruction boundary | — | `signal` consumed at tool-call boundary (hook) |
 | **Hard stop** | NMI (unmaskable) | — | managed runner kill (`/runner/v1/sessions/{runner_session_id}/kill`) with snapshot + audit |
 | **Decision record** | append-only ledger | `record_decision`/`list_decisions` | keep; index into RAG |
@@ -211,6 +212,10 @@ The protocol is a small, stable ABI. Everything else is built from these.
 - **FR-14** A `stop`/`redirect` `signal` is consumed at the **next tool-call boundary** by
   a runtime adapter (e.g. Claude Code `PreToolUse` hook) which denies the pending tool with
   the message as the reason → the agent halts/redirects before acting.
+- **FR-14a** `request_wake(selector, reason, source, policy)` creates a durable wake intent
+  for an Agent Host when a target runtime is absent or has missed an ack. The host either
+  starts/reuses a supervised runtime session, or records that no eligible host is online. See
+  [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
 - **FR-15** Before servicing an interrupt, the agent snapshots `set_agent_state` (context
   save); after, it restores and resumes (IRET). Heads-ups deliver at a `Stop`/turn boundary.
 - **FR-16** **NMI:** an operator (or watchdog on budget/time/ignored-stops) triggers
@@ -475,7 +480,7 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
 |---|---|---|
 | **P0 — Close the floor** | authn on all writes; deterministic serialization (done); REST shim parity with MCP; see [`P0-SPEC.md`](P0-SPEC.md) | can't be a public substrate while writes are open |
 | **P1 — Presence + dispatch** | `register_agent`/heartbeat/`list_active_agents`; `claim_next` (RVDQ); see [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) | makes it an *active* coordinator; finishes the "switch" |
-| **P2 — Interrupts** | `signal` field; hook-level deny (IRQ); runner `kill` (NMI); state save/resume; see [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) | the live stop/redirect the operator wants |
+| **P2 — Interrupts + wake** | `signal` field; hook-level deny (IRQ); Agent Host wake intents; runner `kill` (NMI); state save/resume; see [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) and [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md) | the live stop/redirect the operator wants, plus the missing "start an absent worker" loop |
 | **P3 — Oversight + cost** | approval gates; cost-per-outcome ledger; reliability scoring; see [`TALLY-SPEC.md`](TALLY-SPEC.md) | the commercial wedge for serious/regulated buyers |
 | **P4 — Subjects + scale** | explicit subject addressing + wildcards; kernel extraction (Go/NATS) behind the interface | scale + the pub/sub north star |
 | **P5 — Protocol + ecosystem** | published spec; reference adapters; multi-tenant workspaces, RBAC, self-serve; see [`RUNTIME-ADAPTERS-SPEC.md`](RUNTIME-ADAPTERS-SPEC.md) | turn the convention into the moat |
@@ -653,6 +658,7 @@ adoptable: cost is the *why they'll pull.*
 - [`P0-SPEC.md`](P0-SPEC.md) — the implementation floor: auth, REST/MCP parity, idempotency, presence, conformance
 - [`RUNTIME-ADAPTERS-SPEC.md`](RUNTIME-ADAPTERS-SPEC.md) — runtime packs that automate the agent handshake
 - [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) — visible stop/redirect/kill guarantees by runtime
+- [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md) — always-on host registration and wake intents for absent runtimes
 - [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) — `+TXP` dispatch profile: active scheduler semantics
 - [`TALLY-SPEC.md`](TALLY-SPEC.md) — `+OXP` cost-to-outcome and KPI ledger
 - [`SWITCHBOARD-DESIGN-LOG.md`](SWITCHBOARD-DESIGN-LOG.md) — the reasoning trail + decision log (incl. the original code review)

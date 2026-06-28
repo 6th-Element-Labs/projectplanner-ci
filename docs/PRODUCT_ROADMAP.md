@@ -86,6 +86,7 @@ tools can't touch. Aligns with the founder's safety-critical (offshore-energy) b
 | 1 | **Cost-per-outcome ledger** (Bet 1) | sellable dashboard; extends token-mgmt thesis | M — see ADR-0002 |
 | 2 | **`claim_next` dispatch** (Bet 2) | board becomes active, not passive | S |
 | 2.5 | **Work provenance + reconciliation** | git-derived `Done` + `get_working_agreement` + `reconcile` — ends the local/remote unsync mess (the 89-branch false alarm, 4 local-only branches). The board becomes ground truth for *where work is*, not just status | M — see [ADR-0003](decisions/0003-work-provenance-and-reconciliation.md) |
+| 2.75 | **Agent Host wake supervisor** | durable inbox + monitors are not delivery when a runtime is absent; registered hosts + wake intents start/reuse Claude/Codex/etc. or report "no eligible host online" | M — see [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md) |
 | 3 | **Approval gates + audit trail** (Bet 3) | safety-critical wedge; human oversight | M |
 | 4 | **Context-pack tool** | one call returns an agent's minimal optimal context (decisions + leased files + rationale + blocking deps). Fewer round-trips = next token win after delta-polling | S |
 | 5 | **Merge-queue from leases** | serialize N agents on the shared shell file through the board instead of advisory soft locks | M |

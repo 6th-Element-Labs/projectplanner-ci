@@ -292,6 +292,10 @@ reliably halted. A Tier 3/4 session can be killed when policy requires it.
 ## 8. Runner API
 
 Runner kill is not `IXP-core`; it belongs to a deployment/runner binding.
+The wake/start side of that binding is specified in
+[`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md): Agent Hosts register inventory, claim wake intents,
+and start or reuse supervised runtime sessions when the substrate cannot reach an absent agent
+by inbox delivery alone.
 
 Minimum managed runner operations:
 

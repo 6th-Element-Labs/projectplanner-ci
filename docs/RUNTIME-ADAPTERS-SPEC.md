@@ -55,6 +55,10 @@ remember it:
 The adapter may be a hook bundle, SDK middleware, wrapper script, local daemon, library, or
 MCP configuration. The packaging differs per runtime; the behavioral contract does not.
 
+An adapter starts working only after its runtime process exists. The separate Agent Host layer
+is responsible for keeping runtimes warm or waking one when a message/claim needs attention;
+see [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
+
 ---
 
 ## 3. Universal session lifecycle
@@ -113,6 +117,8 @@ advertise control fidelity
 If a startup `stop` is pending, the adapter must prevent work from beginning when it has a
 hook-level or runner-level enforcement mechanism. If it only has advisory polling, it must
 surface the stop prominently and ack only after the agent or wrapper confirms handling.
+If no runtime is alive, no adapter can run this sequence; Switchboard must rely on an Agent Host
+wake intent or report that no eligible host is online.
 
 ### 3.3 Boundary sequence
 

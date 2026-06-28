@@ -50,6 +50,8 @@ Durable ack rule:
 - `list_pending_acks` and `get_message_status` expose monitor state; `sweep_monitors` resolves
   acked messages and fires timed-out monitors. The production host should run
   `jobs.py sweep_monitors` through `projectplanner-monitors.timer`.
+- A fired ack monitor does not wake an absent runtime by itself. Agent Host registration and
+  wake intents are specified in [`docs/AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
 
 Protocol compatibility:
 - `get_working_agreement` includes `protocol.version`, `protocol.profile`,

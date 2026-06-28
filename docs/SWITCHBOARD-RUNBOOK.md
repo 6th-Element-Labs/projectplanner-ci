@@ -2,7 +2,8 @@
 
 How to actually run the autonomous coordination mesh, and **where each piece runs**. Written
 from the dogfood (DOGFOOD-3) + the shipped pieces: `run_session` (driver, decision #4),
-the Codex `supervisor.py` (ADAPTER-8), RECON-5 auto-provenance, and the monitor sweep.
+the Codex `supervisor.py` (ADAPTER-8), RECON-5 auto-provenance, the monitor sweep, and the
+Agent Host wake contract in [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
 
 ## 1. Deployment topology — two distinct hosts (don't conflate them)
 
@@ -17,6 +18,7 @@ the Codex `supervisor.py` (ADAPTER-8), RECON-5 auto-provenance, and the monitor 
 │  • LLM gateway   :8095       │         │               switchboard_core.run_session │
 │  • monitor sweep (every 1m)  │         │        (claim_next→work→complete→repeat)   │
 │  COORDINATION ONLY           │         │  .switchboard/runner/  (session records)   │
+│  • wake intents (durable)    │         │  host daemon polls wake intents            │
 └─────────────────────────────┘         └──────────────────────────────────────────┘
 ```
 
@@ -31,6 +33,7 @@ spawns/keeps-alive/kills each agent it launches.
 |---|---|---|
 | board / MCP / gateway / monitor-sweep timer | **Plan VM** | coordination substrate; tiny + always-on |
 | `supervisor.py` (spawn / keep-alive / T3 kill) | **agent host** | owns the agent process group; needs compute |
+| Agent Host daemon / wake loop | **agent host** | keeps warm capacity and starts absent runtimes |
 | agent runtime (Claude Code, Codex, …) + `run_session` | **agent host** | does the actual work; needs repo + keys |
 
 ## 2. Run the substrate (Plan VM) — already deployed
@@ -57,6 +60,12 @@ Inside the agent, the loop is `switchboard_core.run_session(work_fn=…)`:
 `no_unblocked_work` / error (claim abandoned) / `max_tasks`. `work_fn` is "run the model on this
 task and return {branch, head_sha}" — supplied by the runtime.
 
+For hands-off delivery, run an Agent Host daemon as well as one-off supervised sessions. The
+daemon registers host capacity, polls wake intents, and starts/reuses a supervised runtime when
+an ack timeout, operator request, or ready-work policy asks for one. Without that daemon, a
+message to an absent Claude/Codex session is durable but not deliverable until a human or another
+process starts the runtime.
+
 ## 4. The self-driving loop (what makes it hands-off)
 ```
 supervisor keeps agent(s) alive
@@ -65,6 +74,7 @@ supervisor keeps agent(s) alive
       → task → Done  → unblocks downstream deps
       → claim_next hands out the next task … (loop)
    monitor-sweep (Plan VM) fires any unacked requires_ack handoff
+      → optional wake intent asks an Agent Host to start/reuse a runtime
    any agent can stop/redirect another via a signal consumed at the tool boundary (FR-14)
 ```
 **Human stays in the loop only where it should:** approve/kill via the supervisor, and review
@@ -79,6 +89,8 @@ the board. No human relay for handoffs; no human ignition once the supervisor is
 
 ## 6. Honest limits
 The substrate is live; the driver + supervisor + auto-provenance are built and unit/dogfood
-tested. Not yet proven: a long-running multi-agent supervised session under real load, and the
-PR-merge webhook (RECON-2) as the primary Done path (RECON-5 covers direct-push today). Start
-one supervised agent on an agent host, watch the board, then scale the fleet.
+tested. The next product proof is the Agent Host daemon from
+[`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md): a monitored message times out, a wake intent is
+claimed by a host, and an absent runtime is started or a clear "no eligible host online" result
+is recorded. Not yet proven: a long-running multi-agent supervised session under real load, and
+the PR-merge webhook (RECON-2) as the primary Done path (RECON-5 covers direct-push today).
