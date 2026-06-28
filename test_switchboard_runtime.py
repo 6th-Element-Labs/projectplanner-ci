@@ -206,6 +206,22 @@ try:
                                     actor="github-webhook", project=P)
     ok(merged["status"] == "Done" and merged["git_state"]["merged_sha"] == "merge789",
        "PR merge stamps merged_sha and marks task Done")
+    direct = store.create_task({"workstream_id": "TEST", "title": "direct default"},
+                               actor="seed", project=P)
+    store.update_task(direct["task_id"], {"status": "In Review"}, actor="seed", project=P)
+    backfilled = store.mark_task_default_branch_commit(
+        direct["task_id"], "direct456", branch="master",
+        subject=f"feat({direct['task_id']}): direct default proof",
+        actor="default-branch-backfill", project=P)
+    ok(backfilled["status"] == "Done" and backfilled["git_state"]["merged_sha"] == "direct456",
+       "default-branch backfill stamps commit SHA and marks In Review Done")
+    not_ready = store.create_task({"workstream_id": "TEST", "title": "not ready"},
+                                  actor="seed", project=P)
+    skipped = store.mark_task_default_branch_commit(
+        not_ready["task_id"], "skip456", branch="master",
+        subject=f"feat({not_ready['task_id']}): not ready", project=P)
+    ok(skipped.get("reason") == "status_not_in_review",
+       "default-branch backfill skips tasks that are not In Review")
     next_claim = store.claim_next(
         agent_id="codex/TEST#1",
         lanes=["TEST"],

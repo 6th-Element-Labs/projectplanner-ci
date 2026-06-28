@@ -37,6 +37,9 @@ Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
 - Agents must not self-set `Done`; GitHub PR merge webhook stamps `merged_sha` and moves the
   task to `Done`.
+- Bootstrap repair: `jobs.py backfill_default_branch_provenance` can stamp legacy direct-to-default
+  commits that already landed before PR-only flow was enforced. It is a system/reconcile action,
+  not a normal agent completion path. Use `PM_BACKFILL_DRY_RUN=1` first to inspect candidates.
 
 Durable ack rule:
 - `send_agent_message(... requires_ack=true ...)` creates a durable `ack_deadline` monitor.

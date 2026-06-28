@@ -1027,6 +1027,47 @@ def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = N
     return {"task_id": task_id, "status": "Done", "git_state": git_state}
 
 
+def mark_task_default_branch_commit(task_id: str, commit_sha: str,
+                                    branch: str = "master", subject: str = "",
+                                    actor: str = "default-branch-backfill",
+                                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Bootstrap-only provenance repair for direct default-branch commits.
+
+    Normal flow remains complete_claim -> In Review -> PR merge webhook -> Done. This is a
+    system/reconcile escape hatch for pre-flow dogfood commits that are already on the default
+    branch and mention a task id in their commit subject.
+    """
+    if not commit_sha:
+        return {"error": "commit_sha required", "task_id": task_id}
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
+            return {"error": "task not found", "task_id": task_id}
+        if row["status"] == "Done":
+            return {"skipped": True, "reason": "already_done", "task_id": task_id}
+        if row["status"] != "In Review":
+            return {"skipped": True, "reason": "status_not_in_review",
+                    "task_id": task_id, "status": row["status"]}
+        c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?",
+                  (now, task_id))
+        evidence = {"source": "default_branch_backfill", "commit_sha": commit_sha,
+                    "branch": branch, "subject": subject}
+        git_state = _upsert_git_state(c, task_id, {
+            "branch": branch or None,
+            "head_sha": commit_sha,
+            "pushed_at": now,
+            "merged_sha": commit_sha,
+            "merged_at": now,
+            "in_main_content": True,
+            "evidence": evidence,
+        })
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "git.default_branch_backfilled",
+                   json.dumps(evidence, sort_keys=True), now))
+    return {"task_id": task_id, "status": "Done", "git_state": git_state}
+
+
 def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
                  claim_id: Optional[str] = None, outcome_id: Optional[str] = None,
                  agent_id: Optional[str] = None, principal_id: str = "",

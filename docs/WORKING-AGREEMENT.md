@@ -18,6 +18,9 @@ session so the fleet stays in sync.
   evidence={branch, head_sha, pr?})`.
 - **You MUST NOT set a task to `Done`.** Only the merge webhook marks `Done` (it records the
   `merged_sha`). `Done` means *merged to `main`*, never "works on my machine."
+- Bootstrap repair exception: a system-owned reconcile/backfill job may stamp legacy
+  direct-to-default commits that already landed before this PR-only rule was enforced. Agents
+  still must not use that path for normal work.
 
 ## Git discipline
 - **Push your branch before you claim progress.** Committed-but-unpushed work is invisible to
