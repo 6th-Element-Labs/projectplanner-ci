@@ -27,6 +27,8 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `add_comment(task_id, text)`
 - `register_agent(...)`, `heartbeat(...)`, `list_active_agents(...)`
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
+- `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
+  `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
 - `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`
 - `report_usage(...)`, `get_task_tally(...)`
 - `reconcile(project)` — local provenance drift report; flags e.g. `Done` without `merged_sha`.
@@ -35,6 +37,12 @@ Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
 - Agents must not self-set `Done`; GitHub PR merge webhook stamps `merged_sha` and moves the
   task to `Done`.
+
+Durable ack rule:
+- `send_agent_message(... requires_ack=true ...)` creates a durable `ack_deadline` monitor.
+- `list_pending_acks` and `get_message_status` expose monitor state; `sweep_monitors` resolves
+  acked messages and fires timed-out monitors. The production host should run
+  `jobs.py sweep_monitors` through `projectplanner-monitors.timer`.
 
 ## Connect
 

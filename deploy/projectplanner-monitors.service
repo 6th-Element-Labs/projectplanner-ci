@@ -1,0 +1,14 @@
+# /etc/systemd/system/projectplanner-monitors.service
+# One-shot service: evaluate durable Switchboard coordination monitors.
+# Triggered by projectplanner-monitors.timer.
+[Unit]
+Description=ProjectPlanner Switchboard monitor sweep
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py sweep_monitors
+StandardOutput=journal
+StandardError=journal

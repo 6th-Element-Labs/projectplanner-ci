@@ -707,6 +707,43 @@ async def ixp_message_status(message_id: int, project: str = Query(store.DEFAULT
     return msg
 
 
+@app.get("/ixp/v1/pending_acks")
+async def ixp_pending_acks(project: str = Query(store.DEFAULT_PROJECT), agent_id: str = ""):
+    return {"pending_acks": store.list_pending_acks(agent_id=agent_id, project=_proj(project))}
+
+
+@app.get("/ixp/v1/monitors")
+async def ixp_monitors(project: str = Query(store.DEFAULT_PROJECT), status: str = "",
+                       kind: str = ""):
+    return {"monitors": store.list_coordination_monitors(status=status, kind=kind,
+                                                         project=_proj(project))}
+
+
+@app.post("/ixp/v1/sweep_monitors")
+async def ixp_sweep_monitors(request: Request, body: dict = Body(default={})):
+    project = _body_project(body or {})
+    _principal(request, project, ("write:ixp",), dev_actor="switchboard/monitor")
+    return store.sweep_coordination_monitors(project=project)
+
+
+@app.post("/ixp/v1/resolve_monitor")
+async def ixp_resolve_monitor(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/monitor")
+    return store.resolve_monitor(body.get("monitor_id") or body.get("id") or "",
+                                 reason=body.get("reason") or "manual",
+                                 actor=auth.actor(principal), project=project)
+
+
+@app.post("/ixp/v1/cancel_monitor")
+async def ixp_cancel_monitor(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/monitor")
+    return store.cancel_monitor(body.get("monitor_id") or body.get("id") or "",
+                                reason=body.get("reason") or "cancelled",
+                                actor=auth.actor(principal), project=project)
+
+
 @app.get("/ixp/v1/delta")
 async def ixp_delta(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
                     since_cursor: int = 0):

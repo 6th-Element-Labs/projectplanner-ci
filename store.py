@@ -151,6 +151,29 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ack_response  TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_messages_to ON agent_messages(to_agent, acked_at);
+            CREATE TABLE IF NOT EXISTS coordination_monitors (
+                id              TEXT PRIMARY KEY,
+                kind            TEXT NOT NULL,
+                target_type     TEXT NOT NULL,
+                target_id       TEXT NOT NULL,
+                task_id         TEXT,
+                owner_agent     TEXT,
+                subject_agent   TEXT,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                deadline        REAL,
+                condition_json  TEXT NOT NULL DEFAULT '{}',
+                on_timeout_json TEXT NOT NULL DEFAULT '{}',
+                result_json     TEXT NOT NULL DEFAULT '{}',
+                created_at      REAL NOT NULL,
+                updated_at      REAL NOT NULL,
+                last_checked_at REAL,
+                fired_at        REAL,
+                resolved_at     REAL
+            );
+            CREATE INDEX IF NOT EXISTS ix_monitors_status
+                ON coordination_monitors(status, deadline);
+            CREATE INDEX IF NOT EXISTS ix_monitors_target
+                ON coordination_monitors(target_type, target_id);
             CREATE TABLE IF NOT EXISTS principals (
                 id            TEXT PRIMARY KEY,
                 kind          TEXT NOT NULL,
@@ -1261,10 +1284,59 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                     "task_id": task_id, "message": message, "requires_ack": requires_ack,
                     "ack_deadline": deadline, "sent_at": now, "acked_at": None,
                     "signal": signal, "priority": int(priority or 0)}
+        if requires_ack:
+            monitor = _create_ack_monitor(c, msg_id, from_agent, to_agent, task_id,
+                                          deadline, now)
+            response["monitor_id"] = monitor["id"]
+            response["monitor"] = monitor
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, from_agent, "message.sent", json.dumps(response, sort_keys=True), now))
         _idem_store(c, "send", idem_key, from_agent, payload, response)
         return response
+
+
+def _monitor_row(r: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if not r:
+        return None
+    d = dict(r)
+    for k in ("condition_json", "on_timeout_json", "result_json"):
+        raw = d.pop(k, "{}")
+        d[k[:-5] if k.endswith("_json") else k] = json.loads(raw or "{}")
+    return d
+
+
+def _create_ack_monitor(c: sqlite3.Connection, message_id: int, from_agent: str,
+                        to_agent: str, task_id: Optional[str], deadline: Optional[float],
+                        now: float) -> Dict[str, Any]:
+    monitor_id = f"mon-{uuid.uuid4().hex[:16]}"
+    condition = {"type": "message_ack", "message_id": message_id}
+    on_timeout = {"action": "notify_sender", "signal": "ack_timeout"}
+    c.execute(
+        "INSERT INTO coordination_monitors"
+        "(id, kind, target_type, target_id, task_id, owner_agent, subject_agent, status, "
+        "deadline, condition_json, on_timeout_json, result_json, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (monitor_id, "ack_deadline", "agent_message", str(message_id), task_id,
+         from_agent, to_agent, "pending", deadline,
+         json.dumps(condition, sort_keys=True), json.dumps(on_timeout, sort_keys=True),
+         "{}", now, now),
+    )
+    c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+              (task_id, "switchboard/monitor", "monitor.created",
+               json.dumps({"monitor_id": monitor_id, "kind": "ack_deadline",
+                           "message_id": message_id, "deadline": deadline,
+                           "owner_agent": from_agent, "subject_agent": to_agent},
+                          sort_keys=True), now))
+    return _monitor_row(c.execute("SELECT * FROM coordination_monitors WHERE id=?",
+                                  (monitor_id,)).fetchone()) or {}
+
+
+def _load_monitor_for_message(c: sqlite3.Connection, message_id: int) -> Optional[Dict[str, Any]]:
+    return _monitor_row(c.execute(
+        "SELECT * FROM coordination_monitors WHERE kind='ack_deadline' "
+        "AND target_type='agent_message' AND target_id=? ORDER BY created_at DESC LIMIT 1",
+        (str(message_id),),
+    ).fetchone())
 
 
 def ack_message(message_id: int, response: str = "",
@@ -1280,13 +1352,30 @@ def ack_message(message_id: int, response: str = "",
         if cur.rowcount == 0:
             r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
             if r:
-                return dict(r) | {"note": "already acked"}
+                msg = dict(r) | {"note": "already acked"}
+                msg["monitor"] = _load_monitor_for_message(c, message_id)
+                return msg
             return {"error": "message not found", "id": message_id}
         r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
+        mon = _load_monitor_for_message(c, message_id)
+        if mon and mon.get("status") in ("pending", "fired"):
+            c.execute(
+                "UPDATE coordination_monitors SET status='resolved', resolved_at=?, "
+                "updated_at=?, last_checked_at=?, result_json=? WHERE id=?",
+                (now, now, now,
+                 json.dumps({"acked_at": now, "ack_response": response}, sort_keys=True),
+                 mon["id"]),
+            )
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (r["task_id"], "switchboard/monitor", "monitor.resolved",
+                       json.dumps({"monitor_id": mon["id"], "message_id": message_id,
+                                   "reason": "acked"}, sort_keys=True), now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (r["task_id"], actor, "message.acked",
                    json.dumps({"message_id": message_id, "response": response}, sort_keys=True), now))
-    return dict(r)
+        out = dict(r)
+        out["monitor"] = _load_monitor_for_message(c, message_id)
+    return out
 
 
 def list_unacked_messages(to_agent: str, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
@@ -1304,7 +1393,177 @@ def get_message_status(message_id: int, project: str = DEFAULT_PROJECT) -> Optio
     """Sender polls this to see whether a message has been acked."""
     with _conn(project) as c:
         r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
-    return dict(r) if r else None
+        if not r:
+            return None
+        out = dict(r)
+        out["monitor"] = _load_monitor_for_message(c, message_id)
+        return out
+
+
+def list_pending_acks(agent_id: str = "", project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """Unacked required messages plus their durable monitor state."""
+    q = ("SELECT * FROM agent_messages WHERE requires_ack=1 AND acked_at IS NULL")
+    params: List[Any] = []
+    if agent_id:
+        q += " AND (from_agent=? OR to_agent=?)"
+        params.extend([agent_id, agent_id])
+    q += " ORDER BY COALESCE(ack_deadline, 9999999999999), priority DESC, id"
+    with _conn(project) as c:
+        rows = c.execute(q, params).fetchall()
+        out = []
+        for r in rows:
+            msg = dict(r)
+            msg["monitor"] = _load_monitor_for_message(c, int(r["id"]))
+            out.append(msg)
+        return out
+
+
+def list_coordination_monitors(status: str = "", kind: str = "",
+                               project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    q = "SELECT * FROM coordination_monitors WHERE 1=1"
+    params: List[Any] = []
+    if status:
+        q += " AND status=?"; params.append(status)
+    if kind:
+        q += " AND kind=?"; params.append(kind)
+    q += " ORDER BY COALESCE(deadline, 9999999999999), created_at"
+    with _conn(project) as c:
+        return [_monitor_row(r) or {} for r in c.execute(q, params).fetchall()]
+
+
+def resolve_monitor(monitor_id: str, reason: str = "manual",
+                    actor: str = "system",
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        r = c.execute("SELECT * FROM coordination_monitors WHERE id=?", (monitor_id,)).fetchone()
+        if not r:
+            return {"error": "monitor not found", "monitor_id": monitor_id}
+        mon = _monitor_row(r) or {}
+        if mon.get("status") == "resolved":
+            return mon | {"note": "already resolved"}
+        result = dict(mon.get("result") or {})
+        result.update({"resolved_by": actor, "reason": reason})
+        c.execute(
+            "UPDATE coordination_monitors SET status='resolved', resolved_at=?, "
+            "updated_at=?, last_checked_at=?, result_json=? WHERE id=?",
+            (now, now, now, json.dumps(result, sort_keys=True), monitor_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (mon.get("task_id"), actor, "monitor.resolved",
+                   json.dumps({"monitor_id": monitor_id, "reason": reason}, sort_keys=True), now))
+        return _monitor_row(c.execute("SELECT * FROM coordination_monitors WHERE id=?",
+                                      (monitor_id,)).fetchone()) or {}
+
+
+def cancel_monitor(monitor_id: str, reason: str = "cancelled",
+                   actor: str = "system",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        r = c.execute("SELECT * FROM coordination_monitors WHERE id=?", (monitor_id,)).fetchone()
+        if not r:
+            return {"error": "monitor not found", "monitor_id": monitor_id}
+        mon = _monitor_row(r) or {}
+        if mon.get("status") == "cancelled":
+            return mon | {"note": "already cancelled"}
+        result = dict(mon.get("result") or {})
+        result.update({"cancelled_by": actor, "reason": reason})
+        c.execute(
+            "UPDATE coordination_monitors SET status='cancelled', resolved_at=?, "
+            "updated_at=?, last_checked_at=?, result_json=? WHERE id=?",
+            (now, now, now, json.dumps(result, sort_keys=True), monitor_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (mon.get("task_id"), actor, "monitor.cancelled",
+                   json.dumps({"monitor_id": monitor_id, "reason": reason}, sort_keys=True), now))
+        return _monitor_row(c.execute("SELECT * FROM coordination_monitors WHERE id=?",
+                                      (monitor_id,)).fetchone()) or {}
+
+
+def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
+                                now: Optional[float] = None) -> Dict[str, Any]:
+    """Evaluate durable monitors. Designed for a Switchboard-owned timer or explicit tool call."""
+    now = time.time() if now is None else float(now)
+    checked = resolved = fired = 0
+    events: List[Dict[str, Any]] = []
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT * FROM coordination_monitors WHERE status='pending' ORDER BY created_at"
+        ).fetchall()
+        for row in rows:
+            checked += 1
+            mon = _monitor_row(row) or {}
+            if mon.get("kind") != "ack_deadline":
+                c.execute("UPDATE coordination_monitors SET last_checked_at=?, updated_at=? WHERE id=?",
+                          (now, now, mon["id"]))
+                continue
+            msg = c.execute("SELECT * FROM agent_messages WHERE id=?",
+                            (int(mon.get("target_id") or 0),)).fetchone()
+            if not msg:
+                result = {"reason": "target_missing"}
+                c.execute(
+                    "UPDATE coordination_monitors SET status='cancelled', resolved_at=?, "
+                    "last_checked_at=?, updated_at=?, result_json=? WHERE id=?",
+                    (now, now, now, json.dumps(result, sort_keys=True), mon["id"]),
+                )
+                events.append({"monitor_id": mon["id"], "status": "cancelled",
+                               "reason": "target_missing"})
+                continue
+            if msg["acked_at"] is not None:
+                result = {"acked_at": msg["acked_at"], "ack_response": msg["ack_response"]}
+                c.execute(
+                    "UPDATE coordination_monitors SET status='resolved', resolved_at=?, "
+                    "last_checked_at=?, updated_at=?, result_json=? WHERE id=?",
+                    (now, now, now, json.dumps(result, sort_keys=True), mon["id"]),
+                )
+                c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                          (mon.get("task_id"), "switchboard/monitor", "monitor.resolved",
+                           json.dumps({"monitor_id": mon["id"], "message_id": msg["id"],
+                                       "reason": "acked"}, sort_keys=True), now))
+                resolved += 1
+                events.append({"monitor_id": mon["id"], "status": "resolved",
+                               "message_id": msg["id"]})
+                continue
+            deadline = mon.get("deadline")
+            if deadline is not None and deadline <= now:
+                result = {"reason": "ack_timeout", "deadline": deadline, "fired_at": now}
+                c.execute(
+                    "UPDATE coordination_monitors SET status='fired', fired_at=?, "
+                    "last_checked_at=?, updated_at=?, result_json=? WHERE id=?",
+                    (now, now, now, json.dumps(result, sort_keys=True), mon["id"]),
+                )
+                payload = {"monitor_id": mon["id"], "message_id": msg["id"],
+                           "from_agent": msg["from_agent"], "to_agent": msg["to_agent"],
+                           "deadline": deadline}
+                c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                          (msg["task_id"], "switchboard/monitor", "monitor.timeout",
+                           json.dumps(payload, sort_keys=True), now))
+                notice = (f"Ack timeout for message {msg['id']} to {msg['to_agent']} "
+                          f"on task {msg['task_id'] or '(none)'}.")
+                cur = c.execute(
+                    "INSERT INTO agent_messages(from_agent, to_agent, task_id, message, "
+                    "requires_ack, ack_deadline, sent_at, signal, priority, idem_key, principal_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    ("switchboard/monitor", msg["from_agent"], msg["task_id"], notice,
+                     0, None, now, "ack_timeout", 100, None, None),
+                )
+                notice_payload = {"id": cur.lastrowid, "from_agent": "switchboard/monitor",
+                                  "to_agent": msg["from_agent"], "task_id": msg["task_id"],
+                                  "message": notice, "requires_ack": False,
+                                  "signal": "ack_timeout", "priority": 100,
+                                  "sent_at": now}
+                c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                          (msg["task_id"], "switchboard/monitor", "message.sent",
+                           json.dumps(notice_payload, sort_keys=True), now))
+                fired += 1
+                events.append({"monitor_id": mon["id"], "status": "fired",
+                               "message_id": msg["id"], "notice_id": cur.lastrowid})
+            else:
+                c.execute("UPDATE coordination_monitors SET last_checked_at=?, updated_at=? WHERE id=?",
+                          (now, now, mon["id"]))
+    return {"project": project, "checked": checked, "resolved": resolved,
+            "fired": fired, "events": events}
 
 
 def set_task_summary(task_id: str, rationale: str, activity_cursor: int,

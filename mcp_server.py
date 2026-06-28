@@ -443,6 +443,47 @@ def get_message_status(message_id: int, project: str = "maxwell") -> str:
     return _dumps(r) if r else "message not found"
 
 
+@mcp.tool()
+def list_pending_acks(project: str = "maxwell", agent_id: str = "") -> str:
+    """List unacked requires_ack messages plus durable monitor state. agent_id filters to
+    messages either sent by or addressed to that agent. This is the protocol-native way to see
+    what is still waiting on another agent."""
+    return _dumps(store.list_pending_acks(agent_id=agent_id, project=project))
+
+
+@mcp.tool()
+def list_monitors(project: str = "maxwell", status: str = "", kind: str = "") -> str:
+    """List durable Switchboard monitors. status can be pending|fired|resolved|cancelled;
+    kind can be ack_deadline."""
+    return _dumps(store.list_coordination_monitors(status=status, kind=kind, project=project))
+
+
+@mcp.tool()
+def sweep_monitors(ctx: Context, project: str = "maxwell") -> str:
+    """Evaluate durable monitors now: resolve acked messages and fire timed-out ack monitors.
+    This is also what the Switchboard-owned systemd timer calls."""
+    _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.sweep_coordination_monitors(project=project))
+
+
+@mcp.tool()
+def resolve_monitor(monitor_id: str, ctx: Context, project: str = "maxwell",
+                    reason: str = "manual") -> str:
+    """Manually resolve a durable monitor after an operator handles it outside the normal path."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.resolve_monitor(monitor_id, reason=reason,
+                                       actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def cancel_monitor(monitor_id: str, ctx: Context, project: str = "maxwell",
+                   reason: str = "cancelled") -> str:
+    """Cancel a durable monitor that should no longer fire."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.cancel_monitor(monitor_id, reason=reason,
+                                      actor=auth.actor(principal), project=project))
+
+
 # ---- blocking dep requests (§2.2 — requires_ack IM with dep semantics) ------
 @mcp.tool()
 def request_unblock(requesting_agent: str, owner_agent: str,

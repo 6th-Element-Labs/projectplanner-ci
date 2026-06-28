@@ -3,6 +3,7 @@
 workflow engine. Each job is a plain function; the timer invokes this module.
 
   python jobs.py weekly_digest    # generate the digest + deliver via notify (Slack+Email)
+  python jobs.py sweep_monitors   # evaluate Switchboard durable coordination monitors
 
 Loads /opt/projectplanner/.env via the systemd EnvironmentFile (same as the web app).
 """
@@ -55,8 +56,28 @@ def summarize_pending():
     return total
 
 
+def sweep_monitors():
+    """Evaluate durable coordination monitors for every project.
+
+    This is deliberately a Switchboard job, not a Codex-thread reminder: monitor state lives
+    in SQLite, and this job only advances that durable state.
+    """
+    total_checked = total_fired = total_resolved = 0
+    for project_id in store.PROJECTS:
+        store.init_db(project_id)
+        res = store.sweep_coordination_monitors(project=project_id)
+        print(f"  [{project_id}] checked={res['checked']} fired={res['fired']} "
+              f"resolved={res['resolved']}")
+        total_checked += res["checked"]
+        total_fired += res["fired"]
+        total_resolved += res["resolved"]
+    print(f"sweep_monitors: checked={total_checked} fired={total_fired} "
+          f"resolved={total_resolved}")
+    return {"checked": total_checked, "fired": total_fired, "resolved": total_resolved}
+
+
 JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
-        "summarize_pending": summarize_pending}
+        "summarize_pending": summarize_pending, "sweep_monitors": sweep_monitors}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else "weekly_digest"

@@ -128,10 +128,33 @@ try:
         project=P,
     )
     ok(msg["signal"] == "stop" and msg["priority"] == 10, "messages carry signal and priority")
+    ok(msg.get("monitor_id") and msg.get("monitor", {}).get("kind") == "ack_deadline",
+       "requires_ack creates a durable ack monitor")
     inbox = store.list_unacked_messages("claude/TEST#2", project=P)
     ok(inbox and inbox[0]["id"] == msg["id"], "inbox returns unacked directed message")
     ack = store.ack_message(msg["id"], response="denied before tool", actor="claude/TEST#2", project=P)
     ok(ack["acked_at"] is not None, "ack_message records receipt")
+    acked_status = store.get_message_status(msg["id"], project=P)
+    ok(acked_status["monitor"]["status"] == "resolved", "ack_message resolves durable monitor")
+    timed = store.send_agent_message(
+        "codex/TEST#1",
+        "claude/TEST#2",
+        "please ack quickly",
+        task_id="TEST-1",
+        requires_ack=True,
+        ack_deadline_minutes=-1,
+        project=P,
+    )
+    pending = store.list_pending_acks("codex/TEST#1", project=P)
+    ok(any(m["id"] == timed["id"] and m["monitor"]["status"] == "pending" for m in pending),
+       "list_pending_acks exposes outstanding ack monitors")
+    swept = store.sweep_coordination_monitors(project=P)
+    ok(swept["fired"] == 1, "sweep_coordination_monitors fires timed-out ack monitor")
+    timed_status = store.get_message_status(timed["id"], project=P)
+    ok(timed_status["monitor"]["status"] == "fired", "timed-out monitor stays fired until resolved")
+    timeout_notice = store.list_unacked_messages("codex/TEST#1", project=P)
+    ok(any(m.get("signal") == "ack_timeout" for m in timeout_notice),
+       "ack timeout sends a notice back to the sender")
 
     first = store.create_task({"workstream_id": "TEST", "title": "first"}, actor="seed", project=P)
     second = store.create_task({"workstream_id": "TEST", "title": "second",

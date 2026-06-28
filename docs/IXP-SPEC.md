@@ -189,6 +189,16 @@ recipient change its execution.
 - `inbox(project, to_agent, unacked=true, signal?) → [msg]` — the recipient's queue.
 - `ack(project, message_id, response?) → msg` — recipient confirms receipt/handling.
 - `status(project, message_id) → msg` — sender checks for ack.
+- `list_pending_acks(project, agent_id?) → [msg+monitor]` — outstanding ack-required messages.
+- `list_monitors(project, status?, kind?) → [monitor]` — durable monitor state.
+- `sweep_monitors(project) → {checked,resolved,fired,events}` — evaluate monitors now.
+- `resolve_monitor(project, monitor_id, reason?) → monitor` — operator/manual cleanup.
+- `cancel_monitor(project, monitor_id, reason?) → monitor` — stop a monitor that should not fire.
+
+If `requires_ack=true`, `send` **MUST** create a durable `ack_deadline` monitor and return
+`monitor_id`. `requires_ack` is not just metadata: if no agent acks before `ack_deadline`, the
+monitor sweep writes a `monitor.timeout` activity event and sends an `ack_timeout` notice to the
+sender. A production Switchboard deployment SHOULD run monitor sweep on a durable host timer.
 
 ### 7.2 Signals
 
