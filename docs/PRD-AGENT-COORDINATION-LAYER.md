@@ -293,6 +293,15 @@ We expose a uniform API but publish the real guarantees:
 tightest external signal lands at a **boundary** (tool call / turn). For a working agent
 that's seconds — enough for stop/redirect/heads-up, not a freeze.
 
+**Adoption is a three-tier model, not a hope** (full design: [ADR-0004](decisions/0004-adoption-and-enforcement.md)):
+**T1 advisory** — the handshake + "never self-set `Done`" live in the MCP `instructions`/tool
+descriptions (every runtime). **T2 enforced** — a per-runtime **adapter** (Claude Code
+`SessionStart` injects the working agreement + registers; `PreToolUse` denies self-`Done` and
+write-before-claim) makes the handshake a guarantee. **T3 launcher-owned** — `dispatch.py`
+installs the adapter + registers before handoff, so board-launched agents are born in-contract.
+*Availability* (loading the tools) is just MCP config; *adoption* is the adapter. Reference
+implementation: [`adapters/claude-code/`](../adapters/claude-code/).
+
 ---
 
 ## 11. Non-functional requirements

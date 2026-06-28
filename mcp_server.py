@@ -48,7 +48,13 @@ mcp = FastMCP(
         "to the named board — they can never cross. Use search_tasks/get_task to read, board_summary "
         "for the at-a-glance board, get_plan_signals for health, and create_task/update_task/add_comment "
         "to change a plan. ask_plan also takes project (Helm answers are board-grounded incl. "
-        "code-audit comments); doc_search remains Maxwell-only."
+        "code-audit comments); doc_search remains Maxwell-only.\n\n"
+        "SESSION-START HANDSHAKE (do this first): (1) call get_working_agreement(project) and "
+        "follow its rules for the whole session; (2) register_agent; (3) drain your inbox. "
+        "DEFINITION OF DONE: you may move a task only as far as 'In Review' (via complete with "
+        "branch+SHA evidence) — you MUST NOT set status to 'Done'. Only the merge webhook marks "
+        "Done. Push your branch before you claim progress; we squash-merge, so trust the board's "
+        "merged_sha, never `git branch --merged`. See ADR-0003/0004."
     ),
     host="127.0.0.1",
     port=_PORT,

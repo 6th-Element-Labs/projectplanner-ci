@@ -1,0 +1,28 @@
+{
+  "//": "Switchboard Claude Code adapter (Tier 2 — ADR-0004). Merge these into your project or",
+  "//install": "user .claude/settings.json. $CLAUDE_PROJECT_DIR is set by Claude Code at hook time.",
+  "//env": "Configure via env: PM_BASE (default https://plan.taikunai.com), PM_PROJECT, PM_MCP_TOKEN.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/adapters/claude-code/session_start.py\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__taikun-plan__update_task|Bash|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/adapters/claude-code/pretooluse_guard.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

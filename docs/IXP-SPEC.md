@@ -247,8 +247,12 @@ Every `IXP-core` agent **MUST** perform this sequence at session start, before d
 4. *(if it will edit resources)* `check(...)` then `claim(...)` before the first write.
 
 An agent **SHOULD** repeat step 3 (and a `heartbeat`) at each tool-call boundary, and
-**MUST** `release` its leases on completion. Runtimes **MAY** automate the whole sequence via
-an adapter (hook / SDK lifecycle) so the model need not be relied upon to remember it.
+**MUST** `release` its leases on completion. Runtimes **SHOULD** automate the whole sequence
+via an adapter (hook / SDK lifecycle) so the model need not be relied upon to remember it —
+this is how the handshake becomes a guarantee rather than a suggestion. The adapter contract
+and the three-tier adoption model are specified in
+[ADR-0004](decisions/0004-adoption-and-enforcement.md); the Claude Code reference adapter
+lives in [`adapters/claude-code/`](../adapters/claude-code/).
 
 An agent **MUST NOT** set a task to `Done` itself: it reports progress only up to `In Review`
 via `complete(evidence={branch, head_sha, pr?})`; the merge webhook is the sole writer of
