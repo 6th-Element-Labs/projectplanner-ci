@@ -36,10 +36,15 @@ spawns/keeps-alive/kills each agent it launches.
 ## 2. Run the substrate (Plan VM) — already deployed
 ```bash
 ssh plan-vm; cd /opt/projectplanner
-git pull --ff-only && .venv/bin/python -c "import store;[store.init_db(p) for p in store.PROJECTS]"
+git pull --ff-only
+set -a; . ./.env; set +a       # REQUIRED: .env redirects the data dir to /var/lib/projectplanner.
+                               # Without it, store resolves the empty /opt/*.db and migrates the WRONG file.
+.venv/bin/python -c "import store;[store.init_db(p) for p in store.PROJECTS]"
 sudo systemctl restart projectplanner projectplanner-mcp
 sudo systemctl enable --now projectplanner-monitors.timer   # durable ack/deadline sweep (every 1m)
 ```
+> The live DBs live in `/var/lib/projectplanner/` (env-redirected), not `/opt/projectplanner/`.
+> The `*.db` files under `/opt` are empty placeholders — never point a tool at them.
 
 ## 3. Run an autonomous agent (agent host)
 ```bash
