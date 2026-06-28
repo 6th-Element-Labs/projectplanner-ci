@@ -42,7 +42,7 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `reconcile_alerts(project, alert_to?, min_severity?)`
 - `request_wake(...)`, `list_wake_intents(...)`, `claim_wake(...)`, `complete_wake(...)`,
   `cancel_wake(...)`
-- `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`
+- `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`, `revoke_claim(...)`
 - `report_usage(...)`, `record_outcome(...)`, `verify_outcome(...)`, `reject_outcome(...)`
 - `create_kpi(...)`, `update_kpi_value(...)`, `link_outcome_to_kpi(...)`
 - `get_task_tally(...)`, `get_kpi_tally(...)`
@@ -91,6 +91,10 @@ Dispatch rule:
   required/matched capabilities, and skipped counts by constraint.
 - `budget.status` and `recommendation.model_tier` are advisory guidance for the runtime; they
   should be surfaced to the model/operator before work starts.
+- `revoke_claim(claim_id, reason, reassign_to?, sort_order?, partial_evidence?)` is the
+  operator override path. It releases the active claim, requeues the task, optionally redirects or
+  reprioritizes it, preserves partial evidence, and sends the displaced agent an ack-required
+  `claim_revoked` stop message. After revoke, the old claim cannot complete the task.
 
 Durable ack rule:
 - `send_agent_message(... requires_ack=true ...)` creates a durable `ack_deadline` monitor.

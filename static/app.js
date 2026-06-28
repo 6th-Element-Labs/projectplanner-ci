@@ -249,6 +249,47 @@ const TeepPlan = {
             ${metric('KPI movement', this.compact(tally.verified_kpi_contribution || 0), `${kpis.length} linked KPI${kpis.length === 1 ? '' : 's'}`, 'chart-arrows-vertical')}
         </div>${kpiLine}`;
     },
+    claimControlHtml(t) {
+        const claims = (t.active_claims || []);
+        if (!claims.length) {
+            return `<div class="alert alert-secondary d-flex align-items-center py-2 mb-3">
+                <i class="ti ti-lock-open me-2"></i><span class="small">No active task claim.</span>
+            </div>`;
+        }
+        const rows = claims.map((c) => {
+            const exp = c.expires_at ? new Date(c.expires_at * 1000).toLocaleString() : '—';
+            return `<tr>
+                <td><span class="font-monospace">${this.esc(c.claim_id)}</span></td>
+                <td>${this.esc(c.agent_id)}</td>
+                <td class="text-secondary">${this.esc(exp)}</td>
+            </tr>`;
+        }).join('');
+        const primary = claims[0];
+        return `<div class="card mb-3" id="claim-control" data-claim-id="${this.esc(primary.claim_id)}">
+            <div class="card-header py-2">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="ti ti-hand-stop text-red"></i>
+                    <span class="fw-semibold">Claim control</span>
+                    <span class="badge bg-red-lt">${claims.length} active</span>
+                </div>
+            </div>
+            <div class="table-responsive"><table class="table table-sm card-table mb-0">
+                <thead><tr><th>Claim</th><th>Holder</th><th>Expires</th></tr></thead><tbody>${rows}</tbody>
+            </table></div>
+            <div class="card-body border-top py-3">
+                <div class="row g-2">
+                    <div class="col-12 col-md-5"><label class="form-label small mb-1">Reason</label><input id="claim-revoke-reason" class="form-control form-control-sm" value="operator override"></div>
+                    <div class="col-6 col-md-4"><label class="form-label small mb-1">Redirect agent</label><input id="claim-revoke-reassign" class="form-control form-control-sm" placeholder="codex/DISPATCH-3"></div>
+                    <div class="col-6 col-md-3"><label class="form-label small mb-1">Sort order</label><input id="claim-revoke-sort" class="form-control form-control-sm" type="number" min="1" step="1" value="${this.esc(t.sort_order || '')}"></div>
+                    <div class="col-12"><label class="form-label small mb-1">Partial evidence</label><textarea id="claim-revoke-evidence" class="form-control form-control-sm" rows="2" placeholder='{"branch":"...","head_sha":"..."}'></textarea></div>
+                </div>
+                <div class="btn-list mt-3">
+                    <button id="claim-revoke-btn" class="btn btn-danger btn-sm"><i class="ti ti-ban me-1"></i>Revoke claim</button>
+                    <span id="claim-revoke-flash" class="small text-secondary"></span>
+                </div>
+            </div>
+        </div>`;
+    },
     badge(text, color, light) {
         const cls = light === false ? `bg-${color}` : `bg-${color}-lt`;
         return `<span class="badge ${cls}">${this.esc(text)}</span>`;
@@ -860,6 +901,7 @@ const TeepPlan = {
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
                     <p class="text-secondary">Dispatch hands this task to a Claude Code agent in an isolated worktree. It drafts the change, opens a PR, and reports back here — it never merges or writes to your systems on its own.</p>
                     ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
+                    ${this.claimControlHtml(t)}
                     <button id="edit-dispatch" class="btn btn-primary mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
                     <div id="dispatch-panel"></div>
                     <span id="edit-flash-dev" class="small text-secondary"></span>
@@ -884,6 +926,8 @@ const TeepPlan = {
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
         document.getElementById('edit-dispatch').addEventListener('click', () => this.dispatchTask(t.task_id));
+        const revokeBtn = document.getElementById('claim-revoke-btn');
+        if (revokeBtn) revokeBtn.addEventListener('click', () => this.revokeClaim(t.task_id));
         document.getElementById('chat-send').addEventListener('click', () => this.sendChat(t.task_id));
         document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendChat(t.task_id); });
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('task-modal')).show();
@@ -1051,6 +1095,46 @@ const TeepPlan = {
         if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || 'unknown'), 'danger');
         flash(`Dispatched (job ${data.job_id}) — Claude Code is building it now.`, 'green');
         this._loadDispatch(id);   // render the live panel (status -> Open PR); it self-refreshes
+    },
+
+    async revokeClaim(taskId) {
+        const root = document.getElementById('claim-control');
+        const claimId = root ? root.getAttribute('data-claim-id') : '';
+        const flash = (msg, cls) => { const el = document.getElementById('claim-revoke-flash'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
+        if (!claimId) return;
+        const reason = (document.getElementById('claim-revoke-reason') || {}).value || 'operator override';
+        const reassign = (document.getElementById('claim-revoke-reassign') || {}).value || '';
+        const sortVal = (document.getElementById('claim-revoke-sort') || {}).value || '';
+        const evidenceRaw = ((document.getElementById('claim-revoke-evidence') || {}).value || '').trim();
+        let partial_evidence = {};
+        if (evidenceRaw) {
+            try { partial_evidence = JSON.parse(evidenceRaw); }
+            catch (e) { partial_evidence = { note: evidenceRaw }; }
+        }
+        if (!window.confirm(`Revoke claim ${claimId}?`)) return;
+        flash('Revoking…');
+        try {
+            const body = {
+                reason,
+                reassign_to: reassign.trim(),
+                sort_order: sortVal ? parseInt(sortVal, 10) : null,
+                partial_evidence,
+                notify: true,
+            };
+            const res = await fetch(`api/tasks/${encodeURIComponent(taskId)}/claims/${encodeURIComponent(claimId)}/revoke`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+            const updated = data.task;
+            const i = this.tasks.findIndex((x) => x.task_id === taskId);
+            if (i >= 0 && updated) this.tasks[i] = Object.assign({}, this.tasks[i], updated);
+            flash('Revoked', 'green');
+            this.renderBoard();
+            this.renderTasks();
+            if (this.isGanttVisible()) this.renderGantt();
+            await this.openTask(taskId);
+        } catch (e) { flash('Revoke failed: ' + e.message, 'danger'); }
     },
 
     async _loadDispatch(id) {

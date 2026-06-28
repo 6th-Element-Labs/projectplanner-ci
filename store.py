@@ -595,6 +595,25 @@ def _load_git_state(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
                                     (task_id,)).fetchone())
 
 
+def _active_task_claims_in(c: sqlite3.Connection, task_id: str,
+                           now: Optional[float] = None) -> List[Dict[str, Any]]:
+    now = time.time() if now is None else now
+    rows = c.execute(
+        "SELECT * FROM task_claims WHERE task_id=? AND status='active' "
+        "AND expires_at>? ORDER BY claimed_at",
+        (task_id, now),
+    ).fetchall()
+    return [{
+        "claim_id": r["id"],
+        "task_id": r["task_id"],
+        "agent_id": r["agent_id"],
+        "principal_id": r["principal_id"],
+        "status": r["status"],
+        "claimed_at": r["claimed_at"],
+        "expires_at": r["expires_at"],
+    } for r in rows]
+
+
 def _parse_evidence(evidence: Any) -> Dict[str, Any]:
     if isinstance(evidence, dict):
         return dict(evidence)
@@ -669,6 +688,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
                          for a in c.execute(
                              "SELECT * FROM activity WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]
         t["git_state"] = _load_git_state(c, task_id)
+        t["active_claims"] = _active_task_claims_in(c, task_id)
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
             t["rationale"] = s["rationale"]
@@ -1688,6 +1708,9 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
         row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
         if not row:
             return {"error": "claim not found", "claim_id": claim_id}
+        if row["status"] != "active":
+            return {"error": "claim is not active", "claim_id": claim_id,
+                    "status": row["status"]}
         c.execute("UPDATE task_claims SET status='completed', completed_at=? WHERE id=?",
                   (now, claim_id))
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
@@ -1728,6 +1751,9 @@ def abandon_claim(claim_id: str, reason: str,
         row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
         if not row:
             return {"error": "claim not found", "claim_id": claim_id}
+        if row["status"] != "active":
+            return {"error": "claim is not active", "claim_id": claim_id,
+                    "status": row["status"]}
         c.execute("UPDATE task_claims SET status='abandoned', abandon_reason=? WHERE id=?",
                   (reason, claim_id))
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
@@ -1740,6 +1766,117 @@ def abandon_claim(claim_id: str, reason: str,
                   (row["task_id"], actor, "task.claim.abandoned",
                    json.dumps({"claim_id": claim_id, "reason": reason}, sort_keys=True), now))
     return {"abandoned": True, "claim_id": claim_id, "task_id": row["task_id"]}
+
+
+def revoke_claim(claim_id: str, reason: str,
+                 reassign_to: str = "", sort_order: Optional[int] = None,
+                 partial_evidence: Any = None, notify: bool = True,
+                 ack_deadline_minutes: float = 5,
+                 expected_task_id: str = "",
+                 actor: str = "switchboard/operator",
+                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Operator override for an active task claim.
+
+    Unlike abandon_claim(), revoke_claim() records that a human/operator took
+    control, preserves partial evidence, optionally redirects the task, and
+    sends the displaced holder an ack-required stop signal.
+    """
+    now = time.time()
+    reason = (reason or "").strip() or "operator override"
+    reassignee = (reassign_to or "").strip()
+    evidence_obj = _parse_evidence(partial_evidence)
+    notification = None
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
+        if not row:
+            return {"error": "claim not found", "claim_id": claim_id}
+        if row["status"] != "active":
+            return {"error": "claim is not active", "claim_id": claim_id,
+                    "status": row["status"]}
+        task_id = row["task_id"]
+        if expected_task_id and task_id != expected_task_id:
+            return {"error": "claim belongs to a different task", "claim_id": claim_id,
+                    "task_id": task_id, "expected_task_id": expected_task_id}
+        task = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not task:
+            return {"error": "task not found", "task_id": task_id, "claim_id": claim_id}
+
+        c.execute(
+            "UPDATE task_claims SET status='revoked', completed_at=?, abandon_reason=? "
+            "WHERE id=?",
+            (now, f"revoked by {actor}: {reason}", claim_id),
+        )
+        c.execute(
+            "UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
+            "AND task_id=? AND agent_id=? AND released_at IS NULL",
+            (now, task_id, row["agent_id"]),
+        )
+
+        sets = ["status='Not Started'", "assignee=?", "updated_at=?"]
+        vals: List[Any] = [reassignee or None, now]
+        if sort_order is not None:
+            sets.append("sort_order=?")
+            vals.append(int(sort_order))
+        vals.append(task_id)
+        c.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE task_id=? "
+                  "AND status NOT IN ('Done', 'Cancelled', 'Canceled')", vals)
+
+        git_state = None
+        if evidence_obj:
+            git_updates = {
+                "branch": evidence_obj.get("branch"),
+                "head_sha": evidence_obj.get("head_sha"),
+                "pushed_at": now if evidence_obj.get("head_sha") else None,
+                "pr_number": evidence_obj.get("pr_number"),
+                "pr_url": evidence_obj.get("pr_url"),
+                "evidence": {"operator_revoke": evidence_obj},
+            }
+            if any(v is not None for v in git_updates.values()):
+                git_state = _upsert_git_state(c, task_id, git_updates)
+
+        payload = {
+            "claim_id": claim_id,
+            "task_id": task_id,
+            "revoked_agent": row["agent_id"],
+            "reason": reason,
+            "reassigned_to": reassignee or None,
+            "sort_order": sort_order,
+            "partial_evidence": evidence_obj,
+        }
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "task.claim.revoked",
+                   json.dumps(payload, sort_keys=True), now))
+        updated_task = _task_row(c.execute("SELECT * FROM tasks WHERE task_id=?",
+                                           (task_id,)).fetchone())
+        updated_task["git_state"] = git_state or _load_git_state(c, task_id)
+        updated_task["active_claims"] = _active_task_claims_in(c, task_id, now)
+
+    if notify:
+        msg = (f"Operator revoked claim {claim_id} on {updated_task['task_id']}. "
+               f"Stop work, preserve any local evidence, and ack this message. "
+               f"Reason: {reason}.")
+        if reassignee:
+            msg += f" Redirected to {reassignee}."
+        notification = send_agent_message(
+            actor,
+            row["agent_id"],
+            msg,
+            task_id=updated_task["task_id"],
+            requires_ack=True,
+            ack_deadline_minutes=ack_deadline_minutes,
+            signal="claim_revoked",
+            priority=20,
+            project=project,
+        )
+    return {
+        "revoked": True,
+        "claim_id": claim_id,
+        "task_id": updated_task["task_id"],
+        "revoked_agent": row["agent_id"],
+        "reassigned_to": reassignee or None,
+        "task": updated_task,
+        "notification": notification,
+    }
 
 
 def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",

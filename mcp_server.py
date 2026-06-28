@@ -867,6 +867,31 @@ def abandon_claim(claim_id: str, reason: str, ctx: Context,
 
 
 @mcp.tool()
+def revoke_claim(claim_id: str, reason: str, ctx: Context,
+                 project: str = "maxwell", reassign_to: str = "",
+                 sort_order: int = 0, partial_evidence: str = "",
+                 notify: bool = True, ack_deadline_minutes: float = 5) -> str:
+    """Operator override for a live claim.
+
+    Revokes the active task claim, releases its task lease, requeues the task,
+    optionally redirects/reprioritizes it, preserves partial evidence, and sends
+    the displaced agent an ack-required claim_revoked message.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.revoke_claim(
+        claim_id,
+        reason=reason,
+        reassign_to=reassign_to,
+        sort_order=sort_order if sort_order > 0 else None,
+        partial_evidence=partial_evidence,
+        notify=notify,
+        ack_deadline_minutes=ack_deadline_minutes,
+        actor=auth.actor(principal),
+        project=project,
+    ))
+
+
+@mcp.tool()
 def report_usage(ctx: Context, source: str = "agent_report", confidence: str = "reported",
                  task_id: str = "", claim_id: str = "", agent_id: str = "",
                  outcome_id: str = "",

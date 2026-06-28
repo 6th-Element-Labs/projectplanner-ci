@@ -215,6 +215,34 @@ async def move_task(request: Request, task_id: str, body: dict = Body(...),
     return result
 
 
+@app.post("/api/tasks/{task_id}/claims/{claim_id}/revoke")
+async def api_revoke_claim(request: Request, task_id: str, claim_id: str,
+                           body: dict = Body(default={}), project: str = Query(...)):
+    project = _proj(project)
+    body = body or {}
+    actor = _actor_from_request(request, "switchboard/operator")
+    sort_order = body.get("sort_order")
+    try:
+        sort_order_value = int(sort_order) if sort_order not in (None, "") else None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "sort_order must be an integer")
+    result = store.revoke_claim(
+        claim_id,
+        reason=body.get("reason") or "operator override",
+        reassign_to=body.get("reassign_to") or body.get("reassigned_to") or "",
+        sort_order=sort_order_value,
+        partial_evidence=body.get("partial_evidence") or body.get("evidence") or {},
+        notify=body.get("notify") is not False,
+        ack_deadline_minutes=float(body.get("ack_deadline_minutes") or 5),
+        expected_task_id=task_id,
+        actor=actor,
+        project=project,
+    )
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.post("/api/tasks/{task_id}/comment")
 async def comment(request: Request, task_id: str, body: dict = Body(...), project: str = Query(...)):
     text = (body.get("text") or "").strip()
@@ -949,6 +977,29 @@ async def txp_abandon_claim(request: Request, body: dict = Body(...)):
     principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
     return store.abandon_claim(body.get("claim_id") or "", reason=body.get("reason") or "unspecified",
                                actor=auth.actor(principal), project=project)
+
+
+@app.post("/txp/v1/revoke_claim")
+async def txp_revoke_claim(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("operator_agent") or "switchboard/operator")
+    sort_order = body.get("sort_order")
+    try:
+        sort_order_value = int(sort_order) if sort_order not in (None, "") else None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "sort_order must be an integer")
+    return store.revoke_claim(
+        body.get("claim_id") or "",
+        reason=body.get("reason") or "operator override",
+        reassign_to=body.get("reassign_to") or body.get("reassigned_to") or "",
+        sort_order=sort_order_value,
+        partial_evidence=body.get("partial_evidence") or body.get("evidence") or {},
+        notify=body.get("notify") is not False,
+        ack_deadline_minutes=float(body.get("ack_deadline_minutes") or 5),
+        actor=auth.actor(principal),
+        project=project,
+    )
 
 
 @app.post("/tally/v1/spend/ingest")

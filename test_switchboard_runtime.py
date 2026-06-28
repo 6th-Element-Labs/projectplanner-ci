@@ -390,6 +390,67 @@ try:
        "claim_next returns dispatch reason and budget status")
     ok(scored["recommendation"]["model_tier"] == "balanced",
        "claim_next returns model guidance from risk/budget/capability context")
+    override = store.create_task({
+        "workstream_id": "OVERRIDE",
+        "title": "operator needs to redirect this claim",
+        "risk_level": "Medium",
+    }, actor="seed", project=P)
+    override_claim = store.claim_next(
+        agent_id="claude/OVERRIDE#1",
+        lanes=["OVERRIDE"],
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(override_claim.get("claimed") and
+       override_claim["task"]["task_id"] == override["task_id"],
+       "claim_next creates a revocable active claim")
+    override_detail = store.get_task(override["task_id"], project=P)
+    ok(override_detail["active_claims"][0]["claim_id"] == override_claim["claim_id"],
+       "task detail exposes active claims for operator UI")
+    revoked = store.revoke_claim(
+        override_claim["claim_id"],
+        reason="operator redirect to Codex",
+        reassign_to="codex/OVERRIDE#2",
+        sort_order=1,
+        partial_evidence={"branch": "claude/OVERRIDE-spike", "head_sha": "deadbeef"},
+        expected_task_id=override["task_id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(revoked.get("revoked") and revoked["revoked_agent"] == "claude/OVERRIDE#1",
+       "revoke_claim records an operator override")
+    override_after = store.get_task(override["task_id"], project=P)
+    ok(override_after["status"] == "Not Started" and
+       override_after["assignee"] == "codex/OVERRIDE#2" and
+       override_after["active_claims"] == [],
+       "revoke_claim requeues the task and clears active claims")
+    ok(override_after["git_state"]["head_sha"] == "deadbeef" and
+       override_after["git_state"]["evidence"]["operator_revoke"]["branch"] == "claude/OVERRIDE-spike",
+       "revoke_claim preserves partial evidence")
+    revoke_msgs = store.list_unacked_messages("claude/OVERRIDE#1", project=P)
+    ok(any(m.get("signal") == "claim_revoked" and m.get("requires_ack") for m in revoke_msgs),
+       "revoke_claim sends an ack-required stop message")
+    late_complete = store.complete_claim(
+        override_claim["claim_id"],
+        evidence={"head_sha": "late"},
+        actor="claude/OVERRIDE#1",
+        project=P,
+    )
+    ok(late_complete.get("error") == "claim is not active",
+       "revoked claims cannot be completed later by the displaced agent")
+    redirected = store.claim_next(
+        agent_id="codex/OVERRIDE#2",
+        lanes=["OVERRIDE"],
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(redirected.get("claimed") and redirected["task"]["task_id"] == override["task_id"],
+       "redirected task can be claimed again after revoke")
+    cleanup = store.abandon_claim(redirected["claim_id"], "test cleanup",
+                                  actor=auth.actor(p), project=P)
+    ok(cleanup.get("abandoned"), "abandon_claim still releases a current active claim")
     delta = store.get_activity_delta(0, lane="TEST", project=P)
     ok(any(u["task_id"] == first["task_id"] and u["git_state"]["merged_sha"] == "merge789"
            for u in delta["updates"]), "delta includes git_state provenance")

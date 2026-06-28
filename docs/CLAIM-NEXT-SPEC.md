@@ -334,11 +334,34 @@ Reasons:
 
 ### 7.5 `revoke_claim`
 
-Operator/system revokes a claim and optionally sends a stop signal.
+Operator/system revokes a claim, releases its task lease, and sends the displaced holder an
+ack-required stop signal.
 
 ```text
-revoke_claim(project, claim_id, reason, send_stop=true) -> claim
+revoke_claim(
+  project,
+  claim_id,
+  reason,
+  reassign_to?,
+  sort_order?,
+  partial_evidence?,
+  notify=true,
+  ack_deadline_minutes=5
+) -> claim
 ```
+
+Effects:
+
+- `task_claims.status` moves from `active` to `revoked`;
+- the task resource lease is released;
+- the task returns to `Not Started`;
+- `assignee` is set to `reassign_to` when provided, otherwise cleared;
+- `sort_order` is updated when provided, so the scheduler can reprioritize the returned work;
+- `partial_evidence` is preserved in the activity log and git-state evidence when branch/SHA/PR
+  fields are present;
+- the displaced agent receives an ack-required `claim_revoked` message;
+- stale `complete_claim` / `abandon_claim` calls against the revoked claim fail with
+  `claim is not active`.
 
 ---
 
@@ -453,10 +476,11 @@ These events feed delta polling, Tally, reliability scoring, and the operator UI
 4. A repeated `idem_key` returns the same claim.
 5. Unknown project fails closed.
 6. Claim TTL expiry returns work to the queue.
-7. `complete_claim` and `abandon_claim` release the task lease.
-8. Activity events are emitted for every transition.
-9. `claim_next` returns model/budget guidance when Tally data exists.
-10. Selection is deterministic for equal inputs.
+7. `complete_claim`, `abandon_claim`, and `revoke_claim` release the task lease.
+8. `revoke_claim` notifies the displaced agent and prevents stale completion.
+9. Activity events are emitted for every transition.
+10. `claim_next` returns model/budget guidance when Tally data exists.
+11. Selection is deterministic for equal inputs.
 
 ---
 
