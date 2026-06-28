@@ -59,7 +59,10 @@ def _live_agreement():
 
 
 def _agent_id(event):
-    # stable id: prefer the git branch, else the session id.
+    # stable id: explicit PM_AGENT_ID wins (must match the PreToolUse hook), else git branch,
+    # else the session id.
+    if os.environ.get("PM_AGENT_ID"):
+        return os.environ["PM_AGENT_ID"]
     import subprocess
     try:
         b = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
