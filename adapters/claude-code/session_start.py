@@ -54,8 +54,8 @@ def _fallback_agreement():
 
 
 def _live_agreement():
-    # FR-23 endpoint (REST mirror of get_working_agreement); may not exist yet → caller falls back.
-    return _http("GET", f"/ixp/working_agreement?project={PROJECT}")
+    # Codex's live contract (1af1b9c): GET /ixp/v1/working_agreement?project=.
+    return _http("GET", f"/ixp/v1/working_agreement?project={PROJECT}")
 
 
 def _agent_id(event):
@@ -85,12 +85,17 @@ def main():
         agreement = _fallback_agreement()
         source = "bundled fallback (live endpoint unavailable)"
 
-    # 2. best-effort registration (don't fail the session if it's not wired yet)
+    # 2. best-effort registration via Codex's live contract (1af1b9c):
+    #    POST /ixp/v1/register_agent {agent_id, runtime, model, lane, control}.
+    #    control advertises this adapter's fidelity (PRD §10): we can deny at the tool boundary
+    #    (PreToolUse hook) but not mid-token — declare it honestly.
     reg = "registration skipped"
     try:
-        _http("POST", "/ixp/register_agent",
-              {"project": PROJECT, "agent_id": agent_id,
-               "session_id": event.get("session_id", ""), "fidelity": "irq"})
+        _http("POST", "/ixp/v1/register_agent",
+              {"project": PROJECT, "agent_id": agent_id, "runtime": "claude-code",
+               "model": os.environ.get("PM_AGENT_MODEL", ""),
+               "lane": os.environ.get("PM_LANE", ""),
+               "control": {"interrupt": "tool_boundary", "deny": "PreToolUse", "kill": "runner"}})
         reg = f"registered as {agent_id}"
     except Exception:
         reg = f"registration unavailable (would be {agent_id})"
