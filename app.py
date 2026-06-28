@@ -893,14 +893,14 @@ async def _handle_push(payload: dict, project: str):
             )
             notified.append(holder)
 
-    referenced = []
-    for c in commits:
-        referenced.extend(_closing_task_ids(c.get("message", "")))
-    referenced = list(dict.fromkeys(referenced))
+    direct_backfill = await asyncio.to_thread(
+        store.backfill_default_branch_commits,
+        commits, default, "github-webhook", project
+    )
 
     return {"action": "push_processed", "repo": repo, "sha": head_sha,
             "changed_files": len(changed_files), "notified_agents": notified,
-            "referenced_tasks_not_auto_closed": referenced}
+            **direct_backfill}
 
 
 async def _handle_pr(payload: dict, project: str):

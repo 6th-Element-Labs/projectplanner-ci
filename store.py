@@ -3,6 +3,7 @@ bundled plan snapshot. One file, zero ops (see ADR 0007). No shared DB touched."
 import json
 import hashlib
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -32,6 +33,7 @@ PROJECTS = {
                     "pretitle": "6th Element Labs · live dogfood control plane"},
 }
 DEFAULT_PROJECT = "maxwell"
+TASK_ID_RE = re.compile(r"\b([A-Z]+-\d+)\b")
 
 
 def hash_token(token: str) -> str:
@@ -1082,6 +1084,38 @@ def mark_task_default_branch_commit(task_id: str, commit_sha: str,
                   (task_id, actor, "git.default_branch_backfilled",
                    json.dumps(evidence, sort_keys=True), now))
     return {"task_id": task_id, "status": "Done", "git_state": git_state}
+
+
+def backfill_default_branch_commits(commits: List[Dict[str, Any]],
+                                    branch: str = "master",
+                                    actor: str = "github-webhook",
+                                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Stamp In Review tasks referenced by commits that already reached the default branch."""
+    direct_backfilled: List[str] = []
+    direct_backfill_skipped: List[Dict[str, str]] = []
+    seen = set()
+    for commit in commits or []:
+        message = commit.get("message") or commit.get("subject") or ""
+        sha = commit.get("id") or commit.get("sha") or commit.get("commit_sha") or ""
+        if not sha:
+            continue
+        for task_id in dict.fromkeys(TASK_ID_RE.findall(message)):
+            key = (task_id, sha)
+            if key in seen:
+                continue
+            seen.add(key)
+            res = mark_task_default_branch_commit(
+                task_id, sha, branch=branch, subject=message,
+                actor=actor, project=project)
+            if res.get("status") == "Done":
+                direct_backfilled.append(task_id)
+            elif res.get("skipped") or res.get("reason") or res.get("error"):
+                direct_backfill_skipped.append({
+                    "task_id": task_id,
+                    "reason": res.get("reason") or res.get("error") or "skipped",
+                })
+    return {"direct_backfilled_tasks": list(dict.fromkeys(direct_backfilled)),
+            "direct_backfill_skipped": direct_backfill_skipped}
 
 
 def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
