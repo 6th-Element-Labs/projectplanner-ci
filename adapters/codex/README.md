@@ -15,6 +15,7 @@ the thin Codex-specific wiring. Authored as a scaffold by `claude-code` per deci
 | Claim ready scheduler work | ✅ `codex_adapter.py claim-next` and `session-start --claim-next` call `/txp/v1/claim_next` |
 | Report completion evidence | ✅ `codex_adapter.py complete <claim_id>` calls `/txp/v1/complete_claim` with git evidence |
 | Prove managed-runner deny enforcement | ✅ `runner_smoke.py --offline --deny-exit-code 0` blocks a self-Done call before execution |
+| Own a process handle for runner kill | ✅ `supervisor.py start/status/kill` persists `runner_session_id`, log path, and kill snapshot |
 | Prove native Codex hook lifecycle blocks tools | 🔲 not proven in this repo; keep Codex native hook status TBD until a real Codex launcher integrates this shim |
 
 The Codex-specific surface is now a stable JSON stdin/stdout shim. A native Codex hook, wrapper,
@@ -119,3 +120,19 @@ The default candidate is an attempted `update_task(status="Done")`. A passing sm
 `runner_action=blocked_before_execution` and `would_execute=false`. That proves a
 Switchboard-owned runner can honor the adapter's deny verdict; it deliberately reports
 `native_codex_hook_proven=false`.
+
+## Managed process supervisor
+```bash
+PM_RUNNER_DIR=.switchboard/runner \
+  python3 adapters/codex/supervisor.py start \
+    --agent-id codex/current --task-id ADAPTER-8 -- \
+    python3 adapters/codex/codex_adapter.py session-start --claim-next --lanes ADAPTER
+
+python3 adapters/codex/supervisor.py status run_...
+python3 adapters/codex/supervisor.py kill run_... --grace-seconds 5
+```
+
+The supervisor injects `PM_RUNNER_SESSION_ID` and `PM_AGENT_ID`, stores
+`session.json` plus `stdout.log`, and snapshots cwd, branch, `HEAD`, task/claim ids, and log tail
+before kill. This is the concrete process handle behind the `runner_kill` tier; it does not yet
+claim native Codex hook support or implement a hosted `/runner/v1/*` API wrapper.
