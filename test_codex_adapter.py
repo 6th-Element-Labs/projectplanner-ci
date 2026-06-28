@@ -43,6 +43,17 @@ try:
     t2 = codex_adapter.control_fidelity()
     ok(t2["tier"] == "T2" and t2["deny"] == "adapter_cli_pre_tool",
        "deny mode advertises T2 only when explicitly enabled")
+    codex_adapter.sb.ensure_compatible({"protocol": {"version": "ixp.v1",
+                                                     "compatible_versions": ["ixp.v1"]}})
+    ok(codex_adapter.sb.SUPPORTED_PROTOCOL["version"] == "ixp.v1",
+       "shared adapter advertises IXP protocol version")
+    try:
+        codex_adapter.sb.ensure_compatible({"protocol": {"version": "ixp.v9",
+                                                         "compatible_versions": ["ixp.v9"]}})
+        incompatible_failed = False
+    except RuntimeError:
+        incompatible_failed = True
+    ok(incompatible_failed, "shared adapter fails closed on incompatible protocol")
 
     name, ti, cwd = codex_adapter.normalize_pending({
         "toolCall": {

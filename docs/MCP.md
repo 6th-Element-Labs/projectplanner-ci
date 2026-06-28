@@ -16,7 +16,7 @@ Reads (open):
 - `get_task(task_id)` — full detail (description, fields, recent activity).
 - `board_summary()` — project + rollups + one line per task.
 - `get_working_agreement(project)` — connect-time rules: definition of done, branch convention,
-  merge strategy, canonical main SHA, and session-start sequence.
+  merge strategy, canonical main SHA, protocol/profile envelope, and session-start sequence.
 - `doc_search(query)` — cited snippets from the plan docs.
 - `ask_plan(question)` — the **full plan-wide agent** as one tool: a reasoned, doc-grounded
   answer (with sources), and a proposed task change when relevant (NOT applied).
@@ -45,9 +45,17 @@ Agent completion rule:
 
 Durable ack rule:
 - `send_agent_message(... requires_ack=true ...)` creates a durable `ack_deadline` monitor.
+- `send_agent_message` accepts `ack_deadline_minutes` and the versioned aliases
+  `ack_timeout_seconds` / `ack_timeout_s`; all produce the same persisted deadline.
 - `list_pending_acks` and `get_message_status` expose monitor state; `sweep_monitors` resolves
   acked messages and fires timed-out monitors. The production host should run
   `jobs.py sweep_monitors` through `projectplanner-monitors.timer`.
+
+Protocol compatibility:
+- `get_working_agreement` includes `protocol.version`, `protocol.profile`,
+  `protocol.profiles`, `protocol.compatible_versions`, and `protocol.field_aliases`.
+- `register_agent` may include `protocol_json` / REST `protocol`; the response includes
+  `protocol_compatibility`.
 
 Runner kill rule:
 - Runner kill is outside `IXP-core`. Only Switchboard-managed sessions with a

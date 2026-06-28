@@ -82,6 +82,24 @@ META_SECTIONS = ["project", "generated", "schedule_start", "schedule_note", "own
                  "milestones", "consolidated_risks", "consolidated_decisions", "people",
                  "working_agreement"]
 
+PROTOCOL_ENVELOPE = {
+    "name": "switchboard",
+    "version": "ixp.v1",
+    "profile": "p0-dogfood",
+    "profile_version": "2026-06-28",
+    "profiles": {
+        "ixp_core": "1.0",
+        "txp_dispatch": "0.1",
+        "oxp_tally": "0.1",
+        "reconcile": "0.1",
+    },
+    "compatible_versions": ["ixp.v1"],
+    "field_aliases": {
+        "send_agent_message.ack_timeout_seconds": "ack_deadline_minutes",
+        "send_agent_message.ack_timeout_s": "ack_deadline_minutes",
+    },
+}
+
 # A sensible default people list for the assignee picker (the real names in the plan).
 DEFAULT_PEOPLE = ["Steve Ridder", "Taikun eng", "Darko", "Sahir", "Sebastian", "Mike",
                   "Michelle", "Sierra", "Clovis", "Devin", "Brent", "IFS owner", "Nubo"]
@@ -672,15 +690,38 @@ def revoke_principal(principal_id: str, project: str = DEFAULT_PROJECT) -> bool:
         return cur.rowcount > 0
 
 
+def protocol_envelope() -> Dict[str, Any]:
+    return json.loads(json.dumps(PROTOCOL_ENVELOPE))
+
+
+def check_protocol_compatibility(advertised: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not advertised:
+        return {"compatible": True, "mode": "legacy_assumed",
+                "warnings": ["agent did not advertise protocol; treating as pre-PROTO-2"]}
+    version = advertised.get("version") or advertised.get("ixp_version")
+    supported = PROTOCOL_ENVELOPE["compatible_versions"]
+    if version not in supported:
+        return {"compatible": False, "mode": "reject",
+                "reason": f"unsupported protocol version {version!r}; supported={supported}"}
+    return {"compatible": True, "mode": "exact", "version": version,
+            "profile": advertised.get("profile")}
+
+
 def register_agent(agent_id: str, runtime: str, model: str = "", lane: str = "",
                    task_id: str = "", ttl_s: int = 120,
                    control: Optional[Dict[str, Any]] = None,
+                   protocol: Optional[Dict[str, Any]] = None,
                    principal_id: str = "",
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     ttl_s = max(10, int(ttl_s or 120))
-    control_json = json.dumps(control or {}, sort_keys=True)
+    compatibility = check_protocol_compatibility(protocol)
+    stored_control = dict(control or {})
+    if protocol:
+        stored_control["protocol"] = protocol
+    stored_control["protocol_compatibility"] = compatibility
+    control_json = json.dumps(stored_control, sort_keys=True)
     with _conn(project) as c:
         c.execute(
             "INSERT OR REPLACE INTO agent_presence"
@@ -692,10 +733,12 @@ def register_agent(agent_id: str, runtime: str, model: str = "", lane: str = "",
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id or None, actor, "agent.registered",
                    json.dumps({"agent_id": agent_id, "runtime": runtime, "lane": lane,
-                               "control": control or {}}, sort_keys=True), now))
+                               "control": control or {}, "protocol": protocol or {},
+                               "protocol_compatibility": compatibility}, sort_keys=True), now))
     return {"agent_id": agent_id, "runtime": runtime, "model": model or None,
             "lane": lane or None, "task_id": task_id or None,
-            "control": control or {}, "registered_at": now,
+            "control": control or {}, "protocol": protocol or {},
+            "protocol_compatibility": compatibility, "registered_at": now,
             "heartbeat_at": now, "expires_at": now + ttl_s, "ttl_s": ttl_s}
 
 
@@ -1351,15 +1394,19 @@ def get_agent_state(task_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, A
 def send_agent_message(from_agent: str, to_agent: str, message: str,
                        task_id: Optional[str] = None, requires_ack: bool = False,
                        ack_deadline_minutes: Optional[int] = None,
+                       ack_timeout_seconds: Optional[float] = None,
                        signal: Optional[str] = None, priority: int = 0,
                        principal_id: str = "", idem_key: str = "",
                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Send a directed message from one agent to another. Returns the message record."""
     now = time.time()
+    if ack_deadline_minutes is None and ack_timeout_seconds is not None:
+        ack_deadline_minutes = float(ack_timeout_seconds) / 60.0
     deadline = (now + ack_deadline_minutes * 60) if ack_deadline_minutes else None
     payload = {"from_agent": from_agent, "to_agent": to_agent, "message": message,
                "task_id": task_id, "requires_ack": requires_ack,
                "ack_deadline_minutes": ack_deadline_minutes,
+               "ack_timeout_seconds": ack_timeout_seconds,
                "signal": signal, "priority": priority}
     with _conn(project) as c:
         hit = _idem_hit(c, "send", idem_key, from_agent, payload)
@@ -1741,6 +1788,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     override = get_meta("working_agreement", {}, project=project) or {}
     default = {
         "project": project,
+        "protocol": protocol_envelope(),
         "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),
         "branch_convention": "claude/<TASK-ID>-<slug>",
         "definition_of_done": "merged to main with a recorded merge SHA — agents never self-set Done",

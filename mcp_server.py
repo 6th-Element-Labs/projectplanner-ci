@@ -244,17 +244,23 @@ def list_active_leases(project: str = "maxwell") -> str:
 @mcp.tool()
 def register_agent(agent_id: str, runtime: str, ctx: Context, model: str = "",
                    lane: str = "", task_id: str = "", ttl_s: int = 120,
-                   control_json: str = "{}", project: str = "maxwell") -> str:
+                   control_json: str = "{}", protocol_json: str = "{}",
+                   project: str = "maxwell") -> str:
     """Register a live agent session. Call at session start before claiming work.
-    control_json advertises truthful control fidelity, e.g. {"mode":"advisory_poll"}."""
+    control_json advertises truthful control fidelity, e.g. {"mode":"advisory_poll"}.
+    protocol_json advertises the adapter protocol envelope returned by get_working_agreement."""
     principal = _require_write(ctx, project, ("write:ixp",))
     try:
         control = json.loads(control_json or "{}")
     except Exception:
         return _dumps({"error": "control_json must be a JSON object string"})
+    try:
+        protocol = json.loads(protocol_json or "{}")
+    except Exception:
+        return _dumps({"error": "protocol_json must be a JSON object string"})
     return _dumps(store.register_agent(
         agent_id=agent_id, runtime=runtime, model=model, lane=lane, task_id=task_id,
-        ttl_s=ttl_s, control=control, principal_id=principal["id"],
+        ttl_s=ttl_s, control=control, protocol=protocol, principal_id=principal["id"],
         actor=auth.actor(principal), project=project))
 
 
@@ -387,6 +393,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                        ctx: Context, project: str = "maxwell", task_id: str = "",
                        requires_ack: bool = False,
                        ack_deadline_minutes: int = 0,
+                       ack_timeout_seconds: float = 0,
                        signal: str = "", priority: int = 0,
                        idem_key: str = "") -> str:
     """Send a directed message to another agent session. Unlike add_comment (bulletin
@@ -397,6 +404,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
     task_id: the task this message is about (optional).
     requires_ack: if true, the receiving agent should call ack_message to confirm receipt.
     ack_deadline_minutes: how long the sender will wait for an ack (0 = no deadline).
+    ack_timeout_seconds: equivalent seconds-based alias; used when minutes is 0.
 
     Returns the message record including its id. Pass the id to get_message_status to
     check whether the recipient has acked."""
@@ -406,6 +414,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
         task_id=task_id or None,
         requires_ack=requires_ack,
         ack_deadline_minutes=ack_deadline_minutes or None,
+        ack_timeout_seconds=ack_timeout_seconds or None,
         signal=signal or None,
         priority=priority,
         principal_id=principal["id"],

@@ -174,7 +174,8 @@ def on_session_start(cwd=None):
     context = (
         f"## Switchboard working agreement - project '{PROJECT}'\n\n"
         f"Registered as `{me}` with control fidelity `{control['tier']}` "
-        f"(deny={control['deny']}, interrupt={control['interrupt']}).\n\n"
+        f"(deny={control['deny']}, interrupt={control['interrupt']}) and protocol "
+        f"`{sb.SUPPORTED_PROTOCOL['version']}` / `{sb.SUPPORTED_PROTOCOL['profile']}`.\n\n"
         f"{_inbox_context(inbox)}\n\n"
         f"{text}\n\n"
         f"Codex adapter note: if `PM_CODEX_PRETOOL_MODE` is not `deny`, this session is advisory "

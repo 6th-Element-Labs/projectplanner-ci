@@ -28,6 +28,17 @@ import urllib.request
 
 DEFAULT_BASE = os.environ.get("PM_BASE", "https://plan.taikunai.com").rstrip("/")
 TIMEOUT = 4
+SUPPORTED_PROTOCOL = {
+    "name": "switchboard-adapter",
+    "version": "ixp.v1",
+    "profile": "p0-dogfood",
+    "profiles": {
+        "ixp_core": "1.0",
+        "txp_dispatch": "0.1",
+        "oxp_tally": "0.1",
+        "reconcile": "0.1",
+    },
+}
 
 DONE_RULE = ("Working agreement (ADR-0003): agents do not set a task to 'Done'. Move it to "
              "'In Review' via complete(task_id, agent_id, evidence={branch, head_sha, pr}); the "
@@ -44,6 +55,22 @@ def _http(method, path, body=None, base=None, token=None):
         req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         return json.loads(r.read().decode())
+
+
+def ensure_compatible(agreement):
+    """Fail closed when the server advertises an unsupported protocol version."""
+    if not agreement:
+        return
+    proto = agreement.get("protocol") or {}
+    version = proto.get("version") or proto.get("ixp_version")
+    compatible = proto.get("compatible_versions") or [version]
+    if not version:
+        raise RuntimeError("Switchboard server did not advertise a protocol version")
+    if SUPPORTED_PROTOCOL["version"] not in compatible:
+        raise RuntimeError(
+            f"Switchboard protocol mismatch: adapter supports {SUPPORTED_PROTOCOL['version']}, "
+            f"server advertises {version} compatible={compatible}"
+        )
 
 
 def agent_id(cwd=None):
@@ -82,12 +109,16 @@ def handshake(project, agent_id, runtime, base=None, token=None, model="", lane=
     agreement = None
     try:
         agreement = _http("GET", f"/ixp/v1/working_agreement?project={project}", base=base, token=token)
+        ensure_compatible(agreement)
     except Exception:
+        if agreement:
+            raise
         agreement = None
     try:
         _http("POST", "/ixp/v1/register_agent",
               {"project": project, "agent_id": agent_id, "runtime": runtime,
-               "model": model, "lane": lane, "control": control}, base=base, token=token)
+               "model": model, "lane": lane, "control": control,
+               "protocol": SUPPORTED_PROTOCOL}, base=base, token=token)
     except Exception:
         pass
     return agreement

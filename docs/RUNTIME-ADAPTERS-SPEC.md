@@ -42,14 +42,15 @@ remember it:
 
 1. Build a stable `agent_id`.
 2. Authenticate with a per-agent credential.
-3. Call `register_agent`.
-4. Drain `inbox` and handle or ack pending signals.
-5. Call `get_delta` from the last cursor.
-6. Claim required resources before writes or task execution.
-7. Heartbeat and poll at every supported boundary.
-8. Release owned leases on normal completion.
-9. Report completion, abandon, and usage where supported.
-10. Advertise the runtime's actual control fidelity.
+3. Call `get_working_agreement` and verify `protocol.version`.
+4. Call `register_agent` with the adapter's `protocol` envelope.
+5. Drain `inbox` and handle or ack pending signals.
+6. Call `get_delta` from the last cursor.
+7. Claim required resources before writes or task execution.
+8. Heartbeat and poll at every supported boundary.
+9. Release owned leases on normal completion.
+10. Report completion, abandon, and usage where supported.
+11. Advertise the runtime's actual control fidelity.
 
 The adapter may be a hook bundle, SDK middleware, wrapper script, local daemon, library, or
 MCP configuration. The packaging differs per runtime; the behavioral contract does not.
@@ -100,7 +101,9 @@ On session start:
 detect runtime/model/task/lane
 derive agent_id
 authenticate
-register_agent(project, agent_id, runtime, model, lane, task, ttl_s)
+get_working_agreement(project)
+fail_closed_if_protocol_incompatible
+register_agent(project, agent_id, runtime, model, lane, task, ttl_s, protocol)
 inbox(to_agent=agent_id, unacked=true)
 ack or surface pending heads_up/redirect/stop
 get_delta(since_cursor=last_cursor)
@@ -167,6 +170,20 @@ the adapter.
 ---
 
 ## 5. Control fidelity advertisement
+
+Every `register_agent` call from an adapter must include a `protocol` object matching the
+version it verified from `get_working_agreement`:
+
+```json
+{
+  "version": "ixp.v1",
+  "profile": "p0-dogfood",
+  "profiles": {"ixp_core": "1.0", "txp_dispatch": "0.1"}
+}
+```
+
+The response includes `protocol_compatibility`. If it is false, or if the working agreement
+advertises a known-incompatible protocol, the adapter must fail closed before claiming work.
 
 Every `register_agent` call from an adapter must include a `control` object:
 
@@ -408,4 +425,3 @@ Runtime adapters are product-ready when:
 - a missing adapter is visible as a lower-fidelity session, not invisible risk;
 - adapter smoke tests run in CI for the shared SDK and at least one reference pack;
 - docs say exactly which guarantees each runtime has today.
-

@@ -149,6 +149,7 @@ Bearer <token>`.
 ### 5.1 Presence
 
 - `POST /ixp/v1/register_agent`
+  - accepts optional `protocol` envelope; returns `protocol_compatibility`.
 - `POST /ixp/v1/heartbeat`
 - `GET /ixp/v1/agents?project=&lane=`
 
@@ -179,6 +180,7 @@ conflict. `release` is idempotent.
 ### 5.3 Messages and signals
 
 - `POST /ixp/v1/send`
+  - accepts `ack_deadline_minutes` plus seconds aliases `ack_timeout_seconds` / `ack_timeout_s`.
 - `GET /ixp/v1/inbox?project=&to_agent=&unacked=true&signal=`
 - `POST /ixp/v1/ack`
 - `GET /ixp/v1/message_status?project=&message_id=`

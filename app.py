@@ -606,6 +606,7 @@ async def ixp_register_agent(request: Request, body: dict = Body(...)):
         agent_id=agent_id, runtime=runtime, model=body.get("model") or "",
         lane=body.get("lane") or "", task_id=body.get("task") or body.get("task_id") or "",
         ttl_s=int(body.get("ttl_s") or 120), control=body.get("control") or {},
+        protocol=body.get("protocol") or {},
         principal_id=principal["id"], actor=auth.actor(principal), project=project)
 
 
@@ -676,6 +677,9 @@ async def ixp_send(request: Request, body: dict = Body(...)):
         task_id=body.get("task") or body.get("task_id"),
         requires_ack=bool(body.get("requires_ack")),
         ack_deadline_minutes=body.get("ack_deadline_minutes"),
+        ack_timeout_seconds=(body.get("ack_timeout_seconds")
+                             if body.get("ack_timeout_seconds") is not None
+                             else body.get("ack_timeout_s")),
         signal=body.get("signal"), priority=int(body.get("priority") or 0),
         principal_id=principal["id"], idem_key=body.get("idem_key") or "",
         project=project)

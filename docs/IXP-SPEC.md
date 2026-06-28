@@ -97,6 +97,9 @@ Presence answers "who is live, on what, in which runtime" so a sender can addres
 
 - `register_agent(project, agent_id, runtime, model?, lane?, task?, ttl_s=120) → presence`
   — announce a live session; establishes a heartbeat TTL.
+- `register_agent(..., protocol?)` — agents **SHOULD** advertise the `protocol` envelope they
+  support. The response includes `protocol_compatibility`; adapters **MUST** stop or downgrade
+  when it is incompatible.
 - `heartbeat(project, agent_id) → presence` — renew. An agent **SHOULD** heartbeat at an
   interval ≤ `ttl_s/2`.
 - `list_active_agents(project, lane?) → [presence]` — agents whose presence is unexpired.
@@ -109,8 +112,34 @@ Presence answers "who is live, on what, in which runtime" so a sender can addres
 - `presence` object:
   ```json
   {"agent_id":"claude/ENGINE-11","runtime":"claude-code","model":"claude-opus-4-8",
-   "lane":"ENGINE","task":"ENGINE-11","registered_at":"...Z","expires_at":"...Z"}
+   "lane":"ENGINE","task":"ENGINE-11","registered_at":"...Z","expires_at":"...Z",
+   "protocol_compatibility":{"compatible":true,"mode":"exact","version":"ixp.v1"}}
   ```
+
+---
+
+## 4.3 Protocol Envelope
+
+`get_working_agreement(project)` **MUST** include:
+
+```json
+{
+  "protocol": {
+    "name": "switchboard",
+    "version": "ixp.v1",
+    "profile": "p0-dogfood",
+    "profile_version": "2026-06-28",
+    "profiles": {"ixp_core":"1.0","txp_dispatch":"0.1"},
+    "compatible_versions": ["ixp.v1"],
+    "field_aliases": {
+      "send_agent_message.ack_timeout_seconds": "ack_deadline_minutes"
+    }
+  }
+}
+```
+
+Adapters **MUST** fail closed on a known-incompatible `version`. Missing protocol metadata is
+treated as legacy only by the server; adapter packs may require it once their profile says so.
 
 ---
 

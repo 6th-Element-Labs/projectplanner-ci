@@ -64,6 +64,12 @@ try:
     agreement = store.get_working_agreement(P)
     ok("get_working_agreement" in agreement["session_start_sequence"][0],
        "working agreement is step zero of the handshake")
+    ok(agreement["protocol"]["version"] == "ixp.v1",
+       "working agreement advertises protocol version")
+    ok(store.check_protocol_compatibility(agreement["protocol"])["compatible"] is True,
+       "current protocol envelope is compatible")
+    incompatible = store.check_protocol_compatibility({"version": "ixp.v9"})
+    ok(incompatible["compatible"] is False, "unsupported protocol version is incompatible")
     ok(store.coerce_csv_list("ADAPTER, ENFORCE\nDISPATCH") == ["ADAPTER", "ENFORCE", "DISPATCH"],
        "coerce_csv_list splits comma/newline REST fields")
     ok(store.coerce_csv_list(["ADAPTER, ENFORCE", " docs "]) == ["ADAPTER", "ENFORCE", "docs"],
@@ -76,11 +82,14 @@ try:
         lane="TEST",
         task_id="TEST-1",
         control={"mode": "advisory_poll"},
+        protocol=agreement["protocol"],
         principal_id=p["id"],
         actor=auth.actor(p),
         project=P,
     )
     ok(reg["control"]["mode"] == "advisory_poll", "register_agent stores control fidelity")
+    ok(reg["protocol_compatibility"]["compatible"] is True,
+       "register_agent returns protocol compatibility")
     ok(len(store.list_active_agents(lane="TEST", project=P)) == 1, "list_active_agents returns live session")
     hb = store.heartbeat("codex/TEST#1", actor=auth.actor(p), project=P)
     ok(not hb.get("error"), "heartbeat renews registered session")
@@ -135,6 +144,17 @@ try:
     ok(msg["signal"] == "stop" and msg["priority"] == 10, "messages carry signal and priority")
     ok(msg.get("monitor_id") and msg.get("monitor", {}).get("kind") == "ack_deadline",
        "requires_ack creates a durable ack monitor")
+    seconds_msg = store.send_agent_message(
+        "codex/TEST#1",
+        "claude/TEST#2",
+        "ack timeout in seconds",
+        task_id="TEST-1",
+        requires_ack=True,
+        ack_timeout_seconds=2,
+        project=P,
+    )
+    ok(1.0 <= (seconds_msg["ack_deadline"] - seconds_msg["sent_at"]) <= 3.0,
+       "ack_timeout_seconds creates a real ack deadline")
     inbox = store.list_unacked_messages("claude/TEST#2", project=P)
     ok(inbox and inbox[0]["id"] == msg["id"], "inbox returns unacked directed message")
     ack = store.ack_message(msg["id"], response="denied before tool", actor="claude/TEST#2", project=P)
