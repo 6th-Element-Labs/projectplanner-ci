@@ -43,9 +43,12 @@ sudo chown -R ubuntu /opt/projectplanner
 
 ## 4. Run (systemd + Caddy)
 ```bash
-sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service /etc/systemd/system/
+sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
+  deploy/projectplanner-mcp.service deploy/projectplanner-monitors.service \
+  deploy/projectplanner-monitors.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now projectplanner-gateway projectplanner
+sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp
+sudo systemctl enable --now projectplanner-monitors.timer
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 ```
 Caddy fetches the TLS cert automatically once DNS resolves. Visit https://plan.taikunai.com/.
@@ -54,11 +57,32 @@ Caddy fetches the TLS cert automatically once DNS resolves. Visit https://plan.t
 ```bash
 curl -s http://127.0.0.1:8110/health            # {"status":"ok",...}
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
+systemctl list-timers projectplanner-monitors.timer
 ```
 
-## Update / rebase timeline
+## Update live code
 ```bash
 cd /opt/projectplanner && git pull && .venv/bin/pip install -r requirements.txt
+sudo systemctl restart projectplanner projectplanner-mcp
+sudo systemctl restart projectplanner-monitors.timer
+```
+
+## Bootstrap direct-default provenance backfill
+Use this only for legacy dogfood commits that landed directly on the default branch before the
+PR webhook flow was enforced. Normal agent work still goes through `complete_claim` → PR merge
+webhook → `Done`.
+
+```bash
+cd /opt/projectplanner
+PM_BACKFILL_PROJECT=switchboard PM_BACKFILL_DRY_RUN=1 \
+  .venv/bin/python jobs.py backfill_default_branch_provenance
+# If the candidates are correct:
+PM_BACKFILL_PROJECT=switchboard \
+  .venv/bin/python jobs.py backfill_default_branch_provenance
+```
+
+## Rebase timeline
+```bash
 # rebase kickoff (regenerates seed_plan.json); apply to the LIVE db with a dates-only UPDATE:
 .venv/bin/python build_plan_artifacts.py 2026-06-01
 .venv/bin/python - <<'PY'
@@ -73,7 +97,7 @@ for k in ["schedule_start","schedule_note","generated"]:
     c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)", (k, json.dumps(seed[k])))
 c.commit(); print("rebased")
 PY
-sudo systemctl restart projectplanner
+sudo systemctl restart projectplanner projectplanner-mcp
 ```
 
 ## Cost

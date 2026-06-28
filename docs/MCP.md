@@ -81,6 +81,8 @@ principals or set `PM_AUTH_TOKEN` during bootstrap:
 
 - Runs as its own process: `projectplanner-mcp.service` (uvicorn, `127.0.0.1:8111`).
   Caddy routes `/mcp*` → `:8111`, everything else → the web app (`:8110`).
+- The coordination monitor sweep is host-owned: enable `projectplanner-monitors.timer` so
+  `requires_ack` messages can time out and notify senders even if no Codex thread is awake.
 - Shares the SQLite file (WAL) with the web app; reuses `store`/`rag`/`agent` in-process.
 - Auth: reads may remain open; writes are bearer-authenticated when `PM_AUTH_MODE=required`.
   `PM_MCP_TOKEN` and `PM_AUTH_TOKEN` map to compatibility system principals until explicit
