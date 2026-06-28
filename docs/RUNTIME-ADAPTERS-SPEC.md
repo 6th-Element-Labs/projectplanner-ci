@@ -407,6 +407,17 @@ The result should be written as an adapter capability statement:
 }
 ```
 
+The shared fixture lives in [`adapters/conformance.py`](../adapters/conformance.py). The
+reference command uses isolated temporary SQLite databases and requires no background server:
+
+```bash
+python3 adapters/conformance.py
+```
+
+Adapter authors should keep the same checks and swap only the client transport. That lets a
+Claude Code, Codex, Cursor, LangGraph, or raw-loop pack prove the same P0 behavior instead of
+shipping runtime-specific smoke tests with different meanings.
+
 ---
 
 ## 9. Implementation order

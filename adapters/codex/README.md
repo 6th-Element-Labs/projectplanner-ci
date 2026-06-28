@@ -61,6 +61,14 @@ Codex hook fidelity marked TBD/T1.
 PM_PROJECT=switchboard python3 adapters/codex/codex_adapter.py smoke --skip-session
 ```
 
+## P0 Conformance
+```bash
+python3 adapters/conformance.py --adapter codex --runtime codex
+```
+
+The current conformance transport is the local throwaway StoreClient; Codex's live REST/MCP
+transport should be wired to the same fixture when the native launcher surface is stable.
+
 ## Session start
 ```bash
 PM_PROJECT=switchboard PM_AGENT_ID=codex/ADAPTER-2 \
