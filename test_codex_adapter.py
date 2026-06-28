@@ -12,6 +12,12 @@ codex_adapter = importlib.util.module_from_spec(spec)
 sys.modules["codex_adapter"] = codex_adapter
 spec.loader.exec_module(codex_adapter)
 
+RUNNER = ROOT / "adapters" / "codex" / "runner_smoke.py"
+runner_spec = importlib.util.spec_from_file_location("runner_smoke", RUNNER)
+runner_smoke = importlib.util.module_from_spec(runner_spec)
+sys.modules["runner_smoke"] = runner_smoke
+runner_spec.loader.exec_module(runner_smoke)
+
 passed = failed = 0
 
 
@@ -90,6 +96,13 @@ try:
     })
     ok(verdict["decision"] == "deny", "self-Done update is denied through shared core")
     ok(verdict["agent_id"].startswith("codex/"), "pre-tool verdict carries Codex agent id")
+
+    runner_result = runner_smoke.evaluate_candidate(runner_smoke.SELF_DONE_CANDIDATE,
+                                                    offline=True)
+    ok(runner_result["runner_action"] == "blocked_before_execution",
+       "managed runner blocks deny before execution")
+    ok(runner_result["native_codex_hook_proven"] is False,
+       "runner smoke does not overclaim native Codex hook proof")
 finally:
     os.environ.pop("PM_CODEX_PRETOOL_MODE", None)
 

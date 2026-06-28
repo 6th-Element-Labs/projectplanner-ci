@@ -14,7 +14,8 @@ the thin Codex-specific wiring. Authored as a scaffold by `claude-code` per deci
 | Wire `evaluate_tool` to a Codex pre-tool hook | ✅ `codex_adapter.py pre-tool` accepts pending tool JSON and prints allow/deny verdicts |
 | Claim ready scheduler work | ✅ `codex_adapter.py claim-next` and `session-start --claim-next` call `/txp/v1/claim_next` |
 | Report completion evidence | ✅ `codex_adapter.py complete <claim_id>` calls `/txp/v1/complete_claim` with git evidence |
-| Prove native Codex hook lifecycle blocks tools | 🔲 still TBD; set `PM_CODEX_PRETOOL_MODE=deny` only when a runner actually honors denials |
+| Prove managed-runner deny enforcement | ✅ `runner_smoke.py --offline --deny-exit-code 0` blocks a self-Done call before execution |
+| Prove native Codex hook lifecycle blocks tools | 🔲 not proven in this repo; keep Codex native hook status TBD until a real Codex launcher integrates this shim |
 
 The Codex-specific surface is now a stable JSON stdin/stdout shim. A native Codex hook, wrapper,
 or launcher can call it without reimplementing Switchboard logic. The remaining unknown is only
@@ -40,6 +41,10 @@ export PM_CODEX_PRETOOL_MODE=deny
 Then `session-start` advertises **T2** (`deny=adapter_cli_pre_tool`,
 `interrupt=tool_boundary`). Runner kill remains the T3/NMI path when Switchboard owns the
 process.
+
+This repo currently proves managed-runner enforcement, not a native Codex product hook. Until a
+Codex launcher invokes `pre-tool` before every call and honors `decision=deny`, leave native
+Codex hook fidelity marked TBD/T1.
 
 ## Config
 `PM_BASE` (default `https://plan.taikunai.com`), `PM_PROJECT` (`switchboard`), `PM_MCP_TOKEN`,
@@ -103,3 +108,14 @@ PM_PROJECT=switchboard PM_AGENT_ID=codex/current \
 
 `complete` records the current git branch and `HEAD` SHA by default, plus any PR fields supplied.
 It moves the task to `In Review`; the GitHub webhook remains the only writer of `Done`.
+
+## Managed runner smoke
+```bash
+PM_PROJECT=switchboard PM_AGENT_ID=codex/current \
+  python3 adapters/codex/runner_smoke.py --offline --deny-exit-code 0
+```
+
+The default candidate is an attempted `update_task(status="Done")`. A passing smoke returns
+`runner_action=blocked_before_execution` and `would_execute=false`. That proves a
+Switchboard-owned runner can honor the adapter's deny verdict; it deliberately reports
+`native_codex_hook_proven=false`.
