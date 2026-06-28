@@ -13,6 +13,7 @@ principal; explicit principals can be created in the SQLite store.
 """
 import json
 import os
+import re
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -50,12 +51,15 @@ mcp = FastMCP(
         "ALWAYS pass project='helm' to read or update Helm tasks (workstreams ENGINE/CHART/CONTRACT/"
         "OWNSHIP/ROUTE/AIS/ALARM/WX/...). ALWAYS pass project='switchboard' for Switchboard/"
         "projectplanner product work. Omit project (or use 'maxwell') only for the Maxwell plan. "
-        "Writes go ONLY to the named board — they can never cross. Use search_tasks/get_task to read, board_summary "
+        "Writes go ONLY to the named board — they can never cross. At boot, call prepare_agent_session "
+        "with your runtime plus assigned task_id/lane/project; it lists boards, validates the selected "
+        "project, and returns a project-bound startup prompt. Use search_tasks/get_task to read, board_summary "
         "for the at-a-glance board, get_plan_signals for health, and create_task/update_task/add_comment "
         "to change a plan. ask_plan also takes project (Helm answers are board-grounded incl. "
         "code-audit comments); doc_search remains Maxwell-only.\n\n"
-        "SESSION-START HANDSHAKE (do this first): (1) call get_working_agreement(project) and "
-        "follow its rules for the whole session; (2) register_agent; (3) drain your inbox. "
+        "SESSION-START HANDSHAKE: (0) call prepare_agent_session(...) if you were assigned a task, "
+        "lane, or project and follow its selected project; (1) call get_working_agreement(project) "
+        "and follow its rules for the whole session; (2) register_agent; (3) drain your inbox. "
         "DEFINITION OF DONE: you may move a task only as far as 'In Review' (via complete with "
         "branch+SHA evidence) — you MUST NOT set status to 'Done'. Only the merge webhook marks "
         "Done. Push your branch before you claim progress; we squash-merge, so trust the board's "
@@ -102,11 +106,268 @@ def _unknown_ids(ids, project):
     return [d for d in ids if not store.get_task(d, project=project)]
 
 
+def _resolve_project_input(project: str) -> str:
+    """Accept either a project id or its display label, case-insensitively."""
+    value = (project or "").strip()
+    if not value:
+        return ""
+    lowered = value.lower()
+    for p in store.projects():
+        if lowered in (p["id"].lower(), (p.get("label") or "").lower()):
+            return p["id"]
+    return lowered
+
+
+def _project_ids_for_task(task_id: str) -> list[str]:
+    tid = (task_id or "").strip().upper()
+    if not tid:
+        return []
+    matches = []
+    for pid in store.project_ids():
+        try:
+            if store.get_task(tid, project=pid):
+                matches.append(pid)
+        except Exception:
+            continue
+    return matches
+
+
+def _project_ids_for_lane(lane: str) -> list[str]:
+    ws = (lane or "").strip().upper()
+    if not ws:
+        return []
+    matches = []
+    for pid in store.project_ids():
+        try:
+            if store.list_tasks(workstream=ws, project=pid):
+                matches.append(pid)
+        except Exception:
+            continue
+    return matches
+
+
+def _task_boot_brief(task):
+    if not task:
+        return None
+    return {
+        "task_id": task.get("task_id"),
+        "title": task.get("title"),
+        "status": task.get("status"),
+        "workstream": task.get("_wsId"),
+        "workstream_name": task.get("_wsName"),
+        "owner_person_or_role": task.get("owner_person_or_role"),
+        "depends_on": task.get("depends_on") or [],
+    }
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
+    return slug[:48].strip("-") or "session"
+
+
+def _suggest_agent_id(runtime: str, agent_id: str, task_id: str, lane: str, task) -> str:
+    if (agent_id or "").strip():
+        return agent_id.strip()
+    rt = (runtime or "").strip() or "<runtime>"
+    if task_id:
+        title = (task or {}).get("title") if task else ""
+        return f"{rt}/{task_id}-{_slugify(title or lane or 'work')}"
+    if lane:
+        return f"{rt}/{lane}-{_slugify('work')}"
+    return f"{rt}/<TASK-ID>-<slug>"
+
+
+def _project_label(project: str) -> str:
+    for p in store.projects():
+        if p["id"] == project:
+            return p.get("label") or project
+    return project
+
+
+def _agent_bootstrap_prompt(project: str, agent_id: str, task_id: str, lane: str) -> str:
+    lines = [
+        f'You are enlisting on Switchboard project="{project}" ({_project_label(project)}).',
+        f'Every board/MCP call in this session must include project="{project}".',
+        'Do not use project="helm", project="maxwell", or any other board unless prepare_agent_session selects it.',
+        "Boot sequence:",
+        f'1. get_working_agreement(project="{project}")',
+        f'2. register_agent(agent_id="{agent_id}", runtime="<your-runtime>", lane="{lane or "<lane>"}", '
+        f'task_id="{task_id or "<task-id>"}", project="{project}", control_json="{{...}}", protocol_json="{{...}}")',
+        f'3. list_unacked_messages(to_agent="{agent_id}", project="{project}")',
+        f'4. list_unblock_requests(owner_agent="{agent_id}", project="{project}")',
+    ]
+    if task_id:
+        lines.append(f'5. get_task(task_id="{task_id}", project="{project}")')
+    elif lane:
+        lines.append(f'5. search_tasks(workstream="{lane}", project="{project}")')
+    else:
+        lines.append(f'5. board_summary(project="{project}")')
+    lines.append('If a task or lane is missing, stop and call prepare_agent_session again before doing work.')
+    return "\n".join(lines)
+
+
+def _first_calls(project: str, agent_id: str, runtime: str, model: str,
+                 task_id: str, lane: str, agreement: dict) -> list[dict]:
+    register_args = {
+        "agent_id": agent_id,
+        "runtime": runtime or "<runtime>",
+        "model": model or "",
+        "lane": lane or "",
+        "task_id": task_id or "",
+        "control_json": json.dumps({"mode": "advisory_poll"}, sort_keys=True),
+        "protocol_json": json.dumps(agreement.get("protocol") or {}, sort_keys=True),
+        "project": project,
+    }
+    calls = [
+        {"tool": "get_working_agreement", "args": {"project": project}},
+        {"tool": "register_agent", "args": register_args},
+        {"tool": "list_unacked_messages", "args": {"to_agent": agent_id, "project": project}},
+        {"tool": "list_unblock_requests", "args": {"owner_agent": agent_id, "project": project}},
+    ]
+    if task_id:
+        calls.append({"tool": "get_task", "args": {"task_id": task_id, "project": project}})
+    elif lane:
+        calls.append({"tool": "search_tasks", "args": {"workstream": lane, "project": project}})
+    else:
+        calls.append({"tool": "board_summary", "args": {"project": project}})
+    return calls
+
+
 # ---- read tools (open) ---------------------------------------------------
 @mcp.tool()
 def list_projects() -> str:
     """List all routable project boards. Returns [{id,label,pretitle}] plus the default id."""
     return _dumps({"projects": store.projects(), "default": store.DEFAULT_PROJECT})
+
+
+@mcp.tool()
+def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = "",
+                          task_id: str = "", lane: str = "", model: str = "",
+                          intent: str = "") -> str:
+    """Boot-time resolver for autonomous agents.
+
+    Call this BEFORE get_working_agreement/register_agent/claim_next. It lists available
+    project boards, resolves task_id or lane to the correct project when possible, validates
+    any explicit project choice, and returns a project-bound startup prompt plus exact first
+    MCP calls. This prevents agents from silently landing on the default Maxwell board or
+    doing Vulkan work on Helm.
+    """
+    tid = (task_id or "").strip().upper()
+    ws = (lane or "").strip().upper()
+    selected = _resolve_project_input(project)
+    task_matches = _project_ids_for_task(tid)
+    lane_matches = _project_ids_for_lane(ws)
+    warnings: list[str] = []
+    projects_payload = store.projects()
+
+    if selected and not store.has_project(selected):
+        return _dumps({
+            "ok": False,
+            "status": "unknown_project",
+            "error": f"project '{project}' is not a routable Switchboard project",
+            "projects": projects_payload,
+            "selected_project": None,
+            "task_matches": task_matches,
+            "lane_matches": lane_matches,
+            "next_step": "Pick one of projects[].id and call prepare_agent_session again.",
+        })
+
+    if selected and tid and selected not in task_matches:
+        return _dumps({
+            "ok": False,
+            "status": "project_task_mismatch" if task_matches else "task_not_found",
+            "error": (
+                f"task_id '{tid}' is not on project '{selected}'"
+                + (f"; it exists on {', '.join(task_matches)}" if task_matches else "")
+            ),
+            "projects": projects_payload,
+            "selected_project": selected,
+            "task_matches": task_matches,
+            "lane_matches": lane_matches,
+            "next_step": (
+                f"Use project='{task_matches[0]}' for task_id='{tid}'."
+                if len(task_matches) == 1 else
+                "Choose the intended project explicitly, or create the missing task on that project."
+            ),
+        })
+
+    if selected and ws and lane_matches and selected not in lane_matches:
+        return _dumps({
+            "ok": False,
+            "status": "project_lane_mismatch",
+            "error": f"lane '{ws}' is not on project '{selected}'; it exists on {', '.join(lane_matches)}",
+            "projects": projects_payload,
+            "selected_project": selected,
+            "task_matches": task_matches,
+            "lane_matches": lane_matches,
+            "next_step": f"Use project='{lane_matches[0]}' for lane='{ws}'." if len(lane_matches) == 1
+            else "Choose the intended project explicitly.",
+        })
+
+    if not selected:
+        candidate_sets = [set(x) for x in (task_matches, lane_matches) if x]
+        if candidate_sets:
+            common = set.intersection(*candidate_sets)
+            candidates = sorted(common or set.union(*candidate_sets))
+            if len(candidates) == 1:
+                selected = candidates[0]
+                warnings.append(f"project inferred from {'task_id' if tid else 'lane'}")
+            else:
+                return _dumps({
+                    "ok": False,
+                    "status": "choice_required",
+                    "error": "task/lane matches multiple projects" if candidates else "no project could be inferred",
+                    "projects": projects_payload,
+                    "selected_project": None,
+                    "task_matches": task_matches,
+                    "lane_matches": lane_matches,
+                    "next_step": "Call prepare_agent_session again with project set to one of projects[].id.",
+                })
+        else:
+            return _dumps({
+                "ok": False,
+                "status": "choice_required",
+                "error": "no project, task_id, or lane selected",
+                "projects": projects_payload,
+                "selected_project": None,
+                "task_matches": task_matches,
+                "lane_matches": lane_matches,
+                "next_step": "Choose a project id from projects[] before register_agent or claim_next.",
+            })
+
+    task = store.get_task(tid, project=selected) if tid else None
+    if task and ws and task.get("_wsId") != ws:
+        return _dumps({
+            "ok": False,
+            "status": "task_lane_mismatch",
+            "error": f"task_id '{tid}' belongs to lane '{task.get('_wsId')}', not lane '{ws}'",
+            "projects": projects_payload,
+            "selected_project": selected,
+            "task": _task_boot_brief(task),
+            "next_step": f"Use lane='{task.get('_wsId')}' or pick the correct task.",
+        })
+    if task and not ws:
+        ws = task.get("_wsId") or ""
+
+    agreement = store.get_working_agreement(project=selected)
+    chosen_agent_id = _suggest_agent_id(runtime, agent_id, tid, ws, task)
+    return _dumps({
+        "ok": True,
+        "status": "ready",
+        "projects": projects_payload,
+        "selected_project": selected,
+        "selected_project_label": _project_label(selected),
+        "task_matches": task_matches,
+        "lane_matches": lane_matches,
+        "task": _task_boot_brief(task),
+        "lane": ws,
+        "agent_id": chosen_agent_id,
+        "intent": intent,
+        "warnings": warnings,
+        "working_agreement": agreement,
+        "first_calls": _first_calls(selected, chosen_agent_id, runtime, model, tid, ws, agreement),
+        "startup_prompt": _agent_bootstrap_prompt(selected, chosen_agent_id, tid, ws),
+    })
 
 
 @mcp.tool()
