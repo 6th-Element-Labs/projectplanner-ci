@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 
 PM_BASE = os.environ.get("PM_BASE", "https://plan.taikunai.com").rstrip("/")
@@ -97,11 +98,40 @@ def _lease_holder(relpath):
     return None
 
 
+def _check_interrupt(me):
+    """FR-14: an inbound stop/redirect signal addressed to me is consumed at THIS tool boundary.
+    Returns (signal, message, from_agent) and acks it (consume-once) so it doesn't re-fire on
+    every subsequent tool. Fail-open: board unreachable → no interrupt → proceed."""
+    try:
+        q = urllib.parse.quote(me, safe="")
+        r = _http("GET", f"/ixp/v1/inbox?project={PROJECT}&to_agent={q}&unacked=true")
+        for m in (r.get("messages") or []):
+            if m.get("signal") in ("stop", "redirect"):
+                try:
+                    _http("POST", "/ixp/v1/ack",
+                          {"project": PROJECT, "message_id": m.get("id"),
+                           "response": "consumed at tool boundary"})
+                except Exception:
+                    pass
+                return m["signal"], m.get("message") or "", m.get("from_agent") or "?"
+    except Exception:
+        return None
+    return None
+
+
 def main():
     ev = _event()
     name = ev.get("tool_name", "")
     ti = ev.get("tool_input", {}) or {}
     cwd = ev.get("cwd") or os.getcwd()
+    me = _agent_id(cwd)
+
+    # Rule 0 (FR-14, highest priority): consume an inbound stop/redirect interrupt at this boundary.
+    intr = _check_interrupt(me)
+    if intr:
+        sig, msg, frm = intr
+        _emit("deny", f"[{sig.upper()} from {frm}] {msg}  — interrupt consumed at the tool boundary "
+                      f"(FR-14). Halt or redirect per this message before any further tool use.")
 
     # Rule 1a: MCP board write tool setting status=Done
     if name.endswith("update_task") and str(ti.get("status", "")).strip().lower() == "done":
@@ -119,7 +149,6 @@ def main():
         if not path:
             sys.exit(0)
         rel = _repo_rel(path, cwd)
-        me = _agent_id(cwd)
         holder = _lease_holder(rel)
         if holder and holder.get("held_by") and holder["held_by"] != me:
             try:  # best-effort heads-up to the lease holder (records the event)
