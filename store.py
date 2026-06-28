@@ -21,11 +21,17 @@ SWITCHBOARD_DB_PATH = os.environ.get("PM_SWITCHBOARD_DB_PATH",
 SWITCHBOARD_SEED_PATH = os.environ.get("PM_SWITCHBOARD_SEED_PATH",
                                        os.path.join(os.path.dirname(__file__), "seeds",
                                                     "switchboard_seed_plan.json"))
+PROJECT_REGISTRY_DB_PATH = os.environ.get(
+    "PM_PROJECT_REGISTRY_DB_PATH",
+    os.path.join(os.path.dirname(DB_PATH), "project_registry.db"),
+)
+PROJECT_ID_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
+PROJECT_ID_VALID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,62}$")
 
 # Multi-project registry. Each project is its OWN sqlite file — physical isolation, so a Helm
 # request can never read or write Maxwell's rows (no shared table, no project_id column). The
 # default is always 'maxwell', so every existing caller behaves exactly as before.
-PROJECTS = {
+BUILTIN_PROJECTS = {
     "maxwell": {"db": DB_PATH, "seed": SEED_PATH,
                 "label": "Project Maxwell", "pretitle": "TEEP Barnett · TotalEnergies E&P"},
     "helm": {"db": HELM_DB_PATH, "seed": HELM_SEED_PATH,
@@ -34,8 +40,70 @@ PROJECTS = {
                     "label": "Switchboard — Agent Coordination Layer",
                     "pretitle": "6th Element Labs · live dogfood control plane"},
 }
+# Back-compat for older call sites that only need the built-in project set. New code should call
+# project_ids(), has_project(), projects(), or _resolve() so dynamic projects are included.
+PROJECTS = BUILTIN_PROJECTS
 DEFAULT_PROJECT = "maxwell"
 TASK_ID_RE = re.compile(r"\b([A-Z]+-\d+)\b")
+
+
+def _registry_conn():
+    os.makedirs(os.path.dirname(PROJECT_REGISTRY_DB_PATH), exist_ok=True)
+    c = sqlite3.connect(PROJECT_REGISTRY_DB_PATH)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    return c
+
+
+def init_project_registry() -> None:
+    with _registry_conn() as c:
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                id         TEXT PRIMARY KEY,
+                label      TEXT NOT NULL,
+                pretitle   TEXT,
+                db_path    TEXT NOT NULL,
+                seed_path  TEXT,
+                created_at REAL NOT NULL,
+                created_by TEXT
+            )
+            """
+        )
+
+
+def normalize_project_id(value: str) -> str:
+    """Turn a human project name like 'Vulkan Renderer' into a stable project id."""
+    slug = PROJECT_ID_SLUG_RE.sub("-", (value or "").strip().lower()).strip("-_")
+    slug = re.sub(r"[-_]{2,}", "-", slug)
+    return slug
+
+
+def _dynamic_projects() -> Dict[str, Dict[str, str]]:
+    init_project_registry()
+    with _registry_conn() as c:
+        rows = c.execute("SELECT * FROM projects ORDER BY id").fetchall()
+    return {
+        r["id"]: {
+            "db": r["db_path"],
+            "seed": r["seed_path"],
+            "label": r["label"],
+            "pretitle": r["pretitle"] or "",
+        }
+        for r in rows
+    }
+
+
+def _project_map() -> Dict[str, Dict[str, str]]:
+    return {**_dynamic_projects(), **BUILTIN_PROJECTS}
+
+
+def project_ids() -> List[str]:
+    return list(_project_map())
+
+
+def has_project(project: Optional[str]) -> bool:
+    return (project or DEFAULT_PROJECT) in _project_map()
 
 
 def hash_token(token: str) -> str:
@@ -45,7 +113,8 @@ def hash_token(token: str) -> str:
 
 def projects() -> List[Dict[str, Any]]:
     """The switcher's source of truth — [{id, label, pretitle}]."""
-    return [{"id": k, "label": v["label"], "pretitle": v.get("pretitle", "")} for k, v in PROJECTS.items()]
+    return [{"id": k, "label": v["label"], "pretitle": v.get("pretitle", "")}
+            for k, v in _project_map().items()]
 
 
 def coerce_csv_list(value: Any) -> List[str]:
@@ -65,7 +134,7 @@ def coerce_csv_list(value: Any) -> List[str]:
 def _resolve(project: Optional[str]) -> Dict[str, str]:
     """Map a project id -> its config. Fail CLOSED on an unknown id — never silently fall back
     to Maxwell (which could leak a write across projects)."""
-    p = PROJECTS.get(project or DEFAULT_PROJECT)
+    p = _project_map().get(project or DEFAULT_PROJECT)
     if not p:
         raise ValueError(f"unknown project: {project!r}")
     return p
@@ -351,7 +420,7 @@ def seed_if_empty(project: str = DEFAULT_PROJECT):
         if n:
             return n
         seed_path = _resolve(project)["seed"]
-        if not os.path.exists(seed_path):
+        if not seed_path or not os.path.exists(seed_path):
             return 0
         plan = json.load(open(seed_path))
         now = time.time()
@@ -1781,6 +1850,64 @@ def get_meta(key: str, default=None, project: str = DEFAULT_PROJECT):
 def set_meta(key: str, value, project: str = DEFAULT_PROJECT):
     with _conn(project) as c:
         c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, json.dumps(value)))
+
+
+def create_project(name: str, project_id: str = "", label: str = "", pretitle: str = "",
+                   actor: str = "system", seed_path: str = "") -> Dict[str, Any]:
+    """Create a physically isolated project board and register it for routing.
+
+    Dynamic projects mirror the built-ins: one row in the lightweight registry, one SQLite
+    file for that board's actual task/activity state. The returned id is the value callers pass
+    as project="..." to all normal board tools.
+    """
+    clean_name = (name or "").strip()
+    pid = normalize_project_id(project_id or clean_name)
+    if not clean_name and not pid:
+        return {"error": "project name or project_id required"}
+    if not PROJECT_ID_VALID_RE.match(pid):
+        return {"error": "invalid project id; use 2-63 chars: lowercase letters, digits, '-' or '_'",
+                "project_id": pid}
+    if pid in BUILTIN_PROJECTS:
+        return {"error": f"reserved built-in project id: {pid}", "project_id": pid}
+
+    existing = _dynamic_projects().get(pid)
+    if existing:
+        init_db(pid)
+        seed_if_empty(pid)
+        return {"created": False, "project": {"id": pid, "label": existing["label"],
+                "pretitle": existing.get("pretitle", ""), "db": existing["db"],
+                "seed": existing.get("seed")}}
+
+    base_dir = os.environ.get("PM_DYNAMIC_PROJECTS_DIR") or os.path.dirname(PROJECT_REGISTRY_DB_PATH)
+    os.makedirs(base_dir, exist_ok=True)
+    db_path = os.path.join(base_dir, f"{pid}.db")
+    project_label = (label or clean_name or pid).strip()
+    project_pretitle = (pretitle or "").strip()
+    seed = (seed_path or "").strip() or None
+    now = time.time()
+
+    init_project_registry()
+    with _registry_conn() as c:
+        c.execute(
+            "INSERT INTO projects(id, label, pretitle, db_path, seed_path, created_at, created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (pid, project_label, project_pretitle, db_path, seed, now, actor),
+        )
+    try:
+        init_db(pid)
+        set_meta("project", project_label, project=pid)
+        set_meta("people", DEFAULT_PEOPLE, project=pid)
+        if project_pretitle:
+            set_meta("pretitle", project_pretitle, project=pid)
+        if seed:
+            seed_if_empty(pid)
+    except Exception:
+        with _registry_conn() as c:
+            c.execute("DELETE FROM projects WHERE id=?", (pid,))
+        raise
+
+    return {"created": True, "project": {"id": pid, "label": project_label,
+            "pretitle": project_pretitle, "db": db_path, "seed": seed}}
 
 
 def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:

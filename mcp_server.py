@@ -26,7 +26,8 @@ import rag
 import signals
 import store
 
-for _pid in store.PROJECTS:  # ensure every project's schema exists (the web app normally seeds them)
+store.init_project_registry()
+for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
     store.init_db(_pid)
     store.seed_if_empty(_pid)
 
@@ -42,13 +43,14 @@ _SECURITY = TransportSecuritySettings(
 mcp = FastMCP(
     "taikun-plan",
     instructions=(
-        "Multi-project planning board. Every task/board tool takes a `project` arg: 'maxwell' "
-        "(default — TEEP Barnett Phase-1 pilot), 'helm' (the Helm marine-chartplotter build), "
-        "or 'switchboard' (the live dogfood board for the agent coordination layer). "
+        "Multi-project planning board. Every task/board tool takes a `project` arg. Built-ins are "
+        "'maxwell' (default — TEEP Barnett Phase-1 pilot), 'helm' (the Helm marine-chartplotter "
+        "build), and 'switchboard' (the live dogfood board for the agent coordination layer); "
+        "additional boards may be created with create_project and discovered with list_projects. "
         "ALWAYS pass project='helm' to read or update Helm tasks (workstreams ENGINE/CHART/CONTRACT/"
         "OWNSHIP/ROUTE/AIS/ALARM/WX/...). ALWAYS pass project='switchboard' for Switchboard/"
-        "projectplanner product work. Omit project (or use 'maxwell') only for the Maxwell plan. Writes go ONLY "
-        "to the named board — they can never cross. Use search_tasks/get_task to read, board_summary "
+        "projectplanner product work. Omit project (or use 'maxwell') only for the Maxwell plan. "
+        "Writes go ONLY to the named board — they can never cross. Use search_tasks/get_task to read, board_summary "
         "for the at-a-glance board, get_plan_signals for health, and create_task/update_task/add_comment "
         "to change a plan. ask_plan also takes project (Helm answers are board-grounded incl. "
         "code-audit comments); doc_search remains Maxwell-only.\n\n"
@@ -101,6 +103,12 @@ def _unknown_ids(ids, project):
 
 
 # ---- read tools (open) ---------------------------------------------------
+@mcp.tool()
+def list_projects() -> str:
+    """List all routable project boards. Returns [{id,label,pretitle}] plus the default id."""
+    return _dumps({"projects": store.projects(), "default": store.DEFAULT_PROJECT})
+
+
 @mcp.tool()
 def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
                  blocking: bool = False, query: str = "", project: str = "maxwell") -> str:
@@ -619,6 +627,21 @@ def get_decision(decision_id: int, project: str = "maxwell") -> str:
 
 
 # ---- task write tools (Switchboard bearer-principal authenticated) -------
+@mcp.tool()
+def create_project(name: str, ctx: Context, project_id: str = "", label: str = "",
+                   pretitle: str = "") -> str:
+    """Create a new isolated project board and make it routable by all board tools.
+
+    Authenticates against project='switchboard' with write:system. `name` is the human
+    name; `project_id` is optional and defaults to a lowercase slug, e.g. name='Vulkan'
+    creates project='vulkan'. Returns the created/existing project record.
+    """
+    principal = _require_write(ctx, "switchboard", ("write:system",))
+    result = store.create_project(name=name, project_id=project_id, label=label,
+                                  pretitle=pretitle, actor=auth.actor(principal))
+    return _dumps(result)
+
+
 @mcp.tool()
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", assignee: str = "",

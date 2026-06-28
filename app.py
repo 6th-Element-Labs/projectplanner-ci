@@ -47,11 +47,12 @@ import store  # noqa: E402
 
 app = FastAPI(title="Taikun PM", version="0.1.0")
 
+store.init_project_registry()
 store.init_db()
 _seeded = store.seed_if_empty()
 # Additional projects — each in its OWN db file; one-shot seed, guarded so a restart never
 # wipes or re-imports. Maxwell (DEFAULT_PROJECT) is seeded above, untouched.
-for _pid in store.PROJECTS:
+for _pid in store.project_ids():
     if _pid != store.DEFAULT_PROJECT:
         try:
             store.init_db(_pid)
@@ -63,7 +64,7 @@ for _pid in store.PROJECTS:
 def _proj(project: str) -> str:
     """Validate a project id against the registry — fail closed (400) on anything unknown
     so a bad/stale id can never be silently routed to (or written into) the wrong db."""
-    if project not in store.PROJECTS:
+    if not store.has_project(project):
         raise HTTPException(400, f"unknown project: {project}")
     return project
 
@@ -93,12 +94,14 @@ async def _write_auth_boundary(request: Request, call_next):
     path = request.url.path
     if path.startswith(("/ixp/", "/txp/", "/tally/")) or path == "/api/github/webhook":
         return await call_next(request)
-    project = request.query_params.get("project") or store.DEFAULT_PROJECT
-    if project not in store.PROJECTS:
+    project = "switchboard" if path == "/api/projects" else (
+        request.query_params.get("project") or store.DEFAULT_PROJECT)
+    if not store.has_project(project):
         return JSONResponse({"detail": f"unknown project: {project}"}, status_code=400)
+    required_scopes = ("write:system",) if path == "/api/projects" else ("write:tasks",)
     try:
         request.state.principal = auth.authenticate(
-            project, auth.bearer_from_request(request), ("write:tasks",), dev_actor="web")
+            project, auth.bearer_from_request(request), required_scopes, dev_actor="web")
     except PermissionError as e:
         status = 403 if "forbidden" in str(e) else 401
         return JSONResponse({"detail": str(e)}, status_code=status)
@@ -108,13 +111,28 @@ async def _write_auth_boundary(request: Request, call_next):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "taikun-pm", "tasks": len(store.list_tasks()),
-            "projects": list(store.PROJECTS)}
+            "projects": store.project_ids()}
 
 
 @app.get("/api/projects")
 async def list_projects():
     """The project switcher's source of truth — [{id, label, pretitle}] + the default."""
     return {"projects": store.projects(), "default": store.DEFAULT_PROJECT}
+
+
+@app.post("/api/projects")
+async def create_project(request: Request, body: dict = Body(...)):
+    principal = _principal(request, "switchboard", ("write:system",), dev_actor="web")
+    created = store.create_project(
+        name=body.get("name") or body.get("label") or "",
+        project_id=body.get("project_id") or body.get("id") or "",
+        label=body.get("label") or "",
+        pretitle=body.get("pretitle") or "",
+        actor=auth.actor(principal),
+    )
+    if created.get("error"):
+        raise HTTPException(400, created["error"])
+    return created
 
 
 @app.get("/api/board")

@@ -42,7 +42,7 @@ ssh plan-vm; cd /opt/projectplanner
 git pull --ff-only
 set -a; . ./.env; set +a       # REQUIRED: .env redirects the data dir to /var/lib/projectplanner.
                                # Without it, store resolves the empty /opt/*.db and migrates the WRONG file.
-.venv/bin/python -c "import store;[store.init_db(p) for p in store.PROJECTS]"
+.venv/bin/python -c "import store;[store.init_db(p) for p in store.project_ids()]"
 sudo systemctl restart projectplanner projectplanner-mcp
 sudo systemctl enable --now projectplanner-monitors.timer   # durable ack/deadline sweep (every 1m)
 ```

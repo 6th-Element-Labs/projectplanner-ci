@@ -54,7 +54,7 @@ def summarize_pending():
     PM_SUMMARIZE_MODEL controls the model (default: taikun-chat; set taikun-haiku for cheapest)."""
     import summarize as summarize_mod
     total = 0
-    for project_id in store.PROJECTS:
+    for project_id in store.project_ids():
         results = summarize_mod.run_pending(project=project_id)
         print(f"  [{project_id}] summarized {len(results)} task(s)")
         total += len(results)
@@ -69,7 +69,7 @@ def sweep_monitors():
     in SQLite, and this job only advances that durable state.
     """
     total_checked = total_fired = total_resolved = 0
-    for project_id in store.PROJECTS:
+    for project_id in store.project_ids():
         store.init_db(project_id)
         res = store.sweep_coordination_monitors(project=project_id)
         print(f"  [{project_id}] checked={res['checked']} fired={res['fired']} "
