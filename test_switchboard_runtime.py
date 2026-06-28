@@ -63,6 +63,10 @@ try:
     agreement = store.get_working_agreement(P)
     ok("get_working_agreement" in agreement["session_start_sequence"][0],
        "working agreement is step zero of the handshake")
+    ok(store.coerce_csv_list("ADAPTER, ENFORCE\nDISPATCH") == ["ADAPTER", "ENFORCE", "DISPATCH"],
+       "coerce_csv_list splits comma/newline REST fields")
+    ok(store.coerce_csv_list(["ADAPTER, ENFORCE", " docs "]) == ["ADAPTER", "ENFORCE", "docs"],
+       "coerce_csv_list normalizes list items containing CSV fragments")
 
     reg = store.register_agent(
         agent_id="codex/TEST#1",
@@ -161,7 +165,7 @@ try:
                                 "depends_on": [first["task_id"]]}, actor="seed", project=P)
     claimed = store.claim_next(
         agent_id="codex/TEST#1",
-        lanes=["TEST"],
+        lanes="TEST,OTHER",
         principal_id=p["id"],
         actor=auth.actor(p),
         idem_key="claim-next-1",
@@ -171,7 +175,7 @@ try:
        "claim_next claims the first unblocked task")
     claimed_again = store.claim_next(
         agent_id="codex/TEST#1",
-        lanes=["TEST"],
+        lanes=["TEST,OTHER"],
         principal_id=p["id"],
         actor=auth.actor(p),
         idem_key="claim-next-1",

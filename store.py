@@ -44,6 +44,20 @@ def projects() -> List[Dict[str, Any]]:
     return [{"id": k, "label": v["label"], "pretitle": v.get("pretitle", "")} for k, v in PROJECTS.items()]
 
 
+def coerce_csv_list(value: Any) -> List[str]:
+    """Normalize REST/CLI list fields that may arrive as a list or comma/newline string."""
+    if value is None:
+        return []
+    raw = value if isinstance(value, list) else [value]
+    out: List[str] = []
+    for item in raw:
+        for part in str(item).replace("\n", ",").split(","):
+            part = part.strip()
+            if part:
+                out.append(part)
+    return out
+
+
 def _resolve(project: Optional[str]) -> Dict[str, str]:
     """Map a project id -> its config. Fail CLOSED on an unknown id — never silently fall back
     to Maxwell (which could leak a write across projects)."""
@@ -820,8 +834,8 @@ def _deps_done(task: Dict[str, Any], by_id: Dict[str, Dict[str, Any]]) -> bool:
     return True
 
 
-def claim_next(agent_id: str, lanes: Optional[List[str]] = None,
-               capabilities: Optional[List[str]] = None,
+def claim_next(agent_id: str, lanes: Any = None,
+               capabilities: Any = None,
                max_risk: str = "", max_budget_usd: Optional[float] = None,
                principal_id: str = "", actor: str = "system",
                ttl_seconds: int = 1800, idem_key: str = "",
@@ -833,7 +847,9 @@ def claim_next(agent_id: str, lanes: Optional[List[str]] = None,
     task_claims/activity records.
     """
     now = time.time()
-    lane_set = {x.strip().upper() for x in (lanes or []) if x and x.strip()}
+    lanes = coerce_csv_list(lanes)
+    capabilities = coerce_csv_list(capabilities)
+    lane_set = {x.strip().upper() for x in lanes}
     payload = {"agent_id": agent_id, "lanes": sorted(lane_set),
                "capabilities": sorted(capabilities or []), "max_risk": max_risk,
                "max_budget_usd": max_budget_usd, "ttl_seconds": ttl_seconds}

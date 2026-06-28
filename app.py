@@ -759,10 +759,13 @@ async def ixp_working_agreement(project: str = Query(store.DEFAULT_PROJECT)):
 async def txp_claim_next(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",), dev_actor=body.get("agent_id") or "agent")
+    lanes = store.coerce_csv_list(body.get("lanes"))
+    if not lanes:
+        lanes = store.coerce_csv_list(body.get("lane"))
     return store.claim_next(
         agent_id=body.get("agent_id") or auth.actor(principal),
-        lanes=body.get("lanes") or ([body.get("lane")] if body.get("lane") else []),
-        capabilities=body.get("capabilities") or [],
+        lanes=lanes,
+        capabilities=store.coerce_csv_list(body.get("capabilities")),
         max_risk=body.get("max_risk") or "",
         max_budget_usd=body.get("max_budget_usd"),
         principal_id=principal["id"], actor=auth.actor(principal),
