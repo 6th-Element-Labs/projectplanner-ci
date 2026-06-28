@@ -156,6 +156,13 @@ def get_plan_signals(project: str = "maxwell") -> str:
 
 
 @mcp.tool()
+def get_working_agreement(project: str = "maxwell") -> str:
+    """Connect-time policy for agents: definition of done, branch convention, merge strategy,
+    canonical main SHA, and the session-start sequence. Call before register_agent."""
+    return _dumps(store.get_working_agreement(project=project))
+
+
+@mcp.tool()
 def ask_plan(question: str, project: str = "maxwell") -> str:
     """Ask the plan-wide agent a question about a board. project selects it ('maxwell' default, or
     'helm'). For 'helm' the answer is grounded in the live board (incl. code-audit comments); for
@@ -308,7 +315,9 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
 @mcp.tool()
 def complete_claim(claim_id: str, ctx: Context, evidence: str = "",
                    project: str = "maxwell") -> str:
-    """Mark a task claim completed and release its task lease."""
+    """Mark a task claim completed, release its task lease, and move the task to In Review.
+    evidence should be a JSON object string with branch, head_sha, pr_url/pr_number when known.
+    Agents must NOT set Done; the GitHub merge webhook stamps merged_sha and sets Done."""
     principal = _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.complete_claim(claim_id, evidence=evidence,
                                       actor=auth.actor(principal), project=project))
@@ -352,6 +361,13 @@ def report_usage(ctx: Context, source: str = "agent_report", confidence: str = "
 def get_task_tally(task_id: str, project: str = "maxwell") -> str:
     """Tally rollup for one task: spend by source, total tokens/cost, and outcome denominator."""
     return _dumps(store.task_tally(task_id, project=project))
+
+
+@mcp.tool()
+def reconcile(project: str = "maxwell") -> str:
+    """Run the local board/git-provenance drift report. This first pass catches board-internal
+    contradictions such as Done without merged_sha or In Review without PR/branch evidence."""
+    return _dumps(store.reconcile(project=project))
 
 
 # ---- directed agent IM (IXP write-authenticated) -----------------------

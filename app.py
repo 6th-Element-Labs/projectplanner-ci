@@ -713,6 +713,11 @@ async def ixp_delta(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
     return store.get_activity_delta(since_cursor=since_cursor, lane=lane, project=_proj(project))
 
 
+@app.get("/ixp/v1/working_agreement")
+async def ixp_working_agreement(project: str = Query(store.DEFAULT_PROJECT)):
+    return store.get_working_agreement(project=_proj(project))
+
+
 @app.post("/txp/v1/claim_next")
 async def txp_claim_next(request: Request, body: dict = Body(...)):
     project = _body_project(body)
@@ -732,7 +737,7 @@ async def txp_claim_next(request: Request, body: dict = Body(...)):
 async def txp_complete_claim(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    return store.complete_claim(body.get("claim_id") or "", evidence=body.get("evidence") or "",
+    return store.complete_claim(body.get("claim_id") or "", evidence=body.get("evidence") or {},
                                 actor=auth.actor(principal), project=project)
 
 
@@ -768,6 +773,11 @@ async def tally_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
     return store.task_tally(task_id, project=_proj(project))
 
 
+@app.get("/ixp/v1/reconcile")
+async def ixp_reconcile(project: str = Query(store.DEFAULT_PROJECT)):
+    return store.reconcile(project=_proj(project))
+
+
 # ---- GitHub webhook — §1.2 board↔git auto-sync + §1.3 "main moved" notify ----
 # Configure in GitHub → repo Settings → Webhooks:
 #   Payload URL: https://<your-host>/api/github/webhook
@@ -777,9 +787,9 @@ async def tally_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
 #
 # Behaviour:
 #   push to main/master   → find active leases on changed files, send directed IM
-#                           to each lease holder; also auto-advance task status if
-#                           a commit message contains "closes TASK-ID" / "fixes TASK-ID".
-#   PR merged             → same task-id extraction; mark matched tasks Done.
+#                           to each lease holder. Does NOT mark tasks Done.
+#   PR opened             → record PR provenance + move referenced tasks to In Review.
+#   PR merged             → stamp merged_sha + mark referenced tasks Done.
 
 _GH_SECRET = os.environ.get("PM_GITHUB_WEBHOOK_SECRET", "")
 _CLOSES_RE = re.compile(r"\b(?:closes?|fixes?|resolves?)\s+([A-Z]+-\d+)\b", re.I)
@@ -805,7 +815,7 @@ def _closing_task_ids(text: str) -> list:
 
 
 async def _handle_push(payload: dict, project: str):
-    """Push to default branch: notify active lease holders + auto-advance task status."""
+    """Push to default branch: refresh canonical main SHA + notify active lease holders."""
     ref = payload.get("ref", "")
     default = payload.get("repository", {}).get("default_branch", "main")
     if ref != f"refs/heads/{default}":
@@ -813,7 +823,8 @@ async def _handle_push(payload: dict, project: str):
 
     repo = payload.get("repository", {}).get("full_name", "?")
     commits = payload.get("commits") or []
-    head_sha = payload.get("after", "")[:8]
+    head_sha = payload.get("after", "")
+    await asyncio.to_thread(store.update_canonical_main_sha, head_sha, "github-webhook", project)
 
     # Collect all changed files across the push
     changed_files: list = []
@@ -842,53 +853,58 @@ async def _handle_push(payload: dict, project: str):
             )
             notified.append(holder)
 
-    # Auto-advance tasks mentioned with closes/fixes/resolves
-    closed: list = []
+    referenced = []
     for c in commits:
-        msg = c.get("message", "")
-        for task_id in _closing_task_ids(msg):
-            t = await asyncio.to_thread(store.get_task, task_id, project)
-            if t and t.get("status") not in ("Done", "Cancelled"):
-                await asyncio.to_thread(
-                    store.update_task, task_id, {"status": "Done"}, "github-webhook", project
-                )
-                await asyncio.to_thread(
-                    store.add_comment, task_id, "github-webhook",
-                    f"Auto-closed by commit {c['id'][:8]} on {repo}: {msg[:120]}",
-                    "git", project
-                )
-                closed.append(task_id)
+        referenced.extend(_closing_task_ids(c.get("message", "")))
+    referenced = list(dict.fromkeys(referenced))
 
     return {"action": "push_processed", "repo": repo, "sha": head_sha,
             "changed_files": len(changed_files), "notified_agents": notified,
-            "auto_closed_tasks": closed}
+            "referenced_tasks_not_auto_closed": referenced}
 
 
 async def _handle_pr(payload: dict, project: str):
-    """PR merged: auto-close tasks referenced in the PR title/body/branch."""
+    """PR lifecycle: open -> In Review; merge -> Done with merged_sha."""
     pr = payload.get("pull_request") or {}
-    if payload.get("action") != "closed" or not pr.get("merged"):
-        return {"action": "ignored", "reason": "not a merged PR"}
+    action = payload.get("action")
+    if action not in ("opened", "reopened", "ready_for_review", "closed"):
+        return {"action": "ignored", "reason": f"unsupported PR action {action!r}"}
 
     repo = payload.get("repository", {}).get("full_name", "?")
     pr_num = pr.get("number")
     text = f"{pr.get('title','')} {pr.get('body','')} {pr.get('head',{}).get('ref','')}"
-    closed: list = []
-    for task_id in _closing_task_ids(text):
-        t = await asyncio.to_thread(store.get_task, task_id, project)
-        if t and t.get("status") not in ("Done", "Cancelled"):
-            await asyncio.to_thread(
-                store.update_task, task_id, {"status": "Done"}, "github-webhook", project
+    task_ids = _closing_task_ids(text) or _extract_task_ids(text)
+    branch = pr.get("head", {}).get("ref", "")
+    head_sha = pr.get("head", {}).get("sha", "")
+    pr_url = pr.get("html_url", "")
+    touched: list = []
+    if action in ("opened", "reopened", "ready_for_review"):
+        for task_id in task_ids:
+            res = await asyncio.to_thread(
+                store.mark_task_pr_opened, task_id, pr_num, pr_url, branch, head_sha,
+                "github-webhook", project
             )
+            if not res.get("error"):
+                touched.append(task_id)
+        return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
+                "in_review_tasks": touched}
+
+    if not pr.get("merged"):
+        return {"action": "ignored", "reason": "closed PR was not merged", "pr": pr_num}
+
+    merged_sha = pr.get("merge_commit_sha") or ""
+    closed: list = []
+    for task_id in task_ids:
+        t = await asyncio.to_thread(store.get_task, task_id, project)
+        if t and t.get("status") not in ("Cancelled", "Canceled"):
             await asyncio.to_thread(
-                store.add_comment, task_id, "github-webhook",
-                f"Auto-closed by PR #{pr_num} merge on {repo}: {pr.get('title','')[:120]}",
-                "git", project
+                store.mark_task_merged, task_id, merged_sha, pr_num, pr_url, branch, head_sha,
+                "github-webhook", project
             )
             closed.append(task_id)
 
     return {"action": "pr_processed", "repo": repo, "pr": pr_num,
-            "auto_closed_tasks": closed}
+            "merged_sha": merged_sha, "auto_closed_tasks": closed}
 
 
 @app.post("/api/github/webhook")

@@ -48,6 +48,9 @@ try:
 
     p = auth.authenticate(P, TOKEN, ("write:ixp",))
     ok(p["id"] == principal["id"], "principal authenticates by bearer token")
+    agreement = store.get_working_agreement(P)
+    ok("get_working_agreement" in agreement["session_start_sequence"][0],
+       "working agreement is step zero of the handshake")
 
     reg = store.register_agent(
         agent_id="codex/TEST#1",
@@ -140,8 +143,34 @@ try:
         project=P,
     )
     ok(claimed_again["claim_id"] == claimed["claim_id"], "claim_next is idempotent by idem_key")
-    store.complete_claim(claimed["claim_id"], evidence="smoke", actor=auth.actor(p), project=P)
-    store.update_task(first["task_id"], {"status": "Done"}, actor="verifier", project=P)
+    completed = store.complete_claim(
+        claimed["claim_id"],
+        evidence={"branch": "claude/TEST-1-first", "head_sha": "abc123", "pr_url": "https://example/pr/1"},
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(completed["status"] == "In Review", "complete_claim moves task to In Review, not Done")
+    first_after_complete = store.get_task(first["task_id"], project=P)
+    ok(first_after_complete["status"] == "In Review", "task remains In Review after agent completion")
+    ok(first_after_complete["git_state"]["head_sha"] == "abc123", "complete_claim stores head_sha evidence")
+    waiting_claim = store.claim_next(
+        agent_id="codex/TEST#1",
+        lanes=["TEST"],
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(not waiting_claim.get("claimed"), "claim_next will not claim dependent task before merge-derived Done")
+    opened = store.mark_task_pr_opened(first["task_id"], 1, "https://example/pr/1",
+                                       "claude/TEST-1-first", "abc123",
+                                       actor="github-webhook", project=P)
+    ok(opened["status"] == "In Review" and opened["git_state"]["pr_number"] == 1,
+       "PR open records review provenance")
+    merged = store.mark_task_merged(first["task_id"], "merge789", 1, "https://example/pr/1",
+                                    "claude/TEST-1-first", "abc123",
+                                    actor="github-webhook", project=P)
+    ok(merged["status"] == "Done" and merged["git_state"]["merged_sha"] == "merge789",
+       "PR merge stamps merged_sha and marks task Done")
     next_claim = store.claim_next(
         agent_id="codex/TEST#1",
         lanes=["TEST"],
@@ -151,6 +180,9 @@ try:
     )
     ok(next_claim.get("claimed") and next_claim["task"]["task_id"] == second["task_id"],
        "claim_next respects dependency completion")
+    delta = store.get_activity_delta(0, lane="TEST", project=P)
+    ok(any(u["task_id"] == first["task_id"] and u["git_state"]["merged_sha"] == "merge789"
+           for u in delta["updates"]), "delta includes git_state provenance")
 
     usage = store.report_usage(
         source="agent_report",
@@ -172,8 +204,19 @@ try:
     ok(tally["spend"]["by_source"]["agent_report"]["total_tokens"] == 1200,
        "task_tally preserves spend source")
 
+    bad = store.create_task({"workstream_id": "TEST", "title": "bad done"}, actor="seed", project=P)
+    store.update_task(bad["task_id"], {"status": "Done"}, actor="legacy", project=P)
+    report = store.reconcile(project=P)
+    ok(any(f["code"] == "done_without_merged_sha" and f["task_id"] == bad["task_id"]
+           for f in report["findings"]), "reconcile flags Done without merged_sha")
+    fixed = store.mark_task_merged(bad["task_id"], "legacyfix", actor="github-webhook", project=P)
+    ok(fixed["git_state"]["merged_sha"] == "legacyfix",
+       "merge webhook can stamp provenance onto a legacy Done task")
+    fixed_report = store.reconcile(project=P)
+    ok(not any(f["code"] == "done_without_merged_sha" and f["task_id"] == bad["task_id"]
+               for f in fixed_report["findings"]), "reconcile clears Done task after merge provenance")
+
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
-

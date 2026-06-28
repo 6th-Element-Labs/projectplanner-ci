@@ -193,6 +193,21 @@ def init_db(project: str = DEFAULT_PROJECT):
             );
             CREATE INDEX IF NOT EXISTS ix_task_claims_active
                 ON task_claims(task_id, status, expires_at);
+            CREATE TABLE IF NOT EXISTS task_git_state (
+                task_id            TEXT PRIMARY KEY,
+                branch             TEXT,
+                head_sha           TEXT,
+                pushed_at          REAL,
+                pr_number          INTEGER,
+                pr_url             TEXT,
+                merged_sha         TEXT,
+                merged_at          REAL,
+                in_main_content    INTEGER NOT NULL DEFAULT 0,
+                published_ref      TEXT,
+                last_reconciled_at REAL,
+                evidence_json      TEXT NOT NULL DEFAULT '{}',
+                updated_at         REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS idempotency_keys (
                 idem_key      TEXT NOT NULL,
                 operation     TEXT NOT NULL,
@@ -315,6 +330,72 @@ def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
     return d
 
 
+def _git_state_row(r: Optional[sqlite3.Row]) -> Dict[str, Any]:
+    if not r:
+        return {"branch": None, "head_sha": None, "pushed_at": None, "pr_number": None,
+                "pr_url": None, "merged_sha": None, "merged_at": None,
+                "in_main_content": False, "published_ref": None,
+                "last_reconciled_at": None, "evidence": {}}
+    d = dict(r)
+    d["in_main_content"] = bool(d.get("in_main_content"))
+    d["evidence"] = json.loads(d.pop("evidence_json") or "{}")
+    return d
+
+
+def _load_git_state(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
+    return _git_state_row(c.execute("SELECT * FROM task_git_state WHERE task_id=?",
+                                    (task_id,)).fetchone())
+
+
+def _parse_evidence(evidence: Any) -> Dict[str, Any]:
+    if isinstance(evidence, dict):
+        return dict(evidence)
+    if not evidence:
+        return {}
+    if isinstance(evidence, str):
+        try:
+            parsed = json.loads(evidence)
+            return parsed if isinstance(parsed, dict) else {"note": evidence}
+        except Exception:
+            return {"note": evidence}
+    return {"value": evidence}
+
+
+def _upsert_git_state(c: sqlite3.Connection, task_id: str,
+                      updates: Dict[str, Any]) -> Dict[str, Any]:
+    now = time.time()
+    current = _load_git_state(c, task_id)
+    evidence = dict(current.get("evidence") or {})
+    if "evidence" in updates and isinstance(updates["evidence"], dict):
+        evidence.update(updates.pop("evidence"))
+    clean_updates = {k: v for k, v in updates.items() if v is not None}
+    merged = {**current, **clean_updates}
+    branch = merged.get("branch")
+    head_sha = merged.get("head_sha")
+    pushed_at = merged.get("pushed_at")
+    pr_number = merged.get("pr_number")
+    pr_url = merged.get("pr_url")
+    merged_sha = merged.get("merged_sha")
+    merged_at = merged.get("merged_at")
+    in_main = 1 if merged.get("in_main_content") else 0
+    published_ref = merged.get("published_ref")
+    last_reconciled_at = merged.get("last_reconciled_at")
+    c.execute(
+        "INSERT INTO task_git_state(task_id, branch, head_sha, pushed_at, pr_number, pr_url, "
+        "merged_sha, merged_at, in_main_content, published_ref, last_reconciled_at, "
+        "evidence_json, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(task_id) DO UPDATE SET branch=excluded.branch, head_sha=excluded.head_sha, "
+        "pushed_at=excluded.pushed_at, pr_number=excluded.pr_number, pr_url=excluded.pr_url, "
+        "merged_sha=excluded.merged_sha, merged_at=excluded.merged_at, "
+        "in_main_content=excluded.in_main_content, published_ref=excluded.published_ref, "
+        "last_reconciled_at=excluded.last_reconciled_at, evidence_json=excluded.evidence_json, "
+        "updated_at=excluded.updated_at",
+        (task_id, branch, head_sha, pushed_at, pr_number, pr_url, merged_sha, merged_at,
+         in_main, published_ref, last_reconciled_at, json.dumps(evidence, sort_keys=True), now),
+    )
+    return _load_git_state(c, task_id)
+
+
 def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
                assignee: Optional[str] = None, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     q = "SELECT * FROM tasks WHERE 1=1"
@@ -339,6 +420,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["activity"] = [dict(a) | {"payload": json.loads(a["payload"] or "{}")}
                          for a in c.execute(
                              "SELECT * FROM activity WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]
+        t["git_state"] = _load_git_state(c, task_id)
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
             t["rationale"] = s["rationale"]
@@ -448,6 +530,7 @@ def get_activity_delta(since_cursor: int = 0, lane: str = "",
                    ORDER BY a.id""",
                 (since_cursor,),
             ).fetchall()
+        git_states = {r["task_id"]: _load_git_state(c, r["task_id"]) for r in rows}
     if not rows:
         return {"cursor": since_cursor, "updates": []}
     new_cursor = rows[-1]["id"]
@@ -457,7 +540,7 @@ def get_activity_delta(since_cursor: int = 0, lane: str = "",
         if tid not in by_task:
             by_task[tid] = {"task_id": tid, "status": row["status"],
                             "title": row["title"], "workstream_id": row["workstream_id"],
-                            "kinds": []}
+                            "kinds": [], "git_state": git_states.get(tid, {})}
         by_task[tid]["status"] = row["status"]
         if row["kind"] not in by_task[tid]["kinds"]:
             by_task[tid]["kinds"].append(row["kind"])
@@ -802,6 +885,10 @@ def complete_claim(claim_id: str, evidence: str = "",
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
+    evidence_obj = _parse_evidence(evidence)
+    pushed_at = evidence_obj.get("pushed_at")
+    if pushed_at is None and evidence_obj.get("head_sha"):
+        pushed_at = now
     with _conn(project) as c:
         row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
         if not row:
@@ -811,10 +898,23 @@ def complete_claim(claim_id: str, evidence: str = "",
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
                   "AND task_id=? AND agent_id=? AND released_at IS NULL",
                   (now, row["task_id"], row["agent_id"]))
+        c.execute("UPDATE tasks SET status='In Review', updated_at=? WHERE task_id=? "
+                  "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
+                  (now, row["task_id"]))
+        git_state = _upsert_git_state(c, row["task_id"], {
+            "branch": evidence_obj.get("branch"),
+            "head_sha": evidence_obj.get("head_sha"),
+            "pushed_at": pushed_at,
+            "pr_number": evidence_obj.get("pr_number"),
+            "pr_url": evidence_obj.get("pr_url"),
+            "evidence": evidence_obj,
+        })
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (row["task_id"], actor, "task.claim.completed",
-                   json.dumps({"claim_id": claim_id, "evidence": evidence}, sort_keys=True), now))
-    return {"completed": True, "claim_id": claim_id, "task_id": row["task_id"]}
+                   json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
+                               "next_status": "In Review"}, sort_keys=True), now))
+    return {"completed": True, "claim_id": claim_id, "task_id": row["task_id"],
+            "status": "In Review", "git_state": git_state}
 
 
 def abandon_claim(claim_id: str, reason: str,
@@ -837,6 +937,62 @@ def abandon_claim(claim_id: str, reason: str,
                   (row["task_id"], actor, "task.claim.abandoned",
                    json.dumps({"claim_id": claim_id, "reason": reason}, sort_keys=True), now))
     return {"abandoned": True, "claim_id": claim_id, "task_id": row["task_id"]}
+
+
+def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",
+                        branch: str = "", head_sha: str = "",
+                        actor: str = "github-webhook",
+                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
+            return {"error": "task not found", "task_id": task_id}
+        c.execute("UPDATE tasks SET status='In Review', updated_at=? WHERE task_id=? "
+                  "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
+                  (now, task_id))
+        git_state = _upsert_git_state(c, task_id, {
+            "branch": branch or None,
+            "head_sha": head_sha or None,
+            "pushed_at": now if head_sha else None,
+            "pr_number": pr_number,
+            "pr_url": pr_url or None,
+            "evidence": {"pr_number": pr_number, "pr_url": pr_url,
+                         "branch": branch, "head_sha": head_sha},
+        })
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "git.pr_opened",
+                   json.dumps({"pr_number": pr_number, "pr_url": pr_url,
+                               "branch": branch, "head_sha": head_sha}, sort_keys=True), now))
+    return {"task_id": task_id, "status": "In Review", "git_state": git_state}
+
+
+def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = None,
+                     pr_url: str = "", branch: str = "", head_sha: str = "",
+                     actor: str = "github-webhook",
+                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
+            return {"error": "task not found", "task_id": task_id}
+        c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?",
+                  (now, task_id))
+        git_state = _upsert_git_state(c, task_id, {
+            "branch": branch or None,
+            "head_sha": head_sha or None,
+            "pushed_at": now if head_sha else None,
+            "pr_number": pr_number,
+            "pr_url": pr_url or None,
+            "merged_sha": merged_sha,
+            "merged_at": now,
+            "in_main_content": True,
+            "evidence": {"merged_sha": merged_sha, "pr_number": pr_number,
+                         "pr_url": pr_url, "branch": branch, "head_sha": head_sha},
+        })
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "git.pr_merged",
+                   json.dumps({"merged_sha": merged_sha, "pr_number": pr_number,
+                               "pr_url": pr_url}, sort_keys=True), now))
+    return {"task_id": task_id, "status": "Done", "git_state": git_state}
 
 
 def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
@@ -1217,6 +1373,80 @@ def get_meta(key: str, default=None, project: str = DEFAULT_PROJECT):
 def set_meta(key: str, value, project: str = DEFAULT_PROJECT):
     with _conn(project) as c:
         c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, json.dumps(value)))
+
+
+def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Canonical connect-time rules for agents in this workspace."""
+    override = get_meta("working_agreement", {}, project=project) or {}
+    default = {
+        "project": project,
+        "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),
+        "branch_convention": "claude/<TASK-ID>-<slug>",
+        "definition_of_done": "merged to main with a recorded merge SHA — agents never self-set Done",
+        "push_before_claiming_progress": True,
+        "merge_strategy": "squash",
+        "main_writes": "PR only — never push main directly",
+        "ports_doc": "docs/PORTS.md",
+        "byo_data": True,
+        "session_start_sequence": [
+            "get_working_agreement(project)",
+            "register_agent",
+            "inbox(unacked)",
+            "check+claim before first write",
+        ],
+        "agent_completion_rule": "complete_claim moves work to In Review; only merge webhook sets Done",
+    }
+    return {**default, **override, "project": project}
+
+
+def update_canonical_main_sha(sha: str, actor: str = "github-webhook",
+                              project: str = DEFAULT_PROJECT) -> None:
+    if not sha:
+        return
+    set_meta("canonical_main_sha", sha, project=project)
+    append_activity("git.main_advanced", actor, {"canonical_main_sha": sha},
+                    task_id=None, project=project)
+
+
+def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Local drift report for board provenance.
+
+    This first pass intentionally avoids external GitHub calls; it catches board-internal
+    contradictions and leaves deeper reachability/content checks for the runner/API-backed
+    phase.
+    """
+    now = time.time()
+    findings: List[Dict[str, Any]] = []
+    with _conn(project) as c:
+        rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
+        for row in rows:
+            task = _task_row(row)
+            git_state = _load_git_state(c, task["task_id"])
+            status = task.get("status")
+            if status == "Done" and not git_state.get("merged_sha"):
+                findings.append({"severity": "high", "task_id": task["task_id"],
+                                 "code": "done_without_merged_sha",
+                                 "detail": "Task is Done but has no recorded merge SHA."})
+            if status == "In Review" and not (git_state.get("branch") or git_state.get("pr_url")):
+                findings.append({"severity": "medium", "task_id": task["task_id"],
+                                 "code": "review_without_provenance",
+                                 "detail": "Task is In Review but lacks branch/PR evidence."})
+            if status == "In Progress" and not git_state.get("head_sha"):
+                findings.append({"severity": "low", "task_id": task["task_id"],
+                                 "code": "progress_without_pushed_head",
+                                 "detail": "Task is In Progress with no reported pushed head SHA."})
+            _upsert_git_state(c, task["task_id"], {"last_reconciled_at": now})
+        cursor = c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0]
+    agreement = get_working_agreement(project)
+    if not agreement.get("canonical_main_sha"):
+        findings.append({"severity": "medium", "task_id": None,
+                         "code": "missing_canonical_main_sha",
+                         "detail": "No canonical main SHA recorded yet; wait for a default-branch push webhook or set meta."})
+    append_activity("reconcile.completed", "reconcile",
+                    {"findings": len(findings)}, task_id=None, project=project)
+    return {"project": project, "ok": not findings, "findings": findings,
+            "activity_cursor": cursor, "checked_at": now,
+            "external_checks": "not_configured"}
 
 
 # ---- dev dispatches (Claude Code runner) — so the UI can show the latest run per task ----

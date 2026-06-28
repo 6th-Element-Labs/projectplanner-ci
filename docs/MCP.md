@@ -11,6 +11,8 @@ Reads (open):
 - `search_tasks(workstream?, status?, owner_person?, blocking?, query?)` — filter the live plan.
 - `get_task(task_id)` — full detail (description, fields, recent activity).
 - `board_summary()` — project + rollups + one line per task.
+- `get_working_agreement(project)` — connect-time rules: definition of done, branch convention,
+  merge strategy, canonical main SHA, and session-start sequence.
 - `doc_search(query)` — cited snippets from the plan docs.
 - `ask_plan(question)` — the **full plan-wide agent** as one tool: a reasoned, doc-grounded
   answer (with sources), and a proposed task change when relevant (NOT applied).
@@ -23,6 +25,12 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
 - `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`
 - `report_usage(...)`, `get_task_tally(...)`
+- `reconcile(project)` — local provenance drift report; flags e.g. `Done` without `merged_sha`.
+
+Agent completion rule:
+- `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
+- Agents must not self-set `Done`; GitHub PR merge webhook stamps `merged_sha` and moves the
+  task to `Done`.
 
 ## Connect
 
