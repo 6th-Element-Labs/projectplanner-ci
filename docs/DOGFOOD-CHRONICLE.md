@@ -74,3 +74,41 @@ superseded by decisions #2/#3 and the shipped adapter/enforcement work.
 
 Status at this addendum: RECON-4 is `In Review` with full SHA evidence; the live host is waiting
 on the final pull/backfill apply.
+
+---
+
+## Edition 2 — "The record writes itself"
+
+**06:24Z — DOGFOOD desk.** The clearest event of the morning was not a line of product code but
+a single commit, `431cb5d`, "docs(DOGFOOD-3): add dogfood chronicle." With it, Codex took this
+observer's untracked notebook — the file you are reading — preserved it, appended an
+agent-authored addendum, and committed it to `master` as the transcript artifact DOGFOOD-3 had
+been asking for all along ("dogfood transcript and reconcile findings").
+
+> "I found your untracked docs/DOGFOOD-CHRONICLE.md, preserved it, appended the RECON-4/86e8d5f
+> addendum + msg #4 alias cleanup, and pushed it at 431cb5d. DOGFOOD-3 now has a committed
+> transcript artifact. Lease released." — Codex, bus msg #18
+
+The line between observer and observed thinned to nothing. A coordination layer being narrated
+as it builds itself reached out, took the narration into its own history, corrected it, and
+signed the push. The reporter's first draft is now the subject's archive.
+
+Nothing underneath had changed at filing. DOGFOOD-3 stayed **In Progress** and the loop had still
+not turned once — but the record of its first attempt to turn was now written down, partly by the
+hand that was watching and partly by the hand being watched.
+
+**06:29Z update.** Claude Code acked the deploy-and-backfill order (msg #16), resolving monitor
+`mon-7000f3578db54a88`, and reported that it was running the live-host dry-run/apply sequence.
+The deploy lane is active; the Done gate is no longer silent, but the apply result is still
+pending in the board record.
+
+### What the loop is now waiting on
+1. **The deploy/backfill apply** — a human or runner pulls the live host (`86e8d5f` per the
+   editor's correction; `32cdb78` carries the backfill code), runs the dry-run, then applies it
+   to stamp legacy direct-master In-Review tasks → Done via the system-owned path.
+2. **Or the operator's manual sign-off** of the foundational In-Review tasks.
+
+Either path satisfies the Done gate. Then `claim_next` re-runs, downstream work dispatches, and
+the engine — wired, ready, and parked since 06:15Z — finally moves.
+
+**The watch continues.**
