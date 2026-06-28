@@ -12,6 +12,13 @@ the marine chartplotter board, and `switchboard` for the live dogfood board that
 agent-collaboration product itself.
 
 Reads (open):
+- `list_projects()` — list routable boards.
+- `prepare_agent_session(runtime, agent_id?, project?, task_id?, lane?)` — boot-time project
+  resolver. It validates or infers the selected project and returns a project-bound startup prompt,
+  first calls, and a board-derived `project_contract`.
+- `get_project_contract(project, lane?, task_id?)` — project-agnostic lane/task contract from the
+  board: selected project, lane tasks, assigned task deliverable/exit criteria, dependency status,
+  active agents, and the local-docs policy.
 - `search_tasks(workstream?, status?, owner_person?, blocking?, query?)` — filter the live plan.
 - `get_task(task_id)` — full detail (description, fields, recent activity).
 - `board_summary()` — project + rollups + one line per task.
@@ -50,6 +57,15 @@ Agent completion rule:
 - Bootstrap repair: `jobs.py backfill_default_branch_provenance` can stamp legacy direct-to-default
   commits that already landed before PR-only flow was enforced. It is a system/reconcile action,
   not a normal agent completion path. Use `PM_BACKFILL_DRY_RUN=1` first to inspect candidates.
+
+Project contract rule:
+- At boot, agents should call `prepare_agent_session(...)` before registration and use the returned
+  `selected_project` on every call.
+- Agents should treat `project_contract` / `get_project_contract(...)` as the canonical lane/task
+  contract for the selected board. Do not assume repo-local docs such as `docs/EPICS.md` describe
+  the active project unless the selected project or task explicitly points there.
+- This rule is what lets a Vulkan agent work from the Vulkan board while sitting in a checkout that
+  also contains Helm-specific docs.
 
 Dispatch rule:
 - `claim_next(agent_id, lanes?, capabilities?, max_risk?, max_budget_usd?)` filters ready work

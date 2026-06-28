@@ -69,9 +69,23 @@ try:
     created = store.create_project("Vulkan", actor="test")
     ok(created.get("created") is True, "dynamic Vulkan project is created")
 
-    seam = store.create_task({"workstream_id": "SEAM", "title": "renderer seam"},
-                             project="vulkan")
+    seam = store.create_task({
+        "workstream_id": "SEAM",
+        "workstream_name": "Renderer seam",
+        "title": "renderer seam",
+        "description": "Define the Vulkan renderer seam from the board, not Helm docs.",
+        "entry_criteria": "Vulkan project selected",
+        "exit_criteria": "Command stream contract is clear",
+        "deliverable": "Board-owned renderer seam contract",
+    }, project="vulkan")
     ok(seam["task_id"] == "SEAM-1", "Vulkan has SEAM-1")
+    store.create_task({
+        "workstream_id": "SEAM",
+        "workstream_name": "Renderer seam",
+        "title": "adapter contract",
+        "depends_on": ["SEAM-1"],
+        "deliverable": "Adapter contract",
+    }, project="vulkan")
 
     wrong = call_boot(runtime="codex", agent_id="codex/SEAM-1", project="helm",
                       task_id="SEAM-1")
@@ -85,14 +99,32 @@ try:
        "task_id alone selects Vulkan")
     ok(inferred_task["lane"] == "SEAM" and inferred_task["task"]["task_id"] == "SEAM-1",
        "task selection returns lane and task brief")
+    ok(inferred_task["project_contract"]["source_of_truth"] == "switchboard_board",
+       "boot response includes a board-derived project contract")
+    ok("Do not assume repo-local docs" in inferred_task["project_contract"]["local_docs_policy"],
+       "project contract warns against repo-local doc assumptions")
 
     explicit = call_boot(runtime="codex", project="vulkan", task_id="SEAM-1")
     ok(explicit["ok"] is True and explicit["selected_project"] == "vulkan",
        "explicit Vulkan project validates")
+    ok(explicit["project_contract"]["assigned_task"]["deliverable"] == "Board-owned renderer seam contract",
+       "project contract includes task deliverable")
+    ok(len(explicit["project_contract"]["lane"]["tasks"]) == 2,
+       "project contract includes lane task list")
     ok(any(c["tool"] == "get_task" and c["args"] == {"task_id": "SEAM-1", "project": "vulkan"}
            for c in explicit["first_calls"]), "first calls include project-bound get_task")
+    ok(any(c["tool"] == "get_project_contract" and c["args"]["project"] == "vulkan"
+           for c in explicit["first_calls"]), "first calls include project contract read")
     ok('project="vulkan"' in explicit["startup_prompt"] and 'get_task(task_id="SEAM-1", project="vulkan")' in explicit["startup_prompt"],
        "startup prompt tells the agent to stay on Vulkan")
+    ok("project_contract" in explicit["startup_prompt"] and "docs/EPICS.md" in explicit["startup_prompt"],
+       "startup prompt tells agents not to assume Helm EPICS docs")
+
+    contract = json.loads(mcp_server.get_project_contract(project="vulkan", task_id="SEAM-1"))
+    ok(contract["ok"] is True and contract["project"] == "vulkan",
+       "get_project_contract works for dynamic projects")
+    ok(contract["lane"]["id"] == "SEAM" and contract["assigned_task"]["task_id"] == "SEAM-1",
+       "get_project_contract resolves lane from task")
 
     inferred_lane = call_boot(runtime="codex", lane="SEAM")
     ok(inferred_lane["ok"] is True and inferred_lane["selected_project"] == "vulkan",

@@ -53,10 +53,12 @@ mcp = FastMCP(
         "projectplanner product work. Omit project (or use 'maxwell') only for the Maxwell plan. "
         "Writes go ONLY to the named board — they can never cross. At boot, call prepare_agent_session "
         "with your runtime plus assigned task_id/lane/project; it lists boards, validates the selected "
-        "project, and returns a project-bound startup prompt. Use search_tasks/get_task to read, board_summary "
-        "for the at-a-glance board, get_plan_signals for health, and create_task/update_task/add_comment "
-        "to change a plan. ask_plan also takes project (Helm answers are board-grounded incl. "
-        "code-audit comments); doc_search remains Maxwell-only.\n\n"
+        "project, and returns a project-bound startup prompt plus a board-derived project_contract. "
+        "For lane ownership, deliverables, dependencies, and file-boundary hints, use "
+        "get_project_contract/project_contract rather than assuming repo-local docs are universal. "
+        "Use search_tasks/get_task to read, board_summary for the at-a-glance board, get_plan_signals "
+        "for health, and create_task/update_task/add_comment to change a plan. ask_plan also takes "
+        "project; doc_search remains Maxwell-only.\n\n"
         "SESSION-START HANDSHAKE: (0) call prepare_agent_session(...) if you were assigned a task, "
         "lane, or project and follow its selected project; (1) call get_working_agreement(project) "
         "and follow its rules for the whole session; (2) register_agent; (3) drain your inbox. "
@@ -162,6 +164,110 @@ def _task_boot_brief(task):
     }
 
 
+def _task_contract_brief(task):
+    if not task:
+        return None
+    return {
+        "task_id": task.get("task_id"),
+        "title": task.get("title"),
+        "status": task.get("status"),
+        "workstream": task.get("_wsId"),
+        "workstream_name": task.get("_wsName"),
+        "owner_org": task.get("owner_org"),
+        "owner_person_or_role": task.get("owner_person_or_role"),
+        "assignee": task.get("assignee"),
+        "depends_on": task.get("depends_on") or [],
+        "description": task.get("description"),
+        "entry_criteria": task.get("entry_criteria"),
+        "exit_criteria": task.get("exit_criteria"),
+        "deliverable": task.get("deliverable"),
+        "risk_level": task.get("risk_level"),
+        "is_blocking": task.get("is_blocking"),
+    }
+
+
+def _dependency_contract(project: str, task) -> list[dict]:
+    out = []
+    for dep in (task or {}).get("depends_on") or []:
+        dt = store.get_task(dep, project=project)
+        out.append({
+            "task_id": dep,
+            "exists": bool(dt),
+            "status": dt.get("status") if dt else None,
+            "title": dt.get("title") if dt else None,
+            "workstream": dt.get("_wsId") if dt else None,
+        })
+    return out
+
+
+def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
+    selected = _resolve_project_input(project) or store.DEFAULT_PROJECT
+    if not store.has_project(selected):
+        return {
+            "ok": False,
+            "status": "unknown_project",
+            "error": f"project '{project}' is not a routable Switchboard project",
+            "projects": store.projects(),
+        }
+    tid = (task_id or "").strip().upper()
+    task = store.get_task(tid, project=selected) if tid else None
+    ws = (lane or "").strip().upper()
+    if task and not ws:
+        ws = task.get("_wsId") or ""
+    lane_tasks = store.list_tasks(workstream=ws, project=selected) if ws else []
+    lane_name = None
+    for lt in lane_tasks:
+        if lt.get("_wsName"):
+            lane_name = lt.get("_wsName")
+            break
+    active_agents = []
+    try:
+        active_agents = [
+            {
+                "agent_id": a.get("agent_id"),
+                "runtime": a.get("runtime"),
+                "lane": a.get("lane"),
+                "task_id": a.get("task_id"),
+                "stale": a.get("stale"),
+            }
+            for a in store.list_active_agents(lane=ws, project=selected)
+        ] if ws else []
+    except Exception:
+        active_agents = []
+    return {
+        "ok": True,
+        "source_of_truth": "switchboard_board",
+        "project": selected,
+        "project_label": _project_label(selected),
+        "local_docs_policy": (
+            "Do not assume repo-local docs such as docs/EPICS.md define this project. "
+            "Use this Switchboard project contract, get_task, search_tasks, task activity, and active leases "
+            "as the canonical lane/task boundary. Treat repo docs as project artifacts only when the selected "
+            "project or task explicitly references them."
+        ),
+        "lane": {
+            "id": ws or None,
+            "name": lane_name,
+            "task_count": len(lane_tasks),
+            "tasks": [_task_contract_brief(t) for t in lane_tasks],
+        },
+        "assigned_task": _task_contract_brief(task),
+        "dependency_status": _dependency_contract(selected, task),
+        "active_agents_in_lane": active_agents,
+        "operating_rules": [
+            f'Pass project="{selected}" on every Switchboard MCP call.',
+            "Read task description, deliverable, exit_criteria, dependencies, and recent activity before editing.",
+            "If file ownership is unclear, check active leases/agent state and ask the board or human before writing.",
+            "Do not import Helm lane/file ownership into non-Helm projects.",
+        ],
+        "recommended_reads": [x for x in [
+            f'get_task(task_id="{tid}", project="{selected}")' if tid else None,
+            f'search_tasks(workstream="{ws}", project="{selected}")' if ws else None,
+            f'get_agent_state(task_id="{tid}", project="{selected}")' if tid else None,
+        ] if x],
+    }
+
+
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
     return slug[:48].strip("-") or "session"
@@ -191,6 +297,7 @@ def _agent_bootstrap_prompt(project: str, agent_id: str, task_id: str, lane: str
         f'You are enlisting on Switchboard project="{project}" ({_project_label(project)}).',
         f'Every board/MCP call in this session must include project="{project}".',
         'Do not use project="helm", project="maxwell", or any other board unless prepare_agent_session selects it.',
+        "Use the returned project_contract as the canonical lane/task contract. Do not assume docs/EPICS.md or other repo-local docs apply unless this selected project/task explicitly says so.",
         "Boot sequence:",
         f'1. get_working_agreement(project="{project}")',
         f'2. register_agent(agent_id="{agent_id}", runtime="<your-runtime>", lane="{lane or "<lane>"}", '
@@ -225,6 +332,9 @@ def _first_calls(project: str, agent_id: str, runtime: str, model: str,
         {"tool": "register_agent", "args": register_args},
         {"tool": "list_unacked_messages", "args": {"to_agent": agent_id, "project": project}},
         {"tool": "list_unblock_requests", "args": {"owner_agent": agent_id, "project": project}},
+        {"tool": "get_project_contract", "args": {
+            "project": project, "task_id": task_id or "", "lane": lane or "",
+        }},
     ]
     if task_id:
         calls.append({"tool": "get_task", "args": {"task_id": task_id, "project": project}})
@@ -240,6 +350,18 @@ def _first_calls(project: str, agent_id: str, runtime: str, model: str,
 def list_projects() -> str:
     """List all routable project boards. Returns [{id,label,pretitle}] plus the default id."""
     return _dumps({"projects": store.projects(), "default": store.DEFAULT_PROJECT})
+
+
+@mcp.tool()
+def get_project_contract(project: str = "maxwell", lane: str = "", task_id: str = "") -> str:
+    """Return the board-derived project/lane/task contract for any Switchboard project.
+
+    This is the project-agnostic replacement for assuming repo-local files such as
+    docs/EPICS.md describe the active board. It returns the selected project, lane tasks,
+    assigned task deliverable/exit criteria/dependencies, active agents in the lane, and
+    operating rules. Use it at boot and whenever a repo contains docs for a different project.
+    """
+    return _dumps(_project_contract(project=project, lane=lane, task_id=task_id))
 
 
 @mcp.tool()
@@ -367,6 +489,7 @@ def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = 
         "intent": intent,
         "warnings": warnings,
         "working_agreement": agreement,
+        "project_contract": _project_contract(selected, lane=ws, task_id=tid),
         "first_calls": _first_calls(selected, chosen_agent_id, runtime, model, tid, ws, agreement),
         "startup_prompt": _agent_bootstrap_prompt(selected, chosen_agent_id, tid, ws),
     })
