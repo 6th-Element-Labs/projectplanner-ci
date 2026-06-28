@@ -1531,14 +1531,22 @@ def claim_next(agent_id: str, lanes: Any = None,
         return response
 
 
-def complete_claim(claim_id: str, evidence: str = "",
+def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     evidence_obj = _parse_evidence(evidence)
+    requested_status = (final_status or evidence_obj.get("final_status") or evidence_obj.get("status") or "").strip()
+    done_requested = requested_status.lower() == "done" or str(evidence_obj.get("done", "")).lower() in ("1", "true", "yes")
+    if done_requested and not evidence_obj:
+        return {"error": "evidence required for final_status=Done", "claim_id": claim_id}
+    next_status = "Done" if done_requested else "In Review"
     pushed_at = evidence_obj.get("pushed_at")
     if pushed_at is None and evidence_obj.get("head_sha"):
         pushed_at = now
+    merged_at = evidence_obj.get("merged_at")
+    if merged_at is None and evidence_obj.get("merged_sha"):
+        merged_at = now
     with _conn(project) as c:
         row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
         if not row:
@@ -1548,23 +1556,31 @@ def complete_claim(claim_id: str, evidence: str = "",
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
                   "AND task_id=? AND agent_id=? AND released_at IS NULL",
                   (now, row["task_id"], row["agent_id"]))
-        c.execute("UPDATE tasks SET status='In Review', updated_at=? WHERE task_id=? "
+        c.execute("UPDATE tasks SET status=?, updated_at=? WHERE task_id=? "
                   "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
-                  (now, row["task_id"]))
+                  (next_status, now, row["task_id"]))
         git_state = _upsert_git_state(c, row["task_id"], {
             "branch": evidence_obj.get("branch"),
             "head_sha": evidence_obj.get("head_sha"),
             "pushed_at": pushed_at,
             "pr_number": evidence_obj.get("pr_number"),
             "pr_url": evidence_obj.get("pr_url"),
+            "merged_sha": evidence_obj.get("merged_sha"),
+            "merged_at": merged_at,
+            "in_main_content": True if evidence_obj.get("merged_sha") else None,
             "evidence": evidence_obj,
         })
+        if next_status == "Done":
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"], actor, "task.done",
+                       json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
+                                   "source": "complete_claim"}, sort_keys=True), now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (row["task_id"], actor, "task.claim.completed",
                    json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
-                               "next_status": "In Review"}, sort_keys=True), now))
+                               "next_status": next_status}, sort_keys=True), now))
     return {"completed": True, "claim_id": claim_id, "task_id": row["task_id"],
-            "status": "In Review", "git_state": git_state}
+            "status": next_status, "git_state": git_state}
 
 
 def abandon_claim(claim_id: str, reason: str,
@@ -2750,7 +2766,13 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "protocol": protocol_envelope(),
         "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),
         "branch_convention": "claude/<TASK-ID>-<slug>",
-        "definition_of_done": "merged to main with a recorded merge SHA — agents never self-set Done",
+        "definition_of_done": "verified complete with recorded evidence; code tasks should include branch/head_sha/PR or merged_sha when available",
+        "done_policy": {
+            "mode": "agent_verified",
+            "agent_may_set_done": True,
+            "requires_evidence": True,
+            "code_tasks_should_include_git_evidence": True,
+        },
         "push_before_claiming_progress": True,
         "merge_strategy": "squash",
         "main_writes": "PR only — never push main directly",
@@ -2762,9 +2784,14 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "inbox(unacked)",
             "check+claim before first write",
         ],
-        "agent_completion_rule": "complete_claim moves work to In Review; only merge webhook sets Done",
+        "agent_completion_rule": "complete_claim(..., final_status='Done') may set Done when evidence proves completion; omit final_status to stop at In Review for review-first work",
     }
-    return {**default, **override, "project": project}
+    agreement = {**default, **override, "project": project}
+    if "done_policy" not in override:
+        agreement["done_policy"] = default["done_policy"]
+        agreement["definition_of_done"] = default["definition_of_done"]
+        agreement["agent_completion_rule"] = default["agent_completion_rule"]
+    return agreement
 
 
 def update_canonical_main_sha(sha: str, actor: str = "github-webhook",
@@ -2862,6 +2889,9 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     config is present, PR records are checked through the GitHub API.
     """
     now = time.time()
+    agreement = get_working_agreement(project)
+    done_policy = agreement.get("done_policy") or {}
+    agent_done_ok = bool(done_policy.get("agent_may_set_done"))
     findings: List[Dict[str, Any]] = []
     tasks: List[Dict[str, Any]] = []
     git_states: Dict[str, Dict[str, Any]] = {}
@@ -2874,9 +2904,14 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             git_states[task["task_id"]] = git_state
             status = task.get("status")
             if status == "Done" and not git_state.get("merged_sha"):
-                findings.append({"severity": "high", "task_id": task["task_id"],
-                                 "code": "done_without_merged_sha",
-                                 "detail": "Task is Done but has no recorded merge SHA."})
+                has_done_evidence = c.execute(
+                    "SELECT 1 FROM activity WHERE task_id=? AND kind='task.done' LIMIT 1",
+                    (task["task_id"],),
+                ).fetchone()
+                if not (agent_done_ok and has_done_evidence):
+                    findings.append({"severity": "high", "task_id": task["task_id"],
+                                     "code": "done_without_merged_sha",
+                                     "detail": "Task is Done but has no recorded merge SHA or agent completion evidence."})
             if status == "In Review" and not (git_state.get("branch") or git_state.get("pr_url")):
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "review_without_provenance",
@@ -2887,7 +2922,6 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                                  "detail": "Task is In Progress with no reported pushed head SHA."})
             _upsert_git_state(c, task["task_id"], {"last_reconciled_at": now})
         cursor = c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0]
-    agreement = get_working_agreement(project)
     if not agreement.get("canonical_main_sha"):
         findings.append({"severity": "medium", "task_id": None,
                          "code": "missing_canonical_main_sha",

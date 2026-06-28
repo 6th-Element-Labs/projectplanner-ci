@@ -8,7 +8,7 @@ lifecycle + how its pre-tool hook receives the pending call and signals a deny.
 
 Contract (must do, per ADR-0004):
   1. On session start: surface the working agreement as first-turn context + register_agent.
-  2. On each tool call (if the runtime allows a pre-tool hook): deny self-Done, deny edits to a
+  2. On each tool call (if the runtime allows a pre-tool hook): deny naked Done status flips, deny edits to a
      file another agent holds, and consume inbound stop/redirect signals (FR-14).
   3. Advertise control fidelity so the board knows how strongly this agent is governed.
 
@@ -147,12 +147,15 @@ def claim_next(lanes="", capabilities="", max_risk="", max_budget_usd=None,
     return sb._http("POST", "/txp/v1/claim_next", body)
 
 
-def complete_claim(claim_id, evidence=None):
-    return sb._http("POST", "/txp/v1/complete_claim", {
+def complete_claim(claim_id, evidence=None, final_status=""):
+    body = {
         "project": PROJECT,
         "claim_id": claim_id,
         "evidence": evidence or {},
-    })
+    }
+    if final_status:
+        body["final_status"] = final_status
+    return sb._http("POST", "/txp/v1/complete_claim", body)
 
 
 def abandon_claim(claim_id, reason):
@@ -278,6 +281,8 @@ def main(argv=None):
     complete.add_argument("--head-sha", default="")
     complete.add_argument("--pr-url", default="")
     complete.add_argument("--pr-number", type=int, default=None)
+    complete.add_argument("--final-status", default="",
+                          help="pass Done to mark the task Done with evidence; omit for In Review")
 
     abandon = sub.add_parser("abandon", help="abandon a TXP claim")
     abandon.add_argument("claim_id")
@@ -323,7 +328,7 @@ def main(argv=None):
             if value not in (None, ""):
                 overrides[key] = value
         evidence = git_evidence(**overrides)
-        _emit_json(complete_claim(args.claim_id, evidence))
+        _emit_json(complete_claim(args.claim_id, evidence, args.final_status))
         return 0
     if args.command == "abandon":
         _emit_json(abandon_claim(args.claim_id, args.reason))

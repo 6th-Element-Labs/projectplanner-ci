@@ -25,7 +25,13 @@
   "timeline_note": "P0 focuses on proving the loop end to end before treating it as production infrastructure: isolated board namespace, protocol surface, adapters, enforcement tiers, claim_next dispatch, Tally, and reconciliation. The board should expose missing primitives quickly rather than hide them behind docs.",
   "working_agreement": {
     "branch_convention": "codex/<TASK-ID>-<slug> or claude/<TASK-ID>-<slug>",
-    "definition_of_done": "merged to master with a recorded merge SHA; agents never self-set Done",
+    "definition_of_done": "verified complete with recorded evidence; code tasks should include branch/head_sha/PR or merged_sha when available",
+    "done_policy": {
+      "mode": "agent_verified",
+      "agent_may_set_done": true,
+      "requires_evidence": true,
+      "code_tasks_should_include_git_evidence": true
+    },
     "main_writes": "PR preferred; direct master commits require a reconcile note and recorded SHA",
     "merge_strategy": "squash or fast-forward; record the resulting master SHA",
     "ports_doc": "docs/MCP.md",
@@ -34,9 +40,9 @@
       "register_agent",
       "inbox(unacked)",
       "claim_next before first write",
-      "complete_claim with branch/head_sha/pr evidence when finished"
+      "complete_claim with branch/head_sha/pr evidence and final_status when finished"
     ],
-    "agent_completion_rule": "complete_claim moves work to In Review; only merge/reconcile authority sets Done"
+    "agent_completion_rule": "complete_claim(..., final_status='Done') may set Done when evidence proves completion; omit final_status to stop at In Review for review-first work"
   },
   "workstreams": [
     {

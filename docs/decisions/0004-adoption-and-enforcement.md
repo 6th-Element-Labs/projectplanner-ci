@@ -38,10 +38,11 @@ Adopt a **three-tier adoption model**. Each tier is a fallback for the one above
 runtime lacks the deeper hook. Publish the honest fidelity per runtime (PRD §10).
 
 ### Tier 1 — Advisory (every runtime; weakest)
-Encode the handshake and the hard rule in the MCP server `instructions` string and in each
+Encode the handshake and the evidence rule in the MCP server `instructions` string and in each
 write tool's description:
-> "At session start call `get_working_agreement(project)`, then `register_agent`. You may set
-> status only up to `In Review`; **never set `Done`** — the merge webhook does that."
+> "At session start call `get_working_agreement(project)`, then `register_agent`. Use
+> `complete_claim(final_status='Done', evidence=...)` only when verified; do not use naked
+> `update_task(status='Done')`."
 
 The model reads it and usually complies. Necessary, not sufficient. (Cost: ~free — a string.)
 
@@ -52,10 +53,10 @@ two deterministic hooks the *harness* runs (not the model):
   conversation as context**, and `register_agent`s the session. The agent starts in-contract
   with no remembering required.
 - **`PreToolUse`** → intercepts each tool call and **denies** contract violations: an agent
-  setting `update_task(status="Done")` (only the merge webhook may), or a file write before a
+  setting naked `update_task(status="Done")` instead of evidence-backed completion, or a file write before a
   `claim`. The denial reason is the rule, so the agent self-corrects at the next boundary.
 
-This is the ADR-0003 inversion made physical: the agent *can't* self-declare `Done`.
+This is the ADR-0003 inversion made physical: the agent cannot self-declare `Done` without evidence.
 
 ### Tier 3 — Launcher-owned (board-dispatched agents; strongest)
 When the board launches the agent (`dispatch.py` → runner), the launcher injects the MCP
@@ -66,17 +67,17 @@ Ad-hoc, human-launched agents fall back to Tier 2; non-MCP loops fall back to Ti
 ### The adapter contract (what any runtime adapter MUST do)
 1. **On session start:** `GET` the working agreement for the project and surface it to the
    agent as first-turn context; `register_agent(session_id, agent_id, fidelity)`.
-2. **On each tool call (if the runtime allows):** deny `status→Done` from an agent; deny a
+2. **On each tool call (if the runtime allows):** deny naked `status→Done` from an agent; deny a
    file mutation with no active `claim` on that path (or downgrade to a warning if the adapter
    can't cheaply check leases).
 3. **Declare its fidelity** (`discover | irq | nmi`) so the board knows how strongly this
    agent is actually governed (feeds the PRD §10 matrix and reliability scoring).
 
 ## Build plan (the four pieces)
-1. **MCP `instructions` + tool descriptions** carry the handshake + "never self-set Done"
+1. **MCP `instructions` + tool descriptions** carry the handshake + "evidence-backed Done"
    (Tier 1) — *this ADR ships it.*
 2. **Claude Code reference adapter** — `adapters/claude-code/` hook bundle: `SessionStart`
-   (fetch+inject agreement + register) and `PreToolUse` (deny self-`Done`, warn
+   (fetch+inject agreement + register) and `PreToolUse` (deny naked `Done`, warn
    write-before-claim) (Tier 2) — *this ADR ships it as the reference implementation.*
 3. **`dispatch.py` wiring** — register + inject agreement + install the adapter for
    board-launched agents (Tier 3) — *next slice.*

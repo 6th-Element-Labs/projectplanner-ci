@@ -13,14 +13,14 @@ session so the fleet stays in sync.
 2. `register_agent(...)` — announce presence (the adapter does this for you when installed).
 3. Drain your inbox (`list_unacked_messages` / `inbox`) and `ack` anything handled.
 
-## Definition of Done (the one that bit us)
-- You may move a task **only as far as `In Review`**, via `complete(task_id, agent_id,
-  evidence={branch, head_sha, pr?})`.
-- **You MUST NOT set a task to `Done`.** Only the merge webhook marks `Done` (it records the
-  `merged_sha`). `Done` means *merged to `main`*, never "works on my machine."
-- Bootstrap repair exception: a system-owned reconcile/backfill job may stamp legacy
-  direct-to-default commits that already landed before this PR-only rule was enforced. Agents
-  still must not use that path for normal work.
+## Definition of Done
+- Use `complete_claim(claim_id, evidence={...})` to release your claim and record what you verified.
+- Omit `final_status` when the work needs review; the task moves to `In Review`.
+- Pass `final_status="Done"` only when the task is truly complete under the project working
+  agreement. Code tasks should include branch/head SHA/PR or merge SHA when available; planning and
+  coordination tasks should include a concrete verification note.
+- Do not use naked `update_task(status="Done")` as a checkbox flip. It lacks completion evidence and
+  reconcile will flag it.
 
 ## Git discipline
 - **Push your branch before you claim progress.** Committed-but-unpushed work is invisible to

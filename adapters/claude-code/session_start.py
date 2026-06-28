@@ -25,8 +25,8 @@ def _bundled_agreement():
         with open(path, encoding="utf-8") as f:
             return f.read()
     except Exception:
-        return ("Working agreement unavailable. Core rule: you MUST NOT set a task to 'Done' "
-                "— move only to 'In Review'; the merge webhook marks Done.")
+        return ("Working agreement unavailable. Core rule: use complete_claim(final_status='Done', "
+                "evidence=...) only when verified; do not use naked update_task(status='Done').")
 
 
 def main():
@@ -52,7 +52,7 @@ def main():
         f"{text}\n\n"
         f"_This session is governed at the tool boundary by the PreToolUse hook "
         f"(adapters/switchboard_core.evaluate_tool): inbound stop/redirect interrupts are "
-        f"consumed, and self-Done + lease-conflict edits are denied._"
+        f"consumed, and naked Done + lease-conflict edits are denied._"
     )
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "SessionStart",

@@ -37,13 +37,16 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `create_kpi(...)`, `update_kpi_value(...)`, `link_outcome_to_kpi(...)`
 - `get_task_tally(...)`, `get_kpi_tally(...)`
 - `reconcile(project)` — provenance drift report; always flags board contradictions like
-  `Done` without `merged_sha`, and when canonical main / GitHub config is available, checks
-  recorded SHAs and PR state against git/GitHub.
+  naked `Done` without merge SHA or agent completion evidence, and when canonical main / GitHub
+  config is available, checks recorded SHAs and PR state against git/GitHub.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
-- Agents must not self-set `Done`; GitHub PR merge webhook stamps `merged_sha` and moves the
-  task to `Done`.
+- `complete_claim(evidence, final_status="Done")` marks the task `Done` when the agent has verified
+  completion and supplied evidence. For code tasks, include branch/head SHA/PR or `merged_sha` when
+  available.
+- Agents should not use naked `update_task(status="Done")`; it records no evidence and reconcile
+  treats it as suspect.
 - Bootstrap repair: `jobs.py backfill_default_branch_provenance` can stamp legacy direct-to-default
   commits that already landed before PR-only flow was enforced. It is a system/reconcile action,
   not a normal agent completion path. Use `PM_BACKFILL_DRY_RUN=1` first to inspect candidates.

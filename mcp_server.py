@@ -60,10 +60,12 @@ mcp = FastMCP(
         "SESSION-START HANDSHAKE: (0) call prepare_agent_session(...) if you were assigned a task, "
         "lane, or project and follow its selected project; (1) call get_working_agreement(project) "
         "and follow its rules for the whole session; (2) register_agent; (3) drain your inbox. "
-        "DEFINITION OF DONE: you may move a task only as far as 'In Review' (via complete with "
-        "branch+SHA evidence) — you MUST NOT set status to 'Done'. Only the merge webhook marks "
-        "Done. Push your branch before you claim progress; we squash-merge, so trust the board's "
-        "merged_sha, never `git branch --merged`. See ADR-0003/0004."
+        "DEFINITION OF DONE: follow get_working_agreement(project). Agents may use "
+        "complete_claim(final_status='Done', evidence=...) when they have verified completion and "
+        "recorded evidence; omit final_status to stop at In Review for review-first work. For code "
+        "tasks, include branch/head_sha/PR or merged_sha when available. Push your branch before you "
+        "claim progress; we squash-merge, so trust the board's recorded merged_sha over local branch "
+        "state."
     ),
     host="127.0.0.1",
     port=_PORT,
@@ -717,13 +719,17 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
 
 
 @mcp.tool()
-def complete_claim(claim_id: str, ctx: Context, evidence: str = "",
+def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status: str = "",
                    project: str = "maxwell") -> str:
-    """Mark a task claim completed, release its task lease, and move the task to In Review.
-    evidence should be a JSON object string with branch, head_sha, pr_url/pr_number when known.
-    Agents must NOT set Done; the GitHub merge webhook stamps merged_sha and sets Done."""
+    """Mark a task claim completed, release its task lease, and record completion evidence.
+
+    By default this moves the task to In Review. Pass final_status='Done' only when you have
+    verified the task is truly complete per get_working_agreement(project). evidence should be
+    a JSON object string with branch, head_sha, pr_url/pr_number, merged_sha, or a verification
+    note when known.
+    """
     principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.complete_claim(claim_id, evidence=evidence,
+    return _dumps(store.complete_claim(claim_id, evidence=evidence, final_status=final_status,
                                       actor=auth.actor(principal), project=project))
 
 

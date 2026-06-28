@@ -9,12 +9,12 @@ the thin Codex-specific wiring. Authored as a scaffold by `claude-code` per deci
 | Piece | State |
 |---|---|
 | Handshake (working_agreement → register → inbox) | ✅ in `switchboard_core.handshake()` |
-| Enforce: FR-14 interrupt-consume, self-Done deny, lease-conflict deny | ✅ in `switchboard_core.evaluate_tool()` (live-verified via the Claude adapter) |
+| Enforce: FR-14 interrupt-consume, naked Done deny, lease-conflict deny | ✅ in `switchboard_core.evaluate_tool()` (live-verified via the Claude adapter) |
 | Wire handshake to a Codex session/launcher | ✅ `codex_adapter.py session-start` prints first-turn context JSON, registers, and drains unacked inbox |
 | Wire `evaluate_tool` to a Codex pre-tool hook | ✅ `codex_adapter.py pre-tool` accepts pending tool JSON and prints allow/deny verdicts |
 | Claim ready scheduler work | ✅ `codex_adapter.py claim-next` and `session-start --claim-next` call `/txp/v1/claim_next` |
 | Report completion evidence | ✅ `codex_adapter.py complete <claim_id>` calls `/txp/v1/complete_claim` with git evidence |
-| Prove managed-runner deny enforcement | ✅ `runner_smoke.py --offline --deny-exit-code 0` blocks a self-Done call before execution |
+| Prove managed-runner deny enforcement | ✅ `runner_smoke.py --offline --deny-exit-code 0` blocks a naked Done call before execution |
 | Own a process handle for runner kill | ✅ `supervisor.py start/status/kill` persists `runner_session_id`, log path, and kill snapshot |
 | Prove native Codex hook lifecycle blocks tools | 🔲 not proven in this repo; keep Codex native hook status TBD until a real Codex launcher integrates this shim |
 
@@ -116,7 +116,7 @@ PM_PROJECT=switchboard PM_AGENT_ID=codex/current \
   python3 adapters/codex/runner_smoke.py --offline --deny-exit-code 0
 ```
 
-The default candidate is an attempted `update_task(status="Done")`. A passing smoke returns
+The default candidate is an attempted naked `update_task(status="Done")`. A passing smoke returns
 `runner_action=blocked_before_execution` and `would_execute=false`. That proves a
 Switchboard-owned runner can honor the adapter's deny verdict; it deliberately reports
 `native_codex_hook_proven=false`.

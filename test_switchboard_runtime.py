@@ -66,6 +66,8 @@ try:
        "working agreement is step zero of the handshake")
     ok(agreement["protocol"]["version"] == "ixp.v1",
        "working agreement advertises protocol version")
+    ok(agreement["done_policy"]["agent_may_set_done"] is True,
+       "working agreement allows evidence-backed agent Done")
     ok(store.check_protocol_compatibility(agreement["protocol"])["compatible"] is True,
        "current protocol envelope is compatible")
     incompatible = store.check_protocol_compatibility({"version": "ixp.v9"})
@@ -411,6 +413,29 @@ try:
     ok(kt["verified_contribution"] == 1.0 and
        kt["unit_cost"]["cost_per_contribution_unit"] == 0.5,
        "kpi_tally reports spend per verified contribution unit")
+    empty_done = store.complete_claim(
+        next_claim["claim_id"],
+        evidence={},
+        final_status="Done",
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok("error" in empty_done and "evidence required" in empty_done["error"],
+       "complete_claim requires evidence for Done")
+    agent_done = store.complete_claim(
+        next_claim["claim_id"],
+        evidence={"done": True, "verification": "agent ran the focused checks"},
+        final_status="Done",
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(agent_done["status"] == "Done", "complete_claim can set Done when explicitly requested")
+    second_done = store.get_task(second["task_id"], project=P)
+    ok(second_done["status"] == "Done", "agent-completed task is Done on the board")
+    agent_done_report = store.reconcile(project=P)
+    ok(not any(f["code"] == "done_without_merged_sha" and f["task_id"] == second["task_id"]
+               for f in agent_done_report["findings"]),
+       "reconcile accepts agent Done when completion evidence exists")
 
     bad = store.create_task({"workstream_id": "TEST", "title": "bad done"}, actor="seed", project=P)
     store.update_task(bad["task_id"], {"status": "Done"}, actor="legacy", project=P)

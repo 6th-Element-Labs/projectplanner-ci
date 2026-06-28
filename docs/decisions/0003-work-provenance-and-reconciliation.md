@@ -57,7 +57,8 @@ handshake — plan hands every agent, regardless of model/runtime, the same cano
   "project": "helm",
   "canonical_main_sha": "10949ed…",          // current origin/main HEAD (kept live by the webhook)
   "branch_convention": "claude/<TASK-ID>-<slug>",
-  "definition_of_done": "merged to main with a recorded merge SHA — agents NEVER self-set Done",
+  "definition_of_done": "verified complete with recorded evidence; code tasks include git evidence when available",
+  "done_policy": {"mode": "agent_verified", "agent_may_set_done": true, "requires_evidence": true},
   "push_before_claiming_progress": true,
   "merge_strategy": "squash",                  // => trust board.merged_sha, NOT git ancestry/--merged
   "main_writes": "PR only — never push main directly",
@@ -71,22 +72,25 @@ handshake — plan hands every agent, regardless of model/runtime, the same cano
 Stored as per-project board config (`meta`) plus computed fields (`canonical_main_sha` from the
 webhook). One source of truth, fetched on connect.
 
-### Part 2 — Git-derived `Done` (the key inversion)
+### Part 2 — Evidence-backed `Done` (updated)
 
-Stop letting agents self-declare `Done`. The lifecycle becomes:
+Stop letting agents self-declare `Done` via naked status flips. The lifecycle becomes:
 
 ```
-Not Started ─claim_next/start→ In Progress ─complete(evidence)→ In Review ─PR merged (webhook)→ Done ─published→ Released
+Not Started ─claim_next/start→ In Progress ─complete(evidence)→ In Review
+                                      └─complete(final_status=Done, evidence)→ Done
+                                      └─PR merged (webhook/reconcile)→ Done ─published→ Released
 ```
 
 - Agents `claim_next` → work → **`complete(task_id, agent_id, evidence)`** where evidence is the
-  branch + head_sha (+ PR if opened). This moves the task to **`In Review`** and records
-  provenance. Agents may set up to `In Review`, **never `Done`**.
-- **Only the merge webhook moves a task to `Done`**, stamping `merged_sha`. (Extends the
-  §1.2 webhook already shipped at `/api/github/webhook`, which today only auto-closes.)
+  branch + head_sha (+ PR if opened) or another concrete verification note. This moves the task to
+  **`In Review`** unless the agent passes `final_status="Done"`, which records a `task.done`
+  evidence event.
+- GitHub webhooks and reconcile jobs may still move code tasks to `Done`, stamping `merged_sha`.
 - Optional **`Released`** when the merge SHA's content reaches the public mirror.
 
-This single rule kills failure #1: a task cannot read `Done` unless git says it merged.
+This rule still kills failure #1: a task cannot read `Done` from a naked checkbox. It needs either
+agent completion evidence or git merge evidence.
 
 ### Part 3 — Per-task git-lifecycle field + `reconcile` drift detector
 

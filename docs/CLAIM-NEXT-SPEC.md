@@ -264,12 +264,13 @@ Adapters should renew before half the TTL has elapsed.
 Marks the claim complete and records evidence.
 
 ```text
-complete_claim(project, claim_id, evidence, outcome_id?) -> claim
+complete_claim(project, claim_id, evidence, final_status?, outcome_id?) -> claim
 ```
 
-Completion does not have to mean the task is verified. The verified denominator belongs to
-Tally/OXP. A task can be "agent completed" while still waiting for CI, review, or human
-verification.
+Completion does not have to mean the task is verified: omit `final_status` to move the task to
+`In Review`. When the agent has verified the task under the project working agreement, it may pass
+`final_status="Done"` with concrete evidence. Code tasks should include branch/head SHA/PR or
+`merged_sha` when available.
 
 ### 7.4 `abandon_claim`
 
@@ -427,4 +428,3 @@ These events feed delta polling, Tally, reliability scoring, and the operator UI
 - adapters can call `claim_next` at startup and after completion;
 - task claims feed Tally/reliability metrics;
 - the board visibly behaves like a scheduler, not only a reporting surface.
-

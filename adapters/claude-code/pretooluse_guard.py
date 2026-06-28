@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code PreToolUse hook — THIN SHIM over adapters/switchboard_core.py (ADR-0004).
 
-All enforcement logic (FR-14 interrupt-consume, self-Done deny, lease-conflict deny) lives in
+All enforcement logic (FR-14 interrupt-consume, naked Done deny, lease-conflict deny) lives in
 the shared core's evaluate_tool(), so Claude Code and Codex provably run the *same* contract.
 This file only maps Claude Code's PreToolUse I/O: stdin tool-call JSON → core verdict →
 permissionDecision. Fail-open (the core returns allow on any board/network error).

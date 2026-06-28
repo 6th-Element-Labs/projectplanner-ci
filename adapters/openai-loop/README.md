@@ -34,5 +34,5 @@ A **managed runner** that owns the process adds the T3/NMI kill on top.
 ## Smoke
 ```bash
 PM_PROJECT=switchboard PM_AGENT_ID=openai-loop/smoke python3 adapters/openai-loop/openai_loop_adapter.py
-# → prints the agreement + a deny verdict (self-Done) + an allow verdict
+# → prints the agreement + a deny verdict (naked Done) + an allow verdict
 ```

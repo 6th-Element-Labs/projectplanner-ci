@@ -156,7 +156,7 @@ The protocol is a small, stable ABI. Everything else is built from these.
 | **Hard stop** | NMI (unmaskable) | — | managed runner kill (`/runner/v1/sessions/{runner_session_id}/kill`) with snapshot + audit |
 | **Decision record** | append-only ledger | `record_decision`/`list_decisions` | keep; index into RAG |
 | **Working state** | saved registers (for IRET) | `set_agent_state`/`get_agent_state` | keep; the "stack" for resume-after-interrupt |
-| **Work provenance** (lifecycle) | a process table (PID → state) | task `status` only (self-reported) | per-task `{branch, head_sha, pushed, pr, merged_sha, in_main, published}`; `Done` git-derived |
+| **Work provenance** (lifecycle) | a process table (PID → state) | task `status` only (self-reported) | per-task `{branch, head_sha, pushed, pr, merged_sha, in_main, published}` plus agent completion evidence; `Done` is evidence-backed |
 | **Working agreement** | the kernel ABI/conventions handed to every process | implicit, per-agent reinvented | `get_working_agreement(project)` at connect (DoD, branch naming, merge strategy, ports) |
 | **Reconcile** | `fsck` / drift audit | manual git archaeology | scheduled `reconcile(project)` — content-based board↔git↔mirror drift report |
 | **Cost record** | metering | — | per-task/agent/epic token+\$ ledger |
@@ -241,19 +241,19 @@ The protocol is a small, stable ABI. Everything else is built from these.
 ### 8.8 Work provenance & reconciliation
 > The board is the ground truth for *where work is*, not just its status. Full design +
 > the lived-failure evidence: [ADR-0003](decisions/0003-work-provenance-and-reconciliation.md).
-> Governing principle: **git events are the source of truth for work state; agents propose,
-> the board + merge webhook decide, `reconcile` catches drift, and everyone gets the same
-> rules at connect.**
+> Governing principle: **completion evidence is the source of truth for work state; agents record
+> what they verified, git/webhook evidence enriches code tasks, `reconcile` catches drift, and
+> everyone gets the same rules at connect.**
 - **FR-23** **`get_working_agreement(project)`** — **step 0 of the handshake.** Returns the
-  canonical per-project policy: `canonical_main_sha`, branch convention, **definition of done
-  (= merged with a recorded merge SHA — agents never self-set `Done`)**, push-before-progress,
-  `merge_strategy` (squash → trust `merged_sha`, not git ancestry), main-writes-via-PR-only,
-  ports doc, BYO-data. One source of truth so N agents stop each inventing their own flow.
-- **FR-24** **Git-derived `Done` (the inversion).** `claim_next` → work → `complete(task_id,
-  agent_id, evidence={branch, head_sha, pr?})` moves the task to `In Review` and records
-  provenance. **Only the merge webhook moves it to `Done`** (stamping `merged_sha`); optional
-  `Released` when that SHA reaches the public mirror. Agents may set up to `In Review`, never
-  `Done`.
+  canonical per-project policy: `canonical_main_sha`, branch convention, **definition of done**,
+  done policy, push-before-progress, `merge_strategy` (squash → trust `merged_sha`, not git
+  ancestry), main-writes-via-PR-only, ports doc, BYO-data. One source of truth so N agents stop each
+  inventing their own flow.
+- **FR-24** **Evidence-backed `Done`.** `claim_next` → work → `complete_claim(evidence=...)` moves
+  the task to `In Review` by default and records provenance. If the agent has verified completion
+  under the project working agreement, `complete_claim(final_status="Done", evidence=...)` marks
+  the task `Done`. GitHub merge webhooks and reconcile jobs may still stamp `merged_sha`; naked
+  `update_task(status="Done")` remains suspect because it records no evidence.
 - **FR-25** **Per-task git-lifecycle block** on `get_task`/`get_lane_delta`:
   `{branch, head_sha, pushed_at, pr_number, merged_sha, merged_at, in_main_content, published_ref,
   last_reconciled_at}`.
@@ -302,9 +302,9 @@ tightest external signal lands at a **boundary** (tool call / turn). For a worki
 that's seconds — enough for stop/redirect/heads-up, not a freeze.
 
 **Adoption is a three-tier model, not a hope** (full design: [ADR-0004](decisions/0004-adoption-and-enforcement.md)):
-**T1 advisory** — the handshake + "never self-set `Done`" live in the MCP `instructions`/tool
+**T1 advisory** — the handshake + evidence-backed `Done` rule live in the MCP `instructions`/tool
 descriptions (every runtime). **T2 enforced** — a per-runtime **adapter** (Claude Code
-`SessionStart` injects the working agreement + registers; `PreToolUse` denies self-`Done` and
+`SessionStart` injects the working agreement + registers; `PreToolUse` denies naked `Done` and
 write-before-claim) makes the handshake a guarantee. **T3 launcher-owned** — `dispatch.py`
 installs the adapter + registers before handoff, so board-launched agents are born in-contract.
 *Availability* (loading the tools) is just MCP config; *adoption* is the adapter. Reference

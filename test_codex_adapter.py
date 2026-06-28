@@ -108,7 +108,7 @@ try:
         },
         "cwd": str(ROOT),
     })
-    ok(verdict["decision"] == "deny", "self-Done update is denied through shared core")
+    ok(verdict["decision"] == "deny", "naked Done update is denied through shared core")
     ok(verdict["agent_id"].startswith("codex/"), "pre-tool verdict carries Codex agent id")
 
     runner_result = runner_smoke.evaluate_candidate(runner_smoke.SELF_DONE_CANDIDATE,

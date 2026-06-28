@@ -898,6 +898,7 @@ async def txp_complete_claim(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
     return store.complete_claim(body.get("claim_id") or "", evidence=body.get("evidence") or {},
+                                final_status=body.get("final_status") or "",
                                 actor=auth.actor(principal), project=project)
 
 
