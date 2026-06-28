@@ -175,6 +175,18 @@ scope, message the holder). An agent that proceeds despite a conflict is **non-c
 but **MUST NOT** be blocked at the wire — it is surfaced, not prevented. (Hard serialization
 is a `TXP` merge-queue concern, not `IXP-core`.)
 
+### 6.6 Forward: agent-scaffolded capabilities (planned `resource_type`)
+
+As agents increasingly **scaffold their own tools/environments at runtime**, a tool an agent
+invents becomes a *shared resource the swarm must discover, not silently re-invent*. A planned
+`resource_type` — **`capability`** (a.k.a. `tool`) — extends the lease/registry model so a
+runtime-created tool is **published into presence, leased while being built, and discovered**
+by peers via `check`/`list_active_leases`, with a version. This turns self-scaffolding from
+sprawl (every agent re-builds and re-pays for the same tool) into a **compounding shared
+library the fleet builds for itself.** Not in `IXP-core`; reserved here so the resource model
+anticipates it. *(The matching oversight — provenance + approval gates for what a swarm builds
+— is an `OXP`/control-plane concern: see [`TALLY-SPEC.md`](TALLY-SPEC.md) and PRD §8.6–§8.7.)*
+
 ---
 
 ## 7. Directed messages & signals
