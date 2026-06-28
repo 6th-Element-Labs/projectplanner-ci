@@ -238,13 +238,22 @@ delivery.
 
 Every `IXP-core` agent **MUST** perform this sequence at session start, before doing work:
 
-1. `register_agent(...)` — announce presence.
-2. `inbox(to_agent=self, unacked=true)` — drain pending messages/signals; `ack` as handled.
-3. *(if it will edit resources)* `check(...)` then `claim(...)` before the first write.
+1. `get_working_agreement(project)` — fetch the canonical rules-of-the-repo policy
+   (definition of done, branch convention, `merge_strategy`, `canonical_main_sha`, port map,
+   BYO-data) and conform to it for the session. This makes every agent — behind any model —
+   play the same game instead of each inventing its own flow. See PRD §8.8 / ADR-0003.
+2. `register_agent(...)` — announce presence.
+3. `inbox(to_agent=self, unacked=true)` — drain pending messages/signals; `ack` as handled.
+4. *(if it will edit resources)* `check(...)` then `claim(...)` before the first write.
 
-An agent **SHOULD** repeat steps 2 (and a `heartbeat`) at each tool-call boundary, and
+An agent **SHOULD** repeat step 3 (and a `heartbeat`) at each tool-call boundary, and
 **MUST** `release` its leases on completion. Runtimes **MAY** automate the whole sequence via
 an adapter (hook / SDK lifecycle) so the model need not be relied upon to remember it.
+
+An agent **MUST NOT** set a task to `Done` itself: it reports progress only up to `In Review`
+via `complete(evidence={branch, head_sha, pr?})`; the merge webhook is the sole writer of
+`Done` (it stamps the `merged_sha`). This keeps task status git-derived, not self-reported —
+see ADR-0003 (work provenance & reconciliation).
 
 ---
 

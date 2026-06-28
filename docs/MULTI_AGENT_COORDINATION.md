@@ -152,6 +152,12 @@ had to separately verify with `git log`. With auto-sync, the board is always aut
 
 **MCP addition:** `get_task` response gains `{ prs: [{number, url, merged_at, sha}] }` field.
 
+**Promoted:** this is the seed of a full **work-provenance + reconciliation layer** —
+git-derived `Done` (agents never self-set it), a connect-time `get_working_agreement`, a
+per-task git-lifecycle block, and a content-based `reconcile` drift detector. Design +
+lived-failure evidence: [ADR-0003](decisions/0003-work-provenance-and-reconciliation.md);
+product FRs: [PRD §8.8](PRD-AGENT-COORDINATION-LAYER.md).
+
 ---
 
 ### 1.3 · "Main moved / you're behind" event push

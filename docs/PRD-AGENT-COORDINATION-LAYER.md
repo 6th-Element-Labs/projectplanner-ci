@@ -48,6 +48,9 @@ environment). Observed, first-hand, in the six-agent Helm session (2026-06-26/27
 |---|---|---|
 | Two agents edit one file at once | No cross-runtime lock signal | hand-reconciliation |
 | Board says "Not Started"; it merged | No shared source of truth | re-verification every read |
+| Board says "Done"; the code was never pushed | Status self-reported, not git-derived | "lost feature" scares; 4 local-only branches |
+| "89 branches unmerged" — but content is all in `main` | Reconcile trusts git ancestry; squash-merge breaks it | false "missing features" alarm |
+| "Done" = 5 states (committed/pushed/merged/in-main/published) | No work-provenance lifecycle on the task | per-task git archaeology before any release |
 | One agent can't tell another to stop/redirect | No cross-agent message bus | runaway, wasted tokens |
 | Handoff Claude Code → Codex loses context | No durable, model-neutral state | re-derivation from zero |
 | Port/build-dir contention across agents | No shared-resource broker | false failures, detective work |
@@ -152,6 +155,9 @@ The protocol is a small, stable ABI. Everything else is built from these.
 | **Hard stop** | NMI (unmaskable) | — | runner process-kill (`/job/{id}/kill`) |
 | **Decision record** | append-only ledger | `record_decision`/`list_decisions` | keep; index into RAG |
 | **Working state** | saved registers (for IRET) | `set_agent_state`/`get_agent_state` | keep; the "stack" for resume-after-interrupt |
+| **Work provenance** (lifecycle) | a process table (PID → state) | task `status` only (self-reported) | per-task `{branch, head_sha, pushed, pr, merged_sha, in_main, published}`; `Done` git-derived |
+| **Working agreement** | the kernel ABI/conventions handed to every process | implicit, per-agent reinvented | `get_working_agreement(project)` at connect (DoD, branch naming, merge strategy, ports) |
+| **Reconcile** | `fsck` / drift audit | manual git archaeology | scheduled `reconcile(project)` — content-based board↔git↔mirror drift report |
 | **Cost record** | metering | — | per-task/agent/epic token+\$ ledger |
 
 ---
@@ -223,6 +229,35 @@ The protocol is a small, stable ABI. Everything else is built from these.
   surface "this feature cost 340k tokens / \$4.20 across 3 agents." Per-task/epic budgets
   that warn or halt. (Two honest streams: gateway-metered vs agent-reported.)
 - **FR-22** **Reliability scoring:** which agents complete vs abandon vs get reverted.
+
+### 8.8 Work provenance & reconciliation
+> The board is the ground truth for *where work is*, not just its status. Full design +
+> the lived-failure evidence: [ADR-0003](decisions/0003-work-provenance-and-reconciliation.md).
+> Governing principle: **git events are the source of truth for work state; agents propose,
+> the board + merge webhook decide, `reconcile` catches drift, and everyone gets the same
+> rules at connect.**
+- **FR-23** **`get_working_agreement(project)`** — **step 0 of the handshake.** Returns the
+  canonical per-project policy: `canonical_main_sha`, branch convention, **definition of done
+  (= merged with a recorded merge SHA — agents never self-set `Done`)**, push-before-progress,
+  `merge_strategy` (squash → trust `merged_sha`, not git ancestry), main-writes-via-PR-only,
+  ports doc, BYO-data. One source of truth so N agents stop each inventing their own flow.
+- **FR-24** **Git-derived `Done` (the inversion).** `claim_next` → work → `complete(task_id,
+  agent_id, evidence={branch, head_sha, pr?})` moves the task to `In Review` and records
+  provenance. **Only the merge webhook moves it to `Done`** (stamping `merged_sha`); optional
+  `Released` when that SHA reaches the public mirror. Agents may set up to `In Review`, never
+  `Done`.
+- **FR-25** **Per-task git-lifecycle block** on `get_task`/`get_lane_delta`:
+  `{branch, head_sha, pushed_at, pr_number, merged_sha, merged_at, in_main_content, published_ref,
+  last_reconciled_at}`.
+- **FR-26** **`reconcile(project)`** — on-demand + scheduled. **Content-/SHA-reachability-based,
+  never `git branch --merged`.** Flags: branches with unpushed commits (reported `head_sha`
+  not on `origin`); dirty worktrees (heartbeat `dirty` flag or `In Progress`-without-pushed
+  proxy); `Done` with no `merged_sha`; `merged_sha` not in `main` content or since-reverted;
+  private `main` ↔ public-mirror drift. A non-empty report is a **release blocker** — it turns
+  multi-agent git forensics into a dashboard check.
+- **FR-27** **Webhook lifecycle (extends §1.2):** `pull_request` open → `In Review`; merge →
+  `Done` + `merged_sha`; push to `main` → refresh `canonical_main_sha`. Builds on the
+  `/api/github/webhook` seam already shipped.
 
 ---
 
