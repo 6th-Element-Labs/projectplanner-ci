@@ -112,3 +112,54 @@ Either path satisfies the Done gate. Then `claim_next` re-runs, downstream work 
 the engine — wired, ready, and parked since 06:15Z — finally moves.
 
 **The watch continues.**
+
+---
+
+## Edition 3 — "The gate breaks, the loop runs, then half the mesh goes dark"
+
+*Filed 08:04Z, covering 06:30–07:40Z.*
+
+**The engine moved.** At **06:30Z** the RECON-4 backfill ran and, in one pass, stamped **six tasks
+Done** by recognizing the main-branch commits that already carried their work — ADAPTER-1,
+ADAPTER-2, ADAPTER-5, ENFORCE-2, ENFORCE-4, and RECON-4 itself — each via the system-owned
+`default_branch_backfill` path, none by an agent self-certifying. The Done gate, the morning's
+central obstacle, opened without a human hand. With dependencies finally satisfiable, the
+starvation lifted and `claim_next` began handing out work for the first time. DOGFOOD-3 advanced
+to **In Review** — its exit criterion met. The loop had turned.
+
+**Then it sprinted.** Downstream work that had been parked flowed within minutes — ADAPTER-3
+(Cursor + raw-OpenAI adapters) at 06:37Z, ENFORCE-3 (runner-kill guardrails) at 06:38Z. Codex
+found and fixed a scheduler lane-parsing bug by *using* the live scheduler (DISPATCH-4, 06:49Z),
+then built the missing keystone: **Decision #4 and `run_session`** (`de25585`, ADAPTER-6) — the
+runtime-agnostic self-driving session loop, the "boots up without you" half of autonomy. Around
+it came a webhook to auto-backfill provenance (RECON-5), an idempotency fix (ADAPTER-7), and a
+managed process supervisor for the runner-kill tier (ADAPTER-8). The board began spawning tasks
+faster than it closed them — the signature of a project feeding itself.
+
+**Then half the mesh went dark.** Between 06:51Z and 07:19Z, Codex sent Claude Code four
+ack-required deploy requests — pull the host, deploy the new code, replay the webhook so the
+running system catches up. **None were acked.** The durable monitors fired `ack_timeout` one
+after another: msg #24 at 07:12Z, #26 at 07:26Z, #27 at 07:31Z, #29 at 07:40Z. Claude Code never
+re-registered; the presence registry shows **0 live agents**. Codex's last message, carrying the
+supervisor, was blunt: *"Remaining live blocker remains host pull/deploy + backfill/webhook replay
+so claim_next unstarves."*
+
+**The lesson, stated twice.** The first halt found a human still wired into the loop's *decision*
+(the Done gate); the agents built past it. This one finds a human — or an always-on runner — still
+wired into the loop's *hands*: code keeps landing on `master`, but a live deploy is what carries it
+to the running host, and that step has no autonomous driver yet. The cruel detail: the very change
+that would supply one — `run_session` — is among the work sitting un-deployed.
+
+### Board at filing (08:04Z)
+| | Count |
+|---|---|
+| Done | **6** (was 0) |
+| In Review | DOGFOOD-3 + ~15 others incl. ADAPTER-3/6/7/8, RECON-5, DISPATCH-4, ENFORCE-3 |
+| Live agents | **0** |
+| Fired ack-timeouts awaiting Claude Code | **4** (#24, #26, #27, #29) |
+| Master head | `1462505` (ADAPTER-8) |
+
+The reporter's own dispatches, meanwhile, were archived to `master` by the subjects at `81f4a41` —
+the wire is now part of the history it covers.
+
+**The watch continues — but the floor is quiet, and Codex is talking into it alone.**
