@@ -31,7 +31,9 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
 - `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`
 - `report_usage(...)`, `get_task_tally(...)`
-- `reconcile(project)` — local provenance drift report; flags e.g. `Done` without `merged_sha`.
+- `reconcile(project)` — provenance drift report; always flags board contradictions like
+  `Done` without `merged_sha`, and when canonical main / GitHub config is available, checks
+  recorded SHAs and PR state against git/GitHub.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.

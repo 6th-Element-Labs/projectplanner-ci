@@ -6,6 +6,7 @@ Uses throwaway SQLite files only. Run:
 """
 import os
 import shutil
+import subprocess
 import tempfile
 
 _TMP = tempfile.mkdtemp(prefix="switchboard-runtime-")
@@ -270,6 +271,22 @@ try:
     fixed_report = store.reconcile(project=P)
     ok(not any(f["code"] == "done_without_merged_sha" and f["task_id"] == bad["task_id"]
                for f in fixed_report["findings"]), "reconcile clears Done task after merge provenance")
+    ok(fixed_report["external_checks"]["git_reachability"] == "not_configured",
+       "reconcile skips git reachability until canonical main is known")
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    store.update_canonical_main_sha(head, actor="test", project=P)
+    real_git = store.create_task({"workstream_id": "TEST", "title": "real git proof"},
+                                 actor="seed", project=P)
+    store.update_task(real_git["task_id"], {"status": "In Review"}, actor="seed", project=P)
+    store.mark_task_default_branch_commit(
+        real_git["task_id"], head, branch="HEAD",
+        subject=f"test({real_git['task_id']}): real git proof",
+        actor="test", project=P)
+    external_report = store.reconcile(project=P)
+    ok(external_report["external_checks"]["git_reachability"] == "checked",
+       "reconcile checks git reachability when canonical main is known")
+    ok(not any(f["task_id"] == real_git["task_id"] for f in external_report["findings"]),
+       "reconcile accepts a Done task whose merged_sha is reachable from canonical main")
 
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)

@@ -5,9 +5,11 @@ import hashlib
 import os
 import re
 import sqlite3
+import subprocess
 import time
+import urllib.request
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 DB_PATH = os.environ.get("PM_DB_PATH", os.path.join(os.path.dirname(__file__), "taikun_pm.db"))
 SEED_PATH = os.environ.get("PM_SEED_PATH", os.path.join(os.path.dirname(__file__), "seed_plan.json"))
@@ -1767,20 +1769,102 @@ def update_canonical_main_sha(sha: str, actor: str = "github-webhook",
                     task_id=None, project=project)
 
 
+def _git_ok(args: List[str]) -> bool:
+    try:
+        return subprocess.run(["git", *args], cwd=os.path.dirname(__file__),
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=5).returncode == 0
+    except Exception:
+        return False
+
+
+def _git_checks_available() -> bool:
+    return _git_ok(["rev-parse", "--is-inside-work-tree"])
+
+
+def _github_pr(repo: str, pr_number: int, token: str = "") -> Optional[Dict[str, Any]]:
+    if not repo or not pr_number:
+        return None
+    req = urllib.request.Request(f"https://api.github.com/repos/{repo}/pulls/{int(pr_number)}")
+    req.add_header("Accept", "application/vnd.github+json")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read().decode())
+    except Exception:
+        return None
+
+
+def _external_reconcile_findings(tasks: List[Dict[str, Any]],
+                                 git_states: Dict[str, Dict[str, Any]],
+                                 canonical_main_sha: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    findings: List[Dict[str, Any]] = []
+    checks = {"git_reachability": "not_configured", "github_prs": "not_configured"}
+    if canonical_main_sha and _git_checks_available():
+        checks["git_reachability"] = "checked"
+        main_ref = canonical_main_sha
+        for task in tasks:
+            task_id = task["task_id"]
+            state = git_states.get(task_id, {})
+            for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
+                sha = state.get(field)
+                if not sha:
+                    continue
+                if not _git_ok(["cat-file", "-e", f"{sha}^{{commit}}"]):
+                    findings.append({"severity": severity, "task_id": task_id,
+                                     "code": f"{field}_not_found",
+                                     "detail": f"Recorded {field} is not present in the local git object database."})
+                    continue
+                if field == "merged_sha" and not _git_ok(["merge-base", "--is-ancestor", sha, main_ref]):
+                    findings.append({"severity": "high", "task_id": task_id,
+                                     "code": "merged_sha_not_on_canonical_main",
+                                     "detail": "Recorded merged_sha is not reachable from canonical main."})
+
+    repo = os.environ.get("PM_GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
+    token = os.environ.get("PM_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+    pr_tasks = [t for t in tasks if git_states.get(t["task_id"], {}).get("pr_number")]
+    if repo and pr_tasks:
+        checks["github_prs"] = "checked" if token else "checked_unauthenticated"
+        for task in pr_tasks:
+            state = git_states.get(task["task_id"], {})
+            pr = _github_pr(repo, int(state.get("pr_number") or 0), token=token)
+            if not pr:
+                findings.append({"severity": "medium", "task_id": task["task_id"],
+                                 "code": "pr_state_unavailable",
+                                 "detail": "Could not fetch recorded PR state from GitHub."})
+                continue
+            merged = bool(pr.get("merged_at"))
+            if task.get("status") == "Done" and not merged:
+                findings.append({"severity": "high", "task_id": task["task_id"],
+                                 "code": "done_pr_not_merged",
+                                 "detail": "Task is Done but the recorded GitHub PR is not merged."})
+            merge_sha = pr.get("merge_commit_sha")
+            if merged and state.get("merged_sha") and merge_sha and state["merged_sha"] != merge_sha:
+                findings.append({"severity": "medium", "task_id": task["task_id"],
+                                 "code": "merged_sha_mismatch",
+                                 "detail": "Recorded merged_sha differs from GitHub PR merge_commit_sha."})
+    return findings, checks
+
+
 def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Local drift report for board provenance.
 
-    This first pass intentionally avoids external GitHub calls; it catches board-internal
-    contradictions and leaves deeper reachability/content checks for the runner/API-backed
-    phase.
+    Board-internal checks always run. When a canonical main SHA and local git checkout are
+    available, reconcile also verifies recorded SHAs against git reachability. If GitHub repo
+    config is present, PR records are checked through the GitHub API.
     """
     now = time.time()
     findings: List[Dict[str, Any]] = []
+    tasks: List[Dict[str, Any]] = []
+    git_states: Dict[str, Dict[str, Any]] = {}
     with _conn(project) as c:
         rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
         for row in rows:
             task = _task_row(row)
             git_state = _load_git_state(c, task["task_id"])
+            tasks.append(task)
+            git_states[task["task_id"]] = git_state
             status = task.get("status")
             if status == "Done" and not git_state.get("merged_sha"):
                 findings.append({"severity": "high", "task_id": task["task_id"],
@@ -1801,11 +1885,14 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         findings.append({"severity": "medium", "task_id": None,
                          "code": "missing_canonical_main_sha",
                          "detail": "No canonical main SHA recorded yet; wait for a default-branch push webhook or set meta."})
+    external_findings, external_checks = _external_reconcile_findings(
+        tasks, git_states, agreement.get("canonical_main_sha") or "")
+    findings.extend(external_findings)
     append_activity("reconcile.completed", "reconcile",
                     {"findings": len(findings)}, task_id=None, project=project)
     return {"project": project, "ok": not findings, "findings": findings,
             "activity_cursor": cursor, "checked_at": now,
-            "external_checks": "not_configured"}
+            "external_checks": external_checks}
 
 
 # ---- dev dispatches (Claude Code runner) — so the UI can show the latest run per task ----
