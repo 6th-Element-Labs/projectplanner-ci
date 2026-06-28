@@ -316,6 +316,12 @@ P0 for this layer is intentionally small:
    host daemon starts Claude-compatible runtime, runtime registers and drains inbox or records a
    clear launch failure.
 
+Implementation note: the substrate portion is implemented when those tables/tools exist, monitor
+sweep can create wake intents through `on_ack_timeout=wake_target`, and the runtime smoke test
+proves wake request/claim/complete plus monitor-created wakes. The live product proof still
+requires deploying an Agent Host daemon and observing a real runtime start or explicit no-host
+result.
+
 Exit criteria:
 
 - no human has to notice an ack timeout in order for a wake attempt to be made;

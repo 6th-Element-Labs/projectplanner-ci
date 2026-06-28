@@ -387,6 +387,48 @@ def init_db(project: str = DEFAULT_PROJECT):
                 generated_at    REAL NOT NULL,
                 activity_cursor INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS agent_hosts (
+                host_id            TEXT PRIMARY KEY,
+                hostname           TEXT,
+                agent_host_version TEXT,
+                repo_root          TEXT,
+                runtimes_json      TEXT NOT NULL DEFAULT '[]',
+                limits_json        TEXT NOT NULL DEFAULT '{}',
+                capacity_json      TEXT NOT NULL DEFAULT '{}',
+                principal_id       TEXT,
+                registered_at      REAL NOT NULL,
+                heartbeat_at       REAL NOT NULL,
+                heartbeat_ttl_s    INTEGER NOT NULL DEFAULT 60,
+                status             TEXT NOT NULL DEFAULT 'online',
+                last_error         TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_agent_hosts_heartbeat
+                ON agent_hosts(status, heartbeat_at);
+            CREATE TABLE IF NOT EXISTS wake_intents (
+                wake_id           TEXT PRIMARY KEY,
+                source            TEXT NOT NULL,
+                reason            TEXT NOT NULL,
+                selector_json     TEXT NOT NULL DEFAULT '{}',
+                policy_json       TEXT NOT NULL DEFAULT '{}',
+                status            TEXT NOT NULL DEFAULT 'pending',
+                requested_at      REAL NOT NULL,
+                deadline          REAL,
+                claimed_at        REAL,
+                claimed_by_host   TEXT,
+                completed_at      REAL,
+                runner_session_id TEXT,
+                agent_id          TEXT,
+                result_json       TEXT NOT NULL DEFAULT '{}',
+                task_id           TEXT,
+                principal_id      TEXT,
+                idem_key          TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_wake_intents_status
+                ON wake_intents(status, deadline, requested_at);
+            CREATE INDEX IF NOT EXISTS ix_wake_intents_host
+                ON wake_intents(claimed_by_host, status);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_wake_intents_idem
+                ON wake_intents(idem_key) WHERE idem_key IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
             CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status);
             CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
@@ -847,6 +889,404 @@ def list_active_agents(lane: str = "", project: str = DEFAULT_PROJECT) -> List[D
         else:
             rows = c.execute("SELECT * FROM agent_presence ORDER BY heartbeat_at DESC").fetchall()
     return [p for p in (_presence_row(r, now=now) for r in rows) if not p["stale"]]
+
+
+def _json_obj(raw: Any, default: Any) -> Any:
+    if raw in (None, ""):
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    d = dict(row)
+    runtimes = _json_obj(d.pop("runtimes_json", "[]"), [])
+    limits = _json_obj(d.pop("limits_json", "{}"), {})
+    capacity = _json_obj(d.pop("capacity_json", "{}"), {})
+    ttl_s = int(d.get("heartbeat_ttl_s") or 60)
+    expires_at = float(d.get("heartbeat_at") or 0) + ttl_s
+    active = int(capacity.get("active_sessions") or 0)
+    max_sessions = limits.get("max_sessions")
+    try:
+        max_sessions = int(max_sessions) if max_sessions is not None else None
+    except Exception:
+        max_sessions = None
+    d.update({
+        "runtimes": runtimes,
+        "limits": limits,
+        "capacity": capacity,
+        "expires_at": expires_at,
+        "stale": now >= expires_at or d.get("status") != "online",
+        "available_sessions": (max(0, max_sessions - active)
+                               if max_sessions is not None else None),
+    })
+    return d
+
+
+def _wake_row(row: sqlite3.Row) -> Dict[str, Any]:
+    d = dict(row)
+    d["selector"] = _json_obj(d.pop("selector_json", "{}"), {})
+    d["policy"] = _json_obj(d.pop("policy_json", "{}"), {})
+    d["result"] = _json_obj(d.pop("result_json", "{}"), {})
+    return d
+
+
+def _selector_runtime_for_agent(agent_id: str) -> str:
+    aid = (agent_id or "").lower()
+    if aid.startswith("claude"):
+        return "claude-code"
+    if aid.startswith("codex"):
+        return "codex"
+    if aid.startswith("cursor"):
+        return "cursor"
+    if aid.startswith("langgraph"):
+        return "langgraph"
+    if aid.startswith("openai"):
+        return "openai-loop"
+    return ""
+
+
+def _runtime_matches_selector(runtime: Dict[str, Any], selector: Dict[str, Any]) -> bool:
+    want_runtime = (selector.get("runtime") or "").strip()
+    want_lane = (selector.get("lane") or "").strip()
+    want_caps = {str(c).strip() for c in selector.get("capabilities") or [] if str(c).strip()}
+    have_runtime = (runtime.get("runtime") or "").strip()
+    if want_runtime and have_runtime != want_runtime:
+        return False
+    lanes = [str(x).strip() for x in runtime.get("lanes") or [] if str(x).strip()]
+    if want_lane and lanes and want_lane not in lanes:
+        return False
+    caps = {str(c).strip() for c in runtime.get("capabilities") or [] if str(c).strip()}
+    if want_caps and not want_caps.issubset(caps):
+        return False
+    return True
+
+
+def _host_can_handle(host: Dict[str, Any], selector: Dict[str, Any]) -> bool:
+    if host.get("stale"):
+        return False
+    if host.get("available_sessions") is not None and host["available_sessions"] <= 0:
+        return False
+    return any(_runtime_matches_selector(rt, selector) for rt in host.get("runtimes") or [])
+
+
+def _eligible_hosts_in(c: sqlite3.Connection, selector: Dict[str, Any],
+                       now: float) -> List[Dict[str, Any]]:
+    rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
+    hosts = [_host_row(r, now=now) for r in rows]
+    return [h for h in hosts if _host_can_handle(h, selector)]
+
+
+def register_host(inventory: Dict[str, Any], principal_id: str = "",
+                  actor: str = "system",
+                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Register or refresh an always-on Agent Host inventory record."""
+    now = time.time()
+    host_id = (inventory.get("host_id") or "").strip()
+    if not host_id:
+        return {"error": "host_id required"}
+    runtimes = inventory.get("runtimes") or []
+    limits = inventory.get("limits") or {}
+    capacity = inventory.get("capacity") or {}
+    if "active_sessions" in inventory and "active_sessions" not in capacity:
+        capacity["active_sessions"] = inventory.get("active_sessions")
+    ttl_s = max(10, int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60))
+    with _conn(project) as c:
+        c.execute(
+            "INSERT INTO agent_hosts(host_id, hostname, agent_host_version, repo_root, "
+            "runtimes_json, limits_json, capacity_json, principal_id, registered_at, "
+            "heartbeat_at, heartbeat_ttl_s, status, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(host_id) DO UPDATE SET hostname=excluded.hostname, "
+            "agent_host_version=excluded.agent_host_version, repo_root=excluded.repo_root, "
+            "runtimes_json=excluded.runtimes_json, limits_json=excluded.limits_json, "
+            "capacity_json=excluded.capacity_json, principal_id=excluded.principal_id, "
+            "heartbeat_at=excluded.heartbeat_at, heartbeat_ttl_s=excluded.heartbeat_ttl_s, "
+            "status=excluded.status, last_error=NULL",
+            (host_id, inventory.get("hostname") or None,
+             inventory.get("agent_host_version") or None, inventory.get("repo_root") or None,
+             json.dumps(runtimes, sort_keys=True), json.dumps(limits, sort_keys=True),
+             json.dumps(capacity, sort_keys=True), principal_id or None, now, now, ttl_s,
+             "online", None),
+        )
+        payload = {"host_id": host_id, "runtimes": runtimes, "limits": limits,
+                   "heartbeat_ttl_s": ttl_s}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "agent_host.registered",
+                   json.dumps(payload, sort_keys=True), now))
+        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+    return _host_row(row, now=now)
+
+
+def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
+                   capacity: Optional[Dict[str, Any]] = None,
+                   status: str = "online", last_error: str = "",
+                   actor: str = "system",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+        if not row:
+            return {"error": "host not registered", "host_id": host_id}
+        current = _json_obj(row["capacity_json"], {})
+        if capacity:
+            current.update(capacity)
+        if active_sessions is not None:
+            current["active_sessions"] = int(active_sessions)
+        c.execute(
+            "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=? "
+            "WHERE host_id=?",
+            (now, json.dumps(current, sort_keys=True), status or "online",
+             last_error or None, host_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "agent_host.heartbeat",
+                   json.dumps({"host_id": host_id, "capacity": current,
+                               "status": status or "online"}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+    return _host_row(row, now=now)
+
+
+def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
+                     include_stale: bool = False,
+                     project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    now = time.time()
+    selector = {"runtime": runtime or "", "lane": lane or "",
+                "capabilities": [capability] if capability else []}
+    with _conn(project) as c:
+        rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
+    hosts = [_host_row(r, now=now) for r in rows]
+    out = []
+    for host in hosts:
+        if host.get("stale") and not include_stale:
+            continue
+        if (runtime or lane or capability) and not any(
+            _runtime_matches_selector(rt, selector) for rt in host.get("runtimes") or []
+        ):
+            continue
+        out.append(host)
+    return out
+
+
+def host_status(host_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+        if not row:
+            return {"error": "host not registered", "host_id": host_id}
+        host = _host_row(row, now=now)
+        counts = c.execute(
+            "SELECT status, COUNT(*) n FROM wake_intents WHERE claimed_by_host=? GROUP BY status",
+            (host_id,),
+        ).fetchall()
+    host["wake_counts"] = {r["status"]: r["n"] for r in counts}
+    return host
+
+
+def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
+                        reason: str, source: str, policy: Dict[str, Any],
+                        task_id: Optional[str], principal_id: str, actor: str,
+                        now: float, idem_key: str = "") -> Dict[str, Any]:
+    deadline_s = (policy.get("deadline_seconds") or policy.get("claim_timeout_s") or
+                  policy.get("ttl_s"))
+    deadline = now + float(deadline_s) if deadline_s else None
+    eligible = _eligible_hosts_in(c, selector, now)
+    no_host_policy = (policy.get("no_eligible_host") or "wait").strip()
+    status = "failed" if no_host_policy == "fail" and not eligible else "pending"
+    result = ({"reason": "no_eligible_host", "eligible_host_count": 0}
+              if status == "failed" else {})
+    wake_id = "wake-" + uuid.uuid4().hex[:16]
+    c.execute(
+        "INSERT INTO wake_intents(wake_id, source, reason, selector_json, policy_json, "
+        "status, requested_at, deadline, result_json, task_id, principal_id, idem_key) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (wake_id, source, reason, json.dumps(selector, sort_keys=True),
+         json.dumps(policy, sort_keys=True), status, now, deadline,
+         json.dumps(result, sort_keys=True), task_id, principal_id or None, idem_key or None),
+    )
+    payload = {"wake_id": wake_id, "source": source, "reason": reason,
+               "selector": selector, "policy": policy, "status": status,
+               "eligible_host_count": len(eligible)}
+    c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+              (task_id, actor, "wake.requested", json.dumps(payload, sort_keys=True), now))
+    if not eligible:
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "wake.no_eligible_host",
+                   json.dumps({"wake_id": wake_id, "selector": selector,
+                               "status": status}, sort_keys=True), now))
+    row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    wake = _wake_row(row)
+    wake["eligible_host_count"] = len(eligible)
+    wake["eligible_hosts"] = [h["host_id"] for h in eligible]
+    return wake
+
+
+def request_wake(selector: Dict[str, Any], reason: str = "",
+                 source: str = "", policy: Optional[Dict[str, Any]] = None,
+                 task_id: Optional[str] = None, principal_id: str = "",
+                 actor: str = "system", idem_key: str = "",
+                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    policy = dict(policy or {})
+    selector = dict(selector or {})
+    if not selector.get("runtime") and selector.get("agent_id"):
+        runtime = _selector_runtime_for_agent(str(selector.get("agent_id") or ""))
+        if runtime:
+            selector["runtime"] = runtime
+    if not selector.get("runtime") and not selector.get("agent_id"):
+        return {"error": "selector.runtime or selector.agent_id required"}
+    payload = {"selector": selector, "reason": reason or "wake requested",
+               "source": source or actor, "policy": policy, "task_id": task_id}
+    with _conn(project) as c:
+        hit = _idem_hit(c, "request_wake", idem_key, actor, payload)
+        if hit is not None:
+            return hit
+        wake = _insert_wake_intent(
+            c, selector=selector, reason=reason or "wake requested",
+            source=source or actor, policy=policy, task_id=task_id,
+            principal_id=principal_id, actor=actor, now=now, idem_key=idem_key)
+        _idem_store(c, "request_wake", idem_key, actor, payload, wake)
+        return wake
+
+
+def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
+                      project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    q = "SELECT * FROM wake_intents WHERE 1=1"
+    params: List[Any] = []
+    if status:
+        q += " AND status=?"; params.append(status)
+    if host_id:
+        q += " AND claimed_by_host=?"; params.append(host_id)
+    q += " ORDER BY requested_at"
+    with _conn(project) as c:
+        wakes = [_wake_row(r) for r in c.execute(q, params).fetchall()]
+    if runtime:
+        wakes = [w for w in wakes if (w.get("selector") or {}).get("runtime") == runtime]
+    return wakes
+
+
+def claim_wake(host_id: str, wake_id: str, actor: str = "system",
+               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        wake_row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+        if not wake_row:
+            return {"claimed": False, "error": "wake not found", "wake_id": wake_id}
+        wake = _wake_row(wake_row)
+        if wake["status"] != "pending":
+            return {"claimed": False, "reason": f"wake is {wake['status']}", "wake": wake}
+        if wake.get("deadline") and wake["deadline"] <= now:
+            result = {"reason": "deadline_expired", "deadline": wake["deadline"]}
+            c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+                      "WHERE wake_id=?",
+                      (now, json.dumps(result, sort_keys=True), wake_id))
+            return {"claimed": False, "reason": "deadline_expired", "wake_id": wake_id}
+        host_row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+        if not host_row:
+            return {"claimed": False, "reason": "host_not_registered", "host_id": host_id}
+        host = _host_row(host_row, now=now)
+        if not _host_can_handle(host, wake["selector"]):
+            return {"claimed": False, "reason": "host_not_eligible",
+                    "host_id": host_id, "wake_id": wake_id}
+        cur = c.execute(
+            "UPDATE wake_intents SET status='claimed', claimed_at=?, claimed_by_host=? "
+            "WHERE wake_id=? AND status='pending'",
+            (now, host_id, wake_id),
+        )
+        if cur.rowcount == 0:
+            row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+            return {"claimed": False, "reason": "lost_race", "wake": _wake_row(row)}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (wake.get("task_id"), actor, "wake.claimed",
+                   json.dumps({"wake_id": wake_id, "host_id": host_id}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    return {"claimed": True, "wake": _wake_row(row)}
+
+
+def complete_wake(wake_id: str, runner_session_id: str = "",
+                  agent_id: str = "", result: Optional[Dict[str, Any]] = None,
+                  actor: str = "system",
+                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    result = dict(result or {})
+    success = bool(result.get("started") or runner_session_id or agent_id)
+    status = "completed" if success else "failed"
+    if "reason" not in result:
+        result["reason"] = "started" if success else "launch_failed"
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+        if not row:
+            return {"error": "wake not found", "wake_id": wake_id}
+        wake = _wake_row(row)
+        c.execute(
+            "UPDATE wake_intents SET status=?, completed_at=?, runner_session_id=?, "
+            "agent_id=?, result_json=? WHERE wake_id=?",
+            (status, now, runner_session_id or None, agent_id or None,
+             json.dumps(result, sort_keys=True), wake_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (wake.get("task_id"), actor,
+                   "wake.completed" if status == "completed" else "wake.failed",
+                   json.dumps({"wake_id": wake_id, "status": status,
+                               "runner_session_id": runner_session_id or None,
+                               "agent_id": agent_id or None,
+                               "result": result}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    return _wake_row(row)
+
+
+def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
+                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+        if not row:
+            return {"error": "wake not found", "wake_id": wake_id}
+        wake = _wake_row(row)
+        if wake["status"] in ("completed", "failed", "cancelled"):
+            return wake | {"note": "already terminal"}
+        result = dict(wake.get("result") or {})
+        result.update({"reason": reason, "cancelled_by": actor})
+        c.execute("UPDATE wake_intents SET status='cancelled', completed_at=?, result_json=? "
+                  "WHERE wake_id=?",
+                  (now, json.dumps(result, sort_keys=True), wake_id))
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (wake.get("task_id"), actor, "wake.cancelled",
+                   json.dumps({"wake_id": wake_id, "reason": reason}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    return _wake_row(row)
+
+
+def sweep_wake_intents(project: str = DEFAULT_PROJECT,
+                       now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else float(now)
+    failed = 0
+    events: List[Dict[str, Any]] = []
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
+            "AND deadline IS NOT NULL AND deadline<=?",
+            (now,),
+        ).fetchall()
+        for row in rows:
+            wake = _wake_row(row)
+            result = dict(wake.get("result") or {})
+            result.update({"reason": "deadline_expired", "deadline": wake.get("deadline")})
+            c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+                      "WHERE wake_id=?",
+                      (now, json.dumps(result, sort_keys=True), wake["wake_id"]))
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (wake.get("task_id"), "switchboard/wake", "wake.failed",
+                       json.dumps({"wake_id": wake["wake_id"], "reason": "deadline_expired"},
+                                  sort_keys=True), now))
+            failed += 1
+            events.append({"wake_id": wake["wake_id"], "status": "failed",
+                           "reason": "deadline_expired"})
+    return {"project": project, "failed": failed, "events": events}
 
 
 def _active_resource_leases_in(c: sqlite3.Connection, now: float,
@@ -1465,6 +1905,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                        ack_deadline_minutes: Optional[int] = None,
                        ack_timeout_seconds: Optional[float] = None,
                        signal: Optional[str] = None, priority: int = 0,
+                       on_ack_timeout: str = "notify_sender",
                        principal_id: str = "", idem_key: str = "",
                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Send a directed message from one agent to another. Returns the message record."""
@@ -1476,7 +1917,8 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                "task_id": task_id, "requires_ack": requires_ack,
                "ack_deadline_minutes": ack_deadline_minutes,
                "ack_timeout_seconds": ack_timeout_seconds,
-               "signal": signal, "priority": priority}
+               "signal": signal, "priority": priority,
+               "on_ack_timeout": on_ack_timeout}
     with _conn(project) as c:
         hit = _idem_hit(c, "send", idem_key, from_agent, payload)
         if hit is not None:
@@ -1495,7 +1937,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                     "signal": signal, "priority": int(priority or 0)}
         if requires_ack:
             monitor = _create_ack_monitor(c, msg_id, from_agent, to_agent, task_id,
-                                          deadline, now)
+                                          deadline, now, on_ack_timeout=on_ack_timeout)
             response["monitor_id"] = monitor["id"]
             response["monitor"] = monitor
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
@@ -1516,10 +1958,13 @@ def _monitor_row(r: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
 
 def _create_ack_monitor(c: sqlite3.Connection, message_id: int, from_agent: str,
                         to_agent: str, task_id: Optional[str], deadline: Optional[float],
-                        now: float) -> Dict[str, Any]:
+                        now: float, on_ack_timeout: str = "notify_sender") -> Dict[str, Any]:
     monitor_id = f"mon-{uuid.uuid4().hex[:16]}"
     condition = {"type": "message_ack", "message_id": message_id}
-    on_timeout = {"action": "notify_sender", "signal": "ack_timeout"}
+    action = (on_ack_timeout or "notify_sender").strip()
+    if action not in ("notify_sender", "wake_target", "wake_or_operator_alert"):
+        action = "notify_sender"
+    on_timeout = {"action": action, "signal": "ack_timeout"}
     c.execute(
         "INSERT INTO coordination_monitors"
         "(id, kind, target_type, target_id, task_id, owner_agent, subject_agent, status, "
@@ -1736,7 +2181,9 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                 continue
             deadline = mon.get("deadline")
             if deadline is not None and deadline <= now:
-                result = {"reason": "ack_timeout", "deadline": deadline, "fired_at": now}
+                action = (mon.get("on_timeout") or {}).get("action") or "notify_sender"
+                result = {"reason": "ack_timeout", "deadline": deadline, "fired_at": now,
+                          "on_timeout": action}
                 c.execute(
                     "UPDATE coordination_monitors SET status='fired', fired_at=?, "
                     "last_checked_at=?, updated_at=?, result_json=? WHERE id=?",
@@ -1765,14 +2212,39 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                 c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                           (msg["task_id"], "switchboard/monitor", "message.sent",
                            json.dumps(notice_payload, sort_keys=True), now))
+                wake = None
+                if action in ("wake_target", "wake_or_operator_alert"):
+                    selector = {"agent_id": msg["to_agent"]}
+                    runtime = _selector_runtime_for_agent(msg["to_agent"])
+                    if runtime:
+                        selector["runtime"] = runtime
+                    wake = _insert_wake_intent(
+                        c, selector=selector, reason="ack_timeout",
+                        source=f"monitor:{mon['id']}",
+                        policy={"no_eligible_host": "wait",
+                                "operator_alert": action == "wake_or_operator_alert"},
+                        task_id=msg["task_id"], principal_id="",
+                        actor="switchboard/monitor", now=now,
+                        idem_key=f"ack-timeout:{mon['id']}")
+                    result["wake_id"] = wake["wake_id"]
+                    result["wake_status"] = wake["status"]
+                    c.execute(
+                        "UPDATE coordination_monitors SET result_json=? WHERE id=?",
+                        (json.dumps(result, sort_keys=True), mon["id"]),
+                    )
                 fired += 1
-                events.append({"monitor_id": mon["id"], "status": "fired",
-                               "message_id": msg["id"], "notice_id": cur.lastrowid})
+                event = {"monitor_id": mon["id"], "status": "fired",
+                         "message_id": msg["id"], "notice_id": cur.lastrowid}
+                if wake:
+                    event["wake_id"] = wake["wake_id"]
+                    event["wake_status"] = wake["status"]
+                events.append(event)
             else:
                 c.execute("UPDATE coordination_monitors SET last_checked_at=?, updated_at=? WHERE id=?",
                           (now, now, mon["id"]))
+    wake_sweep = sweep_wake_intents(project=project, now=now)
     return {"project": project, "checked": checked, "resolved": resolved,
-            "fired": fired, "events": events}
+            "fired": fired, "events": events, "wake_sweep": wake_sweep}
 
 
 def set_task_summary(task_id: str, rationale: str, activity_cursor: int,

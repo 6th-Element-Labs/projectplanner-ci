@@ -94,6 +94,69 @@ try:
     hb = store.heartbeat("codex/TEST#1", actor=auth.actor(p), project=P)
     ok(not hb.get("error"), "heartbeat renews registered session")
 
+    host = store.register_host(
+        {
+            "host_id": "host/test",
+            "hostname": "testbox",
+            "agent_host_version": "0.1.0",
+            "repo_root": os.getcwd(),
+            "runtimes": [{
+                "runtime": "claude-code",
+                "lanes": ["TEST"],
+                "capabilities": ["docs", "python"],
+                "control": {"mode": "hook_deny", "runner_kill": True},
+            }],
+            "limits": {"max_sessions": 2},
+            "heartbeat_ttl_s": 60,
+        },
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(host["host_id"] == "host/test" and not host["stale"],
+       "register_host stores live Agent Host inventory")
+    host_hb = store.heartbeat_host("host/test", active_sessions=1,
+                                   actor=auth.actor(p), project=P)
+    ok(host_hb["capacity"]["active_sessions"] == 1,
+       "heartbeat_host renews capacity")
+    hosts = store.list_agent_hosts(runtime="claude-code", lane="TEST",
+                                   capability="docs", project=P)
+    ok(len(hosts) == 1 and hosts[0]["host_id"] == "host/test",
+       "list_agent_hosts filters by runtime, lane, and capability")
+    host_status = store.host_status("host/test", project=P)
+    ok(host_status["available_sessions"] == 1,
+       "host_status reports remaining capacity")
+    wake = store.request_wake(
+        selector={"runtime": "claude-code", "agent_id": "claude/TEST#2",
+                  "lane": "TEST", "capabilities": ["docs"]},
+        reason="operator proof",
+        source="test",
+        policy={"deadline_seconds": 60},
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(wake["status"] == "pending" and wake["eligible_host_count"] == 1,
+       "request_wake records a durable wake intent with eligible host count")
+    wake_claim = store.claim_wake("host/test", wake["wake_id"],
+                                  actor=auth.actor(p), project=P)
+    ok(wake_claim["claimed"] is True and wake_claim["wake"]["status"] == "claimed",
+       "claim_wake atomically assigns a wake to an eligible host")
+    wake_claim_again = store.claim_wake("host/test", wake["wake_id"],
+                                        actor=auth.actor(p), project=P)
+    ok(wake_claim_again["claimed"] is False,
+       "claim_wake refuses already-claimed wakes")
+    wake_done = store.complete_wake(
+        wake["wake_id"],
+        runner_session_id="run_test",
+        agent_id="claude/TEST#2",
+        result={"started": True},
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(wake_done["status"] == "completed" and wake_done["runner_session_id"] == "run_test",
+       "complete_wake records runtime start evidence")
+
     lease = store.claim_resources(
         agent_id="codex/TEST#1",
         resource_type="file",
@@ -180,6 +243,27 @@ try:
     timeout_notice = store.list_unacked_messages("codex/TEST#1", project=P)
     ok(any(m.get("signal") == "ack_timeout" for m in timeout_notice),
        "ack timeout sends a notice back to the sender")
+    wake_timed = store.send_agent_message(
+        "codex/TEST#1",
+        "claude/TEST#2",
+        "wake if absent",
+        task_id="TEST-1",
+        requires_ack=True,
+        ack_deadline_minutes=-1,
+        on_ack_timeout="wake_target",
+        project=P,
+    )
+    swept_wake = store.sweep_coordination_monitors(project=P)
+    wake_events = [e for e in swept_wake["events"] if e.get("message_id") == wake_timed["id"]]
+    ok(wake_events and wake_events[0].get("wake_id"),
+       "ack-timeout monitor can create a wake intent")
+    wake_status = store.get_message_status(wake_timed["id"], project=P)
+    ok(wake_status["monitor"]["result"]["wake_status"] == "pending",
+       "monitor result records the created wake intent")
+    wakes = store.list_wake_intents(status="pending", runtime="claude-code", project=P)
+    ok(any(w["source"] == f"monitor:{wake_status['monitor']['id']}" and
+           w["selector"]["agent_id"] == "claude/TEST#2" for w in wakes),
+       "list_wake_intents exposes monitor-created wakes")
 
     first = store.create_task({"workstream_id": "TEST", "title": "first"}, actor="seed", project=P)
     second = store.create_task({"workstream_id": "TEST", "title": "second",

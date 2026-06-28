@@ -26,9 +26,12 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `update_task(task_id, ...only the fields you pass...)`
 - `add_comment(task_id, text)`
 - `register_agent(...)`, `heartbeat(...)`, `list_active_agents(...)`
+- `register_host(...)`, `heartbeat_host(...)`, `list_agent_hosts(...)`, `host_status(...)`
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
 - `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
+- `request_wake(...)`, `list_wake_intents(...)`, `claim_wake(...)`, `complete_wake(...)`,
+  `cancel_wake(...)`
 - `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`
 - `report_usage(...)`, `get_task_tally(...)`
 - `reconcile(project)` — provenance drift report; always flags board contradictions like
@@ -50,8 +53,19 @@ Durable ack rule:
 - `list_pending_acks` and `get_message_status` expose monitor state; `sweep_monitors` resolves
   acked messages and fires timed-out monitors. The production host should run
   `jobs.py sweep_monitors` through `projectplanner-monitors.timer`.
-- A fired ack monitor does not wake an absent runtime by itself. Agent Host registration and
-  wake intents are specified in [`docs/AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
+- By default, a fired ack monitor only notifies the sender. Callers may opt into
+  `on_ack_timeout="wake_target"` or `on_ack_timeout="wake_or_operator_alert"` to create a
+  durable wake intent for an eligible Agent Host. Host registration and wake intent semantics
+  are specified in [`docs/AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
+
+Agent Host wake rule:
+- `register_host` advertises always-on host inventory, runtimes, lanes, capabilities, capacity,
+  and TTL.
+- `request_wake` creates a durable wake intent; `claim_wake` atomically assigns it to one
+  eligible host; `complete_wake` records start/failure evidence.
+- `list_wake_intents` distinguishes `pending`, `claimed`, `completed`, `failed`, and
+  `cancelled` wakes. A host daemon should poll pending wakes and launch/reuse a supervised
+  runtime.
 
 Protocol compatibility:
 - `get_working_agreement` includes `protocol.version`, `protocol.profile`,

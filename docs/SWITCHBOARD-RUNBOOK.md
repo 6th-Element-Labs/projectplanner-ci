@@ -89,8 +89,10 @@ the board. No human relay for handoffs; no human ignition once the supervisor is
 
 ## 6. Honest limits
 The substrate is live; the driver + supervisor + auto-provenance are built and unit/dogfood
-tested. The next product proof is the Agent Host daemon from
-[`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md): a monitored message times out, a wake intent is
-claimed by a host, and an absent runtime is started or a clear "no eligible host online" result
-is recorded. Not yet proven: a long-running multi-agent supervised session under real load, and
-the PR-merge webhook (RECON-2) as the primary Done path (RECON-5 covers direct-push today).
+tested. The Agent Host substrate adds host inventory, wake intents, and optional
+`on_ack_timeout=wake_target` escalation. The remaining product proof is operational:
+deploy a host daemon, send an ack-required message to an absent runtime, watch the monitor
+create a wake intent, and confirm the host either starts/reuses the runtime or records a clear
+"no eligible host online" result. Not yet proven: a long-running multi-agent supervised session
+under real load, and the PR-merge webhook (RECON-2) as the primary Done path (RECON-5 covers
+direct-push today).

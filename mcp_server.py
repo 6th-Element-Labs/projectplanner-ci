@@ -286,6 +286,124 @@ def list_active_agents(project: str = "maxwell", lane: str = "") -> str:
 
 
 @mcp.tool()
+def register_host(host_id: str, runtimes_json: str, ctx: Context,
+                  hostname: str = "", repo_root: str = "",
+                  agent_host_version: str = "0.1.0",
+                  limits_json: str = "{}", heartbeat_ttl_s: int = 60,
+                  project: str = "maxwell") -> str:
+    """Register an always-on Agent Host that can wake/start runtimes.
+
+    runtimes_json is a JSON list, e.g. [{"runtime":"claude-code","lanes":["ADAPTER"],
+    "capabilities":["python","docs"]}]. limits_json can include {"max_sessions":2}.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        runtimes = json.loads(runtimes_json or "[]")
+        limits = json.loads(limits_json or "{}")
+    except Exception:
+        return _dumps({"error": "runtimes_json and limits_json must be valid JSON"})
+    return _dumps(store.register_host(
+        {"host_id": host_id, "hostname": hostname, "repo_root": repo_root,
+         "agent_host_version": agent_host_version, "runtimes": runtimes,
+         "limits": limits, "heartbeat_ttl_s": heartbeat_ttl_s},
+        principal_id=principal["id"], actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def heartbeat_host(host_id: str, ctx: Context, active_sessions: int = -1,
+                   capacity_json: str = "{}", status: str = "online",
+                   last_error: str = "", project: str = "maxwell") -> str:
+    """Renew liveness/capacity for an Agent Host."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        capacity = json.loads(capacity_json or "{}")
+    except Exception:
+        return _dumps({"error": "capacity_json must be a JSON object string"})
+    return _dumps(store.heartbeat_host(
+        host_id, active_sessions=(None if active_sessions < 0 else active_sessions),
+        capacity=capacity, status=status, last_error=last_error,
+        actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def list_agent_hosts(project: str = "maxwell", runtime: str = "", lane: str = "",
+                     capability: str = "", include_stale: bool = False) -> str:
+    """List registered Agent Hosts and their wake capacity."""
+    return _dumps(store.list_agent_hosts(runtime=runtime, lane=lane,
+                                        capability=capability,
+                                        include_stale=include_stale,
+                                        project=project))
+
+
+@mcp.tool()
+def host_status(host_id: str, project: str = "maxwell") -> str:
+    """Return one Agent Host's inventory, liveness, capacity, and wake counts."""
+    return _dumps(store.host_status(host_id, project=project))
+
+
+@mcp.tool()
+def request_wake(selector_json: str, reason: str, ctx: Context,
+                 source: str = "", policy_json: str = "{}", task_id: str = "",
+                 idem_key: str = "", project: str = "maxwell") -> str:
+    """Create a durable wake intent for an absent runtime/session.
+
+    selector_json includes runtime/agent_id/lane/capabilities. Example:
+    {"runtime":"claude-code","agent_id":"claude-code","lane":"ADAPTER"}.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        selector = json.loads(selector_json or "{}")
+        policy = json.loads(policy_json or "{}")
+    except Exception:
+        return _dumps({"error": "selector_json and policy_json must be valid JSON"})
+    return _dumps(store.request_wake(
+        selector=selector, reason=reason, source=source or auth.actor(principal),
+        policy=policy, task_id=task_id or None, principal_id=principal["id"],
+        actor=auth.actor(principal), idem_key=idem_key, project=project))
+
+
+@mcp.tool()
+def list_wake_intents(project: str = "maxwell", status: str = "", host_id: str = "",
+                      runtime: str = "") -> str:
+    """List durable wake intents. status can be pending|claimed|completed|failed|cancelled."""
+    return _dumps(store.list_wake_intents(status=status, host_id=host_id,
+                                         runtime=runtime, project=project))
+
+
+@mcp.tool()
+def claim_wake(host_id: str, wake_id: str, ctx: Context,
+               project: str = "maxwell") -> str:
+    """Atomically assign one pending wake intent to an eligible Agent Host."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.claim_wake(host_id, wake_id, actor=auth.actor(principal),
+                                  project=project))
+
+
+@mcp.tool()
+def complete_wake(wake_id: str, ctx: Context, runner_session_id: str = "",
+                  agent_id: str = "", result_json: str = "{}",
+                  project: str = "maxwell") -> str:
+    """Record wake success/failure after the host daemon starts or fails to start a runtime."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        result = json.loads(result_json or "{}")
+    except Exception:
+        return _dumps({"error": "result_json must be a JSON object string"})
+    return _dumps(store.complete_wake(
+        wake_id, runner_session_id=runner_session_id, agent_id=agent_id,
+        result=result, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def cancel_wake(wake_id: str, ctx: Context, reason: str = "cancelled",
+                project: str = "maxwell") -> str:
+    """Cancel a pending or claimed wake intent."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.cancel_wake(wake_id, reason=reason,
+                                   actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
 def claim_resource(agent_id: str, resource_type: str, names: str, ctx: Context,
                    task_id: str = "", ttl_seconds: int = 1800,
                    idem_key: str = "", project: str = "maxwell") -> str:
@@ -402,6 +520,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                        requires_ack: bool = False,
                        ack_deadline_minutes: int = 0,
                        ack_timeout_seconds: float = 0,
+                       on_ack_timeout: str = "notify_sender",
                        signal: str = "", priority: int = 0,
                        idem_key: str = "") -> str:
     """Send a directed message to another agent session. Unlike add_comment (bulletin
@@ -423,6 +542,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
         requires_ack=requires_ack,
         ack_deadline_minutes=ack_deadline_minutes or None,
         ack_timeout_seconds=ack_timeout_seconds or None,
+        on_ack_timeout=on_ack_timeout,
         signal=signal or None,
         priority=priority,
         principal_id=principal["id"],
