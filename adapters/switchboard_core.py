@@ -210,6 +210,14 @@ def heartbeat(project, agent_id, base=None, token=None):
         pass  # fail-open: a missed heartbeat just lets presence lapse
 
 
+def inbox(project, agent_id, base=None, token=None):
+    """Return unacked directed messages for this agent id."""
+    q = urllib.parse.quote(agent_id, safe="")
+    r = _http("GET", f"/ixp/v1/inbox?project={project}&to_agent={q}&unacked=true",
+              base=base, token=token)
+    return r.get("messages") or []
+
+
 def claim_next(project, agent_id, lanes=None, base=None, token=None, idem_key=""):
     body = {"project": project, "agent_id": agent_id}
     if lanes:

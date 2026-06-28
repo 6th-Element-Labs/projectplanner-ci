@@ -66,6 +66,9 @@ an ack timeout, operator request, or ready-work policy asks for one. Without tha
 message to an absent Claude/Codex session is durable but not deliverable until a human or another
 process starts the runtime.
 
+Safety rule: message-only wakes do not have `selector.lane`, so the daemon must use the
+inbox-only path and must not call `claim_next`. Work-dispatch wakes need an explicit lane.
+
 ## 4. The self-driving loop (what makes it hands-off)
 ```
 supervisor keeps agent(s) alive
@@ -90,9 +93,10 @@ the board. No human relay for handoffs; no human ignition once the supervisor is
 ## 6. Honest limits
 The substrate is live; the driver + supervisor + auto-provenance are built and unit/dogfood
 tested. The Agent Host substrate adds host inventory, wake intents, and optional
-`on_ack_timeout=wake_target` escalation. The remaining product proof is operational:
-deploy a host daemon, send an ack-required message to an absent runtime, watch the monitor
-create a wake intent, and confirm the host either starts/reuses the runtime or records a clear
-"no eligible host online" result. Not yet proven: a long-running multi-agent supervised session
-under real load, and the PR-merge webhook (RECON-2) as the primary Done path (RECON-5 covers
-direct-push today).
+`on_ack_timeout=wake_target` escalation. The Agent Host daemon uses inbox-only mode for
+lane-less message wakes, so it can register/read inbox without accidentally taking global work.
+The remaining product proof is operational: deploy a host daemon, send an ack-required message to
+an absent runtime, watch the monitor create a wake intent, and confirm the host either
+starts/reuses the runtime or records a clear "no eligible host online" result. Not yet proven: a
+long-running multi-agent supervised session under real load, and the PR-merge webhook (RECON-2)
+as the primary Done path (RECON-5 covers direct-push today).

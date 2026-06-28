@@ -21,6 +21,7 @@ import importlib
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # put adapters/ on path
 import switchboard_core as sb  # noqa: E402
@@ -39,6 +40,21 @@ def _load_work_fn(spec):
     return getattr(importlib.import_module(mod), attr)
 
 
+def inbox_only(agent_id, runtime, idle_seconds):
+    """Register and read inbox without calling claim_next.
+
+    This is used by Agent Host for message-only wakes. It proves the runtime adapter reached
+    Switchboard and surfaced pending messages, but cannot accidentally take global work.
+    """
+    sb.handshake(PROJECT, agent_id, runtime, lane="")
+    messages = sb.inbox(PROJECT, agent_id)
+    print(json.dumps({"agent_id": agent_id, "mode": "inbox_only",
+                      "unacked_messages": messages}), flush=True)
+    if idle_seconds > 0:
+        time.sleep(idle_seconds)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Switchboard supervisable agent entrypoint")
     ap.add_argument("--lanes", default="", help="comma-separated lane filter (blank = any)")
@@ -46,9 +62,15 @@ def main(argv=None):
     ap.add_argument("--runtime", default=os.environ.get("PM_RUNTIME", "claude-code"))
     ap.add_argument("--dry", action="store_true", help="claim+abandon; never complete (safe)")
     ap.add_argument("--work-module", default="", help="pkg.mod:attr for the real work_fn")
+    ap.add_argument("--inbox-only", action="store_true",
+                    help="register and read inbox; never call claim_next")
+    ap.add_argument("--idle-seconds", type=float, default=0.0,
+                    help="keep the process alive briefly for supervisor readiness checks")
     a = ap.parse_args(argv)
 
     me = os.environ.get("PM_AGENT_ID") or sb.agent_id()
+    if a.inbox_only:
+        return inbox_only(me, a.runtime, max(0.0, a.idle_seconds))
     if a.dry:
         work_fn = dry_work_fn
     elif a.work_module:

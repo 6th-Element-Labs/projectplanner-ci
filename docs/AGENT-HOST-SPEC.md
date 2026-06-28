@@ -322,6 +322,10 @@ proves wake request/claim/complete plus monitor-created wakes. The live product 
 requires deploying an Agent Host daemon and observing a real runtime start or explicit no-host
 result.
 
+Daemon safety note: a wake intent with no `selector.lane` is message-only. The host daemon may
+register the runtime adapter and read its inbox, but it must not call `claim_next` without an
+explicit lane. Scheduler wakes that should claim work must include a lane/capability selector.
+
 Exit criteria:
 
 - no human has to notice an ack timeout in order for a wake attempt to be made;

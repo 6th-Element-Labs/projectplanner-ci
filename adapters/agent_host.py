@@ -94,6 +94,24 @@ def eligible_runtime(wake, inventory):
     return None
 
 
+def wake_mode(wake):
+    """Choose the safe launch mode for a wake.
+
+    Lane-scoped wakes may enter the claim_next loop. Lane-less wakes are message-only by
+    construction: they can register and read inbox, but must never ask for global work.
+    """
+    policy = (wake or {}).get("policy") or {}
+    selector = (wake or {}).get("selector") or {}
+    explicit = (policy.get("mode") or "").strip()
+    if explicit in ("inbox_only", "message_only"):
+        return "inbox_only"
+    if explicit == "claim_next" and selector.get("lane"):
+        return "claim_next"
+    if selector.get("lane"):
+        return "claim_next"
+    return "inbox_only"
+
+
 def active_session_count(inventory):
     """Best-effort live session count from the supervisor (capacity gate). 0 on any error."""
     try:
@@ -105,20 +123,37 @@ def active_session_count(inventory):
         return 0
 
 
-def launch(wake, inventory):
-    """Spawn a supervised run_agent for this wake via supervisor.py (the proven CLI). Returns the
-    supervisor session record (with runner_session_id, pid) or None on failure."""
+def launch_command(wake, inventory):
+    """Build the supervisor command for a wake without executing it."""
     sel = wake.get("selector") or {}
     agent_id = sel.get("agent_id") or sel.get("runtime") or "claude-code"
     lane = sel.get("lane") or ""
+    runtime = sel.get("runtime") or (eligible_runtime(wake, inventory) or {}).get("runtime") or "claude-code"
     work_mod = os.environ.get("PM_AGENT_WORK_MODULE", "")
-    child = ["python3", RUN_AGENT, "--lanes", lane, "--max-tasks", "1"]
-    child += (["--work-module", work_mod] if work_mod else ["--dry"])
+    mode = wake_mode(wake)
+    if mode == "inbox_only":
+        idle = os.environ.get("PM_AGENT_HOST_INBOX_IDLE_SECONDS", "6")
+        child = ["python3", RUN_AGENT, "--runtime", runtime,
+                 "--inbox-only", "--idle-seconds", idle]
+    else:
+        child = ["python3", RUN_AGENT, "--runtime", runtime,
+                 "--lanes", lane, "--max-tasks", "1"]
+        child += (["--work-module", work_mod] if work_mod else ["--dry"])
     cmd = ["python3", SUPERVISOR, "start", "--agent-id", agent_id,
            "--cwd", inventory["repo_root"], "--"] + child
+    return cmd, mode
+
+
+def launch(wake, inventory):
+    """Spawn a supervised run_agent for this wake via supervisor.py (the proven CLI). Returns the
+    supervisor session record (with runner_session_id, pid) or None on failure."""
+    cmd, mode = launch_command(wake, inventory)
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-        return json.loads(out.stdout)
+        rec = json.loads(out.stdout)
+        if isinstance(rec, dict):
+            rec["wake_mode"] = mode
+        return rec
     except Exception as e:
         print(f"[agent_host] launch failed: {e}", flush=True)
         return None
@@ -161,6 +196,7 @@ def run_once(inventory):
         rec = launch(w, inventory)
         started = confirm_started(rec)
         result = {"started": started, "runner_session_id": (rec or {}).get("runner_session_id"),
+                  "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w),
                   "reason": "started" if started else "launch_failed"}
         _try("POST", P_COMPLETE_WAKE, {"project": PROJECT, "wake_id": wake_id,
                                        "runner_session_id": result["runner_session_id"],
