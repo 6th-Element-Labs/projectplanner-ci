@@ -44,6 +44,29 @@ delivery can be proven without a human manually running `agent_host.py`. It inte
 | Agent Host daemon / wake loop | **agent host** | keeps warm capacity and starts absent runtimes |
 | agent runtime (Claude Code, Codex, …) + `run_session` | **agent host** | does the actual work; needs repo + keys |
 
+## 1.1 Why durable state matters
+
+Agent runtimes are not durable infrastructure. They can compact their context window, restart,
+lose a terminal, move to another host, or be killed by a supervisor. That limit is imposed by
+the runtime/model platform, not by Switchboard, and it will differ across Claude Code, Codex,
+Cursor, LangGraph, and custom loops.
+
+Switchboard's job is to make those discontinuities boring. The board, inbox, claims, leases,
+decisions, monitors, wake intents, git evidence, and Tally records are the durable contract.
+An agent's current chat memory is useful working state, but it is never authoritative.
+
+Operator rule: if an agent says it lost context, compacted, restarted, or "hit a handoff
+limit," do not treat that as a product failure by itself. Check Switchboard:
+
+1. Is the agent registered or stale?
+2. Does it hold an active claim or lease?
+3. Did it leave branch, head SHA, PR, merged SHA, or other evidence?
+4. Are there unacked messages or fired monitors?
+5. Is there a wake intent or eligible Agent Host to restart the runtime?
+
+If those answers are visible, Switchboard is doing its job: the runtime blinked, but the
+coordination state survived.
+
 ## 2. Run the substrate (Plan VM) — already deployed
 ```bash
 ssh plan-vm; cd /opt/projectplanner

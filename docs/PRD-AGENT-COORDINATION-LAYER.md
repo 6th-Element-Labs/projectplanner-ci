@@ -61,6 +61,29 @@ agents **inside one run** — ephemeral, headless, single-vendor, dies with the 
 durable substrate, no human window, no cross-runtime/cross-session coordination. That gap
 **is the product.**
 
+### 2.1 Runtime memory is volatile; Switchboard is durable
+
+Switchboard must assume that every agent runtime can lose local continuity at any time. A
+Claude Code, Codex, Cursor, LangGraph, or raw API-loop session may compact its context window,
+hit a token ceiling, restart, crash, move hosts, or be killed by an operator. Those limits are
+owned by the runtime or model platform, not by Switchboard, and they vary by vendor.
+
+That volatility is not an edge case. It is the normal operating environment for cross-LLM
+collaboration. Therefore no agent's chat transcript, scratchpad, or current process memory is
+the source of truth. The durable state must live in Switchboard:
+
+- task claims and dependencies;
+- leases and resource ownership;
+- directed messages, acks, monitors, and wake intents;
+- decisions and working agreements;
+- git/provenance evidence;
+- Tally spend and verified outcomes.
+
+This is why Switchboard exists above runtime adapters. The adapters may blink; the control plane
+must not. A session handoff or context compaction should become a recoverable event: the next
+runtime registers, drains its inbox, reads its claim and project contract, resumes from recorded
+evidence, and leaves a new audit trail.
+
 ---
 
 ## 3. Vision & positioning

@@ -12,6 +12,12 @@ Switchboard's bus is durable, but it is pull-based. A message in an inbox does n
 Code, Codex, Cursor, or a raw API loop by itself. It only becomes action when a runtime is alive,
 polls, and acts.
 
+The same is true for runtime memory. A model session may compact its context, hit a platform
+limit, restart, or move to a different host. Switchboard cannot make vendor-managed context
+windows durable. It can make the work durable outside them: claims, inbox messages, monitors,
+wake intents, project contracts, provenance, and outcomes are stored in the substrate so a new
+runtime process can rejoin the work without trusting the old chat transcript.
+
 This spec defines the missing layer between the always-on substrate and the runtime adapters:
 an **Agent Host** that can keep suitable agent sessions alive, start one when work or a message
 needs attention, and truthfully report when no eligible runtime is reachable.
