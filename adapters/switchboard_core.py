@@ -169,3 +169,73 @@ def evaluate_tool(project, me, tool_name, tool_input, cwd=None, base=None, token
                     "reason": "Reminder: claim this file (/ixp/v1/claim) before editing so peers see your lease."}
 
     return {"decision": "allow", "reason": ""}
+
+
+# ---- TXP dispatch helpers + the self-driving session loop (autonomy) --------------------
+def heartbeat(project, agent_id, base=None, token=None):
+    try:
+        _http("POST", "/ixp/v1/heartbeat", {"project": project, "agent_id": agent_id}, base=base, token=token)
+    except Exception:
+        pass  # fail-open: a missed heartbeat just lets presence lapse
+
+
+def claim_next(project, agent_id, lanes=None, base=None, token=None, idem_key=""):
+    body = {"project": project, "agent_id": agent_id}
+    if lanes:
+        body["lanes"] = lanes if isinstance(lanes, list) else [x.strip() for x in lanes.split(",") if x.strip()]
+    if idem_key:
+        body["idem_key"] = idem_key
+    return _http("POST", "/txp/v1/claim_next", body, base=base, token=token)
+
+
+def complete_claim(project, claim_id, evidence, base=None, token=None):
+    ev = evidence if isinstance(evidence, str) else __import__("json").dumps(evidence or {})
+    return _http("POST", "/txp/v1/complete_claim",
+                 {"project": project, "claim_id": claim_id, "evidence": ev}, base=base, token=token)
+
+
+def abandon_claim(project, claim_id, reason, base=None, token=None):
+    try:
+        return _http("POST", "/txp/v1/abandon_claim",
+                     {"project": project, "claim_id": claim_id, "reason": reason}, base=base, token=token)
+    except Exception:
+        return None
+
+
+def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, token=None,
+                max_tasks=10, register=True):
+    """Runtime-agnostic self-driving agent loop (ADR-0004 autonomy split, decision #4).
+
+    handshake(register) → repeatedly: heartbeat → claim_next → if work, work_fn(task)→evidence
+    → complete_claim; else stop. Returns a summary. work_fn(task_dict) MUST return an evidence
+    dict {branch, head_sha, pr_number?} (or raise to abandon the claim). The runtime supplies
+    work_fn (its model actually does the task); this driver only orchestrates the loop. A
+    process SUPERVISOR (Codex's lane) spawns/keeps-alive one such loop per agent.
+
+    Stops on: no_unblocked_work, work_fn error (claim abandoned), or max_tasks. Fail-open on
+    transport: a failed claim_next ends the loop cleanly rather than spinning.
+    """
+    lane_list = (lanes if isinstance(lanes, list) else
+                 [x.strip() for x in (lanes or "").split(",") if x.strip()]) or None
+    if register:
+        handshake(project, agent_id, runtime, base=base, token=token,
+                  lane=(lane_list[0] if lane_list else ""))
+    completed = []
+    for _ in range(max(1, max_tasks)):
+        heartbeat(project, agent_id, base=base, token=token)
+        try:
+            res = claim_next(project, agent_id, lanes=lane_list, base=base, token=token)
+        except Exception as e:
+            return {"completed": completed, "stopped": f"claim_error:{e}"}
+        if not res.get("claimed"):
+            return {"completed": completed, "stopped": res.get("reason", "no_unblocked_work")}
+        claim_id = res.get("claim_id") or res.get("id")
+        task_id = res.get("task_id")
+        try:
+            evidence = work_fn(res) or {}
+        except Exception as e:
+            abandon_claim(project, claim_id, f"work_fn error: {e}", base=base, token=token)
+            return {"completed": completed, "stopped": f"work_error:{task_id}:{e}"}
+        complete_claim(project, claim_id, evidence, base=base, token=token)
+        completed.append({"task_id": task_id, "evidence": evidence})
+    return {"completed": completed, "stopped": "max_tasks"}
