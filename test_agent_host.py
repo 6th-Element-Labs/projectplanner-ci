@@ -29,6 +29,16 @@ def ok(condition, message):
     failed += 0 if condition else 1
 
 
+service_text = (ROOT / "deploy" / "projectplanner-agent-host.service").read_text()
+ok("PM_PROJECT=switchboard" in service_text,
+   "systemd Agent Host service is scoped to the switchboard project")
+ok("PM_HOST_LANES=__MESSAGE_ONLY__" in service_text,
+   "systemd Agent Host service advertises message-only sentinel lane")
+ok("adapters/agent_host.py --interval 10" in service_text,
+   "systemd Agent Host service runs the persistent daemon loop")
+ok("PM_HOST_MAX_SESSIONS=1" in service_text,
+   "systemd Agent Host service limits concurrent wake readers")
+
 inventory = {
     "host_id": "host/test",
     "repo_root": str(ROOT),

@@ -1,0 +1,30 @@
+# /etc/systemd/system/projectplanner-agent-host.service
+# Safe default Agent Host: consumes message-only wake intents for Switchboard.
+# It intentionally advertises a sentinel lane so lane-scoped work wakes do not
+# dispatch into this service until a separate work-capable host is configured.
+[Unit]
+Description=ProjectPlanner Switchboard Agent Host (message-only wakes)
+After=network-online.target projectplanner.service projectplanner-mcp.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=PM_BASE=https://plan.taikunai.com
+Environment=PM_PROJECT=switchboard
+Environment=PM_HOST_ID=host/plan-vm-message-wake
+Environment=PM_RUNTIME=claude-code
+Environment=PM_HOST_LANES=__MESSAGE_ONLY__
+Environment=PM_HOST_MAX_SESSIONS=1
+Environment=PM_REPO_ROOT=/opt/projectplanner
+Environment=PM_AGENT_HOST_INBOX_IDLE_SECONDS=6
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/adapters/agent_host.py --interval 10
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

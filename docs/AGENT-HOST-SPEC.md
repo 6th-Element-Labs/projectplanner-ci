@@ -326,6 +326,13 @@ Daemon safety note: a wake intent with no `selector.lane` is message-only. The h
 register the runtime adapter and read its inbox, but it must not call `claim_next` without an
 explicit lane. Scheduler wakes that should claim work must include a lane/capability selector.
 
+P0 service profile: `deploy/projectplanner-agent-host.service` is the safe default always-on
+host for Switchboard dogfood. It runs on the Plan VM as `host/plan-vm-message-wake` with
+`PM_HOST_LANES=__MESSAGE_ONLY__`, `PM_HOST_MAX_SESSIONS=1`, and starts child sessions with
+`run_agent.py --inbox-only`. This profile is deliberately not a production work executor: it
+may satisfy ack-timeout handoff wakes, but it must not accept lane-scoped scheduler wakes or
+claim tasks. A future work-capable host must advertise real lanes and a real work module.
+
 Exit criteria:
 
 - no human has to notice an ack timeout in order for a wake attempt to be made;

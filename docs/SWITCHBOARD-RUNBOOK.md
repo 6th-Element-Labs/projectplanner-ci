@@ -19,6 +19,7 @@ Agent Host wake contract in [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
 │  • monitor sweep (every 1m)  │         │        (claim_next→work→complete→repeat)   │
 │  COORDINATION ONLY           │         │  .switchboard/runner/  (session records)   │
 │  • wake intents (durable)    │         │  host daemon polls wake intents            │
+│  • message-only wake host    │         │                                            │
 └─────────────────────────────┘         └──────────────────────────────────────────┘
 ```
 
@@ -29,9 +30,16 @@ don't belong on a 911 MB coordination box. The **supervisor and the agents it sp
 agent host** (your dev machine, a CI runner, or a dedicated agent box) — one supervisor process
 spawns/keeps-alive/kills each agent it launches.
 
+Exception for P0 dogfood: the Plan VM may run `projectplanner-agent-host.service` as a
+**message-only wake host**. It starts `run_agent.py --inbox-only` for lane-less handoff wakes so
+delivery can be proven without a human manually running `agent_host.py`. It intentionally uses
+`PM_HOST_LANES=__MESSAGE_ONLY__`, so it will not accept lane-scoped work-dispatch wakes or call
+`claim_next`.
+
 | Piece | Host | Why |
 |---|---|---|
 | board / MCP / gateway / monitor-sweep timer | **Plan VM** | coordination substrate; tiny + always-on |
+| message-only `projectplanner-agent-host` | **Plan VM** | wake-delivery proof; no lane work, no `claim_next` |
 | `supervisor.py` (spawn / keep-alive / T3 kill) | **agent host** | owns the agent process group; needs compute |
 | Agent Host daemon / wake loop | **agent host** | keeps warm capacity and starts absent runtimes |
 | agent runtime (Claude Code, Codex, …) + `run_session` | **agent host** | does the actual work; needs repo + keys |
@@ -69,6 +77,27 @@ process starts the runtime.
 Safety rule: message-only wakes do not have `selector.lane`, so the daemon must use the
 inbox-only path and must not call `claim_next`. Work-dispatch wakes need an explicit lane.
 
+### 3.1 Run the P0 message-only host on the Plan VM
+
+```bash
+ssh plan-vm; cd /opt/projectplanner
+git pull --ff-only
+.venv/bin/pip install -r requirements.txt
+sudo cp deploy/projectplanner-agent-host.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now projectplanner-agent-host
+sudo systemctl restart projectplanner-agent-host
+systemctl is-active projectplanner-agent-host
+journalctl -u projectplanner-agent-host -n 80 --no-pager
+```
+
+Expected behavior:
+
+- host registers as `host/plan-vm-message-wake`;
+- lane-less wake intents can be claimed and completed with `wake_mode=inbox_only`;
+- child sessions run `adapters/run_agent.py --inbox-only`;
+- no `task.claimed` activity is emitted by message-only wakes.
+
 ## 4. The self-driving loop (what makes it hands-off)
 ```
 supervisor keeps agent(s) alive
@@ -92,11 +121,10 @@ the board. No human relay for handoffs; no human ignition once the supervisor is
 
 ## 6. Honest limits
 The substrate is live; the driver + supervisor + auto-provenance are built and unit/dogfood
-tested. The Agent Host substrate adds host inventory, wake intents, and optional
-`on_ack_timeout=wake_target` escalation. The Agent Host daemon uses inbox-only mode for
-lane-less message wakes, so it can register/read inbox without accidentally taking global work.
-The remaining product proof is operational: deploy a host daemon, send an ack-required message to
-an absent runtime, watch the monitor create a wake intent, and confirm the host either
-starts/reuses the runtime or records a clear "no eligible host online" result. Not yet proven: a
-long-running multi-agent supervised session under real load, and the PR-merge webhook (RECON-2)
-as the primary Done path (RECON-5 covers direct-push today).
+tested. The Agent Host substrate adds host inventory, wake intents, optional
+`on_ack_timeout=wake_target` escalation, and a message-only systemd host for lane-less handoff
+wakes. The Agent Host daemon uses inbox-only mode for lane-less message wakes, so it can
+register/read inbox without accidentally taking global work. Not yet proven: a long-running
+multi-agent supervised session under real load, a production work-capable host with explicit
+lane policy, and the PR-merge webhook (RECON-2) as the primary Done path (RECON-5 covers
+direct-push today).
