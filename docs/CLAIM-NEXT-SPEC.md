@@ -1,6 +1,6 @@
 # `claim_next` Spec - TXP work dispatch
 
-- **Status:** Draft v0.1
+- **Status:** P0 implemented through DISPATCH-2
 - **Date:** 2026-06-28
 - **Product:** Switchboard
 - **Protocol profile:** `+TXP` - task exchange / work dispatch, layered above `IXP-core`
@@ -111,7 +111,32 @@ Response when work is claimed:
   "budget": {
     "budget_usd": 12.0,
     "spent_usd": 1.35,
-    "remaining_usd": 10.65
+    "remaining_usd": 10.65,
+    "status": "ok"
+  },
+  "dispatch_reason": {
+    "policy": "score.v1",
+    "score": 10680,
+    "candidate_count": 3,
+    "skipped": {
+      "active_claim": 1,
+      "status": 10,
+      "lane": 2,
+      "dependencies": 1,
+      "capability_mismatch": 1,
+      "risk": 0,
+      "budget": 0
+    },
+    "required_capabilities": ["typescript", "tests"],
+    "matched_capabilities": ["typescript", "tests"],
+    "factors": {
+      "blocking": 10000,
+      "sort_order": 520,
+      "lane_affinity": 250,
+      "capability_fit": 200,
+      "risk_fit": 80,
+      "budget_fit": 100
+    }
   },
   "recommendation": {
     "model_tier": "medium",
@@ -127,7 +152,20 @@ Response when no work is available:
   "claimed": false,
   "reason": "no_unblocked_work",
   "retry_after_seconds": 60,
-  "cursor": 4921
+  "cursor": 4921,
+  "dispatch_reason": {
+    "policy": "score.v1",
+    "candidate_count": 0,
+    "skipped": {
+      "active_claim": 0,
+      "status": 20,
+      "lane": 1,
+      "dependencies": 2,
+      "capability_mismatch": 1,
+      "risk": 0,
+      "budget": 0
+    }
+  }
 }
 ```
 
@@ -189,14 +227,18 @@ Default score components:
 | reliability history | prefer agent/runtime with lower cost per verified outcome |
 | WIP limits | avoid overloading one agent/runtime |
 
-The first implementation can be deterministic and simple:
+DISPATCH-1 used deterministic first-ready selection. DISPATCH-2 implements `score.v1`:
 
-```text
-ORDER BY priority DESC, unblocked_since ASC, id ASC
-```
+- hard filters: ready status, lane, dependencies, active claim, declared required
+  capabilities, `max_risk`, and `max_budget_usd`;
+- scoring factors: blocking status, sort order, lane affinity, capability fit, risk fit,
+  budget fit, and Tally outcome signals;
+- response explanation: `dispatch_reason` records the selected score, factor breakdown,
+  required/matched capabilities, candidate count, and skipped counts by constraint;
+- guidance: `budget.status` and `recommendation.model_tier` are returned with the claim.
 
-But the API should reserve fields for cost/reliability-based dispatch because that is the
-commercial wedge.
+The first version is intentionally deterministic and explainable. Later versions can add
+fleet reliability and cost-per-outcome history without changing the envelope.
 
 ---
 
@@ -428,3 +470,18 @@ These events feed delta polling, Tally, reliability scoring, and the operator UI
 - adapters can call `claim_next` at startup and after completion;
 - task claims feed Tally/reliability metrics;
 - the board visibly behaves like a scheduler, not only a reporting surface.
+
+## 14. Implementation Notes
+
+Capability requirements are optional. P0 supports either
+`agent_state.dispatch.required_capabilities` or text declarations such as
+`requires capabilities: docs, tests` in description/criteria fields. Tasks without declared
+requirements remain claimable by lane-matched agents.
+
+Budget enforcement is conservative: when `max_budget_usd` is supplied, a task whose existing
+Tally spend already exceeds that ceiling is skipped. Selected tasks return `budget_usd`,
+`spent_usd`, `remaining_usd`, and `status`.
+
+Risk enforcement is driven by task `risk_level` and caller `max_risk` using the order
+`low < medium < high < critical`. Unknown or unspecified risk remains eligible unless the task
+declares a higher known risk than the caller accepts.

@@ -707,7 +707,8 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
                ttl_seconds: int = 1800, idem_key: str = "",
                project: str = "maxwell") -> str:
     """Atomically claim the next unblocked task for this agent. This is the first +TXP
-    scheduler primitive: dependency-aware, idempotent, and returns budget/model guidance."""
+    scheduler primitive: dependency-aware, idempotent, constraint-scored, and returns
+    dispatch_reason plus budget/model guidance."""
     principal = _require_write(ctx, project, ("write:ixp",))
     lane_list = [x.strip().upper() for x in lanes.replace("\n", ",").split(",") if x.strip()]
     cap_list = [x.strip() for x in capabilities.replace("\n", ",").split(",") if x.strip()]

@@ -342,6 +342,54 @@ try:
     )
     ok(next_claim.get("claimed") and next_claim["task"]["task_id"] == second["task_id"],
        "claim_next respects dependency completion")
+    cap_skip = store.create_task({
+        "workstream_id": "SCORE",
+        "title": "needs python",
+        "description": "requires capabilities: python, tests",
+        "risk_level": "Low",
+    }, actor="seed", project=P)
+    budget_skip = store.create_task({
+        "workstream_id": "SCORE",
+        "title": "spent too much",
+        "description": "requires capabilities: docs",
+        "risk_level": "Low",
+    }, actor="seed", project=P)
+    risk_skip = store.create_task({
+        "workstream_id": "SCORE",
+        "title": "too risky",
+        "description": "requires capabilities: docs",
+        "risk_level": "High",
+    }, actor="seed", project=P)
+    scored_winner = store.create_task({
+        "workstream_id": "SCORE",
+        "title": "right sized docs task",
+        "description": "requires capabilities: docs",
+        "risk_level": "Medium",
+    }, actor="seed", project=P)
+    store.report_usage(
+        source="agent_report", confidence="reported", task_id=budget_skip["task_id"],
+        agent_id="codex/SCORE#1", cost_usd=2.50, principal_id=p["id"], project=P)
+    scored = store.claim_next(
+        agent_id="codex/SCORE#1",
+        lanes=["SCORE"],
+        capabilities=["docs"],
+        max_risk="medium",
+        max_budget_usd=1.0,
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(scored.get("claimed") and scored["task"]["task_id"] == scored_winner["task_id"],
+       "claim_next scores only candidates inside capability/risk/budget constraints")
+    ok(scored["dispatch_reason"]["skipped"]["capability_mismatch"] >= 1 and
+       scored["dispatch_reason"]["skipped"]["budget"] >= 1 and
+       scored["dispatch_reason"]["skipped"]["risk"] >= 1,
+       "claim_next explains skipped candidates by constraint")
+    ok(scored["dispatch_reason"]["required_capabilities"] == ["docs"] and
+       scored["budget"]["status"] == "ok" and scored["budget"]["remaining_usd"] == 1.0,
+       "claim_next returns dispatch reason and budget status")
+    ok(scored["recommendation"]["model_tier"] == "balanced",
+       "claim_next returns model guidance from risk/budget/capability context")
     delta = store.get_activity_delta(0, lane="TEST", project=P)
     ok(any(u["task_id"] == first["task_id"] and u["git_state"]["merged_sha"] == "merge789"
            for u in delta["updates"]), "delta includes git_state provenance")

@@ -51,6 +51,14 @@ Agent completion rule:
   commits that already landed before PR-only flow was enforced. It is a system/reconcile action,
   not a normal agent completion path. Use `PM_BACKFILL_DRY_RUN=1` first to inspect candidates.
 
+Dispatch rule:
+- `claim_next(agent_id, lanes?, capabilities?, max_risk?, max_budget_usd?)` filters ready work
+  by lane, dependency, active claim, declared required capabilities, risk, and budget.
+- Successful claims include `dispatch_reason` with the score, factor breakdown, candidate count,
+  required/matched capabilities, and skipped counts by constraint.
+- `budget.status` and `recommendation.model_tier` are advisory guidance for the runtime; they
+  should be surfaced to the model/operator before work starts.
+
 Durable ack rule:
 - `send_agent_message(... requires_ack=true ...)` creates a durable `ack_deadline` monitor.
 - `send_agent_message` accepts `ack_deadline_minutes` and the versioned aliases

@@ -1436,6 +1436,95 @@ def _deps_done(task: Dict[str, Any], by_id: Dict[str, Dict[str, Any]]) -> bool:
     return True
 
 
+RISK_ORDER = {"low": 1, "medium": 2, "med": 2, "high": 3, "critical": 4}
+CAPABILITY_RE = re.compile(
+    r"(?:requires?\s+capabilit(?:y|ies)|required\s+capabilit(?:y|ies)|capabilities)\s*[:=]\s*([^\n.;]+)",
+    re.I,
+)
+
+
+def _risk_value(risk: str) -> int:
+    return RISK_ORDER.get((risk or "").strip().lower(), 0)
+
+
+def _task_required_capabilities(task: Dict[str, Any]) -> List[str]:
+    dispatch_state = ((task.get("agent_state") or {}).get("dispatch") or {})
+    raw = (dispatch_state.get("required_capabilities") or
+           dispatch_state.get("capabilities") or [])
+    caps = coerce_csv_list(raw)
+    if not caps:
+        text = "\n".join(str(task.get(k) or "") for k in (
+            "description", "entry_criteria", "exit_criteria", "deliverable"))
+        for m in CAPABILITY_RE.finditer(text):
+            caps.extend(coerce_csv_list(m.group(1)))
+    return sorted({c.strip().lower() for c in caps if c and c.strip()})
+
+
+def _task_tally_snapshot(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
+    outcomes = [_outcome_row(r) for r in c.execute(
+        "SELECT * FROM outcomes WHERE task_id=?", (task_id,)).fetchall()]
+    return {"spend": _spend_summary(_spend_for_task(c, task_id, outcomes)),
+            "outcomes": outcomes}
+
+
+def _budget_status(max_budget_usd: Optional[float], spent_usd: float) -> Dict[str, Any]:
+    remaining = max_budget_usd - spent_usd if max_budget_usd is not None else None
+    if max_budget_usd is None:
+        status = "not_limited"
+    elif remaining is not None and remaining < 0:
+        status = "over_budget"
+    elif max_budget_usd and spent_usd >= max_budget_usd * 0.9:
+        status = "tight"
+    else:
+        status = "ok"
+    return {"budget_usd": max_budget_usd, "spent_usd": round(spent_usd, 6),
+            "remaining_usd": round(remaining, 6) if remaining is not None else None,
+            "status": status}
+
+
+def _dispatch_score(task: Dict[str, Any], requested_lanes: set,
+                    requested_caps: set, tally: Dict[str, Any],
+                    max_budget_usd: Optional[float]) -> Dict[str, Any]:
+    sort_order = int(task.get("sort_order") or 0)
+    lane = (task.get("_wsId") or "").upper()
+    required_caps = _task_required_capabilities(task)
+    matched_caps = sorted(set(required_caps) & requested_caps)
+    capability_fit = ((len(matched_caps) / len(required_caps)) if required_caps else 1.0)
+    budget = _budget_status(max_budget_usd, float(tally["spend"]["cost_usd"] or 0.0))
+    verified = len([o for o in tally.get("outcomes", []) if o.get("status") == "verified"])
+    proposed = len([o for o in tally.get("outcomes", []) if o.get("status") == "proposed"])
+    factors = {
+        "blocking": 10000 if task.get("is_blocking") else 0,
+        "sort_order": max(0, 1000 - min(sort_order, 1000)),
+        "lane_affinity": 250 if requested_lanes and lane in requested_lanes else 0,
+        "capability_fit": int(capability_fit * 200),
+        "risk_fit": max(0, 120 - (_risk_value(task.get("risk_level") or "") * 20)),
+        "budget_fit": 100 if budget["status"] in ("not_limited", "ok") else 0,
+        "verified_outcome_signal": min(verified, 5) * 15,
+        "pending_value_signal": min(proposed, 5) * 5,
+    }
+    return {"score": sum(factors.values()), "factors": factors,
+            "required_capabilities": required_caps, "matched_capabilities": matched_caps,
+            "budget": budget}
+
+
+def _model_recommendation(task: Dict[str, Any], score: Dict[str, Any]) -> Dict[str, str]:
+    risk = _risk_value(task.get("risk_level") or "")
+    budget_status = score["budget"]["status"]
+    if risk >= 3:
+        tier = "high"
+    elif budget_status == "tight":
+        tier = "small"
+    elif score["required_capabilities"]:
+        tier = "balanced"
+    else:
+        tier = "small"
+    return {"model_tier": tier,
+            "reason": f"risk={task.get('risk_level') or 'unspecified'}, "
+                      f"budget={budget_status}, "
+                      f"capabilities={','.join(score['required_capabilities']) or 'none'}"}
+
+
 def claim_next(agent_id: str, lanes: Any = None,
                capabilities: Any = None,
                max_risk: str = "", max_budget_usd: Optional[float] = None,
@@ -1452,6 +1541,8 @@ def claim_next(agent_id: str, lanes: Any = None,
     lanes = coerce_csv_list(lanes)
     capabilities = coerce_csv_list(capabilities)
     lane_set = {x.strip().upper() for x in lanes}
+    cap_set = {x.strip().lower() for x in capabilities}
+    max_risk_value = _risk_value(max_risk)
     payload = {"agent_id": agent_id, "lanes": sorted(lane_set),
                "capabilities": sorted(capabilities or []), "max_risk": max_risk,
                "max_budget_usd": max_budget_usd, "ttl_seconds": ttl_seconds}
@@ -1470,26 +1561,44 @@ def claim_next(agent_id: str, lanes: Any = None,
         tasks = [_task_row(r) for r in rows]
         by_id = {t["task_id"]: t for t in tasks}
         eligible = []
+        skipped = {"active_claim": 0, "status": 0, "lane": 0, "dependencies": 0,
+                   "capability_mismatch": 0, "risk": 0, "budget": 0}
         for t in tasks:
             if t["task_id"] in active_claims:
+                skipped["active_claim"] += 1
                 continue
             if t.get("status") not in ready_statuses:
+                skipped["status"] += 1
                 continue
             if lane_set and (t.get("_wsId") or "").upper() not in lane_set:
+                skipped["lane"] += 1
                 continue
             if not _deps_done(t, by_id):
+                skipped["dependencies"] += 1
                 continue
-            priority = int(t.get("sort_order") or 0)
-            if t.get("is_blocking"):
-                priority -= 10000
-            eligible.append((priority, t["task_id"], t))
+            required_caps = _task_required_capabilities(t)
+            if required_caps and not set(required_caps).issubset(cap_set):
+                skipped["capability_mismatch"] += 1
+                continue
+            if max_risk_value and _risk_value(t.get("risk_level") or "") > max_risk_value:
+                skipped["risk"] += 1
+                continue
+            tally = _task_tally_snapshot(c, t["task_id"])
+            score = _dispatch_score(t, lane_set, cap_set, tally, max_budget_usd)
+            if score["budget"]["status"] == "over_budget":
+                skipped["budget"] += 1
+                continue
+            eligible.append((score["score"], -int(t.get("sort_order") or 0), t["task_id"], t, score))
         if not eligible:
             response = {"claimed": False, "reason": "no_unblocked_work",
                         "retry_after_seconds": 60,
-                        "cursor": c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0]}
+                        "cursor": c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0],
+                        "dispatch_reason": {"policy": "score.v1", "skipped": skipped,
+                                            "candidate_count": 0}}
             _idem_store(c, "claim_next", idem_key, actor, payload, response)
             return response
-        _, _, task = sorted(eligible, key=lambda x: (x[0], x[1]))[0]
+        _, _, _, task, selected_score = sorted(
+            eligible, key=lambda x: (-x[0], -x[1], x[2]))[0]
         claim_id = "taskclaim-" + uuid.uuid4().hex[:16]
         lease_id = "lease-" + uuid.uuid4().hex[:16]
         expires_at = now + max(60, int(ttl_seconds or 1800))
@@ -1507,25 +1616,30 @@ def claim_next(agent_id: str, lanes: Any = None,
         )
         c.execute("UPDATE tasks SET status='In Progress', assignee=?, updated_at=? WHERE task_id=?",
                   (agent_id, now, task["task_id"]))
+        dispatch_reason = {"policy": "score.v1",
+                           "score": selected_score["score"],
+                           "factors": selected_score["factors"],
+                           "required_capabilities": selected_score["required_capabilities"],
+                           "matched_capabilities": selected_score["matched_capabilities"],
+                           "skipped": skipped,
+                           "candidate_count": len(eligible)}
         payload_event = {"claim_id": claim_id, "lease_id": lease_id,
-                         "task_id": task["task_id"], "agent_id": agent_id}
+                         "task_id": task["task_id"], "agent_id": agent_id,
+                         "dispatch_reason": dispatch_reason}
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task["task_id"], actor, "task.claimed",
                    json.dumps(payload_event, sort_keys=True), now))
         claimed_task = _task_row(c.execute("SELECT * FROM tasks WHERE task_id=?",
                                            (task["task_id"],)).fetchone())
-        spend = task_tally(task["task_id"], project=project)
         response = {
             "claimed": True,
             "claim_id": claim_id,
             "task": claimed_task,
             "lease": {"lease_id": lease_id, "resource_type": "task",
                       "names": [task["task_id"]], "expires_at": expires_at},
-            "budget": {"spent_usd": spend["spend"]["cost_usd"],
-                       "remaining_usd": max_budget_usd - spend["spend"]["cost_usd"]
-                       if max_budget_usd is not None else None},
-            "recommendation": {"model_tier": "balanced",
-                               "reason": "initial deterministic dispatcher"},
+            "budget": selected_score["budget"],
+            "dispatch_reason": dispatch_reason,
+            "recommendation": _model_recommendation(task, selected_score),
         }
         _idem_store(c, "claim_next", idem_key, actor, payload, response)
         return response
