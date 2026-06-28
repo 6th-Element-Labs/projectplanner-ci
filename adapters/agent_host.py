@@ -208,9 +208,17 @@ def run_once(inventory):
 
 def run(interval=10, once=False):
     inv = default_inventory()
-    reg = _try("POST", P_REGISTER_HOST, inv)
-    print(f"[agent_host] registered {inv['host_id']} ({'ok' if reg else 'endpoint absent — fail-open'})", flush=True)
+    registered = False
+    last_register_at = 0.0
+    register_every = max(10, int(inv.get("heartbeat_ttl_s") or 60) // 2)
     while True:
+        now = time.time()
+        if not registered or now - last_register_at >= register_every:
+            reg = _try("POST", P_REGISTER_HOST, inv)
+            registered = bool(reg)
+            last_register_at = now
+            print(f"[agent_host] registered {inv['host_id']} ({'ok' if reg else 'retrying'})",
+                  flush=True)
         summary = run_once(inv)
         print(f"[agent_host] {json.dumps(summary)}", flush=True)
         if once:

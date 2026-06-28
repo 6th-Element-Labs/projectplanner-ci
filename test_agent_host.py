@@ -29,6 +29,16 @@ def ok(condition, message):
     failed += 0 if condition else 1
 
 
+service_text = (ROOT / "deploy" / "projectplanner-agent-host.service").read_text()
+ok("PM_PROJECT=switchboard" in service_text,
+   "systemd Agent Host service is scoped to the switchboard project")
+ok("PM_HOST_LANES=__MESSAGE_ONLY__" in service_text,
+   "systemd Agent Host service advertises message-only sentinel lane")
+ok("adapters/agent_host.py --interval 10" in service_text,
+   "systemd Agent Host service runs the persistent daemon loop")
+ok("PM_HOST_MAX_SESSIONS=1" in service_text,
+   "systemd Agent Host service limits concurrent wake readers")
+
 inventory = {
     "host_id": "host/test",
     "repo_root": str(ROOT),
@@ -116,6 +126,38 @@ ok(handshakes and handshakes[0][1] == "claude/test",
 ok(inboxes == [(run_agent.PROJECT, "claude/test")],
    "run_agent inbox_only reads unacked inbox")
 ok(sleeps == [0.25], "run_agent inbox_only idles for readiness checks")
+
+register_calls = []
+loop_count = {"n": 0}
+
+
+class StopLoop(Exception):
+    pass
+
+
+def flaky_register(method, path, body=None):
+    if path == agent_host.P_REGISTER_HOST:
+        register_calls.append((method, path, body or {}))
+        return None
+    return {"ok": True}
+
+
+def stop_after_second_loop(inv):
+    loop_count["n"] += 1
+    if loop_count["n"] >= 2:
+        raise StopLoop()
+    return {"host_id": inv["host_id"], "pending": 0, "acted": []}
+
+
+agent_host._try = flaky_register
+agent_host.run_once = stop_after_second_loop
+agent_host.time.sleep = lambda seconds: None
+try:
+    agent_host.run(interval=1)
+except StopLoop:
+    pass
+ok(len(register_calls) >= 2,
+   "Agent Host daemon retries registration after transient startup failure")
 
 print(f"\n{passed} passed, {failed} failed")
 if failed:
