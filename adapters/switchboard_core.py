@@ -230,9 +230,14 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
         if not res.get("claimed"):
             return {"completed": completed, "stopped": res.get("reason", "no_unblocked_work")}
         claim_id = res.get("claim_id") or res.get("id")
-        task_id = res.get("task_id")
+        # claim_next nests the task: claim_id is top-level, but the task id is under
+        # res["task"]["task_id"] / res["names"][0] (NOT res["task_id"]). Read it robustly so
+        # work_fn knows what it claimed. (Found via the live ignition test — task_id came back None.)
+        task = res.get("task") or {}
+        task_id = (res.get("task_id") or task.get("task_id")
+                   or (res.get("names") or [None])[0])
         try:
-            evidence = work_fn(res) or {}
+            evidence = work_fn({**res, "task_id": task_id, "task": task}) or {}
         except Exception as e:
             abandon_claim(project, claim_id, f"work_fn error: {e}", base=base, token=token)
             return {"completed": completed, "stopped": f"work_error:{task_id}:{e}"}
