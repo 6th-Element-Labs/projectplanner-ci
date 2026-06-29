@@ -625,6 +625,16 @@ try:
        "reconcile checks git reachability when canonical main is known")
     ok(not any(f["task_id"] == real_git["task_id"] for f in external_report["findings"]),
        "reconcile accepts a Done task whose merged_sha is reachable from canonical main")
+    squashed = store.create_task({"workstream_id": "TEST", "title": "squashed branch head"},
+                                 actor="seed", project=P)
+    store.mark_task_merged(
+        squashed["task_id"], head, branch="deleted-branch",
+        head_sha="0000000000000000000000000000000000000000",
+        actor="github-webhook", project=P)
+    squash_report = store.reconcile(project=P)
+    ok(not any(f["task_id"] == squashed["task_id"] and f["code"] == "head_sha_not_found"
+               for f in squash_report["findings"]),
+       "reconcile trusts merged_sha for Done tasks after squash branch deletion")
 
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)

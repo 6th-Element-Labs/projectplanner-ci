@@ -3602,6 +3602,9 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
             task_id = task["task_id"]
             state = git_states.get(task_id, {})
             for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
+                if (field == "head_sha" and task.get("status") == "Done"
+                        and state.get("merged_sha")):
+                    continue
                 sha = state.get(field)
                 if not sha:
                     continue
