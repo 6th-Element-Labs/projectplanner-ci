@@ -129,6 +129,28 @@ PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
 The production fallback is `projectplanner-ci-gate.timer`, which polls open PRs and posts the
 `Switchboard CI / VM gate` status from the Plan VM.
 
+## 2.2 Fail-and-fix-early operating policy
+
+Switchboard should make the weakest link visible quickly. Missing data, broken connections,
+invalid inputs, stale branch state, absent credentials, failed tests, and malformed payloads should
+be reported at the point they are detected. Do not replace them with placeholder values or hidden
+defaults that let downstream work keep moving on false assumptions.
+
+Operationally, this means:
+
+- ingestion, normalization, protocol adapters, CI gates, monitors, and workflow execution should
+  fail closed when their required signal is missing or invalid;
+- a visible fallback is acceptable only if it keeps the original failure visible, names the
+  fallback path, and preserves a red/yellow signal such as a PR status, reconcile finding, monitor
+  event, or task comment;
+- when a test or deploy gate exposes a real bug, fix the bug before treating the task as complete,
+  even if the bug is in the environment or process rather than the first code change;
+- if the current agent cannot fix the issue safely, it must leave a precise blocker with the
+  observed command, failing input, expected signal, and next action.
+
+This is why the CI fallback posts `Switchboard CI / VM gate` instead of silently replacing GitHub
+Actions: GitHub Actions remains visibly broken, while PRs still get a concrete pass/fail signal.
+
 ## 3. Run an autonomous agent (agent host)
 ```bash
 export PM_BASE=https://plan.taikunai.com PM_PROJECT=switchboard PM_MCP_TOKEN=…  PM_AGENT_ID=claude/work-1

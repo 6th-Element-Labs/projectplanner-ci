@@ -3737,6 +3737,34 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 "if the webhook is unavailable, run or request reconcile/backfill rather than setting Done manually",
             ],
         },
+        "fail_fix_early_policy": {
+            "summary": "Surface real failures immediately and repair them before they spread.",
+            "surface_immediately": [
+                "missing data",
+                "broken connections",
+                "invalid inputs",
+                "stale branches",
+                "absent permissions",
+                "malformed payloads",
+                "failed checks",
+            ],
+            "do_not_hide_with": [
+                "placeholder values",
+                "silent defaults",
+                "optimistic status updates",
+                "fallbacks that make the workflow look green",
+            ],
+            "fallback_rule": (
+                "Fallbacks are allowed only when they are visible, named, and preserve the "
+                "original failing signal with an auditable red/yellow status, monitor event, "
+                "reconcile finding, task comment, or blocker."
+            ),
+            "agent_rule": (
+                "When a gate uncovers an environment, ingestion, normalization, protocol, "
+                "auth, or workflow problem, treat the discovered problem as part of the task "
+                "until it is repaired or deliberately handed off."
+            ),
+        },
         "ports_doc": "docs/PORTS.md",
         "byo_data": True,
         "session_start_sequence": [

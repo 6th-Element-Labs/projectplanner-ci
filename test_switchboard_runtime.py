@@ -81,6 +81,11 @@ try:
        "rerun the relevant tests/checks after the rebase or conflict resolution"
        in agreement["safe_merge_protocol"]["pre_merge"],
        "working agreement instructs agents how to merge safely")
+    policy = agreement.get("fail_fix_early_policy", {})
+    ok(policy and "placeholder values" in policy["do_not_hide_with"],
+       "working agreement tells agents not to hide failures")
+    ok("visible" in policy["fallback_rule"] and "original failing signal" in policy["fallback_rule"],
+       "working agreement allows only visible fallbacks")
     ok(store.check_protocol_compatibility(agreement["protocol"])["compatible"] is True,
        "current protocol envelope is compatible")
     incompatible = store.check_protocol_compatibility({"version": "ixp.v9"})

@@ -295,6 +295,13 @@ The protocol is a small, stable ABI. Everything else is built from these.
   branch, merge through GitHub/merge queue only when checks and review are green, then fetch the
   target branch and record `merged_sha`. If webhook marking fails, they request reconcile/backfill;
   they never set `Done` manually.
+- **FR-29** **Fail-and-fix-early policy.** Switchboard should expose missing data, broken
+  connections, invalid inputs, stale branches, absent permissions, malformed payloads, and failed
+  gates at the point of detection. Agents and adapters must not hide those failures behind
+  placeholders, silent defaults, or optimistic status updates. Visible fallbacks are allowed only
+  when they preserve the original failing signal and name the fallback path. The goal is to make
+  every workflow rely on real signals so testing improves the control plane instead of glossing
+  over its weakest link.
 
 ---
 

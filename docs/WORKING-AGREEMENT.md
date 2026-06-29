@@ -23,6 +23,19 @@ session so the fleet stays in sync.
   adapters deny it; the server rejects naked status flips and keeps bypassed claim-completion
   attempts in `In Review`.
 
+## Fail and fix early
+- Surface missing data, broken connections, invalid inputs, stale branches, failed checks, and
+  missing permissions as soon as they appear. Do not hide them behind placeholder values, silent
+  defaults, or optimistic status updates.
+- If a failure is real and fixable inside your scope, fix it before moving on. If it is outside
+  your scope, leave an auditable signal where the next actor will see it: a failing PR status,
+  task comment, reconcile finding, monitor event, or explicit blocker.
+- Fallbacks are allowed only when they are visible and named. A fallback must preserve the failing
+  signal and explain what it replaced; it must not make the workflow look green.
+- Testing is a discovery loop. When a gate uncovers an environment, ingestion, normalization,
+  protocol, auth, or workflow problem, treat the discovered problem as part of the task until it is
+  repaired or deliberately handed off.
+
 ## Git discipline
 - **Push your branch before you claim progress.** Committed-but-unpushed work is invisible to
   the fleet and gets lost (it already did once).
