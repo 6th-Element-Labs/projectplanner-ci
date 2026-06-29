@@ -212,11 +212,13 @@ try:
     rel = store.release_resource_lease(lease["lease_id"], actor=auth.actor(p), project=P)
     ok(rel.get("released") is True, "release_resource_lease releases a lease")
 
+    message_task = store.create_task({"workstream_id": "MSG", "title": "message fallback"},
+                                     actor="seed", project=P)
     msg = store.send_agent_message(
         "codex/TEST#1",
         "claude/TEST#2",
         "stop before editing store.py",
-        task_id="TEST-1",
+        task_id=message_task["task_id"],
         requires_ack=True,
         signal="stop",
         priority=10,
@@ -225,13 +227,24 @@ try:
         project=P,
     )
     ok(msg["signal"] == "stop" and msg["priority"] == 10, "messages carry signal and priority")
+    ok(msg["delivery_status"] == "unreachable" and msg["delivery"]["reason"] == "not_registered",
+       "send_agent_message marks absent target agents as unreachable")
+    ok(msg.get("fallback", {}).get("task_comment") is True,
+       "unreachable directed messages advertise the visible task-comment fallback")
+    message_task_after_send = store.get_task(message_task["task_id"], project=P)
+    ok(any(a["kind"] == "message.delivery_unreachable"
+           for a in message_task_after_send["activity"]),
+       "unreachable directed messages write structured delivery failure activity")
+    ok(any(a["kind"] == "comment" and a["actor"] == "switchboard/delivery"
+           for a in message_task_after_send["activity"]),
+       "unreachable directed messages add a visible fallback task comment")
     ok(msg.get("monitor_id") and msg.get("monitor", {}).get("kind") == "ack_deadline",
        "requires_ack creates a durable ack monitor")
     seconds_msg = store.send_agent_message(
         "codex/TEST#1",
         "claude/TEST#2",
         "ack timeout in seconds",
-        task_id="TEST-1",
+        task_id=message_task["task_id"],
         requires_ack=True,
         ack_timeout_seconds=2,
         project=P,
@@ -248,7 +261,7 @@ try:
         "codex/TEST#1",
         "claude/TEST#2",
         "please ack quickly",
-        task_id="TEST-1",
+        task_id=message_task["task_id"],
         requires_ack=True,
         ack_deadline_minutes=-1,
         project=P,
@@ -267,7 +280,7 @@ try:
         "codex/TEST#1",
         "claude/TEST#2",
         "wake if absent",
-        task_id="TEST-1",
+        task_id=message_task["task_id"],
         requires_ack=True,
         ack_deadline_minutes=-1,
         on_ack_timeout="wake_target",
@@ -284,10 +297,38 @@ try:
     ok(any(w["source"] == f"monitor:{wake_status['monitor']['id']}" and
            w["selector"]["agent_id"] == "claude/TEST#2" for w in wakes),
        "list_wake_intents exposes monitor-created wakes")
+    live_reg = store.register_agent(
+        agent_id="claude/LIVE#1",
+        runtime="claude-code",
+        model="opus",
+        lane="TEST",
+        task_id=message_task["task_id"],
+        control={"mode": "advisory_poll"},
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(live_reg["agent_id"] == "claude/LIVE#1", "test target can register as a live agent")
+    live_msg = store.send_agent_message(
+        "codex/TEST#1",
+        "claude/LIVE#1",
+        "live target check",
+        task_id=message_task["task_id"],
+        project=P,
+    )
+    ok(live_msg["delivery_status"] == "active" and live_msg["delivery"]["reachable"] is True,
+       "send_agent_message marks live registered targets as active")
 
     first = store.create_task({"workstream_id": "TEST", "title": "first"}, actor="seed", project=P)
     second = store.create_task({"workstream_id": "TEST", "title": "second",
                                 "depends_on": [first["task_id"]]}, actor="seed", project=P)
+    unbound_task = store.create_task({"workstream_id": "UNBOUND", "title": "unbound write"},
+                                     actor="seed", project=P)
+    store.add_comment(unbound_task["task_id"], "env-mcp-token",
+                      "posted through a shared MCP token", project=P)
+    unbound = store.get_task(unbound_task["task_id"], project=P)
+    ok(any(a["kind"] == "principal.unbound_write" for a in unbound["activity"]),
+       "shared env-token task comments create an unbound principal audit")
     claimed = store.claim_next(
         agent_id="codex/TEST#1",
         lanes="TEST,OTHER",

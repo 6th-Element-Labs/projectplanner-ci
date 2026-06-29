@@ -878,11 +878,31 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
 
 def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
                 project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    now = time.time()
     with _conn(project) as c:
         if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
             return None
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (task_id, actor, kind, json.dumps({"text": text}), time.time()))
+                  (task_id, actor, kind, json.dumps({"text": text}), now))
+        if _is_unbound_system_actor(actor):
+            active_agents = _active_agent_ids_for_task(c, task_id, now)
+            if not active_agents:
+                payload = {
+                    "actor": actor,
+                    "reason": "system_principal_write_without_active_agent",
+                    "message": (
+                        "This write came from a shared system token, but no active "
+                        "agent session is registered on this task. Directed inbox "
+                        "delivery to a named agent may not reach the runtime until "
+                        "that runtime handshakes and drains its inbox."
+                    ),
+                }
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (task_id, "switchboard/identity", "principal.unbound_write",
+                     json.dumps(payload, sort_keys=True), now),
+                )
     return get_task(task_id, project)
 
 
@@ -1124,6 +1144,73 @@ def _presence_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, An
             "control": json.loads(row["control"] or "{}"),
             "registered_at": row["registered_at"], "heartbeat_at": row["heartbeat_at"],
             "expires_at": expires_at, "ttl_s": ttl_s, "stale": now >= expires_at}
+
+
+def _agent_delivery_state(c: sqlite3.Connection, agent_id: str,
+                          now: float) -> Dict[str, Any]:
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return {
+            "status": "unreachable",
+            "reason": "missing_agent_id",
+            "reachable": False,
+            "message": "Directed messages require a target agent_id.",
+        }
+    row = c.execute("SELECT * FROM agent_presence WHERE agent_id=?", (agent_id,)).fetchone()
+    if not row:
+        return {
+            "agent_id": agent_id,
+            "status": "unreachable",
+            "reason": "not_registered",
+            "reachable": False,
+            "message": "No active or historical registration exists for this agent_id.",
+        }
+    presence = _presence_row(row, now=now)
+    delivery = {
+        "agent_id": agent_id,
+        "runtime": presence.get("runtime"),
+        "lane": presence.get("lane"),
+        "task_id": presence.get("task_id"),
+        "heartbeat_at": presence.get("heartbeat_at"),
+        "expires_at": presence.get("expires_at"),
+        "ttl_s": presence.get("ttl_s"),
+    }
+    if presence.get("stale"):
+        delivery.update({
+            "status": "unreachable",
+            "reason": "stale_registration",
+            "reachable": False,
+            "message": "Agent registration exists but its heartbeat has expired.",
+        })
+    else:
+        delivery.update({
+            "status": "active",
+            "reason": None,
+            "reachable": True,
+            "control": presence.get("control") or {},
+        })
+    return delivery
+
+
+def _is_unbound_system_actor(actor: str) -> bool:
+    actor = (actor or "").strip()
+    return actor in {"env-mcp-token", "env-auth-token"} or (
+        actor.startswith("env-") and actor.endswith("-token")
+    )
+
+
+def _active_agent_ids_for_task(c: sqlite3.Connection, task_id: str,
+                               now: float) -> List[str]:
+    if not task_id:
+        return []
+    rows = c.execute("SELECT * FROM agent_presence WHERE task_id=?",
+                     (task_id,)).fetchall()
+    active: List[str] = []
+    for row in rows:
+        presence = _presence_row(row, now=now)
+        if not presence.get("stale"):
+            active.append(presence["agent_id"])
+    return active
 
 
 def list_active_agents(lane: str = "", project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
@@ -3447,6 +3534,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
         hit = _idem_hit(c, "send", idem_key, from_agent, payload)
         if hit is not None:
             return hit
+        delivery = _agent_delivery_state(c, to_agent, now)
         cur = c.execute(
             "INSERT INTO agent_messages(from_agent, to_agent, task_id, message, requires_ack, "
             "ack_deadline, sent_at, signal, priority, idem_key, principal_id) "
@@ -3455,10 +3543,23 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
              signal or None, int(priority or 0), idem_key or None, principal_id or None),
         )
         msg_id = cur.lastrowid
+        task_exists = bool(
+            task_id and c.execute("SELECT 1 FROM tasks WHERE task_id=?",
+                                  (task_id,)).fetchone()
+        )
         response = {"id": msg_id, "from_agent": from_agent, "to_agent": to_agent,
                     "task_id": task_id, "message": message, "requires_ack": requires_ack,
                     "ack_deadline": deadline, "sent_at": now, "acked_at": None,
-                    "signal": signal, "priority": int(priority or 0)}
+                    "signal": signal, "priority": int(priority or 0),
+                    "mailbox_stored": True,
+                    "delivery": delivery,
+                    "delivery_status": delivery["status"]}
+        if not delivery.get("reachable"):
+            response["warning"] = delivery.get("message")
+            response["fallback"] = {
+                "task_comment": task_exists,
+                "reason": delivery.get("reason"),
+            }
         if requires_ack:
             monitor = _create_ack_monitor(c, msg_id, from_agent, to_agent, task_id,
                                           deadline, now, on_ack_timeout=on_ack_timeout)
@@ -3466,6 +3567,31 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
             response["monitor"] = monitor
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, from_agent, "message.sent", json.dumps(response, sort_keys=True), now))
+        if not delivery.get("reachable"):
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                (task_id, "switchboard/delivery", "message.delivery_unreachable",
+                 json.dumps({
+                     "message_id": msg_id,
+                     "from_agent": from_agent,
+                     "to_agent": to_agent,
+                     "delivery": delivery,
+                 }, sort_keys=True), now),
+            )
+            if task_exists:
+                fallback_text = (
+                    f"Directed message #{msg_id} to `{to_agent}` was queued in the "
+                    f"durable inbox, but the target is not currently reachable "
+                    f"({delivery.get('reason')}). Treat this task comment as the "
+                    "visible fallback until that runtime registers, heartbeats, and "
+                    "drains its Switchboard inbox."
+                )
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (task_id, "switchboard/delivery", "comment",
+                     json.dumps({"text": fallback_text}, sort_keys=True), now),
+                )
         _idem_store(c, "send", idem_key, from_agent, payload, response)
         return response
 
@@ -3569,12 +3695,16 @@ def list_unacked_messages(to_agent: str, project: str = DEFAULT_PROJECT) -> List
 
 def get_message_status(message_id: int, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     """Sender polls this to see whether a message has been acked."""
+    now = time.time()
     with _conn(project) as c:
         r = c.execute("SELECT * FROM agent_messages WHERE id=?", (message_id,)).fetchone()
         if not r:
             return None
         out = dict(r)
         out["monitor"] = _load_monitor_for_message(c, message_id)
+        out["mailbox_stored"] = True
+        out["delivery"] = _agent_delivery_state(c, out.get("to_agent") or "", now)
+        out["delivery_status"] = out["delivery"]["status"]
         return out
 
 
