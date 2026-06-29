@@ -123,19 +123,28 @@ def _ensure_cache_repo(root: Path, source_repo: Path, repo: str) -> Path:
     else:
         _run(["git", "-C", str(cache), "remote", "set-url", "origin", origin])
     _run(["git", "-C", str(cache), "fetch", "--prune", "origin",
-          "+refs/heads/*:refs/heads/*", "+refs/pull/*/head:refs/pull/*/head"])
+          "+refs/heads/*:refs/heads/*",
+          "+refs/pull/*/head:refs/pull/*/head",
+          "+refs/pull/*/merge:refs/pull/*/merge"])
     return cache
 
 
 def _prepare_worktree(cache: Path, root: Path, pr: Dict[str, Any]) -> Path:
     number = int(pr["number"])
     sha = pr["head"]["sha"]
+    merge_ref = f"refs/pull/{number}/merge"
+    merge = subprocess.run(["git", "-C", str(cache), "rev-parse", "--verify",
+                            f"{merge_ref}^{{commit}}"],
+                           text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if merge.returncode != 0:
+        raise GateError(f"PR #{number} has no merge ref; rebase or resolve conflicts before gating.")
+    test_sha = merge.stdout.strip()
     run_dir = root / "runs" / f"pr-{number}-{sha[:12]}"
     if run_dir.exists():
         _run(["git", "-C", str(cache), "worktree", "remove", "--force", str(run_dir)],
              check=False)
         shutil.rmtree(run_dir, ignore_errors=True)
-    _run(["git", "-C", str(cache), "worktree", "add", "--detach", str(run_dir), sha])
+    _run(["git", "-C", str(cache), "worktree", "add", "--detach", str(run_dir), test_sha])
     return run_dir
 
 
