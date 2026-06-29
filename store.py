@@ -3686,7 +3686,8 @@ def list_unacked_messages(to_agent: str, project: str = DEFAULT_PROJECT) -> List
     """Messages directed to this agent that have not been acknowledged yet."""
     with _conn(project) as c:
         rows = c.execute(
-            "SELECT * FROM agent_messages WHERE to_agent=? AND acked_at IS NULL "
+            "SELECT * FROM agent_messages WHERE to_agent=? AND requires_ack=1 "
+            "AND acked_at IS NULL "
             "ORDER BY priority DESC, id",
             (to_agent,),
         ).fetchall()
@@ -3856,11 +3857,11 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                     "requires_ack, ack_deadline, sent_at, signal, priority, idem_key, principal_id) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     ("switchboard/monitor", msg["from_agent"], msg["task_id"], notice,
-                     0, None, now, "ack_timeout", 100, None, None),
+                     1, None, now, "ack_timeout", 100, None, None),
                 )
                 notice_payload = {"id": cur.lastrowid, "from_agent": "switchboard/monitor",
                                   "to_agent": msg["from_agent"], "task_id": msg["task_id"],
-                                  "message": notice, "requires_ack": False,
+                                  "message": notice, "requires_ack": True,
                                   "signal": "ack_timeout", "priority": 100,
                                   "sent_at": now}
                 c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
@@ -4928,7 +4929,7 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
         to_agent=alert_to,
         task_id=None,
         message=message,
-        requires_ack=False,
+        requires_ack=True,
         signal="reconcile_alert",
         priority=90,
         idem_key=f"{idem_key}:message",

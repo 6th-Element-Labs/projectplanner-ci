@@ -253,6 +253,20 @@ try:
        "ack_timeout_seconds creates a real ack deadline")
     inbox = store.list_unacked_messages("claude/TEST#2", project=P)
     ok(inbox and inbox[0]["id"] == msg["id"], "inbox returns unacked directed message")
+    no_ack_msg = store.send_agent_message(
+        "codex/TEST#1",
+        "claude/TEST#2",
+        "fire-and-forget notice",
+        task_id=message_task["task_id"],
+        requires_ack=False,
+        project=P,
+    )
+    inbox_after_no_ack = store.list_unacked_messages("claude/TEST#2", project=P)
+    ok(all(m["id"] != no_ack_msg["id"] for m in inbox_after_no_ack),
+       "fire-and-forget messages do not appear in unacked inbox")
+    no_ack_status = store.get_message_status(no_ack_msg["id"], project=P)
+    ok(no_ack_status["monitor"] is None and not no_ack_status["requires_ack"],
+       "fire-and-forget messages remain stored without an ack monitor")
     ack = store.ack_message(msg["id"], response="denied before tool", actor="claude/TEST#2", project=P)
     ok(ack["acked_at"] is not None, "ack_message records receipt")
     acked_status = store.get_message_status(msg["id"], project=P)
