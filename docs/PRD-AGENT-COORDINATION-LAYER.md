@@ -8,8 +8,8 @@
 - **Protocol:** **IXP — Instruction Exchange Protocol** (the open spec; `_XP` family —
   A/T/I/O = Agent/Task/Instruction/Outcome; IXP canonical)
 - **Ledger:** **Tally** — the cost-per-outcome accounting feature (motif: 正)
-- **One-line:** The narrow waist for agent coordination — any agent, behind any model,
-  coordinates through one neutral substrate as long as it loads our tools first.
+- **One-line:** Switchboard is the neutral control plane for AI work: it coordinates
+  agents across clouds and tools while proving cost, control, and outcomes.
   *Switchboard speaks IXP and keeps a Tally.*
 
 > Builds on what already ships: the coordination primitives in
@@ -35,7 +35,8 @@ model behind them.
 
 **We become the narrow waist** — the TCP/IP of agent coordination; more precisely, the
 **POSIX/syscall layer** any agent links against. We do not run the models. We do not own
-the agents. We own the *contract they coordinate over*.
+the agents. We own the *contract they coordinate over* and the durable operational record
+of the work they perform.
 
 ---
 
@@ -96,8 +97,50 @@ evidence, and leaves a new audit trail.
 - **The bet:** *coordination-first, model-agnostic, human-inspectable.* Everyone else
   builds from the wrong end (one vendor, one run, no human).
 - **The moat (restated from the roadmap):** not the code — the **protocol/convention**
-  agents speak, the **accumulated cross-session state**, the **two-sided habit**, and the
-  **cost-economics framing**. Win protocol adoption → become the default.
+  agents speak, the **accumulated trusted work graph**, the **two-sided habit**, and the
+  **cost-economics framing**. Win protocol adoption → become the default; win the
+  operational record → become hard to replace.
+
+### 3.1 Open-core posture and commercial boundary
+
+Switchboard should be open where adoption requires trust and closed where the buyer pays for
+governance.
+
+Open-source candidates:
+
+- the IXP/TXP/OXP protocol specs and compatibility envelopes;
+- runtime adapter SDKs for Claude Code, Codex, Cursor, LangGraph, and raw API loops;
+- conformance fixtures that prove handshake, inbox, claim, ack, release, control fidelity,
+  and usage/outcome reporting;
+- the local Agent Host / wake daemon and CLI/dev harness.
+
+Commercial / hosted Switchboard:
+
+- hosted multi-org Switchboard cloud;
+- auth, roles, project boundaries, invites, subscriptions, and agent entitlements;
+- the operator cockpit, runner controls, policy enforcement, long-term audit history, and
+  compliance exports;
+- Tally's cost-to-outcome/KPI analytics and provider reconciliation;
+- advanced dispatch using capability, budget, reliability, risk, and business priority;
+- managed runners, enterprise integrations, and hosted evidence graph.
+
+The open protocol lets every agent plug in. The hosted control plane is commercial because
+companies need trust, governance, cost control, and proof at scale.
+
+### 3.2 Hyperscaler threat model
+
+AWS, Google, Microsoft, OpenAI, and Anthropic can all ship first-party agent-control services.
+They will be strongest inside their own clouds, models, IAM systems, telemetry stacks, and
+developer tools. Switchboard should not compete by being a better single-cloud agent runtime.
+It competes by being neutral:
+
+> Run agents anywhere. Govern the work in one place.
+
+The durable asset is the trusted work graph: who assigned work, which runtime took it, what
+it touched, what it cost, which evidence proved it, who approved it, and which KPI/outcome
+it moved. A platform vendor can copy primitives; it is harder to replace a cross-cloud,
+cross-runtime, human-and-agent operating record once teams rely on it for audit, cost, and
+delivery truth.
 
 **Beachhead ICP — high-intelligence knowledge work (deliberate, for now).** The initial
 target is *knowledge work*: software, consulting, investment-banking deliverables (pitch
@@ -123,7 +166,9 @@ is thinner. Land knowledge work first; generalize down to operations later.
    guaranteed (process-level kill), honestly surfaced per runtime.
 4. **Human oversight preserved:** peek in *and* step in (approval gates, audit trail).
 5. **Cost-per-outcome accounting:** tokens/$ per task, per agent, per epic.
-6. **Swappable engine:** semantics defined once; storage/transport replaceable (SQLite →
+6. **Commercial governance:** orgs, roles, scoped tokens, project boundaries, invites,
+   entitlements, and audit exports for multi-human/multi-agent use.
+7. **Swappable engine:** semantics defined once; storage/transport replaceable (SQLite →
    Go/NATS/Postgres) behind an unchanged interface.
 
 ### Non-goals
@@ -131,6 +176,8 @@ is thinner. Land knowledge work first; generalize down to operations later.
 - We are **not** an in-run orchestration DAG framework (LangGraph et al. stay; they become
   *clients* that coordinate through us when multiple runs share state).
 - We do **not** route around the human as merge/approval authority.
+- We are **not** trying to replace AWS, Google, Microsoft, OpenAI, or Anthropic as model/cloud
+  providers; we coordinate and govern work across them.
 - No full chat/IM stream, no wiki, no voting/consensus engine (see §15).
 
 ---
@@ -395,6 +442,13 @@ implementation: [`adapters/claude-code/`](../adapters/claude-code/).
 The durable advantage is the **convention**. But a coordination standard can die (SIP) or
 win (MCP, Kubernetes) depending on *who pulls adoption*. Be precise about which kind we are.
 
+The protocol is the adoption surface, not the whole business. Switchboard's posture is
+**open-core**: publish the protocol, adapters, conformance fixtures, and local Agent Host so
+integrators trust the contract and can bring any runtime. Keep the hosted control plane,
+governance, Tally analytics, policy, managed runners, enterprise integrations, and long-term
+evidence graph commercial. That keeps Switchboard from becoming a protocol-only company
+whose value is captured by larger platforms.
+
 **Two kinds of standard:**
 
 - **Vertical** (model → tools): **MCP**. Spread like wildfire because it serves the
@@ -440,6 +494,12 @@ lease/ack semantics); dead-simple onboarding (one-liner to load the toolset per 
 MCP config + `AGENTS.md`/`CLAUDE.md` protocol + REST shim); reference adapters (Claude Code
 hooks, Agent SDK events, generic REST loop) so "load us first" is minutes; lead the story
 with the six-agent session + the cost number — the two things competitors can't fake.
+
+**Commercial checklist:** ACCESS must land before external use: login/session protection,
+org/user/project roles, scoped MCP/API tokens, project-creation permissions, invite/manage
+humans, subscription/agent entitlements, feedback-to-plan flow, and UI permission gating.
+Without ACCESS, Switchboard is an internal dogfood control plane; with ACCESS, it becomes a
+collaborative agent-control product.
 
 **Conformance over decoration — the only load-bearing use of the `_XP` family.** The IP is
 the **wire semantics** of each primitive (§7–8) — the lease state machine, the delta cursor,
@@ -518,8 +578,10 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
 | **P1 — Presence + dispatch** | `register_agent`/heartbeat/`list_active_agents`; `claim_next` (RVDQ); see [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) | makes it an *active* coordinator; finishes the "switch" |
 | **P2 — Interrupts + wake** | `signal` field; hook-level deny (IRQ); Agent Host wake intents; runner `kill` (NMI); state save/resume; see [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) and [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md) | the live stop/redirect the operator wants, plus the missing "start an absent worker" loop |
 | **P3 — Oversight + cost** | approval gates; cost-per-outcome ledger; reliability scoring; see [`TALLY-SPEC.md`](TALLY-SPEC.md) | the commercial wedge for serious/regulated buyers |
-| **P4 — Subjects + scale** | explicit subject addressing + wildcards; kernel extraction (Go/NATS) behind the interface | scale + the pub/sub north star |
-| **P5 — Protocol + ecosystem** | published spec; reference adapters; multi-tenant workspaces, RBAC, self-serve; see [`RUNTIME-ADAPTERS-SPEC.md`](RUNTIME-ADAPTERS-SPEC.md) | turn the convention into the moat |
+| **P4 — ACCESS commercial shell** | password/session auth; org/user/project roles; scoped MCP/API tokens; project creation permissions; invite/manage humans; subscriptions/agent entitlements; restricted UI controls | turns dogfood into a safe multi-human product |
+| **P5 — Subjects + scale** | explicit subject addressing + wildcards; kernel extraction (Go/NATS) behind the interface | scale + the pub/sub north star |
+| **P6 — Protocol + ecosystem** | published spec; OSS adapter SDKs; conformance certification; local Agent Host; public quickstarts | turns the convention into the adoption moat |
+| **P7 — Enterprise trust graph** | compliance exports; provider cost reconciliation; immutable audit/evidence retention; enterprise integrations | makes the trusted work graph hard to replace |
 
 ---
 
@@ -535,6 +597,10 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
   this is a *today* security risk, not a future feature.** *Fix:* per-agent bearer auth on
   every write surface; record the authenticated identity as `actor`. **Owner/ETA: TBD —
   treat as P0.** See [`P0-SPEC.md`](P0-SPEC.md).
+- 🔴 **ACCESS gap — not yet a multi-human product.** The board tracks ACCESS-1 through
+  ACCESS-8 as the commercial shell: sessions, roles, scoped tokens, project creation
+  permissions, invites, subscriptions/agent entitlements, feedback-to-plan, and restricted
+  controls. Treat ACCESS-1 as the next implementation step before inviting non-core users.
 - 🟡 **`TXP` / `OXP` specs — drafted, implementation gated behind P0.** Work-dispatch
   (`TXP`: `claim_next`, dependency-aware routing) is now scoped in
   [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md). Outcome-settlement (`OXP`: **Tally**, budgets,
@@ -546,9 +612,12 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
 
 ### Strategic risks
 
-1. **Platform encroachment:** Anthropic/OpenAI/Linear ship native coordination. *Mitigation:*
-   be narrowly excellent at the coordination + oversight + cost triangle and be the
-   cross-vendor neutral party; publish the protocol.
+1. **Platform encroachment:** AWS, Google, Microsoft, OpenAI, Anthropic, or Linear ship native
+   coordination. *Mitigation:* be narrowly excellent at the coordination + oversight + cost
+   triangle, be the cross-vendor neutral party, publish the protocol, and keep the hosted
+   trust/economics layer commercial. Expect hyperscaler services to be strong inside their own
+   cloud; Switchboard must be the neutral work record across clouds, IDEs, repos, runtimes,
+   and human teams.
 2. **Cooperative-only ceiling:** we can't orchestrate an agent that won't call the tools.
    *Mitigation:* fidelity tiers + the NMI kill floor; make "load us first" frictionless.
 3. **Codex enforcement surface unknown** — verify whether Codex supports a `PreToolUse`-style
@@ -557,7 +626,11 @@ MCP and Kubernetes spread, and is the property worth specifying and (eventually)
    runway; late = scaling pain. *Trigger:* first real multi-tenant write load.
 5. **Cost-attribution honesty:** gateway-metered vs agent-reported tokens diverge. *Open —
    see ADR-0002.*
-6. **Standalone product vs strategic acquihire bait** — depends on how fast platforms move.
+6. **Open-source value capture:** an open protocol could be captured by platforms if the
+   commercial layer is thin. *Mitigation:* treat protocol/adapters as adoption infrastructure
+   and invest in Tally, policy, entitlements, audit, evidence history, and ecosystem
+   integrations as the paid control plane.
+7. **Standalone product vs strategic acquihire bait** — depends on how fast platforms move.
    The wedge is real today either way.
 
 ---

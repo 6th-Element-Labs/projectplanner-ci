@@ -4499,6 +4499,12 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                     if (field == "head_sha" and task.get("status") == "Done"
                             and state.get("merged_sha")):
                         continue
+                    if (field == "head_sha" and state.get("pr_number")
+                            and task.get("status") in ("In Review", "Done")):
+                        # Production checkouts do not need to fetch every PR head. GitHub PR
+                        # state below is the source of truth for open/review heads; local git
+                        # reachability remains authoritative for merged/default-branch SHAs.
+                        continue
                     sha = state.get(field)
                     if not sha:
                         continue

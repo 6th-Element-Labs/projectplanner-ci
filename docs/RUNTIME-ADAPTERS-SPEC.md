@@ -33,6 +33,11 @@ An adapter pack is the "load us first" kit for one runtime:
 The goal is not to own agent execution. The goal is to make Switchboard the coordination
 control plane every runtime can safely call into.
 
+In the open-core packaging, adapter packs are public adoption infrastructure. A team should be
+able to inspect the adapter, run the conformance smoke test, and trust that the runtime really
+does the Switchboard handshake. The paid product begins above that layer: hosted governance,
+roles, entitlements, Tally analytics, managed runners, audit history, and operator policy.
+
 ---
 
 ## 2. Adapter contract

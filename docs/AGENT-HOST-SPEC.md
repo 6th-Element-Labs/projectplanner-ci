@@ -73,6 +73,11 @@ The Plan VM remains lightweight. It stores durable coordination state and wake i
 not run arbitrary coding agents. Agent Hosts run where repo access, model credentials, build
 toolchains, and process control are available.
 
+Open-core boundary: a local Agent Host should be inspectable and open so developers trust how
+Switchboard wakes and supervises their own machines. Hosted/managed runner fleets, enterprise
+policy, entitlement checks, pooled capacity, and long-term runner audit remain part of the
+commercial Switchboard control plane.
+
 ## 5. Host Registration
 
 An Agent Host must register separately from individual agent sessions.

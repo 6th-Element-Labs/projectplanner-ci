@@ -15,6 +15,11 @@
 > P0 does not by itself wake an absent runtime. Always-on host registration, wake intents, and
 > supervised runtime launch are specified separately in
 > [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
+>
+> P0 also does not finish the commercial identity product. It closes the unsafe write floor.
+> The multi-human SaaS shell lives in the ACCESS lane: sessions, org/user/project roles,
+> scoped MCP/API tokens, project-creation permissions, invites, subscriptions/agent
+> entitlements, feedback-to-plan, and restricted UI controls.
 
 ---
 
@@ -76,6 +81,9 @@ P0 is done when a fresh deployment can truthfully advertise:
 
 - Multi-tenant SaaS onboarding, billing, or self-serve workspaces.
 - Full OAuth/user-login UI and RBAC beyond the minimum write credential model.
+- Subscription/agent entitlement management, invite flows, and permissioned project creation.
+  These are required before external collaborators use hosted Switchboard, but they are ACCESS
+  tasks rather than the `IXP-core` reference floor.
 - `TXP` work dispatch (`claim_next`, see [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md)) except
   for reserving compatible auth/idempotency shapes.
 - Agent Host wake/launch control (see [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md)) except for

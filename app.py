@@ -1295,8 +1295,10 @@ async def ixp_reconcile(project: str = Query(store.DEFAULT_PROJECT)):
 # Behaviour:
 #   push to main/master   → find active leases on changed files, send directed IM
 #                           to each lease holder. Does NOT mark tasks Done.
-#   PR opened             → record PR provenance + move referenced tasks to In Review.
-#   PR merged             → stamp merged_sha + mark referenced tasks Done.
+#   PR opened/synced      → record PR provenance + move branch/title/closing-referenced tasks
+#                           to In Review; update head SHA after branch pushes. Broad body
+#                           mentions are ignored.
+#   PR merged             → stamp merged_sha + mark branch/title/closing-referenced tasks Done.
 
 _GH_SECRET = os.environ.get("PM_GITHUB_WEBHOOK_SECRET", "")
 

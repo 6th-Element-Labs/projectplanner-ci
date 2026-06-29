@@ -13,6 +13,12 @@ Everything below builds on the seed already documented in [`AGENT_ROADMAP.md`](A
 activity-log audit substrate, the MCP front door, `dispatch.py` → Claude Code → PR, the
 email Inbox triage, the Pulse digest). This doc is the *operator-level* layer on top.
 
+For Switchboard, these operator features are commercial control-plane features, not public
+shared-identity planner conveniences. They require ACCESS first: authenticated sessions,
+roles, scoped MCP/API tokens, project creation permissions, invites, subscriptions/agent
+entitlements, and UI permission gates. A cockpit that can dispatch, stop, kill, or reassign
+agent work must know who is operating it and what they are allowed to control.
+
 ---
 
 ## Feature roadmap, by operator verb

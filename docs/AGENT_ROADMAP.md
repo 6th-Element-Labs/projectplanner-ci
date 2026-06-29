@@ -77,11 +77,12 @@ snapshot infra), and the **autonomy pattern** is the same `auto_resolve` /
 
 ## Decisions (locked)
 
-- **Auth: public for now.** No login. Everything runs **shared-identity**; all agent
-  actions audited as "Maxwell". No per-user identity yet (personal digests/nudges run
-  in team/unattributed mode until auth). **MCP write tools get a shared token**; reads
-  open. Revisit real auth before per-user features or a second customer. Because we're
-  staying public, Phases 4 and 7 are **not** gated — they ship in shared-identity mode.
+- **Auth: legacy planner mode vs Switchboard product mode.** The original ProjectPlanner
+  assistant shipped in a shared-identity mode for a single trusted deployment. That decision
+  is **not** valid for Switchboard as an agent-control product. Switchboard requires ACCESS:
+  password/session protection, org/user/project roles, scoped MCP/API tokens, project creation
+  permissions, invites, subscription/agent entitlements, and restricted controls before
+  external humans or customer-owned agents are allowed in.
 - **Notify channel: Slack + Gmail** (not SMTP/SES). `notify.send` gets two adapters:
   Slack (incoming webhook / bot token) and Gmail (API, `gmail.send` scope). This
   **deletes the SPF/DKIM/DMARC deliverability problem**. Build it now, wire it; heavy

@@ -816,6 +816,29 @@ try:
     ok(not any(f["task_id"] == squashed["task_id"] and f["code"] == "head_sha_not_found"
                for f in squash_report["findings"]),
        "reconcile trusts merged_sha for Done tasks after squash branch deletion")
+    open_pr = store.create_task({"workstream_id": "TEST", "title": "open PR head"},
+                                actor="seed", project=P)
+    store.mark_task_pr_opened(
+        open_pr["task_id"], 999,
+        "https://github.com/6th-Element-Labs/projectplanner/pull/999",
+        branch=f"codex/{open_pr['task_id']}-open-pr",
+        head_sha="1111111111111111111111111111111111111111",
+        actor="github-webhook", project=P)
+    original_github_pr = store._github_pr
+    store._github_pr = lambda repo, pr_number, token="": {
+        "merged_at": None,
+        "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+        "base": {"ref": "master", "repo": {"default_branch": "master"}},
+        "head": {"ref": f"codex/{open_pr['task_id']}-open-pr",
+                 "sha": "1111111111111111111111111111111111111111"},
+    }
+    try:
+        open_pr_report = store.reconcile(project=P)
+    finally:
+        store._github_pr = original_github_pr
+    ok(not any(f["task_id"] == open_pr["task_id"] and f["code"] == "head_sha_not_found"
+               for f in open_pr_report["findings"]),
+       "reconcile trusts GitHub state for open PR heads not fetched locally")
     store.init_db("helm")
     helm_sha = "f" * 40
     helm_task = store.create_task({"workstream_id": "OFFLINE", "title": "foreign repo proof"},

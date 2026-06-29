@@ -91,6 +91,42 @@ try:
     ok(replay_opened["in_review_tasks"] == [pr_task["task_id"]] and
        activity_count(pr_task["task_id"], "git.pr_opened") == opened_events,
        "PR opened webhook replay is idempotent")
+    pr_payload["action"] = "synchronize"
+    pr_payload["pull_request"]["head"]["sha"] = "headupdated"
+    synced = github_sync.handle_pr(pr_payload, P)
+    synced_task = store.get_task(pr_task["task_id"], project=P)
+    ok(synced["in_review_tasks"] == [pr_task["task_id"]] and
+       synced_task["git_state"]["head_sha"] == "headupdated",
+       "PR synchronize updates review head provenance")
+
+    scope_task = store.create_task({"workstream_id": "DOGFOOD", "title": "scope task"},
+                                   actor="seed", project=P)
+    follow_on = store.create_task({"workstream_id": "ACCESS", "title": "future task"},
+                                  actor="seed", project=P)
+    broad_body_payload = {
+        "action": "opened",
+        "repository": {
+            "full_name": "6th-Element-Labs/projectplanner",
+            "name": "projectplanner",
+            "default_branch": "master",
+        },
+        "pull_request": {
+            "number": 48,
+            "title": f"docs({scope_task['task_id']}): scope future work",
+            "body": f"Live board scope added: {follow_on['task_id']}.",
+            "html_url": "https://github.com/6th-Element-Labs/projectplanner/pull/48",
+            "head": {
+                "ref": f"codex/{scope_task['task_id']}-scope",
+                "sha": "scopehead",
+            },
+            "base": {"ref": "master"},
+        },
+    }
+    broad_opened = github_sync.handle_pr(broad_body_payload, P)
+    ok(broad_opened["in_review_tasks"] == [scope_task["task_id"]],
+       "PR opened ignores broad body task mentions")
+    ok(store.get_task(follow_on["task_id"], project=P)["status"] == "Not Started",
+       "broad body task mention does not move follow-on task")
 
     pr_payload["action"] = "closed"
     pr_payload["pull_request"]["merged"] = True

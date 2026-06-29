@@ -31,6 +31,12 @@ Tally must ship early in a rough but honest form:
 The first version can be simple. It cannot be deferred into "later analytics" without losing
 the product's commercial center.
 
+Tally is also one of the closed/commercial value layers in the open-core strategy. The
+protocol can be open, but the hosted product's ability to reconcile provider bills, compare
+agents, enforce budget policy, connect outcomes to KPIs, and preserve long-running cost
+history is part of the paid control plane. This is what keeps Switchboard from being only a
+coordination standard that platforms can absorb.
+
 ---
 
 ## 2. Relationship to `IXP-core` and TXP

@@ -47,12 +47,12 @@ def resolve_project(payload: Dict[str, Any], requested_project: str = "") -> str
 
 
 def task_ids_for_pr(pr: Dict[str, Any]) -> List[str]:
-    text = " ".join([
-        str(pr.get("title") or ""),
-        str(pr.get("body") or ""),
-        str((pr.get("head") or {}).get("ref") or ""),
-    ])
-    return closing_task_ids(text) or extract_task_ids(text)
+    title = str(pr.get("title") or "")
+    body = str(pr.get("body") or "")
+    branch = str((pr.get("head") or {}).get("ref") or "")
+    explicit_closes = closing_task_ids(f"{title}\n{body}")
+    branch_or_title = extract_task_ids(f"{title}\n{branch}")
+    return _dedupe_upper(explicit_closes + branch_or_title)
 
 
 def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
@@ -102,7 +102,7 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     """PR lifecycle: open -> In Review; merge -> Done with merged_sha."""
     pr = payload.get("pull_request") or {}
     action = payload.get("action")
-    if action not in ("opened", "reopened", "ready_for_review", "closed"):
+    if action not in ("opened", "reopened", "ready_for_review", "synchronize", "closed"):
         return {"action": "ignored", "reason": f"unsupported PR action {action!r}"}
 
     repo = payload.get("repository", {}).get("full_name", "?")
@@ -114,7 +114,7 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     head_sha = (pr.get("head") or {}).get("sha", "")
     pr_url = pr.get("html_url", "")
 
-    if action in ("opened", "reopened", "ready_for_review"):
+    if action in ("opened", "reopened", "ready_for_review", "synchronize"):
         touched: List[str] = []
         skipped: List[Dict[str, str]] = []
         for task_id in task_ids:

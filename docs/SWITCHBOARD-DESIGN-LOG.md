@@ -73,6 +73,8 @@ makers are weakest; the moat is the protocol becoming a convention, not the code
 | 13 | Naming | **Switchboard** (product) · **IXP — Instruction Exchange Protocol** (spec) · **Tally** (cost-per-outcome ledger, 正 motif, Tab÷Tally) | PRD §13 |
 | 14 | Is the `_XP` layer-stack real IP or marketing? | The IP is the **wire semantics**, not names/analogies. Layering earns its keep **only as conformance profiles** (IXP-core → +TXP → +OXP) | PRD §13 checklist; IXP §11 |
 | 15 | Is there a hierarchy AXP>TXP>IXP? | Not a `>` chain — it's an **hourglass**: IXP-core is the *waist* (the universal contract), TXP is an app above it, **OXP is a cross-cutting plane** (a projection over the activity log). My earlier four-layer table was too tidy (it wrongly put presence above signaling) | PRD §17 design note |
+| 16 | Open source or hosted service? | **Hybrid open-core.** Open the protocol, adapters, conformance tests, local Agent Host, and dev harness to create trust/adoption. Keep hosted governance, Tally analytics, policy, entitlements, managed runners, integrations, and long-term evidence history commercial | PRD §3.1, §13; PRODUCT_ROADMAP §3 |
+| 17 | Is that enough of a moat against AWS/Google/Microsoft? | Not if the product is only "protocol + dashboard." The moat must be the **neutral trusted work graph** across clouds, IDEs, repos, runtimes, humans, cost, approvals, and evidence. Hyperscalers win inside their clouds; Switchboard wins by governing the work everywhere | PRD §3.2, §17; PRODUCT_ROADMAP §3 |
 
 ---
 
@@ -96,6 +98,10 @@ makers are weakest; the moat is the protocol becoming a convention, not the code
   handle cases it can't really decide, the work has gone agentic — that tail is the
   Switchboard-shaped hole.
 - **Tally = a projection over the log**, not new mutating ops (carry into the OXP spec).
+- **Open protocol ≠ open business.** Open the parts required for trust and ecosystem pull;
+  capture value in hosted governance, economics, policy, and the accumulated evidence graph.
+- **Neutrality is the anti-hyperscaler wedge.** AWS/Google/Microsoft can ship agent-control
+  services inside their stacks; Switchboard must be the system of record across the stacks.
 
 ---
 
@@ -111,3 +117,7 @@ makers are weakest; the moat is the protocol becoming a convention, not the code
 - **Name/availability check** (trademark · domain · GitHub · npm) before the public spec drops.
 - **Live UI pass** of `plan.taikunai.com` — never completed (network-blocked at review time).
 - **Measure, don't estimate** the delta-poll token-savings number before publishing it.
+- **ACCESS-1 through ACCESS-8** — the commercial shell is now the next product gate before
+  external humans or customer-owned agents use hosted Switchboard.
+- **Public ecosystem packaging** — license, repo split, adapter quickstarts, conformance badge,
+  and local Agent Host release plan still need scoped implementation tasks.

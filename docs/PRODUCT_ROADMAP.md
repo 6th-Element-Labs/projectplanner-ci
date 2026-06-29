@@ -1,4 +1,4 @@
-# ProjectPlanner — product roadmap & competitive positioning
+# Switchboard — product roadmap & competitive positioning
 
 - **Status:** Living document
 - **Date started:** 2026-06-27
@@ -10,9 +10,13 @@
 
 ## 1. What this product actually is
 
-A **durable, human-inspectable PM board that is simultaneously the async coordination
-substrate for a fleet of agents** — with token/cost economics as a first-class design
-constraint.
+Switchboard is the **neutral control plane for AI work**: it assigns work, coordinates
+agents across clouds and tools, tracks cost, enforces oversight, and proves what actually
+got done.
+
+The visible surface can look like a planning board, but the product is the operating record
+under the work: claims, messages, leases, decisions, runner state, provenance, spend,
+outcomes, and human approvals.
 
 Two users, one board:
 
@@ -25,6 +29,11 @@ Two users, one board:
 The defining bet: **agent-coordination-first, with the human window preserved.** Most of
 the market builds from the opposite end.
 
+The shortest public sentence:
+
+> Switchboard is the neutral control plane for AI work, coordinating agents across clouds and
+> tools while proving cost, control, and outcomes.
+
 ## 2. Competitive read (honest)
 
 The pieces exist in fragments; the *synthesis* is uncommon. Three adjacent categories each
@@ -35,6 +44,7 @@ leave the gap we sit in:
 | Orchestration frameworks | LangGraph, CrewAI, AutoGen, OpenAI/Anthropic agent SDKs | Coordinate agents *inside one run*. Ephemeral, headless, die with the process. No durable board, no human window, no cross-session state. |
 | Human PM tools + AI | Linear, Asana, Jira, Notion, Height | Human-first; agents bolted on as assistants. Data model assumes a human is the actor. No first-class leases/IM/decisions/state for agents. |
 | Agent runtimes | Devin, Cursor background agents, Claude Code | Great at *doing the work*; coordination + durable PM is an afterthought. |
+| Cloud agent platforms | AWS/Google/Microsoft agent services | Strong inside their own cloud/model/IAM stack; weak as the neutral operating record across rival runtimes, local agents, IDEs, repos, and human approval paths. |
 | OSS "task-manager MCP" servers | various | Single-project, no human PM layer, no cost story, no leases/decisions log. |
 
 Closest in spirit, but none ship the full combination as a polished product. Not "no one
@@ -47,14 +57,23 @@ Closest in spirit, but none ship the full combination as a polished product. Not
 **The moat:**
 1. **The protocol/conventions** agents speak (session-start sequence, lease semantics,
    decisions log). If that becomes the convention teams' agents adopt → lock-in.
-2. **Accumulated cross-session state** — the board gets more valuable the longer a team runs on it.
-3. **Two-sided habit** — where both humans and agents already look.
-4. **Token-economics framing** — the 999× delta-poll number is a *sales story*, not just hygiene.
+2. **The trusted work graph** — who assigned work, which runtime took it, what it touched,
+   what it cost, which evidence proved it, who approved it, and which outcome/KPI it moved.
+3. **Accumulated cross-session state** — the board gets more valuable the longer a team runs on it.
+4. **Two-sided habit** — where both humans and agents already look.
+5. **Token-economics framing** — the 999× delta-poll number is a *sales story*, not just hygiene.
 
-**The standing risk:** platform encroachment (Anthropic/OpenAI ship native multi-agent
-coordination; Linear ships agent-native primitives). The edge is being narrowly excellent at
-the **coordination + oversight + cost** triangle while they're distracted, and publishing the
-protocol so it can become a convention.
+**The standing risk:** platform encroachment (AWS, Google, Microsoft, OpenAI, Anthropic, or
+Linear ship native coordination). The edge is not "we orchestrate agents" by itself; the edge
+is being the **neutral operating record** across clouds, models, IDEs, repos, local hosts,
+human teams, cost, and evidence.
+
+Open source the adoption layer; keep the governance layer commercial:
+
+- **Open:** protocol specs, adapter SDKs, conformance tests, local Agent Host, CLI/dev harness.
+- **Closed/hosted:** multi-org auth/RBAC, Tally analytics, dispatch optimization, policy,
+  entitlements, operator cockpit, managed runners, integrations, audit/compliance exports,
+  and long-term evidence history.
 
 ## 4. Roadmap — the three headline bets
 
@@ -93,7 +112,9 @@ tools can't touch. Aligns with the founder's safety-critical (offshore-energy) b
 | 6 | **Model-routing advice** | board recommends a model tier per task from `risk_level`/complexity — cost optimization as a service | S |
 | 7 | **Outcome verification** | "Done" isn't Done until exit_criteria confirmed (verifier agent or CI hook via the GitHub webhook) | M |
 | 8 | **Agent reliability scoring** | which agents complete vs abandon vs get reverted — trust data | S |
-| 9 | **Commercial table stakes** | real agent identity/auth (ADR-0001 open question), multi-tenant workspaces, RBAC, self-serve onboarding | L |
+| 9 | **ACCESS commercial shell** | login/session auth, org/user/project roles, scoped MCP/API tokens, project creation permissions, invites, subscriptions/agent entitlements, feedback inbox, restricted UI controls | L — next live board lane |
+| 10 | **Public protocol ecosystem** | OSS spec/adapters/conformance/local host, license, quickstarts, certification badges | M |
+| 11 | **Enterprise trust graph** | audit exports, provider cost reconciliation, immutable evidence retention, enterprise integrations | L |
 
 ## 6. Commercial framing
 
@@ -101,6 +122,8 @@ tools can't touch. Aligns with the founder's safety-critical (offshore-energy) b
   oversight + cost control — a fast-growing cohort the incumbents underserve today.
 - **Wedge:** go narrow and deep on **cost-per-outcome + oversight/audit** where Linear-likes
   and the SDK-makers are weakest.
-- **Moat play:** publish the coordination protocol so it can become a convention.
+- **Moat play:** publish the coordination protocol so it can become a convention, while
+  keeping the hosted trust/economics layer commercial.
+- **Strategic position:** run agents anywhere; govern the work in one place.
 - **Open strategic question:** standalone product vs. strategic acquihire bait — depends on how
   fast the platforms move. The wedge is real *today* either way.
