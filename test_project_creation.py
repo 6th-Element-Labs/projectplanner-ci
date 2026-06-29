@@ -39,7 +39,8 @@ def _stub_heavy_imports():
     _mk("mcp.server.transport_security",
         TransportSecuritySettings=type("TSS", (), {"__init__": lambda self, *a, **k: None}))
     _mk("agent", _task_brief=lambda t, full=False: t, run=lambda *a, **k: {},
-        _search_tasks=lambda args, project="maxwell": [])
+        _search_tasks=lambda args, project="maxwell": [],
+        board_summary_text=lambda project="maxwell": "")
     for n in ("digest", "intake", "notify", "rag", "signals"):
         _mk(n)
 
@@ -79,6 +80,12 @@ try:
     ok(task["task_id"] == "VKPLAN-1", "normal task creation works on dynamic project")
     ok(not any(t["task_id"] == "VKPLAN-1" for t in store.list_tasks(project="switchboard")),
        "dynamic tasks do not leak into switchboard")
+    payload = store.board_payload(project="vulkan")
+    ok(payload["rollups"]["total_tasks"] == 1 and payload["rollups"]["total_workstreams"] == 1,
+       "dynamic project board rollups are computed from live tasks")
+    ok(payload["rollups"]["status_counts"].get("Not Started") == 1 and
+       payload["rollups"]["workstream_counts"].get("VKPLAN") == 1,
+       "dynamic project rollups expose status and workstream counts")
 
     listed = json.loads(mcp_server.list_projects())
     ok(any(p["id"] == "vulkan" for p in listed["projects"]),
@@ -89,6 +96,9 @@ try:
     mcp_task = json.loads(mcp_server.create_task("VKPLAN", "MCP-root", None, project="vkrender"))
     ok(mcp_task["task_id"] == "VKPLAN-1",
        "MCP create_task can write to a freshly created dynamic project")
+    mcp_summary = mcp_server.board_summary(project="vkrender")
+    ok('"total_tasks": 1' in mcp_summary and '"VKPLAN": 1' in mcp_summary,
+       "MCP board_summary reports live rollups for dynamic projects")
 
     reserved = store.create_project("Helm", project_id="helm", actor="test")
     ok("error" in reserved and "reserved" in reserved["error"],

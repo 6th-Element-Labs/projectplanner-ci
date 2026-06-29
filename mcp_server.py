@@ -528,7 +528,7 @@ def board_summary(project: str = "maxwell") -> str:
     did vs ~3000-5000 tokens here. project selects the board ('maxwell' default, 'helm',
     or 'switchboard')."""
     return (f"Project: {store.get_meta('project', project=project)}\n"
-            f"Rollups: {_dumps(store.get_meta('rollups', project=project) or {})}\n\n"
+            f"Rollups: {_dumps(store.board_rollups(project=project))}\n\n"
             f"{agent.board_summary_text(project=project)}")
 
 

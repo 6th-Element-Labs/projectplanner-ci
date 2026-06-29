@@ -678,6 +678,35 @@ def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
         return [_task_row(r) for r in c.execute(q, p).fetchall()]
 
 
+def board_rollups(project: str = DEFAULT_PROJECT,
+                  tasks: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Compute board-level counts from live task rows, not seed metadata."""
+    rows = tasks if tasks is not None else list_tasks(project=project)
+    status_counts: Dict[str, int] = {}
+    workstream_counts: Dict[str, int] = {}
+    effort = 0.0
+    for t in rows:
+        status = t.get("status") or "Unknown"
+        ws_id = t.get("_wsId") or t.get("workstream_id") or "UNKNOWN"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        workstream_counts[ws_id] = workstream_counts.get(ws_id, 0) + 1
+        raw_effort = t.get("effort_days")
+        if raw_effort in (None, ""):
+            continue
+        try:
+            effort += float(raw_effort)
+        except (TypeError, ValueError):
+            continue
+    effort_value: Any = int(effort) if effort.is_integer() else round(effort, 2)
+    return {
+        "total_tasks": len(rows),
+        "total_workstreams": len(workstream_counts),
+        "total_effort_days": effort_value,
+        "status_counts": dict(sorted(status_counts.items())),
+        "workstream_counts": dict(sorted(workstream_counts.items())),
+    }
+
+
 def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     with _conn(project) as c:
         r = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
@@ -4029,5 +4058,6 @@ def board_payload(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         ws = by_ws.setdefault(t["_wsId"], {"workstream_id": t["_wsId"], "name": t["_wsName"], "tasks": []})
         ws["tasks"].append(t)
     payload: Dict[str, Any] = {k: get_meta(k, project=project) for k in META_SECTIONS}
+    payload["rollups"] = board_rollups(project=project, tasks=tasks)
     payload["workstreams"] = list(by_ws.values())
     return payload

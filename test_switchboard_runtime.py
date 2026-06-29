@@ -58,6 +58,14 @@ try:
     switch_tasks = store.list_tasks(project="switchboard")
     ok(any(t["task_id"] == "DOGFOOD-1" for t in switch_tasks),
        "Switchboard seed includes DOGFOOD-1")
+    switch_payload = store.board_payload(project="switchboard")
+    ok(switch_payload["rollups"]["total_tasks"] == len(switch_tasks),
+       "Switchboard board_payload rollups match live task rows")
+    ok(switch_payload["rollups"]["total_workstreams"] ==
+       len({t["_wsId"] for t in switch_tasks}),
+       "Switchboard board_payload workstream rollup matches visible workstreams")
+    ok(sum(switch_payload["rollups"]["status_counts"].values()) == len(switch_tasks),
+       "Switchboard status rollups add up to visible tasks")
     switch_agreement = store.get_working_agreement("switchboard")
     ok("codex/<TASK-ID>" in switch_agreement["branch_convention"],
        "Switchboard working agreement serves project-specific branch convention")
