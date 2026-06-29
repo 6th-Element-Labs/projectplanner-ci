@@ -28,6 +28,10 @@ PROJECT_REGISTRY_DB_PATH = os.environ.get(
 PROJECT_ID_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 PROJECT_ID_VALID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,62}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+GITHUB_PR_URL_RE = re.compile(
+    r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)")
+BRANCH_EVIDENCE_RE = re.compile(r"\bbranch(?:\s+was)?[:\s]+`?([A-Za-z0-9._/-]+)`?", re.I)
+HEAD_EVIDENCE_RE = re.compile(r"\bhead(?:_sha|\s+sha)?[:\s]+`?([0-9a-f]{7,40})`?", re.I)
 
 # Multi-project registry. Each project is its OWN sqlite file — physical isolation, so a Helm
 # request can never read or write Maxwell's rows (no shared table, no project_id column). The
@@ -4259,6 +4263,46 @@ def _github_token() -> str:
     ).strip()
 
 
+def _activity_text(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        return " ".join(_activity_text(v) for v in payload.values())
+    if isinstance(payload, list):
+        return " ".join(_activity_text(v) for v in payload)
+    if payload is None:
+        return ""
+    return str(payload)
+
+
+def _infer_pr_evidence_from_activity(c: sqlite3.Connection, task_id: str,
+                                     repo: str) -> Dict[str, Any]:
+    if not repo:
+        return {}
+    repo_l = repo.lower()
+    rows = c.execute(
+        "SELECT kind, payload FROM activity WHERE task_id=? ORDER BY id DESC LIMIT 80",
+        (task_id,),
+    ).fetchall()
+    for row in rows:
+        text = _activity_text(_json_payload(row["payload"]))
+        if not text:
+            continue
+        for match in GITHUB_PR_URL_RE.finditer(text):
+            if match.group(1).lower() != repo_l:
+                continue
+            branch_match = BRANCH_EVIDENCE_RE.search(text)
+            head_match = HEAD_EVIDENCE_RE.search(text)
+            return {
+                "pr_number": int(match.group(2)),
+                "pr_url": match.group(0),
+                "branch": branch_match.group(1) if branch_match else "",
+                "head_sha": head_match.group(1) if head_match else "",
+                "source": "task_activity",
+            }
+    return {}
+
+
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  git_states: Dict[str, Dict[str, Any]],
                                  canonical_main_sha: str,
@@ -4396,14 +4440,38 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     findings: List[Dict[str, Any]] = []
     tasks: List[Dict[str, Any]] = []
     git_states: Dict[str, Dict[str, Any]] = {}
+    repo = get_project_github_repo(project)
     with _conn(project) as c:
         rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
         for row in rows:
             task = _task_row(row)
             git_state = _load_git_state(c, task["task_id"])
             tasks.append(task)
-            git_states[task["task_id"]] = git_state
             status = task.get("status")
+            if status == "In Review" and not (git_state.get("pr_number") or git_state.get("pr_url")):
+                inferred = _infer_pr_evidence_from_activity(c, task["task_id"], repo)
+                if inferred:
+                    evidence = {
+                        "source": "activity_pr_evidence",
+                        "pr_number": inferred.get("pr_number"),
+                        "pr_url": inferred.get("pr_url"),
+                        "branch": inferred.get("branch"),
+                        "head_sha": inferred.get("head_sha"),
+                    }
+                    git_state = _upsert_git_state(c, task["task_id"], {
+                        "pr_number": inferred.get("pr_number"),
+                        "pr_url": inferred.get("pr_url"),
+                        "branch": inferred.get("branch") or None,
+                        "head_sha": inferred.get("head_sha") or None,
+                        "pushed_at": now if inferred.get("head_sha") else None,
+                        "evidence": evidence,
+                    })
+                    c.execute(
+                        "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                        (task["task_id"], "reconcile", "git.pr_evidence_hydrated",
+                         json.dumps(evidence, sort_keys=True), now),
+                    )
+            git_states[task["task_id"]] = git_state
             if status == "Done" and not git_state.get("merged_sha"):
                 findings.append({"severity": "high", "task_id": task["task_id"],
                                  "code": "done_without_merged_sha",

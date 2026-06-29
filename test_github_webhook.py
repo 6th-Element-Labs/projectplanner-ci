@@ -176,6 +176,16 @@ try:
        not done_after.get("pr_number") and done_after.get("branch") == "master",
        "PR opened webhook cannot overwrite Done task provenance")
 
+    activity_task = store.create_task({"workstream_id": "HARDEN", "title": "activity PR evidence"},
+                                      actor="seed", project=P)
+    store.update_task(activity_task["task_id"], {"status": "In Review"},
+                      actor="seed", project=P)
+    store.add_comment(
+        activity_task["task_id"], "seed",
+        f"Ready in PR #47: https://github.com/6th-Element-Labs/projectplanner/pull/47. "
+        f"Branch `codex/{activity_task['task_id']}-activity`, head `activityhead`.",
+        project=P)
+
     reconcile_task = store.create_task({"workstream_id": "HARDEN", "title": "reconcile PR merge"},
                                        actor="seed", project=P)
     store.mark_task_pr_opened(
@@ -193,6 +203,15 @@ try:
 
     def fake_github_pr(repo, pr_number, token=""):
         seen["token"] = token
+        if int(pr_number) == 47:
+            return {
+                "merged_at": "2026-06-29T05:52:17Z",
+                "merge_commit_sha": "activitymerge",
+                "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                "base": {"ref": "master", "repo": {"default_branch": "master"}},
+                "head": {"ref": f"codex/{activity_task['task_id']}-activity",
+                         "sha": "activityhead"},
+            }
         return {
             "merged_at": "2026-06-29T05:52:17Z",
             "merge_commit_sha": "reconcilemerge",
@@ -212,11 +231,16 @@ try:
             else:
                 os.environ[key] = value
     reconciled = store.get_task(reconcile_task["task_id"], project=P)
+    activity_reconciled = store.get_task(activity_task["task_id"], project=P)
     ok(report["external_checks"]["github_repo"] == "6th-Element-Labs/projectplanner",
        "reconcile uses project-scoped GitHub repo config")
     ok(seen.get("token") == "ci-status-token",
        "reconcile accepts SWITCHBOARD_CI_GITHUB_TOKEN for PR checks")
-    ok(report["backfilled"] and report["backfilled"][0]["task_id"] == reconcile_task["task_id"],
+    ok(activity_reconciled["status"] == "Done" and
+       activity_reconciled["git_state"]["pr_number"] == 47 and
+       activity_reconciled["git_state"]["merged_sha"] == "activitymerge",
+       "reconcile hydrates PR evidence from task activity before merge backfill")
+    ok(any(b["task_id"] == reconcile_task["task_id"] for b in report["backfilled"]),
        "reconcile reports PR-merge backfill")
     ok(reconciled["status"] == "Done" and
        reconciled["git_state"]["merged_sha"] == "reconcilemerge",
