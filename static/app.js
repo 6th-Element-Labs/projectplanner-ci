@@ -309,6 +309,30 @@ const TeepPlan = {
         const cls = light === false ? `bg-${color}` : `bg-${color}-lt`;
         return `<span class="badge ${cls}">${this.esc(text)}</span>`;
     },
+    provenanceBadge(t) {
+        const p = (t && t.provenance) || {};
+        if (p.type !== 'offline_evidence') return '';
+        const title = [
+            p.verifier ? `verified by ${p.verifier}` : 'verified offline',
+            p.evidence_hash ? `hash ${String(p.evidence_hash).slice(0, 12)}` : '',
+        ].filter(Boolean).join(' · ');
+        return `<span class="badge bg-teal-lt" title="${this.esc(title)}"><i class="ti ti-clipboard-check me-1"></i>offline evidence</span>`;
+    },
+    provenanceDetail(t) {
+        const p = (t && t.provenance) || {};
+        if (!p.type) return '<span class="text-secondary">none</span>';
+        if (p.type === 'offline_evidence') {
+            const parts = [this.provenanceBadge(t)];
+            if (p.verifier) parts.push(`<span class="text-secondary small">by ${this.esc(p.verifier)}</span>`);
+            if (p.artifact_url) parts.push(`<a class="small" href="${this.esc(p.artifact_url)}" target="_blank" rel="noopener">artifact</a>`);
+            if (p.evidence_hash) parts.push(`<span class="font-monospace small">${this.esc(String(p.evidence_hash).slice(0, 16))}</span>`);
+            return parts.join(' ');
+        }
+        if (p.type === 'github_pr_merged') return `<span class="badge bg-green-lt"><i class="ti ti-git-merge me-1"></i>PR merged</span>`;
+        if (p.type === 'default_branch_commit') return `<span class="badge bg-green-lt"><i class="ti ti-git-commit me-1"></i>default branch</span>`;
+        if (p.type === 'github_pr_open') return `<span class="badge bg-azure-lt"><i class="ti ti-git-pull-request me-1"></i>PR evidence</span>`;
+        return `<span class="badge bg-secondary-lt">${this.esc(p.label || p.type)}</span>`;
+    },
     initials(name) {
         if (!name) return '';
         // drop "(TEEP)"-style org tags and any word without a letter (e.g. "+", "·")
@@ -447,6 +471,7 @@ const TeepPlan = {
         const deps = (t.depends_on || []).length;
         const tally = this.taskTally(t.task_id);
         const econ = this.tallyMini(tally);
+        const provenance = this.provenanceBadge(t);
         const meta = [];
         if (t.owner_org) meta.push(this.esc(t.owner_org));
         if (t.effort_days != null) meta.push(this.esc(t.effort_days) + 'd');
@@ -466,6 +491,7 @@ const TeepPlan = {
                             <span>${meta.join(' · ')}</span>
                             ${t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High risk</span>' : ''}
                             ${t.is_blocking ? '<span class="text-red lh-1" title="Blocking"><i class="ti ti-alert-triangle-filled"></i></span>' : ''}
+                            ${provenance}
                             ${t.assignee ? `<span class="avatar avatar-xs ms-auto" title="${this.esc(t.assignee)}">${this.esc(this.initials(t.assignee))}</span>` : ''}
                         </div>
                         ${econ ? `<div class="text-secondary small mt-2 border-top pt-2">${econ}</div>` : ''}
@@ -671,6 +697,7 @@ const TeepPlan = {
         const due = this.fmtDue(t.finish_date, done);
         const id = this.esc(t.task_id);
         const titleCls = done ? 'text-decoration-line-through text-secondary' : 'text-body';
+        const provenance = this.provenanceBadge(t);
         return `
             <div class="list-group-item d-flex align-items-start gap-2 py-2" data-task-row="${id}">
                 <input class="form-check-input rounded-circle mt-1 flex-shrink-0" type="checkbox" data-check="${id}"${done ? ' checked' : ''} title="Mark done"/>
@@ -680,6 +707,7 @@ const TeepPlan = {
                         ${due.text ? `<span class="${due.cls}"><i class="ti ti-calendar-event me-1"></i>${due.text}</span>` : ''}
                         ${t.risk_level === 'High' ? '<span class="text-red" title="High risk"><i class="ti ti-flag-filled"></i></span>' : ''}
                         ${t.is_blocking ? '<span class="text-red" title="Blocking"><i class="ti ti-alert-triangle-filled"></i></span>' : ''}
+                        ${provenance}
                         <span class="text-secondary ms-auto"><span class="status-dot bg-${wc} me-1"></span>${id} · ${this.esc(t._wsId)}</span>
                     </div>
                 </div>
@@ -867,6 +895,7 @@ const TeepPlan = {
         const blockArr = this.tasks.filter((x) => (x.depends_on || []).includes(t.task_id)).map((x) => x.task_id);
         const riskHtml = t.risk_level === 'High' ? '<span class="badge badge-outline text-red">High</span>' : (t.risk_level ? this.esc(t.risk_level) : '—');
         const tally = this.taskTally(t.task_id);
+        const provenanceHtml = this.provenanceDetail(t);
         document.getElementById('task-modal-title').innerHTML =
             `<span class="status-dot bg-${sc} me-2"></span><span class="text-secondary font-monospace fw-normal me-2">${this.esc(t.task_id)}</span>${this.esc(t.title)}${t.is_blocking ? ' <span class="badge bg-red-lt ms-2"><i class="ti ti-alert-triangle me-1"></i>Blocking</span>' : ''}`;
         document.getElementById('task-modal-body').innerHTML = `
@@ -886,6 +915,7 @@ const TeepPlan = {
                     <div class="datagrid mb-3">
                         <div class="datagrid-item"><div class="datagrid-title">Status</div>
                             <div class="datagrid-content"><select id="details-status" class="form-select form-select-sm" style="max-width:200px">${statusOpts}</select></div></div>
+                        ${dg('Done provenance', provenanceHtml)}
                         ${dg('Owner', av(t.owner_person_or_role || t.owner_org) + owner)}
                         ${dg('Assignee', t.assignee ? av(t.assignee) + this.esc(t.assignee) : '—')}
                         ${dg('Phase', this.esc(t.phase || '—'))}

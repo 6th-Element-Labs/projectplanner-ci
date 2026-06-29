@@ -50,6 +50,10 @@ ok(body["context"] == "Switchboard CI / VM gate",
    "commit status uses the documented VM-gate context")
 ok(len(body["description"]) <= 140, "commit status description is GitHub-safe")
 ok(body["target_url"].endswith("/pull/18"), "commit status links back to the PR")
+tag_a = gate._run_tag(31, "abcdef1234567890")
+tag_b = gate._run_tag(31, "abcdef1234567890")
+ok(tag_a.startswith("pr-31-abcdef123456"), "gate run tag preserves PR and SHA prefix")
+ok(tag_a != tag_b, "gate run tag is unique for concurrent invocations")
 
 try:
     gate.post_status(
@@ -65,4 +69,4 @@ except gate.GateError:
 else:
     raise AssertionError("missing token should fail closed")
 
-print("\n8 passed, 0 failed")
+print("\n10 passed, 0 failed")

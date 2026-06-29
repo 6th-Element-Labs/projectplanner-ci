@@ -711,6 +711,41 @@ try:
     ok(not any(f["code"] == "done_without_merged_sha" and f["task_id"] == second["task_id"]
                for f in agent_done_report["findings"]),
        "reconcile does not see agent-completed In Review as Done")
+    missing_offline = store.mark_task_offline_done(second["task_id"], evidence={},
+                                                  actor="switchboard/operator", project=P)
+    ok(missing_offline.get("error") == "offline evidence required",
+       "offline completion requires explicit evidence")
+    premature_offline_task = store.create_task(
+        {"workstream_id": "TEST", "title": "offline too early"}, actor="seed", project=P)
+    premature_offline = store.mark_task_offline_done(
+        premature_offline_task["task_id"],
+        evidence={"review": "looked good"}, actor="switchboard/operator", project=P)
+    ok(premature_offline.get("error") == "offline_done_requires_in_review",
+       "offline completion requires In Review status first")
+    offline_done = store.mark_task_offline_done(
+        second["task_id"],
+        evidence={"claim_id": next_claim["claim_id"],
+                  "verification": "operator reviewed offline run log"},
+        artifact_url="https://example.test/run-log",
+        verifier="switchboard/operator",
+        reviewed_at=1234,
+        actor="switchboard/operator",
+        project=P)
+    ok(offline_done["status"] == "Done" and
+       offline_done["provenance"]["type"] == "offline_evidence",
+       "offline verifier can mark In Review non-PR task Done")
+    second_offline = store.get_task(second["task_id"], project=P)
+    ok(second_offline["git_state"]["provenance_type"] == "offline_evidence" and
+       second_offline["provenance"]["artifact_url"] == "https://example.test/run-log" and
+       second_offline["provenance"]["evidence_hash"],
+       "offline Done records verifier evidence, artifact, and hash")
+    listed_second = next(t for t in store.list_tasks(project=P) if t["task_id"] == second["task_id"])
+    ok(listed_second["provenance"]["type"] == "offline_evidence",
+       "task lists expose offline provenance for the UI badge")
+    offline_report = store.reconcile(project=P)
+    ok(not any(f["code"] == "done_without_merged_sha" and f["task_id"] == second["task_id"]
+               for f in offline_report["findings"]),
+       "reconcile accepts verifier-stamped offline Done provenance")
 
     bad = store.create_task({"workstream_id": "TEST", "title": "bad done"}, actor="seed", project=P)
     blocked_done = store.update_task(bad["task_id"], {"status": "Done"}, actor="legacy", project=P)

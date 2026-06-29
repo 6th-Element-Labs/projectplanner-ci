@@ -180,6 +180,27 @@ async def patch_task(request: Request, task_id: str, body: dict = Body(...), pro
     return t
 
 
+@app.post("/api/tasks/{task_id}/verify_offline")
+async def verify_task_offline(request: Request, task_id: str, body: dict = Body(default={}),
+                              project: str = Query(...)):
+    actor = _actor_from_request(request, body.pop("_actor", "switchboard/operator"))
+    result = store.mark_task_offline_done(
+        task_id,
+        evidence=body.get("evidence") or body.get("evidence_json") or {},
+        artifact_url=body.get("artifact_url") or "",
+        evidence_hash=body.get("evidence_hash") or body.get("hash") or "",
+        verifier=body.get("verifier") or actor,
+        reviewed_at=body.get("reviewed_at"),
+        actor=actor,
+        project=_proj(project),
+    )
+    if result.get("error") == "task not found":
+        raise HTTPException(404, "task not found")
+    if result.get("error"):
+        raise HTTPException(409, result.get("message") or result["error"])
+    return result
+
+
 @app.delete("/api/tasks/{task_id}")
 async def delete_task(task_id: str, project: str = Query(...)):
     if not store.delete_task(task_id, project=_proj(project)):

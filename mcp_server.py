@@ -63,10 +63,10 @@ mcp = FastMCP(
         "lane, or project and follow its selected project; (1) call get_working_agreement(project) "
         "and follow its rules for the whole session; (2) register_agent; (3) drain your inbox. "
         "DEFINITION OF DONE: follow get_working_agreement(project). Agents use "
-        "complete_claim(evidence=...) to record branch/head_sha/PR evidence, release the claim, "
-        "and move work to In Review. Agents do not mark Done. Done is reserved for GitHub/default-"
-        "branch provenance: merged/rebased into the intended branch with merged_sha/default-branch "
-        "SHA recorded by webhook or reconcile. Push your branch before you claim progress; we "
+        "complete_claim(evidence=...) to record branch/head_sha/PR/offline evidence, release the "
+        "claim, and move work to In Review. Agents do not mark Done. Done is reserved for "
+        "GitHub/default-branch provenance recorded by webhook/reconcile, or verifier-stamped "
+        "offline_evidence for non-PR work. Push your branch before you claim progress; we "
         "squash-merge, so trust the board's recorded merged_sha over local branch state. SAFE "
         "MERGE: if you are authorized to merge, fetch origin, rebase/merge onto the intended "
         "target branch, resolve conflicts intentionally, rerun relevant tests, push the updated "
@@ -960,6 +960,26 @@ def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status
     principal = _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.complete_claim(claim_id, evidence=evidence, final_status=final_status,
                                       actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def verify_offline_completion(task_id: str, ctx: Context, evidence: str = "",
+                              artifact_url: str = "", evidence_hash: str = "",
+                              verifier: str = "", reviewed_at: float = 0,
+                              project: str = "maxwell") -> str:
+    """Mark an In Review non-PR/offline task Done with verifier-stamped evidence.
+
+    Agents still use complete_claim(...) to move work to In Review. This tool is the
+    privileged verifier/operator path for work that has no code PR: it records
+    provenance_type=offline_evidence, evidence/artifact/hash/verifier/reviewed_at, and
+    then marks Done. It fails closed unless the task is already In Review and evidence
+    is supplied.
+    """
+    principal = _require_write(ctx, project)
+    return _dumps(store.mark_task_offline_done(
+        task_id, evidence=evidence, artifact_url=artifact_url,
+        evidence_hash=evidence_hash, verifier=verifier or auth.actor(principal),
+        reviewed_at=reviewed_at or None, actor=auth.actor(principal), project=project))
 
 
 @mcp.tool()

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -129,9 +130,12 @@ def _ensure_cache_repo(root: Path, source_repo: Path, repo: str) -> Path:
     return cache
 
 
-def _prepare_worktree(cache: Path, root: Path, pr: Dict[str, Any]) -> Path:
+def _run_tag(number: int, sha: str) -> str:
+    return f"pr-{int(number)}-{sha[:12]}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+
+
+def _prepare_worktree(cache: Path, root: Path, pr: Dict[str, Any], run_tag: str) -> Path:
     number = int(pr["number"])
-    sha = pr["head"]["sha"]
     merge_ref = f"refs/pull/{number}/merge"
     merge = subprocess.run(["git", "-C", str(cache), "rev-parse", "--verify",
                             f"{merge_ref}^{{commit}}"],
@@ -139,7 +143,7 @@ def _prepare_worktree(cache: Path, root: Path, pr: Dict[str, Any]) -> Path:
     if merge.returncode != 0:
         raise GateError(f"PR #{number} has no merge ref; rebase or resolve conflicts before gating.")
     test_sha = merge.stdout.strip()
-    run_dir = root / "runs" / f"pr-{number}-{sha[:12]}"
+    run_dir = root / "runs" / run_tag
     if run_dir.exists():
         _run(["git", "-C", str(cache), "worktree", "remove", "--force", str(run_dir)],
              check=False)
@@ -179,14 +183,15 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
     number = int(pr["number"])
     sha = pr["head"]["sha"]
     pr_url = pr.get("html_url", f"https://github.com/{repo}/pull/{number}")
+    run_tag = _run_tag(number, sha)
     logs = work_root / "logs"
     logs.mkdir(parents=True, exist_ok=True)
-    log_path = logs / f"pr-{number}-{sha[:12]}.log"
+    log_path = logs / f"{run_tag}.log"
     post_status(repo, sha, "pending", context=context,
                 description="Switchboard VM gate is running", target_url=pr_url,
                 token=token)
     cache = _ensure_cache_repo(work_root, source_repo, repo)
-    run_dir = _prepare_worktree(cache, work_root, pr)
+    run_dir = _prepare_worktree(cache, work_root, pr, run_tag)
     try:
         run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s)
         post_status(repo, sha, "success", context=context,

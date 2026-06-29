@@ -115,7 +115,13 @@ Merge rule: a branch can move to `In Review` with branch/head/PR evidence, but i
 merged unless the PR's `Switchboard CI / VM gate` commit status is green or a human explicitly
 records the risk. GitHub Actions is currently disabled because the hosted workflow records
 `startup_failure` before job creation; the VM-backed status is the canonical merge gate. `Done`
-still comes only from GitHub/default-branch provenance.
+comes only from GitHub/default-branch provenance or verifier-stamped offline evidence.
+
+Offline/non-PR completion rule: an agent still completes its claim to `In Review`. A verifier or
+operator may then call the offline-evidence completion path with review evidence, an artifact URL
+and/or evidence hash, and a verifier identity. Reconcile accepts that explicit
+`offline_evidence` provenance, and still flags naked `Done` task rows with neither git provenance
+nor offline evidence.
 
 Runner bootstrap exception: if the VM gate status is missing, do not treat that as a product pass.
 Confirm `projectplanner-ci-gate.timer` is active, run the strict gate on the Plan VM or another

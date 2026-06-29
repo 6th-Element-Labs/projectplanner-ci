@@ -63,6 +63,10 @@ session so the fleet stays in sync.
   resulting `merged_sha` or target branch head.
 - Let the GitHub webhook or default-branch provenance path mark `Done`. If the webhook is down, run
   or request reconcile/backfill instead of setting `Done` manually.
+- For non-PR/offline work, the agent still uses `complete_claim(...)` to move the task to
+  `In Review`. A separate verifier/operator can then use the offline-evidence completion path to
+  stamp `provenance_type=offline_evidence` with evidence, artifact/hash, verifier, and review time.
+  This is the only non-code `Done` path; naked status edits to `Done` remain invalid.
 
 ## Coordination
 - `claim`/`check` a file or resource before your first write to it; `release` when done.

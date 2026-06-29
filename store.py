@@ -643,9 +643,56 @@ def _git_state_row(r: Optional[sqlite3.Row]) -> Dict[str, Any]:
     return d
 
 
+def _offline_evidence_from_state(git_state: Dict[str, Any]) -> Dict[str, Any]:
+    evidence = git_state.get("evidence") or {}
+    offline = evidence.get("offline_evidence") if isinstance(evidence, dict) else None
+    return offline if isinstance(offline, dict) else {}
+
+
+def _has_done_provenance(git_state: Dict[str, Any]) -> bool:
+    return bool(git_state.get("merged_sha") or _offline_evidence_from_state(git_state))
+
+
+def _provenance_summary(git_state: Dict[str, Any]) -> Dict[str, Any]:
+    offline = _offline_evidence_from_state(git_state)
+    if offline:
+        return {
+            "type": "offline_evidence",
+            "label": "Offline evidence",
+            "verifier": offline.get("verifier"),
+            "reviewed_at": offline.get("reviewed_at"),
+            "artifact_url": offline.get("artifact_url"),
+            "evidence_hash": offline.get("evidence_hash"),
+        }
+    if git_state.get("merged_sha"):
+        return {
+            "type": "github_pr_merged" if git_state.get("pr_number") else "default_branch_commit",
+            "label": "Merged code",
+            "merged_sha": git_state.get("merged_sha"),
+            "pr_number": git_state.get("pr_number"),
+            "pr_url": git_state.get("pr_url"),
+        }
+    if git_state.get("pr_number") or git_state.get("pr_url"):
+        return {
+            "type": "github_pr_open",
+            "label": "PR evidence",
+            "pr_number": git_state.get("pr_number"),
+            "pr_url": git_state.get("pr_url"),
+        }
+    if git_state.get("head_sha"):
+        return {
+            "type": "branch_head",
+            "label": "Branch evidence",
+            "head_sha": git_state.get("head_sha"),
+        }
+    return {"type": None, "label": "No provenance"}
+
+
 def _load_git_state(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
-    return _git_state_row(c.execute("SELECT * FROM task_git_state WHERE task_id=?",
-                                    (task_id,)).fetchone())
+    state = _git_state_row(c.execute("SELECT * FROM task_git_state WHERE task_id=?",
+                                     (task_id,)).fetchone())
+    state["provenance_type"] = _provenance_summary(state)["type"]
+    return state
 
 
 def _active_task_claims_in(c: sqlite3.Connection, task_id: str,
@@ -728,7 +775,12 @@ def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
         q += " AND assignee=?"; p.append(assignee)
     q += " ORDER BY sort_order"
     with _conn(project) as c:
-        return [_task_row(r) for r in c.execute(q, p).fetchall()]
+        tasks = []
+        for r in c.execute(q, p).fetchall():
+            t = _task_row(r)
+            t["provenance"] = _provenance_summary(_load_git_state(c, t["task_id"]))
+            tasks.append(t)
+        return tasks
 
 
 def board_rollups(project: str = DEFAULT_PROJECT,
@@ -770,6 +822,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
                          for a in c.execute(
                              "SELECT * FROM activity WHERE task_id=? ORDER BY id", (task_id,)).fetchall()]
         t["git_state"] = _load_git_state(c, task_id)
+        t["provenance"] = _provenance_summary(t["git_state"])
         t["active_claims"] = _active_task_claims_in(c, task_id)
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
@@ -797,11 +850,11 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
             if not row:
                 return None
             git_state = _load_git_state(c, task_id)
-            if not git_state.get("merged_sha"):
+            if not _has_done_provenance(git_state):
                 payload = {
                     "requested_status": "Done",
                     "reason": "done_requires_merge_provenance",
-                    "message": "Status Done requires GitHub/default-branch merge provenance.",
+                    "message": "Status Done requires GitHub/default-branch or offline evidence provenance.",
                 }
                 c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                           (task_id, actor, "task.done_blocked",
@@ -2594,6 +2647,68 @@ def mark_task_default_branch_commit(task_id: str, commit_sha: str,
     return {"task_id": task_id, "status": "Done", "git_state": git_state}
 
 
+def mark_task_offline_done(task_id: str, evidence: Any = None,
+                           artifact_url: str = "", evidence_hash: str = "",
+                           verifier: str = "", reviewed_at: Optional[float] = None,
+                           actor: str = "switchboard/operator",
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Verify a non-PR/offline task as Done with explicit operator evidence.
+
+    Agents still complete claims to In Review. This path is intentionally separate: a
+    verifier/system actor reviews evidence and stamps a non-code provenance record so
+    Done means "verified outcome" instead of "agent asked nicely."
+    """
+    now = time.time()
+    evidence_obj = _parse_evidence(evidence)
+    artifact_url = (artifact_url or evidence_obj.get("artifact_url") or "").strip()
+    evidence_hash = (evidence_hash or evidence_obj.get("evidence_hash") or "").strip()
+    verifier = (verifier or evidence_obj.get("verifier") or actor or "").strip()
+    if not evidence_obj and not artifact_url and not evidence_hash:
+        return {"error": "offline evidence required", "task_id": task_id}
+    if not evidence_hash and evidence_obj:
+        evidence_hash = hashlib.sha256(
+            json.dumps(evidence_obj, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    try:
+        reviewed = float(reviewed_at) if reviewed_at not in (None, "") else now
+    except (TypeError, ValueError):
+        return {"error": "reviewed_at must be a unix timestamp", "task_id": task_id}
+    offline_payload = {
+        "provenance_type": "offline_evidence",
+        "evidence": evidence_obj,
+        "artifact_url": artifact_url or None,
+        "evidence_hash": evidence_hash or None,
+        "verifier": verifier,
+        "reviewed_at": reviewed,
+        "source": "offline_verifier",
+    }
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
+            return {"error": "task not found", "task_id": task_id}
+        current = _load_git_state(c, task_id)
+        if row["status"] == "Done":
+            if _offline_evidence_from_state(current):
+                return {"task_id": task_id, "status": "Done", "git_state": current,
+                        "provenance": _provenance_summary(current), "idempotent": True}
+            if current.get("merged_sha"):
+                return {"skipped": True, "reason": "already_done_with_git_provenance",
+                        "task_id": task_id, "git_state": current}
+        if row["status"] != "In Review":
+            return {"error": "offline_done_requires_in_review", "task_id": task_id,
+                    "status": row["status"],
+                    "message": "Offline Done verification requires the task to be In Review first."}
+        c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?", (now, task_id))
+        git_state = _upsert_git_state(c, task_id, {
+            "evidence": {"offline_evidence": offline_payload},
+        })
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "task.offline_verified",
+                   json.dumps(offline_payload, sort_keys=True), now))
+    return {"task_id": task_id, "status": "Done", "git_state": git_state,
+            "provenance": _provenance_summary(git_state)}
+
+
 def backfill_default_branch_commits(commits: List[Dict[str, Any]],
                                     branch: str = "master",
                                     actor: str = "github-webhook",
@@ -4128,7 +4243,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "protocol": protocol_envelope(),
         "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),
         "branch_convention": "claude/<TASK-ID>-<slug>",
-        "definition_of_done": "Done means merged/rebased into the intended branch with recorded GitHub/default-branch provenance; implemented work with branch/head_sha/PR evidence is In Review.",
+        "definition_of_done": "Done means merged/rebased into the intended branch with recorded GitHub/default-branch provenance, or verified non-code work with recorded offline evidence provenance; implemented work with branch/head_sha/PR evidence is In Review.",
         "done_policy": {
             "mode": "git_merge_verified",
             "agent_may_set_done": False,
@@ -4136,7 +4251,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "requires_merge_provenance": True,
             "code_tasks_should_include_git_evidence": True,
             "implemented_pr_status": "In Review",
-            "done_sources": ["github_pr_merged", "default_branch_backfill"],
+            "done_sources": ["github_pr_merged", "default_branch_backfill", "offline_evidence_verified"],
         },
         "push_before_claiming_progress": True,
         "merge_strategy": "squash",
@@ -4147,6 +4262,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "include branch, head_sha, pr_number/pr_url in complete_claim evidence",
             "complete_claim moves the task to In Review and releases the claim",
             "after merge/rebase reaches the intended branch, the GitHub webhook or default-branch backfill stamps merged_sha and marks Done",
+            "for non-PR/offline work, a verifier uses the offline-evidence path after In Review to stamp provenance and mark Done",
         ],
         "safe_merge_protocol": {
             "merge_authority": "Agents may merge only when their control registration, task instructions, or the human operator explicitly allow it.",
@@ -4208,7 +4324,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "inbox(unacked)",
             "check+claim before first write",
         ],
-        "agent_completion_rule": "complete_claim(evidence=...) records branch/head_sha/PR evidence and moves to In Review; agents cannot mark Done. Done is reserved for GitHub/default-branch merge provenance.",
+        "agent_completion_rule": "complete_claim(evidence=...) records branch/head_sha/PR/offline evidence and moves to In Review; agents cannot mark Done. Done is reserved for GitHub/default-branch merge provenance or verifier-stamped offline evidence.",
     }
     agreement = {**default, **override, "project": project}
     if "done_policy" not in override:
@@ -4527,10 +4643,10 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                          json.dumps(evidence, sort_keys=True), now),
                     )
             git_states[task["task_id"]] = git_state
-            if status == "Done" and not git_state.get("merged_sha"):
+            if status == "Done" and not _has_done_provenance(git_state):
                 findings.append({"severity": "high", "task_id": task["task_id"],
                                  "code": "done_without_merged_sha",
-                                 "detail": "Task is Done but has no recorded merge/default-branch SHA."})
+                                 "detail": "Task is Done but has no recorded merge/default-branch or offline evidence provenance."})
             if status == "In Review" and not (git_state.get("branch") or git_state.get("pr_url")):
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "review_without_provenance",
