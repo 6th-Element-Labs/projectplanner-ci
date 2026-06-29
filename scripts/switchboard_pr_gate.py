@@ -221,6 +221,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--keep-worktree", action="store_true",
                         default=os.environ.get("SWITCHBOARD_CI_KEEP_WORKTREE", "").lower()
                         in ("1", "true", "yes"))
+    parser.add_argument("--fail-on-red", action="store_true",
+                        help="Return nonzero when any PR gate posts failure. Manual use only; "
+                             "systemd timers should stay green when they successfully post red statuses.")
     args = parser.parse_args(argv)
 
     token = _token()
@@ -241,7 +244,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(result, sort_keys=True))
         results.append(result)
     failed = [r for r in results if r.get("state") != "success"]
-    return 1 if failed else 0
+    return 1 if args.fail_on_red and failed else 0
 
 
 if __name__ == "__main__":
