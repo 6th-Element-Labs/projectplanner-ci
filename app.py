@@ -14,7 +14,6 @@ import asyncio
 import hashlib
 import hmac
 import os
-import re
 from pathlib import Path
 
 # Load a local .env if present (SMTP/gateway config for later slices). No core import.
@@ -39,6 +38,7 @@ import dispatch  # noqa: E402
 import export  # noqa: E402
 import inbox as inbox_mod  # noqa: E402
 import intake  # noqa: E402
+import github_sync  # noqa: E402
 import notify  # noqa: E402
 import ocr  # noqa: E402
 import rebrand  # noqa: E402
@@ -1148,8 +1148,6 @@ async def ixp_reconcile(project: str = Query(store.DEFAULT_PROJECT)):
 #   PR merged             → stamp merged_sha + mark referenced tasks Done.
 
 _GH_SECRET = os.environ.get("PM_GITHUB_WEBHOOK_SECRET", "")
-_CLOSES_RE = re.compile(r"\b(?:closes?|fixes?|resolves?)\s+([A-Z]+-\d+)\b", re.I)
-_TASKID_RE = re.compile(r"\b([A-Z]+-\d+)\b")
 
 
 def _verify_gh_signature(body: bytes, sig_header: str) -> bool:
@@ -1162,109 +1160,16 @@ def _verify_gh_signature(body: bytes, sig_header: str) -> bool:
     return hmac.compare_digest(f"sha256={expected}", sig_header)
 
 
-def _extract_task_ids(text: str) -> list:
-    return list(dict.fromkeys(_TASKID_RE.findall(text or "")))  # dedup, preserve order
-
-
-def _closing_task_ids(text: str) -> list:
-    return list(dict.fromkeys(m.group(1).upper() for m in _CLOSES_RE.finditer(text or "")))
-
-
 async def _handle_push(payload: dict, project: str):
-    """Push to default branch: refresh canonical main SHA + notify active lease holders."""
-    ref = payload.get("ref", "")
-    default = payload.get("repository", {}).get("default_branch", "main")
-    if ref != f"refs/heads/{default}":
-        return {"action": "ignored", "reason": f"push to {ref!r}, not default branch"}
-
-    repo = payload.get("repository", {}).get("full_name", "?")
-    commits = payload.get("commits") or []
-    head_sha = payload.get("after", "")
-    await asyncio.to_thread(store.update_canonical_main_sha, head_sha, "github-webhook", project)
-
-    # Collect all changed files across the push
-    changed_files: list = []
-    for c in commits:
-        for key in ("added", "modified", "removed"):
-            changed_files.extend(c.get(key) or [])
-    changed_files = list(dict.fromkeys(changed_files))  # dedup
-
-    # Notify agents with active leases on affected files
-    notified: list = []
-    if changed_files:
-        held_records = await asyncio.to_thread(store.check_files, changed_files, project)
-        # Group by holder so each agent gets one message listing all their affected files
-        by_holder: dict = {}
-        for rec in held_records:
-            holder = rec["held_by"]
-            by_holder.setdefault(holder, []).append(rec["file"])
-        for holder, their_files in by_holder.items():
-            await asyncio.to_thread(
-                store.send_agent_message,
-                "github-webhook", holder,
-                f"main advanced on {repo} @ {head_sha}. "
-                f"Files you hold a lease on were changed: {', '.join(their_files[:10])}. "
-                "Rebase or release your lease before merging.",
-                requires_ack=False, project=project,
-            )
-            notified.append(holder)
-
-    direct_backfill = await asyncio.to_thread(
-        store.backfill_default_branch_commits,
-        commits, default, "github-webhook", project
-    )
-
-    return {"action": "push_processed", "repo": repo, "sha": head_sha,
-            "changed_files": len(changed_files), "notified_agents": notified,
-            **direct_backfill}
+    return await asyncio.to_thread(github_sync.handle_push, payload, project)
 
 
 async def _handle_pr(payload: dict, project: str):
-    """PR lifecycle: open -> In Review; merge -> Done with merged_sha."""
-    pr = payload.get("pull_request") or {}
-    action = payload.get("action")
-    if action not in ("opened", "reopened", "ready_for_review", "closed"):
-        return {"action": "ignored", "reason": f"unsupported PR action {action!r}"}
-
-    repo = payload.get("repository", {}).get("full_name", "?")
-    pr_num = pr.get("number")
-    text = f"{pr.get('title','')} {pr.get('body','')} {pr.get('head',{}).get('ref','')}"
-    task_ids = _closing_task_ids(text) or _extract_task_ids(text)
-    branch = pr.get("head", {}).get("ref", "")
-    head_sha = pr.get("head", {}).get("sha", "")
-    pr_url = pr.get("html_url", "")
-    touched: list = []
-    if action in ("opened", "reopened", "ready_for_review"):
-        for task_id in task_ids:
-            res = await asyncio.to_thread(
-                store.mark_task_pr_opened, task_id, pr_num, pr_url, branch, head_sha,
-                "github-webhook", project
-            )
-            if not res.get("error"):
-                touched.append(task_id)
-        return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
-                "in_review_tasks": touched}
-
-    if not pr.get("merged"):
-        return {"action": "ignored", "reason": "closed PR was not merged", "pr": pr_num}
-
-    merged_sha = pr.get("merge_commit_sha") or ""
-    closed: list = []
-    for task_id in task_ids:
-        t = await asyncio.to_thread(store.get_task, task_id, project)
-        if t and t.get("status") not in ("Cancelled", "Canceled"):
-            await asyncio.to_thread(
-                store.mark_task_merged, task_id, merged_sha, pr_num, pr_url, branch, head_sha,
-                "github-webhook", project
-            )
-            closed.append(task_id)
-
-    return {"action": "pr_processed", "repo": repo, "pr": pr_num,
-            "merged_sha": merged_sha, "auto_closed_tasks": closed}
+    return await asyncio.to_thread(github_sync.handle_pr, payload, project)
 
 
 @app.post("/api/github/webhook")
-async def github_webhook(request: Request, project: str = "helm"):
+async def github_webhook(request: Request, project: str = ""):
     """Receive GitHub push/pull_request events. project selects the board to update.
     Set PM_GITHUB_WEBHOOK_SECRET in .env and configure the matching secret in GitHub."""
     body = await request.body()
@@ -1278,6 +1183,7 @@ async def github_webhook(request: Request, project: str = "helm"):
     except Exception:
         raise HTTPException(400, "invalid JSON payload")
 
+    project = github_sync.resolve_project(payload, project)
     _proj(project)  # fail-closed on unknown project
     if event == "push":
         result = await _handle_push(payload, project)

@@ -1949,8 +1949,20 @@ def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",
                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
-        if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
+        row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
             return {"error": "task not found", "task_id": task_id}
+        current = _load_git_state(c, task_id)
+        same_pr = (
+            current.get("pr_number") == pr_number and
+            (not pr_url or current.get("pr_url") == pr_url) and
+            (not branch or current.get("branch") == branch) and
+            (not head_sha or current.get("head_sha") == head_sha)
+        )
+        if row["status"] in ("In Review", "Done") and same_pr:
+            task = _task_row(row)
+            return {"task_id": task_id, "status": task["status"],
+                    "git_state": current, "idempotent": True}
         c.execute("UPDATE tasks SET status='In Review', updated_at=? WHERE task_id=? "
                   "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
                   (now, task_id))
@@ -1976,8 +1988,21 @@ def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = N
                      project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
-        if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
+        row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
             return {"error": "task not found", "task_id": task_id}
+        current = _load_git_state(c, task_id)
+        same_merge = (
+            row["status"] == "Done" and
+            current.get("merged_sha") == merged_sha and
+            (pr_number is None or current.get("pr_number") == pr_number) and
+            (not pr_url or current.get("pr_url") == pr_url) and
+            (not branch or current.get("branch") == branch) and
+            (not head_sha or current.get("head_sha") == head_sha)
+        )
+        if same_merge:
+            return {"task_id": task_id, "status": "Done",
+                    "git_state": current, "idempotent": True}
         c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?",
                   (now, task_id))
         git_state = _upsert_git_state(c, task_id, {
