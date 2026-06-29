@@ -170,6 +170,51 @@ try:
     ok(store.get_meta("canonical_main_sha", project=P) == "mergeabc",
        "non-default-branch PR merge does not advance canonical main SHA")
 
+    dynamic_created = store.create_project(
+        "Vulkan", actor="seed", github_repo="StevenRidder/OpenCPN")
+    ok(dynamic_created.get("created") is True,
+       "dynamic project can be configured for an external GitHub repo")
+    dynamic_task = store.create_task(
+        {"workstream_id": "CONVERT", "title": "dynamic external repo merge"},
+        actor="seed", project="vulkan")
+    dynamic_payload = {
+        "action": "opened",
+        "repository": {
+            "full_name": "StevenRidder/OpenCPN",
+            "name": "OpenCPN",
+            "default_branch": "master",
+        },
+        "pull_request": {
+            "number": 38,
+            "title": f"{dynamic_task['task_id']}: dynamic repo branch merge",
+            "body": "",
+            "html_url": "https://github.com/StevenRidder/OpenCPN/pull/38",
+            "head": {
+                "ref": f"codex/{dynamic_task['task_id']}-slice",
+                "sha": "dynamichead",
+            },
+            "base": {"ref": "vulkan/render-core-poc"},
+        },
+    }
+    routed_project = github_sync.resolve_project(dynamic_payload, "")
+    ok(routed_project == "vulkan",
+       "external repo webhook resolves to configured dynamic project")
+    dynamic_opened = github_sync.handle_pr(dynamic_payload, routed_project)
+    ok(dynamic_opened["in_review_tasks"] == [dynamic_task["task_id"]] and
+       store.get_task(dynamic_task["task_id"], project="vulkan")["status"] == "In Review",
+       "dynamic project PR open records In Review on the dynamic board")
+    dynamic_payload["action"] = "closed"
+    dynamic_payload["pull_request"]["merged"] = True
+    dynamic_payload["pull_request"]["merge_commit_sha"] = "dynamicmerge"
+    dynamic_merged = github_sync.handle_pr(dynamic_payload, routed_project)
+    dynamic_after = store.get_task(dynamic_task["task_id"], project="vulkan")
+    ok(dynamic_merged["auto_closed_tasks"] == [dynamic_task["task_id"]] and
+       dynamic_after["status"] == "Done" and
+       dynamic_after["git_state"]["merged_sha"] == "dynamicmerge",
+       "dynamic project non-default PR merge marks task Done")
+    ok(not store.get_meta("canonical_main_sha", project="vulkan"),
+       "dynamic non-default PR merge does not advance canonical main SHA")
+
     missing_sha_task = store.create_task({"workstream_id": "HARDEN", "title": "missing sha"},
                                          actor="seed", project=P)
     missing_sha_payload = {

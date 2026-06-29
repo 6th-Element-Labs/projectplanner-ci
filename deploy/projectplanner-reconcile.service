@@ -1,5 +1,5 @@
 # /etc/systemd/system/projectplanner-reconcile.service
-# One-shot service: run Switchboard reconcile and send deduped drift alerts.
+# One-shot service: reconcile every registered board and send deduped drift alerts.
 # Triggered by projectplanner-reconcile.timer.
 [Unit]
 Description=ProjectPlanner Switchboard reconcile alerts

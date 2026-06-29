@@ -97,10 +97,11 @@ def _configured_projects(env_name: str, default: str):
 def reconcile_alerts():
     """Run reconcile and send deduped actionable drift alerts.
 
-    Defaults to the Switchboard dogfood board. Set PM_RECON_ALERT_PROJECTS=all to run every
-    registered project, or a comma list to run a deliberate subset.
+    Defaults to every registered project so merge-provenance backfill keeps dynamic boards
+    (Helm, Vulkan, etc.) unblocked without a human running reconcile(project=...) by hand.
+    Set PM_RECON_ALERT_PROJECTS to a comma list to run a deliberate subset.
     """
-    projects = _configured_projects("PM_RECON_ALERT_PROJECTS", "switchboard")
+    projects = _configured_projects("PM_RECON_ALERT_PROJECTS", "all")
     alert_to = os.environ.get("PM_RECON_ALERT_TO", "switchboard/operator")
     min_severity = os.environ.get("PM_RECON_ALERT_MIN_SEVERITY", "medium")
     dedupe_s = int(os.environ.get("PM_RECON_ALERT_DEDUPE_SECONDS", "3600"))

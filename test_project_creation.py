@@ -48,6 +48,7 @@ def _stub_heavy_imports():
 _stub_heavy_imports()
 import store       # noqa: E402
 import mcp_server  # noqa: E402
+import jobs        # noqa: E402
 
 passed = failed = 0
 
@@ -121,6 +122,26 @@ try:
     mcp_summary = mcp_server.board_summary(project="vkrender")
     ok('"total_tasks": 1' in mcp_summary and '"VKPLAN": 1' in mcp_summary,
        "MCP board_summary reports live rollups for dynamic projects")
+
+    original_reconcile_alerts = jobs.store.run_reconcile_alerts
+    original_recon_projects = os.environ.pop("PM_RECON_ALERT_PROJECTS", None)
+    seen_projects = []
+
+    def fake_reconcile_alerts(project="maxwell", alert_to="switchboard/operator",
+                              min_severity="medium", dedupe_window_s=3600):
+        seen_projects.append(project)
+        return {"project": project, "ok": True, "alert_sent": False,
+                "deduped": False, "finding_count": 0}
+
+    jobs.store.run_reconcile_alerts = fake_reconcile_alerts
+    try:
+        jobs.reconcile_alerts()
+    finally:
+        jobs.store.run_reconcile_alerts = original_reconcile_alerts
+        if original_recon_projects is not None:
+            os.environ["PM_RECON_ALERT_PROJECTS"] = original_recon_projects
+    ok({"vulkan", "vkrender", "helm", "switchboard"}.issubset(set(seen_projects)),
+       "scheduled reconcile defaults across dynamic and built-in projects")
 
     reserved = store.create_project("Helm", project_id="helm", actor="test")
     ok("error" in reserved and "reserved" in reserved["error"],

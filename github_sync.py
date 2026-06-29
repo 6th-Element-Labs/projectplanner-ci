@@ -24,11 +24,36 @@ def closing_task_ids(text: str) -> List[str]:
     return _dedupe_upper([m.group(1) for m in _CLOSES_RE.finditer(text or "")])
 
 
+def _project_for_repo(full_name: str) -> str:
+    repo = (full_name or "").strip().lower()
+    if not repo:
+        return ""
+    matches = []
+    for project_id in store.project_ids():
+        try:
+            store.init_db(project_id)
+            configured = (store.get_project_github_repo(project_id) or "").strip().lower()
+        except Exception:
+            continue
+        if configured == repo:
+            matches.append(project_id)
+    if not matches:
+        return ""
+    # More than one board can technically point at one repo; explicit ?project=...
+    # remains the unambiguous route. Prefer non-default boards so a legacy global
+    # PM_GITHUB_REPO cannot steal Helm/Switchboard/dynamic project webhooks.
+    for project_id in matches:
+        if project_id != store.DEFAULT_PROJECT:
+            return project_id
+    return matches[0]
+
+
 def resolve_project(payload: Dict[str, Any], requested_project: str = "") -> str:
     """Resolve webhook project safely.
 
-    Explicit query-string project wins. When GitHub sends a projectplanner/Switchboard repo
-    webhook without ?project=..., route it to the Switchboard board instead of Helm.
+    Explicit query-string project wins. Otherwise route by the repository configured on
+    each board (including dynamic projects such as Vulkan). The hard-coded aliases below
+    preserve older deployments even before their project metadata is initialized.
     """
     explicit = (requested_project or "").strip()
     if explicit:
@@ -36,6 +61,9 @@ def resolve_project(payload: Dict[str, Any], requested_project: str = "") -> str
     repo = (payload.get("repository") or {})
     full_name = (repo.get("full_name") or "").lower()
     name = (repo.get("name") or "").lower()
+    configured_project = _project_for_repo(full_name)
+    if configured_project:
+        return configured_project
     if full_name.endswith("/projectplanner") or full_name.endswith("/switchboard") or name in {
         "projectplanner",
         "switchboard",
