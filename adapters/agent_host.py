@@ -18,7 +18,8 @@ lane (store/app); this only CONSUMES them. Built fail-open against the spec's op
 a missing/!200 endpoint logs and is skipped, never crashes the daemon — so it is ready the moment
 those land. Pin REST paths below once Codex publishes them. Config via env: PM_BASE, PM_PROJECT,
 PM_MCP_TOKEN, PM_HOST_ID, PM_REPO_ROOT, PM_HOST_MAX_SESSIONS, PM_AGENT_WORK_MODULE (real work_fn;
-absent → --dry, which claims+abandons safely).
+absent -> --dry, which claims+abandons safely), PM_AGENT_HOST_ALLOW_WORK,
+PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM.
 """
 import json
 import os
@@ -41,6 +42,37 @@ P_HEARTBEAT_HOST = "/ixp/v1/heartbeat_host"
 P_LIST_WAKES = "/txp/v1/list_wake_intents"
 P_CLAIM_WAKE = "/txp/v1/claim_wake"
 P_COMPLETE_WAKE = "/txp/v1/complete_wake"
+MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
+
+
+def _csv(value):
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return [x.strip() for x in str(value or "").replace("\n", ",").split(",") if x.strip()]
+
+
+def _truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def host_policy_from_env(lanes):
+    allow_work = _truthy(os.environ.get("PM_AGENT_HOST_ALLOW_WORK"))
+    allow_global = _truthy(os.environ.get("PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM"))
+    if not allow_work:
+        mode = "message_only"
+    elif allow_global:
+        mode = "global_claim_allowed"
+    elif lanes:
+        mode = "lane_scoped"
+    else:
+        mode = "unconfigured_no_lanes"
+    return {
+        "mode": mode,
+        "allow_message_only": True,
+        "allow_work": allow_work,
+        "allow_global_claim": allow_global,
+        "allowed_lanes": lanes,
+    }
 
 
 def _try(method, path, body=None):
@@ -55,14 +87,19 @@ def _try(method, path, body=None):
 def default_inventory():
     repo = os.environ.get("PM_REPO_ROOT") or _git_root()
     host_id = os.environ.get("PM_HOST_ID") or f"host/{socket.gethostname().split('.')[0]}"
+    env_lanes = _csv(os.environ.get("PM_HOST_LANES", ""))
+    policy = host_policy_from_env(env_lanes)
+    runtime_lanes = env_lanes or ([MESSAGE_ONLY_LANE] if not policy["allow_work"] else [])
     return {
         "project": PROJECT, "host_id": host_id, "hostname": socket.gethostname(),
         "agent_host_version": "0.1.0", "repo_root": repo,
+        "policy": policy,
         "runtimes": [{
             "runtime": os.environ.get("PM_RUNTIME", "claude-code"),
             "launcher": "python3", "profiles": ["ixp.v1", "txp.dispatch.v0"],
-            "control": {"mode": "hook_deny", "runner_kill": True},
-            "lanes": [x for x in os.environ.get("PM_HOST_LANES", "").split(",") if x],
+            "control": {"mode": "hook_deny", "runner_kill": True, "host_policy": policy["mode"]},
+            "policy": policy,
+            "lanes": runtime_lanes,
             "capabilities": ["docs", "python", "github", "tests"],
         }],
         "limits": {"max_sessions": int(os.environ.get("PM_HOST_MAX_SESSIONS", "2"))},
@@ -82,11 +119,23 @@ def eligible_runtime(wake, inventory):
     """Return the host runtime entry that can serve this wake, else None (skip → don't claim)."""
     sel = (wake or {}).get("selector") or {}
     want_rt, want_lane = sel.get("runtime"), sel.get("lane")
-    want_caps = set(sel.get("capabilities") or [])
+    want_caps = set(_csv(sel.get("capabilities") or []))
+    requested_mode = str(((wake or {}).get("policy") or {}).get("mode") or "").strip()
+    wants_claim = requested_mode == "claim_next" or bool(want_lane and requested_mode != "message_only")
     for rt in inventory["runtimes"]:
         if want_rt and rt["runtime"] != want_rt:
             continue
-        if want_lane and rt.get("lanes") and want_lane not in rt["lanes"]:
+        rt_policy = {**(inventory.get("policy") or {}), **(rt.get("policy") or {})}
+        rt_lanes = set(rt.get("lanes") or [])
+        if wants_claim:
+            if not rt_policy.get("allow_work"):
+                continue
+            if want_lane:
+                if want_lane not in rt_lanes:
+                    continue
+            elif not rt_policy.get("allow_global_claim"):
+                continue
+        elif want_lane and rt_lanes and want_lane not in rt_lanes and MESSAGE_ONLY_LANE not in rt_lanes:
             continue
         if want_caps and not want_caps.issubset(set(rt.get("capabilities") or [])):
             continue
@@ -94,7 +143,7 @@ def eligible_runtime(wake, inventory):
     return None
 
 
-def wake_mode(wake):
+def wake_mode(wake, inventory=None):
     """Choose the safe launch mode for a wake.
 
     Lane-scoped wakes may enter the claim_next loop. Lane-less wakes are message-only by
@@ -107,6 +156,9 @@ def wake_mode(wake):
         return "inbox_only"
     if explicit == "claim_next" and selector.get("lane"):
         return "claim_next"
+    if explicit == "claim_next":
+        inv_policy = (inventory or {}).get("policy") or {}
+        return "claim_next" if inv_policy.get("allow_global_claim") else "refused"
     if selector.get("lane"):
         return "claim_next"
     return "inbox_only"
@@ -126,18 +178,28 @@ def active_session_count(inventory):
 def launch_command(wake, inventory):
     """Build the supervisor command for a wake without executing it."""
     sel = wake.get("selector") or {}
+    eligible = eligible_runtime(wake, inventory)
+    if not eligible:
+        raise ValueError("wake is not eligible for this host policy/runtime inventory")
     agent_id = sel.get("agent_id") or sel.get("runtime") or "claude-code"
     lane = sel.get("lane") or ""
-    runtime = sel.get("runtime") or (eligible_runtime(wake, inventory) or {}).get("runtime") or "claude-code"
+    runtime = sel.get("runtime") or eligible.get("runtime") or "claude-code"
     work_mod = os.environ.get("PM_AGENT_WORK_MODULE", "")
-    mode = wake_mode(wake)
+    mode = wake_mode(wake, inventory)
+    if mode == "refused":
+        raise ValueError("wake asks for global claim_next but host policy forbids global work")
     if mode == "inbox_only":
         idle = os.environ.get("PM_AGENT_HOST_INBOX_IDLE_SECONDS", "6")
         child = ["python3", RUN_AGENT, "--runtime", runtime,
                  "--inbox-only", "--idle-seconds", idle]
     else:
-        child = ["python3", RUN_AGENT, "--runtime", runtime,
-                 "--lanes", lane, "--max-tasks", "1"]
+        child = ["python3", RUN_AGENT, "--runtime", runtime, "--max-tasks", "1"]
+        if lane:
+            child += ["--lanes", lane]
+        elif not (inventory.get("policy") or {}).get("allow_global_claim"):
+            raise ValueError("global claim_next requires PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=1")
+        idle = os.environ.get("PM_AGENT_HOST_CLAIM_IDLE_SECONDS", "6")
+        child += ["--idle-seconds", idle]
         child += (["--work-module", work_mod] if work_mod else ["--dry"])
     cmd = ["python3", SUPERVISOR, "start", "--agent-id", agent_id,
            "--cwd", inventory["repo_root"], "--"] + child
@@ -196,7 +258,7 @@ def run_once(inventory):
         rec = launch(w, inventory)
         started = confirm_started(rec)
         result = {"started": started, "runner_session_id": (rec or {}).get("runner_session_id"),
-                  "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w),
+                  "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
                   "reason": "started" if started else "launch_failed"}
         _try("POST", P_COMPLETE_WAKE, {"project": PROJECT, "wake_id": wake_id,
                                        "runner_session_id": result["runner_session_id"],

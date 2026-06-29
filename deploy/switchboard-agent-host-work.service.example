@@ -1,0 +1,35 @@
+# /etc/systemd/system/switchboard-agent-host-work.service
+# Example work-capable Agent Host. Install this only on a machine that has the
+# repo checkout, runtime credentials, build tools, and operator approval to run agents.
+[Unit]
+Description=Switchboard Agent Host (lane-scoped work wakes)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/path/to/projectplanner
+EnvironmentFile=/path/to/projectplanner/.env
+Environment=PM_BASE=https://plan.taikunai.com
+Environment=PM_PROJECT=switchboard
+Environment=PM_HOST_ID=host/%H-work
+Environment=PM_RUNTIME=codex
+Environment=PM_HOST_LANES=HARDEN,ADAPTER,DISPATCH,RECON
+Environment=PM_AGENT_HOST_ALLOW_WORK=1
+Environment=PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
+Environment=PM_HOST_MAX_SESSIONS=1
+Environment=PM_REPO_ROOT=/path/to/projectplanner
+Environment=PM_AGENT_HOST_CLAIM_IDLE_SECONDS=6
+# Leave PM_AGENT_WORK_MODULE unset for a dry-run proof: claim_next is called, any
+# claimed task is abandoned, and no completion is fabricated. Set it to
+# package.module:work_fn only after the runtime can do real work safely.
+# Environment=PM_AGENT_WORK_MODULE=switchboard_agent.work:run_task
+ExecStart=/path/to/projectplanner/.venv/bin/python /path/to/projectplanner/adapters/agent_host.py --interval 10
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

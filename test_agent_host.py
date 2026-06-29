@@ -34,14 +34,33 @@ ok("PM_PROJECT=switchboard" in service_text,
    "systemd Agent Host service is scoped to the switchboard project")
 ok("PM_HOST_LANES=__MESSAGE_ONLY__" in service_text,
    "systemd Agent Host service advertises message-only sentinel lane")
+ok("PM_AGENT_HOST_ALLOW_WORK=0" in service_text,
+   "systemd Agent Host service explicitly disables work claims")
+ok("PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0" in service_text,
+   "systemd Agent Host service explicitly forbids global claims")
 ok("adapters/agent_host.py --interval 10" in service_text,
    "systemd Agent Host service runs the persistent daemon loop")
 ok("PM_HOST_MAX_SESSIONS=1" in service_text,
    "systemd Agent Host service limits concurrent wake readers")
 
+for key in ("PM_HOST_LANES", "PM_AGENT_HOST_ALLOW_WORK", "PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM"):
+    os.environ.pop(key, None)
+default_inventory = agent_host.default_inventory()
+ok(default_inventory["policy"]["mode"] == "message_only",
+   "default Agent Host policy is message-only")
+ok(default_inventory["runtimes"][0]["lanes"] == [agent_host.MESSAGE_ONLY_LANE],
+   "default Agent Host inventory fails closed with sentinel lane")
+
 inventory = {
     "host_id": "host/test",
     "repo_root": str(ROOT),
+    "policy": {
+        "mode": "lane_scoped",
+        "allow_message_only": True,
+        "allow_work": True,
+        "allow_global_claim": False,
+        "allowed_lanes": ["ADAPTER"],
+    },
     "limits": {"max_sessions": 2},
     "runtimes": [{
         "runtime": "claude-code",
@@ -60,6 +79,28 @@ lane_wake = {
     "selector": {"runtime": "claude-code", "agent_id": "claude/test", "lane": "ADAPTER"},
     "policy": {},
 }
+global_claim_wake = {
+    "wake_id": "wake-global",
+    "selector": {"runtime": "claude-code", "agent_id": "claude/test"},
+    "policy": {"mode": "claim_next"},
+}
+message_only_inventory = {
+    "host_id": "host/message-only",
+    "repo_root": str(ROOT),
+    "policy": {
+        "mode": "message_only",
+        "allow_message_only": True,
+        "allow_work": False,
+        "allow_global_claim": False,
+        "allowed_lanes": [agent_host.MESSAGE_ONLY_LANE],
+    },
+    "limits": {"max_sessions": 1},
+    "runtimes": [{
+        "runtime": "claude-code",
+        "lanes": [agent_host.MESSAGE_ONLY_LANE],
+        "capabilities": ["docs", "python"],
+    }],
+}
 
 cmd, mode = agent_host.launch_command(message_wake, inventory)
 ok(mode == "inbox_only", "lane-less wake selects inbox-only mode")
@@ -71,6 +112,7 @@ cmd, mode = agent_host.launch_command(lane_wake, inventory)
 ok(mode == "claim_next", "lane-scoped wake selects claim_next mode")
 ok("--lanes" in cmd and "ADAPTER" in cmd and "--dry" in cmd,
    "lane-scoped dry wake enters claim_next with an explicit lane")
+ok("--idle-seconds" in cmd, "lane-scoped dry wake stays alive for readiness check")
 ok("--inbox-only" not in cmd, "lane-scoped wake does not use inbox-only mode")
 
 explicit = dict(lane_wake)
@@ -78,6 +120,18 @@ explicit["policy"] = {"mode": "message_only"}
 cmd, mode = agent_host.launch_command(explicit, inventory)
 ok(mode == "inbox_only" and "--inbox-only" in cmd,
    "explicit message_only policy overrides lane claim loop")
+ok(agent_host.wake_mode(global_claim_wake, inventory) == "refused",
+   "lane-less claim_next wake is refused by default")
+ok(agent_host.eligible_runtime(global_claim_wake, inventory) is None,
+   "lane-less claim_next wake is not eligible without global policy")
+try:
+    agent_host.launch_command(global_claim_wake, inventory)
+    refused_launch = False
+except ValueError:
+    refused_launch = True
+ok(refused_launch, "launch_command refuses ineligible global claim wake")
+ok(agent_host.eligible_runtime(lane_wake, message_only_inventory) is None,
+   "message-only host refuses lane-scoped work wakes")
 
 calls = []
 
@@ -108,6 +162,28 @@ ok(summary["acted"] and summary["acted"][0]["wake_mode"] == "inbox_only",
 ok(complete_calls and complete_calls[0][2]["result"]["wake_mode"] == "inbox_only",
    "complete_wake records inbox-only mode")
 
+calls = []
+
+
+def fake_try_lane(method, path, body=None):
+    calls.append((method, path, body or {}))
+    if path.startswith(agent_host.P_LIST_WAKES):
+        return {"wake_intents": [global_claim_wake, lane_wake]}
+    if path == agent_host.P_CLAIM_WAKE:
+        return {"claimed": True}
+    if path == agent_host.P_COMPLETE_WAKE:
+        return {"ok": True}
+    return {"ok": True}
+
+
+agent_host._try = fake_try_lane
+summary = agent_host.run_once(inventory)
+claim_calls = [c for c in calls if c[1] == agent_host.P_CLAIM_WAKE]
+ok(len(claim_calls) == 1 and claim_calls[0][2]["wake_id"] == "wake-lane",
+   "run_once claims only the eligible lane-scoped wake")
+ok(summary["acted"] and summary["acted"][0]["wake_mode"] == "claim_next",
+   "run_once reports claim_next mode for lane-scoped wake")
+
 handshakes = []
 inboxes = []
 sleeps = []
@@ -126,6 +202,16 @@ ok(handshakes and handshakes[0][1] == "claude/test",
 ok(inboxes == [(run_agent.PROJECT, "claude/test")],
    "run_agent inbox_only reads unacked inbox")
 ok(sleeps == [0.25], "run_agent inbox_only idles for readiness checks")
+
+sessions = []
+run_agent.sb.run_session = lambda *a, **k: sessions.append((a, k)) or {
+    "completed": [], "stopped": "no_unblocked_work"}
+rc = run_agent.main(["--runtime", "claude-code", "--lanes", "ADAPTER",
+                     "--max-tasks", "1", "--dry", "--idle-seconds", "0.5"])
+ok(rc == 0, "run_agent claim mode exits successfully")
+ok(sessions and sessions[0][1]["lanes"] == "ADAPTER",
+   "run_agent claim mode passes explicit lane to claim_next loop")
+ok(sleeps[-1:] == [0.5], "run_agent claim mode idles for readiness checks")
 
 register_calls = []
 loop_count = {"n": 0}

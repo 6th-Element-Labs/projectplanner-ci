@@ -90,6 +90,13 @@ An Agent Host must register separately from individual agent sessions.
       "launcher": "claude",
       "profiles": ["ixp.v1", "txp.dispatch.v0"],
       "control": {"mode": "hook_deny", "runner_kill": true},
+      "policy": {
+        "mode": "lane_scoped",
+        "allow_message_only": true,
+        "allow_work": true,
+        "allow_global_claim": false,
+        "allowed_lanes": ["ADAPTER", "DISPATCH", "RECON"]
+      },
       "lanes": ["ADAPTER", "DISPATCH", "RECON"],
       "capabilities": ["docs", "python", "github", "tests"]
     },
@@ -110,6 +117,18 @@ An Agent Host must register separately from individual agent sessions.
   "heartbeat_ttl_s": 60
 }
 ```
+
+Host policy is part of the contract, not an operator assumption:
+
+- Default host mode is `message_only`. It may register, drain inbox, and satisfy lane-less
+  handoff wakes, but it must not call `claim_next`.
+- Work-capable hosts must opt in with `allow_work=true` and explicit `allowed_lanes`.
+- A lane-scoped wake may call `claim_next(lane=...)` only when the requested lane is advertised
+  by the host inventory.
+- A lane-less/global `claim_next` wake is refused unless `allow_global_claim=true`. The default
+  is false because global dispatch is how one agent accidentally takes unrelated work.
+- Runtime command templates live on the host. Wake payloads select a runtime/profile/lane; they
+  do not carry arbitrary shell commands.
 
 Required operations:
 

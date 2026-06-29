@@ -105,6 +105,9 @@ process starts the runtime.
 
 Safety rule: message-only wakes do not have `selector.lane`, so the daemon must use the
 inbox-only path and must not call `claim_next`. Work-dispatch wakes need an explicit lane.
+Agent Hosts fail closed: `PM_AGENT_HOST_ALLOW_WORK` defaults to off, `PM_HOST_LANES` must name
+the allowed work lanes, and `PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM` stays off unless an operator is
+intentionally allowing global dispatch.
 
 ### 3.1 Run the P0 message-only host on the Plan VM
 
@@ -126,6 +129,41 @@ Expected behavior:
 - lane-less wake intents can be claimed and completed with `wake_mode=inbox_only`;
 - child sessions run `adapters/run_agent.py --inbox-only`;
 - no `task.claimed` activity is emitted by message-only wakes.
+
+### 3.2 Run a work-capable Agent Host on an eligible worker
+
+Do this on a machine that actually has the repo, runtime credentials, and compute budget to do
+agent work. The Plan VM should stay message-only.
+
+```bash
+cd /path/to/projectplanner
+export PM_BASE=https://plan.taikunai.com
+export PM_PROJECT=switchboard
+export PM_MCP_TOKEN=...
+export PM_HOST_ID=host/my-worker-hardening
+export PM_RUNTIME=codex
+export PM_REPO_ROOT=$PWD
+export PM_HOST_LANES=HARDEN,ADAPTER
+export PM_AGENT_HOST_ALLOW_WORK=1
+export PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
+export PM_HOST_MAX_SESSIONS=1
+export PM_AGENT_HOST_CLAIM_IDLE_SECONDS=6
+python3 adapters/agent_host.py --once
+```
+
+For a dry proof, leave `PM_AGENT_WORK_MODULE` unset. A lane-scoped wake starts
+`run_agent.py --lanes <lane> --dry`, which calls `claim_next` only for that explicit lane and
+abandons any claim instead of fabricating completion. For real delivery, set
+`PM_AGENT_WORK_MODULE=package.module:work_fn` after the runtime adapter can perform the work and
+return branch/SHA/PR evidence.
+
+A work-capable host should show:
+
+- `register_host` inventory with `policy.mode=lane_scoped`;
+- explicit `allowed_lanes`;
+- lane-less handoff wakes still using `wake_mode=inbox_only`;
+- lane-scoped wakes using `wake_mode=claim_next`;
+- lane-less `policy.mode=claim_next` wakes left unclaimed unless `PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=1`.
 
 ## 4. The self-driving loop (what makes it hands-off)
 ```
@@ -151,9 +189,8 @@ the board. No human relay for handoffs; no human ignition once the supervisor is
 ## 6. Honest limits
 The substrate is live; the driver + supervisor + auto-provenance are built and unit/dogfood
 tested. The Agent Host substrate adds host inventory, wake intents, optional
-`on_ack_timeout=wake_target` escalation, and a message-only systemd host for lane-less handoff
-wakes. The Agent Host daemon uses inbox-only mode for lane-less message wakes, so it can
-register/read inbox without accidentally taking global work. Not yet proven: a long-running
-multi-agent supervised session under real load, a production work-capable host with explicit
-lane policy, and the PR-merge webhook (RECON-2) as the primary Done path (RECON-5 covers
-direct-push today).
+`on_ack_timeout=wake_target` escalation, a message-only systemd host for lane-less handoff
+wakes, and a lane-scoped work-host policy for eligible worker machines. The Agent Host daemon
+uses inbox-only mode for lane-less message wakes, and refuses global `claim_next` unless an
+operator explicitly enables it. Still to prove after HARDEN-3: a long-running multi-agent
+supervised session under real load.

@@ -82,6 +82,8 @@ def main(argv=None):
     res = sb.run_session(PROJECT, me, a.runtime, work_fn,
                          lanes=a.lanes or None, max_tasks=a.max_tasks)
     print(json.dumps({"agent_id": me, "result": res}), flush=True)
+    if a.idle_seconds > 0:
+        time.sleep(a.idle_seconds)
     return 0
 
 

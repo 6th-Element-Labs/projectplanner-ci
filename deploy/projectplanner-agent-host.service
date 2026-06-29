@@ -17,6 +17,8 @@ Environment=PM_PROJECT=switchboard
 Environment=PM_HOST_ID=host/plan-vm-message-wake
 Environment=PM_RUNTIME=claude-code
 Environment=PM_HOST_LANES=__MESSAGE_ONLY__
+Environment=PM_AGENT_HOST_ALLOW_WORK=0
+Environment=PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
 Environment=PM_HOST_MAX_SESSIONS=1
 Environment=PM_REPO_ROOT=/opt/projectplanner
 Environment=PM_AGENT_HOST_INBOX_IDLE_SECONDS=6

@@ -250,6 +250,19 @@ def claim_next(project, agent_id, lanes=None, base=None, token=None, idem_key=""
     return _http("POST", "/txp/v1/claim_next", body, base=base, token=token)
 
 
+def claim_task(project, task_id, agent_id, base=None, token=None,
+               ttl_seconds=1800, idem_key=""):
+    body = {
+        "project": project,
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "ttl_seconds": ttl_seconds,
+    }
+    if idem_key:
+        body["idem_key"] = idem_key
+    return _http("POST", "/txp/v1/claim_task", body, base=base, token=token)
+
+
 def complete_claim(project, claim_id, evidence, base=None, token=None, final_status=""):
     ev = evidence if isinstance(evidence, str) else __import__("json").dumps(evidence or {})
     body = {"project": project, "claim_id": claim_id, "evidence": ev}

@@ -80,6 +80,8 @@ try:
         calls.append((method, path, body or {}))
         if path.endswith("/claim_next"):
             return {"claimed": False, "reason": "no_unblocked_work"}
+        if path.endswith("/claim_task"):
+            return {"claimed": True, "claim_id": "taskclaim-exact", "task": {"task_id": body["task_id"]}}
         if path.endswith("/complete_claim"):
             return {"completed": True, "claim_id": body["claim_id"], "status": "In Review"}
         if path.endswith("/abandon_claim"):
@@ -95,6 +97,11 @@ try:
     ok("idem_key" not in calls[-1][2], "claim-next omits stale default idem key")
     codex_adapter.claim_next(lanes="ADAPTER", idem_key="retry-1")
     ok(calls[-1][2]["idem_key"] == "retry-1", "claim-next preserves explicit idem key")
+    exact = codex_adapter.claim_task("HARDEN-3", idem_key="exact-1")
+    ok(exact["claim_id"] == "taskclaim-exact", "claim-task calls exact TXP claim endpoint")
+    ok(calls[-1][1].endswith("/claim_task") and calls[-1][2]["task_id"] == "HARDEN-3",
+       "claim-task serializes the human-selected task id")
+    ok(calls[-1][2]["idem_key"] == "exact-1", "claim-task preserves explicit idem key")
 
     complete = codex_adapter.complete_claim("taskclaim-test", {"head_sha": "abc"})
     ok(complete["status"] == "In Review", "complete calls TXP complete_claim")

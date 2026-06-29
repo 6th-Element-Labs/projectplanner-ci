@@ -147,6 +147,12 @@ def claim_next(lanes="", capabilities="", max_risk="", max_budget_usd=None,
     return sb._http("POST", "/txp/v1/claim_next", body)
 
 
+def claim_task(task_id, ttl_seconds=1800, idem_key="", cwd=None):
+    me = codex_agent_id(cwd)
+    return sb.claim_task(PROJECT, task_id, me,
+                         ttl_seconds=ttl_seconds, idem_key=idem_key)
+
+
 def complete_claim(claim_id, evidence=None, final_status=""):
     body = {
         "project": PROJECT,
@@ -274,6 +280,11 @@ def main(argv=None):
     claim.add_argument("--ttl-seconds", type=int, default=1800)
     claim.add_argument("--idem-key", default=os.environ.get("PM_IDEM_KEY", ""))
 
+    claim_exact = sub.add_parser("claim-task", help="atomically claim one exact TXP task")
+    claim_exact.add_argument("task_id")
+    claim_exact.add_argument("--ttl-seconds", type=int, default=1800)
+    claim_exact.add_argument("--idem-key", default=os.environ.get("PM_IDEM_KEY", ""))
+
     complete = sub.add_parser("complete", help="complete a TXP claim with git evidence")
     complete.add_argument("claim_id")
     complete.add_argument("--evidence-json", default="")
@@ -312,6 +323,9 @@ def main(argv=None):
     if args.command == "claim-next":
         _emit_json(claim_next(args.lanes, args.capabilities, args.max_risk,
                               args.max_budget_usd, args.ttl_seconds, args.idem_key))
+        return 0
+    if args.command == "claim-task":
+        _emit_json(claim_task(args.task_id, args.ttl_seconds, args.idem_key))
         return 0
     if args.command == "complete":
         try:
