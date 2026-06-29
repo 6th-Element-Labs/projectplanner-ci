@@ -732,6 +732,91 @@ def host_status(host_id: str, project: str = "maxwell") -> str:
 
 
 @mcp.tool()
+def list_runner_sessions(project: str = "maxwell", host_id: str = "", runtime: str = "",
+                         task_id: str = "", status: str = "",
+                         include_stale: bool = False) -> str:
+    """List live runner sessions with host/runtime/task/claim/fidelity and available actions."""
+    return _dumps(store.list_runner_sessions(
+        host_id=host_id, runtime=runtime, task_id=task_id, status=status,
+        include_stale=include_stale, project=project))
+
+
+@mcp.tool()
+def register_runner_session(runner_session_json: str, ctx: Context,
+                            project: str = "maxwell") -> str:
+    """Register or heartbeat one supervised runner session.
+
+    runner_session_json should include runner_session_id, host_id, agent_id, runtime,
+    task_id/claim_id when known, status, and control. runner_kill is accepted only for
+    host-owned managed_process sessions.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        record = json.loads(runner_session_json or "{}")
+    except Exception:
+        return _dumps({"error": "runner_session_json must be a JSON object string"})
+    return _dumps(store.upsert_runner_session(
+        record, principal_id=principal["id"], actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def request_runner_snapshot(runner_session_id: str, ctx: Context,
+                            reason: str = "", project: str = "maxwell") -> str:
+    """Request a host-side snapshot for a managed runner session."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.request_runner_control(
+        runner_session_id, "snapshot", reason=reason,
+        actor=auth.actor(principal), principal_id=principal["id"], project=project))
+
+
+@mcp.tool()
+def request_runner_kill(runner_session_id: str, ctx: Context,
+                        reason: str = "", grace_seconds: float = 5.0,
+                        signal: str = "TERM", project: str = "maxwell") -> str:
+    """Request a host-side runner kill. The request is audited and carries a pre-kill snapshot."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.request_runner_control(
+        runner_session_id, "kill", reason=reason,
+        options={"grace_seconds": grace_seconds, "signal": signal or "TERM"},
+        actor=auth.actor(principal), principal_id=principal["id"], project=project))
+
+
+@mcp.tool()
+def list_runner_control_requests(project: str = "maxwell", status: str = "",
+                                 host_id: str = "",
+                                 runner_session_id: str = "") -> str:
+    """List pending/completed runner snapshot/kill/restart control requests."""
+    return _dumps(store.list_runner_control_requests(
+        status=status, host_id=host_id, runner_session_id=runner_session_id,
+        project=project))
+
+
+@mcp.tool()
+def claim_runner_control(host_id: str, request_id: str, ctx: Context,
+                         project: str = "maxwell") -> str:
+    """Agent Host claims a pending runner control request for one of its sessions."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.claim_runner_control_request(
+        host_id, request_id, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def complete_runner_control(request_id: str, ctx: Context, result_json: str = "{}",
+                            snapshot_json: str = "{}", status: str = "",
+                            project: str = "maxwell") -> str:
+    """Agent Host completes a runner control request after snapshot/kill execution."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        result = json.loads(result_json or "{}")
+        snapshot = json.loads(snapshot_json or "{}")
+    except Exception:
+        return _dumps({"error": "result_json and snapshot_json must be JSON object strings"})
+    return _dumps(store.complete_runner_control_request(
+        request_id, result=result, snapshot=snapshot, status=status,
+        actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
 def request_wake(selector_json: str, reason: str, ctx: Context,
                  source: str = "", policy_json: str = "{}", task_id: str = "",
                  idem_key: str = "", project: str = "maxwell") -> str:

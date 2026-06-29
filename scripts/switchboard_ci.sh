@@ -59,6 +59,7 @@ run_test test_github_webhook.py
 run_test test_langgraph_adapter.py
 run_test test_mcp_dependencies.py
 run_test test_project_creation.py
+run_test test_runner_control_api.py
 run_test test_switchboard_runtime.py
 run_test test_tally_project_surface.py
 run_test test_task_move_archive.py

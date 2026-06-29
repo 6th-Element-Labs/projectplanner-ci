@@ -290,6 +290,21 @@ const TeepPlan = {
             </div>
         </div>`;
     },
+    runnerControlHtml(t) {
+        return `<div class="card mb-3" id="runner-control-panel" data-task-id="${this.esc(t.task_id)}">
+            <div class="card-header py-2">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="ti ti-player-play text-azure"></i>
+                    <span class="fw-semibold">Runner sessions</span>
+                    <span id="runner-control-count" class="badge bg-secondary-lt">loading</span>
+                    <span id="runner-control-flash" class="small text-secondary ms-auto"></span>
+                </div>
+            </div>
+            <div id="runner-control-body" class="card-body py-3">
+                <div class="text-secondary small">Loading runner sessions…</div>
+            </div>
+        </div>`;
+    },
     badge(text, color, light) {
         const cls = light === false ? `bg-${color}` : `bg-${color}-lt`;
         return `<span class="badge ${cls}">${this.esc(text)}</span>`;
@@ -904,6 +919,7 @@ const TeepPlan = {
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
                     <p class="text-secondary">Dispatch hands this task to a Claude Code agent in an isolated worktree. It drafts the change, opens a PR, and reports back here — it never merges or writes to your systems on its own.</p>
                     ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
+                    ${this.runnerControlHtml(t)}
                     ${this.claimControlHtml(t)}
                     <button id="edit-dispatch" class="btn btn-primary mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
                     <div id="dispatch-panel"></div>
@@ -924,6 +940,7 @@ const TeepPlan = {
                 </div>
             </div>`;
         this._renderActivity(t);
+        this._loadRunnerSessions(t.task_id);
         this._loadDispatch(t.task_id);
         document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
@@ -1138,6 +1155,94 @@ const TeepPlan = {
             if (this.isGanttVisible()) this.renderGantt();
             await this.openTask(taskId);
         } catch (e) { flash('Revoke failed: ' + e.message, 'danger'); }
+    },
+
+    async _loadRunnerSessions(taskId) {
+        const body = document.getElementById('runner-control-body');
+        const count = document.getElementById('runner-control-count');
+        if (!body) return;
+        let data;
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}&include_stale=true`;
+            data = await (await fetch(`/ixp/v1/runner_sessions?${q}`)).json();
+        } catch (e) {
+            body.innerHTML = `<div class="text-danger small">Runner sessions unavailable: ${this.esc(e.message)}</div>`;
+            if (count) { count.className = 'badge bg-red-lt'; count.textContent = 'error'; }
+            return;
+        }
+        const sessions = data.sessions || [];
+        if (count) {
+            count.className = sessions.length ? 'badge bg-azure-lt' : 'badge bg-secondary-lt';
+            count.textContent = `${sessions.length}`;
+        }
+        if (!sessions.length) {
+            body.innerHTML = `<div class="text-secondary small">No runner sessions are registered for this task.</div>`;
+            return;
+        }
+        body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
+            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Claim</th><th>Fidelity</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
+            <tbody>${sessions.map((s) => this._runnerSessionRow(s)).join('')}</tbody>
+        </table></div>`;
+        body.querySelectorAll('[data-runner-action]').forEach((btn) => {
+            btn.addEventListener('click', () => this.requestRunnerControl(
+                btn.getAttribute('data-runner-id'),
+                btn.getAttribute('data-runner-action'),
+                taskId,
+            ));
+        });
+    },
+
+    _runnerSessionRow(s) {
+        const actions = s.available_actions || [];
+        const canSnap = actions.includes('snapshot');
+        const canKill = actions.includes('kill');
+        const snap = s.last_snapshot || {};
+        const snapText = snap.captured_at ? new Date(snap.captured_at * 1000).toLocaleTimeString() : '—';
+        const statusColor = s.stale ? 'yellow' : (s.status === 'running' ? 'green' : 'secondary');
+        const ctrl = s.control || {};
+        const fidelity = ctrl.runner_kill ? 'T3 runner kill' : (ctrl.managed_process ? 'Managed' : 'Advisory');
+        const btn = (action, icon, label, color, disabled) =>
+            `<button class="btn btn-sm btn-${color}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-action="${action}"${disabled ? ' disabled' : ''} title="${this.esc(label)}"><i class="ti ti-${icon}"></i></button>`;
+        return `<tr>
+            <td><div class="font-monospace small">${this.esc(s.runner_session_id)}</div><span class="badge bg-${statusColor}-lt">${this.esc(s.status || 'unknown')}${s.stale ? ' · stale' : ''}</span></td>
+            <td>${this.esc(s.host_id || '—')}</td>
+            <td>${this.esc(s.runtime || '—')}<div class="text-secondary small">${this.esc(s.agent_id || '')}</div></td>
+            <td class="font-monospace small">${this.esc(s.claim_id || '—')}</td>
+            <td>${this.esc(fidelity)}</td>
+            <td class="text-secondary small">${this.esc(snapText)}</td>
+            <td class="text-end"><div class="btn-list justify-content-end flex-nowrap">
+                ${btn('snapshot', 'camera', 'Snapshot', 'outline-secondary', !canSnap)}
+                ${btn('kill', 'square', 'Kill', 'outline-danger', !canKill)}
+            </div></td>
+        </tr>`;
+    },
+
+    async requestRunnerControl(runnerId, action, taskId) {
+        const flash = (msg, cls) => {
+            const el = document.getElementById('runner-control-flash');
+            if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary') + ' ms-auto'; }
+        };
+        if (!runnerId || !action) return;
+        if (action === 'kill' && !window.confirm(`Request runner kill for ${runnerId}?`)) return;
+        flash(action === 'kill' ? 'Requesting kill…' : 'Requesting snapshot…');
+        const endpoint = action === 'kill' ? '/ixp/v1/request_runner_kill' : '/ixp/v1/request_runner_snapshot';
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project: window.PM_PROJECT || 'maxwell',
+                    runner_session_id: runnerId,
+                    reason: `operator ${action} from task ${taskId}`,
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+            flash(data.requested === false ? `${action} refused` : `${action} requested`, data.requested === false ? 'warning' : 'green');
+            await this._loadRunnerSessions(taskId);
+        } catch (e) {
+            flash(`${action} failed: ${e.message}`, 'danger');
+        }
     },
 
     async _loadDispatch(id) {

@@ -307,6 +307,91 @@ try:
         project=P,
     )
     ok(claimed_again["claim_id"] == claimed["claim_id"], "claim_next is idempotent by idem_key")
+    runner = store.upsert_runner_session(
+        {
+            "runner_session_id": "run_claimed",
+            "host_id": "host/test",
+            "agent_id": "codex/TEST#1",
+            "runtime": "codex",
+            "task_id": first["task_id"],
+            "claim_id": claimed["claim_id"],
+            "pid": 12345,
+            "status": "running",
+            "cwd": os.getcwd(),
+            "control": {"tier": "T3", "managed_process": True, "runner_kill": True},
+        },
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok("kill" in runner["available_actions"] and "snapshot" in runner["available_actions"],
+       "managed runner session advertises snapshot and kill actions")
+    runner_list = store.list_runner_sessions(task_id=first["task_id"], project=P)
+    ok(runner_list and runner_list[0]["claim_id"] == claimed["claim_id"],
+       "list_runner_sessions exposes current task claim")
+    snap_req = store.request_runner_control(
+        "run_claimed",
+        "snapshot",
+        reason="operator wants state",
+        actor=auth.actor(p),
+        principal_id=p["id"],
+        project=P,
+    )
+    ok(snap_req.get("requested") and snap_req["status"] == "pending",
+       "request_runner_control queues snapshot request")
+    kill_req = store.request_runner_control(
+        "run_claimed",
+        "kill",
+        reason="operator stop",
+        options={"grace_seconds": 0.1, "signal": "TERM"},
+        actor=auth.actor(p),
+        principal_id=p["id"],
+        project=P,
+    )
+    ok(kill_req.get("requested") and
+       kill_req["snapshot"]["runner_session_id"] == "run_claimed",
+       "kill request carries a pre-kill registry snapshot")
+    control_claim = store.claim_runner_control_request(
+        "host/test", kill_req["request_id"], actor="host/test", project=P)
+    ok(control_claim.get("claimed"), "owning host can claim runner control request")
+    control_done = store.complete_runner_control_request(
+        kill_req["request_id"],
+        result={"status": "killed"},
+        snapshot={"runner_session_id": "run_claimed", "source": "supervisor", "status": "killed"},
+        actor="host/test",
+        project=P,
+    )
+    ok(control_done["status"] == "completed" and
+       store.get_runner_session("run_claimed", project=P)["status"] == "killed",
+       "runner control completion updates runner session state")
+    ok(store.get_task(first["task_id"], project=P)["status"] == "In Progress",
+       "runner kill control never marks task complete")
+    unmanaged = store.upsert_runner_session(
+        {
+            "runner_session_id": "run_unmanaged",
+            "agent_id": "codex/unmanaged",
+            "runtime": "codex",
+            "task_id": first["task_id"],
+            "status": "running",
+            "control": {"runner_kill": True},
+        },
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(unmanaged["control"]["runner_kill"] is False and
+       "kill" not in unmanaged["available_actions"],
+       "unmanaged session cannot advertise runner_kill")
+    refused_kill = store.request_runner_control(
+        "run_unmanaged",
+        "kill",
+        reason="should fail closed",
+        actor=auth.actor(p),
+        principal_id=p["id"],
+        project=P,
+    )
+    ok(refused_kill.get("requested") is False and refused_kill["status"] == "refused",
+       "kill request for unmanaged session is visibly refused")
     exact_target = store.create_task({"workstream_id": "EXACT", "title": "human-selected"},
                                      actor="seed", project=P)
     exact_dep = store.create_task({"workstream_id": "EXACT", "title": "blocked exact",

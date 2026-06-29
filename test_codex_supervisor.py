@@ -42,6 +42,16 @@ try:
     ok(started["status"] == "running" and started["alive"], "start_session launches child")
     status = supervisor.status_session(started["runner_session_id"], _TMP)
     ok(status["pid"] == started["pid"] and status["alive"], "status_session reports live child")
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        if started["runner_session_id"] in Path(started["log_path"]).read_text(errors="replace"):
+            break
+        time.sleep(0.05)
+    snap = supervisor.snapshot_session(started["runner_session_id"], _TMP)
+    ok(snap["last_snapshot"]["runner_session_id"] == started["runner_session_id"],
+       "snapshot_session records a live snapshot")
+    ok(started["runner_session_id"] in snap["last_snapshot"]["log_tail"],
+       "snapshot_session preserves child log tail")
     time.sleep(0.2)
     killed = supervisor.kill_session(started["runner_session_id"], _TMP, grace_seconds=0.1)
     ok(killed["status"] == "killed" and not killed["alive"], "kill_session terminates child")

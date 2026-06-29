@@ -480,6 +480,50 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ON wake_intents(claimed_by_host, status);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_wake_intents_idem
                 ON wake_intents(idem_key) WHERE idem_key IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS runner_sessions (
+                runner_session_id TEXT PRIMARY KEY,
+                host_id           TEXT,
+                agent_id          TEXT,
+                runtime           TEXT,
+                task_id           TEXT,
+                claim_id          TEXT,
+                pid               INTEGER,
+                status            TEXT NOT NULL DEFAULT 'unknown',
+                cwd               TEXT,
+                control_json      TEXT NOT NULL DEFAULT '{}',
+                metadata_json     TEXT NOT NULL DEFAULT '{}',
+                last_snapshot_json TEXT NOT NULL DEFAULT '{}',
+                principal_id      TEXT,
+                started_at        REAL,
+                heartbeat_at      REAL NOT NULL,
+                heartbeat_ttl_s   INTEGER NOT NULL DEFAULT 60,
+                updated_at        REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_runner_sessions_host
+                ON runner_sessions(host_id, heartbeat_at);
+            CREATE INDEX IF NOT EXISTS ix_runner_sessions_task
+                ON runner_sessions(task_id, status);
+            CREATE TABLE IF NOT EXISTS runner_control_requests (
+                request_id        TEXT PRIMARY KEY,
+                runner_session_id TEXT NOT NULL,
+                host_id           TEXT,
+                action            TEXT NOT NULL,
+                status            TEXT NOT NULL,
+                reason            TEXT,
+                requested_by      TEXT,
+                principal_id      TEXT,
+                requested_at      REAL NOT NULL,
+                claimed_at        REAL,
+                claimed_by_host   TEXT,
+                completed_at      REAL,
+                snapshot_json     TEXT NOT NULL DEFAULT '{}',
+                result_json       TEXT NOT NULL DEFAULT '{}',
+                options_json      TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS ix_runner_control_status
+                ON runner_control_requests(status, host_id, requested_at);
+            CREATE INDEX IF NOT EXISTS ix_runner_control_session
+                ON runner_control_requests(runner_session_id, requested_at);
             CREATE TABLE IF NOT EXISTS archived_tasks (
                 archive_id          TEXT PRIMARY KEY,
                 task_id             TEXT NOT NULL,
@@ -1080,6 +1124,161 @@ def _wake_row(row: sqlite3.Row) -> Dict[str, Any]:
     return d
 
 
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_runner_control(control: Dict[str, Any], host_id: str) -> Dict[str, Any]:
+    """Fail closed on T3 claims.
+
+    A session may advertise runner_kill only when it is both host-owned and explicitly
+    managed by a supervisor/process handle. Unmanaged sessions can still be listed, but they
+    cannot make the UI/API show a kill button.
+    """
+    raw = dict(control or {})
+    managed = bool(
+        raw.get("managed_process")
+        or raw.get("managed")
+        or raw.get("supervised")
+        or str(raw.get("tier") or "").upper() == "T3"
+    )
+    runner_kill = bool(raw.get("runner_kill")) and managed and bool(host_id)
+    runner_restart = False  # fail closed until supervisor restart is implemented end-to-end
+    raw["managed_process"] = managed
+    raw["runner_kill"] = runner_kill
+    raw["runner_restart"] = runner_restart
+    if runner_kill:
+        raw.setdefault("tier", "T3")
+    return raw
+
+
+def _runner_available_actions(session: Dict[str, Any]) -> List[str]:
+    control = session.get("control") or {}
+    status = str(session.get("status") or "").lower()
+    if session.get("stale") or status in {"exited", "killed", "failed", "completed"}:
+        return []
+    actions: List[str] = []
+    if control.get("managed_process") and session.get("host_id"):
+        actions.append("snapshot")
+    if control.get("runner_kill"):
+        actions.append("kill")
+    if control.get("runner_restart"):
+        actions.append("restart")
+    return actions
+
+
+def _runner_session_row(row: sqlite3.Row, now: Optional[float] = None,
+                        include_claim: bool = False,
+                        c: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    d = dict(row)
+    ttl_s = d.get("heartbeat_ttl_s") or 60
+    expires_at = (d.get("heartbeat_at") or 0) + ttl_s
+    d["control"] = _json_obj(d.pop("control_json", "{}"), {})
+    d["metadata"] = _json_obj(d.pop("metadata_json", "{}"), {})
+    d["last_snapshot"] = _json_obj(d.pop("last_snapshot_json", "{}"), {})
+    d["expires_at"] = expires_at
+    d["stale"] = now >= expires_at
+    d["available_actions"] = _runner_available_actions(d)
+    if include_claim and c is not None and d.get("claim_id"):
+        claim = c.execute("SELECT * FROM task_claims WHERE id=?", (d["claim_id"],)).fetchone()
+        d["claim"] = dict(claim) if claim else None
+    return d
+
+
+def _runner_control_row(row: sqlite3.Row) -> Dict[str, Any]:
+    d = dict(row)
+    d["snapshot"] = _json_obj(d.pop("snapshot_json", "{}"), {})
+    d["result"] = _json_obj(d.pop("result_json", "{}"), {})
+    d["options"] = _json_obj(d.pop("options_json", "{}"), {})
+    return d
+
+
+def _runner_snapshot_from_session(session: Dict[str, Any],
+                                  reason: str = "operator_request") -> Dict[str, Any]:
+    return {
+        "captured_at": time.time(),
+        "source": "switchboard_registry",
+        "reason": reason,
+        "runner_session_id": session.get("runner_session_id"),
+        "host_id": session.get("host_id"),
+        "agent_id": session.get("agent_id"),
+        "runtime": session.get("runtime"),
+        "task_id": session.get("task_id"),
+        "claim_id": session.get("claim_id"),
+        "pid": session.get("pid"),
+        "status": session.get("status"),
+        "cwd": session.get("cwd"),
+        "heartbeat_at": session.get("heartbeat_at"),
+        "head_sha": (session.get("last_snapshot") or {}).get("head_sha"),
+    }
+
+
+def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
+                              principal_id: str, actor: str, now: float) -> Dict[str, Any]:
+    runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
+    if not runner_session_id:
+        return {"error": "runner_session_id required"}
+    host_id = (record.get("host_id") or "").strip()
+    control = _normalize_runner_control(record.get("control") or {}, host_id)
+    metadata = dict(record.get("metadata") or {})
+    for key in ("command", "log_path", "pgid", "wake_id", "wake_mode", "alive"):
+        if key in record and key not in metadata:
+            metadata[key] = record.get(key)
+    snapshot = record.get("last_snapshot") or record.get("snapshot") or {}
+    heartbeat_ttl_s = max(10, int(record.get("heartbeat_ttl_s") or record.get("ttl_s") or 60))
+    started_at = record.get("started_at") or now
+    heartbeat_at = record.get("heartbeat_at") or now
+    c.execute(
+        "INSERT INTO runner_sessions(runner_session_id, host_id, agent_id, runtime, task_id, "
+        "claim_id, pid, status, cwd, control_json, metadata_json, last_snapshot_json, "
+        "principal_id, started_at, heartbeat_at, heartbeat_ttl_s, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(runner_session_id) DO UPDATE SET host_id=excluded.host_id, "
+        "agent_id=excluded.agent_id, runtime=excluded.runtime, task_id=excluded.task_id, "
+        "claim_id=excluded.claim_id, pid=excluded.pid, status=excluded.status, cwd=excluded.cwd, "
+        "control_json=excluded.control_json, metadata_json=excluded.metadata_json, "
+        "last_snapshot_json=CASE WHEN excluded.last_snapshot_json!='{}' "
+        "THEN excluded.last_snapshot_json ELSE runner_sessions.last_snapshot_json END, "
+        "principal_id=excluded.principal_id, heartbeat_at=excluded.heartbeat_at, "
+        "heartbeat_ttl_s=excluded.heartbeat_ttl_s, updated_at=excluded.updated_at",
+        (
+            runner_session_id,
+            host_id or None,
+            record.get("agent_id") or None,
+            record.get("runtime") or None,
+            record.get("task_id") or None,
+            record.get("claim_id") or None,
+            record.get("pid"),
+            record.get("status") or ("running" if record.get("alive", True) else "unknown"),
+            record.get("cwd") or None,
+            json.dumps(control, sort_keys=True),
+            json.dumps(metadata, sort_keys=True),
+            json.dumps(snapshot or {}, sort_keys=True),
+            principal_id or None,
+            started_at,
+            heartbeat_at,
+            heartbeat_ttl_s,
+            now,
+        ),
+    )
+    c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+              (record.get("task_id") or None, actor, "runner.session_registered",
+               json.dumps({"runner_session_id": runner_session_id, "host_id": host_id or None,
+                           "agent_id": record.get("agent_id"),
+                           "runtime": record.get("runtime"),
+                           "control": control,
+                           "available_actions": _runner_available_actions({
+                               "control": control,
+                               "host_id": host_id,
+                               "status": record.get("status") or "running",
+                               "stale": False,
+                           })}, sort_keys=True), now))
+    row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
+                    (runner_session_id,)).fetchone()
+    return _runner_session_row(row, now=now, include_claim=True, c=c)
+
+
 def _selector_runtime_for_agent(agent_id: str) -> str:
     aid = (agent_id or "").lower()
     if aid.startswith("claude"):
@@ -1379,8 +1578,237 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                                "runner_session_id": runner_session_id or None,
                                "agent_id": agent_id or None,
                                "result": result}, sort_keys=True), now))
+        if status == "completed" and runner_session_id:
+            selector = wake.get("selector") or {}
+            _upsert_runner_session_in(
+                c,
+                {
+                    "runner_session_id": runner_session_id,
+                    "host_id": wake.get("claimed_by_host") or "",
+                    "agent_id": agent_id or selector.get("agent_id") or "",
+                    "runtime": selector.get("runtime") or "",
+                    "task_id": wake.get("task_id") or result.get("task_id") or "",
+                    "claim_id": result.get("claim_id") or "",
+                    "pid": result.get("pid"),
+                    "status": "running" if result.get("started") else "unknown",
+                    "cwd": result.get("cwd") or "",
+                    "control": result.get("control") or {"managed_process": True,
+                                                          "runner_kill": bool(runner_session_id)},
+                    "metadata": {"wake_id": wake_id, "wake_result": result},
+                    "heartbeat_ttl_s": result.get("heartbeat_ttl_s") or 60,
+                },
+                principal_id=actor,
+                actor=actor,
+                now=now,
+            )
         row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     return _wake_row(row)
+
+
+def upsert_runner_session(record: Dict[str, Any], principal_id: str = "",
+                          actor: str = "system",
+                          project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        return _upsert_runner_session_in(c, record, principal_id, actor, now)
+
+
+def list_runner_sessions(host_id: str = "", runtime: str = "", task_id: str = "",
+                         status: str = "", include_stale: bool = False,
+                         project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    q = "SELECT * FROM runner_sessions WHERE 1=1"
+    params: List[Any] = []
+    if host_id:
+        q += " AND host_id=?"; params.append(host_id)
+    if runtime:
+        q += " AND runtime=?"; params.append(runtime)
+    if task_id:
+        q += " AND task_id=?"; params.append(task_id)
+    if status:
+        q += " AND status=?"; params.append(status)
+    q += " ORDER BY heartbeat_at DESC, runner_session_id"
+    now = time.time()
+    with _conn(project) as c:
+        rows = c.execute(q, params).fetchall()
+        sessions = [_runner_session_row(r, now=now, include_claim=True, c=c) for r in rows]
+    if not include_stale:
+        sessions = [s for s in sessions if not s.get("stale")]
+    return sessions
+
+
+def get_runner_session(runner_session_id: str,
+                       project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
+                        (runner_session_id,)).fetchone()
+        return _runner_session_row(row, now=now, include_claim=True, c=c) if row else None
+
+
+def request_runner_control(runner_session_id: str, action: str, reason: str = "",
+                           options: Optional[Dict[str, Any]] = None,
+                           actor: str = "system", principal_id: str = "",
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    action = (action or "").strip().lower()
+    if action not in {"snapshot", "kill", "restart"}:
+        return {"requested": False, "error": "unsupported_action", "action": action}
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
+                        (runner_session_id,)).fetchone()
+        if not row:
+            return {"requested": False, "error": "runner_session_not_found",
+                    "runner_session_id": runner_session_id}
+        session = _runner_session_row(row, now=now, include_claim=True, c=c)
+        available = set(session.get("available_actions") or [])
+        request_id = "runnerreq-" + uuid.uuid4().hex[:16]
+        snapshot = _runner_snapshot_from_session(session, reason=f"before_{action}")
+        req_status = "pending" if action in available else "refused"
+        result = {}
+        if req_status == "refused":
+            result = {
+                "reason": "action_not_supported",
+                "available_actions": sorted(available),
+                "control": session.get("control") or {},
+            }
+        c.execute(
+            "INSERT INTO runner_control_requests(request_id, runner_session_id, host_id, "
+            "action, status, reason, requested_by, principal_id, requested_at, "
+            "snapshot_json, result_json, options_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                request_id,
+                runner_session_id,
+                session.get("host_id") or None,
+                action,
+                req_status,
+                reason or f"operator requested {action}",
+                actor,
+                principal_id or None,
+                now,
+                json.dumps(snapshot, sort_keys=True),
+                json.dumps(result, sort_keys=True),
+                json.dumps(options or {}, sort_keys=True),
+            ),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (session.get("task_id") or None, actor,
+                   f"runner.{action}_{'requested' if req_status == 'pending' else 'refused'}",
+                   json.dumps({"request_id": request_id,
+                               "runner_session_id": runner_session_id,
+                               "host_id": session.get("host_id"),
+                               "status": req_status,
+                               "reason": reason or "",
+                               "available_actions": sorted(available),
+                               "snapshot": snapshot}, sort_keys=True), now))
+        out = _runner_control_row(c.execute(
+            "SELECT * FROM runner_control_requests WHERE request_id=?",
+            (request_id,),
+        ).fetchone())
+    out["requested"] = req_status == "pending"
+    return out
+
+
+def list_runner_control_requests(status: str = "", host_id: str = "",
+                                 runner_session_id: str = "",
+                                 project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    q = "SELECT * FROM runner_control_requests WHERE 1=1"
+    params: List[Any] = []
+    if status:
+        q += " AND status=?"; params.append(status)
+    if host_id:
+        q += " AND host_id=?"; params.append(host_id)
+    if runner_session_id:
+        q += " AND runner_session_id=?"; params.append(runner_session_id)
+    q += " ORDER BY requested_at"
+    with _conn(project) as c:
+        return [_runner_control_row(r) for r in c.execute(q, params).fetchall()]
+
+
+def claim_runner_control_request(host_id: str, request_id: str,
+                                 actor: str = "system",
+                                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM runner_control_requests WHERE request_id=?",
+                        (request_id,)).fetchone()
+        if not row:
+            return {"claimed": False, "error": "runner_control_not_found",
+                    "request_id": request_id}
+        req = _runner_control_row(row)
+        if req["status"] != "pending":
+            return {"claimed": False, "reason": f"request is {req['status']}", "request": req}
+        if req.get("host_id") and req["host_id"] != host_id:
+            return {"claimed": False, "reason": "wrong_host", "host_id": host_id,
+                    "request_host_id": req.get("host_id")}
+        cur = c.execute(
+            "UPDATE runner_control_requests SET status='claimed', claimed_at=?, "
+            "claimed_by_host=? WHERE request_id=? AND status='pending'",
+            (now, host_id, request_id),
+        )
+        if cur.rowcount == 0:
+            row = c.execute("SELECT * FROM runner_control_requests WHERE request_id=?",
+                            (request_id,)).fetchone()
+            return {"claimed": False, "reason": "lost_race",
+                    "request": _runner_control_row(row)}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "runner.control_claimed",
+                   json.dumps({"request_id": request_id, "host_id": host_id}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM runner_control_requests WHERE request_id=?",
+                        (request_id,)).fetchone()
+    return {"claimed": True, "request": _runner_control_row(row)}
+
+
+def complete_runner_control_request(request_id: str, result: Optional[Dict[str, Any]] = None,
+                                    snapshot: Optional[Dict[str, Any]] = None,
+                                    status: str = "",
+                                    actor: str = "system",
+                                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    result = dict(result or {})
+    snapshot = dict(snapshot or {})
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM runner_control_requests WHERE request_id=?",
+                        (request_id,)).fetchone()
+        if not row:
+            return {"error": "runner_control_not_found", "request_id": request_id}
+        req = _runner_control_row(row)
+        final_status = status or ("failed" if result.get("error") else "completed")
+        if final_status not in {"completed", "failed", "cancelled"}:
+            final_status = "completed"
+        if not snapshot:
+            snapshot = req.get("snapshot") or {}
+        merged_result = {**(req.get("result") or {}), **result}
+        c.execute(
+            "UPDATE runner_control_requests SET status=?, completed_at=?, "
+            "snapshot_json=?, result_json=? WHERE request_id=?",
+            (final_status, now, json.dumps(snapshot, sort_keys=True),
+             json.dumps(merged_result, sort_keys=True), request_id),
+        )
+        session_status = None
+        if req.get("action") == "kill" and final_status == "completed":
+            session_status = merged_result.get("status") or "killed"
+        elif req.get("action") == "snapshot" and snapshot.get("status"):
+            session_status = snapshot.get("status")
+        sets = ["last_snapshot_json=?", "updated_at=?"]
+        vals: List[Any] = [json.dumps(snapshot, sort_keys=True), now]
+        if session_status:
+            sets.append("status=?")
+            vals.append(session_status)
+        vals.append(req["runner_session_id"])
+        c.execute(f"UPDATE runner_sessions SET {', '.join(sets)} WHERE runner_session_id=?", vals)
+        session_row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
+                                (req["runner_session_id"],)).fetchone()
+        session = _runner_session_row(session_row, now=now, include_claim=True, c=c) if session_row else {}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (session.get("task_id") or None, actor, f"runner.{req['action']}_{final_status}",
+                   json.dumps({"request_id": request_id,
+                               "runner_session_id": req["runner_session_id"],
+                               "status": final_status,
+                               "result": merged_result,
+                               "snapshot": snapshot}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM runner_control_requests WHERE request_id=?",
+                        (request_id,)).fetchone()
+    return _runner_control_row(row)
 
 
 def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",

@@ -42,6 +42,10 @@ P_HEARTBEAT_HOST = "/ixp/v1/heartbeat_host"
 P_LIST_WAKES = "/txp/v1/list_wake_intents"
 P_CLAIM_WAKE = "/txp/v1/claim_wake"
 P_COMPLETE_WAKE = "/txp/v1/complete_wake"
+P_REGISTER_RUNNER = "/ixp/v1/register_runner_session"
+P_LIST_RUNNER_CONTROLS = "/ixp/v1/runner_controls"
+P_CLAIM_RUNNER_CONTROL = "/ixp/v1/claim_runner_control"
+P_COMPLETE_RUNNER_CONTROL = "/ixp/v1/complete_runner_control"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
 
 
@@ -202,7 +206,10 @@ def launch_command(wake, inventory):
         child += ["--idle-seconds", idle]
         child += (["--work-module", work_mod] if work_mod else ["--dry"])
     cmd = ["python3", SUPERVISOR, "start", "--agent-id", agent_id,
-           "--cwd", inventory["repo_root"], "--"] + child
+           "--cwd", inventory["repo_root"]]
+    if wake.get("task_id"):
+        cmd += ["--task-id", wake.get("task_id")]
+    cmd += ["--"] + child
     return cmd, mode
 
 
@@ -215,6 +222,9 @@ def launch(wake, inventory):
         rec = json.loads(out.stdout)
         if isinstance(rec, dict):
             rec["wake_mode"] = mode
+            rec["host_id"] = inventory.get("host_id")
+            rec["runtime"] = (wake.get("selector") or {}).get("runtime") or ""
+            rec["task_id"] = rec.get("task_id") or wake.get("task_id") or ""
         return rec
     except Exception as e:
         print(f"[agent_host] launch failed: {e}", flush=True)
@@ -236,11 +246,88 @@ def confirm_started(rec, grace_s=4.0):
     return True
 
 
+def register_runner_session(rec, wake, inventory):
+    """Publish the supervisor session to Switchboard's central runner registry."""
+    if not rec or not rec.get("runner_session_id"):
+        return None
+    body = {
+        "project": PROJECT,
+        "runner_session_id": rec.get("runner_session_id"),
+        "host_id": inventory.get("host_id"),
+        "agent_id": rec.get("agent_id") or (wake.get("selector") or {}).get("agent_id"),
+        "runtime": rec.get("runtime") or (wake.get("selector") or {}).get("runtime"),
+        "task_id": rec.get("task_id") or wake.get("task_id") or "",
+        "claim_id": rec.get("claim_id") or "",
+        "pid": rec.get("pid"),
+        "status": rec.get("status") or "running",
+        "cwd": rec.get("cwd") or inventory.get("repo_root"),
+        "control": rec.get("control") or {"tier": "T3", "runner_kill": True,
+                                           "managed_process": True},
+        "metadata": {
+            "wake_id": wake.get("wake_id"),
+            "wake_mode": rec.get("wake_mode"),
+            "log_path": rec.get("log_path"),
+            "command": rec.get("command"),
+        },
+        "heartbeat_ttl_s": 60,
+    }
+    return _try("POST", P_REGISTER_RUNNER, body)
+
+
+def supervisor_action(action, runner_session_id, options=None):
+    options = options or {}
+    if action == "snapshot":
+        cmd = ["python3", SUPERVISOR, "snapshot", runner_session_id]
+    elif action == "kill":
+        cmd = ["python3", SUPERVISOR, "kill", runner_session_id,
+               "--grace-seconds", str(options.get("grace_seconds") or 5.0),
+               "--signal", options.get("signal") or "TERM"]
+    else:
+        return {"error": f"unsupported runner action {action}"}
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return {"error": "supervisor_failed", "stderr": out.stderr[-4000:]}
+        return json.loads(out.stdout or "{}")
+    except Exception as e:
+        return {"error": type(e).__name__, "message": str(e)}
+
+
+def handle_runner_controls(inventory):
+    """Consume pending snapshot/kill requests for runner sessions hosted here."""
+    host_id = inventory["host_id"]
+    listed = _try(
+        "GET",
+        f"{P_LIST_RUNNER_CONTROLS}?project={PROJECT}&status=pending&host_id={host_id}",
+    ) or {}
+    requests = listed.get("requests") or []
+    handled = []
+    for req in requests:
+        req_id = req.get("request_id")
+        claimed = _try("POST", P_CLAIM_RUNNER_CONTROL,
+                       {"project": PROJECT, "host_id": host_id, "request_id": req_id})
+        if not claimed or not claimed.get("claimed"):
+            continue
+        action = req.get("action")
+        result = supervisor_action(action, req.get("runner_session_id"), req.get("options") or {})
+        snapshot = result.get("last_snapshot") or result.get("snapshot") or {}
+        if action == "snapshot" and not snapshot:
+            snapshot = result
+        status = "failed" if result.get("error") else "completed"
+        _try("POST", P_COMPLETE_RUNNER_CONTROL,
+             {"project": PROJECT, "host_id": host_id, "request_id": req_id,
+              "status": status, "result": result, "snapshot": snapshot})
+        handled.append({"request_id": req_id, "action": action, "status": status,
+                        "runner_session_id": req.get("runner_session_id")})
+    return handled
+
+
 def run_once(inventory):
     """One daemon iteration. Returns a summary of what it did (for tests + logging)."""
     host_id = inventory["host_id"]
     _try("POST", P_HEARTBEAT_HOST, {"project": PROJECT, "host_id": host_id,
                                     "active_sessions": active_session_count(inventory)})
+    controls = handle_runner_controls(inventory)
     listed = _try("GET", f"{P_LIST_WAKES}?project={PROJECT}&status=pending") or {}
     wakes = listed.get("wake_intents") or listed.get("wakes") or []
     acted = []
@@ -257,15 +344,22 @@ def run_once(inventory):
             continue  # another host won it (atomic claim)
         rec = launch(w, inventory)
         started = confirm_started(rec)
+        runner_registration = register_runner_session(rec, w, inventory) if started else None
         result = {"started": started, "runner_session_id": (rec or {}).get("runner_session_id"),
                   "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
-                  "reason": "started" if started else "launch_failed"}
+                  "reason": "started" if started else "launch_failed",
+                  "pid": (rec or {}).get("pid"),
+                  "cwd": (rec or {}).get("cwd"),
+                  "task_id": (rec or {}).get("task_id") or w.get("task_id"),
+                  "control": (rec or {}).get("control") or {},
+                  "runner_registered": bool(runner_registration and not runner_registration.get("error"))}
         _try("POST", P_COMPLETE_WAKE, {"project": PROJECT, "wake_id": wake_id,
                                        "runner_session_id": result["runner_session_id"],
                                        "agent_id": (w.get("selector") or {}).get("agent_id"),
                                        "result": result})
         acted.append({"wake_id": wake_id, **result})
-    return {"host_id": host_id, "pending": len(wakes), "acted": acted}
+    return {"host_id": host_id, "pending": len(wakes), "acted": acted,
+            "runner_controls": controls}
 
 
 def run(interval=10, once=False):

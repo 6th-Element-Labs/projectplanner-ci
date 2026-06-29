@@ -745,6 +745,123 @@ async def ixp_host_status(host_id: str, project: str = Query(store.DEFAULT_PROJE
     return status
 
 
+@app.get("/ixp/v1/runner_sessions")
+async def ixp_runner_sessions(project: str = Query(store.DEFAULT_PROJECT),
+                              host_id: str = "", runtime: str = "",
+                              task_id: str = "", status: str = "",
+                              include_stale: bool = False):
+    return {"sessions": store.list_runner_sessions(
+        host_id=host_id, runtime=runtime, task_id=task_id, status=status,
+        include_stale=include_stale, project=_proj(project))}
+
+
+@app.post("/ixp/v1/register_runner_session")
+async def ixp_register_runner_session(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("host_id") or body.get("agent_id") or "runner")
+    record = dict(body)
+    record.pop("project", None)
+    return store.upsert_runner_session(
+        record, principal_id=principal["id"], actor=auth.actor(principal), project=project)
+
+
+@app.post("/ixp/v1/heartbeat_runner_session")
+async def ixp_heartbeat_runner_session(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("host_id") or body.get("agent_id") or "runner")
+    record = dict(body)
+    record.pop("project", None)
+    return store.upsert_runner_session(
+        record, principal_id=principal["id"], actor=auth.actor(principal), project=project)
+
+
+@app.post("/ixp/v1/request_runner_snapshot")
+async def ixp_request_runner_snapshot(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+    result = store.request_runner_control(
+        body.get("runner_session_id") or body.get("id") or "",
+        "snapshot",
+        reason=body.get("reason") or "",
+        options=body.get("options") or {},
+        actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/request_runner_kill")
+async def ixp_request_runner_kill(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+    result = store.request_runner_control(
+        body.get("runner_session_id") or body.get("id") or "",
+        "kill",
+        reason=body.get("reason") or "",
+        options={"grace_seconds": body.get("grace_seconds"),
+                 "signal": body.get("signal") or "TERM"},
+        actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/request_runner_restart")
+async def ixp_request_runner_restart(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+    result = store.request_runner_control(
+        body.get("runner_session_id") or body.get("id") or "",
+        "restart",
+        reason=body.get("reason") or "",
+        options=body.get("options") or {},
+        actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.get("/ixp/v1/runner_controls")
+async def ixp_runner_controls(project: str = Query(store.DEFAULT_PROJECT),
+                              status: str = "", host_id: str = "",
+                              runner_session_id: str = ""):
+    return {"requests": store.list_runner_control_requests(
+        status=status, host_id=host_id, runner_session_id=runner_session_id,
+        project=_proj(project))}
+
+
+@app.post("/ixp/v1/claim_runner_control")
+async def ixp_claim_runner_control(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("host_id") or "agent-host")
+    result = store.claim_runner_control_request(
+        (body.get("host_id") or "").strip(),
+        (body.get("request_id") or body.get("id") or "").strip(),
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/complete_runner_control")
+async def ixp_complete_runner_control(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("host_id") or "agent-host")
+    result = store.complete_runner_control_request(
+        (body.get("request_id") or body.get("id") or "").strip(),
+        result=body.get("result") or {},
+        snapshot=body.get("snapshot") or {},
+        status=body.get("status") or "",
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.post("/ixp/v1/claim")
 async def ixp_claim(request: Request, body: dict = Body(...)):
     project = _body_project(body)

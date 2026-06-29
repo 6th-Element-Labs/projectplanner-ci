@@ -156,6 +156,15 @@ def status_session(runner_session_id, runner_dir=None):
     return {**meta, "alive": alive}
 
 
+def snapshot_session(runner_session_id, runner_dir=None):
+    meta = _read_meta(runner_session_id, runner_dir)
+    snap = _snapshot(meta)
+    meta["last_snapshot"] = snap
+    meta["snapshot_at"] = snap["captured_at"]
+    _write_json(_meta_path(runner_session_id, runner_dir), meta)
+    return {**status_session(runner_session_id, runner_dir), "last_snapshot": snap}
+
+
 def kill_session(runner_session_id, runner_dir=None, grace_seconds=5.0, signal_name="TERM"):
     meta = _read_meta(runner_session_id, runner_dir)
     snap = _snapshot(meta)
@@ -217,6 +226,9 @@ def main(argv=None):
     status = sub.add_parser("status", help="inspect a managed session")
     status.add_argument("runner_session_id")
 
+    snapshot = sub.add_parser("snapshot", help="capture a managed session snapshot")
+    snapshot.add_argument("runner_session_id")
+
     kill = sub.add_parser("kill", help="terminate a managed session")
     kill.add_argument("runner_session_id")
     kill.add_argument("--grace-seconds", type=float, default=5.0)
@@ -231,6 +243,8 @@ def main(argv=None):
                             args.runner_dir, args.runner_session_id))
     elif args.command == "status":
         _emit(status_session(args.runner_session_id, args.runner_dir))
+    elif args.command == "snapshot":
+        _emit(snapshot_session(args.runner_session_id, args.runner_dir))
     elif args.command == "kill":
         _emit(kill_session(args.runner_session_id, args.runner_dir, args.grace_seconds,
                            args.signal))

@@ -43,6 +43,9 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `archive_task(task_id, project, reason?)`
 - `register_agent(...)`, `heartbeat(...)`, `list_active_agents(...)`
 - `register_host(...)`, `heartbeat_host(...)`, `list_agent_hosts(...)`, `host_status(...)`
+- `register_runner_session(...)`, `list_runner_sessions(...)`, `request_runner_snapshot(...)`,
+  `request_runner_kill(...)`, `list_runner_control_requests(...)`, `claim_runner_control(...)`,
+  `complete_runner_control(...)`
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
 - `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
@@ -154,9 +157,13 @@ Protocol compatibility:
 
 Runner kill rule:
 - Runner kill is outside `IXP-core`. Only Switchboard-managed sessions with a
-  `runner_session_id` may advertise `runner_kill=true`.
-- Kill requests target the runner session, snapshot state first, write `runner.*` audit events,
-  and do not silently mark work complete. See `docs/INTERRUPT-TIERS-SPEC.md`.
+  `runner_session_id`, owning `host_id`, and `managed_process=true` may advertise
+  `runner_kill=true`. Unmanaged sessions are still visible, but their kill action is stripped.
+- Operators request snapshot/kill through runner-control requests. The owning Agent Host claims
+  the request, executes the local supervisor action, completes the request with the captured
+  snapshot/result, and writes `runner.*` audit events.
+- Kill/restart requests snapshot state first and never mark work complete. See
+  `docs/INTERRUPT-TIERS-SPEC.md`.
 
 ## Connect
 

@@ -157,10 +157,13 @@ agent_host.launch = lambda wake, inv: {
 agent_host.confirm_started = lambda rec: True
 summary = agent_host.run_once(inventory)
 complete_calls = [c for c in calls if c[1] == agent_host.P_COMPLETE_WAKE]
+runner_register_calls = [c for c in calls if c[1] == agent_host.P_REGISTER_RUNNER]
 ok(summary["acted"] and summary["acted"][0]["wake_mode"] == "inbox_only",
    "run_once reports inbox-only mode for lane-less wake")
 ok(complete_calls and complete_calls[0][2]["result"]["wake_mode"] == "inbox_only",
    "complete_wake records inbox-only mode")
+ok(runner_register_calls and runner_register_calls[0][2]["runner_session_id"] == "run_test",
+   "run_once registers launched runner session")
 
 calls = []
 
@@ -183,6 +186,48 @@ ok(len(claim_calls) == 1 and claim_calls[0][2]["wake_id"] == "wake-lane",
    "run_once claims only the eligible lane-scoped wake")
 ok(summary["acted"] and summary["acted"][0]["wake_mode"] == "claim_next",
    "run_once reports claim_next mode for lane-scoped wake")
+
+calls = []
+runner_actions = []
+kill_request = {
+    "request_id": "runnerreq-kill",
+    "runner_session_id": "run_test",
+    "host_id": "host/test",
+    "action": "kill",
+    "options": {"grace_seconds": 0.1, "signal": "TERM"},
+}
+
+
+def fake_try_runner_control(method, path, body=None):
+    calls.append((method, path, body or {}))
+    if path.startswith(agent_host.P_LIST_RUNNER_CONTROLS):
+        return {"requests": [kill_request]}
+    if path == agent_host.P_CLAIM_RUNNER_CONTROL:
+        return {"claimed": True, "request": kill_request}
+    if path == agent_host.P_COMPLETE_RUNNER_CONTROL:
+        return {"status": body.get("status")}
+    if path.startswith(agent_host.P_LIST_WAKES):
+        return {"wake_intents": []}
+    return {"ok": True}
+
+
+agent_host._try = fake_try_runner_control
+agent_host.supervisor_action = lambda action, runner_session_id, options=None: runner_actions.append(
+    (action, runner_session_id, options or {})) or {
+        "status": "killed",
+        "last_snapshot": {"runner_session_id": runner_session_id, "source": "test"},
+    }
+summary = agent_host.run_once(inventory)
+control_claims = [c for c in calls if c[1] == agent_host.P_CLAIM_RUNNER_CONTROL]
+control_completes = [c for c in calls if c[1] == agent_host.P_COMPLETE_RUNNER_CONTROL]
+ok(runner_actions and runner_actions[0][0] == "kill",
+   "run_once executes pending runner kill through supervisor")
+ok(control_claims and control_claims[0][2]["request_id"] == "runnerreq-kill",
+   "run_once claims runner control request for this host")
+ok(control_completes and control_completes[0][2]["snapshot"]["runner_session_id"] == "run_test",
+   "run_once completes runner control with snapshot")
+ok(summary["runner_controls"] and summary["runner_controls"][0]["status"] == "completed",
+   "run_once reports handled runner controls")
 
 handshakes = []
 inboxes = []

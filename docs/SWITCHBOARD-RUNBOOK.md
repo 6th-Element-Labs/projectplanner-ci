@@ -174,6 +174,13 @@ Agent Hosts fail closed: `PM_AGENT_HOST_ALLOW_WORK` defaults to off, `PM_HOST_LA
 the allowed work lanes, and `PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM` stays off unless an operator is
 intentionally allowing global dispatch.
 
+Runner session control is host-owned. Switchboard keeps a central registry of supervised
+`runner_session_id` records so operators can see host, runtime, task/claim, heartbeat,
+control fidelity, last snapshot, and available actions. Snapshot/kill buttons create audited
+runner-control requests; only the owning Agent Host claims them and calls the local supervisor.
+Unmanaged or hostless sessions cannot advertise `runner_kill`, and kill/restart control never
+marks task work complete.
+
 ### 3.1 Run the P0 message-only host on the Plan VM
 
 ```bash
