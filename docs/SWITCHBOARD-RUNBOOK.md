@@ -165,6 +165,44 @@ A work-capable host should show:
 - lane-scoped wakes using `wake_mode=claim_next`;
 - lane-less `policy.mode=claim_next` wakes left unclaimed unless `PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=1`.
 
+### 3.3 HARDEN-4 unattended proof mode
+
+For the bounded dogfood proof, create an isolated proof task and a downstream sentinel on the
+`PROOF` lane, then start an eligible work host with the proof worker:
+
+```bash
+export PM_BASE=https://plan.taikunai.com
+export PM_PROJECT=switchboard
+export PM_MCP_TOKEN=...
+export PM_HOST_ID=host/my-worker-proof
+export PM_RUNTIME=codex
+export PM_HOST_LANES=PROOF
+export PM_AGENT_HOST_ALLOW_WORK=1
+export PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
+export PM_AGENT_WORK_MODULE=proof_work:run_task
+python3 adapters/agent_host.py --once
+```
+
+The proof worker is deliberately narrow. It claims only via `claim_next(lanes="PROOF")`, writes
+a generated markdown proof file under `docs/dispatches/`, pushes a task-scoped branch, opens a
+PR containing `Closes PROOF-n`, and returns branch/head/PR evidence to `complete_claim`. After
+merge provenance marks that proof task Done, a second `claim_next(lanes="PROOF")` should see the
+downstream sentinel. That is the minimum live proof that wake -> host -> runtime -> handshake ->
+inbox -> claim_next -> PR -> In Review -> merge-proven Done -> downstream dispatch works.
+
+Before trusting the merge-provenance leg, verify the repository webhook is actually installed:
+
+```bash
+gh api repos/6th-Element-Labs/projectplanner/hooks \
+  --jq '.[] | select(.config.url=="https://plan.taikunai.com/api/github/webhook") | {id,active,events,last_response}'
+```
+
+The live app should have `PM_GITHUB_WEBHOOK_SECRET` set in `/opt/projectplanner/.env`; the GitHub
+hook should use the same secret, subscribe to `pull_request` and `push`, and show
+`last_response.status=active` after `gh api --method POST repos/.../hooks/<id>/pings`. Without
+that repo-level hook, PR merges can still be replayed through `/api/github/webhook`, but they are
+not unattended.
+
 ## 4. The self-driving loop (what makes it hands-off)
 ```
 supervisor keeps agent(s) alive
