@@ -1,9 +1,18 @@
-# ProjectPlanner
+# Switchboard
 
-A tiny, standalone Asana-style project-board web app with a per-task **Ask Taikun**
-agent (RAG over the plan docs + propose-to-confirm task edits). Extracted from the
-ActionEngine `taikun-pm` satellite (ADR 0007) into its own repo so it is **not** part
-of the core platform and never ships to a fresh ActionEngine install.
+Switchboard is the model-agnostic agent coordination layer behind `plan.taikunai.com`:
+a live project board, MCP/REST control plane, durable agent inbox, claim scheduler,
+runtime adapters, host wake substrate, reconcile loop, and Tally cost-to-outcome ledger.
+
+Compatibility note: the GitHub repo, live checkout, systemd units, and data directory still
+use the historical `projectplanner` name. Treat those names as compatibility surfaces during
+the migration, not as the product name. See
+[`docs/SWITCHBOARD-RENAME-MIGRATION.md`](docs/SWITCHBOARD-RENAME-MIGRATION.md).
+
+The original app began as a tiny, standalone Asana-style project-board web app with a
+per-task **Ask Taikun** agent (RAG over plan docs + propose-to-confirm task edits). It was
+extracted from the ActionEngine `taikun-pm` satellite (ADR 0007) into its own repo so it is
+**not** part of the core platform and never ships to a fresh ActionEngine install.
 
 Runs as **two small processes on one cheap VM**:
 - `app` — FastAPI on `127.0.0.1:8110` (board UI + task CRUD + live xlsx/MSPDI export + the agent)
@@ -29,7 +38,7 @@ build_plan_artifacts.py                       # regenerate seed_plan.json (rebas
 requirements.txt                              # app deps
 deploy/
   gateway/config.yaml + requirements.txt      # the bundled LiteLLM gateway
-  projectplanner.service / -gateway.service   # systemd units
+  projectplanner.service / -gateway.service   # compatibility systemd units
   Caddyfile                                    # plan.taikunai.com -> :8110 (auto-HTTPS)
   PROVISION.md                                 # spin up the cheap VM end-to-end
 ```
@@ -66,6 +75,7 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/INTERRUPT-TIERS-SPEC.md`](docs/INTERRUPT-TIERS-SPEC.md) | Visible stop/redirect guarantees: advisory poll, hook-level deny, runner kill, and managed control |
 | [`docs/CLAIM-NEXT-SPEC.md`](docs/CLAIM-NEXT-SPEC.md) | `claim_next` / `+TXP` dispatch profile: atomic task assignment, task claims, budget/model guidance |
 | [`docs/TALLY-SPEC.md`](docs/TALLY-SPEC.md) | Tally / `+OXP` cost-to-outcome and KPI ledger: gateway-measured plus agent-reported spend |
+| [`docs/SWITCHBOARD-RENAME-MIGRATION.md`](docs/SWITCHBOARD-RENAME-MIGRATION.md) | Safe migration from `projectplanner` repo/ops identity to Switchboard product identity |
 | [`docs/decisions/0001-…`](docs/decisions/0001-multi-agent-coordination-primitives.md) | ADR: build order for the multi-agent coordination primitives |
 | [`docs/MCP.md`](docs/MCP.md) | MCP server design and tool reference |
 | [`docs/UNIVERSAL_WORKFLOW_UI.md`](docs/UNIVERSAL_WORKFLOW_UI.md) | Universal workflow UI spec |

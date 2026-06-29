@@ -2,6 +2,11 @@
 
 Two small Python processes + Caddy on one tiny ARM VM. ~$6/mo.
 
+Switchboard is the product name. This provisioning guide still uses the historical
+`projectplanner` repo, paths, systemd units, and `PM_*` env prefix because those are the
+currently deployed compatibility surfaces. Do not rename them in-place without following
+[`docs/SWITCHBOARD-RENAME-MIGRATION.md`](../docs/SWITCHBOARD-RENAME-MIGRATION.md).
+
 ## 1. Launch the VM (AWS, us-east-1)
 - **Type:** `t4g.micro` (2 vCPU ARM Graviton, 1 GB RAM) — comfortable for app + gateway.
   `t4g.nano` (0.5 GB) is cheaper (~$3/mo) but tight once LiteLLM is running; micro is the safe pick.
@@ -82,6 +87,21 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-agent-host
 sudo systemctl restart projectplanner-agent-host
 ```
+
+## Rename safety
+
+The live deployment should keep these compatibility names until Switchboard aliases are
+implemented and verified:
+
+- `/opt/projectplanner`
+- `/var/lib/projectplanner`
+- `projectplanner*.service` and `projectplanner*.timer`
+- `PM_*` environment variables
+- GitHub remote `6th-Element-Labs/projectplanner`
+
+For the rename migration, first add aliases such as `/opt/switchboard -> /opt/projectplanner`
+and `switchboard*.service` wrappers. Verify health, MCP, Agent Host, reconcile, and Tally
+before making any alias canonical.
 
 ## Bootstrap direct-default provenance backfill
 Use this only for legacy dogfood commits that landed directly on the default branch before the

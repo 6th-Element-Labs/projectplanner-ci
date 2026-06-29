@@ -5,6 +5,11 @@ from the dogfood (DOGFOOD-3) + the shipped pieces: `run_session` (driver, decisi
 the Codex `supervisor.py` (ADAPTER-8), RECON-5 auto-provenance, the monitor sweep, and the
 Agent Host wake contract in [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
 
+Naming note: Switchboard is the product name. The live VM still uses `projectplanner`
+for the repo, `/opt` checkout, `/var/lib` data path, systemd units, and `PM_*` env vars.
+Those are compatibility names until the staged rename in
+[`SWITCHBOARD-RENAME-MIGRATION.md`](SWITCHBOARD-RENAME-MIGRATION.md) is complete.
+
 ## 1. Deployment topology — two distinct hosts (don't conflate them)
 
 ```
@@ -79,6 +84,7 @@ sudo systemctl enable --now projectplanner-monitors.timer   # durable ack/deadli
 ```
 > The live DBs live in `/var/lib/projectplanner/` (env-redirected), not `/opt/projectplanner/`.
 > The `*.db` files under `/opt` are empty placeholders — never point a tool at them.
+> Do not move these paths directly during the rename. Add and validate Switchboard aliases first.
 
 ## 3. Run an autonomous agent (agent host)
 ```bash

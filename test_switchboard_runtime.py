@@ -66,8 +66,13 @@ try:
        "working agreement is step zero of the handshake")
     ok(agreement["protocol"]["version"] == "ixp.v1",
        "working agreement advertises protocol version")
-    ok(agreement["done_policy"]["agent_may_set_done"] is True,
-       "working agreement allows evidence-backed agent Done")
+    ok(agreement["done_policy"]["agent_may_set_done"] is False and
+       agreement["done_policy"]["requires_merge_provenance"] is True,
+       "working agreement reserves Done for merge provenance")
+    ok("safe_merge_protocol" in agreement and
+       "rerun the relevant tests/checks after the rebase or conflict resolution"
+       in agreement["safe_merge_protocol"]["pre_merge"],
+       "working agreement instructs agents how to merge safely")
     ok(store.check_protocol_compatibility(agreement["protocol"])["compatible"] is True,
        "current protocol envelope is compatible")
     incompatible = store.check_protocol_compatibility({"version": "ixp.v9"})
@@ -551,16 +556,25 @@ try:
         actor=auth.actor(p),
         project=P,
     )
-    ok(agent_done["status"] == "Done", "complete_claim can set Done when explicitly requested")
+    ok(agent_done["status"] == "In Review" and
+       agent_done.get("done_gate", {}).get("code") == "done_requires_merge_provenance",
+       "complete_claim downgrades agent-requested Done to In Review")
     second_done = store.get_task(second["task_id"], project=P)
-    ok(second_done["status"] == "Done", "agent-completed task is Done on the board")
+    ok(second_done["status"] == "In Review", "agent-completed task waits In Review until merge")
     agent_done_report = store.reconcile(project=P)
     ok(not any(f["code"] == "done_without_merged_sha" and f["task_id"] == second["task_id"]
                for f in agent_done_report["findings"]),
-       "reconcile accepts agent Done when completion evidence exists")
+       "reconcile does not see agent-completed In Review as Done")
 
     bad = store.create_task({"workstream_id": "TEST", "title": "bad done"}, actor="seed", project=P)
-    store.update_task(bad["task_id"], {"status": "Done"}, actor="legacy", project=P)
+    blocked_done = store.update_task(bad["task_id"], {"status": "Done"}, actor="legacy", project=P)
+    ok(blocked_done.get("error") == "done_requires_merge_provenance",
+       "update_task blocks naked Done without merge provenance")
+    with store._conn(P) as c:
+        c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?",
+                  (0, bad["task_id"]))
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (bad["task_id"], "legacy", "edit", "{\"status\":\"Done\"}", 0))
     report = store.reconcile(project=P)
     ok(any(f["code"] == "done_without_merged_sha" and f["task_id"] == bad["task_id"]
            for f in report["findings"]), "reconcile flags Done without merged_sha")

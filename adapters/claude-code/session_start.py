@@ -25,8 +25,8 @@ def _bundled_agreement():
         with open(path, encoding="utf-8") as f:
             return f.read()
     except Exception:
-        return ("Working agreement unavailable. Core rule: use complete_claim(final_status='Done', "
-                "evidence=...) only when verified; do not use naked update_task(status='Done').")
+        return ("Working agreement unavailable. Core rule: use complete_claim(evidence=...) "
+                "to move work to In Review; Done requires GitHub/default-branch merge provenance.")
 
 
 def main():

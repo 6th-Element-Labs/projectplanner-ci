@@ -57,8 +57,8 @@ handshake — plan hands every agent, regardless of model/runtime, the same cano
   "project": "helm",
   "canonical_main_sha": "10949ed…",          // current origin/main HEAD (kept live by the webhook)
   "branch_convention": "claude/<TASK-ID>-<slug>",
-  "definition_of_done": "verified complete with recorded evidence; code tasks include git evidence when available",
-  "done_policy": {"mode": "agent_verified", "agent_may_set_done": true, "requires_evidence": true},
+  "definition_of_done": "Done means merged/rebased into the intended branch with recorded GitHub/default-branch provenance",
+  "done_policy": {"mode": "git_merge_verified", "agent_may_set_done": false, "requires_merge_provenance": true},
   "push_before_claiming_progress": true,
   "merge_strategy": "squash",                  // => trust board.merged_sha, NOT git ancestry/--merged
   "main_writes": "PR only — never push main directly",
@@ -72,25 +72,25 @@ handshake — plan hands every agent, regardless of model/runtime, the same cano
 Stored as per-project board config (`meta`) plus computed fields (`canonical_main_sha` from the
 webhook). One source of truth, fetched on connect.
 
-### Part 2 — Evidence-backed `Done` (updated)
+### Part 2 — Branch-proven `Done` (updated)
 
 Stop letting agents self-declare `Done` via naked status flips. The lifecycle becomes:
 
 ```
 Not Started ─claim_next/start→ In Progress ─complete(evidence)→ In Review
-                                      └─complete(final_status=Done, evidence)→ Done
                                       └─PR merged (webhook/reconcile)→ Done ─published→ Released
 ```
 
 - Agents `claim_next` → work → **`complete(task_id, agent_id, evidence)`** where evidence is the
-  branch + head_sha (+ PR if opened) or another concrete verification note. This moves the task to
-  **`In Review`** unless the agent passes `final_status="Done"`, which records a `task.done`
-  evidence event.
-- GitHub webhooks and reconcile jobs may still move code tasks to `Done`, stamping `merged_sha`.
+  branch + head_sha (+ PR if opened) or another concrete verification note. This always moves the
+  task to **`In Review`** and releases the claim. If an agent asks for `final_status="Done"`, the
+  server records the attempt but keeps the task in review.
+- GitHub webhooks and reconcile/default-branch jobs move code tasks to `Done`, stamping
+  `merged_sha`.
 - Optional **`Released`** when the merge SHA's content reaches the public mirror.
 
-This rule still kills failure #1: a task cannot read `Done` from a naked checkbox. It needs either
-agent completion evidence or git merge evidence.
+This rule kills failure #1: a task cannot read `Done` from a naked checkbox or agent optimism. It
+needs GitHub/default-branch proof.
 
 ### Part 3 — Per-task git-lifecycle field + `reconcile` drift detector
 

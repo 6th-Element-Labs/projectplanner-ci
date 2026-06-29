@@ -60,9 +60,13 @@ jq -s '.[0] * .[1]' .claude/settings.json adapters/claude-code/settings.json > /
 echo '{"tool_name":"mcp__taikun-plan__update_task","tool_input":{"status":"Done"}}' \
   | python3 adapters/claude-code/pretooluse_guard.py        # -> permissionDecision: deny
 
-# evidence-backed Done goes through complete_claim:
-echo '{"tool_name":"mcp__taikun-plan__complete_claim","tool_input":{"claim_id":"taskclaim-123","final_status":"Done","evidence":"{\"done\":true,\"verification\":\"checks passed\"}"}}' \
-  | python3 adapters/claude-code/pretooluse_guard.py        # -> permissionDecision: allow
+# agent-set Done is denied even through complete_claim:
+echo '{"tool_name":"mcp__taikun-plan__complete_claim","tool_input":{"claim_id":"taskclaim-123","final_status":"Done","evidence":"{\"branch\":\"claude/TASK-1\",\"head_sha\":\"abc\"}"}}' \
+  | python3 adapters/claude-code/pretooluse_guard.py        # -> permissionDecision: deny
+
+# normal claim completion is allowed and moves the task to In Review:
+echo '{"tool_name":"mcp__taikun-plan__complete_claim","tool_input":{"claim_id":"taskclaim-123","evidence":"{\"branch\":\"claude/TASK-1\",\"head_sha\":\"abc\"}"}}' \
+  | python3 adapters/claude-code/pretooluse_guard.py        # -> (no output = allow)
 
 # In Review is allowed:
 echo '{"tool_name":"mcp__taikun-plan__update_task","tool_input":{"status":"In Review"}}' \

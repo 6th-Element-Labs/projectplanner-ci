@@ -179,7 +179,7 @@ The protocol is a small, stable ABI. Everything else is built from these.
 | **Hard stop** | NMI (unmaskable) | — | managed runner kill (`/runner/v1/sessions/{runner_session_id}/kill`) with snapshot + audit |
 | **Decision record** | append-only ledger | `record_decision`/`list_decisions` | keep; index into RAG |
 | **Working state** | saved registers (for IRET) | `set_agent_state`/`get_agent_state` | keep; the "stack" for resume-after-interrupt |
-| **Work provenance** (lifecycle) | a process table (PID → state) | task `status` only (self-reported) | per-task `{branch, head_sha, pushed, pr, merged_sha, in_main, published}` plus agent completion evidence; `Done` is evidence-backed |
+| **Work provenance** (lifecycle) | a process table (PID → state) | task `status` only (self-reported) | per-task `{branch, head_sha, pushed, pr, merged_sha, in_main, published}` plus agent completion evidence; `Done` is branch-proven |
 | **Working agreement** | the kernel ABI/conventions handed to every process | implicit, per-agent reinvented | `get_working_agreement(project)` at connect (DoD, branch naming, merge strategy, ports) |
 | **Reconcile** | `fsck` / drift audit | manual git archaeology | scheduled `reconcile(project)` — content-based board↔git↔mirror drift report |
 | **Cost record** | metering | — | per-task/agent/epic token+\$ ledger |
@@ -264,19 +264,20 @@ The protocol is a small, stable ABI. Everything else is built from these.
 ### 8.8 Work provenance & reconciliation
 > The board is the ground truth for *where work is*, not just its status. Full design +
 > the lived-failure evidence: [ADR-0003](decisions/0003-work-provenance-and-reconciliation.md).
-> Governing principle: **completion evidence is the source of truth for work state; agents record
-> what they verified, git/webhook evidence enriches code tasks, `reconcile` catches drift, and
+> Governing principle: **branch truth is the source of truth for `Done`; agents record what they
+> implemented, GitHub/default-branch evidence promotes code tasks, `reconcile` catches drift, and
 > everyone gets the same rules at connect.**
 - **FR-23** **`get_working_agreement(project)`** — **step 0 of the handshake.** Returns the
   canonical per-project policy: `canonical_main_sha`, branch convention, **definition of done**,
   done policy, push-before-progress, `merge_strategy` (squash → trust `merged_sha`, not git
   ancestry), main-writes-via-PR-only, ports doc, BYO-data. One source of truth so N agents stop each
   inventing their own flow.
-- **FR-24** **Evidence-backed `Done`.** `claim_next` → work → `complete_claim(evidence=...)` moves
-  the task to `In Review` by default and records provenance. If the agent has verified completion
-  under the project working agreement, `complete_claim(final_status="Done", evidence=...)` marks
-  the task `Done`. GitHub merge webhooks and reconcile jobs may still stamp `merged_sha`; naked
-  `update_task(status="Done")` remains suspect because it records no evidence.
+- **FR-24** **Branch-proven `Done`.** `claim_next` → work → `complete_claim(evidence=...)` moves
+  the task to `In Review` and records branch/head/PR provenance. Agent-completed work, including an
+  open PR, stays `In Review`. `Done` is reserved for GitHub/default-branch provenance: merged,
+  squash-merged, or rebased into the intended branch with `merged_sha` or equivalent stamped by the
+  webhook/reconcile path. Naked `update_task(status="Done")` fails closed unless that branch truth
+  already exists.
 - **FR-25** **Per-task git-lifecycle block** on `get_task`/`get_lane_delta`:
   `{branch, head_sha, pushed_at, pr_number, merged_sha, merged_at, in_main_content, published_ref,
   last_reconciled_at}`.
@@ -289,6 +290,11 @@ The protocol is a small, stable ABI. Everything else is built from these.
 - **FR-27** **Webhook lifecycle (extends §1.2):** `pull_request` open → `In Review`; merge →
   `Done` + `merged_sha`; push to `main` → refresh `canonical_main_sha`. Builds on the
   `/api/github/webhook` seam already shipped.
+- **FR-28** **Safe merge protocol.** Authorized agents must fetch origin, rebase/merge onto the
+  intended target branch, resolve conflicts intentionally, rerun relevant tests, push the updated
+  branch, merge through GitHub/merge queue only when checks and review are green, then fetch the
+  target branch and record `merged_sha`. If webhook marking fails, they request reconcile/backfill;
+  they never set `Done` manually.
 
 ---
 

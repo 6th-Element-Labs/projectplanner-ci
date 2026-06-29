@@ -40,9 +40,30 @@ SUPPORTED_PROTOCOL = {
     },
 }
 
-DONE_RULE = ("Working agreement: do not set a naked task status to 'Done'. Use "
-             "complete_claim(final_status='Done', evidence={branch, head_sha, pr, verification}) "
-             "so Switchboard records completion evidence, or re-issue with status='In Review'.")
+DONE_RULE = ("Working agreement: agents do not mark tasks Done. Use "
+             "complete_claim(evidence={branch, head_sha, pr_url, verification}) to move work "
+             "to In Review; GitHub/default-branch provenance marks Done after the work is "
+             "merged or rebased into the intended branch.")
+
+
+def _requests_done(tool_input):
+    ti = tool_input or {}
+    vals = [ti.get("status"), ti.get("final_status")]
+    ev = ti.get("evidence")
+    if isinstance(ev, str):
+        try:
+            ev = json.loads(ev)
+        except Exception:
+            ev = {}
+    if isinstance(ev, dict):
+        vals.extend([ev.get("status"), ev.get("final_status"), ev.get("done")])
+    for val in vals:
+        if isinstance(val, bool):
+            if val:
+                return True
+        elif str(val or "").strip().lower() == "done":
+            return True
+    return False
 
 
 def _http(method, path, body=None, base=None, token=None):
@@ -167,8 +188,10 @@ def evaluate_tool(project, me, tool_name, tool_input, cwd=None, base=None, token
                 "reason": f"[{sig.upper()} from {frm}] {msg}  — interrupt consumed at the tool "
                           f"boundary (FR-14). Halt or redirect before any further tool use."}
 
-    # 2. Definition of Done — no naked checkbox flips; complete_claim(final_status=Done) is allowed.
-    if tool_name.endswith("update_task") and str(ti.get("status", "")).strip().lower() == "done":
+    # 2. Definition of Done — no agent-set Done through status flips or complete_claim.
+    if tool_name.endswith("update_task") and _requests_done(ti):
+        return {"decision": "deny", "reason": DONE_RULE}
+    if tool_name.endswith("complete_claim") and _requests_done(ti):
         return {"decision": "deny", "reason": DONE_RULE}
     if tool_name == "Bash":
         cmd = ti.get("command", "") or ""

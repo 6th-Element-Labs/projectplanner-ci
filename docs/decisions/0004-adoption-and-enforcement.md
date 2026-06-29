@@ -41,8 +41,9 @@ runtime lacks the deeper hook. Publish the honest fidelity per runtime (PRD §10
 Encode the handshake and the evidence rule in the MCP server `instructions` string and in each
 write tool's description:
 > "At session start call `get_working_agreement(project)`, then `register_agent`. Use
-> `complete_claim(final_status='Done', evidence=...)` only when verified; do not use naked
-> `update_task(status='Done')`."
+> `complete_claim(evidence=...)` to move implemented work to `In Review`; do not use
+> `final_status='Done'` or naked `update_task(status='Done')`. `Done` comes from GitHub/default-
+> branch provenance."
 
 The model reads it and usually complies. Necessary, not sufficient. (Cost: ~free — a string.)
 
@@ -74,7 +75,7 @@ Ad-hoc, human-launched agents fall back to Tier 2; non-MCP loops fall back to Ti
    agent is actually governed (feeds the PRD §10 matrix and reliability scoring).
 
 ## Build plan (the four pieces)
-1. **MCP `instructions` + tool descriptions** carry the handshake + "evidence-backed Done"
+1. **MCP `instructions` + tool descriptions** carry the handshake + "branch-proven Done"
    (Tier 1) — *this ADR ships it.*
 2. **Claude Code reference adapter** — `adapters/claude-code/` hook bundle: `SessionStart`
    (fetch+inject agreement + register) and `PreToolUse` (deny naked `Done`, warn

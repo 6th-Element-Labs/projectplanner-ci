@@ -5,6 +5,11 @@ Claude Desktop, Cursor, or any MCP client and drive the plan without opening the
 
 **Endpoint:** `https://plan.taikunai.com/mcp`
 
+Product naming note: this MCP surface is Switchboard. The deployed unit is still named
+`projectplanner-mcp.service` during the compatibility phase; follow
+[`SWITCHBOARD-RENAME-MIGRATION.md`](SWITCHBOARD-RENAME-MIGRATION.md) before renaming units,
+paths, repo remotes, or env prefixes.
+
 ## Tools
 
 Every task/board tool accepts `project`. Use `maxwell` for the TEEP Barnett plan, `helm` for
@@ -47,20 +52,30 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `create_kpi(...)`, `update_kpi_value(...)`, `link_outcome_to_kpi(...)`
 - `get_task_tally(...)`, `get_kpi_tally(...)`
 - `reconcile(project)` — provenance drift report; always flags board contradictions like
-  naked `Done` without merge SHA or agent completion evidence, and when canonical main / GitHub
-  config is available, checks recorded SHAs and PR state against git/GitHub. It also reports
-  expired active task claims and unreleased resource/file leases as stale claims.
+  naked `Done` without merge/default-branch SHA, and when canonical main / GitHub config is
+  available, checks recorded SHAs and PR state against git/GitHub. It also reports expired active
+  task claims and unreleased resource/file leases as stale claims.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
-- `complete_claim(evidence, final_status="Done")` marks the task `Done` when the agent has verified
-  completion and supplied evidence. For code tasks, include branch/head SHA/PR or `merged_sha` when
-  available.
-- Agents should not use naked `update_task(status="Done")`; it records no evidence and reconcile
-  treats it as suspect.
+- `Done` is reserved for GitHub/default-branch provenance: merged/rebased into the intended branch
+  with `merged_sha` or equivalent recorded by webhook/reconcile.
+- If an agent passes `final_status="Done"`, Switchboard records the attempt, releases the claim,
+  and keeps the task `In Review` with a `done_requires_merge_provenance` warning.
+- Naked `update_task(status="Done")` fails closed unless the task already has merge/default-branch
+  provenance; hook-capable adapters deny the call before it reaches the server.
 - Bootstrap repair: `jobs.py backfill_default_branch_provenance` can stamp legacy direct-to-default
   commits that already landed before PR-only flow was enforced. It is a system/reconcile action,
   not a normal agent completion path. Use `PM_BACKFILL_DRY_RUN=1` first to inspect candidates.
+
+Safe merge rule:
+- Agents may merge only when their control registration, task instructions, or the human operator
+  explicitly allow it.
+- Before merging, fetch origin, rebase/merge the task branch onto the intended target branch,
+  resolve conflicts intentionally, rerun relevant tests, verify a clean committed branch, and push.
+- Merge through GitHub or the configured merge queue only when checks/review are green.
+- After merge, fetch the target branch, verify the content landed, record `merged_sha`, and rely on
+  webhook/reconcile/backfill to mark `Done`.
 
 Scheduled reconcile alert rule:
 - `jobs.py reconcile_alerts` runs `reconcile` and emits a directed `reconcile_alert` IXP message
@@ -173,6 +188,8 @@ principals or set `PM_AUTH_TOKEN` during bootstrap:
 
 - Runs as its own process: `projectplanner-mcp.service` (uvicorn, `127.0.0.1:8111`).
   Caddy routes `/mcp*` → `:8111`, everything else → the web app (`:8110`).
+- `projectplanner-mcp.service` is a compatibility unit name. Future `switchboard-mcp.service`
+  support should be introduced as an alias first, not as an in-place replacement.
 - The coordination monitor sweep is host-owned: enable `projectplanner-monitors.timer` so
   `requires_ack` messages can time out and notify senders even if no Codex thread is awake.
 - Shares the SQLite file (WAL) with the web app; reuses `store`/`rag`/`agent` in-process.

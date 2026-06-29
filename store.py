@@ -708,6 +708,27 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
         sets.append(f"{k}=?"); vals.append(v); changed[k] = v
     if not sets:
         return get_task(task_id, project)
+    if str(changed.get("status") or "").strip().lower() == "done":
+        now = time.time()
+        with _conn(project) as c:
+            row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            if not row:
+                return None
+            git_state = _load_git_state(c, task_id)
+            if not git_state.get("merged_sha"):
+                payload = {
+                    "requested_status": "Done",
+                    "reason": "done_requires_merge_provenance",
+                    "message": "Status Done requires GitHub/default-branch merge provenance.",
+                }
+                c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                          (task_id, actor, "task.done_blocked",
+                           json.dumps(payload, sort_keys=True), now))
+                task = _task_row(row)
+                task["git_state"] = git_state
+                task["error"] = "done_requires_merge_provenance"
+                task["message"] = payload["message"]
+                return task
     sets.append("updated_at=?"); vals.append(time.time())
     vals.append(task_id)
     with _conn(project) as c:
@@ -1697,7 +1718,14 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
     done_requested = requested_status.lower() == "done" or str(evidence_obj.get("done", "")).lower() in ("1", "true", "yes")
     if done_requested and not evidence_obj:
         return {"error": "evidence required for final_status=Done", "claim_id": claim_id}
-    next_status = "Done" if done_requested else "In Review"
+    done_gate = None
+    if done_requested:
+        done_gate = {
+            "code": "done_requires_merge_provenance",
+            "message": "Agent completion records evidence and moves to In Review; Done requires GitHub/default-branch merge provenance.",
+            "requested_status": requested_status or "Done",
+        }
+    next_status = "In Review"
     pushed_at = evidence_obj.get("pushed_at")
     if pushed_at is None and evidence_obj.get("head_sha"):
         pushed_at = now
@@ -1730,17 +1758,24 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
             "in_main_content": True if evidence_obj.get("merged_sha") else None,
             "evidence": evidence_obj,
         })
-        if next_status == "Done":
+        if done_gate:
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                      (row["task_id"], actor, "task.done",
+                      (row["task_id"], actor, "task.done_blocked",
                        json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
+                                   "done_gate": done_gate,
                                    "source": "complete_claim"}, sort_keys=True), now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (row["task_id"], actor, "task.claim.completed",
                    json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
-                               "next_status": next_status}, sort_keys=True), now))
-    return {"completed": True, "claim_id": claim_id, "task_id": row["task_id"],
-            "status": next_status, "git_state": git_state}
+                               "requested_status": requested_status or None,
+                               "next_status": next_status,
+                               "done_gate": done_gate}, sort_keys=True), now))
+    response = {"completed": True, "claim_id": claim_id, "task_id": row["task_id"],
+                "status": next_status, "git_state": git_state}
+    if done_gate:
+        response["done_gate"] = done_gate
+        response["warning"] = done_gate["message"]
+    return response
 
 
 def abandon_claim(claim_id: str, reason: str,
@@ -3457,16 +3492,50 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "protocol": protocol_envelope(),
         "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),
         "branch_convention": "claude/<TASK-ID>-<slug>",
-        "definition_of_done": "verified complete with recorded evidence; code tasks should include branch/head_sha/PR or merged_sha when available",
+        "definition_of_done": "Done means merged/rebased into the intended branch with recorded GitHub/default-branch provenance; implemented work with branch/head_sha/PR evidence is In Review.",
         "done_policy": {
-            "mode": "agent_verified",
-            "agent_may_set_done": True,
+            "mode": "git_merge_verified",
+            "agent_may_set_done": False,
             "requires_evidence": True,
+            "requires_merge_provenance": True,
             "code_tasks_should_include_git_evidence": True,
+            "implemented_pr_status": "In Review",
+            "done_sources": ["github_pr_merged", "default_branch_backfill"],
         },
         "push_before_claiming_progress": True,
         "merge_strategy": "squash",
         "main_writes": "PR only — never push main directly",
+        "github_lifecycle": [
+            "push the task branch",
+            "open or update the PR against the intended branch",
+            "include branch, head_sha, pr_number/pr_url in complete_claim evidence",
+            "complete_claim moves the task to In Review and releases the claim",
+            "after merge/rebase reaches the intended branch, the GitHub webhook or default-branch backfill stamps merged_sha and marks Done",
+        ],
+        "safe_merge_protocol": {
+            "merge_authority": "Agents may merge only when their control registration, task instructions, or the human operator explicitly allow it.",
+            "target_branch_rule": "Merge into the intended branch from the task/PR; do not assume master/main if the board or PR says otherwise.",
+            "pre_merge": [
+                "fetch origin and inspect the current target branch head",
+                "rebase or merge the task branch onto the current target branch",
+                "resolve conflicts intentionally; never overwrite unrelated user/agent work",
+                "rerun the relevant tests/checks after the rebase or conflict resolution",
+                "verify git status is clean except for intentional committed changes",
+                "push the updated branch and ensure the PR points at the pushed head",
+            ],
+            "merge": [
+                "merge through GitHub or the configured merge queue when available",
+                "prefer the repository's configured squash/merge strategy",
+                "do not force-merge red checks, missing reviews, or unexpected file changes",
+            ],
+            "post_merge": [
+                "fetch/pull the target branch after merge",
+                "record the resulting merged_sha or target branch head in evidence",
+                "verify the task's changed files/content are present on the intended branch",
+                "let the GitHub webhook or default-branch provenance path mark Done",
+                "if the webhook is unavailable, run or request reconcile/backfill rather than setting Done manually",
+            ],
+        },
         "ports_doc": "docs/PORTS.md",
         "byo_data": True,
         "session_start_sequence": [
@@ -3475,7 +3544,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "inbox(unacked)",
             "check+claim before first write",
         ],
-        "agent_completion_rule": "complete_claim(..., final_status='Done') may set Done when evidence proves completion; omit final_status to stop at In Review for review-first work",
+        "agent_completion_rule": "complete_claim(evidence=...) records branch/head_sha/PR evidence and moves to In Review; agents cannot mark Done. Done is reserved for GitHub/default-branch merge provenance.",
     }
     agreement = {**default, **override, "project": project}
     if "done_policy" not in override:
@@ -3614,8 +3683,6 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """
     now = time.time()
     agreement = get_working_agreement(project)
-    done_policy = agreement.get("done_policy") or {}
-    agent_done_ok = bool(done_policy.get("agent_may_set_done"))
     findings: List[Dict[str, Any]] = []
     tasks: List[Dict[str, Any]] = []
     git_states: Dict[str, Dict[str, Any]] = {}
@@ -3628,14 +3695,9 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             git_states[task["task_id"]] = git_state
             status = task.get("status")
             if status == "Done" and not git_state.get("merged_sha"):
-                has_done_evidence = c.execute(
-                    "SELECT 1 FROM activity WHERE task_id=? AND kind='task.done' LIMIT 1",
-                    (task["task_id"],),
-                ).fetchone()
-                if not (agent_done_ok and has_done_evidence):
-                    findings.append({"severity": "high", "task_id": task["task_id"],
-                                     "code": "done_without_merged_sha",
-                                     "detail": "Task is Done but has no recorded merge SHA or agent completion evidence."})
+                findings.append({"severity": "high", "task_id": task["task_id"],
+                                 "code": "done_without_merged_sha",
+                                 "detail": "Task is Done but has no recorded merge/default-branch SHA."})
             if status == "In Review" and not (git_state.get("branch") or git_state.get("pr_url")):
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "review_without_provenance",

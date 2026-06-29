@@ -62,12 +62,16 @@ mcp = FastMCP(
         "SESSION-START HANDSHAKE: (0) call prepare_agent_session(...) if you were assigned a task, "
         "lane, or project and follow its selected project; (1) call get_working_agreement(project) "
         "and follow its rules for the whole session; (2) register_agent; (3) drain your inbox. "
-        "DEFINITION OF DONE: follow get_working_agreement(project). Agents may use "
-        "complete_claim(final_status='Done', evidence=...) when they have verified completion and "
-        "recorded evidence; omit final_status to stop at In Review for review-first work. For code "
-        "tasks, include branch/head_sha/PR or merged_sha when available. Push your branch before you "
-        "claim progress; we squash-merge, so trust the board's recorded merged_sha over local branch "
-        "state."
+        "DEFINITION OF DONE: follow get_working_agreement(project). Agents use "
+        "complete_claim(evidence=...) to record branch/head_sha/PR evidence, release the claim, "
+        "and move work to In Review. Agents do not mark Done. Done is reserved for GitHub/default-"
+        "branch provenance: merged/rebased into the intended branch with merged_sha/default-branch "
+        "SHA recorded by webhook or reconcile. Push your branch before you claim progress; we "
+        "squash-merge, so trust the board's recorded merged_sha over local branch state. SAFE "
+        "MERGE: if you are authorized to merge, fetch origin, rebase/merge onto the intended "
+        "target branch, resolve conflicts intentionally, rerun relevant tests, push the updated "
+        "branch, merge through GitHub/merge queue only when checks/review are green, then fetch "
+        "the target branch and record the resulting merged_sha; never set Done manually."
     ),
     host="127.0.0.1",
     port=_PORT,
@@ -847,10 +851,10 @@ def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status
                    project: str = "maxwell") -> str:
     """Mark a task claim completed, release its task lease, and record completion evidence.
 
-    By default this moves the task to In Review. Pass final_status='Done' only when you have
-    verified the task is truly complete per get_working_agreement(project). evidence should be
-    a JSON object string with branch, head_sha, pr_url/pr_number, merged_sha, or a verification
-    note when known.
+    This moves the task to In Review. Done is reserved for GitHub/default-branch merge
+    provenance; if final_status='Done' is passed, Switchboard records the request but keeps
+    the task In Review until merged_sha/default-branch SHA is stamped. evidence should be
+    a JSON object string with branch, head_sha, pr_url/pr_number, or a verification note.
     """
     principal = _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.complete_claim(claim_id, evidence=evidence, final_status=final_status,
@@ -1295,6 +1299,7 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
                 risk_level: str = "", is_blocking: str = "", depends_on: str = "",
                 project: str = "maxwell") -> str:
     """Update only the fields you pass on a task. status: Not Started|In Progress|In Review|Blocked|Done;
+    Done fails closed unless merge/default-branch provenance is already recorded for the task;
     dates: YYYY-MM-DD; is_blocking: 'true'/'false'. depends_on: comma/space-separated task ids that
     REPLACE this task's dependency list (e.g. 'TOOLS-7, SHELL-1'); pass 'none' to clear it (for an
     incremental edge use add_dependency/remove_dependency). Audited as the authenticated actor.

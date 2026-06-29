@@ -15,20 +15,36 @@ session so the fleet stays in sync.
 
 ## Definition of Done
 - Use `complete_claim(claim_id, evidence={...})` to release your claim and record what you verified.
-- Omit `final_status` when the work needs review; the task moves to `In Review`.
-- Pass `final_status="Done"` only when the task is truly complete under the project working
-  agreement. Code tasks should include branch/head SHA/PR or merge SHA when available; planning and
-  coordination tasks should include a concrete verification note.
-- Do not use naked `update_task(status="Done")` as a checkbox flip. It lacks completion evidence and
-  reconcile will flag it.
+- Agent completion moves the task to `In Review`, even if the implementation is finished and a PR
+  is open.
+- `Done` means branch truth: the work was merged, squash-merged, or rebased into the intended
+  branch and Switchboard has recorded GitHub/default-branch provenance (`merged_sha` or equivalent).
+- Do not pass `final_status="Done"` or use naked `update_task(status="Done")`. Hook-capable
+  adapters deny it; the server rejects naked status flips and keeps bypassed claim-completion
+  attempts in `In Review`.
 
 ## Git discipline
 - **Push your branch before you claim progress.** Committed-but-unpushed work is invisible to
   the fleet and gets lost (it already did once).
+- Open or update a PR for implemented work and include `branch`, `head_sha`, and `pr_url` /
+  `pr_number` in `complete_claim` evidence.
 - Branch naming: `claude/<TASK-ID>-<slug>` (e.g. `claude/ENGINE-15-basemap-boot`).
 - **Main writes via PR only** — never push `main` directly.
 - We **squash-merge**, so `git branch --merged` / ancestry will *lie* about what's in `main`.
   Trust the board's `merged_sha`, not git ancestry.
+
+## Safe merge protocol
+- Merge only when your control registration, task instructions, or the human operator explicitly
+  allow it.
+- Fetch origin and rebase or merge your task branch onto the current intended target branch.
+- Resolve conflicts intentionally. Never overwrite unrelated user or agent work.
+- Rerun the relevant tests/checks after rebase or conflict resolution.
+- Push the updated branch and verify the PR points at the pushed head.
+- Merge through GitHub or the configured merge queue only when checks/review are green.
+- After merge, fetch/pull the target branch, verify the changed content is present, and record the
+  resulting `merged_sha` or target branch head.
+- Let the GitHub webhook or default-branch provenance path mark `Done`. If the webhook is down, run
+  or request reconcile/backfill instead of setting `Done` manually.
 
 ## Coordination
 - `claim`/`check` a file or resource before your first write to it; `release` when done.

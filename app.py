@@ -174,6 +174,8 @@ async def patch_task(request: Request, task_id: str, body: dict = Body(...), pro
     t = store.update_task(task_id, body, actor=actor, project=_proj(project))
     if not t:
         raise HTTPException(404, "task not found")
+    if t.get("error") == "done_requires_merge_provenance":
+        raise HTTPException(409, t.get("message") or "Done requires merge provenance")
     return t
 
 

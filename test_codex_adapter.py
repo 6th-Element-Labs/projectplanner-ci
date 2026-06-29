@@ -120,6 +120,16 @@ try:
     })
     ok(verdict["decision"] == "deny", "naked Done update is denied through shared core")
     ok(verdict["agent_id"].startswith("codex/"), "pre-tool verdict carries Codex agent id")
+    done_claim_verdict = codex_adapter.on_pre_tool({
+        "toolCall": {
+            "name": "mcp__taikun_plan__complete_claim",
+            "arguments": {"claim_id": "taskclaim-1", "final_status": "Done",
+                          "evidence": {"branch": "codex/TEST-1", "head_sha": "abc"}},
+        },
+        "cwd": str(ROOT),
+    })
+    ok(done_claim_verdict["decision"] == "deny",
+       "complete_claim final_status Done is denied through shared core")
 
     runner_result = runner_smoke.evaluate_candidate(runner_smoke.SELF_DONE_CANDIDATE,
                                                     offline=True)

@@ -310,9 +310,10 @@ complete_claim(project, claim_id, evidence, final_status?, outcome_id?) -> claim
 ```
 
 Completion does not have to mean the task is verified: omit `final_status` to move the task to
-`In Review`. When the agent has verified the task under the project working agreement, it may pass
-`final_status="Done"` with concrete evidence. Code tasks should include branch/head SHA/PR or
-`merged_sha` when available.
+`In Review`. Agents should not pass `final_status="Done"`; if they do, Switchboard records the
+attempt and still keeps the task `In Review`. Code tasks should include branch/head SHA/PR evidence.
+`Done` is reserved for GitHub/default-branch provenance after the work is merged, squash-merged, or
+rebased into the intended branch.
 
 ### 7.4 `abandon_claim`
 
