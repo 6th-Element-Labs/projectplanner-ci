@@ -2485,6 +2485,9 @@ def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",
             task = _task_row(row)
             return {"task_id": task_id, "status": task["status"],
                     "git_state": current, "idempotent": True}
+        if row["status"] == "Done":
+            return {"task_id": task_id, "status": "Done", "git_state": current,
+                    "skipped": True, "reason": "task_already_done"}
         c.execute("UPDATE tasks SET status='In Review', updated_at=? WHERE task_id=? "
                   "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
                   (now, task_id))

@@ -158,6 +158,24 @@ try:
        store.get_task(missing_sha_task["task_id"], project=P)["status"] == "Not Started",
        "PR merged webhook fails closed when merge_commit_sha is missing")
 
+    done_task = store.create_task({"workstream_id": "DOGFOOD", "title": "done provenance guard"},
+                                  actor="seed", project=P)
+    store.update_task(done_task["task_id"], {"status": "In Review"}, actor="seed", project=P)
+    store.mark_task_default_branch_commit(
+        done_task["task_id"], "donecommit", branch="master",
+        subject="feat(DOGFOOD-1): seed board", actor="seed", project=P)
+    done_before = store.get_task(done_task["task_id"], project=P)["git_state"]
+    skipped = store.mark_task_pr_opened(
+        done_task["task_id"], 46,
+        "https://github.com/6th-Element-Labs/projectplanner/pull/46",
+        "codex/HARDEN-7-ci-gates", "wronghead", actor="seed", project=P)
+    done_after = store.get_task(done_task["task_id"], project=P)["git_state"]
+    ok(skipped.get("skipped") and skipped.get("reason") == "task_already_done",
+       "PR opened webhook skips already-Done tasks")
+    ok(done_after.get("merged_sha") == done_before.get("merged_sha") and
+       not done_after.get("pr_number") and done_after.get("branch") == "master",
+       "PR opened webhook cannot overwrite Done task provenance")
+
     reconcile_task = store.create_task({"workstream_id": "HARDEN", "title": "reconcile PR merge"},
                                        actor="seed", project=P)
     store.mark_task_pr_opened(
