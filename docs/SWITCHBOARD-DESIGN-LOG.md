@@ -11,6 +11,7 @@
 > · [`P0-SPEC.md`](P0-SPEC.md) · [`RUNTIME-ADAPTERS-SPEC.md`](RUNTIME-ADAPTERS-SPEC.md)
 > · [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) ·
 > [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) · [`TALLY-SPEC.md`](TALLY-SPEC.md).
+> Market watch: [`MARKET-LANDSCAPE.md`](MARKET-LANDSCAPE.md).
 > This file is the narrative; those are the source of truth.
 
 ---
@@ -75,6 +76,7 @@ makers are weakest; the moat is the protocol becoming a convention, not the code
 | 15 | Is there a hierarchy AXP>TXP>IXP? | Not a `>` chain — it's an **hourglass**: IXP-core is the *waist* (the universal contract), TXP is an app above it, **OXP is a cross-cutting plane** (a projection over the activity log). My earlier four-layer table was too tidy (it wrongly put presence above signaling) | PRD §17 design note |
 | 16 | Open source or hosted service? | **Hybrid open-core.** Open the protocol, adapters, conformance tests, local Agent Host, and dev harness to create trust/adoption. Keep hosted governance, Tally analytics, policy, entitlements, managed runners, integrations, and long-term evidence history commercial | PRD §3.1, §13; PRODUCT_ROADMAP §3 |
 | 17 | Is that enough of a moat against AWS/Google/Microsoft? | Not if the product is only "protocol + dashboard." The moat must be the **neutral trusted work graph** across clouds, IDEs, repos, runtimes, humans, cost, approvals, and evidence. Hyperscalers win inside their clouds; Switchboard wins by governing the work everywhere | PRD §3.2, §17; PRODUCT_ROADMAP §3 |
+| 18 | Should Switchboard grow a Slack-like/human layer? | Yes, but not as a chat clone. Build the **human/agent collaboration layer** above the coordination core: SME review before coding, discussion-to-plan proposals, approvals/objections tied to tasks and PRs, and Slack/Teams/GitHub/UI as channels into Switchboard's durable work graph | PRD §3.3; PRODUCT_ROADMAP §4; MARKET-LANDSCAPE |
 
 ---
 
@@ -102,6 +104,8 @@ makers are weakest; the moat is the protocol becoming a convention, not the code
   capture value in hosted governance, economics, policy, and the accumulated evidence graph.
 - **Neutrality is the anti-hyperscaler wedge.** AWS/Google/Microsoft can ship agent-control
   services inside their stacks; Switchboard must be the system of record across the stacks.
+- **Chat is a surface, not the ledger.** Humans may talk in Slack, Teams, GitHub, email, or a
+  Switchboard cockpit, but decisions must land as durable work objects that agents can obey.
 
 ---
 
@@ -121,3 +125,7 @@ makers are weakest; the moat is the protocol becoming a convention, not the code
   external humans or customer-owned agents use hosted Switchboard.
 - **Public ecosystem packaging** — license, repo split, adapter quickstarts, conformance badge,
   and local Agent Host release plan still need scoped implementation tasks.
+- **Human/agent collaboration layer** — scoped as ACCESS-10 (SME review gates and expert
+  routing) and ACCESS-11 (channel bridges for discussion-to-plan collaboration).
+- **Market tracker upkeep** — keep [`MARKET-LANDSCAPE.md`](MARKET-LANDSCAPE.md) current before
+  public positioning, investor/customer conversations, or major roadmap pivots.

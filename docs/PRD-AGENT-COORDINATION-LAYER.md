@@ -11,6 +11,9 @@
 - **One-line:** Switchboard is the neutral control plane for AI work: it coordinates
   agents across clouds and tools while proving cost, control, and outcomes.
   *Switchboard speaks IXP and keeps a Tally.*
+- **Product extension:** a human/agent collaboration layer where SMEs, maintainers, and
+  operators steer work before agents code, while Switchboard remains the durable source of
+  truth.
 
 > Builds on what already ships: the coordination primitives in
 > [`MULTI_AGENT_COORDINATION.md`](MULTI_AGENT_COORDINATION.md), the MCP surface in
@@ -154,6 +157,47 @@ draining, SRE) is a real **adjacent generalization** (see §19) but is explicitl
 wedge** — that work is mostly decidable, where a workflow engine wins, and the agentic tail
 is thinner. Land knowledge work first; generalize down to operations later.
 
+### 3.3 Human/agent collaboration layer
+
+The coordination core makes agent work durable. The next product layer makes the work
+steerable by humans before, during, and after execution.
+
+Teams do not only need agents to avoid collisions. They need the right humans to shape the work
+at the right time: a UI lead before a new interface is coded, a security reviewer before a runner
+policy changes, a domain expert before a spec becomes implementation, and a maintainer before an
+open-source contribution gets merged. Switchboard should make those interventions structured
+rather than leaving them as scattered chat.
+
+The product pattern:
+
+1. An agent proposes a plan or asks for SME input before coding.
+2. Switchboard routes the discussion to the right humans and channels.
+3. Feedback becomes a structured plan proposal, decision, approval, blocker, or task update.
+4. Agents resume from the recorded state, not from a lost Slack thread or chat transcript.
+5. Tally and provenance later connect the discussion to the outcome and cost.
+
+Slack, Teams, GitHub, email, and the web UI are therefore **surfaces**, not the system of
+record. They are where humans already are. Switchboard owns the durable objects underneath:
+tasks, claims, decisions, approvals, evidence, policy, cost, and outcome. This lets open-source
+projects, internal platform teams, and enterprise groups bring their own agents and enterprise
+LLMs while still sharing one governed work graph.
+
+Product implications:
+
+- **SME review before coding:** tasks can require design/security/domain review before
+  `claim_next` dispatches implementation.
+- **Discussion-to-plan:** comments, transcripts, and chat threads normalize into proposals,
+  decisions, blockers, or task edits.
+- **Bring-your-own-agent:** humans and orgs can attach Claude, Codex, Cursor, LangGraph,
+  enterprise-gated models, or local hosts under project-scoped permissions.
+- **Conversation with consequences:** every approval, redirect, or objection must attach to a
+  durable work item and affect dispatch, claims, or merge gates.
+- **No chat clone for its own sake:** if a Slack-like UI ships, it exists to expose work state
+  and decisions, not to become another unstructured message archive.
+
+Live board scope: ACCESS-10 owns SME review gates and expert routing; ACCESS-11 owns the first
+channel bridges for discussion-to-plan collaboration.
+
 ---
 
 ## 4. Goals / Non-goals
@@ -165,10 +209,12 @@ is thinner. Land knowledge work first; generalize down to operations later.
 3. **Tiered control fidelity:** from advisory (poll) → enforced (hooks / per-tool-call) →
    guaranteed (process-level kill), honestly surfaced per runtime.
 4. **Human oversight preserved:** peek in *and* step in (approval gates, audit trail).
-5. **Cost-per-outcome accounting:** tokens/$ per task, per agent, per epic.
-6. **Commercial governance:** orgs, roles, scoped tokens, project boundaries, invites,
+5. **Human/agent collaboration:** route SME feedback, discussion, approvals, and objections
+   into structured plan changes before agents code.
+6. **Cost-per-outcome accounting:** tokens/$ per task, per agent, per epic.
+7. **Commercial governance:** orgs, roles, scoped tokens, project boundaries, invites,
    entitlements, and audit exports for multi-human/multi-agent use.
-7. **Swappable engine:** semantics defined once; storage/transport replaceable (SQLite →
+8. **Swappable engine:** semantics defined once; storage/transport replaceable (SQLite →
    Go/NATS/Postgres) behind an unchanged interface.
 
 ### Non-goals
@@ -178,7 +224,8 @@ is thinner. Land knowledge work first; generalize down to operations later.
 - We do **not** route around the human as merge/approval authority.
 - We are **not** trying to replace AWS, Google, Microsoft, OpenAI, or Anthropic as model/cloud
   providers; we coordinate and govern work across them.
-- No full chat/IM stream, no wiki, no voting/consensus engine (see §15).
+- No general chat/IM clone, wiki, or voting/consensus engine (see §15). Conversation surfaces
+  exist only where they drive structured work state, approvals, or decisions.
 
 ---
 

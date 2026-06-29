@@ -18,6 +18,11 @@ The visible surface can look like a planning board, but the product is the opera
 under the work: claims, messages, leases, decisions, runner state, provenance, spend,
 outcomes, and human approvals.
 
+Above that operating record sits the human/agent collaboration layer: the place where SMEs,
+maintainers, operators, and reviewers steer the work before agents spend tokens writing code.
+Slack, Teams, GitHub, email, and the web app are channels into this layer; Switchboard remains
+the durable source of truth.
+
 Two users, one board:
 
 - **Humans** get a planning *agent* that acts as PM (ask_plan, board, weekly digest) and a
@@ -45,10 +50,14 @@ leave the gap we sit in:
 | Human PM tools + AI | Linear, Asana, Jira, Notion, Height | Human-first; agents bolted on as assistants. Data model assumes a human is the actor. No first-class leases/IM/decisions/state for agents. |
 | Agent runtimes | Devin, Cursor background agents, Claude Code | Great at *doing the work*; coordination + durable PM is an afterthought. |
 | Cloud agent platforms | AWS/Google/Microsoft agent services | Strong inside their own cloud/model/IAM stack; weak as the neutral operating record across rival runtimes, local agents, IDEs, repos, and human approval paths. |
+| Enterprise AI governance/security | ServiceNow, Zscaler, Okta, Palo Alto Networks, specialist startups | Govern agent risk, identity, access, or runtime exposure; generally do not own the full work lifecycle from plan → claim → SME review → merge evidence → cost/KPI. |
+| Workplace chat agents | Slack/Salesforce, Microsoft Teams, Atlassian | Strong where humans already talk; usually suite-bound, chat-first, and not the neutral durable ledger across BYO agents and repos. |
 | OSS "task-manager MCP" servers | various | Single-project, no human PM layer, no cost story, no leases/decisions log. |
 
 Closest in spirit, but none ship the full combination as a polished product. Not "no one
-*could* build it" — almost everyone is building from the wrong end.
+*could* build it" — almost everyone is building from the wrong end. Keep the landscape current
+in [`MARKET-LANDSCAPE.md`](MARKET-LANDSCAPE.md); do not let old competitive claims harden into
+sales copy without a fresh check.
 
 ## 3. What is and isn't defensible
 
@@ -61,7 +70,9 @@ Closest in spirit, but none ship the full combination as a polished product. Not
    what it cost, which evidence proved it, who approved it, and which outcome/KPI it moved.
 3. **Accumulated cross-session state** — the board gets more valuable the longer a team runs on it.
 4. **Two-sided habit** — where both humans and agents already look.
-5. **Token-economics framing** — the 999× delta-poll number is a *sales story*, not just hygiene.
+5. **Human review graph** — who shaped the work before coding, which objections changed the plan,
+   and which approvals allowed dispatch or merge.
+6. **Token-economics framing** — the 999× delta-poll number is a *sales story*, not just hygiene.
 
 **The standing risk:** platform encroachment (AWS, Google, Microsoft, OpenAI, Anthropic, or
 Linear ship native coordination). The edge is not "we orchestrate agents" by itself; the edge
@@ -98,6 +109,14 @@ audit/provenance trail (who/what/why on every state change, replayable). This is
 into serious/regulated orgs that won't let agents run unsupervised — a market the consumer-y
 tools can't touch. Aligns with the founder's safety-critical (offshore-energy) background.
 
+### Bet 4 — Human/agent collaboration layer  (the team-product wedge)
+Agents coordinate through Switchboard, but teams coordinate through discussion. The product
+should turn discussion into governed work state: SME review before coding, feedback inbox →
+plan proposal, decision threads attached to tasks/PRs, and Slack/Teams/GitHub/UI bridges that
+route humans into the loop without making chat the source of truth. This is the wedge for
+open-source projects and collaborative teams where many humans bring many agents, including
+enterprise-gated LLMs, to one shared outcome.
+
 ## 5. Roadmap — ranked backlog
 
 | # | Feature | Why | Effort |
@@ -115,6 +134,8 @@ tools can't touch. Aligns with the founder's safety-critical (offshore-energy) b
 | 9 | **ACCESS commercial shell** | login/session auth, org/user/project roles, scoped MCP/API tokens, project creation permissions, invites, subscriptions/agent entitlements, feedback inbox, restricted UI controls | L — next live board lane |
 | 10 | **Public protocol ecosystem** | OSS spec/adapters/conformance/local host, license, quickstarts, certification badges | M |
 | 11 | **Enterprise trust graph** | audit exports, provider cost reconciliation, immutable evidence retention, enterprise integrations | L |
+| 12 | **Human/agent collaboration layer** | SME review gates, discussion-to-plan proposals, Slack/Teams/GitHub bridges, decision threads tied to tasks and PRs | M/L — see ACCESS-10 and ACCESS-11 |
+| 13 | **Market landscape tracker** | quarterly scan of BigCo, startup, and OSS adjacent products so positioning stays honest | S — see [`MARKET-LANDSCAPE.md`](MARKET-LANDSCAPE.md) |
 
 ## 6. Commercial framing
 
@@ -125,5 +146,7 @@ tools can't touch. Aligns with the founder's safety-critical (offshore-energy) b
 - **Moat play:** publish the coordination protocol so it can become a convention, while
   keeping the hosted trust/economics layer commercial.
 - **Strategic position:** run agents anywhere; govern the work in one place.
+- **Team-product position:** let every contributor bring their own agent, while Switchboard keeps
+  one reviewable plan, one evidence trail, and one cost/outcome ledger.
 - **Open strategic question:** standalone product vs. strategic acquihire bait — depends on how
   fast the platforms move. The wedge is real *today* either way.

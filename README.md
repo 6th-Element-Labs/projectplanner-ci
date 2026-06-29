@@ -70,6 +70,8 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/AGENT_ROADMAP.md`](docs/AGENT_ROADMAP.md) | Phased build plan (Phases 0–7, single-agent operator) |
 | [`docs/AGENT_OPERATOR_FEATURES.md`](docs/AGENT_OPERATOR_FEATURES.md) | Operator-level agent features (autonomous delivery loop, action queue, outcome tracker, live-meeting agent) |
 | [`docs/MULTI_AGENT_COORDINATION.md`](docs/MULTI_AGENT_COORDINATION.md) | Multi-agent coordination layer — file leases, git↔board sync, directed IM, decisions log (derived from first-hand six-agent session data) |
+| [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md) | Switchboard product roadmap, competitive positioning, moat, and commercial wedges |
+| [`docs/MARKET-LANDSCAPE.md`](docs/MARKET-LANDSCAPE.md) | Living market tracker for agent collaboration, governance, security, orchestration, and workplace-suite moves |
 | [`docs/P0-SPEC.md`](docs/P0-SPEC.md) | Switchboard P0 implementation floor: authenticated writes, agent identity, REST/MCP parity, idempotency, and `IXP-core` conformance |
 | [`docs/RUNTIME-ADAPTERS-SPEC.md`](docs/RUNTIME-ADAPTERS-SPEC.md) | Runtime adapter packs for Claude Code, Codex, Cursor, LangGraph, raw OpenAI loops, and generic REST clients |
 | [`docs/INTERRUPT-TIERS-SPEC.md`](docs/INTERRUPT-TIERS-SPEC.md) | Visible stop/redirect guarantees: advisory poll, hook-level deny, runner kill, and managed control |
