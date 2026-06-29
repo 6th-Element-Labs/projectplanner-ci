@@ -1,0 +1,15 @@
+# /etc/systemd/system/projectplanner-ci-gate.service
+# One-shot service: run the Switchboard VM-backed PR conformance gate.
+# Triggered by projectplanner-ci-gate.timer.
+[Unit]
+Description=ProjectPlanner Switchboard PR CI gate
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=SWITCHBOARD_CI_WORKDIR=/var/lib/projectplanner/ci-gate
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py ci_gate_prs
+StandardOutput=journal
+StandardError=journal

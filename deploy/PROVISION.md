@@ -51,7 +51,8 @@ sudo chown -R ubuntu /opt/projectplanner
 sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-mcp.service deploy/projectplanner-monitors.service \
   deploy/projectplanner-monitors.timer deploy/projectplanner-reconcile.service \
-  deploy/projectplanner-reconcile.timer deploy/projectplanner-agent-host.service \
+  deploy/projectplanner-reconcile.timer deploy/projectplanner-ci-gate.service \
+  deploy/projectplanner-ci-gate.timer deploy/projectplanner-agent-host.service \
   /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp
@@ -70,7 +71,9 @@ curl -s http://127.0.0.1:8110/health            # {"status":"ok",...}
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
+systemctl list-timers projectplanner-ci-gate.timer
 systemctl is-active projectplanner-agent-host
+systemctl is-active actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
 ```
 
 ## Update live code
@@ -83,11 +86,44 @@ sudo cp deploy/projectplanner-reconcile.service deploy/projectplanner-reconcile.
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-reconcile.timer
 sudo systemctl restart projectplanner-reconcile.timer
+sudo cp deploy/projectplanner-ci-gate.service deploy/projectplanner-ci-gate.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now projectplanner-ci-gate.timer
+sudo systemctl restart projectplanner-ci-gate.timer
 sudo cp deploy/projectplanner-agent-host.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-agent-host
 sudo systemctl restart projectplanner-agent-host
 ```
+
+## GitHub Actions runner
+
+Switchboard CI is a repo-scoped GitHub Actions gate. The workflow targets the self-hosted runner
+with labels `self-hosted`, `Linux`, `ARM64`, and `switchboard-ci`. The Plan VM runner is installed
+at `/opt/actions-runner-projectplanner` and managed by:
+
+```bash
+sudo systemctl status actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
+cd /opt/actions-runner-projectplanner && sudo ./svc.sh status
+```
+
+The runner host must provide Python 3.10+, Node.js, and the project dependencies installed during
+the workflow. If GitHub-hosted Actions starts producing normal queued jobs again, this workflow can
+move back to hosted runners after one green PR and one green `master` push run prove parity.
+
+## VM-backed PR gate
+
+If GitHub Actions records `startup_failure` before creating jobs, the Plan VM keeps PR checks
+visible with `projectplanner-ci-gate.timer`. It runs:
+
+```bash
+/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py ci_gate_prs
+```
+
+The job checks out open PRs into `/var/lib/projectplanner/ci-gate`, runs
+`scripts/switchboard_ci.sh` in strict mode, and posts a commit status named
+`Switchboard CI / VM gate` to each PR head SHA. It needs a token with commit-status write access in
+`PM_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN`.
 
 ## Rename safety
 

@@ -183,10 +183,23 @@ def backfill_default_branch_provenance(project_id: str = "", ref: str = "",
             "results": results}
 
 
+def ci_gate_prs():
+    """Run the VM-backed Switchboard PR CI gate once.
+
+    This is the Actions-equivalent fallback for cases where GitHub records
+    `startup_failure` before any workflow job exists. It posts a commit status
+    to each open PR head SHA, so the PR still carries a visible pass/fail gate.
+    """
+    cmd = [sys.executable, str(Path(__file__).parent / "scripts" / "switchboard_pr_gate.py"),
+           "--once-open-prs"]
+    subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
+
+
 JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "summarize_pending": summarize_pending, "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
-        "backfill_default_branch_provenance": backfill_default_branch_provenance}
+        "backfill_default_branch_provenance": backfill_default_branch_provenance,
+        "ci_gate_prs": ci_gate_prs}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else "weekly_digest"

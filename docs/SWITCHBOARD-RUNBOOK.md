@@ -100,9 +100,12 @@ cd /path/to/projectplanner
 scripts/switchboard_ci.sh
 ```
 
-GitHub Actions runs the same script on every PR and every push to `master` with Python 3.11,
-strict dependency checks, and Node.js syntax checks enabled. Strict mode requires Python 3.10+
-because the MCP runtime dependency requires it:
+GitHub Actions runs the same script on every PR and every push to `master` with strict dependency
+checks and Node.js syntax checks enabled. The workflow currently targets the repo-scoped
+self-hosted runner labelled `switchboard-ci` on the Plan VM because GitHub-hosted jobs were
+startup-failing before job creation in this org/repo. Keep the runner online until hosted Actions
+produce normal queued jobs again. Strict mode requires Python 3.10+ because the MCP runtime
+dependency requires it:
 
 ```bash
 SWITCHBOARD_CI_STRICT=1 SWITCHBOARD_CI_REQUIRE_NODE=1 scripts/switchboard_ci.sh
@@ -110,12 +113,21 @@ SWITCHBOARD_CI_STRICT=1 SWITCHBOARD_CI_REQUIRE_NODE=1 scripts/switchboard_ci.sh
 
 Merge rule: a branch can move to `In Review` with branch/head/PR evidence, but it should not be
 merged unless the PR's `Switchboard CI / Core conformance and smoke tests` check is green or a
-human explicitly records the risk. `Done` still comes only from GitHub/default-branch provenance.
+human explicitly records the risk. While GitHub Actions is startup-failing before job creation,
+the VM-backed `Switchboard CI / VM gate` commit status is the equivalent merge gate. `Done` still
+comes only from GitHub/default-branch provenance.
 
-Bootstrap exception: the first PR that introduces this workflow may not produce a normal PR check
-until the workflow file exists on the default branch. For that one case, run the strict gate on the
-Plan VM or another Python 3.10+ environment before merge, then verify the post-merge `master` push
-run is green. Subsequent PRs should use the normal PR check.
+Runner bootstrap exception: if the PR check is missing or a workflow run records `startup_failure`
+before any job starts, do not treat that as a product pass. Confirm the `switchboard-ci` runner is
+online, run the strict gate on the Plan VM or another Python 3.10+ environment, and record the
+risk before merge. The fallback command is:
+
+```bash
+PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
+```
+
+The production fallback is `projectplanner-ci-gate.timer`, which polls open PRs and posts the
+`Switchboard CI / VM gate` status from the Plan VM.
 
 ## 3. Run an autonomous agent (agent host)
 ```bash

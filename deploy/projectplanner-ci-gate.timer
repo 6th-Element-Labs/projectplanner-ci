@@ -1,0 +1,12 @@
+# /etc/systemd/system/projectplanner-ci-gate.timer
+# Runs the Switchboard PR CI gate every 5 minutes while GitHub Actions is unhealthy.
+[Unit]
+Description=ProjectPlanner Switchboard PR CI gate (every 5 minutes)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
