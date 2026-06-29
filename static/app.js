@@ -506,12 +506,15 @@ const TeepPlan = {
     // tasks) via the in-view toggle; each group collapses to one row
     // (count · who/where · progress) and expands. Replaces the old flat
     // "ToDo" per-person tab. Pure presentation; toggle persists per browser.
+    groupModeKey() {
+        return `pm_group_mode:${window.PM_PROJECT || 'maxwell'}`;
+    },
     groupMode() {
-        try { return localStorage.getItem('pm_group_mode') === 'assignee' ? 'assignee' : 'workstream'; }
+        try { return localStorage.getItem(this.groupModeKey()) === 'assignee' ? 'assignee' : 'workstream'; }
         catch (e) { return 'workstream'; }
     },
     setGroupMode(m) {
-        try { localStorage.setItem('pm_group_mode', m === 'assignee' ? 'assignee' : 'workstream'); } catch (e) {}
+        try { localStorage.setItem(this.groupModeKey(), m === 'assignee' ? 'assignee' : 'workstream'); } catch (e) {}
         this.renderEpics();
     },
     renderEpics() {
