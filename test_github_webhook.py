@@ -229,6 +229,23 @@ try:
         "https://github.com/6th-Element-Labs/projectplanner/pull/45",
         f"codex/{reconcile_task['task_id']}-reconcile", "headrecon",
         actor="seed", project=P)
+
+    stale_claim_task = store.create_task(
+        {"workstream_id": "HARDEN", "title": "stale claim PR evidence"},
+        actor="seed", project=P)
+    stale_claim = store.claim_task(
+        stale_claim_task["task_id"], "codex/stale-claim", actor="seed", project=P)
+    old_head = "651ec7b6e85d6f36037f7ab5c2ae676d67e47a14"
+    latest_head = "fd5d4cfdcc747c6ada49c552fc8f0b70d0841c94"
+    store.complete_claim(
+        stale_claim["claim_id"],
+        evidence={
+            "branch": f"codex/{stale_claim_task['task_id']}-stale",
+            "head_sha": old_head,
+            "pr_url": "https://github.com/6th-Element-Labs/projectplanner/pull/49",
+        },
+        actor="seed",
+        project=P)
     original_github_pr = store._github_pr
     original_env = {k: os.environ.get(k) for k in (
         "PM_GITHUB_TOKEN", "GITHUB_TOKEN", "SWITCHBOARD_CI_GITHUB_TOKEN")}
@@ -247,6 +264,15 @@ try:
                 "base": {"ref": "master", "repo": {"default_branch": "master"}},
                 "head": {"ref": f"codex/{activity_task['task_id']}-activity",
                          "sha": "activityhead"},
+            }
+        if int(pr_number) == 49:
+            return {
+                "merged_at": "2026-06-29T07:30:04Z",
+                "merge_commit_sha": "staleclaimmerge",
+                "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                "base": {"ref": "master", "repo": {"default_branch": "master"}},
+                "head": {"ref": f"codex/{stale_claim_task['task_id']}-stale",
+                         "sha": latest_head},
             }
         return {
             "merged_at": "2026-06-29T05:52:17Z",
@@ -268,6 +294,7 @@ try:
                 os.environ[key] = value
     reconciled = store.get_task(reconcile_task["task_id"], project=P)
     activity_reconciled = store.get_task(activity_task["task_id"], project=P)
+    stale_claim_reconciled = store.get_task(stale_claim_task["task_id"], project=P)
     ok(report["external_checks"]["github_repo"] == "6th-Element-Labs/projectplanner",
        "reconcile uses project-scoped GitHub repo config")
     ok(seen.get("token") == "ci-status-token",
@@ -281,6 +308,11 @@ try:
     ok(reconciled["status"] == "Done" and
        reconciled["git_state"]["merged_sha"] == "reconcilemerge",
        "reconcile stamps merged PR as Done with merged_sha provenance")
+    ok(stale_claim_reconciled["status"] == "Done" and
+       stale_claim_reconciled["git_state"]["pr_number"] == 49 and
+       stale_claim_reconciled["git_state"]["merged_sha"] == "staleclaimmerge" and
+       stale_claim_reconciled["git_state"]["head_sha"] == latest_head,
+       "reconcile stamps merged PR from pr_url-only stale claim evidence")
 
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)

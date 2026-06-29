@@ -4448,9 +4448,41 @@ def _infer_pr_evidence_from_activity(c: sqlite3.Connection, task_id: str,
                 "pr_url": match.group(0),
                 "branch": branch_match.group(1) if branch_match else "",
                 "head_sha": head_match.group(1) if head_match else "",
-                "source": "task_activity",
+                "source": "activity_pr_evidence",
             }
     return {}
+
+
+def _infer_pr_evidence_from_git_state(git_state: Dict[str, Any],
+                                      repo: str) -> Dict[str, Any]:
+    if not repo:
+        return {}
+    pr_url = (git_state.get("pr_url") or "").strip()
+    if not pr_url:
+        return {}
+    repo_l = repo.lower()
+    match = GITHUB_PR_URL_RE.search(pr_url)
+    if not match or match.group(1).lower() != repo_l:
+        return {}
+    return {
+        "pr_number": int(match.group(2)),
+        "pr_url": match.group(0),
+        "branch": git_state.get("branch") or "",
+        "head_sha": git_state.get("head_sha") or "",
+        "source": "git_state_pr_url",
+    }
+
+
+def _merge_pr_evidence(git_state: Dict[str, Any],
+                       inferred: Dict[str, Any]) -> Dict[str, Any]:
+    if not inferred:
+        return {}
+    evidence: Dict[str, Any] = {"source": inferred.get("source")}
+    for field in ("pr_number", "pr_url", "branch", "head_sha"):
+        value = inferred.get(field)
+        if value and not git_state.get(field):
+            evidence[field] = value
+    return evidence if any(k != "source" for k in evidence) else {}
 
 
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
@@ -4551,8 +4583,8 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                     task["task_id"], merge_sha,
                     pr_number=int(state.get("pr_number") or 0) or None,
                     pr_url=state.get("pr_url") or pr.get("html_url") or "",
-                    branch=state.get("branch") or ((pr.get("head") or {}).get("ref") or ""),
-                    head_sha=state.get("head_sha") or ((pr.get("head") or {}).get("sha") or ""),
+                    branch=((pr.get("head") or {}).get("ref") or state.get("branch") or ""),
+                    head_sha=((pr.get("head") or {}).get("sha") or state.get("head_sha") or ""),
                     actor="reconcile",
                     project=project,
                 )
@@ -4625,22 +4657,19 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             git_state = _load_git_state(c, task["task_id"])
             tasks.append(task)
             status = task.get("status")
-            if status == "In Review" and not (git_state.get("pr_number") or git_state.get("pr_url")):
-                inferred = _infer_pr_evidence_from_activity(c, task["task_id"], repo)
-                if inferred:
-                    evidence = {
-                        "source": "activity_pr_evidence",
-                        "pr_number": inferred.get("pr_number"),
-                        "pr_url": inferred.get("pr_url"),
-                        "branch": inferred.get("branch"),
-                        "head_sha": inferred.get("head_sha"),
-                    }
+            if status == "In Review" and repo and not git_state.get("pr_number"):
+                inferred = (
+                    _infer_pr_evidence_from_git_state(git_state, repo)
+                    or _infer_pr_evidence_from_activity(c, task["task_id"], repo)
+                )
+                evidence = _merge_pr_evidence(git_state, inferred)
+                if evidence:
                     git_state = _upsert_git_state(c, task["task_id"], {
-                        "pr_number": inferred.get("pr_number"),
-                        "pr_url": inferred.get("pr_url"),
-                        "branch": inferred.get("branch") or None,
-                        "head_sha": inferred.get("head_sha") or None,
-                        "pushed_at": now if inferred.get("head_sha") else None,
+                        "pr_number": evidence.get("pr_number"),
+                        "pr_url": evidence.get("pr_url"),
+                        "branch": evidence.get("branch") or None,
+                        "head_sha": evidence.get("head_sha") or None,
+                        "pushed_at": now if evidence.get("head_sha") else None,
                         "evidence": evidence,
                     })
                     c.execute(
