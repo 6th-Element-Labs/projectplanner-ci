@@ -158,6 +158,34 @@ try:
        store.get_task(missing_sha_task["task_id"], project=P)["status"] == "Not Started",
        "PR merged webhook fails closed when merge_commit_sha is missing")
 
+    reconcile_task = store.create_task({"workstream_id": "HARDEN", "title": "reconcile PR merge"},
+                                       actor="seed", project=P)
+    store.mark_task_pr_opened(
+        reconcile_task["task_id"], 45,
+        "https://github.com/6th-Element-Labs/projectplanner/pull/45",
+        f"codex/{reconcile_task['task_id']}-reconcile", "headrecon",
+        actor="seed", project=P)
+    original_github_pr = store._github_pr
+    store._github_pr = lambda repo, pr_number, token="": {
+        "merged_at": "2026-06-29T05:52:17Z",
+        "merge_commit_sha": "reconcilemerge",
+        "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+        "base": {"ref": "master", "repo": {"default_branch": "master"}},
+        "head": {"ref": f"codex/{reconcile_task['task_id']}-reconcile", "sha": "headrecon"},
+    }
+    try:
+        report = store.reconcile(project=P)
+    finally:
+        store._github_pr = original_github_pr
+    reconciled = store.get_task(reconcile_task["task_id"], project=P)
+    ok(report["external_checks"]["github_repo"] == "6th-Element-Labs/projectplanner",
+       "reconcile uses project-scoped GitHub repo config")
+    ok(report["backfilled"] and report["backfilled"][0]["task_id"] == reconcile_task["task_id"],
+       "reconcile reports PR-merge backfill")
+    ok(reconciled["status"] == "Done" and
+       reconciled["git_state"]["merged_sha"] == "reconcilemerge",
+       "reconcile stamps merged PR as Done with merged_sha provenance")
+
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)
 finally:

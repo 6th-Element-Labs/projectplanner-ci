@@ -40,6 +40,10 @@ BUILTIN_PROJECTS = {
                     "label": "Switchboard — Agent Coordination Layer",
                     "pretitle": "6th Element Labs · live dogfood control plane"},
 }
+BUILTIN_GITHUB_REPOS = {
+    "helm": "StevenRidder/Helm",
+    "switchboard": "6th-Element-Labs/projectplanner",
+}
 # Back-compat for older call sites that only need the built-in project set. New code should call
 # project_ids(), has_project(), projects(), or _resolve() so dynamic projects are included.
 PROJECTS = BUILTIN_PROJECTS
@@ -3569,6 +3573,42 @@ def set_meta(key: str, value, project: str = DEFAULT_PROJECT):
         c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, json.dumps(value)))
 
 
+def _project_env_suffix(project: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", (project or "").upper()).strip("_")
+
+
+def get_project_github_repo(project: str = DEFAULT_PROJECT) -> str:
+    """Repository used for PR-state reconciliation on one board.
+
+    Multi-project deployments cannot rely on one global PM_GITHUB_REPO: Helm, Switchboard,
+    Vulkan, and Maxwell can all be live at once. Project meta/env wins, then built-in
+    dogfood defaults, with the legacy global env kept for the default board and Switchboard.
+    """
+    configured = (get_meta("github_repo", "", project=project) or "").strip()
+    if configured:
+        return configured
+    suffix = _project_env_suffix(project)
+    for key in (
+        f"PM_GITHUB_REPO_{suffix}" if suffix else "",
+        f"GITHUB_REPOSITORY_{suffix}" if suffix else "",
+    ):
+        if key and os.environ.get(key):
+            return os.environ[key].strip()
+    if project in BUILTIN_GITHUB_REPOS:
+        return BUILTIN_GITHUB_REPOS[project]
+    if project in (DEFAULT_PROJECT, "switchboard"):
+        return (os.environ.get("PM_GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    return ""
+
+
+def set_project_github_repo(repo: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    repo = (repo or "").strip()
+    if repo and not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
+        return {"error": "github repo must be 'owner/name'", "repo": repo, "project": project}
+    set_meta("github_repo", repo, project=project)
+    return {"project": project, "github_repo": repo}
+
+
 def create_project(name: str, project_id: str = "", label: str = "", pretitle: str = "",
                    actor: str = "system", seed_path: str = "") -> Dict[str, Any]:
     """Create a physically isolated project board and register it for routing.
@@ -3735,9 +3775,18 @@ def _github_pr(repo: str, pr_number: int, token: str = "") -> Optional[Dict[str,
 
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  git_states: Dict[str, Dict[str, Any]],
-                                 canonical_main_sha: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+                                 canonical_main_sha: str,
+                                 project: str = DEFAULT_PROJECT) -> Tuple[
+                                     List[Dict[str, Any]],
+                                     Dict[str, Any],
+                                     List[Dict[str, Any]],
+                                 ]:
     findings: List[Dict[str, Any]] = []
-    checks = {"git_reachability": "not_configured", "github_prs": "not_configured"}
+    backfilled: List[Dict[str, Any]] = []
+    checks: Dict[str, Any] = {
+        "git_reachability": "not_configured",
+        "github_prs": "not_configured",
+    }
     if canonical_main_sha and _git_checks_available():
         checks["git_reachability"] = "checked"
         main_ref = canonical_main_sha
@@ -3761,11 +3810,15 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                      "code": "merged_sha_not_on_canonical_main",
                                      "detail": "Recorded merged_sha is not reachable from canonical main."})
 
-    repo = os.environ.get("PM_GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
+    repo = get_project_github_repo(project)
     token = os.environ.get("PM_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     pr_tasks = [t for t in tasks if git_states.get(t["task_id"], {}).get("pr_number")]
-    if repo and pr_tasks:
+    if repo:
+        checks["github_repo"] = repo
         checks["github_prs"] = "checked" if token else "checked_unauthenticated"
+    if repo and not pr_tasks:
+        checks["github_prs"] = "configured_no_prs"
+    if repo and pr_tasks:
         for task in pr_tasks:
             state = git_states.get(task["task_id"], {})
             pr = _github_pr(repo, int(state.get("pr_number") or 0), token=token)
@@ -3780,11 +3833,36 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  "code": "done_pr_not_merged",
                                  "detail": "Task is Done but the recorded GitHub PR is not merged."})
             merge_sha = pr.get("merge_commit_sha")
+            if (merged and merge_sha
+                    and task.get("status") in ("In Review", "Done")
+                    and (task.get("status") != "Done" or not state.get("merged_sha"))):
+                base_ref = ((pr.get("base") or {}).get("ref") or "").strip()
+                default_ref = (pr.get("base") or {}).get("repo", {}).get("default_branch") or ""
+                if base_ref and default_ref and base_ref == default_ref:
+                    update_canonical_main_sha(merge_sha, "reconcile", project)
+                stamped = mark_task_merged(
+                    task["task_id"], merge_sha,
+                    pr_number=int(state.get("pr_number") or 0) or None,
+                    pr_url=state.get("pr_url") or pr.get("html_url") or "",
+                    branch=state.get("branch") or ((pr.get("head") or {}).get("ref") or ""),
+                    head_sha=state.get("head_sha") or ((pr.get("head") or {}).get("sha") or ""),
+                    actor="reconcile",
+                    project=project,
+                )
+                if not stamped.get("error"):
+                    backfilled.append({
+                        "task_id": task["task_id"],
+                        "pr_number": state.get("pr_number"),
+                        "merged_sha": merge_sha,
+                    })
+                    git_states[task["task_id"]] = stamped.get("git_state") or state
+                    task["status"] = "Done"
+                    state = git_states[task["task_id"]]
             if merged and state.get("merged_sha") and merge_sha and state["merged_sha"] != merge_sha:
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "merged_sha_mismatch",
                                  "detail": "Recorded merged_sha differs from GitHub PR merge_commit_sha."})
-    return findings, checks
+    return findings, checks, backfilled
 
 
 SEVERITY_VALUE = {"low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -3883,18 +3961,19 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                                  "code": "stale_resource_lease",
                                  "detail": f"{lease['resource_type']} lease {lease['id']} by {lease['agent_id']} expired without release."})
         cursor = c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0]
-    if not agreement.get("canonical_main_sha"):
+    external_findings, external_checks, backfilled = _external_reconcile_findings(
+        tasks, git_states, agreement.get("canonical_main_sha") or "", project=project)
+    findings.extend(external_findings)
+    if not (agreement.get("canonical_main_sha") or get_meta("canonical_main_sha", None, project=project)):
         findings.append({"severity": "medium", "task_id": None,
                          "code": "missing_canonical_main_sha",
                          "detail": "No canonical main SHA recorded yet; wait for a default-branch push webhook or set meta."})
-    external_findings, external_checks = _external_reconcile_findings(
-        tasks, git_states, agreement.get("canonical_main_sha") or "")
-    findings.extend(external_findings)
     append_activity("reconcile.completed", "reconcile",
-                    {"findings": len(findings)}, task_id=None, project=project)
+                    {"findings": len(findings), "backfilled": backfilled},
+                    task_id=None, project=project)
     return {"project": project, "ok": not findings, "findings": findings,
             "activity_cursor": cursor, "checked_at": now,
-            "external_checks": external_checks}
+            "external_checks": external_checks, "backfilled": backfilled}
 
 
 def run_reconcile_alerts(project: str = DEFAULT_PROJECT,

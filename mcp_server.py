@@ -1309,6 +1309,23 @@ def create_project(name: str, ctx: Context, project_id: str = "", label: str = "
 
 
 @mcp.tool()
+def set_project_github_repo(repo: str, ctx: Context, project: str = "maxwell") -> str:
+    """Set the GitHub owner/repo used by reconcile to verify PR merge provenance for a board.
+
+    Use this when a project board maps to a different repository than Switchboard itself, e.g.
+    project='helm' -> repo='StevenRidder/Helm'. Requires system write scope because it changes
+    the board's trust boundary for Done stamping.
+    """
+    principal = _require_write(ctx, "switchboard", ("write:system",))
+    result = store.set_project_github_repo(repo=repo, project=project)
+    if not result.get("error"):
+        store.append_activity("project.github_repo_configured", auth.actor(principal),
+                              {"project": project, "github_repo": repo},
+                              task_id=None, project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", assignee: str = "",
                 phase: str = "", start_date: str = "", finish_date: str = "",
