@@ -17,12 +17,27 @@ def _date(s):
         return None
 
 
+def _as_list(value):
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _task_deps(t):
+    deps = t.get("depends_on") or []
+    if isinstance(deps, list):
+        return [d for d in deps if isinstance(d, str) and d]
+    if isinstance(deps, str):
+        return [d for d in deps.replace(",", " ").split() if d]
+    return []
+
+
 def _brief(t):
     return {"task_id": t["task_id"], "title": t.get("title"), "workstream": t.get("_wsId"),
             "status": t.get("status"), "owner_org": t.get("owner_org"),
             "owner_person_or_role": t.get("owner_person_or_role"),
             "finish_date": t.get("finish_date"), "is_blocking": t.get("is_blocking"),
-            "depends_on": t.get("depends_on")}
+            "depends_on": _task_deps(t)}
 
 
 def _people_of(t, people):
@@ -42,7 +57,7 @@ def compute_plan_signals(due_soon_days: int = 7, project: str = "maxwell") -> di
         return t.get("status") == "Done"
 
     def deps_done(t):
-        return all(by_id.get(d, {}).get("status") == "Done" for d in (t.get("depends_on") or []))
+        return all(by_id.get(d, {}).get("status") == "Done" for d in _task_deps(t))
 
     def is_actionable(t):
         # Something the owner can actually pick up now.
@@ -67,21 +82,34 @@ def compute_plan_signals(due_soon_days: int = 7, project: str = "maxwell") -> di
             waiting.append(t)
 
     # Critical-path slip: critical-path tasks that are overdue or blocked.
-    cp_ids = {c.get("task_id") for c in (store.get_meta("critical_path", project=project) or [])}
+    cp_ids = set()
+    for c in _as_list(store.get_meta("critical_path", project=project)):
+        if isinstance(c, dict):
+            task_id = c.get("task_id")
+        elif isinstance(c, str):
+            task_id = c
+        else:
+            task_id = None
+        if task_id:
+            cp_ids.add(task_id)
     critical_slip = [t for t in tasks if t["task_id"] in cp_ids and not is_done(t)
                      and (t.get("status") == "Blocked"
                           or (_date(t.get("finish_date")) and _date(t.get("finish_date")) < today))]
 
     # Past-due decisions (only when needed_by is a real date).
     past_due_decisions = []
-    for d in (store.get_meta("consolidated_decisions", project=project) or []):
+    for d in _as_list(store.get_meta("consolidated_decisions", project=project)):
+        if not isinstance(d, dict):
+            continue
         nb = _date(d.get("needed_by"))
         if nb and nb < today:
             past_due_decisions.append({"question": d.get("question"), "owner": d.get("owner"),
                                        "needed_by": d.get("needed_by"), "workstream": d.get("workstream")})
 
     # Next-best per owner: rank the ACTIONABLE tasks each person owns.
-    people = store.get_meta("people", project=project) or store.DEFAULT_PEOPLE
+    people = [p for p in _as_list(store.get_meta("people", project=project)) if isinstance(p, str)]
+    if not people:
+        people = store.DEFAULT_PEOPLE
 
     def score(t):
         fd = _date(t.get("finish_date"))
