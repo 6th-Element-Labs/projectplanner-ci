@@ -196,6 +196,8 @@ def launch_command(wake, inventory):
         idle = os.environ.get("PM_AGENT_HOST_INBOX_IDLE_SECONDS", "6")
         child = ["python3", RUN_AGENT, "--runtime", runtime,
                  "--inbox-only", "--idle-seconds", idle]
+        if _truthy(os.environ.get("PM_AGENT_HOST_ACK_INBOX_ONLY", "1")):
+            child.append("--ack-inbox")
     else:
         child = ["python3", RUN_AGENT, "--runtime", runtime, "--max-tasks", "1"]
         if lane:

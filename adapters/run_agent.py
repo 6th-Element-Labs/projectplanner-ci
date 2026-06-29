@@ -27,6 +27,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # put adapters/ 
 import switchboard_core as sb  # noqa: E402
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
+INBOX_ONLY_ACK_RESPONSE = (
+    "received by inbox-only adapter; no model/action completion performed"
+)
 
 
 def dry_work_fn(task):
@@ -40,7 +43,7 @@ def _load_work_fn(spec):
     return getattr(importlib.import_module(mod), attr)
 
 
-def inbox_only(agent_id, runtime, idle_seconds):
+def inbox_only(agent_id, runtime, idle_seconds, ack_inbox=False):
     """Register and read inbox without calling claim_next.
 
     This is used by Agent Host for message-only wakes. It proves the runtime adapter reached
@@ -48,8 +51,24 @@ def inbox_only(agent_id, runtime, idle_seconds):
     """
     sb.handshake(PROJECT, agent_id, runtime, lane="")
     messages = sb.inbox(PROJECT, agent_id)
+    acked_ids = []
+    ack_errors = []
+    if ack_inbox:
+        for msg in messages:
+            if msg.get("acked_at") or not msg.get("requires_ack", True):
+                continue
+            message_id = msg.get("id")
+            if not message_id:
+                continue
+            try:
+                sb.ack(PROJECT, message_id, response=INBOX_ONLY_ACK_RESPONSE)
+                acked_ids.append(message_id)
+            except Exception as e:
+                ack_errors.append({"message_id": message_id, "error": str(e)})
     print(json.dumps({"agent_id": agent_id, "mode": "inbox_only",
-                      "unacked_messages": messages}), flush=True)
+                      "unacked_messages": messages,
+                      "acked_message_ids": acked_ids,
+                      "ack_errors": ack_errors}), flush=True)
     if idle_seconds > 0:
         time.sleep(idle_seconds)
     return 0
@@ -64,13 +83,16 @@ def main(argv=None):
     ap.add_argument("--work-module", default="", help="pkg.mod:attr for the real work_fn")
     ap.add_argument("--inbox-only", action="store_true",
                     help="register and read inbox; never call claim_next")
+    ap.add_argument("--ack-inbox", action="store_true",
+                    help="ack unacked inbox messages as adapter receipt only")
     ap.add_argument("--idle-seconds", type=float, default=0.0,
                     help="keep the process alive briefly for supervisor readiness checks")
     a = ap.parse_args(argv)
 
     me = os.environ.get("PM_AGENT_ID") or sb.agent_id()
     if a.inbox_only:
-        return inbox_only(me, a.runtime, max(0.0, a.idle_seconds))
+        return inbox_only(me, a.runtime, max(0.0, a.idle_seconds),
+                          ack_inbox=a.ack_inbox)
     if a.dry:
         work_fn = dry_work_fn
     elif a.work_module:

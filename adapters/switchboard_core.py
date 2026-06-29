@@ -241,6 +241,13 @@ def inbox(project, agent_id, base=None, token=None):
     return r.get("messages") or []
 
 
+def ack(project, message_id, response="", base=None, token=None):
+    """Acknowledge directed-message receipt."""
+    return _http("POST", "/ixp/v1/ack",
+                 {"project": project, "message_id": message_id, "response": response},
+                 base=base, token=token)
+
+
 def claim_next(project, agent_id, lanes=None, base=None, token=None, idem_key=""):
     body = {"project": project, "agent_id": agent_id}
     if lanes:

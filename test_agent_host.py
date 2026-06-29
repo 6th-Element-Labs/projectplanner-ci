@@ -106,6 +106,8 @@ cmd, mode = agent_host.launch_command(message_wake, inventory)
 ok(mode == "inbox_only", "lane-less wake selects inbox-only mode")
 ok("--inbox-only" in cmd and "--lanes" not in cmd,
    "lane-less wake command cannot enter claim_next")
+ok("--ack-inbox" in cmd,
+   "lane-less message wake explicitly acks adapter receipt")
 ok("--idle-seconds" in cmd, "inbox-only command stays alive for readiness check")
 
 cmd, mode = agent_host.launch_command(lane_wake, inventory)
@@ -231,21 +233,26 @@ ok(summary["runner_controls"] and summary["runner_controls"][0]["status"] == "co
 
 handshakes = []
 inboxes = []
+acks = []
 sleeps = []
 
 run_agent.sb.handshake = lambda project, agent_id, runtime, **kw: handshakes.append(
     (project, agent_id, runtime, kw))
-run_agent.sb.inbox = lambda project, agent_id: inboxes.append((project, agent_id)) or [{"id": 1}]
+run_agent.sb.inbox = lambda project, agent_id: inboxes.append((project, agent_id)) or [{"id": 1, "requires_ack": True}]
+run_agent.sb.ack = lambda project, message_id, response="": acks.append(
+    (project, message_id, response)) or {"acked": True}
 run_agent.sb.claim_next = lambda *a, **k: (_ for _ in ()).throw(
     AssertionError("inbox_only must not call claim_next"))
 run_agent.time.sleep = lambda seconds: sleeps.append(seconds)
 
-rc = run_agent.inbox_only("claude/test", "claude-code", 0.25)
+rc = run_agent.inbox_only("claude/test", "claude-code", 0.25, ack_inbox=True)
 ok(rc == 0, "run_agent inbox_only exits successfully")
 ok(handshakes and handshakes[0][1] == "claude/test",
    "run_agent inbox_only registers the agent id")
 ok(inboxes == [(run_agent.PROJECT, "claude/test")],
    "run_agent inbox_only reads unacked inbox")
+ok(acks and acks[0][1] == 1 and "adapter" in acks[0][2],
+   "run_agent inbox_only can ack adapter receipt without claiming work")
 ok(sleeps == [0.25], "run_agent inbox_only idles for readiness checks")
 
 sessions = []
