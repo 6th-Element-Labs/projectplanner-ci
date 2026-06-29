@@ -302,6 +302,54 @@ try:
         project=P,
     )
     ok(claimed_again["claim_id"] == claimed["claim_id"], "claim_next is idempotent by idem_key")
+    exact_target = store.create_task({"workstream_id": "EXACT", "title": "human-selected"},
+                                     actor="seed", project=P)
+    exact_dep = store.create_task({"workstream_id": "EXACT", "title": "blocked exact",
+                                   "depends_on": [exact_target["task_id"]]},
+                                  actor="seed", project=P)
+    exact_blocked = store.claim_task(
+        exact_dep["task_id"],
+        agent_id="codex/EXACT#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(not exact_blocked.get("claimed") and exact_blocked["reason"] == "dependencies_unmet",
+       "claim_task refuses exact tasks with unmet dependencies")
+    exact = store.claim_task(
+        exact_target["task_id"],
+        agent_id="codex/EXACT#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        idem_key="claim-task-exact-1",
+        project=P,
+    )
+    ok(exact.get("claimed") and exact["task"]["task_id"] == exact_target["task_id"],
+       "claim_task claims the exact human-selected task")
+    exact_again = store.claim_task(
+        exact_target["task_id"],
+        agent_id="codex/EXACT#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        idem_key="claim-task-exact-1",
+        project=P,
+    )
+    ok(exact_again["claim_id"] == exact["claim_id"], "claim_task is idempotent by idem_key")
+    exact_busy = store.claim_task(
+        exact_target["task_id"],
+        agent_id="codex/EXACT#2",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(not exact_busy.get("claimed") and exact_busy["reason"] == "active_claim",
+       "claim_task refuses tasks with an active claim")
+    exact_abandoned = store.abandon_claim(exact["claim_id"], "human redirected",
+                                          actor=auth.actor(p), project=P)
+    exact_after_abandon = store.get_task(exact_target["task_id"], project=P)
+    ok(exact_abandoned.get("abandoned") and exact_after_abandon["status"] == "Not Started" and
+       exact_after_abandon.get("assignee") is None,
+       "abandon_claim clears claim-owned assignee when returning task to queue")
     completed = store.complete_claim(
         claimed["claim_id"],
         evidence={"branch": "claude/TEST-1-first", "head_sha": "abc123", "pr_url": "https://example/pr/1"},

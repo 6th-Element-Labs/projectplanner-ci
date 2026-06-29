@@ -847,6 +847,22 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
 
 
 @mcp.tool()
+def claim_task(task_id: str, agent_id: str, ctx: Context,
+               ttl_seconds: int = 1800, idem_key: str = "",
+               project: str = "maxwell") -> str:
+    """Atomically claim one exact ready, unblocked task.
+
+    Use this when a human/operator has selected a specific task. Unlike claim_next,
+    this never substitutes a different scheduler-preferred task.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.claim_task(
+        task_id=task_id, agent_id=agent_id,
+        principal_id=principal["id"], actor=auth.actor(principal),
+        ttl_seconds=ttl_seconds, idem_key=idem_key, project=project))
+
+
+@mcp.tool()
 def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status: str = "",
                    project: str = "maxwell") -> str:
     """Mark a task claim completed, release its task lease, and record completion evidence.

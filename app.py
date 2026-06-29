@@ -909,6 +909,18 @@ async def txp_claim_next(request: Request, body: dict = Body(...)):
         idem_key=body.get("idem_key") or "", project=project)
 
 
+@app.post("/txp/v1/claim_task")
+async def txp_claim_task(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor=body.get("agent_id") or "agent")
+    return store.claim_task(
+        task_id=body.get("task_id") or body.get("task") or "",
+        agent_id=body.get("agent_id") or auth.actor(principal),
+        principal_id=principal["id"], actor=auth.actor(principal),
+        ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
+        idem_key=body.get("idem_key") or "", project=project)
+
+
 @app.post("/txp/v1/request_wake")
 async def txp_request_wake(request: Request, body: dict = Body(...)):
     project = _body_project(body)

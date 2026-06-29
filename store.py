@@ -1618,6 +1618,95 @@ def _model_recommendation(task: Dict[str, Any], score: Dict[str, Any]) -> Dict[s
                       f"capabilities={','.join(score['required_capabilities']) or 'none'}"}
 
 
+READY_TASK_STATUSES = {"Not Started", "Ready", "Todo", "Backlog"}
+
+
+def claim_task(task_id: str, agent_id: str,
+               principal_id: str = "", actor: str = "system",
+               ttl_seconds: int = 1800, idem_key: str = "",
+               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Atomically claim one specific ready, unblocked task.
+
+    Use this when a human/operator has already selected the task. Unlike claim_next,
+    this never substitutes a different scheduler-preferred task.
+    """
+    now = time.time()
+    task_id = (task_id or "").strip()
+    payload = {"task_id": task_id, "agent_id": agent_id,
+               "ttl_seconds": ttl_seconds}
+    with _conn(project) as c:
+        hit = _idem_hit(c, "claim_task", idem_key, actor, payload)
+        if hit is not None:
+            return hit
+        row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
+            response = {"claimed": False, "reason": "task_not_found", "task_id": task_id}
+            _idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
+        task = _task_row(row)
+        active = c.execute(
+            "SELECT * FROM task_claims WHERE task_id=? AND status='active' AND expires_at>?",
+            (task_id, now),
+        ).fetchone()
+        if active:
+            response = {"claimed": False, "reason": "active_claim",
+                        "task_id": task_id, "claim_id": active["id"],
+                        "agent_id": active["agent_id"]}
+            _idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
+        if task.get("status") not in READY_TASK_STATUSES:
+            response = {"claimed": False, "reason": "status_not_ready",
+                        "task_id": task_id, "status": task.get("status")}
+            _idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
+        rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
+        by_id = {t["task_id"]: t for t in [_task_row(r) for r in rows]}
+        if not _deps_done(task, by_id):
+            response = {"claimed": False, "reason": "dependencies_unmet",
+                        "task_id": task_id, "depends_on": task.get("depends_on") or []}
+            _idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
+
+        claim_id = "taskclaim-" + uuid.uuid4().hex[:16]
+        lease_id = "lease-" + uuid.uuid4().hex[:16]
+        ttl = max(60, int(ttl_seconds or 1800))
+        expires_at = now + ttl
+        c.execute(
+            "INSERT INTO task_claims(id, task_id, agent_id, principal_id, status, claimed_at, "
+            "expires_at, idem_key) VALUES (?,?,?,?,?,?,?,?)",
+            (claim_id, task_id, agent_id, principal_id or None, "active",
+             now, expires_at, idem_key or None),
+        )
+        c.execute(
+            "INSERT INTO resource_leases(id, agent_id, principal_id, task_id, resource_type, "
+            "names, claimed_at, ttl_seconds) VALUES (?,?,?,?,?,?,?,?)",
+            (lease_id, agent_id, principal_id or None, task_id, "task",
+             json.dumps([task_id]), now, ttl),
+        )
+        c.execute("UPDATE tasks SET status='In Progress', assignee=?, updated_at=? WHERE task_id=?",
+                  (agent_id, now, task_id))
+        dispatch_reason = {"policy": "exact.v1", "requested_task_id": task_id,
+                           "dependency_checked": True}
+        payload_event = {"claim_id": claim_id, "lease_id": lease_id,
+                         "task_id": task_id, "agent_id": agent_id,
+                         "dispatch_reason": dispatch_reason}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "task.claimed",
+                   json.dumps(payload_event, sort_keys=True), now))
+        claimed_task = _task_row(c.execute("SELECT * FROM tasks WHERE task_id=?",
+                                           (task_id,)).fetchone())
+        response = {
+            "claimed": True,
+            "claim_id": claim_id,
+            "task": claimed_task,
+            "lease": {"lease_id": lease_id, "resource_type": "task",
+                      "names": [task_id], "expires_at": expires_at},
+            "dispatch_reason": dispatch_reason,
+        }
+        _idem_store(c, "claim_task", idem_key, actor, payload, response)
+        return response
+
+
 def claim_next(agent_id: str, lanes: Any = None,
                capabilities: Any = None,
                max_risk: str = "", max_budget_usd: Optional[float] = None,
@@ -1639,7 +1728,6 @@ def claim_next(agent_id: str, lanes: Any = None,
     payload = {"agent_id": agent_id, "lanes": sorted(lane_set),
                "capabilities": sorted(capabilities or []), "max_risk": max_risk,
                "max_budget_usd": max_budget_usd, "ttl_seconds": ttl_seconds}
-    ready_statuses = {"Not Started", "Ready", "Todo", "Backlog"}
     with _conn(project) as c:
         hit = _idem_hit(c, "claim_next", idem_key, actor, payload)
         if hit is not None:
@@ -1660,7 +1748,7 @@ def claim_next(agent_id: str, lanes: Any = None,
             if t["task_id"] in active_claims:
                 skipped["active_claim"] += 1
                 continue
-            if t.get("status") not in ready_statuses:
+            if t.get("status") not in READY_TASK_STATUSES:
                 skipped["status"] += 1
                 continue
             if lane_set and (t.get("_wsId") or "").upper() not in lane_set:
@@ -1823,9 +1911,10 @@ def abandon_claim(claim_id: str, reason: str,
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
                   "AND task_id=? AND agent_id=? AND released_at IS NULL",
                   (now, row["task_id"], row["agent_id"]))
-        c.execute("UPDATE tasks SET status='Not Started', updated_at=? WHERE task_id=? "
-                  "AND status='In Progress'",
-                  (now, row["task_id"]))
+        c.execute("UPDATE tasks SET status='Not Started', "
+                  "assignee=CASE WHEN assignee=? THEN NULL ELSE assignee END, "
+                  "updated_at=? WHERE task_id=? AND status='In Progress'",
+                  (row["agent_id"], now, row["task_id"]))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (row["task_id"], actor, "task.claim.abandoned",
                    json.dumps({"claim_id": claim_id, "reason": reason}, sort_keys=True), now))
