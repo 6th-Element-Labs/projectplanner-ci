@@ -72,9 +72,27 @@ try:
     ok(store.get_meta("project", project="vulkan") == "Vulkan",
        "dynamic project metadata is initialized")
 
+    repo_created = store.create_project(
+        "Chart Renderer", actor="test", github_repo="OpenCPN/OpenCPN")
+    ok(repo_created.get("created") is True and
+       repo_created["project"]["github_repo"] == "OpenCPN/OpenCPN",
+       "store.create_project can set github_repo in one step")
+    ok(store.get_project_github_repo("chart-renderer") == "OpenCPN/OpenCPN",
+       "dynamic project resolves its configured github_repo")
+    bad_repo = store.create_project(
+        "Bad Repo", actor="test", github_repo="not-a-valid-repo")
+    ok("error" in bad_repo and "owner/name" in bad_repo["error"] and
+       "bad-repo" not in store.project_ids(),
+       "invalid github_repo fails closed without creating a project")
+
     duplicate = store.create_project("Vulkan", actor="test")
     ok(duplicate.get("created") is False and duplicate["project"]["id"] == "vulkan",
        "duplicate create is idempotent")
+    duplicate_with_repo = store.create_project(
+        "Vulkan", actor="test", github_repo="StevenRidder/vulkan-renderer")
+    ok(duplicate_with_repo.get("created") is False and
+       duplicate_with_repo["project"]["github_repo"] == "StevenRidder/vulkan-renderer",
+       "duplicate create can attach github_repo to an existing dynamic project")
 
     task = store.create_task({"workstream_id": "VKPLAN", "title": "root seam"}, project="vulkan")
     ok(task["task_id"] == "VKPLAN-1", "normal task creation works on dynamic project")
@@ -90,9 +108,13 @@ try:
     listed = json.loads(mcp_server.list_projects())
     ok(any(p["id"] == "vulkan" for p in listed["projects"]),
        "MCP list_projects includes dynamic project")
-    mcp_created = json.loads(mcp_server.create_project("Vulkan Renderer", None, project_id="vkrender"))
+    mcp_created = json.loads(mcp_server.create_project(
+        "Vulkan Renderer", None, project_id="vkrender",
+        github_repo="StevenRidder/OpenCPN"))
     ok(mcp_created.get("created") is True and mcp_created["project"]["id"] == "vkrender",
        "MCP create_project creates a second dynamic project")
+    ok(store.get_project_github_repo("vkrender") == "StevenRidder/OpenCPN",
+       "MCP create_project wires github_repo in one step")
     mcp_task = json.loads(mcp_server.create_task("VKPLAN", "MCP-root", None, project="vkrender"))
     ok(mcp_task["task_id"] == "VKPLAN-1",
        "MCP create_task can write to a freshly created dynamic project")

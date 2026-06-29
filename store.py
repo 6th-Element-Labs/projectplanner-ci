@@ -27,6 +27,7 @@ PROJECT_REGISTRY_DB_PATH = os.environ.get(
 )
 PROJECT_ID_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 PROJECT_ID_VALID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,62}$")
+GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 # Multi-project registry. Each project is its OWN sqlite file — physical isolation, so a Helm
 # request can never read or write Maxwell's rows (no shared table, no project_id column). The
@@ -3601,16 +3602,24 @@ def get_project_github_repo(project: str = DEFAULT_PROJECT) -> str:
     return ""
 
 
+def _validate_github_repo(repo: str) -> Tuple[str, str]:
+    clean = (repo or "").strip()
+    if clean and not GITHUB_REPO_RE.match(clean):
+        return clean, "github repo must be 'owner/name'"
+    return clean, ""
+
+
 def set_project_github_repo(repo: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    repo = (repo or "").strip()
-    if repo and not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
-        return {"error": "github repo must be 'owner/name'", "repo": repo, "project": project}
+    repo, error = _validate_github_repo(repo)
+    if error:
+        return {"error": error, "repo": repo, "project": project}
     set_meta("github_repo", repo, project=project)
     return {"project": project, "github_repo": repo}
 
 
 def create_project(name: str, project_id: str = "", label: str = "", pretitle: str = "",
-                   actor: str = "system", seed_path: str = "") -> Dict[str, Any]:
+                   actor: str = "system", seed_path: str = "",
+                   github_repo: str = "") -> Dict[str, Any]:
     """Create a physically isolated project board and register it for routing.
 
     Dynamic projects mirror the built-ins: one row in the lightweight registry, one SQLite
@@ -3626,14 +3635,20 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
                 "project_id": pid}
     if pid in BUILTIN_PROJECTS:
         return {"error": f"reserved built-in project id: {pid}", "project_id": pid}
+    repo, repo_error = _validate_github_repo(github_repo)
+    if repo_error:
+        return {"error": repo_error, "repo": repo, "project_id": pid}
 
     existing = _dynamic_projects().get(pid)
     if existing:
         init_db(pid)
         seed_if_empty(pid)
+        if repo:
+            set_meta("github_repo", repo, project=pid)
         return {"created": False, "project": {"id": pid, "label": existing["label"],
                 "pretitle": existing.get("pretitle", ""), "db": existing["db"],
-                "seed": existing.get("seed")}}
+                "seed": existing.get("seed"),
+                "github_repo": get_project_github_repo(pid) or None}}
 
     base_dir = os.environ.get("PM_DYNAMIC_PROJECTS_DIR") or os.path.dirname(PROJECT_REGISTRY_DB_PATH)
     os.makedirs(base_dir, exist_ok=True)
@@ -3656,6 +3671,8 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
         set_meta("people", DEFAULT_PEOPLE, project=pid)
         if project_pretitle:
             set_meta("pretitle", project_pretitle, project=pid)
+        if repo:
+            set_meta("github_repo", repo, project=pid)
         if seed:
             seed_if_empty(pid)
     except Exception:
@@ -3664,7 +3681,8 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
         raise
 
     return {"created": True, "project": {"id": pid, "label": project_label,
-            "pretitle": project_pretitle, "db": db_path, "seed": seed}}
+            "pretitle": project_pretitle, "db": db_path, "seed": seed,
+            "github_repo": get_project_github_repo(pid) or None}}
 
 
 def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:

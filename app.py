@@ -128,6 +128,7 @@ async def create_project(request: Request, body: dict = Body(...)):
         project_id=body.get("project_id") or body.get("id") or "",
         label=body.get("label") or "",
         pretitle=body.get("pretitle") or "",
+        github_repo=body.get("github_repo") or body.get("repo") or "",
         actor=auth.actor(principal),
     )
     if created.get("error"):

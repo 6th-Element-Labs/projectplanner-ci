@@ -34,6 +34,8 @@ Reads (open):
   answer (with sources), and a proposed task change when relevant (NOT applied).
 
 Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated actor):
+- `create_project(name, project_id?, label?, pretitle?, github_repo?)` — create a routed board;
+  pass `github_repo="owner/repo"` to wire GitHub PR provenance in the same step.
 - `create_task(workstream_id, title, ...)`
 - `update_task(task_id, ...only the fields you pass...)`
 - `add_comment(task_id, text)`
@@ -55,6 +57,8 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   naked `Done` without merge/default-branch SHA, and when canonical main / GitHub config is
   available, checks recorded SHAs and PR state against git/GitHub. It also reports expired active
   task claims and unreleased resource/file leases as stale claims.
+- `set_project_github_repo(project, repo)` — update the repo binding later if a board was created
+  before the repository existed or the repo moved.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.

@@ -1295,16 +1295,18 @@ def get_decision(decision_id: int, project: str = "maxwell") -> str:
 # ---- task write tools (Switchboard bearer-principal authenticated) -------
 @mcp.tool()
 def create_project(name: str, ctx: Context, project_id: str = "", label: str = "",
-                   pretitle: str = "") -> str:
+                   pretitle: str = "", github_repo: str = "") -> str:
     """Create a new isolated project board and make it routable by all board tools.
 
     Authenticates against project='switchboard' with write:system. `name` is the human
     name; `project_id` is optional and defaults to a lowercase slug, e.g. name='Vulkan'
-    creates project='vulkan'. Returns the created/existing project record.
+    creates project='vulkan'. `github_repo` is optional owner/repo provenance config, e.g.
+    github_repo='StevenRidder/Helm'. Returns the created/existing project record.
     """
     principal = _require_write(ctx, "switchboard", ("write:system",))
     result = store.create_project(name=name, project_id=project_id, label=label,
-                                  pretitle=pretitle, actor=auth.actor(principal))
+                                  pretitle=pretitle, github_repo=github_repo,
+                                  actor=auth.actor(principal))
     return _dumps(result)
 
 
