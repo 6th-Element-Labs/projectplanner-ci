@@ -112,22 +112,21 @@ SWITCHBOARD_CI_STRICT=1 SWITCHBOARD_CI_REQUIRE_NODE=1 scripts/switchboard_ci.sh
 ```
 
 Merge rule: a branch can move to `In Review` with branch/head/PR evidence, but it should not be
-merged unless the PR's `Switchboard CI / Core conformance and smoke tests` check is green or a
-human explicitly records the risk. While GitHub Actions is startup-failing before job creation,
-the VM-backed `Switchboard CI / VM gate` commit status is the equivalent merge gate. `Done` still
-comes only from GitHub/default-branch provenance.
+merged unless the PR's `Switchboard CI / VM gate` commit status is green or a human explicitly
+records the risk. GitHub Actions is currently disabled because the hosted workflow records
+`startup_failure` before job creation; the VM-backed status is the canonical merge gate. `Done`
+still comes only from GitHub/default-branch provenance.
 
-Runner bootstrap exception: if the PR check is missing or a workflow run records `startup_failure`
-before any job starts, do not treat that as a product pass. Confirm the `switchboard-ci` runner is
-online, run the strict gate on the Plan VM or another Python 3.10+ environment, and record the
-risk before merge. The fallback command is:
+Runner bootstrap exception: if the VM gate status is missing, do not treat that as a product pass.
+Confirm `projectplanner-ci-gate.timer` is active, run the strict gate on the Plan VM or another
+Python 3.10+ environment, and record the risk before merge. The manual command is:
 
 ```bash
 PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
 ```
 
-The production fallback is `projectplanner-ci-gate.timer`, which polls open PRs and posts the
-`Switchboard CI / VM gate` status from the Plan VM.
+The production gate is `projectplanner-ci-gate.timer`, which polls open non-draft PRs and posts
+the `Switchboard CI / VM gate` status from the Plan VM.
 
 ## 2.2 Fail-and-fix-early operating policy
 

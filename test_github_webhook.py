@@ -166,20 +166,38 @@ try:
         f"codex/{reconcile_task['task_id']}-reconcile", "headrecon",
         actor="seed", project=P)
     original_github_pr = store._github_pr
-    store._github_pr = lambda repo, pr_number, token="": {
-        "merged_at": "2026-06-29T05:52:17Z",
-        "merge_commit_sha": "reconcilemerge",
-        "html_url": f"https://github.com/{repo}/pull/{pr_number}",
-        "base": {"ref": "master", "repo": {"default_branch": "master"}},
-        "head": {"ref": f"codex/{reconcile_task['task_id']}-reconcile", "sha": "headrecon"},
-    }
+    original_env = {k: os.environ.get(k) for k in (
+        "PM_GITHUB_TOKEN", "GITHUB_TOKEN", "SWITCHBOARD_CI_GITHUB_TOKEN")}
+    seen = {}
+    for key in original_env:
+        os.environ.pop(key, None)
+    os.environ["SWITCHBOARD_CI_GITHUB_TOKEN"] = "ci-status-token"
+
+    def fake_github_pr(repo, pr_number, token=""):
+        seen["token"] = token
+        return {
+            "merged_at": "2026-06-29T05:52:17Z",
+            "merge_commit_sha": "reconcilemerge",
+            "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+            "base": {"ref": "master", "repo": {"default_branch": "master"}},
+            "head": {"ref": f"codex/{reconcile_task['task_id']}-reconcile", "sha": "headrecon"},
+        }
+
+    store._github_pr = fake_github_pr
     try:
         report = store.reconcile(project=P)
     finally:
         store._github_pr = original_github_pr
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     reconciled = store.get_task(reconcile_task["task_id"], project=P)
     ok(report["external_checks"]["github_repo"] == "6th-Element-Labs/projectplanner",
        "reconcile uses project-scoped GitHub repo config")
+    ok(seen.get("token") == "ci-status-token",
+       "reconcile accepts SWITCHBOARD_CI_GITHUB_TOKEN for PR checks")
     ok(report["backfilled"] and report["backfilled"][0]["task_id"] == reconcile_task["task_id"],
        "reconcile reports PR-merge backfill")
     ok(reconciled["status"] == "Done" and

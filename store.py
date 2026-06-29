@@ -4247,6 +4247,15 @@ def _github_pr(repo: str, pr_number: int, token: str = "") -> Optional[Dict[str,
         return None
 
 
+def _github_token() -> str:
+    return (
+        os.environ.get("PM_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("SWITCHBOARD_CI_GITHUB_TOKEN")
+        or ""
+    ).strip()
+
+
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  git_states: Dict[str, Dict[str, Any]],
                                  canonical_main_sha: str,
@@ -4285,7 +4294,7 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                      "detail": "Recorded merged_sha is not reachable from canonical main."})
 
     repo = get_project_github_repo(project)
-    token = os.environ.get("PM_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+    token = _github_token()
     pr_tasks = [t for t in tasks if git_states.get(t["task_id"], {}).get("pr_number")]
     if repo:
         checks["github_repo"] = repo

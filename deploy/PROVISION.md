@@ -98,31 +98,30 @@ sudo systemctl enable --now projectplanner-agent-host
 sudo systemctl restart projectplanner-agent-host
 ```
 
-## GitHub Actions runner
+## VM-backed GitHub PR gate
 
-Switchboard CI is a repo-scoped GitHub Actions gate. The workflow targets the self-hosted runner
-with labels `self-hosted`, `Linux`, `ARM64`, and `switchboard-ci`. The Plan VM runner is installed
-at `/opt/actions-runner-projectplanner` and managed by:
+Switchboard's canonical PR gate is a VM-backed GitHub commit status named
+`Switchboard CI / VM gate`. GitHub Actions is intentionally disabled while the hosted workflow
+records `startup_failure` before creating jobs. The Plan VM still has a self-hosted runner
+installed at `/opt/actions-runner-projectplanner` for future experiments:
 
 ```bash
 sudo systemctl status actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
 cd /opt/actions-runner-projectplanner && sudo ./svc.sh status
 ```
 
-The runner host must provide Python 3.10+, Node.js, and the project dependencies installed during
-the workflow. If GitHub-hosted Actions starts producing normal queued jobs again, this workflow can
-move back to hosted runners after one green PR and one green `master` push run prove parity.
+If GitHub Actions is re-enabled later, prove it with one green PR and one green `master` push run
+before making it a merge gate again.
 
-## VM-backed PR gate
+## PR gate timer
 
-If GitHub Actions records `startup_failure` before creating jobs, the Plan VM keeps PR checks
-visible with `projectplanner-ci-gate.timer`. It runs:
+The Plan VM keeps PR checks visible with `projectplanner-ci-gate.timer`. It runs:
 
 ```bash
 /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py ci_gate_prs
 ```
 
-The job checks out open PRs into `/var/lib/projectplanner/ci-gate`, runs
+The job checks out open non-draft PRs into `/var/lib/projectplanner/ci-gate`, runs
 `scripts/switchboard_ci.sh` in strict mode, and posts a commit status named
 `Switchboard CI / VM gate` to each PR head SHA. It needs a token with commit-status write access in
 `PM_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN`.
