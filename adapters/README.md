@@ -24,3 +24,11 @@ Current reference transport:
 
 Runtime-specific packs should reuse `run_p0_conformance(...)` with their own REST, MCP, or SDK
 client instead of inventing new smoke semantics per adapter.
+
+## Runtime Packs
+
+- `claude-code/` - Claude Code session start and pre-tool guard.
+- `codex/` - Codex adapter harness and managed supervisor proof.
+- `cursor/` - Cursor adapter guidance.
+- `openai-loop/` - raw tool-calling loop integration points.
+- `langgraph/` - LangGraph node/tool wrappers plus claim-loop helper.

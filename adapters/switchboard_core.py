@@ -129,7 +129,7 @@ def _consume_interrupt(project, me, base, token):
         q = urllib.parse.quote(me, safe="")
         r = _http("GET", f"/ixp/v1/inbox?project={project}&to_agent={q}&unacked=true", base=base, token=token)
         for m in (r.get("messages") or []):
-            if m.get("signal") in ("stop", "redirect"):
+            if m.get("signal") in ("stop", "redirect", "claim_revoked"):
                 try:
                     _http("POST", "/ixp/v1/ack",
                           {"project": project, "message_id": m.get("id"),

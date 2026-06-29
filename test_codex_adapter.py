@@ -101,6 +101,16 @@ try:
     abandoned = codex_adapter.abandon_claim("taskclaim-test", "blocked")
     ok(abandoned["abandoned"] is True, "abandon calls TXP abandon_claim")
 
+    codex_adapter.sb._consume_interrupt = lambda *args, **kwargs: (
+        "claim_revoked", "operator revoked this claim", "switchboard/operator")
+    revoked_verdict = codex_adapter.on_pre_tool({
+        "toolCall": {"name": "search_tasks", "arguments": {}},
+        "cwd": str(ROOT),
+    })
+    ok(revoked_verdict["decision"] == "deny" and "CLAIM_REVOKED" in revoked_verdict["reason"],
+       "claim_revoked signal denies the next tool boundary")
+    codex_adapter.sb._consume_interrupt = lambda *args, **kwargs: None
+
     verdict = codex_adapter.on_pre_tool({
         "toolCall": {
             "name": "mcp__taikun_plan__update_task",

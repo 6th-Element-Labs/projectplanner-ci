@@ -339,6 +339,22 @@ Required behaviors:
 - report usage from model callbacks;
 - record outcomes when a run completes verified work.
 
+Implementation:
+
+- Pack: [`adapters/langgraph/`](../adapters/langgraph/)
+- Entry points: `LangGraphSwitchboardAdapter.on_graph_start()`,
+  `wrap_node(node_name)`, `guard_tool(tool_name, args)`, and
+  `run_claim_loop(compiled_graph, lanes=...)`.
+- Smoke:
+
+```bash
+python3 test_langgraph_adapter.py
+python3 adapters/langgraph/langgraph_adapter.py conformance --json
+```
+
+The adapter imports without LangGraph installed. A real LangGraph app supplies the compiled graph
+or node callable; Switchboard supplies only the coordination boundary.
+
 ### 7.5 Raw OpenAI loop adapter
 
 Integration shape:
