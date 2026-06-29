@@ -30,6 +30,7 @@ PROJECT_ID_VALID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,62}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_PR_URL_RE = re.compile(
     r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)")
+GITHUB_PR_SHORTHAND_RE = re.compile(r"\bPR\s*#?\s*(\d+)\b", re.I)
 BRANCH_EVIDENCE_RE = re.compile(r"\bbranch(?:\s+was)?[:\s]+`?([A-Za-z0-9._/-]+)`?", re.I)
 HEAD_EVIDENCE_RE = re.compile(r"\bhead(?:_sha|\s+sha)?[:\s]+`?([0-9a-f]{7,40})`?", re.I)
 
@@ -4449,6 +4450,17 @@ def _infer_pr_evidence_from_activity(c: sqlite3.Connection, task_id: str,
                 "branch": branch_match.group(1) if branch_match else "",
                 "head_sha": head_match.group(1) if head_match else "",
                 "source": "activity_pr_evidence",
+            }
+        for match in GITHUB_PR_SHORTHAND_RE.finditer(text):
+            branch_match = BRANCH_EVIDENCE_RE.search(text)
+            head_match = HEAD_EVIDENCE_RE.search(text)
+            pr_number = int(match.group(1))
+            return {
+                "pr_number": pr_number,
+                "pr_url": f"https://github.com/{repo}/pull/{pr_number}",
+                "branch": branch_match.group(1) if branch_match else "",
+                "head_sha": head_match.group(1) if head_match else "",
+                "source": "activity_pr_number_evidence",
             }
     return {}
 
