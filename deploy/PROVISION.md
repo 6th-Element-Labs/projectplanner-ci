@@ -87,6 +87,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-reconcile.timer
 sudo systemctl restart projectplanner-reconcile.timer
 sudo cp deploy/projectplanner-ci-gate.service deploy/projectplanner-ci-gate.timer /etc/systemd/system/
+sudo mkdir -p /var/lib/projectplanner/ci-gate
+sudo chown -R ubuntu:ubuntu /var/lib/projectplanner/ci-gate
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-ci-gate.timer
 sudo systemctl restart projectplanner-ci-gate.timer
