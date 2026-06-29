@@ -46,7 +46,7 @@ PY
 fi
 
 section "Python compile"
-"$PYTHON" -m compileall -q . -x '(^|/)(\.git|\.venv|__pycache__)(/|$)'
+"$PYTHON" -m compileall -q . -x '(^|/)(\.git|\.venv|__pycache__)(/|$)|(^|/)\._'
 
 run_test test_activity_payloads.py
 run_test test_adapter_conformance.py
