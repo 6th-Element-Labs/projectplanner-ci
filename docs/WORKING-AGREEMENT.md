@@ -28,7 +28,8 @@ session so the fleet stays in sync.
   the fleet and gets lost (it already did once).
 - Open or update a PR for implemented work and include `branch`, `head_sha`, and `pr_url` /
   `pr_number` in `complete_claim` evidence.
-- Branch naming: `claude/<TASK-ID>-<slug>` (e.g. `claude/ENGINE-15-basemap-boot`).
+- Branch naming: `<runtime>/<TASK-ID>-<slug>` (e.g. `codex/HARDEN-7-ci-gates` or
+  `claude/ADAPTER-4-langgraph`).
 - **Main writes via PR only** — never push `main` directly.
 - We **squash-merge**, so `git branch --merged` / ancestry will *lie* about what's in `main`.
   Trust the board's `merged_sha`, not git ancestry.
@@ -38,9 +39,13 @@ session so the fleet stays in sync.
   allow it.
 - Fetch origin and rebase or merge your task branch onto the current intended target branch.
 - Resolve conflicts intentionally. Never overwrite unrelated user or agent work.
-- Rerun the relevant tests/checks after rebase or conflict resolution.
+- Rerun the relevant tests/checks after rebase or conflict resolution. For Switchboard core work,
+  `scripts/switchboard_ci.sh` is the local deployment gate; GitHub Actions runs the same gate on
+  PRs with strict dependency and frontend syntax checks.
 - Push the updated branch and verify the PR points at the pushed head.
-- Merge through GitHub or the configured merge queue only when checks/review are green.
+- Merge through GitHub or the configured merge queue only when review and required checks are green.
+  For Switchboard PRs, the `Switchboard CI / Core conformance and smoke tests` check should be
+  green before merge unless a human explicitly accepts the risk and records why.
 - After merge, fetch/pull the target branch, verify the changed content is present, and record the
   resulting `merged_sha` or target branch head.
 - Let the GitHub webhook or default-branch provenance path mark `Done`. If the webhook is down, run

@@ -76,6 +76,7 @@ systemctl is-active projectplanner-agent-host
 ## Update live code
 ```bash
 cd /opt/projectplanner && git pull && .venv/bin/pip install -r requirements.txt
+PYTHON=.venv/bin/python SWITCHBOARD_CI_STRICT=1 scripts/switchboard_ci.sh
 sudo systemctl restart projectplanner projectplanner-mcp
 sudo systemctl restart projectplanner-monitors.timer
 sudo cp deploy/projectplanner-reconcile.service deploy/projectplanner-reconcile.timer /etc/systemd/system/
