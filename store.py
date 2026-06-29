@@ -4240,6 +4240,40 @@ def _git_checks_available() -> bool:
     return _git_ok(["rev-parse", "--is-inside-work-tree"])
 
 
+def _github_repo_from_git_url(url: str) -> str:
+    clean = (url or "").strip()
+    if not clean:
+        return ""
+    match = re.search(r"github\.com[:/]([^/\s:]+)/([^/\s]+)", clean, re.I)
+    if not match:
+        return ""
+    repo = f"{match.group(1)}/{match.group(2)}"
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return repo.strip()
+
+
+def _normalize_repo_slug(repo: str) -> str:
+    clean = _github_repo_from_git_url(repo) or (repo or "").strip()
+    if clean.endswith(".git"):
+        clean = clean[:-4]
+    return clean.lower()
+
+
+def _local_github_repo() -> str:
+    try:
+        remote = subprocess.check_output(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=os.path.dirname(__file__),
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        ).strip()
+    except Exception:
+        return ""
+    return _github_repo_from_git_url(remote)
+
+
 def _github_pr(repo: str, pr_number: int, token: str = "") -> Optional[Dict[str, Any]]:
     if not repo or not pr_number:
         return None
@@ -4317,30 +4351,51 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
         "git_reachability": "not_configured",
         "github_prs": "not_configured",
     }
-    if canonical_main_sha and _git_checks_available():
-        checks["git_reachability"] = "checked"
-        main_ref = canonical_main_sha
-        for task in tasks:
-            task_id = task["task_id"]
-            state = git_states.get(task_id, {})
-            for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
-                if (field == "head_sha" and task.get("status") == "Done"
-                        and state.get("merged_sha")):
-                    continue
-                sha = state.get(field)
-                if not sha:
-                    continue
-                if not _git_ok(["cat-file", "-e", f"{sha}^{{commit}}"]):
-                    findings.append({"severity": severity, "task_id": task_id,
-                                     "code": f"{field}_not_found",
-                                     "detail": f"Recorded {field} is not present in the local git object database."})
-                    continue
-                if field == "merged_sha" and not _git_ok(["merge-base", "--is-ancestor", sha, main_ref]):
-                    findings.append({"severity": "high", "task_id": task_id,
-                                     "code": "merged_sha_not_on_canonical_main",
-                                     "detail": "Recorded merged_sha is not reachable from canonical main."})
-
     repo = get_project_github_repo(project)
+    if canonical_main_sha and _git_checks_available():
+        local_repo = _local_github_repo()
+        project_repo = _normalize_repo_slug(repo)
+        local_repo_norm = _normalize_repo_slug(local_repo)
+        if project_repo and not local_repo_norm:
+            checks["git_reachability"] = "skipped_local_repo_unknown"
+            checks["git_reachability_detail"] = (
+                "Local git checkout remote could not be mapped to a GitHub repo; "
+                "project-scoped GitHub checks still run when configured."
+            )
+            checks["project_repo"] = repo
+        elif project_repo and local_repo_norm and project_repo != local_repo_norm:
+            checks["git_reachability"] = "skipped_repo_mismatch"
+            checks["git_reachability_detail"] = (
+                "Local git checkout repo does not match the selected project's GitHub repo; "
+                "skipping cat-file/merge-base to avoid cross-project false positives."
+            )
+            checks["local_repo"] = local_repo
+            checks["project_repo"] = repo
+        else:
+            checks["git_reachability"] = "checked"
+            if local_repo:
+                checks["local_repo"] = local_repo
+            main_ref = canonical_main_sha
+            for task in tasks:
+                task_id = task["task_id"]
+                state = git_states.get(task_id, {})
+                for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
+                    if (field == "head_sha" and task.get("status") == "Done"
+                            and state.get("merged_sha")):
+                        continue
+                    sha = state.get(field)
+                    if not sha:
+                        continue
+                    if not _git_ok(["cat-file", "-e", f"{sha}^{{commit}}"]):
+                        findings.append({"severity": severity, "task_id": task_id,
+                                         "code": f"{field}_not_found",
+                                         "detail": f"Recorded {field} is not present in the local git object database."})
+                        continue
+                    if field == "merged_sha" and not _git_ok(["merge-base", "--is-ancestor", sha, main_ref]):
+                        findings.append({"severity": "high", "task_id": task_id,
+                                         "code": "merged_sha_not_on_canonical_main",
+                                         "detail": "Recorded merged_sha is not reachable from canonical main."})
+
     token = _github_token()
     pr_tasks = [t for t in tasks if git_states.get(t["task_id"], {}).get("pr_number")]
     if repo:

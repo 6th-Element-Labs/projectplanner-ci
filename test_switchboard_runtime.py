@@ -781,6 +781,23 @@ try:
     ok(not any(f["task_id"] == squashed["task_id"] and f["code"] == "head_sha_not_found"
                for f in squash_report["findings"]),
        "reconcile trusts merged_sha for Done tasks after squash branch deletion")
+    store.init_db("helm")
+    helm_sha = "f" * 40
+    helm_task = store.create_task({"workstream_id": "OFFLINE", "title": "foreign repo proof"},
+                                  actor="seed", project="helm")
+    store.update_task(helm_task["task_id"], {"status": "In Review"}, actor="seed", project="helm")
+    store.mark_task_default_branch_commit(
+        helm_task["task_id"], helm_sha, branch="main",
+        subject=f"test({helm_task['task_id']}): foreign repo proof",
+        actor="test", project="helm")
+    store.update_canonical_main_sha(helm_sha, actor="test", project="helm")
+    helm_report = store.reconcile(project="helm")
+    ok(helm_report["external_checks"]["git_reachability"] == "skipped_repo_mismatch",
+       "reconcile skips local git reachability when project repo differs from checkout repo")
+    ok(not any(f["task_id"] == helm_task["task_id"] and
+               f["code"] in ("merged_sha_not_found", "merged_sha_not_on_canonical_main")
+               for f in helm_report["findings"]),
+       "foreign project Done provenance does not get false local-git SHA findings")
 
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)
