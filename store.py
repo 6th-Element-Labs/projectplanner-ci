@@ -659,6 +659,73 @@ def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
     return d
 
 
+def _dependency_state_in(c: sqlite3.Connection, task: Dict[str, Any]) -> Dict[str, Any]:
+    deps = list(dict.fromkeys(task.get("depends_on") or []))
+    by_id: Dict[str, Dict[str, Any]] = {}
+    if deps:
+        placeholders = ",".join("?" for _ in deps)
+        rows = c.execute(
+            f"SELECT task_id, title, status FROM tasks WHERE task_id IN ({placeholders})",
+            deps,
+        ).fetchall()
+        by_id = {r["task_id"]: {"title": r["title"], "status": r["status"]} for r in rows}
+    dependency_rows: List[Dict[str, Any]] = []
+    for dep in deps:
+        row = by_id.get(dep)
+        status = row["status"] if row else "Missing"
+        dependency_rows.append({
+            "task_id": dep,
+            "title": row["title"] if row else None,
+            "status": status,
+            "done": status == "Done",
+            "missing": row is None,
+        })
+    blocking = [d for d in dependency_rows if not d["done"]]
+    return {
+        "dependencies": dependency_rows,
+        "dependency_count": len(dependency_rows),
+        "done": [d["task_id"] for d in dependency_rows if d["done"]],
+        "blocking": blocking,
+        "blocked_by_count": len(blocking),
+        "missing": [d["task_id"] for d in dependency_rows if d["missing"]],
+        "satisfied": not blocking,
+        "ready": task.get("status") == "Not Started" and not blocking,
+    }
+
+
+STALE_DEPENDENCY_RATIONALE_RE = re.compile(
+    r"\b(blocked|blocking|blocked\s+on|blocked\s+by|waiting\s+on\s+dependencies)\b",
+    re.I,
+)
+DONE_STATUS_CONTRADICTION_RE = re.compile(
+    r"\b(in\s+review|not\s+started|in\s+progress|blocked)\b",
+    re.I,
+)
+
+
+def _rationale_state(rationale: str, task: Dict[str, Any],
+                     dependency_state: Dict[str, Any]) -> Dict[str, Any]:
+    text = rationale or ""
+    lower = text.lower()
+    flags: List[str] = []
+    if (task.get("status") != "Blocked"
+            and dependency_state.get("satisfied")
+            and STALE_DEPENDENCY_RATIONALE_RE.search(text)
+            and "not blocked" not in lower):
+        flags.append("says_blocked_but_dependencies_satisfied")
+    if task.get("status") == "Done" and DONE_STATUS_CONTRADICTION_RE.search(text):
+        flags.append("mentions_pre_done_status_but_task_is_done")
+    stale = bool(flags)
+    return {
+        "stale": stale,
+        "flags": flags,
+        "message": (
+            "Generated rationale may be stale; trust status, dependency_state, "
+            "git_state, and provenance."
+        ) if stale else None,
+    }
+
+
 def _json_payload(raw: str) -> Any:
     """Parse payload JSON while preserving legacy scalar payloads."""
     if not raw:
@@ -864,9 +931,20 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["provenance"] = _provenance_summary(t["git_state"])
         t["active_claims"] = _active_task_claims_in(c, task_id)
         t["identity"] = _task_identity_state_in(c, task_id, now)
+        t["dependency_state"] = _dependency_state_in(c, t)
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
-            t["rationale"] = s["rationale"]
+            raw_rationale = s["rationale"]
+            rationale_state = _rationale_state(raw_rationale, t, t["dependency_state"])
+            t["rationale_state"] = rationale_state
+            if rationale_state["stale"]:
+                t["rationale_raw"] = raw_rationale
+                t["rationale"] = (
+                    "[STALE GENERATED RATIONALE: trust status/dependency_state/git_state] "
+                    + raw_rationale
+                )
+            else:
+                t["rationale"] = raw_rationale
         return t
 
 

@@ -38,6 +38,12 @@ try:
         {"workstream_id": "PRESENT", "title": "ready child", "depends_on": [root["task_id"]]},
         project="vulkan",
     )
+    store.set_task_summary(
+        child["task_id"],
+        "The task is blocked on dependencies and cannot start yet.",
+        activity_cursor=1,
+        project="vulkan",
+    )
     blocked = store.create_task(
         {"workstream_id": "BACKEND", "title": "blocked backend", "status": "Blocked"},
         project="vulkan",
@@ -62,6 +68,15 @@ try:
        "malformed decision metadata is ignored instead of crashing")
     ok("Unassigned" in result["by_owner_next"],
        "malformed people metadata falls back to default owners")
+
+    child_detail = store.get_task(child["task_id"], project="vulkan")
+    ok(child_detail["dependency_state"]["satisfied"] and child_detail["dependency_state"]["ready"],
+       "task detail reports dependency truth when all dependencies are Done")
+    ok(child_detail["rationale_state"]["stale"] and
+       child_detail["rationale_state"]["flags"] == ["says_blocked_but_dependencies_satisfied"],
+       "task detail flags stale rationale that contradicts dependency truth")
+    ok(child_detail["rationale"].startswith("[STALE GENERATED RATIONALE:"),
+       "task detail prefixes stale generated rationale for old clients")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
