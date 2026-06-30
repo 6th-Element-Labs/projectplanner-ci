@@ -1056,7 +1056,9 @@ async def txp_claim_next(request: Request, body: dict = Body(...)):
         max_budget_usd=body.get("max_budget_usd"),
         principal_id=principal["id"], actor=auth.actor(principal),
         ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
-        idem_key=body.get("idem_key") or "", project=project)
+        idem_key=body.get("idem_key") or "",
+        override_identity_risk=bool(body.get("override_identity_risk")),
+        project=project)
 
 
 @app.post("/txp/v1/claim_task")
@@ -1068,7 +1070,9 @@ async def txp_claim_task(request: Request, body: dict = Body(...)):
         agent_id=body.get("agent_id") or auth.actor(principal),
         principal_id=principal["id"], actor=auth.actor(principal),
         ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
-        idem_key=body.get("idem_key") or "", project=project)
+        idem_key=body.get("idem_key") or "",
+        override_identity_risk=bool(body.get("override_identity_risk")),
+        project=project)
 
 
 @app.post("/txp/v1/request_wake")

@@ -851,6 +851,7 @@ def board_rollups(project: str = DEFAULT_PROJECT,
 
 
 def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    now = time.time()
     with _conn(project) as c:
         r = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if not r:
@@ -862,6 +863,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["git_state"] = _load_git_state(c, task_id)
         t["provenance"] = _provenance_summary(t["git_state"])
         t["active_claims"] = _active_task_claims_in(c, task_id)
+        t["identity"] = _task_identity_state_in(c, task_id, now)
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
             t["rationale"] = s["rationale"]
@@ -1234,6 +1236,88 @@ def _is_unbound_system_actor(actor: str) -> bool:
     return actor in {"env-mcp-token", "env-auth-token"} or (
         actor.startswith("env-") and actor.endswith("-token")
     )
+
+
+def _identity_risk_window_s() -> int:
+    try:
+        return max(60, int(os.environ.get("PM_IDENTITY_RISK_WINDOW_S", "1800")))
+    except (TypeError, ValueError):
+        return 1800
+
+
+IDENTITY_RISK_WINDOW_S = _identity_risk_window_s()
+
+
+def _task_identity_state_in(c: sqlite3.Connection, task_id: str,
+                            now: float, window_s: int = IDENTITY_RISK_WINDOW_S) -> Dict[str, Any]:
+    """Summarize whether a task has recent unbound runtime activity.
+
+    Registered heartbeats are a liveness signal, not the only evidence of work.
+    A shared-token write without a bound live agent means another runtime may be
+    visibly active to the human while invisible to Switchboard coordination.
+    """
+    active_agents = _active_agent_ids_for_task(c, task_id, now)
+    cutoff = now - max(60, int(window_s or IDENTITY_RISK_WINDOW_S))
+    rows = c.execute(
+        "SELECT id, actor, payload, created_at FROM activity "
+        "WHERE task_id=? AND kind='principal.unbound_write' AND created_at>=? "
+        "ORDER BY created_at DESC LIMIT 5",
+        (task_id, cutoff),
+    ).fetchall()
+    recent = []
+    for row in rows:
+        payload = _json_payload(row["payload"])
+        recent.append({
+            "activity_id": row["id"],
+            "actor": (payload or {}).get("actor") or row["actor"],
+            "created_at": row["created_at"],
+            "reason": (payload or {}).get("reason") or "principal.unbound_write",
+        })
+    state = {
+        "active_agents": active_agents,
+        "recent_unbound_activity": recent,
+        "risk_window_seconds": max(60, int(window_s or IDENTITY_RISK_WINDOW_S)),
+        "takeover_safe": True,
+        "status": "clear",
+    }
+    if recent and not active_agents:
+        state.update({
+            "status": "unbound_live_runtime_possible",
+            "takeover_safe": False,
+            "reason": "recent_unbound_activity_without_active_registration",
+            "message": (
+                "Recent task activity came from a shared system principal, but no "
+                "live agent session is registered on this task. Another runtime may "
+                "be active outside Switchboard identity binding."
+            ),
+            "remediation": [
+                "Ask the visible runtime to run register_agent and drain its inbox.",
+                "Bind/re-register the runtime under its intended agent_id.",
+                "Use an explicit human override only after confirming takeover is safe.",
+            ],
+        })
+    elif recent:
+        state.update({
+            "status": "bound_after_unbound_activity",
+            "reason": "recent_unbound_activity_with_active_registration",
+        })
+    return state
+
+
+def _identity_takeover_risk_in(c: sqlite3.Connection, task_id: str,
+                               now: float) -> Optional[Dict[str, Any]]:
+    state = _task_identity_state_in(c, task_id, now)
+    if state.get("takeover_safe"):
+        return None
+    return {
+        "reason": "identity_unknown_recent_activity",
+        "task_id": task_id,
+        "identity": state,
+        "message": (
+            "Recent unbound activity exists on this task, but no active registered "
+            "agent is bound to it. Refusing takeover without explicit override."
+        ),
+    }
 
 
 def _active_agent_ids_for_task(c: sqlite3.Connection, task_id: str,
@@ -2301,6 +2385,7 @@ READY_TASK_STATUSES = {"Not Started", "Ready", "Todo", "Backlog"}
 def claim_task(task_id: str, agent_id: str,
                principal_id: str = "", actor: str = "system",
                ttl_seconds: int = 1800, idem_key: str = "",
+               override_identity_risk: bool = False,
                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Atomically claim one specific ready, unblocked task.
 
@@ -2310,7 +2395,8 @@ def claim_task(task_id: str, agent_id: str,
     now = time.time()
     task_id = (task_id or "").strip()
     payload = {"task_id": task_id, "agent_id": agent_id,
-               "ttl_seconds": ttl_seconds}
+               "ttl_seconds": ttl_seconds,
+               "override_identity_risk": bool(override_identity_risk)}
     with _conn(project) as c:
         hit = _idem_hit(c, "claim_task", idem_key, actor, payload)
         if hit is not None:
@@ -2343,6 +2429,16 @@ def claim_task(task_id: str, agent_id: str,
                         "task_id": task_id, "depends_on": task.get("depends_on") or []}
             _idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
+        risk = _identity_takeover_risk_in(c, task_id, now)
+        if risk and not override_identity_risk:
+            response = {"claimed": False, **risk,
+                        "override_field": "override_identity_risk",
+                        "override_required": True}
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (task_id, "switchboard/identity", "task.claim_blocked_identity",
+                       json.dumps({"agent_id": agent_id, **response}, sort_keys=True), now))
+            _idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
 
         claim_id = "taskclaim-" + uuid.uuid4().hex[:16]
         lease_id = "lease-" + uuid.uuid4().hex[:16]
@@ -2364,6 +2460,8 @@ def claim_task(task_id: str, agent_id: str,
                   (agent_id, now, task_id))
         dispatch_reason = {"policy": "exact.v1", "requested_task_id": task_id,
                            "dependency_checked": True}
+        if risk and override_identity_risk:
+            dispatch_reason["identity_override"] = risk
         payload_event = {"claim_id": claim_id, "lease_id": lease_id,
                          "task_id": task_id, "agent_id": agent_id,
                          "dispatch_reason": dispatch_reason}
@@ -2389,6 +2487,7 @@ def claim_next(agent_id: str, lanes: Any = None,
                max_risk: str = "", max_budget_usd: Optional[float] = None,
                principal_id: str = "", actor: str = "system",
                ttl_seconds: int = 1800, idem_key: str = "",
+               override_identity_risk: bool = False,
                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Atomically claim the highest-priority unblocked task for an agent.
 
@@ -2404,7 +2503,8 @@ def claim_next(agent_id: str, lanes: Any = None,
     max_risk_value = _risk_value(max_risk)
     payload = {"agent_id": agent_id, "lanes": sorted(lane_set),
                "capabilities": sorted(capabilities or []), "max_risk": max_risk,
-               "max_budget_usd": max_budget_usd, "ttl_seconds": ttl_seconds}
+               "max_budget_usd": max_budget_usd, "ttl_seconds": ttl_seconds,
+               "override_identity_risk": bool(override_identity_risk)}
     with _conn(project) as c:
         hit = _idem_hit(c, "claim_next", idem_key, actor, payload)
         if hit is not None:
@@ -2420,7 +2520,9 @@ def claim_next(agent_id: str, lanes: Any = None,
         by_id = {t["task_id"]: t for t in tasks}
         eligible = []
         skipped = {"active_claim": 0, "status": 0, "lane": 0, "dependencies": 0,
-                   "capability_mismatch": 0, "risk": 0, "budget": 0}
+                   "capability_mismatch": 0, "risk": 0, "budget": 0,
+                   "identity_unknown": 0}
+        identity_risks: Dict[str, Dict[str, Any]] = {}
         for t in tasks:
             if t["task_id"] in active_claims:
                 skipped["active_claim"] += 1
@@ -2434,6 +2536,11 @@ def claim_next(agent_id: str, lanes: Any = None,
             if not _deps_done(t, by_id):
                 skipped["dependencies"] += 1
                 continue
+            identity_risk = _identity_takeover_risk_in(c, t["task_id"], now)
+            if identity_risk and not override_identity_risk:
+                skipped["identity_unknown"] += 1
+                identity_risks[t["task_id"]] = identity_risk
+                continue
             required_caps = _task_required_capabilities(t)
             if required_caps and not set(required_caps).issubset(cap_set):
                 skipped["capability_mismatch"] += 1
@@ -2446,13 +2553,16 @@ def claim_next(agent_id: str, lanes: Any = None,
             if score["budget"]["status"] == "over_budget":
                 skipped["budget"] += 1
                 continue
+            if identity_risk and override_identity_risk:
+                score["identity_override"] = identity_risk
             eligible.append((score["score"], -int(t.get("sort_order") or 0), t["task_id"], t, score))
         if not eligible:
             response = {"claimed": False, "reason": "no_unblocked_work",
                         "retry_after_seconds": 60,
                         "cursor": c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0],
                         "dispatch_reason": {"policy": "score.v1", "skipped": skipped,
-                                            "candidate_count": 0}}
+                                            "candidate_count": 0,
+                                            "identity_risks": identity_risks}}
             _idem_store(c, "claim_next", idem_key, actor, payload, response)
             return response
         _, _, _, task, selected_score = sorted(
@@ -2481,6 +2591,8 @@ def claim_next(agent_id: str, lanes: Any = None,
                            "matched_capabilities": selected_score["matched_capabilities"],
                            "skipped": skipped,
                            "candidate_count": len(eligible)}
+        if selected_score.get("identity_override"):
+            dispatch_reason["identity_override"] = selected_score["identity_override"]
         payload_event = {"claim_id": claim_id, "lease_id": lease_id,
                          "task_id": task["task_id"], "agent_id": agent_id,
                          "dispatch_reason": dispatch_reason}
@@ -3634,6 +3746,23 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
         if hit is not None:
             return hit
         delivery = _agent_delivery_state(c, to_agent, now)
+        identity_state = (_task_identity_state_in(c, task_id, now)
+                          if task_id else {"status": "clear", "takeover_safe": True})
+        if (not delivery.get("reachable") and
+                identity_state.get("status") == "unbound_live_runtime_possible"):
+            delivery = dict(delivery)
+            delivery.update({
+                "status": "identity_unbound",
+                "reason": "not_registered_but_recent_unbound_activity",
+                "identity": identity_state,
+                "takeover_safe": False,
+                "message": (
+                    "Target agent_id is not registered, but this task has recent "
+                    "unbound activity. The runtime may be live outside Switchboard "
+                    "identity binding; require re-registration or human override "
+                    "before takeover."
+                ),
+            })
         cur = c.execute(
             "INSERT INTO agent_messages(from_agent, to_agent, task_id, message, requires_ack, "
             "ack_deadline, sent_at, signal, priority, idem_key, principal_id) "
@@ -3653,11 +3782,14 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                     "mailbox_stored": True,
                     "delivery": delivery,
                     "delivery_status": delivery["status"]}
+        if identity_state.get("status") != "clear":
+            response["identity"] = identity_state
         if not delivery.get("reachable"):
             response["warning"] = delivery.get("message")
             response["fallback"] = {
                 "task_comment": task_exists,
                 "reason": delivery.get("reason"),
+                "takeover_safe": delivery.get("takeover_safe", True),
             }
         if requires_ack:
             monitor = _create_ack_monitor(c, msg_id, from_agent, to_agent, task_id,
@@ -3685,6 +3817,11 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                     "visible fallback until that runtime registers, heartbeats, and "
                     "drains its Switchboard inbox."
                 )
+                if delivery.get("takeover_safe") is False:
+                    fallback_text += (
+                        " Recent unbound activity exists on this task, so do not "
+                        "treat absence from active_agents as proof that takeover is safe."
+                    )
                 c.execute(
                     "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
                     "VALUES (?,?,?,?,?)",

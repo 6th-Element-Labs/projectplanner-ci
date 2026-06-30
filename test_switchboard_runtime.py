@@ -343,6 +343,56 @@ try:
     unbound = store.get_task(unbound_task["task_id"], project=P)
     ok(any(a["kind"] == "principal.unbound_write" for a in unbound["activity"]),
        "shared env-token task comments create an unbound principal audit")
+    ok(unbound["identity"]["status"] == "unbound_live_runtime_possible" and
+       unbound["identity"]["takeover_safe"] is False,
+       "task detail surfaces recent unbound activity as takeover risk")
+    unbound_msg = store.send_agent_message(
+        "codex/TEST#1",
+        "claude/UNBOUND#1",
+        "are you still active?",
+        task_id=unbound_task["task_id"],
+        requires_ack=True,
+        principal_id=p["id"],
+        idem_key="unbound-msg-1",
+        project=P,
+    )
+    ok(unbound_msg["delivery_status"] == "identity_unbound" and
+       unbound_msg["fallback"]["takeover_safe"] is False,
+       "directed message reports identity_unbound when task has recent unbound activity")
+    unbound_takeover = store.claim_task(
+        unbound_task["task_id"],
+        "codex/TAKEOVER#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        idem_key="unbound-takeover-1",
+        project=P,
+    )
+    ok(unbound_takeover.get("claimed") is False and
+       unbound_takeover.get("reason") == "identity_unknown_recent_activity",
+       "claim_task refuses takeover of a task with recent unbound activity")
+    unbound_next = store.claim_next(
+        agent_id="codex/TAKEOVER#1",
+        lanes="UNBOUND",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        idem_key="unbound-next-1",
+        project=P,
+    )
+    ok(unbound_next.get("claimed") is False and
+       unbound_next["dispatch_reason"]["skipped"]["identity_unknown"] == 1,
+       "claim_next skips tasks with recent unbound activity")
+    unbound_override = store.claim_task(
+        unbound_task["task_id"],
+        "codex/TAKEOVER#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        idem_key="unbound-takeover-override-1",
+        override_identity_risk=True,
+        project=P,
+    )
+    ok(unbound_override.get("claimed") is True and
+       "identity_override" in unbound_override["dispatch_reason"],
+       "explicit override can claim after preserving identity-risk evidence")
     claimed = store.claim_next(
         agent_id="codex/TEST#1",
         lanes="TEST,OTHER",

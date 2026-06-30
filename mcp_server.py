@@ -917,6 +917,7 @@ def list_active_resource_leases(project: str = "maxwell") -> str:
 def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str = "",
                max_risk: str = "", max_budget_usd: float = 0.0,
                ttl_seconds: int = 1800, idem_key: str = "",
+               override_identity_risk: bool = False,
                project: str = "maxwell") -> str:
     """Atomically claim the next unblocked task for this agent. This is the first +TXP
     scheduler primitive: dependency-aware, idempotent, constraint-scored, and returns
@@ -928,12 +929,15 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
         agent_id=agent_id, lanes=lane_list, capabilities=cap_list,
         max_risk=max_risk, max_budget_usd=max_budget_usd or None,
         principal_id=principal["id"], actor=auth.actor(principal),
-        ttl_seconds=ttl_seconds, idem_key=idem_key, project=project))
+        ttl_seconds=ttl_seconds, idem_key=idem_key,
+        override_identity_risk=override_identity_risk,
+        project=project))
 
 
 @mcp.tool()
 def claim_task(task_id: str, agent_id: str, ctx: Context,
                ttl_seconds: int = 1800, idem_key: str = "",
+               override_identity_risk: bool = False,
                project: str = "maxwell") -> str:
     """Atomically claim one exact ready, unblocked task.
 
@@ -944,7 +948,9 @@ def claim_task(task_id: str, agent_id: str, ctx: Context,
     return _dumps(store.claim_task(
         task_id=task_id, agent_id=agent_id,
         principal_id=principal["id"], actor=auth.actor(principal),
-        ttl_seconds=ttl_seconds, idem_key=idem_key, project=project))
+        ttl_seconds=ttl_seconds, idem_key=idem_key,
+        override_identity_risk=override_identity_risk,
+        project=project))
 
 
 @mcp.tool()
