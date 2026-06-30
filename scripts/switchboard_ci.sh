@@ -57,6 +57,7 @@ run_test test_codex_supervisor.py
 run_test test_control_plane_fail_fast.py
 run_test test_frontend_project_state.py
 run_test test_github_webhook.py
+run_test test_github_actions_ci.py
 run_test test_langgraph_adapter.py
 run_test test_mcp_dependencies.py
 run_test test_project_creation.py
