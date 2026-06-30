@@ -77,6 +77,15 @@ def _principal(request: Request, project: str, scopes=("write:ixp",), dev_actor:
         raise HTTPException(status, str(e))
 
 
+def _control_plane_http(result):
+    if isinstance(result, dict) and result.get("error") == "control_plane_unavailable":
+        raise HTTPException(503, result)
+    if (isinstance(result, list) and result and isinstance(result[0], dict) and
+            result[0].get("error") == "control_plane_unavailable"):
+        raise HTTPException(503, result[0])
+    return result
+
+
 def _actor_from_request(request: Request, fallback: str = "user") -> str:
     p = getattr(request.state, "principal", None)
     return auth.actor(p) if p else fallback
@@ -730,8 +739,8 @@ async def ixp_register_host(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",),
                            dev_actor=body.get("host_id") or "agent-host")
-    return store.register_host(body, principal_id=principal["id"],
-                               actor=auth.actor(principal), project=project)
+    return _control_plane_http(store.register_host(
+        body, principal_id=principal["id"], actor=auth.actor(principal), project=project))
 
 
 @app.post("/ixp/v1/heartbeat_host")
@@ -739,28 +748,30 @@ async def ixp_heartbeat_host(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",),
                            dev_actor=body.get("host_id") or "agent-host")
-    return store.heartbeat_host(
+    return _control_plane_http(store.heartbeat_host(
         (body.get("host_id") or "").strip(),
         active_sessions=body.get("active_sessions"),
         capacity=body.get("capacity") or {},
         status=body.get("status") or "online",
         last_error=body.get("last_error") or "",
-        actor=auth.actor(principal), project=project)
+        actor=auth.actor(principal), project=project))
 
 
 @app.get("/ixp/v1/agent_hosts")
 async def ixp_agent_hosts(project: str = Query(store.DEFAULT_PROJECT), runtime: str = "",
                           lane: str = "", capability: str = "",
                           include_stale: bool = False):
-    return {"hosts": store.list_agent_hosts(runtime=runtime, lane=lane,
-                                            capability=capability,
-                                            include_stale=include_stale,
-                                            project=_proj(project))}
+    hosts = store.list_agent_hosts(runtime=runtime, lane=lane,
+                                   capability=capability,
+                                   include_stale=include_stale,
+                                   project=_proj(project))
+    _control_plane_http(hosts)
+    return {"hosts": hosts}
 
 
 @app.get("/ixp/v1/host_status")
 async def ixp_host_status(host_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    status = store.host_status(host_id, project=_proj(project))
+    status = _control_plane_http(store.host_status(host_id, project=_proj(project)))
     if status.get("error"):
         raise HTTPException(404, status["error"])
     return status
@@ -1065,22 +1076,24 @@ async def txp_request_wake(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",),
                            dev_actor=body.get("source") or "agent")
-    return store.request_wake(
+    return _control_plane_http(store.request_wake(
         selector=body.get("selector") or {},
         reason=body.get("reason") or "",
         source=body.get("source") or auth.actor(principal),
         policy=body.get("policy") or {},
         task_id=body.get("task") or body.get("task_id"),
         principal_id=principal["id"], actor=auth.actor(principal),
-        idem_key=body.get("idem_key") or "", project=project)
+        idem_key=body.get("idem_key") or "", project=project))
 
 
 @app.get("/txp/v1/list_wake_intents")
 async def txp_list_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
                                 status: str = "", host_id: str = "",
                                 runtime: str = ""):
-    return {"wake_intents": store.list_wake_intents(status=status, host_id=host_id,
-                                                    runtime=runtime, project=_proj(project))}
+    wakes = store.list_wake_intents(status=status, host_id=host_id,
+                                    runtime=runtime, project=_proj(project))
+    _control_plane_http(wakes)
+    return {"wake_intents": wakes}
 
 
 @app.post("/txp/v1/claim_wake")
@@ -1088,9 +1101,10 @@ async def txp_claim_wake(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",),
                            dev_actor=body.get("host_id") or "agent-host")
-    return store.claim_wake((body.get("host_id") or "").strip(),
-                            (body.get("wake_id") or body.get("id") or "").strip(),
-                            actor=auth.actor(principal), project=project)
+    return _control_plane_http(store.claim_wake(
+        (body.get("host_id") or "").strip(),
+        (body.get("wake_id") or body.get("id") or "").strip(),
+        actor=auth.actor(principal), project=project))
 
 
 @app.post("/txp/v1/complete_wake")
@@ -1098,21 +1112,22 @@ async def txp_complete_wake(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",),
                            dev_actor=body.get("host_id") or body.get("agent_id") or "agent-host")
-    return store.complete_wake(
+    return _control_plane_http(store.complete_wake(
         (body.get("wake_id") or body.get("id") or "").strip(),
         runner_session_id=body.get("runner_session_id") or "",
         agent_id=body.get("agent_id") or "",
         result=body.get("result") or {},
-        actor=auth.actor(principal), project=project)
+        actor=auth.actor(principal), project=project))
 
 
 @app.post("/txp/v1/cancel_wake")
 async def txp_cancel_wake(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    return store.cancel_wake((body.get("wake_id") or body.get("id") or "").strip(),
-                             reason=body.get("reason") or "cancelled",
-                             actor=auth.actor(principal), project=project)
+    return _control_plane_http(store.cancel_wake(
+        (body.get("wake_id") or body.get("id") or "").strip(),
+        reason=body.get("reason") or "cancelled",
+        actor=auth.actor(principal), project=project))
 
 
 @app.post("/txp/v1/complete_claim")

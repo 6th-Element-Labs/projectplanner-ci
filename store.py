@@ -184,11 +184,48 @@ DEFAULT_PEOPLE = ["Steve Ridder", "Taikun eng", "Darko", "Sahir", "Sebastian", "
                   "Michelle", "Sierra", "Clovis", "Devin", "Brent", "IFS owner", "Nubo"]
 
 
-def _conn(project: str = DEFAULT_PROJECT):
-    c = sqlite3.connect(_resolve(project)["db"])
+def _sqlite_timeout_s(env_name: str, default_s: float) -> float:
+    try:
+        return max(0.0, float(os.environ.get(env_name, str(default_s))))
+    except (TypeError, ValueError):
+        return default_s
+
+
+def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
+    timeout = _sqlite_timeout_s("PM_SQLITE_TIMEOUT_S", 5.0) if timeout_s is None else timeout_s
+    c = sqlite3.connect(_resolve(project)["db"], timeout=timeout)
     c.row_factory = sqlite3.Row
+    c.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
     c.execute("PRAGMA journal_mode=WAL")
     return c
+
+
+def _control_plane_timeout_s() -> float:
+    return _sqlite_timeout_s("PM_CONTROL_PLANE_SQLITE_TIMEOUT_S", 2.0)
+
+
+def _control_plane_conn(project: str = DEFAULT_PROJECT):
+    return _conn(project, timeout_s=_control_plane_timeout_s())
+
+
+def _sqlite_busy(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return isinstance(exc, sqlite3.OperationalError) and (
+        "database is locked" in text or "database is busy" in text or "locked" in text
+    )
+
+
+def _control_plane_unavailable(operation: str, project: str, started_at: float,
+                               exc: Exception) -> Dict[str, Any]:
+    return {
+        "error": "control_plane_unavailable",
+        "reason": "sqlite_busy",
+        "operation": operation,
+        "project": project,
+        "elapsed_ms": int((time.time() - started_at) * 1000),
+        "timeout_ms": int(_control_plane_timeout_s() * 1000),
+        "message": str(exc),
+    }
 
 
 def init_db(project: str = DEFAULT_PROJECT):
@@ -1474,6 +1511,7 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
                   actor: str = "system",
                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Register or refresh an always-on Agent Host inventory record."""
+    started_at = time.time()
     now = time.time()
     host_id = (inventory.get("host_id") or "").strip()
     if not host_id:
@@ -1484,29 +1522,34 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
     if "active_sessions" in inventory and "active_sessions" not in capacity:
         capacity["active_sessions"] = inventory.get("active_sessions")
     ttl_s = max(10, int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60))
-    with _conn(project) as c:
-        c.execute(
-            "INSERT INTO agent_hosts(host_id, hostname, agent_host_version, repo_root, "
-            "runtimes_json, limits_json, capacity_json, principal_id, registered_at, "
-            "heartbeat_at, heartbeat_ttl_s, status, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(host_id) DO UPDATE SET hostname=excluded.hostname, "
-            "agent_host_version=excluded.agent_host_version, repo_root=excluded.repo_root, "
-            "runtimes_json=excluded.runtimes_json, limits_json=excluded.limits_json, "
-            "capacity_json=excluded.capacity_json, principal_id=excluded.principal_id, "
-            "heartbeat_at=excluded.heartbeat_at, heartbeat_ttl_s=excluded.heartbeat_ttl_s, "
-            "status=excluded.status, last_error=NULL",
-            (host_id, inventory.get("hostname") or None,
-             inventory.get("agent_host_version") or None, inventory.get("repo_root") or None,
-             json.dumps(runtimes, sort_keys=True), json.dumps(limits, sort_keys=True),
-             json.dumps(capacity, sort_keys=True), principal_id or None, now, now, ttl_s,
-             "online", None),
-        )
-        payload = {"host_id": host_id, "runtimes": runtimes, "limits": limits,
-                   "heartbeat_ttl_s": ttl_s}
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (None, actor, "agent_host.registered",
-                   json.dumps(payload, sort_keys=True), now))
-        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+    try:
+        with _control_plane_conn(project) as c:
+            c.execute(
+                "INSERT INTO agent_hosts(host_id, hostname, agent_host_version, repo_root, "
+                "runtimes_json, limits_json, capacity_json, principal_id, registered_at, "
+                "heartbeat_at, heartbeat_ttl_s, status, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(host_id) DO UPDATE SET hostname=excluded.hostname, "
+                "agent_host_version=excluded.agent_host_version, repo_root=excluded.repo_root, "
+                "runtimes_json=excluded.runtimes_json, limits_json=excluded.limits_json, "
+                "capacity_json=excluded.capacity_json, principal_id=excluded.principal_id, "
+                "heartbeat_at=excluded.heartbeat_at, heartbeat_ttl_s=excluded.heartbeat_ttl_s, "
+                "status=excluded.status, last_error=NULL",
+                (host_id, inventory.get("hostname") or None,
+                 inventory.get("agent_host_version") or None, inventory.get("repo_root") or None,
+                 json.dumps(runtimes, sort_keys=True), json.dumps(limits, sort_keys=True),
+                 json.dumps(capacity, sort_keys=True), principal_id or None, now, now, ttl_s,
+                 "online", None),
+            )
+            payload = {"host_id": host_id, "runtimes": runtimes, "limits": limits,
+                       "heartbeat_ttl_s": ttl_s}
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (None, actor, "agent_host.registered",
+                       json.dumps(payload, sort_keys=True), now))
+            row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            return _control_plane_unavailable("register_host", project, started_at, exc)
+        raise
     return _host_row(row, now=now)
 
 
@@ -1515,38 +1558,50 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                    status: str = "online", last_error: str = "",
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    started_at = time.time()
     now = time.time()
-    with _conn(project) as c:
-        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
-        if not row:
-            return {"error": "host not registered", "host_id": host_id}
-        current = _json_obj(row["capacity_json"], {})
-        if capacity:
-            current.update(capacity)
-        if active_sessions is not None:
-            current["active_sessions"] = int(active_sessions)
-        c.execute(
-            "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=? "
-            "WHERE host_id=?",
-            (now, json.dumps(current, sort_keys=True), status or "online",
-             last_error or None, host_id),
-        )
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (None, actor, "agent_host.heartbeat",
-                   json.dumps({"host_id": host_id, "capacity": current,
-                               "status": status or "online"}, sort_keys=True), now))
-        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+    try:
+        with _control_plane_conn(project) as c:
+            row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+            if not row:
+                return {"error": "host not registered", "host_id": host_id}
+            current = _json_obj(row["capacity_json"], {})
+            if capacity:
+                current.update(capacity)
+            if active_sessions is not None:
+                current["active_sessions"] = int(active_sessions)
+            c.execute(
+                "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=? "
+                "WHERE host_id=?",
+                (now, json.dumps(current, sort_keys=True), status or "online",
+                 last_error or None, host_id),
+            )
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (None, actor, "agent_host.heartbeat",
+                       json.dumps({"host_id": host_id, "capacity": current,
+                                   "status": status or "online"}, sort_keys=True), now))
+            row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            return _control_plane_unavailable("heartbeat_host", project, started_at, exc)
+        raise
     return _host_row(row, now=now)
 
 
 def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
                      include_stale: bool = False,
                      project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    started_at = time.time()
     now = time.time()
     selector = {"runtime": runtime or "", "lane": lane or "",
                 "capabilities": [capability] if capability else []}
-    with _conn(project) as c:
-        rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
+    try:
+        with _control_plane_conn(project) as c:
+            rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            return [_control_plane_unavailable("list_agent_hosts", project, started_at, exc)]
+        raise
     hosts = [_host_row(r, now=now) for r in rows]
     out = []
     for host in hosts:
@@ -1561,16 +1616,22 @@ def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
 
 
 def host_status(host_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    started_at = time.time()
     now = time.time()
-    with _conn(project) as c:
-        row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
-        if not row:
-            return {"error": "host not registered", "host_id": host_id}
-        host = _host_row(row, now=now)
-        counts = c.execute(
-            "SELECT status, COUNT(*) n FROM wake_intents WHERE claimed_by_host=? GROUP BY status",
-            (host_id,),
-        ).fetchall()
+    try:
+        with _control_plane_conn(project) as c:
+            row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+            if not row:
+                return {"error": "host not registered", "host_id": host_id}
+            host = _host_row(row, now=now)
+            counts = c.execute(
+                "SELECT status, COUNT(*) n FROM wake_intents WHERE claimed_by_host=? GROUP BY status",
+                (host_id,),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            return _control_plane_unavailable("host_status", project, started_at, exc)
+        raise
     host["wake_counts"] = {r["status"]: r["n"] for r in counts}
     return host
 
@@ -1618,6 +1679,7 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                  task_id: Optional[str] = None, principal_id: str = "",
                  actor: str = "system", idem_key: str = "",
                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    started_at = time.time()
     now = time.time()
     policy = dict(policy or {})
     selector = dict(selector or {})
@@ -1629,20 +1691,26 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
         return {"error": "selector.runtime or selector.agent_id required"}
     payload = {"selector": selector, "reason": reason or "wake requested",
                "source": source or actor, "policy": policy, "task_id": task_id}
-    with _conn(project) as c:
-        hit = _idem_hit(c, "request_wake", idem_key, actor, payload)
-        if hit is not None:
-            return hit
-        wake = _insert_wake_intent(
-            c, selector=selector, reason=reason or "wake requested",
-            source=source or actor, policy=policy, task_id=task_id,
-            principal_id=principal_id, actor=actor, now=now, idem_key=idem_key)
-        _idem_store(c, "request_wake", idem_key, actor, payload, wake)
-        return wake
+    try:
+        with _control_plane_conn(project) as c:
+            hit = _idem_hit(c, "request_wake", idem_key, actor, payload)
+            if hit is not None:
+                return hit
+            wake = _insert_wake_intent(
+                c, selector=selector, reason=reason or "wake requested",
+                source=source or actor, policy=policy, task_id=task_id,
+                principal_id=principal_id, actor=actor, now=now, idem_key=idem_key)
+            _idem_store(c, "request_wake", idem_key, actor, payload, wake)
+            return wake
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            return _control_plane_unavailable("request_wake", project, started_at, exc)
+        raise
 
 
 def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
                       project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    started_at = time.time()
     q = "SELECT * FROM wake_intents WHERE 1=1"
     params: List[Any] = []
     if status:
@@ -1650,8 +1718,13 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
     if host_id:
         q += " AND claimed_by_host=?"; params.append(host_id)
     q += " ORDER BY requested_at"
-    with _conn(project) as c:
-        wakes = [_wake_row(r) for r in c.execute(q, params).fetchall()]
+    try:
+        with _control_plane_conn(project) as c:
+            wakes = [_wake_row(r) for r in c.execute(q, params).fetchall()]
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            return [_control_plane_unavailable("list_wake_intents", project, started_at, exc)]
+        raise
     if runtime:
         wakes = [w for w in wakes if (w.get("selector") or {}).get("runtime") == runtime]
     return wakes
@@ -1659,39 +1732,46 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
 
 def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    started_at = time.time()
     now = time.time()
-    with _conn(project) as c:
-        wake_row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
-        if not wake_row:
-            return {"claimed": False, "error": "wake not found", "wake_id": wake_id}
-        wake = _wake_row(wake_row)
-        if wake["status"] != "pending":
-            return {"claimed": False, "reason": f"wake is {wake['status']}", "wake": wake}
-        if wake.get("deadline") and wake["deadline"] <= now:
-            result = {"reason": "deadline_expired", "deadline": wake["deadline"]}
-            c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
-                      "WHERE wake_id=?",
-                      (now, json.dumps(result, sort_keys=True), wake_id))
-            return {"claimed": False, "reason": "deadline_expired", "wake_id": wake_id}
-        host_row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
-        if not host_row:
-            return {"claimed": False, "reason": "host_not_registered", "host_id": host_id}
-        host = _host_row(host_row, now=now)
-        if not _host_can_handle(host, wake["selector"]):
-            return {"claimed": False, "reason": "host_not_eligible",
-                    "host_id": host_id, "wake_id": wake_id}
-        cur = c.execute(
-            "UPDATE wake_intents SET status='claimed', claimed_at=?, claimed_by_host=? "
-            "WHERE wake_id=? AND status='pending'",
-            (now, host_id, wake_id),
-        )
-        if cur.rowcount == 0:
+    try:
+        with _control_plane_conn(project) as c:
+            wake_row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+            if not wake_row:
+                return {"claimed": False, "error": "wake not found", "wake_id": wake_id}
+            wake = _wake_row(wake_row)
+            if wake["status"] != "pending":
+                return {"claimed": False, "reason": f"wake is {wake['status']}", "wake": wake}
+            if wake.get("deadline") and wake["deadline"] <= now:
+                result = {"reason": "deadline_expired", "deadline": wake["deadline"]}
+                c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+                          "WHERE wake_id=?",
+                          (now, json.dumps(result, sort_keys=True), wake_id))
+                return {"claimed": False, "reason": "deadline_expired", "wake_id": wake_id}
+            host_row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+            if not host_row:
+                return {"claimed": False, "reason": "host_not_registered", "host_id": host_id}
+            host = _host_row(host_row, now=now)
+            if not _host_can_handle(host, wake["selector"]):
+                return {"claimed": False, "reason": "host_not_eligible",
+                        "host_id": host_id, "wake_id": wake_id}
+            cur = c.execute(
+                "UPDATE wake_intents SET status='claimed', claimed_at=?, claimed_by_host=? "
+                "WHERE wake_id=? AND status='pending'",
+                (now, host_id, wake_id),
+            )
+            if cur.rowcount == 0:
+                row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+                return {"claimed": False, "reason": "lost_race", "wake": _wake_row(row)}
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (wake.get("task_id"), actor, "wake.claimed",
+                       json.dumps({"wake_id": wake_id, "host_id": host_id}, sort_keys=True), now))
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
-            return {"claimed": False, "reason": "lost_race", "wake": _wake_row(row)}
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (wake.get("task_id"), actor, "wake.claimed",
-                   json.dumps({"wake_id": wake_id, "host_id": host_id}, sort_keys=True), now))
-        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            err = _control_plane_unavailable("claim_wake", project, started_at, exc)
+            return {"claimed": False, **err}
+        raise
     return {"claimed": True, "wake": _wake_row(row)}
 
 
@@ -1699,54 +1779,60 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                   agent_id: str = "", result: Optional[Dict[str, Any]] = None,
                   actor: str = "system",
                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    started_at = time.time()
     now = time.time()
     result = dict(result or {})
     success = bool(result.get("started") or runner_session_id or agent_id)
     status = "completed" if success else "failed"
     if "reason" not in result:
         result["reason"] = "started" if success else "launch_failed"
-    with _conn(project) as c:
-        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
-        if not row:
-            return {"error": "wake not found", "wake_id": wake_id}
-        wake = _wake_row(row)
-        c.execute(
-            "UPDATE wake_intents SET status=?, completed_at=?, runner_session_id=?, "
-            "agent_id=?, result_json=? WHERE wake_id=?",
-            (status, now, runner_session_id or None, agent_id or None,
-             json.dumps(result, sort_keys=True), wake_id),
-        )
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (wake.get("task_id"), actor,
-                   "wake.completed" if status == "completed" else "wake.failed",
-                   json.dumps({"wake_id": wake_id, "status": status,
-                               "runner_session_id": runner_session_id or None,
-                               "agent_id": agent_id or None,
-                               "result": result}, sort_keys=True), now))
-        if status == "completed" and runner_session_id:
-            selector = wake.get("selector") or {}
-            _upsert_runner_session_in(
-                c,
-                {
-                    "runner_session_id": runner_session_id,
-                    "host_id": wake.get("claimed_by_host") or "",
-                    "agent_id": agent_id or selector.get("agent_id") or "",
-                    "runtime": selector.get("runtime") or "",
-                    "task_id": wake.get("task_id") or result.get("task_id") or "",
-                    "claim_id": result.get("claim_id") or "",
-                    "pid": result.get("pid"),
-                    "status": "running" if result.get("started") else "unknown",
-                    "cwd": result.get("cwd") or "",
-                    "control": result.get("control") or {"managed_process": True,
-                                                          "runner_kill": bool(runner_session_id)},
-                    "metadata": {"wake_id": wake_id, "wake_result": result},
-                    "heartbeat_ttl_s": result.get("heartbeat_ttl_s") or 60,
-                },
-                principal_id=actor,
-                actor=actor,
-                now=now,
+    try:
+        with _control_plane_conn(project) as c:
+            row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+            if not row:
+                return {"error": "wake not found", "wake_id": wake_id}
+            wake = _wake_row(row)
+            c.execute(
+                "UPDATE wake_intents SET status=?, completed_at=?, runner_session_id=?, "
+                "agent_id=?, result_json=? WHERE wake_id=?",
+                (status, now, runner_session_id or None, agent_id or None,
+                 json.dumps(result, sort_keys=True), wake_id),
             )
-        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (wake.get("task_id"), actor,
+                       "wake.completed" if status == "completed" else "wake.failed",
+                       json.dumps({"wake_id": wake_id, "status": status,
+                                   "runner_session_id": runner_session_id or None,
+                                   "agent_id": agent_id or None,
+                                   "result": result}, sort_keys=True), now))
+            if status == "completed" and runner_session_id:
+                selector = wake.get("selector") or {}
+                _upsert_runner_session_in(
+                    c,
+                    {
+                        "runner_session_id": runner_session_id,
+                        "host_id": wake.get("claimed_by_host") or "",
+                        "agent_id": agent_id or selector.get("agent_id") or "",
+                        "runtime": selector.get("runtime") or "",
+                        "task_id": wake.get("task_id") or result.get("task_id") or "",
+                        "claim_id": result.get("claim_id") or "",
+                        "pid": result.get("pid"),
+                        "status": "running" if result.get("started") else "unknown",
+                        "cwd": result.get("cwd") or "",
+                        "control": result.get("control") or {"managed_process": True,
+                                                              "runner_kill": bool(runner_session_id)},
+                        "metadata": {"wake_id": wake_id, "wake_result": result},
+                        "heartbeat_ttl_s": result.get("heartbeat_ttl_s") or 60,
+                    },
+                    principal_id=actor,
+                    actor=actor,
+                    now=now,
+                )
+            row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            return _control_plane_unavailable("complete_wake", project, started_at, exc)
+        raise
     return _wake_row(row)
 
 
@@ -1958,51 +2044,64 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
 
 def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    started_at = time.time()
     now = time.time()
-    with _conn(project) as c:
-        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
-        if not row:
-            return {"error": "wake not found", "wake_id": wake_id}
-        wake = _wake_row(row)
-        if wake["status"] in ("completed", "failed", "cancelled"):
-            return wake | {"note": "already terminal"}
-        result = dict(wake.get("result") or {})
-        result.update({"reason": reason, "cancelled_by": actor})
-        c.execute("UPDATE wake_intents SET status='cancelled', completed_at=?, result_json=? "
-                  "WHERE wake_id=?",
-                  (now, json.dumps(result, sort_keys=True), wake_id))
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (wake.get("task_id"), actor, "wake.cancelled",
-                   json.dumps({"wake_id": wake_id, "reason": reason}, sort_keys=True), now))
-        row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    try:
+        with _control_plane_conn(project) as c:
+            row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+            if not row:
+                return {"error": "wake not found", "wake_id": wake_id}
+            wake = _wake_row(row)
+            if wake["status"] in ("completed", "failed", "cancelled"):
+                return wake | {"note": "already terminal"}
+            result = dict(wake.get("result") or {})
+            result.update({"reason": reason, "cancelled_by": actor})
+            c.execute("UPDATE wake_intents SET status='cancelled', completed_at=?, result_json=? "
+                      "WHERE wake_id=?",
+                      (now, json.dumps(result, sort_keys=True), wake_id))
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (wake.get("task_id"), actor, "wake.cancelled",
+                       json.dumps({"wake_id": wake_id, "reason": reason}, sort_keys=True), now))
+            row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            return _control_plane_unavailable("cancel_wake", project, started_at, exc)
+        raise
     return _wake_row(row)
 
 
 def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                        now: Optional[float] = None) -> Dict[str, Any]:
+    started_at = time.time()
     now = time.time() if now is None else float(now)
     failed = 0
     events: List[Dict[str, Any]] = []
-    with _conn(project) as c:
-        rows = c.execute(
-            "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
-            "AND deadline IS NOT NULL AND deadline<=?",
-            (now,),
-        ).fetchall()
-        for row in rows:
-            wake = _wake_row(row)
-            result = dict(wake.get("result") or {})
-            result.update({"reason": "deadline_expired", "deadline": wake.get("deadline")})
-            c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
-                      "WHERE wake_id=?",
-                      (now, json.dumps(result, sort_keys=True), wake["wake_id"]))
-            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                      (wake.get("task_id"), "switchboard/wake", "wake.failed",
-                       json.dumps({"wake_id": wake["wake_id"], "reason": "deadline_expired"},
-                                  sort_keys=True), now))
-            failed += 1
-            events.append({"wake_id": wake["wake_id"], "status": "failed",
-                           "reason": "deadline_expired"})
+    try:
+        with _control_plane_conn(project) as c:
+            rows = c.execute(
+                "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
+                "AND deadline IS NOT NULL AND deadline<=?",
+                (now,),
+            ).fetchall()
+            for row in rows:
+                wake = _wake_row(row)
+                result = dict(wake.get("result") or {})
+                result.update({"reason": "deadline_expired", "deadline": wake.get("deadline")})
+                c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+                          "WHERE wake_id=?",
+                          (now, json.dumps(result, sort_keys=True), wake["wake_id"]))
+                c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                          (wake.get("task_id"), "switchboard/wake", "wake.failed",
+                           json.dumps({"wake_id": wake["wake_id"], "reason": "deadline_expired"},
+                                      sort_keys=True), now))
+                failed += 1
+                events.append({"wake_id": wake["wake_id"], "status": "failed",
+                               "reason": "deadline_expired"})
+    except sqlite3.OperationalError as exc:
+        if _sqlite_busy(exc):
+            err = _control_plane_unavailable("sweep_wake_intents", project, started_at, exc)
+            return {"project": project, "failed": failed, "events": events, **err}
+        raise
     return {"project": project, "failed": failed, "events": events}
 
 
