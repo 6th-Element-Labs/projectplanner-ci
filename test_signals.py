@@ -18,6 +18,7 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 
 import store  # noqa: E402
 import signals  # noqa: E402
+import agent  # noqa: E402
 
 passed = failed = 0
 
@@ -77,6 +78,9 @@ try:
        "task detail flags stale rationale that contradicts dependency truth")
     ok(child_detail["rationale"].startswith("[STALE GENERATED RATIONALE:"),
        "task detail prefixes stale generated rationale for old clients")
+    child_brief = agent._task_brief(child_detail, full=True)
+    ok(child_brief["dependency_state"]["ready"] and child_brief["rationale_state"]["stale"],
+       "MCP task brief exposes dependency_state and rationale_state")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

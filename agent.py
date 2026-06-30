@@ -249,6 +249,12 @@ def _task_brief(t, full=False):
         b["exit_criteria"] = t.get("exit_criteria")
         b["deliverable"] = t.get("deliverable")
         b["rationale"] = t.get("rationale")  # Haiku-generated activity summary; None until first run
+        if t.get("dependency_state") is not None:
+            b["dependency_state"] = t.get("dependency_state")
+        if t.get("rationale_state") is not None:
+            b["rationale_state"] = t.get("rationale_state")
+        if t.get("rationale_raw") is not None:
+            b["rationale_raw"] = t.get("rationale_raw")
         recent = []
         for a in (t.get("activity") or [])[-6:]:
             payload = a.get("payload") or {}
