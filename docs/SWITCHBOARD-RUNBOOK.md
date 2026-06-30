@@ -134,6 +134,12 @@ PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
 The production gate is `projectplanner-ci-gate.timer`, which polls open non-draft PRs and posts
 the `Switchboard CI / VM gate` status from the Plan VM.
 
+GitHub Actions `startup_failure` rule: this private repo has produced Actions runs with
+`conclusion=startup_failure`, `jobs=[]`, and `path=BuildFailed` before any checkout/setup step.
+Treat those as CI-infra failures, not test results. Do not merge on a vague "red but probably
+fine" claim: require the `Switchboard CI / VM gate` status or a recorded strict local/VM run, and
+keep GitHub Actions workflows absent until a one-step hosted-runner probe can start successfully.
+
 ## 2.2 Fail-and-fix-early operating policy
 
 Switchboard should make the weakest link visible quickly. Missing data, broken connections,
