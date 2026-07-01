@@ -359,6 +359,56 @@ try:
        stale_claim_reconciled["git_state"]["head_sha"] == latest_head,
        "reconcile stamps merged PR from pr_url-only stale claim evidence")
 
+    store.init_db("helm")
+    store.set_project_github_repo("StevenRidder/Helm", project="helm")
+    helm_legacy_done = store.create_task(
+        {"workstream_id": "OFFLINE", "title": "legacy Done with PR activity"},
+        actor="seed", project="helm")
+    with store._conn("helm") as c:
+        c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?",
+                  (0, helm_legacy_done["task_id"]))
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (helm_legacy_done["task_id"], "legacy", "comment",
+             '{"text":"Merged PR: https://github.com/StevenRidder/Helm/pull/777 branch `codex/OFFLINE-99-legacy` head `1111111`"}',
+             0),
+        )
+    store.update_canonical_main_sha("f" * 40, actor="test", project="helm")
+    original_github_pr = store._github_pr
+    seen_helm = {}
+
+    def fake_helm_pr(repo, pr_number, token=""):
+        seen_helm["repo"] = repo
+        seen_helm["pr_number"] = int(pr_number)
+        return {
+            "merged_at": "2026-06-30T01:23:45Z",
+            "merge_commit_sha": "helmmerge",
+            "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+            "base": {"ref": "main", "repo": {"default_branch": "main"}},
+            "head": {"ref": "codex/OFFLINE-99-legacy", "sha": "2222222"},
+        }
+
+    store._github_pr = fake_helm_pr
+    try:
+        helm_report = store.reconcile(project="helm")
+    finally:
+        store._github_pr = original_github_pr
+    helm_reconciled = store.get_task(helm_legacy_done["task_id"], project="helm")
+    ok(helm_report["external_checks"]["git_reachability"] == "skipped_repo_mismatch",
+       "Helm reconcile skips local git reachability from the projectplanner checkout")
+    ok(seen_helm == {"repo": "StevenRidder/Helm", "pr_number": 777},
+       "Helm reconcile uses the project GitHub repo when hydrating legacy Done PR evidence")
+    ok(helm_reconciled["status"] == "Done" and
+       helm_reconciled["git_state"]["pr_number"] == 777 and
+       helm_reconciled["git_state"]["merged_sha"] == "helmmerge",
+       "reconcile stamps merged_sha for a legacy Done Helm task from PR activity")
+    ok(any(b["task_id"] == helm_legacy_done["task_id"] and
+           b["merged_sha"] == "helmmerge" for b in helm_report["backfilled"]),
+       "legacy Done Helm PR backfill is reported")
+    ok(not any(f["task_id"] == helm_legacy_done["task_id"] and
+               f["code"] == "done_without_merged_sha" for f in helm_report["findings"]),
+       "legacy Done Helm PR task is not left as Done without provenance")
+
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)
 finally:

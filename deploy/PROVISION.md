@@ -155,6 +155,14 @@ PM_BACKFILL_PROJECT=switchboard \
   .venv/bin/python jobs.py backfill_default_branch_provenance
 ```
 
+## Scheduled reconcile projects
+
+`projectplanner-reconcile.timer` runs `jobs.py reconcile_alerts`. By default that job now checks
+all registered boards, not only `switchboard`, so project-scoped boards such as Helm can backfill
+GitHub merge provenance from PR evidence even if their repo webhook is missing or delayed. To narrow
+the scheduled surface deliberately, set `PM_RECON_ALERT_PROJECTS=switchboard` or a comma-separated
+project list in `/opt/projectplanner/.env`, then restart `projectplanner-reconcile.timer`.
+
 ## Rebase timeline
 ```bash
 # rebase kickoff (regenerates seed_plan.json); apply to the LIVE db with a dates-only UPDATE:

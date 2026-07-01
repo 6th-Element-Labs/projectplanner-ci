@@ -5208,7 +5208,15 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             git_state = _load_git_state(c, task["task_id"])
             tasks.append(task)
             status = task.get("status")
-            if status == "In Review" and repo and not git_state.get("pr_number"):
+            needs_pr_hydration = (
+                repo and
+                not git_state.get("pr_number") and
+                (
+                    status == "In Review" or
+                    (status == "Done" and not _has_done_provenance(git_state))
+                )
+            )
+            if needs_pr_hydration:
                 inferred = (
                     _infer_pr_evidence_from_git_state(git_state, repo)
                     or _infer_pr_evidence_from_activity(c, task["task_id"], repo)
@@ -5229,7 +5237,8 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                          json.dumps(evidence, sort_keys=True), now),
                     )
             git_states[task["task_id"]] = git_state
-            if status == "Done" and not _has_done_provenance(git_state):
+            if (status == "Done" and not _has_done_provenance(git_state)
+                    and not (repo and git_state.get("pr_number"))):
                 findings.append({"severity": "high", "task_id": task["task_id"],
                                  "code": "done_without_merged_sha",
                                  "detail": "Task is Done but has no recorded merge/default-branch or offline evidence provenance."})

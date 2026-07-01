@@ -92,9 +92,9 @@ Scheduled reconcile alert rule:
 - `jobs.py reconcile_alerts` runs `reconcile` and emits a directed `reconcile_alert` IXP message
   when findings at or above `PM_RECON_ALERT_MIN_SEVERITY` exist.
 - The job defaults to `PM_RECON_ALERT_PROJECTS=all` so GitHub merge provenance is hydrated for
-  Helm, Vulkan, Switchboard, and dynamic boards without a human running project-specific reconcile.
-  Set a comma-separated list only when deliberately narrowing the timer. Unknown project ids fail
-  closed.
+  Helm, Vulkan, Switchboard, and dynamic boards even when a repo webhook is missing or delayed.
+  Set a comma-separated list such as `switchboard` only when deliberately narrowing the timer.
+  Unknown project ids fail closed.
 - Alerts are deduped by project, severity floor, alert recipient, finding signature, and
   `PM_RECON_ALERT_DEDUPE_SECONDS` bucket, so unresolved drift does not spam every timer tick.
 - Production runs this through `projectplanner-reconcile.timer`; agents/operators can trigger the

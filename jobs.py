@@ -98,8 +98,9 @@ def reconcile_alerts():
     """Run reconcile and send deduped actionable drift alerts.
 
     Defaults to every registered project so merge-provenance backfill keeps dynamic boards
-    (Helm, Vulkan, etc.) unblocked without a human running reconcile(project=...) by hand.
-    Set PM_RECON_ALERT_PROJECTS to a comma list to run a deliberate subset.
+    (Helm, Vulkan, etc.) unblocked even when a repo webhook is missing or delayed.
+    Set PM_RECON_ALERT_PROJECTS=switchboard (or a comma list) only when deliberately
+    narrowing the scheduled surface.
     """
     projects = _configured_projects("PM_RECON_ALERT_PROJECTS", "all")
     alert_to = os.environ.get("PM_RECON_ALERT_TO", "switchboard/operator")
