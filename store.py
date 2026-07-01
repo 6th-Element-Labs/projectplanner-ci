@@ -952,10 +952,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
             t["rationale_state"] = rationale_state
             if rationale_state["stale"]:
                 t["rationale_raw"] = raw_rationale
-                t["rationale"] = (
-                    "[STALE GENERATED RATIONALE: trust status/dependency_state/git_state] "
-                    + raw_rationale
-                )
+                t["rationale"] = None
             else:
                 t["rationale"] = raw_rationale
         return t

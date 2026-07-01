@@ -76,11 +76,12 @@ try:
     ok(child_detail["rationale_state"]["stale"] and
        child_detail["rationale_state"]["flags"] == ["says_blocked_but_dependencies_satisfied"],
        "task detail flags stale rationale that contradicts dependency truth")
-    ok(child_detail["rationale"].startswith("[STALE GENERATED RATIONALE:"),
-       "task detail prefixes stale generated rationale for old clients")
+    ok(child_detail.get("rationale") is None and "blocked on dependencies" in child_detail["rationale_raw"],
+       "task detail suppresses stale primary rationale while preserving raw text")
     child_brief = agent._task_brief(child_detail, full=True)
-    ok(child_brief["dependency_state"]["ready"] and child_brief["rationale_state"]["stale"],
-       "MCP task brief exposes dependency_state and rationale_state")
+    ok(child_brief["dependency_state"]["ready"] and child_brief["rationale_state"]["stale"]
+       and child_brief["rationale"] is None and "blocked on dependencies" in child_brief["rationale_raw"],
+       "MCP task brief exposes dependency_state/rationale_state without stale primary rationale")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
