@@ -820,6 +820,15 @@ try:
                                                   actor="switchboard/operator", project=P)
     ok(missing_offline.get("error") == "offline evidence required",
        "offline completion requires explicit evidence")
+    invalid_offline_hash = store.mark_task_offline_done(
+        second["task_id"],
+        evidence={"claim_id": next_claim["claim_id"], "verification": "operator reviewed"},
+        evidence_hash="sha256:not-computed-placeholder",
+        actor="switchboard/operator",
+        project=P,
+    )
+    ok(invalid_offline_hash.get("error") == "invalid_evidence_hash",
+       "offline completion rejects invalid evidence hashes")
     premature_offline_task = store.create_task(
         {"workstream_id": "TEST", "title": "offline too early"}, actor="seed", project=P)
     premature_offline = store.mark_task_offline_done(
@@ -839,11 +848,38 @@ try:
     ok(offline_done["status"] == "Done" and
        offline_done["provenance"]["type"] == "offline_evidence",
        "offline verifier can mark In Review non-PR task Done")
+    idempotent_offline = store.mark_task_offline_done(
+        second["task_id"],
+        evidence={"claim_id": next_claim["claim_id"],
+                  "verification": "operator reviewed offline run log"},
+        artifact_url="https://example.test/run-log",
+        verifier="switchboard/operator",
+        reviewed_at=1234,
+        actor="switchboard/operator",
+        project=P)
+    ok(idempotent_offline.get("idempotent"),
+       "offline verifier replay with same evidence is idempotent")
+    corrected_hash = "sha256:f29f6989f8fe2ffe9d52aa38bb43fb053967dbc052789ecfde99c73eb3095fc4"
+    corrected_offline = store.mark_task_offline_done(
+        second["task_id"],
+        evidence={"claim_id": next_claim["claim_id"],
+                  "verification": "operator corrected offline run log hash"},
+        artifact_url="https://example.test/run-log",
+        evidence_hash=corrected_hash,
+        verifier="switchboard/operator",
+        reviewed_at=1235,
+        actor="switchboard/operator",
+        project=P)
+    ok(corrected_offline.get("corrected") and
+       corrected_offline["provenance"]["evidence_hash"] == corrected_hash,
+       "offline verifier can correct evidence metadata with provenance")
     second_offline = store.get_task(second["task_id"], project=P)
     ok(second_offline["git_state"]["provenance_type"] == "offline_evidence" and
        second_offline["provenance"]["artifact_url"] == "https://example.test/run-log" and
-       second_offline["provenance"]["evidence_hash"],
+       second_offline["provenance"]["evidence_hash"] == corrected_hash,
        "offline Done records verifier evidence, artifact, and hash")
+    ok(any(a["kind"] == "task.offline_evidence_corrected" for a in second_offline["activity"]),
+       "offline evidence corrections are audited")
     listed_second = next(t for t in store.list_tasks(project=P) if t["task_id"] == second["task_id"])
     ok(listed_second["provenance"]["type"] == "offline_evidence",
        "task lists expose offline provenance for the UI badge")

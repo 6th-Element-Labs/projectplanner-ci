@@ -714,6 +714,7 @@ DONE_STATUS_CONTRADICTION_RE = re.compile(
     r"\b(in\s+review|not\s+started|in\s+progress|blocked)\b",
     re.I,
 )
+EVIDENCE_HASH_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$", re.I)
 
 
 def _rationale_state(rationale: str, task: Dict[str, Any],
@@ -765,6 +766,10 @@ def _offline_evidence_from_state(git_state: Dict[str, Any]) -> Dict[str, Any]:
     evidence = git_state.get("evidence") or {}
     offline = evidence.get("offline_evidence") if isinstance(evidence, dict) else None
     return offline if isinstance(offline, dict) else {}
+
+
+def _valid_evidence_hash(value: str) -> bool:
+    return bool(EVIDENCE_HASH_RE.fullmatch((value or "").strip()))
 
 
 def _has_done_provenance(git_state: Dict[str, Any]) -> bool:
@@ -3133,6 +3138,12 @@ def mark_task_offline_done(task_id: str, evidence: Any = None,
     verifier = (verifier or evidence_obj.get("verifier") or actor or "").strip()
     if not evidence_obj and not artifact_url and not evidence_hash:
         return {"error": "offline evidence required", "task_id": task_id}
+    if evidence_hash and not _valid_evidence_hash(evidence_hash):
+        return {
+            "error": "invalid_evidence_hash",
+            "task_id": task_id,
+            "message": "evidence_hash must be a 64-character SHA-256 hex digest, optionally prefixed with sha256:",
+        }
     if not evidence_hash and evidence_obj:
         evidence_hash = hashlib.sha256(
             json.dumps(evidence_obj, sort_keys=True, separators=(",", ":")).encode()
@@ -3156,9 +3167,27 @@ def mark_task_offline_done(task_id: str, evidence: Any = None,
             return {"error": "task not found", "task_id": task_id}
         current = _load_git_state(c, task_id)
         if row["status"] == "Done":
-            if _offline_evidence_from_state(current):
-                return {"task_id": task_id, "status": "Done", "git_state": current,
-                        "provenance": _provenance_summary(current), "idempotent": True}
+            existing_offline = _offline_evidence_from_state(current)
+            if existing_offline:
+                if existing_offline == offline_payload:
+                    return {"task_id": task_id, "status": "Done", "git_state": current,
+                            "provenance": _provenance_summary(current), "idempotent": True}
+                corrected_payload = {
+                    **offline_payload,
+                    "corrects": existing_offline,
+                    "corrected_at": now,
+                }
+                git_state = _upsert_git_state(c, task_id, {
+                    "evidence": {"offline_evidence": corrected_payload},
+                })
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                    (task_id, actor, "task.offline_evidence_corrected",
+                     json.dumps({"previous": existing_offline, "current": corrected_payload},
+                                sort_keys=True), now),
+                )
+                return {"task_id": task_id, "status": "Done", "git_state": git_state,
+                        "provenance": _provenance_summary(git_state), "corrected": True}
             if current.get("merged_sha"):
                 return {"skipped": True, "reason": "already_done_with_git_provenance",
                         "task_id": task_id, "git_state": current}
