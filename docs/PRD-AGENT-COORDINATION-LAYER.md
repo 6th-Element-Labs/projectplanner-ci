@@ -17,8 +17,9 @@
 
 > Builds on what already ships: the coordination primitives in
 > [`MULTI_AGENT_COORDINATION.md`](MULTI_AGENT_COORDINATION.md), the MCP surface in
-> `mcp_server.py`, the store in `store.py`, and the strategy in
-> [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md). This PRD promotes that layer from "a
+> `mcp_server.py`, the store in `store.py`, the strategy in
+> [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md), and the backend moat architecture in
+> [`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md). This PRD promotes that layer from "a
 > coordination feature on a PM board" to "the product."
 
 ---
@@ -129,6 +130,24 @@ Commercial / hosted Switchboard:
 
 The open protocol lets every agent plug in. The hosted control plane is commercial because
 companies need trust, governance, cost control, and proof at scale.
+
+### 3.1.1 Backend moat architecture
+
+The open IXP/TXP/OXP contracts are the adoption layer, not the whole product. The hosted
+backend should be hard to copy because it operates the durable coordination kernel and learns
+from real work: claims, leases, messages, acks, wake intents, runner controls, decisions,
+provenance, spend, outcomes, approvals, failures, and policy decisions.
+
+The strategic architecture is in
+[`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md). It turns the moat into an
+implementation map: kernel boundaries, trusted work graph, reliability-weighted dispatch,
+replay/simulation, fail-fix-early taxonomy, Tally economics, audit retention, and the live
+Switchboard task anchors that own each piece.
+
+The ActionEngine/DBOS borrowing map is in
+[`SWITCHBOARD-ACTIONENGINE-BORROWING-MAP.md`](SWITCHBOARD-ACTIONENGINE-BORROWING-MAP.md).
+It defines what to lift directly, what to reimplement as Switchboard-native receipts and
+side-effect ledgers, and what not to import from ActionEngine's workflow engine.
 
 ### 3.2 Hyperscaler threat model
 
@@ -253,6 +272,10 @@ The defining property: **two-sided.** Humans and agents look at the same durable
 **Honest latency note:** an agent action is dominated by inference (seconds). The kernel's
 ops are sub-millisecond today. We optimize the kernel for **throughput, concurrency, and
 fan-out tail latency at fleet scale — never for single-op "speed."** (See §11, §12.)
+
+The kernel boundary is also the commercial backend boundary. Protocol clients can be open;
+the hosted product wins by making this kernel reliable, replayable, policy-aware, and fed by
+long-lived evidence and cost history.
 
 ---
 
@@ -817,6 +840,8 @@ adoptable: cost is the *why they'll pull.*
 - [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md) — always-on host registration and wake intents for absent runtimes
 - [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) — `+TXP` dispatch profile: active scheduler semantics
 - [`TALLY-SPEC.md`](TALLY-SPEC.md) — `+OXP` cost-to-outcome and KPI ledger
+- [`SWITCHBOARD-MANIFESTO.md`](SWITCHBOARD-MANIFESTO.md) — north-star statement for open protocols and the hosted operations brain
+- [`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md) — hosted backend moat, kernel boundaries, replay, reliability, and task map
 - [`SWITCHBOARD-DESIGN-LOG.md`](SWITCHBOARD-DESIGN-LOG.md) — the reasoning trail + decision log (incl. the original code review)
 - [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md) — positioning, competitive read, the three bets
 - [`MULTI_AGENT_COORDINATION.md`](MULTI_AGENT_COORDINATION.md) — the primitives, derived from session data

@@ -86,6 +86,15 @@ Open source the adoption layer; keep the governance layer commercial:
   entitlements, operator cockpit, managed runners, integrations, audit/compliance exports,
   and long-term evidence history.
 
+The north-star version is
+[`SWITCHBOARD-MANIFESTO.md`](SWITCHBOARD-MANIFESTO.md). The backend moat is captured in
+[`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md). The ActionEngine/DBOS
+borrowing boundary is captured in
+[`SWITCHBOARD-ACTIONENGINE-BORROWING-MAP.md`](SWITCHBOARD-ACTIONENGINE-BORROWING-MAP.md).
+The rule is: open the coordination contract, then make the hosted control plane better
+through durable state, scheduler quality, replay, policy, reliability learning, and cost
+intelligence.
+
 ## 4. Roadmap — the three headline bets
 
 ### Bet 1 — Cost-per-outcome accounting  ⭐ strongest commercial wedge
@@ -131,6 +140,10 @@ enterprise-gated LLMs, to one shared outcome.
 | 6 | **Model-routing advice** | board recommends a model tier per task from `risk_level`/complexity — cost optimization as a service | S |
 | 7 | **Outcome verification** | "Done" isn't Done until exit_criteria confirmed (verifier agent or CI hook via the GitHub webhook) | M |
 | 8 | **Agent reliability scoring** | which agents complete vs abandon vs get reverted — trust data | S |
+| 8.5 | **Replay + simulation harness** | replay task/agent lifecycles, preflight dispatch policies, and prove derived state from append-only events | M — see [`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md) / RECON-8 |
+| 8.6 | **Coordination receipts + side-effect ledger** | borrow ActionEngine's durable-run and exact-once-effect lessons without importing its workflow engine; prove every external action, retry, approval, and receipt | M — see [`SWITCHBOARD-ACTIONENGINE-BORROWING-MAP.md`](SWITCHBOARD-ACTIONENGINE-BORROWING-MAP.md), `RECON-9`, `HARDEN-21`, `BUG-16` |
+| 8.75 | **Fail-early taxonomy** | missing data, broken connections, stale branches, and invalid payloads become typed, audited signals that feed BUG/QA | S/M — see BUG-15 and QA-9 |
+| 8.9 | **Dispatch policy simulator** | compare scheduler versions against historical fleet data before changing live routing | M — see DISPATCH-7 |
 | 9 | **ACCESS commercial shell** | login/session auth, org/user/project roles, scoped MCP/API tokens, project creation permissions, invites, subscriptions/agent entitlements, feedback inbox, restricted UI controls | L — next live board lane |
 | 10 | **Public protocol ecosystem** | OSS spec/adapters/conformance/local host, license, quickstarts, certification badges | M |
 | 11 | **Enterprise trust graph** | audit exports, provider cost reconciliation, immutable evidence retention, enterprise integrations | L |
