@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import hmac
 import os
+import time
 from pathlib import Path
 
 # Load a local .env if present (SMTP/gateway config for later slices). No core import.
@@ -91,6 +92,15 @@ def _actor_from_request(request: Request, fallback: str = "user") -> str:
     return auth.actor(p) if p else fallback
 
 
+def _attach_server_timing(response: Response, started_at: float) -> Response:
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    metric = f"app;dur={elapsed_ms:.1f}"
+    existing = response.headers.get("Server-Timing")
+    response.headers["Server-Timing"] = f"{existing}, {metric}" if existing else metric
+    response.headers["X-Switchboard-Server-Ms"] = f"{elapsed_ms:.1f}"
+    return response
+
+
 @app.middleware("http")
 async def _write_auth_boundary(request: Request, call_next):
     """Gate state-changing web/API writes when PM_AUTH_MODE=required.
@@ -98,23 +108,27 @@ async def _write_auth_boundary(request: Request, call_next):
     Protocol endpoints authenticate inside their handlers because their project lives in the
     JSON body. GitHub webhooks keep their HMAC check.
     """
+    started_at = time.perf_counter()
     if request.method.upper() not in {"POST", "PATCH", "DELETE"}:
-        return await call_next(request)
+        return _attach_server_timing(await call_next(request), started_at)
     path = request.url.path
     if path.startswith(("/ixp/", "/txp/", "/tally/")) or path == "/api/github/webhook":
-        return await call_next(request)
+        return _attach_server_timing(await call_next(request), started_at)
     project = "switchboard" if path == "/api/projects" else (
         request.query_params.get("project") or store.DEFAULT_PROJECT)
     if not store.has_project(project):
-        return JSONResponse({"detail": f"unknown project: {project}"}, status_code=400)
+        return _attach_server_timing(
+            JSONResponse({"detail": f"unknown project: {project}"}, status_code=400),
+            started_at,
+        )
     required_scopes = ("write:system",) if path == "/api/projects" else ("write:tasks",)
     try:
         request.state.principal = auth.authenticate(
             project, auth.bearer_from_request(request), required_scopes, dev_actor="web")
     except PermissionError as e:
         status = 403 if "forbidden" in str(e) else 401
-        return JSONResponse({"detail": str(e)}, status_code=status)
-    return await call_next(request)
+        return _attach_server_timing(JSONResponse({"detail": str(e)}, status_code=status), started_at)
+    return _attach_server_timing(await call_next(request), started_at)
 
 
 @app.get("/health")
@@ -767,6 +781,12 @@ async def ixp_agent_hosts(project: str = Query(store.DEFAULT_PROJECT), runtime: 
                                    project=_proj(project))
     _control_plane_http(hosts)
     return {"hosts": hosts}
+
+
+@app.get("/ixp/v1/control_plane_probe")
+async def ixp_control_plane_probe(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
+                                  include_heavy: bool = False):
+    return store.control_plane_probe(project=_proj(project), lane=lane, include_heavy=include_heavy)
 
 
 @app.get("/ixp/v1/host_status")

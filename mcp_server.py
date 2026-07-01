@@ -549,6 +549,19 @@ def get_lane_delta(project: str = "maxwell", lane: str = "", since_cursor: int =
 
 
 @mcp.tool()
+def control_plane_probe(project: str = "maxwell", lane: str = "",
+                        include_heavy: bool = False) -> str:
+    """Tiny latency probe for MCP clients. Compare your client wall time to server_elapsed_ms.
+    A large gap means time is outside Switchboard's Python/SQLite path."""
+    probe = store.control_plane_probe(project=project, lane=lane, include_heavy=include_heavy)
+    probe["mcp_framing"] = {
+        "stateless_http": True,
+        "approx_tool_payload_bytes": len(_dumps(probe).encode("utf-8")),
+    }
+    return _dumps(probe)
+
+
+@mcp.tool()
 def doc_search(query: str) -> str:
     """Search the plan docs (PRD, architecture, integrations, security, the full plan).
     Returns cited snippets: [{file, text}]."""

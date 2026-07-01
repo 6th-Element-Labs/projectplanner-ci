@@ -6,6 +6,7 @@ plan.taikunai.com {
         reverse_proxy 127.0.0.1:8111
     }
     handle {
+        encode zstd gzip
         reverse_proxy 127.0.0.1:8110
     }
 }
@@ -16,6 +17,8 @@ plan.taikunai.com {
 # /ocr.html still work as deep links; everything (CSS, POST /api/*) proxies to :8110.
 # Caddy auto-issues the Let's Encrypt cert once the A record resolves to this VM.
 format.taikunai.com {
+    encode zstd gzip
+
     @root path /
     rewrite @root /format.html
     reverse_proxy 127.0.0.1:8110

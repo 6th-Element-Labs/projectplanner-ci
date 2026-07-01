@@ -27,6 +27,10 @@ Reads (open):
 - `search_tasks(workstream?, status?, owner_person?, blocking?, query?)` — filter the live plan.
 - `get_task(task_id)` — full detail (description, fields, recent activity).
 - `board_summary()` — project + rollups + one line per task.
+- `control_plane_probe(project, lane?, include_heavy?)` — tiny read-only latency probe for MCP
+  clients. Compare client wall time to `server_elapsed_ms`: a large gap means the excess is outside
+  Switchboard's Python/SQLite path, such as TLS/network, MCP bridge dispatch, response framing,
+  payload transfer, or client-side scheduling.
 - `get_working_agreement(project)` — connect-time rules: definition of done, branch convention,
   merge strategy, canonical main SHA, protocol/profile envelope, and session-start sequence.
 - `doc_search(query)` — cited snippets from the plan docs.
@@ -201,6 +205,11 @@ principals or set `PM_AUTH_TOKEN` during bootstrap:
 
 - Runs as its own process: `projectplanner-mcp.service` (uvicorn, `127.0.0.1:8111`).
   Caddy routes `/mcp*` → `:8111`, everything else → the web app (`:8110`).
+- Production Caddy enables `zstd`/`gzip` compression for web/API responses, while leaving `/mcp*`
+  uncompressed to avoid changing MCP stream framing. Full board snapshots can be 100KB+ JSON; clients
+  should still prefer `get_lane_delta` or `control_plane_probe` for polling and diagnostics.
+- HTTP responses include `Server-Timing: app;dur=...` and `X-Switchboard-Server-Ms` so operators can
+  separate application time from public network, TLS, transfer, and MCP/client bridge overhead.
 - `projectplanner-mcp.service` is a compatibility unit name. Future `switchboard-mcp.service`
   support should be introduced as an alias first, not as an in-place replacement.
 - The coordination monitor sweep is host-owned: enable `projectplanner-monitors.timer` so
