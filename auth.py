@@ -192,8 +192,16 @@ def authenticate_request(request: Any, project: str,
     if cookie:
         principal = store.get_principal_by_session(project, cookie)
         if not principal:
+            principal = store.get_principal_by_session_any_project(cookie)
+            if principal and principal.get("home_project") != project:
+                project_roles = store.principal_project_roles(project, principal.get("id") or "")
+                if not project_roles:
+                    raise PermissionError("unauthorized: session is not valid for this project")
+                principal = dict(principal)
+                principal["scopes"] = []
+        if not principal:
             raise PermissionError("unauthorized: session expired or invalid")
-        if principal.get("project") not in (project, "*"):
+        if principal.get("project") not in (project, "*") and not principal.get("home_project"):
             raise PermissionError("unauthorized: session is not valid for this project")
         principal = _attach_effective_access(principal, project)
         if not _has_scopes(principal, required_scopes, project):

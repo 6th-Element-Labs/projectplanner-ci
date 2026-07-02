@@ -490,6 +490,10 @@ async def create_project(request: Request, body: dict = Body(...)):
         label=body.get("label") or "",
         pretitle=body.get("pretitle") or "",
         github_repo=body.get("github_repo") or body.get("repo") or "",
+        owner_principal_id=principal["id"],
+        org_id=body.get("org_id") or store.DEFAULT_ORG_ID,
+        purpose=body.get("purpose") or "",
+        boundary=body.get("boundary") or "",
         actor=auth.actor(principal),
     )
     if created.get("error"):

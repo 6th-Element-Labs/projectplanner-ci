@@ -218,6 +218,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
     ws = (lane or "").strip().upper()
     if task and not ws:
         ws = task.get("_wsId") or ""
+    access = store.project_access(selected)
     lane_tasks = store.list_tasks(workstream=ws, project=selected) if ws else []
     lane_name = None
     for lt in lane_tasks:
@@ -243,6 +244,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
         "source_of_truth": "switchboard_board",
         "project": selected,
         "project_label": _project_label(selected),
+        "project_access": access,
         "local_docs_policy": (
             "Do not assume repo-local docs such as docs/EPICS.md define this project. "
             "Use this Switchboard project contract, get_task, search_tasks, task activity, and active leases "
@@ -260,6 +262,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
         "active_agents_in_lane": active_agents,
         "operating_rules": [
             f'Pass project="{selected}" on every Switchboard MCP call.',
+            access.get("boundary") or f"Only work belonging to project={selected} belongs here.",
             "Read task description, deliverable, exit_criteria, dependencies, and recent activity before editing.",
             "If file ownership is unclear, check active leases/agent state and ask the board or human before writing.",
             "Do not import Helm lane/file ownership into non-Helm projects.",
@@ -297,9 +300,12 @@ def _project_label(project: str) -> str:
 
 
 def _agent_bootstrap_prompt(project: str, agent_id: str, task_id: str, lane: str) -> str:
+    access = store.project_access(project)
     lines = [
         f'You are enlisting on Switchboard project="{project}" ({_project_label(project)}).',
         f'Every board/MCP call in this session must include project="{project}".',
+        f'Project boundary: {access.get("boundary") or f"Only work belonging to project={project} belongs here."}',
+        f'Project purpose: {access.get("purpose") or f"{project} work control plane"}',
         'Do not use project="helm", project="maxwell", or any other board unless prepare_agent_session selects it.',
         "Use the returned project_contract as the canonical lane/task contract. Do not assume docs/EPICS.md or other repo-local docs apply unless this selected project/task explicitly says so.",
         "Boot sequence:",
@@ -1421,7 +1427,9 @@ def get_decision(decision_id: int, project: str = "maxwell") -> str:
 # ---- task write tools (Switchboard bearer-principal authenticated) -------
 @mcp.tool()
 def create_project(name: str, ctx: Context, project_id: str = "", label: str = "",
-                   pretitle: str = "", github_repo: str = "") -> str:
+                   pretitle: str = "", github_repo: str = "",
+                   purpose: str = "", boundary: str = "",
+                   org_id: str = "") -> str:
     """Create a new isolated project board and make it routable by all board tools.
 
     Authenticates against project='switchboard' with write:system. `name` is the human
@@ -1432,6 +1440,9 @@ def create_project(name: str, ctx: Context, project_id: str = "", label: str = "
     principal = _require_write(ctx, "switchboard", ("write:system",))
     result = store.create_project(name=name, project_id=project_id, label=label,
                                   pretitle=pretitle, github_repo=github_repo,
+                                  owner_principal_id=principal["id"],
+                                  org_id=org_id or store.DEFAULT_ORG_ID,
+                                  purpose=purpose, boundary=boundary,
                                   actor=auth.actor(principal))
     return _dumps(result)
 

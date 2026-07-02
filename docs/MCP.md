@@ -40,8 +40,10 @@ Reads (open):
   answer (with sources), and a proposed task change when relevant (NOT applied).
 
 Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated actor):
-- `create_project(name, project_id?, label?, pretitle?, github_repo?)` — create a routed board;
-  pass `github_repo="owner/repo"` to wire GitHub PR provenance in the same step.
+- `create_project(name, project_id?, label?, pretitle?, github_repo?, purpose?, boundary?, org_id?)`
+  — create a routed board; pass `github_repo="owner/repo"` to wire GitHub PR provenance in the
+  same step. Project DBs are physically separate, and the creator receives an explicit admin grant
+  on the new project.
 - `create_task(workstream_id, title, ...)`
 - `update_task(task_id, ...only the fields you pass...)`
 - `add_comment(task_id, text)`
@@ -115,6 +117,9 @@ Project contract rule:
 - If work lands on the wrong board, use `move_task` or `archive_task` rather than direct DB cleanup.
   `move_task` fails closed on unknown projects, active claims/leases, destination id conflicts, and
   dangling destination dependencies unless `dependency_policy="clear"` is explicitly chosen.
+- Project discovery and session bootstrap include each project's purpose/boundary text. Treat that
+  as the project ownership contract: `claim_next` and all writes are scoped to the selected
+  `project`, never global.
 
 Dispatch rule:
 - `claim_next(agent_id, lanes?, capabilities?, max_risk?, max_budget_usd?)` filters ready work

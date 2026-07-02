@@ -177,8 +177,19 @@ def hash_token(token: str) -> str:
 
 def projects() -> List[Dict[str, Any]]:
     """The switcher's source of truth — [{id, label, pretitle}]."""
-    return [{"id": k, "label": v["label"], "pretitle": v.get("pretitle", "")}
-            for k, v in _project_map().items()]
+    out = []
+    for k, v in _project_map().items():
+        access = project_access(k)
+        out.append({
+            "id": k,
+            "label": v["label"],
+            "pretitle": v.get("pretitle", ""),
+            "purpose": access.get("purpose") or "",
+            "boundary": access.get("boundary") or "",
+            "owner_user_id": access.get("owner_user_id") or "",
+            "org_id": access.get("org_id") or "",
+        })
+    return out
 
 
 def role_scopes(role: str) -> List[str]:
@@ -301,7 +312,20 @@ def project_access(project_id: str) -> Dict[str, Any]:
     with _registry_conn() as c:
         row = c.execute("SELECT * FROM project_access WHERE project_id=?",
                         (project_id,)).fetchone()
-    return dict(row) if row else {}
+    if row:
+        return dict(row)
+    if has_project(project_id):
+        return {
+            "project_id": project_id,
+            "org_id": "",
+            "owner_user_id": "",
+            "purpose": f"{project_id} work control plane",
+            "boundary": f"Only work belonging to project={project_id} belongs here.",
+            "created_at": None,
+            "created_by": None,
+            "updated_at": None,
+        }
+    return {}
 
 
 def grant_project_role(project_id: str, subject_kind: str, subject_id: str, role: str,
@@ -2142,6 +2166,23 @@ def get_principal_by_session(project: str, session_token: str) -> Optional[Dict[
     out["session_id"] = row["session_id"]
     out["session_expires_at"] = row["expires_at"]
     return out
+
+
+def get_principal_by_session_any_project(session_token: str) -> Optional[Dict[str, Any]]:
+    """Resolve a human session across projects for explicit cross-project role grants.
+
+    Sessions are stored in the project where the human logged in. Project role grants live in
+    the central registry, so a project owner can be granted into a newly-created project without
+    forcing a second login.
+    """
+    if not session_token:
+        return None
+    for project in project_ids():
+        principal = get_principal_by_session(project, session_token)
+        if principal:
+            principal["home_project"] = project
+            return principal
+    return None
 
 
 def revoke_auth_session(session_token: str, project: str = DEFAULT_PROJECT) -> bool:
@@ -5788,7 +5829,9 @@ def set_project_github_repo(repo: str, project: str = DEFAULT_PROJECT) -> Dict[s
 
 def create_project(name: str, project_id: str = "", label: str = "", pretitle: str = "",
                    actor: str = "system", seed_path: str = "",
-                   github_repo: str = "") -> Dict[str, Any]:
+                   github_repo: str = "", owner_principal_id: str = "",
+                   org_id: str = DEFAULT_ORG_ID, purpose: str = "",
+                   boundary: str = "") -> Dict[str, Any]:
     """Create a physically isolated project board and register it for routing.
 
     Dynamic projects mirror the built-ins: one row in the lightweight registry, one SQLite
@@ -5814,10 +5857,24 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
         seed_if_empty(pid)
         if repo:
             set_meta("github_repo", repo, project=pid)
+        current_access = project_access(pid)
+        access = set_project_access(
+            pid,
+            org_id or current_access.get("org_id") or DEFAULT_ORG_ID,
+            owner_user_id=owner_principal_id or current_access.get("owner_user_id") or "",
+            purpose=purpose or current_access.get("purpose") or f"{pid} work control plane",
+            boundary=boundary or current_access.get("boundary") or f"Only work belonging to project={pid} belongs here.",
+            created_by=actor,
+        )
+        grant = {}
+        if owner_principal_id:
+            grant = grant_project_role(pid, "principal", owner_principal_id, "admin",
+                                       created_by=actor)
         return {"created": False, "project": {"id": pid, "label": existing["label"],
                 "pretitle": existing.get("pretitle", ""), "db": existing["db"],
                 "seed": existing.get("seed"),
-                "github_repo": get_project_github_repo(pid) or None}}
+                "github_repo": get_project_github_repo(pid) or None,
+                "access": access, "owner_grant": grant or None}}
 
     base_dir = os.environ.get("PM_DYNAMIC_PROJECTS_DIR") or os.path.dirname(PROJECT_REGISTRY_DB_PATH)
     os.makedirs(base_dir, exist_ok=True)
@@ -5844,6 +5901,18 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
             set_meta("github_repo", repo, project=pid)
         if seed:
             seed_if_empty(pid)
+        access = set_project_access(
+            pid,
+            org_id or DEFAULT_ORG_ID,
+            owner_user_id=owner_principal_id or "",
+            purpose=purpose or f"{pid} work control plane",
+            boundary=boundary or f"Only work belonging to project={pid} belongs here.",
+            created_by=actor,
+        )
+        grant = {}
+        if owner_principal_id:
+            grant = grant_project_role(pid, "principal", owner_principal_id, "admin",
+                                       created_by=actor)
     except Exception:
         with _registry_conn() as c:
             c.execute("DELETE FROM projects WHERE id=?", (pid,))
@@ -5851,14 +5920,19 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
 
     return {"created": True, "project": {"id": pid, "label": project_label,
             "pretitle": project_pretitle, "db": db_path, "seed": seed,
-            "github_repo": get_project_github_repo(pid) or None}}
+            "github_repo": get_project_github_repo(pid) or None,
+            "access": access, "owner_grant": grant or None}}
 
 
 def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Canonical connect-time rules for agents in this workspace."""
     override = get_meta("working_agreement", {}, project=project) or {}
+    access = project_access(project)
     default = {
         "project": project,
+        "project_boundary": access.get("boundary") or f"Only work belonging to project={project} belongs here.",
+        "project_purpose": access.get("purpose") or f"{project} work control plane",
+        "project_owner": access.get("owner_user_id") or access.get("org_id") or "",
         "protocol": protocol_envelope(),
         "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),
         "branch_convention": "claude/<TASK-ID>-<slug>",
@@ -6693,6 +6767,13 @@ def board_payload(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         ws = by_ws.setdefault(t["_wsId"], {"workstream_id": t["_wsId"], "name": t["_wsName"], "tasks": []})
         ws["tasks"].append(t)
     payload: Dict[str, Any] = {k: get_meta(k, project=project) for k in META_SECTIONS}
+    payload["project"] = next((p for p in projects() if p["id"] == project), {
+        "id": project,
+        "label": project,
+        "pretitle": "",
+        "purpose": project_access(project).get("purpose") or "",
+        "boundary": project_access(project).get("boundary") or "",
+    })
     payload["rollups"] = board_rollups(project=project, tasks=tasks)
     payload["workstreams"] = list(by_ws.values())
     return payload

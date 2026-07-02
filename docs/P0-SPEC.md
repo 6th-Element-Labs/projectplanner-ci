@@ -167,6 +167,10 @@ P0 may keep local development easy, but the unsafe path must be explicit:
   principals only in redacted form; and revoke a principal plus its live sessions. Unknown
   principal kinds, unknown scopes, and unknown projects fail closed. Raw tokens are returned
   only once at creation and are never written to activity logs.
+- ACCESS-4 gates project creation and cross-project cleanup behind `write:system`, initializes
+  project purpose/boundary/owner metadata, grants the creator explicit admin on the new project,
+  and surfaces the boundary in project discovery, board payloads, working agreements, and
+  agent startup contracts. `claim_next` remains project-scoped and unknown project IDs fail closed.
 - startup logs must print a loud warning when `dev-open` is active.
 - Caddy/production provision docs must set `PM_AUTH_MODE=required`.
 
@@ -192,6 +196,16 @@ Bearer <token>`.
     and either `role` or `scopes`; returns `{principal, token, token_returned_once}`.
 - `POST /api/access/tokens/{principal_id}/revoke?project=...`
   - requires `write:system`; revokes the principal and any live sessions for that principal.
+- `GET /api/projects`
+  - requires `read`; returns project labels plus purpose/boundary/owner metadata.
+- `POST /api/projects`
+  - requires `write:system` on `project=switchboard`; creates an isolated project DB,
+    records purpose/boundary metadata, and grants the creator admin on the new project.
+- `POST /api/tasks/{task_id}/move?project=...`
+  - requires `write:system`; moves a task across isolated project DBs only with explicit
+    source/destination projects and audited dependency handling.
+- `POST /api/tasks/{task_id}/archive?project=...`
+  - requires `write:system`; archives active task state with provenance and refuses active leases.
 
 ### 5.1 Presence
 

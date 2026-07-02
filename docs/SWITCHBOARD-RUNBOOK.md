@@ -225,6 +225,26 @@ curl -s -X POST "$PM_BASE/api/access/tokens/agent-abc123/revoke?project=switchbo
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
+Project creation is also a system-scope operation. A successful create makes a physically separate
+project DB, records purpose/boundary metadata, and grants the creator admin on that project so the
+same session can switch into it through an explicit role grant:
+
+```bash
+curl -s "$PM_BASE/api/projects" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id":"customer-alpha",
+    "name":"Customer Alpha",
+    "purpose":"Customer Alpha product work",
+    "boundary":"Only Customer Alpha work belongs here."
+  }'
+```
+
+Agents see that boundary in `list_projects`, `get_working_agreement`, `get_project_contract`, and
+`prepare_agent_session`. Cross-project cleanup uses `move_task` or `archive_task`; both are audited
+and refuse unknown projects or active claims/leases instead of silently editing shared state.
+
 ## 4. Run an autonomous agent (agent host)
 ```bash
 export PM_BASE=https://plan.taikunai.com PM_PROJECT=switchboard PM_MCP_TOKEN=…  PM_AGENT_ID=claude/work-1
