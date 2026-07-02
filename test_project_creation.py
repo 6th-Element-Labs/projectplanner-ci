@@ -17,6 +17,7 @@ os.environ["PM_HELM_DB_PATH"] = os.path.join(_TMP, "helm.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
+os.environ["PM_AUTH_MODE"] = "dev-open"
 os.environ.pop("PM_MCP_TOKEN", None)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
