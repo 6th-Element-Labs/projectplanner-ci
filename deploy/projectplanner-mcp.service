@@ -9,6 +9,8 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
+# Production MCP writes must fail closed even if .env is missing PM_AUTH_MODE.
+Environment=PM_AUTH_MODE=required
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/mcp_server.py
 Restart=always
 RestartSec=3

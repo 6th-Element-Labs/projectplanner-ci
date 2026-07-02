@@ -8,6 +8,8 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
+# Production web writes must fail closed even if .env is missing PM_AUTH_MODE.
+Environment=PM_AUTH_MODE=required
 ExecStart=/opt/projectplanner/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8110
 Restart=always
 RestartSec=3

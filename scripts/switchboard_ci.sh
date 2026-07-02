@@ -66,6 +66,7 @@ run_test test_signals.py
 run_test test_switchboard_runtime.py
 run_test test_tally_project_surface.py
 run_test test_task_move_archive.py
+run_test test_web_write_auth.py
 run_test test_switchboard_pr_gate.py
 run_test test_unattended_proof.py
 
