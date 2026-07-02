@@ -215,6 +215,57 @@ try:
     ok(not store.get_meta("canonical_main_sha", project="vulkan"),
        "dynamic non-default PR merge does not advance canonical main SHA")
 
+    cross_repo_task = store.create_task(
+        {"workstream_id": "CONVERT", "title": "dynamic cross-repo PR evidence"},
+        actor="seed", project="vulkan")
+    store.update_task(cross_repo_task["task_id"], {"status": "In Review"},
+                      actor="seed", project="vulkan")
+    store.add_comment(
+        cross_repo_task["task_id"], "seed",
+        f"Ready in https://github.com/StevenRidder/Helm/pull/238. "
+        f"Branch `codex/{cross_repo_task['task_id']}-helm`, head `abcdef1`.",
+        project="vulkan")
+    original_github_pr = store._github_pr
+    seen_cross_repo = []
+
+    def fake_cross_repo_pr(repo, pr_number, token=""):
+        seen_cross_repo.append({"repo": repo, "pr_number": int(pr_number)})
+        if repo == "StevenRidder/OpenCPN" and int(pr_number) == 38:
+            return {
+                "merged_at": "2026-06-29T05:52:17Z",
+                "merge_commit_sha": "dynamicmerge",
+                "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                "base": {"ref": "vulkan/render-core-poc", "repo": {"default_branch": "master"}},
+                "head": {"ref": f"codex/{dynamic_task['task_id']}-slice", "sha": "dynamichead"},
+            }
+        if repo == "StevenRidder/Helm" and int(pr_number) == 238:
+            return {
+                "merged_at": None,
+                "merge_commit_sha": "",
+                "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                "base": {"ref": "main", "repo": {"default_branch": "main"}},
+                "head": {"ref": f"codex/{cross_repo_task['task_id']}-helm", "sha": "abcdef1"},
+            }
+        return None
+
+    store._github_pr = fake_cross_repo_pr
+    try:
+        cross_repo_report = store.reconcile(project="vulkan")
+    finally:
+        store._github_pr = original_github_pr
+    cross_repo_after = store.get_task(cross_repo_task["task_id"], project="vulkan")
+    ok({"repo": "StevenRidder/Helm", "pr_number": 238} in seen_cross_repo,
+       "reconcile fetches an explicit cross-repo PR URL from its URL repo")
+    ok("StevenRidder/Helm" in cross_repo_report["external_checks"].get("github_pr_repos", []),
+       "reconcile reports every GitHub repo checked for PR state")
+    ok(cross_repo_after["git_state"]["pr_number"] == 238 and
+       cross_repo_after["git_state"]["pr_url"] == "https://github.com/StevenRidder/Helm/pull/238",
+       "reconcile hydrates explicit cross-repo PR evidence")
+    ok(not any(f["task_id"] == cross_repo_task["task_id"] and
+               f["code"] == "pr_state_unavailable"
+               for f in cross_repo_report["findings"]),
+       "explicit cross-repo PR evidence is not reported as unavailable")
+
     missing_sha_task = store.create_task({"workstream_id": "HARDEN", "title": "missing sha"},
                                          actor="seed", project=P)
     missing_sha_payload = {

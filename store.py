@@ -4947,6 +4947,11 @@ def _github_repo_from_git_url(url: str) -> str:
     return repo.strip()
 
 
+def _github_repo_from_pr_url(url: str) -> str:
+    match = GITHUB_PR_URL_RE.search((url or "").strip())
+    return match.group(1) if match else ""
+
+
 def _normalize_repo_slug(repo: str) -> str:
     clean = _github_repo_from_git_url(repo) or (repo or "").strip()
     if clean.endswith(".git"):
@@ -5005,8 +5010,6 @@ def _activity_text(payload: Any) -> str:
 
 def _infer_pr_evidence_from_activity(c: sqlite3.Connection, task_id: str,
                                      repo: str) -> Dict[str, Any]:
-    if not repo:
-        return {}
     repo_l = repo.lower()
     rows = c.execute(
         "SELECT kind, payload FROM activity WHERE task_id=? ORDER BY id DESC LIMIT 80",
@@ -5017,24 +5020,30 @@ def _infer_pr_evidence_from_activity(c: sqlite3.Connection, task_id: str,
         if not text:
             continue
         for match in GITHUB_PR_URL_RE.finditer(text):
-            if match.group(1).lower() != repo_l:
-                continue
+            pr_repo = match.group(1)
             branch_match = BRANCH_EVIDENCE_RE.search(text)
             head_match = HEAD_EVIDENCE_RE.search(text)
             return {
                 "pr_number": int(match.group(2)),
                 "pr_url": match.group(0),
+                "repo": pr_repo,
                 "branch": branch_match.group(1) if branch_match else "",
                 "head_sha": head_match.group(1) if head_match else "",
-                "source": "activity_pr_evidence",
+                "source": (
+                    "activity_pr_evidence"
+                    if pr_repo.lower() == repo_l else "activity_cross_repo_pr_evidence"
+                ),
             }
         for match in GITHUB_PR_SHORTHAND_RE.finditer(text):
+            if not repo:
+                continue
             branch_match = BRANCH_EVIDENCE_RE.search(text)
             head_match = HEAD_EVIDENCE_RE.search(text)
             pr_number = int(match.group(1))
             return {
                 "pr_number": pr_number,
                 "pr_url": f"https://github.com/{repo}/pull/{pr_number}",
+                "repo": repo,
                 "branch": branch_match.group(1) if branch_match else "",
                 "head_sha": head_match.group(1) if head_match else "",
                 "source": "activity_pr_number_evidence",
@@ -5044,21 +5053,23 @@ def _infer_pr_evidence_from_activity(c: sqlite3.Connection, task_id: str,
 
 def _infer_pr_evidence_from_git_state(git_state: Dict[str, Any],
                                       repo: str) -> Dict[str, Any]:
-    if not repo:
-        return {}
     pr_url = (git_state.get("pr_url") or "").strip()
     if not pr_url:
         return {}
-    repo_l = repo.lower()
     match = GITHUB_PR_URL_RE.search(pr_url)
-    if not match or match.group(1).lower() != repo_l:
+    if not match:
         return {}
+    pr_repo = match.group(1)
     return {
         "pr_number": int(match.group(2)),
         "pr_url": match.group(0),
+        "repo": pr_repo,
         "branch": git_state.get("branch") or "",
         "head_sha": git_state.get("head_sha") or "",
-        "source": "git_state_pr_url",
+        "source": (
+            "git_state_pr_url"
+            if not repo or pr_repo.lower() == repo.lower() else "git_state_cross_repo_pr_url"
+        ),
     }
 
 
@@ -5067,7 +5078,7 @@ def _merge_pr_evidence(git_state: Dict[str, Any],
     if not inferred:
         return {}
     evidence: Dict[str, Any] = {"source": inferred.get("source")}
-    for field in ("pr_number", "pr_url", "branch", "head_sha"):
+    for field in ("pr_number", "pr_url", "repo", "branch", "head_sha"):
         value = inferred.get(field)
         if value and not git_state.get(field):
             evidence[field] = value
@@ -5160,13 +5171,20 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
     if repo and not pr_tasks:
         checks["github_prs"] = "configured_no_prs"
     if repo and pr_tasks:
+        pr_repos = sorted({
+            _github_repo_from_pr_url(git_states.get(t["task_id"], {}).get("pr_url") or "") or repo
+            for t in pr_tasks
+        })
+        if pr_repos:
+            checks["github_pr_repos"] = pr_repos
         for task in pr_tasks:
             state = git_states.get(task["task_id"], {})
-            pr = _github_pr(repo, int(state.get("pr_number") or 0), token=token)
+            pr_repo = _github_repo_from_pr_url(state.get("pr_url") or "") or repo
+            pr = _github_pr(pr_repo, int(state.get("pr_number") or 0), token=token)
             if not pr:
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "pr_state_unavailable",
-                                 "detail": "Could not fetch recorded PR state from GitHub."})
+                                 "detail": f"Could not fetch recorded PR state from GitHub repo {pr_repo}."})
                 continue
             merged = bool(pr.get("merged_at"))
             if task.get("status") == "Done" and not merged:
