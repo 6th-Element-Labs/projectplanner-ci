@@ -1141,7 +1141,7 @@ def _rationale_state(rationale: str, task: Dict[str, Any],
     if task.get("status") == "Done" and DONE_STATUS_CONTRADICTION_RE.search(text):
         flags.append("mentions_pre_done_status_but_task_is_done")
     stale = bool(flags)
-    return {
+    state = {
         "stale": stale,
         "flags": flags,
         "message": (
@@ -1149,6 +1149,11 @@ def _rationale_state(rationale: str, task: Dict[str, Any],
             "git_state, and provenance."
         ) if stale else None,
     }
+    if stale:
+        detail = FAIL_FIX_FAILURE_CLASSES["missing_data"]
+        state["failure_class"] = "missing_data"
+        state["expected_signal"] = detail["expected_signal"]
+    return state
 
 
 def bug_intake_policy() -> Dict[str, Any]:

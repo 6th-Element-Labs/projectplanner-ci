@@ -497,9 +497,9 @@ async def verify_task_offline(request: Request, task_id: str, body: dict = Body(
         project=_proj(project),
     )
     if result.get("error") == "task not found":
-        raise HTTPException(404, "task not found")
+        raise HTTPException(404, result)
     if result.get("error"):
-        raise HTTPException(409, result.get("message") or result["error"])
+        raise HTTPException(409, result)
     return result
 
 
