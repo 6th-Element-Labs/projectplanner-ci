@@ -376,6 +376,12 @@ The protocol is a small, stable ABI. Everything else is built from these.
 - **FR-21** **Cost-per-outcome ledger (Tally):** record tokens/$ per task, per agent, per epic;
   surface "this feature cost 340k tokens / \$4.20 across 3 agents." Per-task/epic budgets
   that warn or halt. (Two honest streams: gateway-metered vs agent-reported.)
+- **FR-21a** **Task model policy:** each task can declare planned model tier, allowed or
+  disallowed providers/models, privacy posture, max budget, required tools, and enforcement
+  tier (`advisory`, `claim_gate`, `runner_enforced`). `claim_next` uses this policy when
+  selecting agents; adapters advertise model capability and verification level; Tally compares
+  planned-vs-actual model usage so operators can see whether high-cost reasoning produced
+  verified outcomes or whether cheap models caused rework.
 - **FR-22** **Reliability scoring:** which agents complete vs abandon vs get reverted.
 
 ### 8.8 Work provenance & reconciliation

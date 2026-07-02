@@ -137,7 +137,7 @@ enterprise-gated LLMs, to one shared outcome.
 | 3 | **Approval gates + audit trail** (Bet 3) | safety-critical wedge; human oversight | M |
 | 4 | **Context-pack tool** | one call returns an agent's minimal optimal context (decisions + leased files + rationale + blocking deps). Fewer round-trips = next token win after delta-polling | S |
 | 5 | **Merge-queue from leases** | serialize N agents on the shared shell file through the board instead of advisory soft locks | M |
-| 6 | **Model-routing advice** | board recommends a model tier per task from `risk_level`/complexity — cost optimization as a service | S |
+| 6 | **Task model policy + model-aware dispatch** | board declares required/allowed model tiers, budget ceilings, provider/privacy constraints, and enforcement level per task; `claim_next` matches agents by advertised model capability and Tally compares planned-vs-actual model spend | M |
 | 7 | **Outcome verification** | "Done" isn't Done until exit_criteria confirmed (verifier agent or CI hook via the GitHub webhook) | M |
 | 8 | **Agent reliability scoring** | which agents complete vs abandon vs get reverted — trust data | S |
 | 8.5 | **Replay + simulation harness** | replay task/agent lifecycles, preflight dispatch policies, and prove derived state from append-only events | M — see [`SWITCHBOARD-BACKEND-MOAT.md`](SWITCHBOARD-BACKEND-MOAT.md) / RECON-8 |
@@ -149,6 +149,50 @@ enterprise-gated LLMs, to one shared outcome.
 | 11 | **Enterprise trust graph** | audit exports, provider cost reconciliation, immutable evidence retention, enterprise integrations | L |
 | 12 | **Human/agent collaboration layer** | SME review gates, discussion-to-plan proposals, Slack/Teams/GitHub bridges, decision threads tied to tasks and PRs | M/L — see ACCESS-10 and ACCESS-11 |
 | 13 | **Market landscape tracker** | quarterly scan of BigCo, startup, and OSS adjacent products so positioning stays honest | S — see [`MARKET-LANDSCAPE.md`](MARKET-LANDSCAPE.md) |
+
+### Bet 4 - Model policy as the cost-control layer
+
+Tally becomes commercially credible when Switchboard can compare what model a task
+*should* use against what model it *actually* used. Raw token spend is not enough; the
+operator needs to know whether a high-reasoning model was justified, whether a cheap model
+caused rework, and whether org policy allowed that provider for the work.
+
+Each task should be able to carry a model policy:
+
+```json
+{
+  "model_policy": {
+    "tier": "high_reasoning",
+    "allowed_models": ["gpt-5", "claude-opus-4.8"],
+    "disallowed_models": ["cheap-fast"],
+    "max_budget_usd": 40,
+    "privacy": "no_external_training",
+    "requires_tools": ["git", "github", "mcp"],
+    "approval_required_for_upgrade": true,
+    "enforcement": "claim_gate"
+  }
+}
+```
+
+Policy is evaluated at three levels:
+
+- `advisory` - Switchboard recommends a tier and records drift.
+- `claim_gate` - `claim_next` refuses agents that advertise incompatible model/provider
+  capability unless an operator overrides.
+- `runner_enforced` - Switchboard Agent Host or API gateway launches the requested model
+  or blocks execution.
+
+This closes the loop:
+
+```text
+task risk/value -> planned model tier -> actual model/provider/cost -> verified outcome
+-> cost per accepted outcome -> better future dispatch
+```
+
+The first implementation should be explicit and auditable, not magical. The board should
+prefer low-cost models for rote QA, formatting, reproduction, and smoke checks; reserve
+high-reasoning models for architecture, ambiguous debugging, merge-risk review, and
+coordinator decisions; and let Tally prove which policy actually produces accepted work.
 
 ## 6. Commercial framing
 

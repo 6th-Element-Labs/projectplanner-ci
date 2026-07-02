@@ -75,6 +75,13 @@ Request:
   "agent_id": "codex/CHART#b12e",
   "lanes": ["CHART", "ENGINE"],
   "capabilities": ["typescript", "cpp", "tests"],
+  "model_capabilities": {
+    "provider": "openai",
+    "models": ["gpt-5", "gpt-5-mini"],
+    "tiers": ["high_reasoning", "balanced"],
+    "privacy": ["no_external_training"],
+    "enforcement": ["advisory", "claim_gate", "runner_enforced"]
+  },
   "max_risk": "medium",
   "max_budget_usd": 12.0,
   "idem_key": "codex-CHART-b12e-0001"
@@ -139,7 +146,9 @@ Response when work is claimed:
     }
   },
   "recommendation": {
-    "model_tier": "medium",
+    "model_tier": "balanced",
+    "allowed_models": ["gpt-5-mini", "claude-sonnet"],
+    "enforcement": "claim_gate",
     "reason": "UI/backend integration with existing tests"
   }
 }
@@ -190,8 +199,9 @@ A task is eligible when all are true:
 6. It has no active task claim.
 7. Its required resources are not held by another active lease.
 8. Its risk is within the agent's declared limit.
-9. Its remaining budget is compatible with the agent's cost profile.
-10. The authenticated principal is allowed to claim work in that project.
+9. Its model policy is compatible with the agent's advertised model/provider capability.
+10. Its remaining budget is compatible with the agent's cost profile.
+11. The authenticated principal is allowed to claim work in that project.
 
 Default ready statuses:
 
@@ -223,6 +233,7 @@ Default score components:
 | lane affinity | stronger match rises |
 | capability fit | stronger match rises |
 | risk fit | avoid over-risking weak agents |
+| model policy fit | prefer an agent/runtime that can run the required model tier within policy |
 | budget fit | prefer agents likely to finish inside remaining budget |
 | reliability history | prefer agent/runtime with lower cost per verified outcome |
 | WIP limits | avoid overloading one agent/runtime |
@@ -239,6 +250,55 @@ DISPATCH-1 used deterministic first-ready selection. DISPATCH-2 implements `scor
 
 The first version is intentionally deterministic and explainable. Later versions can add
 fleet reliability and cost-per-outcome history without changing the envelope.
+
+---
+
+## 5.1 Task model policy
+
+`claim_next` must support explicit task model policy so Switchboard can route expensive
+reasoning to work that justifies it and keep routine work on cheaper models.
+
+Suggested task field:
+
+```json
+{
+  "model_policy": {
+    "tier": "high_reasoning",
+    "allowed_models": ["gpt-5", "claude-opus-4.8"],
+    "disallowed_models": ["cheap-fast"],
+    "max_budget_usd": 40.0,
+    "privacy": "no_external_training",
+    "requires_tools": ["git", "github", "mcp"],
+    "approval_required_for_upgrade": true,
+    "enforcement": "claim_gate"
+  }
+}
+```
+
+Policy meanings:
+
+| Field | Meaning |
+|---|---|
+| `tier` | Abstract model class such as `cheap_fast`, `balanced`, `high_reasoning`, `specialist` |
+| `allowed_models` | Concrete models allowed by the task or org policy |
+| `disallowed_models` | Concrete models blocked for quality, privacy, cost, or compliance reasons |
+| `max_budget_usd` | Task-level spend ceiling used by Tally and dispatch |
+| `privacy` | Required provider/data-handling posture |
+| `requires_tools` | Runtime/tool capabilities required to do the work |
+| `approval_required_for_upgrade` | Whether moving to a more expensive tier needs human approval |
+| `enforcement` | `advisory`, `claim_gate`, or `runner_enforced` |
+
+Enforcement tiers:
+
+- `advisory`: return the recommendation and record drift if the actual model differs.
+- `claim_gate`: refuse the claim when the agent advertises incompatible model/provider
+  capability, unless an operator override is present.
+- `runner_enforced`: the Agent Host or gateway launches/configures the requested model and
+  blocks execution when it cannot.
+
+For app-based runtimes where Switchboard cannot control the model directly, the adapter must
+advertise `model_verification=reported` or `unknown`. For API-run agents, the gateway/host can
+advertise `model_verification=enforced`.
 
 ---
 

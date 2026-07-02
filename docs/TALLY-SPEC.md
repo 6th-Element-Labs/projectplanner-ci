@@ -118,6 +118,9 @@ CREATE TABLE IF NOT EXISTS llm_spend (
   call_site         TEXT,
   provider          TEXT,
   model             TEXT,
+  model_tier        TEXT,
+  model_policy_id   TEXT,
+  model_verification TEXT,           -- enforced | reported | inferred | unknown
   prompt_tokens     INTEGER NOT NULL DEFAULT 0,
   completion_tokens INTEGER NOT NULL DEFAULT 0,
   total_tokens      INTEGER NOT NULL DEFAULT 0,
@@ -199,6 +202,38 @@ CREATE TABLE IF NOT EXISTS outcome_kpi_links (
 
 This is how Switchboard answers: "What did this agent spend move?"
 
+### 4.5 Model policy ledger
+
+Tally also needs planned-vs-actual model attribution. Otherwise the dashboard can show
+what was spent, but not whether that spend matched task value, risk, privacy, and budget.
+
+```sql
+CREATE TABLE IF NOT EXISTS task_model_policies (
+  id                     TEXT PRIMARY KEY,
+  project                TEXT NOT NULL,
+  task_id                TEXT NOT NULL,
+  tier                   TEXT NOT NULL,      -- cheap_fast | balanced | high_reasoning | specialist
+  allowed_models_json    TEXT NOT NULL DEFAULT '[]',
+  disallowed_models_json TEXT NOT NULL DEFAULT '[]',
+  max_budget_usd         REAL,
+  privacy                TEXT,
+  requires_tools_json    TEXT NOT NULL DEFAULT '[]',
+  approval_required_for_upgrade INTEGER NOT NULL DEFAULT 0,
+  enforcement            TEXT NOT NULL,      -- advisory | claim_gate | runner_enforced
+  created_by             TEXT,
+  created_at             REAL NOT NULL,
+  updated_at             REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_model_policy_project_task
+ON task_model_policies(project, task_id);
+```
+
+Actual spend records reference `model_policy_id` when a call, turn, claim, or task is
+covered by a policy. `model_verification` labels whether Switchboard enforced the model
+through a gateway/host, received it as an app-runtime report, inferred it from evidence, or
+could not verify it.
+
 ---
 
 ## 5. Core operations
@@ -230,6 +265,9 @@ Request:
   "runtime": "codex",
   "provider": "openai",
   "model": "gpt-5",
+  "model_tier": "high_reasoning",
+  "model_policy_id": "modelpolicy_01J...",
+  "model_verification": "reported",
   "prompt_tokens": 82000,
   "completion_tokens": 11000,
   "cost_usd": 3.42,
@@ -263,6 +301,7 @@ get_epic_tally(project, epic_id) -> tally
 get_agent_tally(project, agent_id, since?) -> tally
 get_kpi_tally(project, kpi_id, since?) -> tally
 get_budget_status(project, task_id? epic_id?) -> budget
+get_model_policy_tally(project, task_id) -> model_policy_tally
 ```
 
 Task tally response:
@@ -286,6 +325,17 @@ Task tally response:
   },
   "unit_cost": {
     "cost_per_verified_outcome": 4.91
+  },
+  "model_policy": {
+    "planned_tier": "balanced",
+    "actual_models": ["gpt-5-mini", "gpt-5"],
+    "actual_cost_usd": 4.91,
+    "policy_drift": true,
+    "drift_reason": "one high_reasoning turn used for merge-risk review",
+    "verification": {
+      "enforced": 1.49,
+      "reported": 3.42
+    }
   },
   "kpis": [
     {
@@ -343,6 +393,15 @@ Budget event thresholds:
 `claim_next` must include budget status and should avoid dispatching work to agents whose
 expected cost exceeds the remaining budget unless an operator overrides it.
 
+Model policy is a budget input. A task can recommend or require a model tier, allowed
+provider/model list, privacy posture, and spend ceiling. Tally records both planned model
+policy and actual model spend so operators can ask:
+
+- Was this high-reasoning model justified by the verified outcome?
+- Did a cheaper model create rework or failed review?
+- Did an app-runtime agent merely report its model, or did Switchboard enforce it?
+- Which provider/model gives the lowest cost per accepted outcome for this work type?
+
 ---
 
 ## 8. KPI semantics
@@ -376,6 +435,7 @@ Tally UI should appear early in the places operators already look:
 
 - task row: cost chip, budget chip, source confidence;
 - task detail: spend by agent/model/source, verified outcomes, KPI links;
+- task detail: planned model policy vs actual model/provider spend and policy drift;
 - epic view: total spend, verified outcomes, cost per verified outcome;
 - agent profile: cost per verified outcome, abandon/rework rate;
 - dispatch view: model recommendation and budget remaining;
@@ -403,6 +463,8 @@ Every report must include:
 - runtime;
 - task_id or claim_id when known;
 - model/provider when known;
+- model tier and model policy id when known;
+- model verification level: `enforced`, `reported`, `inferred`, or `unknown`;
 - source/confidence;
 - raw evidence or reporting method.
 
@@ -425,6 +487,10 @@ If only tokens are known, cost can be estimated and marked `estimated`.
 8. Budget thresholds emit activity events and signals.
 9. `claim_next` returns budget status when Tally is enabled.
 10. UI/API labels advisory spend as advisory.
+11. Task model policy can be recorded and read back.
+12. Planned-vs-actual model spend is visible on task tally.
+13. Model verification distinguishes gateway/host-enforced from agent-reported usage.
+14. Policy drift is recorded when actual model/provider/tier violates task policy.
 
 ---
 
@@ -438,8 +504,10 @@ If only tokens are known, cost can be estimated and marked `estimated`.
 5. Add task and epic tally read APIs.
 6. Add task-detail cost chip and confidence labels.
 7. Wire budget warnings into the interrupt path.
-8. Feed budget/model guidance into `claim_next`.
-9. Add KPI dashboard once enough verified outcomes exist.
+8. Add task model policy storage and API.
+9. Feed budget/model guidance into `claim_next`.
+10. Add planned-vs-actual model policy to task tally.
+11. Add KPI dashboard once enough verified outcomes exist.
 
 ---
 
@@ -452,6 +520,8 @@ Tally is product-ready for the first commercial wedge when:
 - an outcome can be linked to at least one KPI;
 - the UI can show cost per verified outcome;
 - budget thresholds can send `heads_up`, `redirect`, or `stop`;
+- a task can declare planned model tier/provider/privacy/budget policy;
+- actual spend can be compared to planned model policy;
 - Stream B is clearly labeled by confidence/source;
 - the product can answer: "What did this outcome cost, and which KPI did it move?"
 
