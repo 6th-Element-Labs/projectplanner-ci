@@ -249,6 +249,58 @@ const TeepPlan = {
             ${metric('KPI movement', this.compact(tally.verified_kpi_contribution || 0), `${kpis.length} linked KPI${kpis.length === 1 ? '' : 's'}`, 'chart-arrows-vertical')}
         </div>${kpiLine}`;
     },
+    controlTruthHtml(t) {
+        const dep = (t && t.dependency_state) || {};
+        const rat = (t && t.rationale_state) || {};
+        const ident = (t && t.identity) || {};
+        const depStatus = dep.satisfied
+            ? (dep.ready ? 'Ready' : 'Dependencies satisfied')
+            : `${dep.blocked_by_count || 0} blocking`;
+        const depClass = dep.satisfied ? 'green' : 'red';
+        const rationaleStatus = rat.stale ? 'Stale rationale ignored' : 'Rationale current';
+        const rationaleClass = rat.stale ? 'yellow' : 'green';
+        const identityStatus = ident.status && ident.status !== 'clear'
+            ? (ident.takeover_safe === false ? 'Identity takeover risk' : this.esc(ident.status))
+            : 'Identity clear';
+        const identityClass = ident.status && ident.status !== 'clear' ? 'red' : 'green';
+        const deps = (dep.dependencies || []).map((d) => {
+            const cls = d.done ? 'green' : (d.missing ? 'red' : 'yellow');
+            return `<span class="badge bg-${cls}-lt me-1">${this.esc(d.task_id)}${d.status ? ` · ${this.esc(d.status)}` : ''}</span>`;
+        }).join('') || '<span class="text-secondary">none</span>';
+        const flags = (rat.flags || []).map((f) => `<span class="badge bg-yellow-lt me-1">${this.esc(f)}</span>`).join('');
+        return `<div class="card mb-3" id="control-truth-panel">
+            <div class="card-header py-2">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="ti ti-shield-check text-green"></i>
+                    <span class="fw-semibold">Board truth</span>
+                </div>
+            </div>
+            <div class="card-body py-3">
+                <div class="row g-2">
+                    <div class="col-md-4"><span class="badge bg-${depClass}-lt">${this.esc(depStatus)}</span></div>
+                    <div class="col-md-4"><span class="badge bg-${rationaleClass}-lt">${this.esc(rationaleStatus)}</span></div>
+                    <div class="col-md-4"><span class="badge bg-${identityClass}-lt">${identityStatus}</span></div>
+                    <div class="col-12 small">${deps}</div>
+                    ${flags ? `<div class="col-12 small">${flags}</div>` : ''}
+                </div>
+            </div>
+        </div>`;
+    },
+    monitorControlHtml(t) {
+        return `<div class="card mb-3" id="task-monitor-panel" data-task-id="${this.esc(t.task_id)}">
+            <div class="card-header py-2">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="ti ti-radar text-orange"></i>
+                    <span class="fw-semibold">Monitors</span>
+                    <span id="task-monitor-count" class="badge bg-secondary-lt">loading</span>
+                    <span id="task-monitor-flash" class="small text-secondary ms-auto"></span>
+                </div>
+            </div>
+            <div id="task-monitor-body" class="card-body py-3">
+                <div class="text-secondary small">Loading monitors…</div>
+            </div>
+        </div>`;
+    },
     claimControlHtml(t) {
         const claims = (t.active_claims || []);
         if (!claims.length) {
@@ -949,6 +1001,8 @@ const TeepPlan = {
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
                     <p class="text-secondary">Dispatch hands this task to a Claude Code agent in an isolated worktree. It drafts the change, opens a PR, and reports back here — it never merges or writes to your systems on its own.</p>
                     ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
+                    ${this.controlTruthHtml(t)}
+                    ${this.monitorControlHtml(t)}
                     ${this.runnerControlHtml(t)}
                     ${this.claimControlHtml(t)}
                     <button id="edit-dispatch" class="btn btn-primary mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
@@ -970,6 +1024,7 @@ const TeepPlan = {
                 </div>
             </div>`;
         this._renderActivity(t);
+        this._loadTaskMonitors(t.task_id);
         this._loadRunnerSessions(t.task_id);
         this._loadDispatch(t.task_id);
         document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
@@ -1185,6 +1240,43 @@ const TeepPlan = {
             if (this.isGanttVisible()) this.renderGantt();
             await this.openTask(taskId);
         } catch (e) { flash('Revoke failed: ' + e.message, 'danger'); }
+    },
+
+    async _loadTaskMonitors(taskId) {
+        const body = document.getElementById('task-monitor-body');
+        const count = document.getElementById('task-monitor-count');
+        if (!body) return;
+        let data;
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}`;
+            data = await (await fetch(`/ixp/v1/monitors?${q}`)).json();
+        } catch (e) {
+            body.innerHTML = `<div class="text-danger small">Monitors unavailable: ${this.esc(e.message)}</div>`;
+            if (count) { count.className = 'badge bg-red-lt'; count.textContent = 'error'; }
+            return;
+        }
+        const monitors = data.monitors || [];
+        if (count) {
+            count.className = monitors.length ? 'badge bg-orange-lt' : 'badge bg-secondary-lt';
+            count.textContent = `${monitors.length}`;
+        }
+        if (!monitors.length) {
+            body.innerHTML = `<div class="text-secondary small">No monitors are registered for this task.</div>`;
+            return;
+        }
+        const rows = monitors.slice(0, 8).map((m) => {
+            const statusCls = m.status === 'pending' ? 'yellow' : (m.status === 'fired' ? 'red' : 'green');
+            const deadline = m.deadline ? new Date(m.deadline * 1000).toLocaleString() : 'none';
+            return `<tr>
+                <td><span class="badge bg-${statusCls}-lt">${this.esc(m.status || 'unknown')}</span></td>
+                <td>${this.esc(m.kind || 'monitor')}</td>
+                <td class="font-monospace small">${this.esc(m.id || '')}</td>
+                <td class="text-secondary small">${this.esc(deadline)}</td>
+            </tr>`;
+        }).join('');
+        body.innerHTML = `<div class="table-responsive"><table class="table table-sm card-table mb-0">
+            <thead><tr><th>Status</th><th>Kind</th><th>ID</th><th>Deadline</th></tr></thead><tbody>${rows}</tbody>
+        </table></div>`;
     },
 
     async _loadRunnerSessions(taskId) {

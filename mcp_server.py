@@ -1259,10 +1259,12 @@ def list_pending_acks(project: str = "maxwell", agent_id: str = "") -> str:
 
 
 @mcp.tool()
-def list_monitors(project: str = "maxwell", status: str = "", kind: str = "") -> str:
+def list_monitors(project: str = "maxwell", status: str = "", kind: str = "",
+                  task_id: str = "") -> str:
     """List durable Switchboard monitors. status can be pending|fired|resolved|cancelled;
-    kind can be ack_deadline."""
-    return _dumps(store.list_coordination_monitors(status=status, kind=kind, project=project))
+    kind can be ack_deadline. task_id narrows the result to one task."""
+    return _dumps(store.list_coordination_monitors(
+        status=status, kind=kind, task_id=task_id, project=project))
 
 
 @mcp.tool()

@@ -1010,8 +1010,9 @@ async def ixp_pending_acks(project: str = Query(store.DEFAULT_PROJECT), agent_id
 
 @app.get("/ixp/v1/monitors")
 async def ixp_monitors(project: str = Query(store.DEFAULT_PROJECT), status: str = "",
-                       kind: str = ""):
+                       kind: str = "", task_id: str = ""):
     return {"monitors": store.list_coordination_monitors(status=status, kind=kind,
+                                                         task_id=task_id,
                                                          project=_proj(project))}
 
 

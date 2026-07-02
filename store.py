@@ -663,7 +663,7 @@ def seed_if_empty(project: str = DEFAULT_PROJECT):
 
 def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
     d = dict(r)
-    d["depends_on"] = json.loads(d.get("depends_on") or "[]")
+    d["depends_on"] = _normalize_depends_on(d.get("depends_on"))
     d["is_blocking"] = bool(d.get("is_blocking"))
     d["_wsId"] = d.pop("workstream_id")
     d["_wsName"] = d.pop("workstream_name")
@@ -748,6 +748,32 @@ def _json_payload(raw: str) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return {"text": raw}
+
+
+def _normalize_depends_on(value: Any) -> List[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            parsed = value
+    else:
+        parsed = value
+    if isinstance(parsed, str):
+        raw_items = parsed.replace("\n", ",").replace(" ", ",").split(",")
+    elif isinstance(parsed, list):
+        raw_items = parsed
+    else:
+        raw_items = []
+    out: List[str] = []
+    seen = set()
+    for item in raw_items:
+        dep = str(item or "").strip().upper()
+        if dep and dep not in seen:
+            seen.add(dep)
+            out.append(dep)
+    return out
 
 
 def _git_state_row(r: Optional[sqlite3.Row]) -> Dict[str, Any]:
@@ -971,8 +997,10 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
             continue
         if k == "is_blocking":
             v = 1 if v else 0
-        if k == "depends_on" and isinstance(v, list):
-            v = json.dumps(v)
+        if k == "depends_on":
+            v = _normalize_depends_on(v)
+            sets.append(f"{k}=?"); vals.append(json.dumps(v)); changed[k] = v
+            continue
         sets.append(f"{k}=?"); vals.append(v); changed[k] = v
     if not sets:
         return get_task(task_id, project)
@@ -1071,7 +1099,8 @@ def create_task(data: Dict[str, Any], actor: str = "user",
              data.get("owner_person_or_role"), data.get("assignee"), (data.get("phase") or "Build"),
              (data.get("status") or "Not Started"), data.get("effort_days"), data.get("duration_days"),
              data.get("start_date"), data.get("finish_date"), 0,
-             json.dumps(data.get("depends_on", [])), data.get("entry_criteria"), data.get("exit_criteria"),
+             json.dumps(_normalize_depends_on(data.get("depends_on"))),
+             data.get("entry_criteria"), data.get("exit_criteria"),
              data.get("deliverable"), (data.get("risk_level") or "Medium"),
              1 if data.get("is_blocking") else 0, order, now, now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
@@ -4173,7 +4202,7 @@ def list_pending_acks(agent_id: str = "", project: str = DEFAULT_PROJECT) -> Lis
         return out
 
 
-def list_coordination_monitors(status: str = "", kind: str = "",
+def list_coordination_monitors(status: str = "", kind: str = "", task_id: str = "",
                                project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     q = "SELECT * FROM coordination_monitors WHERE 1=1"
     params: List[Any] = []
@@ -4181,6 +4210,8 @@ def list_coordination_monitors(status: str = "", kind: str = "",
         q += " AND status=?"; params.append(status)
     if kind:
         q += " AND kind=?"; params.append(kind)
+    if task_id:
+        q += " AND task_id=?"; params.append(task_id)
     q += " ORDER BY COALESCE(deadline, 9999999999999), created_at"
     with _conn(project) as c:
         return [_monitor_row(r) or {} for r in c.execute(q, params).fetchall()]
