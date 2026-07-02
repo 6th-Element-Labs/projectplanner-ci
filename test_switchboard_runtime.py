@@ -497,6 +497,18 @@ try:
     )
     ok(refused_kill.get("requested") is False and refused_kill["status"] == "refused",
        "kill request for unmanaged session is visibly refused")
+    refused_restart = store.request_runner_control(
+        "run_unmanaged",
+        "restart",
+        reason="restart should fail closed",
+        actor=auth.actor(p),
+        principal_id=p["id"],
+        project=P,
+    )
+    ok(refused_restart.get("requested") is False and
+       refused_restart["status"] == "refused" and
+       refused_restart["result"]["reason"] == "action_not_supported",
+       "restart request for unmanaged session is visibly refused")
     exact_target = store.create_task({"workstream_id": "EXACT", "title": "human-selected"},
                                      actor="seed", project=P)
     exact_dep = store.create_task({"workstream_id": "EXACT", "title": "blocked exact",

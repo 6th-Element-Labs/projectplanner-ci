@@ -61,6 +61,14 @@ try:
     body = reg.json()
     ok(body["control"]["runner_kill"] is False and "kill" not in body["available_actions"],
        "unmanaged REST registration cannot advertise runner_kill")
+    restart_unmanaged = client.post("/ixp/v1/request_runner_restart",
+                                    json={"project": P, "runner_session_id": "run_unmanaged_api",
+                                          "reason": "test"},
+                                    headers=headers)
+    restart_body = restart_unmanaged.json()
+    ok(restart_unmanaged.status_code == 200 and
+       restart_body["requested"] is False and restart_body["status"] == "refused",
+       "unmanaged REST restart request is visibly refused")
 
     managed = dict(unmanaged)
     managed.update({
@@ -71,6 +79,14 @@ try:
     reg_managed = client.post("/ixp/v1/register_runner_session", json=managed, headers=headers)
     ok(reg_managed.status_code == 200 and "kill" in reg_managed.json()["available_actions"],
        "managed REST registration advertises runner kill")
+    restart_managed = client.post("/ixp/v1/request_runner_restart",
+                                  json={"project": P, "runner_session_id": "run_managed_api",
+                                        "reason": "restart not implemented"},
+                                  headers=headers)
+    restart_managed_body = restart_managed.json()
+    ok(restart_managed.status_code == 200 and
+       restart_managed_body["requested"] is False and restart_managed_body["status"] == "refused",
+       "managed REST restart request fails closed until restart is implemented")
     kill = client.post("/ixp/v1/request_runner_kill",
                        json={"project": P, "runner_session_id": "run_managed_api",
                              "reason": "test"},
