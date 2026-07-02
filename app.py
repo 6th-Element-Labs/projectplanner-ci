@@ -85,6 +85,11 @@ def _bootstrap_admin_from_env():
         principal_id=principal_id,
         project=project,
     )
+    store.ensure_bootstrap_project_owner(
+        project, principal["id"], login, display_name, actor="switchboard/auth")
+    principal["effective_scopes"] = store.effective_principal_scopes(
+        project, principal["id"], principal.get("scopes") or [])
+    principal["project_roles"] = store.principal_project_roles(project, principal["id"])
     store.append_activity(
         "auth.admin_bootstrapped",
         "switchboard/auth",
@@ -204,7 +209,9 @@ async def _auth_boundary(request: Request, call_next):
             JSONResponse({"detail": f"unknown project: {project}"}, status_code=400),
             started_at,
         )
-    required_scopes = ("write:system",) if path == "/api/projects" else ("write:tasks",)
+    required_scopes = ("write:system",) if (
+        path == "/api/projects" or path.startswith("/api/access/")
+    ) else ("write:tasks",)
     try:
         request.state.principal = auth.authenticate_request(
             request, project, required_scopes, dev_actor="web")
@@ -283,6 +290,11 @@ async def auth_bootstrap(request: Request, body: dict = Body(...)):
         principal_id=principal_id,
         project=project,
     )
+    store.ensure_bootstrap_project_owner(
+        project, principal["id"], login, display_name, actor="switchboard/auth")
+    principal["effective_scopes"] = store.effective_principal_scopes(
+        project, principal["id"], principal.get("scopes") or [])
+    principal["project_roles"] = store.principal_project_roles(project, principal["id"])
     store.append_activity(
         "auth.admin_bootstrapped",
         "switchboard/auth",
@@ -333,6 +345,36 @@ async def auth_me(request: Request, project: str = Query(store.DEFAULT_PROJECT))
     principal = _principal(request, project, ("read",), dev_actor="web")
     return {"principal": auth.public_principal(principal),
             "mode": auth.auth_mode(), "project": _proj(project)}
+
+
+@app.get("/api/access/model")
+async def access_model(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    principal = _principal(request, project, ("read",), dev_actor="web")
+    return store.project_access_model(_proj(project), principal_id=principal["id"])
+
+
+@app.post("/api/access/project_role")
+async def access_grant_project_role(request: Request, body: dict = Body(...),
+                                    project: str = Query(store.DEFAULT_PROJECT)):
+    principal = _principal(request, project, ("write:system",), dev_actor="web")
+    result = store.grant_project_role(
+        _proj(project),
+        subject_kind=(body or {}).get("subject_kind") or "principal",
+        subject_id=(body or {}).get("subject_id") or "",
+        role=(body or {}).get("role") or "",
+        created_by=auth.actor(principal),
+        scopes=store.coerce_csv_list((body or {}).get("scopes")) or None,
+    )
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    store.append_activity(
+        "access.project_role_granted",
+        auth.actor(principal),
+        result,
+        task_id=None,
+        project=_proj(project),
+    )
+    return result
 
 
 @app.post("/api/auth/logout")

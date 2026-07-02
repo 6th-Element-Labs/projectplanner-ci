@@ -55,6 +55,15 @@ BUILTIN_GITHUB_REPOS = {
 PROJECTS = BUILTIN_PROJECTS
 DEFAULT_PROJECT = "maxwell"
 TASK_ID_RE = re.compile(r"\b([A-Z]+-\d+)\b")
+DEFAULT_ORG_ID = "org-6th-element-labs"
+ROLE_SCOPES = {
+    "viewer": ["read"],
+    "commenter": ["read", "write:comments"],
+    "contributor": ["read", "write:tasks", "write:ixp", "write:bug_intake"],
+    "operator": ["read", "write:tasks", "write:ixp", "write:bug_intake"],
+    "admin": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"],
+    "owner": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"],
+}
 
 
 def _registry_conn():
@@ -67,7 +76,7 @@ def _registry_conn():
 
 def init_project_registry() -> None:
     with _registry_conn() as c:
-        c.execute(
+        c.executescript(
             """
             CREATE TABLE IF NOT EXISTS projects (
                 id         TEXT PRIMARY KEY,
@@ -77,7 +86,50 @@ def init_project_registry() -> None:
                 seed_path  TEXT,
                 created_at REAL NOT NULL,
                 created_by TEXT
-            )
+            );
+            CREATE TABLE IF NOT EXISTS orgs (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                slug       TEXT NOT NULL UNIQUE,
+                created_at REAL NOT NULL,
+                created_by TEXT
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                id           TEXT PRIMARY KEY,
+                email        TEXT UNIQUE,
+                display_name TEXT NOT NULL,
+                created_at   REAL NOT NULL,
+                disabled_at  REAL
+            );
+            CREATE TABLE IF NOT EXISTS org_memberships (
+                org_id     TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                role       TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                created_by TEXT,
+                PRIMARY KEY (org_id, user_id)
+            );
+            CREATE TABLE IF NOT EXISTS project_access (
+                project_id    TEXT PRIMARY KEY,
+                org_id        TEXT NOT NULL,
+                owner_user_id TEXT,
+                purpose       TEXT,
+                boundary      TEXT,
+                created_at    REAL NOT NULL,
+                created_by    TEXT,
+                updated_at    REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS project_role_grants (
+                project_id   TEXT NOT NULL,
+                subject_kind TEXT NOT NULL,
+                subject_id   TEXT NOT NULL,
+                role         TEXT NOT NULL,
+                scopes       TEXT NOT NULL,
+                created_at   REAL NOT NULL,
+                created_by   TEXT,
+                revoked_at   REAL,
+                PRIMARY KEY (project_id, subject_kind, subject_id, role)
+            );
             """
         )
 
@@ -125,6 +177,200 @@ def projects() -> List[Dict[str, Any]]:
     """The switcher's source of truth — [{id, label, pretitle}]."""
     return [{"id": k, "label": v["label"], "pretitle": v.get("pretitle", "")}
             for k, v in _project_map().items()]
+
+
+def role_scopes(role: str) -> List[str]:
+    return list(ROLE_SCOPES.get((role or "").strip().lower(), []))
+
+
+def ensure_org(org_id: str, name: str, slug: str = "", created_by: str = "system") -> Dict[str, Any]:
+    init_project_registry()
+    org_id = (org_id or DEFAULT_ORG_ID).strip()
+    name = (name or org_id).strip()
+    slug = normalize_project_id(slug or name)
+    now = time.time()
+    with _registry_conn() as c:
+        c.execute(
+            "INSERT INTO orgs(id, name, slug, created_at, created_by) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, slug=excluded.slug",
+            (org_id, name, slug, now, created_by),
+        )
+        row = c.execute("SELECT * FROM orgs WHERE id=?", (org_id,)).fetchone()
+    return dict(row)
+
+
+def ensure_user(user_id: str, email: str = "", display_name: str = "",
+                created_by: str = "system") -> Dict[str, Any]:
+    init_project_registry()
+    user_id = (user_id or "").strip()
+    if not user_id:
+        raise ValueError("user_id required")
+    email = (email or "").strip().lower() or None
+    display_name = (display_name or email or user_id).strip()
+    now = time.time()
+    with _registry_conn() as c:
+        c.execute(
+            "INSERT INTO users(id, email, display_name, created_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET email=COALESCE(excluded.email, users.email), "
+            "display_name=excluded.display_name",
+            (user_id, email, display_name, now),
+        )
+        row = c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    return dict(row)
+
+
+def add_org_member(org_id: str, user_id: str, role: str = "member",
+                   created_by: str = "system") -> Dict[str, Any]:
+    init_project_registry()
+    role = (role or "member").strip().lower()
+    now = time.time()
+    with _registry_conn() as c:
+        c.execute(
+            "INSERT INTO org_memberships(org_id, user_id, role, created_at, created_by) "
+            "VALUES (?,?,?,?,?) "
+            "ON CONFLICT(org_id, user_id) DO UPDATE SET role=excluded.role",
+            (org_id, user_id, role, now, created_by),
+        )
+        row = c.execute(
+            "SELECT * FROM org_memberships WHERE org_id=? AND user_id=?",
+            (org_id, user_id),
+        ).fetchone()
+    return dict(row)
+
+
+def set_project_access(project_id: str, org_id: str, owner_user_id: str = "",
+                       purpose: str = "", boundary: str = "",
+                       created_by: str = "system") -> Dict[str, Any]:
+    init_project_registry()
+    if not has_project(project_id):
+        return {"error": f"unknown project: {project_id}"}
+    if not org_id:
+        return {"error": "org_id required"}
+    now = time.time()
+    with _registry_conn() as c:
+        c.execute(
+            "INSERT INTO project_access(project_id, org_id, owner_user_id, purpose, boundary, "
+            "created_at, created_by, updated_at) VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(project_id) DO UPDATE SET org_id=excluded.org_id, "
+            "owner_user_id=excluded.owner_user_id, purpose=excluded.purpose, "
+            "boundary=excluded.boundary, updated_at=excluded.updated_at",
+            (project_id, org_id, owner_user_id or None, purpose or None, boundary or None,
+             now, created_by, now),
+        )
+        row = c.execute("SELECT * FROM project_access WHERE project_id=?",
+                        (project_id,)).fetchone()
+    return dict(row)
+
+
+def project_access(project_id: str) -> Dict[str, Any]:
+    init_project_registry()
+    with _registry_conn() as c:
+        row = c.execute("SELECT * FROM project_access WHERE project_id=?",
+                        (project_id,)).fetchone()
+    return dict(row) if row else {}
+
+
+def grant_project_role(project_id: str, subject_kind: str, subject_id: str, role: str,
+                       created_by: str = "system",
+                       scopes: Optional[List[str]] = None) -> Dict[str, Any]:
+    init_project_registry()
+    if not has_project(project_id):
+        return {"error": f"unknown project: {project_id}"}
+    subject_kind = (subject_kind or "").strip().lower()
+    subject_id = (subject_id or "").strip()
+    role = (role or "").strip().lower()
+    if subject_kind not in {"user", "principal", "agent", "system"}:
+        return {"error": "subject_kind must be user, principal, agent, or system"}
+    if not subject_id:
+        return {"error": "subject_id required"}
+    grant_scopes = scopes if scopes is not None else role_scopes(role)
+    if not grant_scopes:
+        return {"error": f"unknown role: {role}"}
+    now = time.time()
+    with _registry_conn() as c:
+        c.execute(
+            "INSERT INTO project_role_grants(project_id, subject_kind, subject_id, role, scopes, "
+            "created_at, created_by, revoked_at) VALUES (?,?,?,?,?,?,?,NULL) "
+            "ON CONFLICT(project_id, subject_kind, subject_id, role) DO UPDATE SET "
+            "scopes=excluded.scopes, revoked_at=NULL, created_by=excluded.created_by",
+            (project_id, subject_kind, subject_id, role,
+             json.dumps(sorted(set(grant_scopes)), sort_keys=True), now, created_by),
+        )
+        row = c.execute(
+            "SELECT * FROM project_role_grants WHERE project_id=? AND subject_kind=? "
+            "AND subject_id=? AND role=?",
+            (project_id, subject_kind, subject_id, role),
+        ).fetchone()
+    out = dict(row)
+    out["scopes"] = json.loads(out.get("scopes") or "[]")
+    return out
+
+
+def list_project_role_grants(project_id: str, include_revoked: bool = False) -> List[Dict[str, Any]]:
+    init_project_registry()
+    q = "SELECT * FROM project_role_grants WHERE project_id=?"
+    params: List[Any] = [project_id]
+    if not include_revoked:
+        q += " AND revoked_at IS NULL"
+    q += " ORDER BY subject_kind, subject_id, role"
+    with _registry_conn() as c:
+        rows = c.execute(q, params).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["scopes"] = json.loads(item.get("scopes") or "[]")
+        out.append(item)
+    return out
+
+
+def principal_project_roles(project_id: str, principal_id: str) -> List[Dict[str, Any]]:
+    principal_id = (principal_id or "").strip()
+    if not principal_id:
+        return []
+    grants = []
+    for grant in list_project_role_grants(project_id):
+        if grant["subject_id"] != principal_id:
+            continue
+        if grant["subject_kind"] in {"principal", "user"}:
+            grants.append(grant)
+    return grants
+
+
+def effective_principal_scopes(project_id: str, principal_id: str,
+                               base_scopes: Optional[List[str]] = None) -> List[str]:
+    scopes = set(base_scopes or [])
+    for grant in principal_project_roles(project_id, principal_id):
+        scopes.update(grant.get("scopes") or [])
+    return sorted(scopes)
+
+
+def project_access_model(project_id: str, principal_id: str = "") -> Dict[str, Any]:
+    return {
+        "project": project_id,
+        "access": project_access(project_id),
+        "role_definitions": {role: list(scopes) for role, scopes in sorted(ROLE_SCOPES.items())},
+        "grants": list_project_role_grants(project_id),
+        "principal_roles": principal_project_roles(project_id, principal_id),
+    }
+
+
+def ensure_bootstrap_project_owner(project_id: str, principal_id: str, login: str,
+                                   display_name: str, actor: str = "switchboard/auth") -> Dict[str, Any]:
+    org = ensure_org(DEFAULT_ORG_ID, "6th Element Labs", slug="6th-element-labs", created_by=actor)
+    user = ensure_user(principal_id, email=login if "@" in (login or "") else "",
+                       display_name=display_name or login or principal_id, created_by=actor)
+    membership = add_org_member(org["id"], user["id"], role="owner", created_by=actor)
+    access = set_project_access(
+        project_id,
+        org["id"],
+        owner_user_id=user["id"],
+        purpose=f"{project_id} work control plane",
+        boundary=f"Only work belonging to project={project_id} belongs here.",
+        created_by=actor,
+    )
+    grant = grant_project_role(project_id, "principal", principal_id, "admin", created_by=actor)
+    return {"org": org, "user": user, "membership": membership,
+            "project_access": access, "grant": grant}
 
 
 def coerce_csv_list(value: Any) -> List[str]:

@@ -158,6 +158,10 @@ P0 may keep local development easy, but the unsafe path must be explicit:
 - first admin bootstrap is explicit: set `PM_BOOTSTRAP_ADMIN_LOGIN` and
   `PM_BOOTSTRAP_ADMIN_PASSWORD`, or call `/api/auth/bootstrap` from localhost / with
   `PM_BOOTSTRAP_TOKEN`, then remove the bootstrap secret.
+- ACCESS role state is central to the project registry: orgs, users, org memberships,
+  project ownership metadata, and project role grants. Project roles expand effective
+  scopes during authentication, so a principal can be read-only in one project and
+  contributor/admin in another.
 - startup logs must print a loud warning when `dev-open` is active.
 - Caddy/production provision docs must set `PM_AUTH_MODE=required`.
 

@@ -190,6 +190,17 @@ confirming login, remove `PM_BOOTSTRAP_ADMIN_PASSWORD` from the environment and 
 For manual bootstrap, POST `/api/auth/bootstrap` from localhost, or provide `PM_BOOTSTRAP_TOKEN`
 and send it as `X-Switchboard-Bootstrap-Token`.
 
+ACCESS role state lives in the central project registry: orgs, users, org memberships, project
+ownership metadata, and project role grants. Inspect it with `GET /api/access/model?project=...`.
+Admins can grant a project role with `POST /api/access/project_role?project=...`:
+
+```json
+{"subject_kind":"principal","subject_id":"user-viewer","role":"viewer"}
+```
+
+Built-in roles map to effective scopes at auth time: `viewer` can read, `contributor` can
+read/write tasks and agent protocol state, and `admin`/`owner` can manage system settings.
+
 ## 4. Run an autonomous agent (agent host)
 ```bash
 export PM_BASE=https://plan.taikunai.com PM_PROJECT=switchboard PM_MCP_TOKEN=…  PM_AGENT_ID=claude/work-1

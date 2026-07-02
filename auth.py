@@ -127,8 +127,26 @@ def _env_principal(token: str, project: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _has_scopes(principal: Dict[str, Any], required: Iterable[str]) -> bool:
-    scopes = set(principal.get("scopes") or [])
+def _effective_scopes(principal: Dict[str, Any], project: str) -> list:
+    try:
+        return store.effective_principal_scopes(
+            project, principal.get("id") or "", list(principal.get("scopes") or []))
+    except Exception:
+        return list(principal.get("scopes") or [])
+
+
+def _attach_effective_access(principal: Dict[str, Any], project: str) -> Dict[str, Any]:
+    principal = dict(principal)
+    principal["effective_scopes"] = _effective_scopes(principal, project)
+    try:
+        principal["project_roles"] = store.principal_project_roles(project, principal.get("id") or "")
+    except Exception:
+        principal["project_roles"] = []
+    return principal
+
+
+def _has_scopes(principal: Dict[str, Any], required: Iterable[str], project: str) -> bool:
+    scopes = set(principal.get("effective_scopes") or _effective_scopes(principal, project))
     return "admin" in scopes or set(required).issubset(scopes)
 
 
@@ -157,7 +175,8 @@ def authenticate(project: str, token: str,
         raise PermissionError("unauthorized: principal revoked")
     if principal.get("project") not in (project, "*"):
         raise PermissionError("unauthorized: token is not valid for this project")
-    if not _has_scopes(principal, required_scopes):
+    principal = _attach_effective_access(principal, project)
+    if not _has_scopes(principal, required_scopes, project):
         raise PermissionError("forbidden: token is missing required scope")
     return principal
 
@@ -176,7 +195,8 @@ def authenticate_request(request: Any, project: str,
             raise PermissionError("unauthorized: session expired or invalid")
         if principal.get("project") not in (project, "*"):
             raise PermissionError("unauthorized: session is not valid for this project")
-        if not _has_scopes(principal, required_scopes):
+        principal = _attach_effective_access(principal, project)
+        if not _has_scopes(principal, required_scopes, project):
             raise PermissionError("forbidden: session is missing required scope")
         return principal
 
@@ -195,6 +215,8 @@ def verify_login(project: str, login: str, password: str) -> Optional[Dict[str, 
         "display_name": row["display_name"],
         "project": row["project"],
         "scopes": row["scopes"],
+        "effective_scopes": store.effective_principal_scopes(project, row["principal_id"], row["scopes"]),
+        "project_roles": store.principal_project_roles(project, row["principal_id"]),
         "login": row["login"],
         "must_rotate": bool(row.get("must_rotate")),
     }
@@ -211,6 +233,8 @@ def public_principal(principal: Dict[str, Any]) -> Dict[str, Any]:
         "display_name": principal.get("display_name"),
         "project": principal.get("project"),
         "scopes": list(principal.get("scopes") or []),
+        "effective_scopes": list(principal.get("effective_scopes") or principal.get("scopes") or []),
+        "project_roles": list(principal.get("project_roles") or []),
         "login": principal.get("login"),
         "session_id": principal.get("session_id"),
         "session_expires_at": principal.get("session_expires_at"),
