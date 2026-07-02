@@ -489,6 +489,32 @@ def init_db(project: str = DEFAULT_PROJECT):
                 revoked_at    REAL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ux_principals_token ON principals(token_hash);
+            CREATE TABLE IF NOT EXISTS principal_passwords (
+                login               TEXT PRIMARY KEY,
+                principal_id        TEXT NOT NULL,
+                password_hash       TEXT NOT NULL,
+                password_updated_at REAL NOT NULL,
+                must_rotate         INTEGER NOT NULL DEFAULT 0,
+                created_at          REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_passwords_principal
+                ON principal_passwords(principal_id);
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                session_id   TEXT PRIMARY KEY,
+                principal_id TEXT NOT NULL,
+                project      TEXT NOT NULL,
+                session_hash TEXT NOT NULL,
+                created_at   REAL NOT NULL,
+                expires_at   REAL NOT NULL,
+                last_seen_at REAL,
+                revoked_at   REAL,
+                user_agent   TEXT,
+                ip           TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_sessions_hash
+                ON auth_sessions(session_hash);
+            CREATE INDEX IF NOT EXISTS ix_auth_sessions_principal
+                ON auth_sessions(principal_id, expires_at);
             CREATE TABLE IF NOT EXISTS agent_presence (
                 agent_id      TEXT PRIMARY KEY,
                 runtime       TEXT NOT NULL,
@@ -1646,17 +1672,162 @@ def create_principal(kind: str, display_name: str, token: str, scopes: List[str]
             "project": project, "scopes": scopes, "created_at": now}
 
 
+def _principal_from_row(row: sqlite3.Row) -> Dict[str, Any]:
+    out = dict(row)
+    out["scopes"] = json.loads(out.get("scopes") or "[]")
+    return out
+
+
+def get_principal_by_id(principal_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    if not principal_id:
+        return None
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM principals WHERE id=?", (principal_id,)).fetchone()
+    return _principal_from_row(row) if row else None
+
+
 def get_principal_by_token(project: str, token: str) -> Optional[Dict[str, Any]]:
     if not token:
         return None
     with _conn(project) as c:
         row = c.execute("SELECT * FROM principals WHERE token_hash=?",
                         (hash_token(token),)).fetchone()
+    return _principal_from_row(row) if row else None
+
+
+def password_login_count(project: str = DEFAULT_PROJECT) -> int:
+    with _conn(project) as c:
+        return int(c.execute("SELECT COUNT(*) FROM principal_passwords").fetchone()[0] or 0)
+
+
+def set_principal_password(principal_id: str, login: str, password_hash: str,
+                           must_rotate: bool = False,
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    login = (login or "").strip().lower()
+    if not login:
+        return {"error": "login required"}
+    if not principal_id:
+        return {"error": "principal_id required"}
+    principal = get_principal_by_id(principal_id, project=project)
+    if not principal:
+        return {"error": "principal not found"}
+    now = time.time()
+    with _conn(project) as c:
+        c.execute(
+            "INSERT INTO principal_passwords(login, principal_id, password_hash, "
+            "password_updated_at, must_rotate, created_at) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(login) DO UPDATE SET principal_id=excluded.principal_id, "
+            "password_hash=excluded.password_hash, password_updated_at=excluded.password_updated_at, "
+            "must_rotate=excluded.must_rotate",
+            (login, principal_id, password_hash, now, 1 if must_rotate else 0, now),
+        )
+    return {"login": login, "principal_id": principal_id,
+            "password_updated_at": now, "must_rotate": bool(must_rotate)}
+
+
+def get_password_login(login: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    login = (login or "").strip().lower()
+    if not login:
+        return None
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT pp.*, p.kind, p.display_name, p.project, p.scopes, p.revoked_at "
+            "FROM principal_passwords pp JOIN principals p ON p.id=pp.principal_id "
+            "WHERE pp.login=?",
+            (login,),
+        ).fetchone()
     if not row:
         return None
     out = dict(row)
     out["scopes"] = json.loads(out.get("scopes") or "[]")
+    out["must_rotate"] = bool(out.get("must_rotate"))
     return out
+
+
+def create_password_principal(login: str, display_name: str, password_hash: str,
+                              scopes: List[str], principal_id: Optional[str] = None,
+                              kind: str = "user",
+                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    token_seed = f"password-principal:{uuid.uuid4().hex}"
+    principal = create_principal(
+        kind=kind,
+        display_name=display_name or login,
+        token=token_seed,
+        scopes=scopes,
+        principal_id=principal_id,
+        project=project,
+    )
+    password_row = set_principal_password(
+        principal["id"], login, password_hash, project=project)
+    principal["login"] = password_row.get("login")
+    return principal
+
+
+def create_auth_session(principal_id: str, session_token: str, ttl_seconds: int,
+                        user_agent: str = "", ip: str = "",
+                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    if not principal_id:
+        return {"error": "principal_id required"}
+    if not session_token:
+        return {"error": "session_token required"}
+    now = time.time()
+    ttl = max(60, int(ttl_seconds or 0))
+    session_id = f"sess-{uuid.uuid4().hex}"
+    expires_at = now + ttl
+    with _conn(project) as c:
+        c.execute(
+            "INSERT INTO auth_sessions(session_id, principal_id, project, session_hash, "
+            "created_at, expires_at, last_seen_at, user_agent, ip) VALUES (?,?,?,?,?,?,?,?,?)",
+            (session_id, principal_id, project, hash_token(session_token), now,
+             expires_at, now, user_agent or None, ip or None),
+        )
+    return {"session_id": session_id, "principal_id": principal_id,
+            "project": project, "created_at": now, "expires_at": expires_at}
+
+
+def get_principal_by_session(project: str, session_token: str) -> Optional[Dict[str, Any]]:
+    if not session_token:
+        return None
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT p.*, s.session_id, s.expires_at, s.revoked_at AS session_revoked_at "
+            "FROM auth_sessions s JOIN principals p ON p.id=s.principal_id "
+            "WHERE s.session_hash=? AND s.project=?",
+            (hash_token(session_token), project),
+        ).fetchone()
+        if not row:
+            return None
+        if row["session_revoked_at"] or row["revoked_at"] or float(row["expires_at"] or 0) <= now:
+            return None
+        c.execute("UPDATE auth_sessions SET last_seen_at=? WHERE session_id=?",
+                  (now, row["session_id"]))
+    out = _principal_from_row(row)
+    out["session_id"] = row["session_id"]
+    out["session_expires_at"] = row["expires_at"]
+    return out
+
+
+def revoke_auth_session(session_token: str, project: str = DEFAULT_PROJECT) -> bool:
+    if not session_token:
+        return False
+    with _conn(project) as c:
+        cur = c.execute(
+            "UPDATE auth_sessions SET revoked_at=? "
+            "WHERE session_hash=? AND project=? AND revoked_at IS NULL",
+            (time.time(), hash_token(session_token), project),
+        )
+        return cur.rowcount > 0
+
+
+def revoke_principal_sessions(principal_id: str, project: str = DEFAULT_PROJECT) -> int:
+    with _conn(project) as c:
+        cur = c.execute(
+            "UPDATE auth_sessions SET revoked_at=? "
+            "WHERE principal_id=? AND project=? AND revoked_at IS NULL",
+            (time.time(), principal_id, project),
+        )
+        return cur.rowcount
 
 
 def revoke_principal(principal_id: str, project: str = DEFAULT_PROJECT) -> bool:

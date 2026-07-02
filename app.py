@@ -27,7 +27,7 @@ if _env.exists():
             os.environ.setdefault(k.strip(), v.strip())
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile  # noqa: E402
-from fastapi.responses import JSONResponse, Response  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 import agent  # noqa: E402
@@ -62,6 +62,41 @@ for _pid in store.project_ids():
             print(f"[projects] seed {_pid} skipped: {_e}")
 
 
+ADMIN_SCOPES = ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"]
+
+
+def _bootstrap_admin_from_env():
+    password = (os.environ.get("PM_BOOTSTRAP_ADMIN_PASSWORD") or
+                os.environ.get("PM_ADMIN_PASSWORD") or "").strip()
+    if not password:
+        return
+    project = (os.environ.get("PM_BOOTSTRAP_PROJECT") or "switchboard").strip()
+    if not store.has_project(project) or store.password_login_count(project):
+        return
+    login = (os.environ.get("PM_BOOTSTRAP_ADMIN_LOGIN") or
+             os.environ.get("PM_ADMIN_LOGIN") or "admin").strip().lower()
+    display_name = (os.environ.get("PM_BOOTSTRAP_ADMIN_NAME") or login).strip()
+    principal_id = "user-" + hashlib.sha256(f"{project}:{login}".encode("utf-8")).hexdigest()[:16]
+    principal = store.create_password_principal(
+        login=login,
+        display_name=display_name,
+        password_hash=auth.password_hash(password),
+        scopes=ADMIN_SCOPES,
+        principal_id=principal_id,
+        project=project,
+    )
+    store.append_activity(
+        "auth.admin_bootstrapped",
+        "switchboard/auth",
+        {"project": project, "login": login, "principal_id": principal["id"], "source": "env"},
+        task_id=None,
+        project=project,
+    )
+
+
+_bootstrap_admin_from_env()
+
+
 def _proj(project: str) -> str:
     """Validate a project id against the registry — fail closed (400) on anything unknown
     so a bad/stale id can never be silently routed to (or written into) the wrong db."""
@@ -72,7 +107,7 @@ def _proj(project: str) -> str:
 
 def _principal(request: Request, project: str, scopes=("write:ixp",), dev_actor: str = "web"):
     try:
-        return auth.authenticate(_proj(project), auth.bearer_from_request(request), scopes, dev_actor=dev_actor)
+        return auth.authenticate_request(request, _proj(project), scopes, dev_actor=dev_actor)
     except PermissionError as e:
         status = 403 if "forbidden" in str(e) else 401
         raise HTTPException(status, str(e))
@@ -101,21 +136,69 @@ def _attach_server_timing(response: Response, started_at: float) -> Response:
     return response
 
 
+def _request_project(request: Request, path: str) -> str:
+    if path == "/api/projects":
+        return "switchboard"
+    return request.query_params.get("project") or store.DEFAULT_PROJECT
+
+
+def _project_from_session_cookie(request: Request) -> str:
+    token = auth.session_from_request(request)
+    if not token:
+        return ""
+    for project in store.project_ids():
+        if store.get_principal_by_session(project, token):
+            return project
+    return ""
+
+
+def _protected_read_path(path: str) -> bool:
+    return path.startswith(("/api/", "/ixp/", "/txp/", "/tally/"))
+
+
+def _auth_exempt_path(path: str) -> bool:
+    return (
+        path == "/health" or
+        path == "/api/github/webhook" or
+        path.startswith("/api/auth/")
+    )
+
+
 @app.middleware("http")
-async def _write_auth_boundary(request: Request, call_next):
-    """Gate state-changing web/API writes when PM_AUTH_MODE=required.
+async def _auth_boundary(request: Request, call_next):
+    """Gate Switchboard data reads and state-changing writes when auth is required.
 
     Protocol endpoints authenticate inside their handlers because their project lives in the
-    JSON body. GitHub webhooks keep their HMAC check.
+    JSON body. GitHub webhooks keep their HMAC check. Static assets stay public so the login
+    page can render; project data and control APIs do not.
     """
     started_at = time.perf_counter()
-    if request.method.upper() not in {"POST", "PATCH", "DELETE"}:
-        return _attach_server_timing(await call_next(request), started_at)
     path = request.url.path
-    if path.startswith(("/ixp/", "/txp/", "/tally/")) or path == "/api/github/webhook":
+    method = request.method.upper()
+    if _auth_exempt_path(path):
         return _attach_server_timing(await call_next(request), started_at)
-    project = "switchboard" if path == "/api/projects" else (
-        request.query_params.get("project") or store.DEFAULT_PROJECT)
+
+    if method in {"GET", "HEAD"} and auth.auth_mode() == auth.REQUIRED and _protected_read_path(path):
+        project = _request_project(request, path)
+        if not store.has_project(project):
+            return _attach_server_timing(
+                JSONResponse({"detail": f"unknown project: {project}"}, status_code=400),
+                started_at,
+            )
+        try:
+            request.state.principal = auth.authenticate_request(
+                request, project, ("read",), dev_actor="web")
+        except PermissionError as e:
+            status = 403 if "forbidden" in str(e) else 401
+            return _attach_server_timing(JSONResponse({"detail": str(e)}, status_code=status), started_at)
+        return _attach_server_timing(await call_next(request), started_at)
+
+    if method not in {"POST", "PATCH", "DELETE"}:
+        return _attach_server_timing(await call_next(request), started_at)
+    if path.startswith(("/ixp/", "/txp/", "/tally/")):
+        return _attach_server_timing(await call_next(request), started_at)
+
+    project = _request_project(request, path)
     if not store.has_project(project):
         return _attach_server_timing(
             JSONResponse({"detail": f"unknown project: {project}"}, status_code=400),
@@ -123,18 +206,172 @@ async def _write_auth_boundary(request: Request, call_next):
         )
     required_scopes = ("write:system",) if path == "/api/projects" else ("write:tasks",)
     try:
-        request.state.principal = auth.authenticate(
-            project, auth.bearer_from_request(request), required_scopes, dev_actor="web")
+        request.state.principal = auth.authenticate_request(
+            request, project, required_scopes, dev_actor="web")
     except PermissionError as e:
         status = 403 if "forbidden" in str(e) else 401
         return _attach_server_timing(JSONResponse({"detail": str(e)}, status_code=status), started_at)
     return _attach_server_timing(await call_next(request), started_at)
 
 
+def _client_is_loopback(request: Request) -> bool:
+    host = (request.client.host if request.client else "") or ""
+    return host in {"127.0.0.1", "::1", "testclient"}
+
+
+def _session_cookie_secure(request: Request) -> bool:
+    configured = (os.environ.get("PM_SESSION_COOKIE_SECURE") or "").strip().lower()
+    if configured in {"1", "true", "yes", "on"}:
+        return True
+    if configured in {"0", "false", "no", "off"}:
+        return False
+    return (
+        request.url.scheme == "https" or
+        (request.headers.get("x-forwarded-proto") or "").lower() == "https"
+    )
+
+
+def _set_session_cookie(response: Response, request: Request,
+                        session_token: str, expires_at: float) -> Response:
+    max_age = max(0, int(expires_at - time.time()))
+    response.set_cookie(
+        key=auth.session_cookie_name(),
+        value=session_token,
+        max_age=max_age,
+        expires=max_age,
+        path="/",
+        httponly=True,
+        secure=_session_cookie_secure(request),
+        samesite="lax",
+    )
+    return response
+
+
+def _bootstrap_authorized(request: Request, body: dict) -> bool:
+    expected = (os.environ.get("PM_BOOTSTRAP_TOKEN") or "").strip()
+    supplied = (
+        request.headers.get("x-switchboard-bootstrap-token") or
+        request.headers.get("x-bootstrap-token") or
+        (body or {}).get("bootstrap_token") or
+        ""
+    ).strip()
+    if expected:
+        return hmac.compare_digest(expected, supplied)
+    return _client_is_loopback(request)
+
+
+@app.post("/api/auth/bootstrap")
+async def auth_bootstrap(request: Request, body: dict = Body(...)):
+    project = _proj((body or {}).get("project") or "switchboard")
+    if store.password_login_count(project):
+        raise HTTPException(409, "bootstrap already completed")
+    if not _bootstrap_authorized(request, body or {}):
+        raise HTTPException(403, "bootstrap requires localhost access or PM_BOOTSTRAP_TOKEN")
+    login = ((body or {}).get("login") or "admin").strip().lower()
+    password = (body or {}).get("password") or ""
+    display_name = ((body or {}).get("display_name") or login).strip()
+    if len(login) < 3:
+        raise HTTPException(422, "login must be at least 3 characters")
+    if len(password) < 10:
+        raise HTTPException(422, "password must be at least 10 characters")
+    principal_id = "user-" + hashlib.sha256(f"{project}:{login}".encode("utf-8")).hexdigest()[:16]
+    principal = store.create_password_principal(
+        login=login,
+        display_name=display_name,
+        password_hash=auth.password_hash(password),
+        scopes=ADMIN_SCOPES,
+        principal_id=principal_id,
+        project=project,
+    )
+    store.append_activity(
+        "auth.admin_bootstrapped",
+        "switchboard/auth",
+        {"project": project, "login": login, "principal_id": principal["id"], "source": "api"},
+        task_id=None,
+        project=project,
+    )
+    session_token = auth.new_secret_token()
+    session = store.create_auth_session(
+        principal["id"],
+        session_token,
+        auth.session_ttl_seconds(),
+        user_agent=request.headers.get("user-agent", ""),
+        ip=(request.client.host if request.client else ""),
+        project=project,
+    )
+    principal["session_expires_at"] = session["expires_at"]
+    response = JSONResponse({"principal": auth.public_principal(principal),
+                             "session": {"expires_at": session["expires_at"]}})
+    return _set_session_cookie(response, request, session_token, session["expires_at"])
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request, body: dict = Body(...)):
+    project = _proj((body or {}).get("project") or store.DEFAULT_PROJECT)
+    login = ((body or {}).get("login") or "").strip().lower()
+    password = (body or {}).get("password") or ""
+    principal = auth.verify_login(project, login, password)
+    if not principal:
+        raise HTTPException(401, "invalid login or password")
+    session_token = auth.new_secret_token()
+    session = store.create_auth_session(
+        principal["id"],
+        session_token,
+        auth.session_ttl_seconds(),
+        user_agent=request.headers.get("user-agent", ""),
+        ip=(request.client.host if request.client else ""),
+        project=project,
+    )
+    principal["session_expires_at"] = session["expires_at"]
+    response = JSONResponse({"principal": auth.public_principal(principal),
+                             "session": {"expires_at": session["expires_at"]}})
+    return _set_session_cookie(response, request, session_token, session["expires_at"])
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    principal = _principal(request, project, ("read",), dev_actor="web")
+    return {"principal": auth.public_principal(principal),
+            "mode": auth.auth_mode(), "project": _proj(project)}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request, body: dict = Body(default={})):
+    project = _proj((body or {}).get("project") or request.query_params.get("project") or
+                    store.DEFAULT_PROJECT)
+    token = auth.session_from_request(request)
+    revoked = store.revoke_auth_session(token, project=project) if token else False
+    response = JSONResponse({"logged_out": True, "revoked": revoked})
+    response.delete_cookie(auth.session_cookie_name(), path="/")
+    return response
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "taikun-pm", "tasks": len(store.list_tasks()),
             "projects": store.project_ids()}
+
+
+@app.get("/", include_in_schema=False)
+async def root(request: Request):
+    index = _static / "index.html"
+    login = _static / "login.html"
+    if auth.auth_mode() == auth.REQUIRED:
+        project = request.query_params.get("project") or _project_from_session_cookie(request) or store.DEFAULT_PROJECT
+        try:
+            auth.authenticate_request(request, _proj(project), ("read",), dev_actor="web")
+        except PermissionError:
+            if login.exists():
+                return FileResponse(str(login))
+    return FileResponse(str(index))
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page():
+    login = _static / "login.html"
+    if login.exists():
+        return FileResponse(str(login))
+    raise HTTPException(404, "login page not found")
 
 
 @app.get("/api/projects")

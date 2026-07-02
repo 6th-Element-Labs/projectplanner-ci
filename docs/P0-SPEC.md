@@ -153,6 +153,11 @@ P0 may keep local development easy, but the unsafe path must be explicit:
 - `PM_AUTH_MODE=required` is the production default.
 - `PM_AUTH_MODE=dev-open` may allow open writes only when bound to localhost or when an
   operator deliberately opts in.
+- first-party web access uses password-backed principals plus an expiring
+  `switchboard_session` cookie; adapter/MCP access continues to use bearer principals.
+- first admin bootstrap is explicit: set `PM_BOOTSTRAP_ADMIN_LOGIN` and
+  `PM_BOOTSTRAP_ADMIN_PASSWORD`, or call `/api/auth/bootstrap` from localhost / with
+  `PM_BOOTSTRAP_TOKEN`, then remove the bootstrap secret.
 - startup logs must print a loud warning when `dev-open` is active.
 - Caddy/production provision docs must set `PM_AUTH_MODE=required`.
 

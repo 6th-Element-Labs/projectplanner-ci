@@ -45,6 +45,8 @@ sudo mkdir -p /var/lib/projectplanner && sudo chown ubuntu /var/lib/projectplann
 cp .env.example .env   # set OPENAI_API_KEY + LLM_GATEWAY_MASTER_KEY (==PM_LLM_KEY)
 # The production units also force PM_AUTH_MODE=required; keep it explicit here for audits.
 printf '\nPM_AUTH_MODE=required\n' >> .env
+# First human admin bootstrap. Remove the password line after first successful startup/login.
+printf '\nPM_BOOTSTRAP_ADMIN_LOGIN=admin\nPM_BOOTSTRAP_ADMIN_PASSWORD=<replace-me>\n' >> .env
 sudo chown -R ubuntu /opt/projectplanner
 ```
 
@@ -66,6 +68,9 @@ sudo systemctl enable --now projectplanner-agent-host
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 ```
 Caddy fetches the TLS cert automatically once DNS resolves. Visit https://plan.taikunai.com/.
+The app will present the login screen in required mode. On first startup, the bootstrap admin
+is created only if no password-backed admin exists for the project. After confirming login,
+remove `PM_BOOTSTRAP_ADMIN_PASSWORD` from `.env` and restart `projectplanner`.
 
 ## 5. Verify
 ```bash

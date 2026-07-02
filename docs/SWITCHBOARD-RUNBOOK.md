@@ -168,7 +168,29 @@ Operationally, this means:
 This is why the CI fallback posts `Switchboard CI / VM gate` instead of silently replacing GitHub
 Actions: GitHub Actions remains visibly broken, while PRs still get a concrete pass/fail signal.
 
-## 3. Run an autonomous agent (agent host)
+## 3. Operator login
+
+Production runs with `PM_AUTH_MODE=required`. In that mode, board/API/control reads and writes
+require either:
+
+- a human web session from `/api/auth/login`, backed by a password principal and the
+  `switchboard_session` cookie; or
+- an adapter/MCP bearer token such as `PM_MCP_TOKEN` or an explicit principal token.
+
+First admin bootstrap is intentionally narrow:
+
+```bash
+export PM_BOOTSTRAP_ADMIN_LOGIN=admin
+export PM_BOOTSTRAP_ADMIN_PASSWORD='<strong one-time password>'
+sudo systemctl restart projectplanner
+```
+
+The bootstrap path creates the admin only if no password login exists for that project. After
+confirming login, remove `PM_BOOTSTRAP_ADMIN_PASSWORD` from the environment and restart the app.
+For manual bootstrap, POST `/api/auth/bootstrap` from localhost, or provide `PM_BOOTSTRAP_TOKEN`
+and send it as `X-Switchboard-Bootstrap-Token`.
+
+## 4. Run an autonomous agent (agent host)
 ```bash
 export PM_BASE=https://plan.taikunai.com PM_PROJECT=switchboard PM_MCP_TOKEN=…  PM_AGENT_ID=claude/work-1
 # the supervisor spawns the agent process group, injects the runner-session id, can hard-kill it:
@@ -292,7 +314,7 @@ hook should use the same secret, subscribe to `pull_request` and `push`, and sho
 that repo-level hook, PR merges can still be replayed through `/api/github/webhook`, but they are
 not unattended.
 
-## 4. The self-driving loop (what makes it hands-off)
+## 5. The self-driving loop (what makes it hands-off)
 ```
 supervisor keeps agent(s) alive
    → each agent run_session: claim_next → work → push → complete_claim(evidence)
@@ -306,14 +328,14 @@ supervisor keeps agent(s) alive
 **Human stays in the loop only where it should:** approve/kill via the supervisor, and review
 the board. No human relay for handoffs; no human ignition once the supervisor is running.
 
-## 5. Control fidelity / safety (PRD §10)
+## 6. Control fidelity / safety (PRD §10)
 - **T1** advisory (any runtime): the working agreement + `evaluate_tool`.
 - **T2** boundary-deny: runtimes with a pre-tool hook (Claude Code `PreToolUse`); Codex via a
   managed runner that honors deny.
 - **T3** hard kill: only for processes the **supervisor launched** (`os.killpg` + pre-kill
   snapshot). This is why the supervisor must own the agent process group.
 
-## 6. Honest limits
+## 7. Honest limits
 The substrate is live; the driver + supervisor + auto-provenance are built and unit/dogfood
 tested. The Agent Host substrate adds host inventory, wake intents, optional
 `on_ack_timeout=wake_target` escalation, a message-only systemd host for lane-less handoff
