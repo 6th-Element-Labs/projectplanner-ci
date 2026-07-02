@@ -15,3 +15,10 @@ Expected proof chain:
   `Done` through GitHub/default-branch provenance.
 - `QAPROOF-2`, which depends on `QAPROOF-1`, becomes ready only after that
   Done provenance exists.
+
+Late-complete edge:
+
+- `QAPROOF-3` stays claimed while its PR is opened and merged.
+- After merge provenance marks `QAPROOF-3` `Done`, a late `complete_claim`
+  call must release the claim and preserve `Done` instead of regressing the task
+  to `In Review`.
