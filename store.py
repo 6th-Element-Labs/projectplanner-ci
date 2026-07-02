@@ -2838,6 +2838,16 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
             "in_main_content": True if evidence_obj.get("merged_sha") else None,
             "evidence": evidence_obj,
         })
+        status_row = c.execute("SELECT status FROM tasks WHERE task_id=?",
+                               (row["task_id"],)).fetchone()
+        stored_status = status_row["status"] if status_row else next_status
+        terminal_status_preserved = (
+            stored_status == "Done" and _has_done_provenance(git_state)
+        )
+        if terminal_status_preserved:
+            next_status = "Done"
+        elif stored_status in ("Cancelled", "Canceled"):
+            next_status = stored_status
         if done_gate:
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (row["task_id"], actor, "task.done_blocked",
@@ -2849,7 +2859,9 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
                    json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
                                "requested_status": requested_status or None,
                                "next_status": next_status,
-                               "done_gate": done_gate}, sort_keys=True), now))
+                               "done_gate": done_gate,
+                               "terminal_status_preserved": terminal_status_preserved},
+                              sort_keys=True), now))
     response = {"completed": True, "claim_id": claim_id, "task_id": row["task_id"],
                 "status": next_status, "git_state": git_state}
     if done_gate:

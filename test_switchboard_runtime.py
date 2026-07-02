@@ -573,6 +573,34 @@ try:
                                     actor="github-webhook", project=P)
     ok(merged["status"] == "Done" and merged["git_state"]["merged_sha"] == "merge789",
        "PR merge stamps merged_sha and marks task Done")
+    late_terminal = store.create_task({"workstream_id": "TEST", "title": "late terminal"},
+                                      actor="seed", project=P)
+    late_claim = store.claim_task(
+        late_terminal["task_id"],
+        agent_id="codex/LATE#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    store.mark_task_pr_opened(late_terminal["task_id"], 2, "https://example/pr/2",
+                              "codex/late-terminal", "latehead",
+                              actor="github-webhook", project=P)
+    store.mark_task_merged(late_terminal["task_id"], "latemerge", 2, "https://example/pr/2",
+                           "codex/late-terminal", "latehead",
+                           actor="github-webhook", project=P)
+    late_done = store.complete_claim(
+        late_claim["claim_id"],
+        evidence={"branch": "codex/late-terminal", "head_sha": "latehead",
+                  "pr_number": 2, "pr_url": "https://example/pr/2",
+                  "merged_sha": "latemerge"},
+        actor=auth.actor(p),
+        project=P,
+    )
+    late_after = store.get_task(late_terminal["task_id"], project=P)
+    ok(late_done["status"] == "Done" and late_after["status"] == "Done",
+       "late complete_claim preserves terminal Done status")
+    ok(late_after["active_claims"] == [] and late_after["git_state"]["merged_sha"] == "latemerge",
+       "late complete_claim releases claim and keeps merge provenance")
     direct = store.create_task({"workstream_id": "TEST", "title": "direct default"},
                                actor="seed", project=P)
     store.update_task(direct["task_id"], {"status": "In Review"}, actor="seed", project=P)
