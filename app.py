@@ -1062,6 +1062,21 @@ async def ixp_working_agreement(project: str = Query(store.DEFAULT_PROJECT)):
     return store.get_working_agreement(project=_proj(project))
 
 
+@app.post("/ixp/v1/bugs/submit")
+async def ixp_submit_bug(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:bug_intake",),
+                           dev_actor=body.get("source_agent") or "bug-intake")
+    result = store.submit_bug(
+        body,
+        actor=auth.actor(principal),
+        project=project,
+    )
+    if result.get("error"):
+        raise HTTPException(400, result)
+    return result
+
+
 @app.post("/txp/v1/claim_next")
 async def txp_claim_next(request: Request, body: dict = Body(...)):
     project = _body_project(body)

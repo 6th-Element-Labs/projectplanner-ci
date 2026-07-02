@@ -52,6 +52,7 @@ run_test test_activity_payloads.py
 run_test test_adapter_conformance.py
 run_test test_agent_bootstrap.py
 run_test test_agent_host.py
+run_test test_bug_intake.py
 run_test test_codex_adapter.py
 run_test test_codex_supervisor.py
 run_test test_control_plane_fail_fast.py

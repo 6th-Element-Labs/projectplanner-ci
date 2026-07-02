@@ -36,6 +36,15 @@ Every submitted bug report should preserve the failing signal and include:
 Missing required fields keep the bug in intake/needs-info state. The intake agent should ask the
 reporting agent for the smallest missing piece instead of inventing data.
 
+## Submission Surface
+
+Agents file complete bug reports through `submit_bug(...)` over MCP or
+`POST /ixp/v1/bugs/submit` over REST. Both surfaces require the `write:bug_intake` scope.
+
+Successful submission creates one `BUG` task in `Triage` with structured `bug_report` state,
+source task/agent linkage, and the original evidence payload. Submission does not create
+implementation work, mark any task Ready, claim work, wake an agent, or bypass the human gate.
+
 ## Severity Rubric
 
 | Severity | Meaning | Default disposition |

@@ -1514,6 +1514,36 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
 
 
 @mcp.tool()
+def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
+               repro_steps: str, evidence: str, severity_hint: str,
+               affected_surface: str, ctx: Context, project: str = "maxwell",
+               source_agent: str = "", failure_class: str = "",
+               duplicate_of: str = "", title: str = "") -> str:
+    """Submit an agent-discovered bug through the dedicated BUG intake path.
+
+    Requires write:bug_intake. Creates exactly one BUG triage task with structured
+    bug_report state and source task/agent linkage. It does not create implementation
+    work, mark work Ready, dispatch agents, or bypass the human gate.
+    """
+    principal = _require_write(ctx, project, ("write:bug_intake",))
+    actor_name = auth.actor(principal)
+    result = store.submit_bug({
+        "source_task": source_task,
+        "source_agent": source_agent or actor_name,
+        "observed_behavior": observed_behavior,
+        "expected_behavior": expected_behavior,
+        "repro_steps": repro_steps,
+        "evidence": evidence,
+        "severity_hint": severity_hint,
+        "affected_surface": affected_surface,
+        "failure_class": failure_class,
+        "duplicate_of": duplicate_of,
+        "title": title,
+    }, actor=actor_name, project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
 def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell") -> str:
     """Add a note to a task's activity log (audited as actor 'MCP').
     project selects the board ('maxwell' default, 'helm', or 'switchboard')."""

@@ -122,6 +122,7 @@ Minimum scopes:
 |---|---|
 | `read` | read board, docs, activity, deltas |
 | `write:tasks` | create/update/delete tasks, comments, dependencies |
+| `write:bug_intake` | submit structured BUG reports without generic task-write authority |
 | `write:ixp` | register presence, claim/release resources, send/ack messages, set state |
 | `write:system` | GitHub webhook/system maintenance actors only |
 | `admin` | create/revoke principals and rotate credentials |
@@ -227,6 +228,7 @@ Existing MCP tools stay, but P0 changes their guarantees:
   - generic `claim`, `check`, `release`, `list_active_leases`
   - `send`, `inbox`, `ack`, `message_status`
   - `get_delta`
+  - `submit_bug` for BUG intake without generic task-write authority
 - legacy names (`claim_files`, `send_agent_message`, `get_lane_delta`) may remain as
   compatibility wrappers over the generic implementations.
 

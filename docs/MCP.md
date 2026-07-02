@@ -43,6 +43,8 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `create_task(workstream_id, title, ...)`
 - `update_task(task_id, ...only the fields you pass...)`
 - `add_comment(task_id, text)`
+- `submit_bug(source_task, observed_behavior, expected_behavior, repro_steps, evidence,
+  severity_hint, affected_surface, source_agent?, failure_class?, duplicate_of?)`
 - `move_task(task_id, project_from, project_to, reason?, new_task_id?, dependency_policy?)`
 - `archive_task(task_id, project, reason?)`
 - `register_agent(...)`, `heartbeat(...)`, `list_active_agents(...)`
@@ -123,6 +125,16 @@ Dispatch rule:
   operator override path. It releases the active claim, requeues the task, optionally redirects or
   reprioritizes it, preserves partial evidence, and sends the displaced agent an ack-required
   `claim_revoked` stop message. After revoke, the old claim cannot complete the task.
+
+Bug intake rule:
+- `submit_bug(...)` is the supported agent-facing path for filing discovered bugs.
+- It requires `write:bug_intake`, not generic `write:tasks`.
+- A complete submission creates one `BUG` task in `Triage` with structured `bug_report` state,
+  source task/agent linkage, evidence payload, severity hint, affected surface, and optional
+  failure class / duplicate link.
+- It never creates implementation work, marks work Ready, claims work, wakes an agent, or bypasses
+  the human gate.
+- REST parity lives at `POST /ixp/v1/bugs/submit`.
 
 Durable ack rule:
 - `send_agent_message(... requires_ack=true ...)` creates a durable `ack_deadline` monitor.

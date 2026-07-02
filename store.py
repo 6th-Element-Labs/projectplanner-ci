@@ -193,6 +193,28 @@ BUG_INTAKE_POLICY = {
         "The approver, target lane, source BUG task, evidence, and rationale must be audited."
     ),
 }
+BUG_REPORT_REQUIRED_FIELDS = [
+    "source_task",
+    "observed_behavior",
+    "expected_behavior",
+    "repro_steps",
+    "evidence",
+    "severity_hint",
+    "affected_surface",
+]
+BUG_SEVERITIES = {"low": "Low", "medium": "Medium", "high": "High", "critical": "High"}
+BUG_FAILURE_CLASSES = {
+    "missing_data",
+    "broken_connection",
+    "invalid_input",
+    "stale_branch",
+    "absent_permission",
+    "malformed_payload",
+    "failed_gate",
+    "unreachable_agent",
+    "unbound_identity",
+    "hidden_fallback",
+}
 
 # Plan-level sections that are not per-task (kept verbatim from the seed snapshot).
 META_SECTIONS = ["project", "generated", "schedule_start", "schedule_note", "owner_orgs",
@@ -837,6 +859,74 @@ def _task_human_gate_state(task: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _bug_report_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return bool(value)
+    return True
+
+
+def _parse_jsonish(value: Any) -> Any:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        if text[0:1] in ("{", "["):
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {"text": value}
+        return {"text": value}
+    return value
+
+
+def _slug_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", (value or "").strip().lower()).strip("_")
+
+
+def _bug_title(surface: str, observed: str, explicit_title: str = "") -> str:
+    if explicit_title and explicit_title.strip():
+        return explicit_title.strip()[:160]
+    summary = " ".join((observed or "").strip().split())
+    if not summary:
+        summary = "agent-submitted bug"
+    if len(summary) > 96:
+        summary = summary[:93].rstrip() + "..."
+    surface = (surface or "unknown surface").strip()
+    return f"{surface}: {summary}"[:160]
+
+
+def _bug_report_description(report: Dict[str, Any]) -> str:
+    evidence = report.get("evidence")
+    if isinstance(evidence, (dict, list)):
+        evidence_text = json.dumps(evidence, indent=2, sort_keys=True)
+    else:
+        evidence_text = str(evidence or "")
+    return "\n".join([
+        f"Bug submitted by: {report.get('source_agent')}",
+        f"Source task: {report.get('source_task')}",
+        f"Affected surface: {report.get('affected_surface')}",
+        f"Severity hint: {report.get('severity_hint')}",
+        f"Failure class: {report.get('failure_class') or '(unspecified)'}",
+        f"Duplicate of: {report.get('duplicate_of') or '(none)'}",
+        "",
+        "Observed behavior:",
+        str(report.get("observed_behavior") or ""),
+        "",
+        "Expected behavior:",
+        str(report.get("expected_behavior") or ""),
+        "",
+        "Repro steps:",
+        str(report.get("repro_steps") or ""),
+        "",
+        "Evidence:",
+        evidence_text,
+    ])
+
+
 def _json_payload(raw: str) -> Any:
     """Parse payload JSON while preserving legacy scalar payloads."""
     if not raw:
@@ -1204,6 +1294,114 @@ def create_task(data: Dict[str, Any], actor: str = "user",
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (tid, actor, "create", json.dumps({"title": title}), now))
     return get_task(tid, project)
+
+
+def submit_bug(data: Dict[str, Any], actor: str = "agent",
+               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    payload = dict(data or {})
+    missing = [field for field in BUG_REPORT_REQUIRED_FIELDS
+               if not _bug_report_value_present(payload.get(field))]
+    source_agent = (payload.get("source_agent") or actor or "").strip()
+    if not source_agent:
+        missing.append("source_agent")
+    if missing:
+        return {
+            "error": "missing_required_fields",
+            "missing": sorted(set(missing)),
+            "message": "submit_bug requires a complete report; no BUG task was created.",
+        }
+
+    source_task = str(payload.get("source_task") or "").strip().upper()
+    duplicate_of = str(payload.get("duplicate_of") or "").strip().upper()
+    severity = str(payload.get("severity_hint") or "").strip().lower()
+    if severity not in BUG_SEVERITIES:
+        return {
+            "error": "invalid_severity_hint",
+            "allowed": sorted(BUG_SEVERITIES),
+            "message": "severity_hint must be low, medium, high, or critical.",
+        }
+    failure_class = _slug_token(str(payload.get("failure_class") or ""))
+    if failure_class and failure_class not in BUG_FAILURE_CLASSES:
+        return {
+            "error": "invalid_failure_class",
+            "allowed": sorted(BUG_FAILURE_CLASSES),
+            "message": "failure_class is optional, but supplied values must match the BUG-1 taxonomy.",
+        }
+
+    with _conn(project) as c:
+        source = c.execute("SELECT * FROM tasks WHERE task_id=?", (source_task,)).fetchone()
+        if not source:
+            return {
+                "error": "unknown_source_task",
+                "source_task": source_task,
+                "message": "source_task must exist on this project; no BUG task was created.",
+            }
+        if duplicate_of:
+            dup = c.execute("SELECT * FROM tasks WHERE task_id=?", (duplicate_of,)).fetchone()
+            if not dup:
+                return {
+                    "error": "unknown_duplicate_of",
+                    "duplicate_of": duplicate_of,
+                    "message": "duplicate_of must name an existing BUG task; no BUG task was created.",
+                }
+            if (dup["workstream_id"] or "").upper() != "BUG":
+                return {
+                    "error": "duplicate_of_not_bug",
+                    "duplicate_of": duplicate_of,
+                    "message": "duplicate_of must point at a BUG task.",
+                }
+
+    now = time.time()
+    report = {
+        "schema": "bug_report.v1",
+        "intake_status": "new",
+        "source_task": source_task,
+        "source_agent": source_agent,
+        "reported_by": actor,
+        "reported_at": now,
+        "observed_behavior": str(payload.get("observed_behavior") or "").strip(),
+        "expected_behavior": str(payload.get("expected_behavior") or "").strip(),
+        "repro_steps": payload.get("repro_steps"),
+        "evidence": _parse_jsonish(payload.get("evidence")),
+        "severity_hint": severity,
+        "affected_surface": str(payload.get("affected_surface") or "").strip(),
+        "failure_class": failure_class or None,
+        "duplicate_of": duplicate_of or None,
+    }
+    task = create_task({
+        "workstream_id": "BUG",
+        "workstream_name": "BUG",
+        "title": _bug_title(report["affected_surface"], report["observed_behavior"],
+                            str(payload.get("title") or "")),
+        "description": _bug_report_description(report),
+        "status": "Triage",
+        "phase": "Agent Intake P0",
+        "owner_org": "6th Element Labs",
+        "owner_person_or_role": "Bug Intake",
+        "risk_level": BUG_SEVERITIES[severity],
+        "depends_on": [],
+    }, actor=actor, project=project)
+    if not task:
+        return {"error": "bug_task_not_created", "message": "BUG task creation failed."}
+
+    full_state = set_agent_state(task["task_id"], "bug_report", report, project=project)
+    report_event = {
+        "bug_task_id": task["task_id"],
+        "source_task": source_task,
+        "source_agent": source_agent,
+        "severity_hint": severity,
+        "affected_surface": report["affected_surface"],
+        "failure_class": report["failure_class"],
+        "duplicate_of": duplicate_of or None,
+        "evidence": report["evidence"],
+    }
+    append_activity("bug.submitted", actor, report_event,
+                    task_id=task["task_id"], project=project)
+    append_activity("bug.reported_from_task", actor, report_event,
+                    task_id=source_task, project=project)
+    bug = get_task(task["task_id"], project=project)
+    return {"submitted": True, "bug": bug, "bug_report": report,
+            "agent_state": full_state}
 
 
 def get_activity_delta(since_cursor: int = 0, lane: str = "",
