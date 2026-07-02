@@ -207,7 +207,8 @@ claude mcp add --transport http taikun-plan https://plan.taikunai.com/mcp
 
 If writes are token-gated (`PM_AUTH_MODE=required`), add a bearer token header. Existing
 deployments can keep using `PM_MCP_TOKEN`; new deployments should create per-agent
-principals or set `PM_AUTH_TOKEN` during bootstrap:
+principals through `create_scoped_token` / `/api/access/tokens`, or set `PM_AUTH_TOKEN`
+during bootstrap:
 ```json
 {
   "mcpServers": {
@@ -218,6 +219,15 @@ principals or set `PM_AUTH_TOKEN` during bootstrap:
   }
 }
 ```
+
+Admin MCP credential tools:
+
+- `create_scoped_token(project, kind, display_name, role?, scopes?, principal_id?)`
+  - requires `write:system` on the target project and returns the raw token once.
+- `list_scoped_tokens(project, include_revoked?, kind?)`
+  - requires `write:system`; never returns raw tokens or token hashes.
+- `revoke_scoped_token(project, principal_id)`
+  - requires `write:system`; revokes the principal and its live sessions.
 
 ## Ops
 

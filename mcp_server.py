@@ -1454,6 +1454,71 @@ def set_project_github_repo(repo: str, ctx: Context, project: str = "maxwell") -
 
 
 @mcp.tool()
+def list_scoped_tokens(ctx: Context, project: str = "maxwell",
+                       include_revoked: bool = False, kind: str = "") -> str:
+    """List bearer principals for one project without exposing token hashes or raw tokens.
+
+    Requires write:system on the target project. Use this to audit which humans, agents,
+    hosts, or system actors can call Switchboard over REST/MCP.
+    """
+    _require_write(ctx, project, ("write:system",))
+    return _dumps({
+        "project": project,
+        "tokens": store.list_principals(project=project, include_revoked=include_revoked, kind=kind),
+        "scope_definitions": store.principal_scope_definitions(),
+        "valid_kinds": sorted(store.VALID_PRINCIPAL_KINDS),
+    })
+
+
+@mcp.tool()
+def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "agent",
+                        display_name: str = "", scopes: str = "", role: str = "",
+                        principal_id: str = "") -> str:
+    """Create one project-scoped bearer token for REST/MCP callers.
+
+    Requires write:system on the target project. `role` is a preset such as viewer,
+    contributor, operator, or admin; `scopes` can also be a comma/newline list. The raw token is
+    returned once and is never stored, so capture it immediately.
+    """
+    principal = _require_write(ctx, project, ("write:system",))
+    resolved = store.resolve_principal_scopes(scopes, role=role)
+    if resolved.get("error"):
+        return _dumps(resolved)
+    normalized_kind = store.validate_principal_kind(kind or "agent")
+    if not normalized_kind:
+        return _dumps({"error": "kind must be one of: " + ", ".join(sorted(store.VALID_PRINCIPAL_KINDS))})
+    raw_token = auth.new_secret_token()
+    created = store.create_principal(
+        kind=normalized_kind,
+        display_name=display_name or normalized_kind,
+        token=raw_token,
+        scopes=resolved["scopes"],
+        principal_id=principal_id or None,
+        project=project,
+    )
+    if created.get("error"):
+        return _dumps(created)
+    public = store.public_principal_record(created, project=project)
+    store.append_activity(
+        "access.token_created",
+        auth.actor(principal),
+        {"principal": public, "role": resolved.get("role"), "token_returned_once": True},
+        task_id=None,
+        project=project,
+    )
+    return _dumps({"project": project, "principal": public, "token": raw_token,
+                   "token_returned_once": True})
+
+
+@mcp.tool()
+def revoke_scoped_token(principal_id: str, ctx: Context, project: str = "maxwell") -> str:
+    """Revoke one project-scoped bearer principal and any live sessions for that principal."""
+    principal = _require_write(ctx, project, ("write:system",))
+    result = store.revoke_principal_token(principal_id, project=project, actor=auth.actor(principal))
+    return _dumps(result)
+
+
+@mcp.tool()
 def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", assignee: str = "",
                 phase: str = "", start_date: str = "", finish_date: str = "",

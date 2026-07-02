@@ -201,6 +201,30 @@ Admins can grant a project role with `POST /api/access/project_role?project=...`
 Built-in roles map to effective scopes at auth time: `viewer` can read, `contributor` can
 read/write tasks and agent protocol state, and `admin`/`owner` can manage system settings.
 
+Scoped bearer tokens are managed by `write:system` operators. Create a token with a role preset
+or explicit scopes; the raw secret is returned once and later listings are redacted:
+
+```bash
+curl -s "$PM_BASE/api/access/tokens?project=switchboard" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"agent","display_name":"claude/WX","role":"contributor"}'
+```
+
+Audit active credentials without exposing secrets:
+
+```bash
+curl -s "$PM_BASE/api/access/tokens?project=switchboard" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Revoke by principal id; revocation also kills live sessions for that principal:
+
+```bash
+curl -s -X POST "$PM_BASE/api/access/tokens/agent-abc123/revoke?project=switchboard" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
 ## 4. Run an autonomous agent (agent host)
 ```bash
 export PM_BASE=https://plan.taikunai.com PM_PROJECT=switchboard PM_MCP_TOKEN=…  PM_AGENT_ID=claude/work-1

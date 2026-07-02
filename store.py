@@ -64,6 +64,8 @@ ROLE_SCOPES = {
     "admin": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"],
     "owner": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"],
 }
+VALID_PRINCIPAL_KINDS = {"human", "user", "agent", "host", "system"}
+VALID_PRINCIPAL_SCOPES = sorted({s for scopes in ROLE_SCOPES.values() for s in scopes})
 
 
 def _registry_conn():
@@ -181,6 +183,38 @@ def projects() -> List[Dict[str, Any]]:
 
 def role_scopes(role: str) -> List[str]:
     return list(ROLE_SCOPES.get((role or "").strip().lower(), []))
+
+
+def principal_scope_definitions() -> Dict[str, List[str]]:
+    return {role: list(scopes) for role, scopes in sorted(ROLE_SCOPES.items())}
+
+
+def validate_principal_kind(kind: str) -> str:
+    normalized = (kind or "").strip().lower()
+    return normalized if normalized in VALID_PRINCIPAL_KINDS else ""
+
+
+def validate_principal_scopes(scopes: List[str]) -> Tuple[List[str], List[str]]:
+    normalized = sorted({(scope or "").strip() for scope in scopes if (scope or "").strip()})
+    unknown = [scope for scope in normalized if scope not in VALID_PRINCIPAL_SCOPES]
+    return normalized, unknown
+
+
+def resolve_principal_scopes(scopes: Any = None, role: str = "") -> Dict[str, Any]:
+    """Resolve a role preset plus explicit scope list into a validated least-privilege set."""
+    requested = coerce_csv_list(scopes)
+    role_name = (role or "").strip().lower()
+    if role_name:
+        preset = role_scopes(role_name)
+        if not preset:
+            return {"error": f"unknown role: {role_name}"}
+        requested.extend(preset)
+    resolved, unknown = validate_principal_scopes(requested)
+    if unknown:
+        return {"error": "unknown scope(s): " + ", ".join(unknown)}
+    if not resolved:
+        return {"error": "at least one scope or known role is required"}
+    return {"scopes": resolved, "role": role_name or None}
 
 
 def ensure_org(org_id: str, name: str, slug: str = "", created_by: str = "system") -> Dict[str, Any]:
@@ -1910,7 +1944,16 @@ def append_activity(kind: str, actor: str, payload: Optional[Dict[str, Any]] = N
 def create_principal(kind: str, display_name: str, token: str, scopes: List[str],
                      principal_id: Optional[str] = None,
                      project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    kind = validate_principal_kind(kind)
+    if not kind:
+        return {"error": "kind must be one of: " + ", ".join(sorted(VALID_PRINCIPAL_KINDS))}
+    scopes, unknown = validate_principal_scopes(scopes)
+    if unknown:
+        return {"error": "unknown scope(s): " + ", ".join(unknown)}
+    if not token:
+        return {"error": "token required"}
     principal_id = principal_id or f"{kind}-{uuid.uuid4().hex[:12]}"
+    display_name = (display_name or principal_id).strip()
     now = time.time()
     scopes_json = json.dumps(scopes, sort_keys=True)
     with _conn(project) as c:
@@ -1927,6 +1970,48 @@ def _principal_from_row(row: sqlite3.Row) -> Dict[str, Any]:
     out = dict(row)
     out["scopes"] = json.loads(out.get("scopes") or "[]")
     return out
+
+
+def public_principal_record(principal: Dict[str, Any], project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    out = {
+        "id": principal.get("id"),
+        "kind": principal.get("kind"),
+        "display_name": principal.get("display_name"),
+        "project": principal.get("project"),
+        "scopes": list(principal.get("scopes") or []),
+        "created_at": principal.get("created_at"),
+        "revoked_at": principal.get("revoked_at"),
+    }
+    pid = principal.get("id") or ""
+    if pid:
+        out["effective_scopes"] = effective_principal_scopes(
+            project, pid, list(principal.get("scopes") or []))
+        out["project_roles"] = principal_project_roles(project, pid)
+    else:
+        out["effective_scopes"] = list(principal.get("scopes") or [])
+        out["project_roles"] = []
+    return out
+
+
+def list_principals(project: str = DEFAULT_PROJECT, include_revoked: bool = False,
+                    kind: str = "") -> List[Dict[str, Any]]:
+    filters = []
+    args: List[Any] = []
+    if not include_revoked:
+        filters.append("revoked_at IS NULL")
+    normalized_kind = validate_principal_kind(kind) if kind else ""
+    if kind and not normalized_kind:
+        return []
+    if normalized_kind:
+        filters.append("kind=?")
+        args.append(normalized_kind)
+    q = "SELECT * FROM principals"
+    if filters:
+        q += " WHERE " + " AND ".join(filters)
+    q += " ORDER BY created_at DESC, id"
+    with _conn(project) as c:
+        rows = c.execute(q, args).fetchall()
+    return [public_principal_record(_principal_from_row(row), project=project) for row in rows]
 
 
 def get_principal_by_id(principal_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
@@ -2086,6 +2171,30 @@ def revoke_principal(principal_id: str, project: str = DEFAULT_PROJECT) -> bool:
         cur = c.execute("UPDATE principals SET revoked_at=? WHERE id=?",
                         (time.time(), principal_id))
         return cur.rowcount > 0
+
+
+def revoke_principal_token(principal_id: str, project: str = DEFAULT_PROJECT,
+                           actor: str = "system") -> Dict[str, Any]:
+    principal = get_principal_by_id(principal_id, project=project)
+    if not principal:
+        return {"error": "principal not found"}
+    if principal.get("project") not in (project, "*"):
+        return {"error": "principal is not valid for this project"}
+    already_revoked = bool(principal.get("revoked_at"))
+    revoked = revoke_principal(principal_id, project=project)
+    session_count = revoke_principal_sessions(principal_id, project=project)
+    updated = get_principal_by_id(principal_id, project=project) or principal
+    public = public_principal_record(updated, project=project)
+    append_activity(
+        "access.token_revoked",
+        actor,
+        {"principal": public, "sessions_revoked": session_count,
+         "already_revoked": already_revoked},
+        task_id=None,
+        project=project,
+    )
+    return {"revoked": bool(revoked), "already_revoked": already_revoked,
+            "sessions_revoked": session_count, "principal": public}
 
 
 def protocol_envelope() -> Dict[str, Any]:

@@ -377,6 +377,65 @@ async def access_grant_project_role(request: Request, body: dict = Body(...),
     return result
 
 
+@app.get("/api/access/tokens")
+async def access_tokens(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+                        include_revoked: bool = False, kind: str = ""):
+    _principal(request, project, ("write:system",), dev_actor="web")
+    return {
+        "project": _proj(project),
+        "tokens": store.list_principals(
+            project=_proj(project), include_revoked=include_revoked, kind=kind),
+        "scope_definitions": store.principal_scope_definitions(),
+        "valid_kinds": sorted(store.VALID_PRINCIPAL_KINDS),
+    }
+
+
+@app.post("/api/access/tokens")
+async def access_create_token(request: Request, body: dict = Body(...),
+                              project: str = Query(store.DEFAULT_PROJECT)):
+    principal = _principal(request, project, ("write:system",), dev_actor="web")
+    target_project = _proj(project)
+    resolved = store.resolve_principal_scopes(
+        (body or {}).get("scopes"), role=(body or {}).get("role") or "")
+    if resolved.get("error"):
+        raise HTTPException(400, resolved["error"])
+    kind = store.validate_principal_kind((body or {}).get("kind") or "agent")
+    if not kind:
+        raise HTTPException(400, "kind must be one of: " + ", ".join(sorted(store.VALID_PRINCIPAL_KINDS)))
+    raw_token = auth.new_secret_token()
+    created = store.create_principal(
+        kind=kind,
+        display_name=((body or {}).get("display_name") or kind).strip(),
+        token=raw_token,
+        scopes=resolved["scopes"],
+        principal_id=((body or {}).get("principal_id") or None),
+        project=target_project,
+    )
+    if created.get("error"):
+        raise HTTPException(400, created["error"])
+    public = store.public_principal_record(created, project=target_project)
+    store.append_activity(
+        "access.token_created",
+        auth.actor(principal),
+        {"principal": public, "role": resolved.get("role"), "token_returned_once": True},
+        task_id=None,
+        project=target_project,
+    )
+    return {"project": target_project, "principal": public, "token": raw_token,
+            "token_returned_once": True}
+
+
+@app.post("/api/access/tokens/{principal_id}/revoke")
+async def access_revoke_token(principal_id: str, request: Request,
+                              project: str = Query(store.DEFAULT_PROJECT)):
+    principal = _principal(request, project, ("write:system",), dev_actor="web")
+    result = store.revoke_principal_token(
+        principal_id, project=_proj(project), actor=auth.actor(principal))
+    if result.get("error"):
+        raise HTTPException(404 if "not found" in result["error"] else 400, result["error"])
+    return result
+
+
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request, body: dict = Body(default={})):
     project = _proj((body or {}).get("project") or request.query_params.get("project") or

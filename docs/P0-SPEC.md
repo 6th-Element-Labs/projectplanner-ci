@@ -162,6 +162,11 @@ P0 may keep local development easy, but the unsafe path must be explicit:
   project ownership metadata, and project role grants. Project roles expand effective
   scopes during authentication, so a principal can be read-only in one project and
   contributor/admin in another.
+- ACCESS-3 exposes project-scoped bearer-token lifecycle APIs. A `write:system` principal can
+  create tokens for `human`/`user`, `agent`, `host`, and `system` principals; list token
+  principals only in redacted form; and revoke a principal plus its live sessions. Unknown
+  principal kinds, unknown scopes, and unknown projects fail closed. Raw tokens are returned
+  only once at creation and are never written to activity logs.
 - startup logs must print a loud warning when `dev-open` is active.
 - Caddy/production provision docs must set `PM_AUTH_MODE=required`.
 
@@ -171,6 +176,22 @@ P0 may keep local development easy, but the unsafe path must be explicit:
 
 REST mirrors MCP semantics under `/ixp/v1`. All mutating calls require `Authorization:
 Bearer <token>`.
+
+### 5.0 Access Administration
+
+- `GET /api/access/model?project=...`
+  - requires `read`; returns org/project ownership, built-in roles, grants, and the current
+    principal's project roles.
+- `POST /api/access/project_role?project=...`
+  - requires `write:system`; grants a built-in or explicit project role to a principal/user.
+- `GET /api/access/tokens?project=...&include_revoked=false&kind=...`
+  - requires `write:system`; lists redacted token principals, valid kinds, and role-to-scope
+    definitions.
+- `POST /api/access/tokens?project=...`
+  - requires `write:system`; body accepts `kind`, `display_name`, optional `principal_id`,
+    and either `role` or `scopes`; returns `{principal, token, token_returned_once}`.
+- `POST /api/access/tokens/{principal_id}/revoke?project=...`
+  - requires `write:system`; revokes the principal and any live sessions for that principal.
 
 ### 5.1 Presence
 
@@ -236,6 +257,7 @@ Existing MCP tools stay, but P0 changes their guarantees:
   - `list_active_agents`
   - generic `claim`, `check`, `release`, `list_active_leases`
   - `send`, `inbox`, `ack`, `message_status`
+  - `list_scoped_tokens`, `create_scoped_token`, `revoke_scoped_token`
   - `get_delta`
   - `submit_bug` for BUG intake without generic task-write authority
 - legacy names (`claim_files`, `send_agent_message`, `get_lane_delta`) may remain as
