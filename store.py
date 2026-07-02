@@ -5113,31 +5113,44 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
             if local_repo:
                 checks["local_repo"] = local_repo
             main_ref = canonical_main_sha
-            for task in tasks:
-                task_id = task["task_id"]
-                state = git_states.get(task_id, {})
-                for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
-                    if (field == "head_sha" and task.get("status") == "Done"
-                            and state.get("merged_sha")):
-                        continue
-                    if (field == "head_sha" and state.get("pr_number")
-                            and task.get("status") in ("In Review", "Done")):
-                        # Production checkouts do not need to fetch every PR head. GitHub PR
-                        # state below is the source of truth for open/review heads; local git
-                        # reachability remains authoritative for merged/default-branch SHAs.
-                        continue
-                    sha = state.get(field)
-                    if not sha:
-                        continue
-                    if not _git_ok(["cat-file", "-e", f"{sha}^{{commit}}"]):
-                        findings.append({"severity": severity, "task_id": task_id,
-                                         "code": f"{field}_not_found",
-                                         "detail": f"Recorded {field} is not present in the local git object database."})
-                        continue
-                    if field == "merged_sha" and not _git_ok(["merge-base", "--is-ancestor", sha, main_ref]):
-                        findings.append({"severity": "high", "task_id": task_id,
-                                         "code": "merged_sha_not_on_canonical_main",
-                                         "detail": "Recorded merged_sha is not reachable from canonical main."})
+            if not _git_ok(["cat-file", "-e", f"{main_ref}^{{commit}}"]):
+                checks["git_reachability"] = "blocked_missing_canonical_main"
+                checks["canonical_main_sha"] = main_ref
+                findings.append({
+                    "severity": "high",
+                    "task_id": None,
+                    "code": "canonical_main_sha_not_found",
+                    "detail": (
+                        "Canonical main SHA is not present in the local git object database; "
+                        "fetch or refresh the local checkout before per-task ancestry checks."
+                    ),
+                })
+            else:
+                for task in tasks:
+                    task_id = task["task_id"]
+                    state = git_states.get(task_id, {})
+                    for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
+                        if (field == "head_sha" and task.get("status") == "Done"
+                                and state.get("merged_sha")):
+                            continue
+                        if (field == "head_sha" and state.get("pr_number")
+                                and task.get("status") in ("In Review", "Done")):
+                            # Production checkouts do not need to fetch every PR head. GitHub PR
+                            # state below is the source of truth for open/review heads; local git
+                            # reachability remains authoritative for merged/default-branch SHAs.
+                            continue
+                        sha = state.get(field)
+                        if not sha:
+                            continue
+                        if not _git_ok(["cat-file", "-e", f"{sha}^{{commit}}"]):
+                            findings.append({"severity": severity, "task_id": task_id,
+                                             "code": f"{field}_not_found",
+                                             "detail": f"Recorded {field} is not present in the local git object database."})
+                            continue
+                        if field == "merged_sha" and not _git_ok(["merge-base", "--is-ancestor", sha, main_ref]):
+                            findings.append({"severity": "high", "task_id": task_id,
+                                             "code": "merged_sha_not_on_canonical_main",
+                                             "detail": "Recorded merged_sha is not reachable from canonical main."})
 
     token = _github_token()
     pr_tasks = [t for t in tasks if git_states.get(t["task_id"], {}).get("pr_number")]

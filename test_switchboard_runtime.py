@@ -987,6 +987,50 @@ try:
        "reconcile checks git reachability when canonical main is known")
     ok(not any(f["task_id"] == real_git["task_id"] for f in external_report["findings"]),
        "reconcile accepts a Done task whose merged_sha is reachable from canonical main")
+    missing_main_sha = "9" * 40
+    fanout_one = store.create_task({"workstream_id": "TEST", "title": "canonical missing one"},
+                                   actor="seed", project=P)
+    fanout_two = store.create_task({"workstream_id": "TEST", "title": "canonical missing two"},
+                                   actor="seed", project=P)
+    store.update_task(fanout_one["task_id"], {"status": "In Review"}, actor="seed", project=P)
+    store.update_task(fanout_two["task_id"], {"status": "In Review"}, actor="seed", project=P)
+    store.mark_task_default_branch_commit(
+        fanout_one["task_id"], "a" * 40, branch="master",
+        subject=f"test({fanout_one['task_id']}): canonical missing one",
+        actor="test", project=P)
+    store.mark_task_default_branch_commit(
+        fanout_two["task_id"], "b" * 40, branch="master",
+        subject=f"test({fanout_two['task_id']}): canonical missing two",
+        actor="test", project=P)
+    store.update_canonical_main_sha(missing_main_sha, actor="test", project=P)
+    original_git_ok = store._git_ok
+    original_git_checks_available = store._git_checks_available
+    original_local_github_repo = store._local_github_repo
+
+    def fake_git_ok(args):
+        if args == ["cat-file", "-e", f"{missing_main_sha}^{{commit}}"]:
+            return False
+        raise AssertionError("per-task git reachability should be skipped when canonical main is missing")
+
+    store._git_ok = fake_git_ok
+    store._git_checks_available = lambda: True
+    store._local_github_repo = lambda: "6th-Element-Labs/projectplanner"
+    try:
+        missing_main_report = store.reconcile(project=P)
+    finally:
+        store._git_ok = original_git_ok
+        store._git_checks_available = original_git_checks_available
+        store._local_github_repo = original_local_github_repo
+    ok(missing_main_report["external_checks"]["git_reachability"] == "blocked_missing_canonical_main",
+       "reconcile reports missing canonical main as a single blocked git check")
+    ok(sum(1 for f in missing_main_report["findings"]
+           if f["code"] == "canonical_main_sha_not_found") == 1,
+       "reconcile emits one canonical-main-missing finding")
+    ok(not any(f["task_id"] in (fanout_one["task_id"], fanout_two["task_id"]) and
+               f["code"] in ("merged_sha_not_found", "merged_sha_not_on_canonical_main")
+               for f in missing_main_report["findings"]),
+       "missing canonical main does not fan out into per-task merged-sha findings")
+    store.update_canonical_main_sha(head, actor="test", project=P)
     squashed = store.create_task({"workstream_id": "TEST", "title": "squashed branch head"},
                                  actor="seed", project=P)
     store.mark_task_merged(
