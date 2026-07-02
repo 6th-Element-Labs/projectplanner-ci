@@ -22,3 +22,6 @@ Late-complete edge:
 - After merge provenance marks `QAPROOF-3` `Done`, a late `complete_claim`
   call must release the claim and preserve `Done` instead of regressing the task
   to `In Review`.
+- `QAPROOF-4` repeats the same late-complete flow after the `BUG-12` fix is
+  deployed, proving the live backend reports `Done` and records preserved
+  terminal provenance.
