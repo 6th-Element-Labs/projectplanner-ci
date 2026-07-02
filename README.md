@@ -76,6 +76,7 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/RUNTIME-ADAPTERS-SPEC.md`](docs/RUNTIME-ADAPTERS-SPEC.md) | Runtime adapter packs for Claude Code, Codex, Cursor, LangGraph, raw OpenAI loops, and generic REST clients |
 | [`docs/INTERRUPT-TIERS-SPEC.md`](docs/INTERRUPT-TIERS-SPEC.md) | Visible stop/redirect guarantees: advisory poll, hook-level deny, runner kill, and managed control |
 | [`docs/CLAIM-NEXT-SPEC.md`](docs/CLAIM-NEXT-SPEC.md) | `claim_next` / `+TXP` dispatch profile: atomic task assignment, task claims, budget/model guidance |
+| [`docs/BUG-INTAKE-CONTRACT.md`](docs/BUG-INTAKE-CONTRACT.md) | Bug Intake Agent contract: report schema, severity, dedupe, human gate, and conversion policy |
 | [`docs/TALLY-SPEC.md`](docs/TALLY-SPEC.md) | Tally / `+OXP` cost-to-outcome and KPI ledger: gateway-measured plus agent-reported spend |
 | [`docs/SWITCHBOARD-RENAME-MIGRATION.md`](docs/SWITCHBOARD-RENAME-MIGRATION.md) | Safe migration from `projectplanner` repo/ops identity to Switchboard product identity |
 | [`docs/decisions/0001-…`](docs/decisions/0001-multi-agent-coordination-primitives.md) | ADR: build order for the multi-agent coordination primitives |

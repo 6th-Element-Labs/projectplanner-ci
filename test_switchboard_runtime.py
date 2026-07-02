@@ -51,6 +51,22 @@ try:
 
     p = auth.authenticate(P, TOKEN, ("write:ixp",))
     ok(p["id"] == principal["id"], "principal authenticates by bearer token")
+    bug_principal = store.create_principal(
+        kind="agent",
+        display_name="codex/bug-intake",
+        token="bug-intake-token",
+        scopes=["read", "write:bug_intake"],
+        principal_id="agent-bug-intake",
+        project=P,
+    )
+    bug_p = auth.authenticate(P, "bug-intake-token", ("write:bug_intake",))
+    ok(bug_p["id"] == bug_principal["id"],
+       "bug intake principal authenticates with the bug-intake scope")
+    try:
+        auth.authenticate(P, "bug-intake-token", ("write:tasks",))
+        ok(False, "bug intake principal cannot use generic task writes")
+    except PermissionError:
+        ok(True, "bug intake principal cannot use generic task writes")
     project_ids = [p["id"] for p in store.projects()]
     ok("switchboard" in project_ids, "project registry exposes the Switchboard dogfood board")
     seeded = store.seed_if_empty("switchboard")
@@ -86,6 +102,11 @@ try:
        "working agreement tells agents not to hide failures")
     ok("visible" in policy["fallback_rule"] and "original failing signal" in policy["fallback_rule"],
        "working agreement allows only visible fallbacks")
+    bug_policy = agreement.get("bug_intake_policy", {})
+    ok(bug_policy.get("scope") == "write:bug_intake" and
+       "create implementation work outside the BUG lane"
+       in bug_policy.get("forbidden_without_human_approval", []),
+       "working agreement publishes the bug intake human-gate contract")
     ok(store.check_protocol_compatibility(agreement["protocol"])["compatible"] is True,
        "current protocol envelope is compatible")
     incompatible = store.check_protocol_compatibility({"version": "ixp.v9"})
@@ -686,6 +707,60 @@ try:
        "claim_next returns dispatch reason and budget status")
     ok(scored["recommendation"]["model_tier"] == "balanced",
        "claim_next returns model guidance from risk/budget/capability context")
+    gated = store.create_task({
+        "workstream_id": "GATE",
+        "title": "bug conversion awaiting human approval",
+        "risk_level": "High",
+    }, actor="seed", project=P)
+    store.set_agent_state(gated["task_id"], "human_gate", {
+        "required": True,
+        "source_bug_task_id": "BUG-1",
+        "target_workstream": "HARDEN",
+        "severity": "high",
+        "approval_reason": "Bug intake proposed an implementation task.",
+    }, project=P)
+    gated_detail = store.get_task(gated["task_id"], project=P)
+    ok(gated_detail["human_gate"]["blocked"] and
+       gated_detail["human_gate"]["status"] == "human_approval_required",
+       "task detail surfaces unapproved human-gate state")
+    exact_gated = store.claim_task(
+        gated["task_id"],
+        agent_id="codex/GATE#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(not exact_gated.get("claimed") and exact_gated["reason"] == "human_approval_required",
+       "claim_task refuses unapproved human-gated work")
+    next_gated = store.claim_next(
+        agent_id="codex/GATE#2",
+        lanes=["GATE"],
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(not next_gated.get("claimed") and
+       next_gated["dispatch_reason"]["skipped"]["human_approval"] >= 1,
+       "claim_next skips unapproved human-gated work")
+    store.set_agent_state(gated["task_id"], "human_gate", {
+        "required": True,
+        "source_bug_task_id": "BUG-1",
+        "target_workstream": "HARDEN",
+        "severity": "high",
+        "approval_reason": "Human approved conversion to implementation work.",
+        "approved_by": "switchboard/operator",
+        "approved_at": "2026-07-02T00:00:00Z",
+    }, project=P)
+    approved_gated = store.claim_next(
+        agent_id="codex/GATE#3",
+        lanes=["GATE"],
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(approved_gated.get("claimed") and
+       approved_gated["task"]["task_id"] == gated["task_id"],
+       "human-approved gated work becomes claimable")
     override = store.create_task({
         "workstream_id": "OVERRIDE",
         "title": "operator needs to redirect this claim",

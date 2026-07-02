@@ -155,6 +155,45 @@ EDITABLE = ["title", "description", "owner_org", "owner_person_or_role", "assign
             "finish_date", "risk_level", "is_blocking", "sort_order",
             "entry_criteria", "exit_criteria", "deliverable", "depends_on"]
 
+BUG_INTAKE_POLICY = {
+    "scope": "write:bug_intake",
+    "agent_role": (
+        "Receive agent-discovered bugs, normalize them into reproducible BUG reports, "
+        "dedupe them, score severity, and prepare approval-ready conversion proposals."
+    ),
+    "allowed_without_human_approval": [
+        "create or update BUG intake records through the dedicated bug-intake surface",
+        "link duplicate BUG reports to a canonical BUG task",
+        "request missing reproduction evidence from the reporting agent",
+        "assign severity_hint and affected_surface on BUG intake records",
+    ],
+    "forbidden_without_human_approval": [
+        "create implementation work outside the BUG lane",
+        "mark converted implementation work Ready or claimable",
+        "change priority, sort_order, is_blocking, or dependency-critical fields",
+        "dispatch, claim, wake, or otherwise start implementation work",
+        "hide the original failing signal behind a green fallback",
+    ],
+    "conversion_gate": {
+        "state_key": "human_gate",
+        "required_fields": [
+            "required",
+            "source_bug_task_id",
+            "target_workstream",
+            "severity",
+            "approval_reason",
+            "approved_by",
+            "approved_at",
+        ],
+        "unapproved_status": "human_approval_required",
+        "approved_statuses": ["approved", "accepted", "waived"],
+    },
+    "approval_authority": (
+        "A human operator or explicit coordinator policy may approve conversion. "
+        "The approver, target lane, source BUG task, evidence, and rationale must be audited."
+    ),
+}
+
 # Plan-level sections that are not per-task (kept verbatim from the seed snapshot).
 META_SECTIONS = ["project", "generated", "schedule_start", "schedule_note", "owner_orgs",
                  "rollups", "executive_summary", "timeline_note", "critical_path",
@@ -740,6 +779,64 @@ def _rationale_state(rationale: str, task: Dict[str, Any],
     }
 
 
+def bug_intake_policy() -> Dict[str, Any]:
+    return json.loads(json.dumps(BUG_INTAKE_POLICY))
+
+
+def _approval_payload(task: Dict[str, Any]) -> Dict[str, Any]:
+    state = task.get("agent_state") or {}
+    if not isinstance(state, dict):
+        return {}
+    candidates = [
+        state.get("human_gate"),
+        state.get("approval"),
+        (state.get("governance") or {}).get("human_gate")
+        if isinstance(state.get("governance"), dict) else None,
+        (state.get("governance") or {}).get("approval")
+        if isinstance(state.get("governance"), dict) else None,
+        (state.get("bug_intake") or {}).get("conversion_gate")
+        if isinstance(state.get("bug_intake"), dict) else None,
+    ]
+    for value in candidates:
+        if isinstance(value, dict) and value:
+            return value
+    return {}
+
+
+def _task_human_gate_state(task: Dict[str, Any]) -> Dict[str, Any]:
+    raw = _approval_payload(task)
+    required = bool(raw.get("required") or raw.get("approval_required")
+                    or raw.get("needs_human"))
+    approved_by = raw.get("approved_by") or raw.get("approver")
+    status = str(raw.get("status") or "").strip().lower()
+    approved = bool(
+        raw.get("approved") is True
+        or approved_by
+        or status in set(BUG_INTAKE_POLICY["conversion_gate"]["approved_statuses"])
+    )
+    blocked = bool(required and not approved)
+    return {
+        "required": required,
+        "approved": approved,
+        "blocked": blocked,
+        "reason": (
+            raw.get("reason")
+            or raw.get("approval_reason")
+            or ("human approval required" if blocked else None)
+        ),
+        "status": (
+            BUG_INTAKE_POLICY["conversion_gate"]["unapproved_status"]
+            if blocked else (status or ("approved" if approved else "not_required"))
+        ),
+        "approved_by": approved_by,
+        "approved_at": raw.get("approved_at") or raw.get("accepted_at"),
+        "source_bug_task_id": raw.get("source_bug_task_id"),
+        "target_workstream": raw.get("target_workstream"),
+        "severity": raw.get("severity") or raw.get("severity_hint"),
+        "policy": "bug_intake_human_gate.v1",
+    }
+
+
 def _json_payload(raw: str) -> Any:
     """Parse payload JSON while preserving legacy scalar payloads."""
     if not raw:
@@ -976,6 +1073,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["active_claims"] = _active_task_claims_in(c, task_id)
         t["identity"] = _task_identity_state_in(c, task_id, now)
         t["dependency_state"] = _dependency_state_in(c, t)
+        t["human_gate"] = _task_human_gate_state(t)
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
             raw_rationale = s["rationale"]
@@ -2632,6 +2730,15 @@ def claim_task(task_id: str, agent_id: str,
                         "task_id": task_id, "depends_on": task.get("depends_on") or []}
             _idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
+        gate = _task_human_gate_state(task)
+        if gate["blocked"]:
+            response = {"claimed": False, "reason": "human_approval_required",
+                        "task_id": task_id, "human_gate": gate}
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (task_id, actor, "task.claim_blocked_human_gate",
+                       json.dumps({"agent_id": agent_id, **response}, sort_keys=True), now))
+            _idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
         risk = _identity_takeover_risk_in(c, task_id, now)
         if risk and not override_identity_risk:
             response = {"claimed": False, **risk,
@@ -2723,9 +2830,10 @@ def claim_next(agent_id: str, lanes: Any = None,
         by_id = {t["task_id"]: t for t in tasks}
         eligible = []
         skipped = {"active_claim": 0, "status": 0, "lane": 0, "dependencies": 0,
-                   "capability_mismatch": 0, "risk": 0, "budget": 0,
+                   "human_approval": 0, "capability_mismatch": 0, "risk": 0, "budget": 0,
                    "identity_unknown": 0}
         identity_risks: Dict[str, Dict[str, Any]] = {}
+        human_gates: Dict[str, Dict[str, Any]] = {}
         for t in tasks:
             if t["task_id"] in active_claims:
                 skipped["active_claim"] += 1
@@ -2738,6 +2846,11 @@ def claim_next(agent_id: str, lanes: Any = None,
                 continue
             if not _deps_done(t, by_id):
                 skipped["dependencies"] += 1
+                continue
+            gate = _task_human_gate_state(t)
+            if gate["blocked"]:
+                skipped["human_approval"] += 1
+                human_gates[t["task_id"]] = gate
                 continue
             identity_risk = _identity_takeover_risk_in(c, t["task_id"], now)
             if identity_risk and not override_identity_risk:
@@ -2765,6 +2878,7 @@ def claim_next(agent_id: str, lanes: Any = None,
                         "cursor": c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0],
                         "dispatch_reason": {"policy": "score.v1", "skipped": skipped,
                                             "candidate_count": 0,
+                                            "human_gates": human_gates,
                                             "identity_risks": identity_risks}}
             _idem_store(c, "claim_next", idem_key, actor, payload, response)
             return response
@@ -4925,6 +5039,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 "until it is repaired or deliberately handed off."
             ),
         },
+        "bug_intake_policy": bug_intake_policy(),
         "ports_doc": "docs/PORTS.md",
         "byo_data": True,
         "session_start_sequence": [

@@ -36,6 +36,19 @@ session so the fleet stays in sync.
   protocol, auth, or workflow problem, treat the discovered problem as part of the task until it is
   repaired or deliberately handed off.
 
+## Bug intake
+- Use the dedicated bug-intake path for agent-discovered bugs. Preserve the failing signal:
+  observed behavior, expected behavior, repro steps, evidence, severity hint, affected surface,
+  source task, and source agent.
+- Bug intake agents may file and triage `BUG` tasks automatically, dedupe duplicates, score
+  severity, and ask for missing evidence.
+- Bug intake agents may not create, prioritize, dispatch, claim, or wake implementation work
+  outside the `BUG` lane unless a human operator or explicit coordinator policy approves the
+  conversion.
+- Converted implementation work that still needs approval must carry `agent_state.human_gate`.
+  Until approved, `claim_task` fails with `human_approval_required` and `claim_next` skips it.
+- See [`docs/BUG-INTAKE-CONTRACT.md`](BUG-INTAKE-CONTRACT.md).
+
 ## Git discipline
 - **Push your branch before you claim progress.** Committed-but-unpushed work is invisible to
   the fleet and gets lost (it already did once).

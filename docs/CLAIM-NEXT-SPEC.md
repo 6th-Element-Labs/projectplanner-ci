@@ -217,6 +217,35 @@ Blocked, In Progress, Review, Done, Canceled
 
 Existing deployments may map their local statuses into this set.
 
+### 4.1 Human approval gates
+
+Some tasks are intentionally not claimable even when their dependencies are complete. Bug intake
+conversion is the first concrete case: a Bug Intake Agent may prepare implementation work, but the
+task must not enter dispatch until a human operator or explicit coordinator policy approves it.
+
+Human-gated work carries structured task state under `agent_state.human_gate`:
+
+```json
+{
+  "required": true,
+  "source_bug_task_id": "BUG-123",
+  "target_workstream": "HARDEN",
+  "severity": "high",
+  "approval_reason": "Why this bug should become implementation work",
+  "approved_by": "switchboard/operator",
+  "approved_at": "2026-07-02T00:00:00Z"
+}
+```
+
+Until approval is present:
+
+- `claim_task` fails closed with `reason=human_approval_required`;
+- `claim_next` skips the task and increments `dispatch_reason.skipped.human_approval`;
+- task detail exposes `human_gate.status=human_approval_required`.
+
+This keeps intake agents useful as sensors and triagers without making them a hidden
+implementation-dispatch path.
+
 ---
 
 ## 5. Selection policy
