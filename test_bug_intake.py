@@ -116,6 +116,16 @@ try:
     ok(bad_source.status_code == 400 and
        bad_source.json()["detail"]["error"] == "unknown_source_task",
        "REST submit_bug fails closed on unknown source_task")
+    bad_class = client.post(
+        "/ixp/v1/bugs/submit",
+        json={**payload, "failure_class": "mystery fallback"},
+        headers={"Authorization": f"Bearer {BUG_TOKEN}"},
+    )
+    bad_class_body = bad_class.json()["detail"]
+    ok(bad_class.status_code == 400 and
+       bad_class_body["error"] == "invalid_failure_class" and
+       bad_class_body["schema"]["schema"] == "fail_fix_signal.v1",
+       "REST submit_bug fails closed on unknown failure_class with schema details")
 
     good = client.post(
         "/ixp/v1/bugs/submit",
@@ -135,6 +145,10 @@ try:
     ok(report.get("evidence", {}).get("command") == "claim_next" and
        report.get("failure_class") == "invalid_input",
        "bug_report preserves structured evidence and failure class")
+    ok(report.get("failure_class_detail", {}).get("label") == "Invalid input" and
+       report.get("fail_fix_signal", {}).get("schema") == "fail_fix_signal.v1" and
+       report["fail_fix_signal"]["expected_signal"],
+       "bug_report embeds the fail_fix_signal.v1 schema instance")
     source_after = store.get_task(source["task_id"], project=P)
     ok(any(a["kind"] == "bug.reported_from_task" for a in source_after["activity"]),
        "source task receives an audit link to the submitted bug")

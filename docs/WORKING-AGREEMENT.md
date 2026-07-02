@@ -27,6 +27,10 @@ session so the fleet stays in sync.
 - Surface missing data, broken connections, invalid inputs, stale branches, failed checks, and
   missing permissions as soon as they appear. Do not hide them behind placeholder values, silent
   defaults, or optimistic status updates.
+- Use [`fail_fix_signal.v1`](FAIL-FIX-SIGNAL-SCHEMA.md) for product-level or repeated failures.
+  The canonical failure classes are `missing_data`, `broken_connection`, `invalid_input`,
+  `stale_branch`, `absent_permission`, `malformed_payload`, `failed_gate`, `unreachable_agent`,
+  `unbound_identity`, and `hidden_fallback`.
 - If a failure is real and fixable inside your scope, fix it before moving on. If it is outside
   your scope, leave an auditable signal where the next actor will see it: a failing PR status,
   task comment, reconcile finding, monitor event, or explicit blocker.
@@ -39,7 +43,7 @@ session so the fleet stays in sync.
 ## Bug intake
 - Use the dedicated bug-intake path for agent-discovered bugs. Preserve the failing signal:
   observed behavior, expected behavior, repro steps, evidence, severity hint, affected surface,
-  source task, and source agent.
+  source task, source agent, and failure class when the report is a fail/fix signal.
 - Bug intake agents may file and triage `BUG` tasks automatically, dedupe duplicates, score
   severity, and ask for missing evidence.
 - Bug intake agents may not create, prioritize, dispatch, claim, or wake implementation work

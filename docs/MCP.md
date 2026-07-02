@@ -33,6 +33,8 @@ Reads (open):
   payload transfer, or client-side scheduling.
 - `get_working_agreement(project)` — connect-time rules: definition of done, branch convention,
   merge strategy, canonical main SHA, protocol/profile envelope, and session-start sequence.
+  It also publishes the `fail_fix_signal.v1` schema from
+  [`FAIL-FIX-SIGNAL-SCHEMA.md`](FAIL-FIX-SIGNAL-SCHEMA.md).
 - `doc_search(query)` — cited snippets from the plan docs.
 - `ask_plan(question)` — the **full plan-wide agent** as one tool: a reasoned, doc-grounded
   answer (with sources), and a proposed task change when relevant (NOT applied).
@@ -132,6 +134,8 @@ Bug intake rule:
 - A complete submission creates one `BUG` task in `Triage` with structured `bug_report` state,
   source task/agent linkage, evidence payload, severity hint, affected surface, and optional
   failure class / duplicate link.
+- `failure_class`, when present, must be one of the `fail_fix_signal.v1` classes. Unknown classes
+  fail closed and return the schema instead of creating a BUG task.
 - It never creates implementation work, marks work Ready, claims work, wakes an agent, or bypasses
   the human gate.
 - REST parity lives at `POST /ixp/v1/bugs/submit`.
@@ -147,6 +151,8 @@ Durable ack rule:
   `on_ack_timeout="wake_target"` or `on_ack_timeout="wake_or_operator_alert"` to create a
   durable wake intent for an eligible Agent Host. Host registration and wake intent semantics
   are specified in [`docs/AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
+- Ack timeouts are typed as `unreachable_agent`, and visible delivery fallback comments carry the
+  same failure class so QA and operators do not mistake mailbox storage for delivery.
 
 Agent Host wake rule:
 - `register_host` advertises always-on host inventory, runtimes, lanes, capabilities, capacity,

@@ -203,17 +203,95 @@ BUG_REPORT_REQUIRED_FIELDS = [
     "affected_surface",
 ]
 BUG_SEVERITIES = {"low": "Low", "medium": "Medium", "high": "High", "critical": "High"}
-BUG_FAILURE_CLASSES = {
-    "missing_data",
-    "broken_connection",
-    "invalid_input",
-    "stale_branch",
-    "absent_permission",
-    "malformed_payload",
-    "failed_gate",
-    "unreachable_agent",
-    "unbound_identity",
-    "hidden_fallback",
+FAIL_FIX_REQUIRED_FIELDS = [
+    "source",
+    "failure_class",
+    "severity",
+    "affected_surface",
+    "observed_behavior",
+    "expected_behavior",
+    "repro_steps",
+    "evidence",
+    "task_id",
+]
+FAIL_FIX_FAILURE_CLASSES = {
+    "missing_data": {
+        "label": "Missing data",
+        "default_severity": "medium",
+        "description": "A required field, artifact, status, or provenance signal is absent.",
+        "expected_signal": "Required data is present before workflow execution continues.",
+    },
+    "broken_connection": {
+        "label": "Broken connection",
+        "default_severity": "medium",
+        "description": "A network, GitHub, MCP, provider, or service dependency cannot be reached.",
+        "expected_signal": "The dependency returns a structured response or a loud connection error.",
+    },
+    "invalid_input": {
+        "label": "Invalid input",
+        "default_severity": "medium",
+        "description": "A caller supplied a known field with an invalid value or unsafe state transition.",
+        "expected_signal": "The invalid value is rejected before downstream state changes.",
+    },
+    "stale_branch": {
+        "label": "Stale branch",
+        "default_severity": "high",
+        "description": "Git or board state points at a stale, missing, or unreachable branch/SHA.",
+        "expected_signal": "The current branch, head SHA, and canonical main proof are reachable.",
+    },
+    "absent_permission": {
+        "label": "Absent permission",
+        "default_severity": "high",
+        "description": "A principal lacks the scope, token, approval, or policy authority for an action.",
+        "expected_signal": "The action is denied with the missing authority named.",
+    },
+    "malformed_payload": {
+        "label": "Malformed payload",
+        "default_severity": "medium",
+        "description": "A request or stored payload is syntactically malformed or cannot be decoded.",
+        "expected_signal": "Payload shape is validated and malformed input fails closed.",
+    },
+    "failed_gate": {
+        "label": "Failed gate",
+        "default_severity": "high",
+        "description": "A CI, QA, review, human gate, or lifecycle gate failed or was bypassed.",
+        "expected_signal": "The gate failure is visible and blocks release/dispatch until repaired.",
+    },
+    "unreachable_agent": {
+        "label": "Unreachable agent",
+        "default_severity": "medium",
+        "description": "A directed agent, runtime, or host could not be reached or did not ack.",
+        "expected_signal": "Delivery, mailbox, wakeability, and fallback state are explicit.",
+    },
+    "unbound_identity": {
+        "label": "Unbound identity",
+        "default_severity": "high",
+        "description": "Work was written by a shared/system principal without a bound active runtime.",
+        "expected_signal": "The runtime identity is registered, bound, and visible to operators.",
+    },
+    "hidden_fallback": {
+        "label": "Hidden fallback",
+        "default_severity": "critical",
+        "description": "A fallback, placeholder, or optimistic status masks the original failure.",
+        "expected_signal": "Fallbacks are named and preserve a red/yellow auditable signal.",
+    },
+}
+BUG_FAILURE_CLASSES = set(FAIL_FIX_FAILURE_CLASSES)
+RECONCILE_FAILURE_CLASS_BY_CODE = {
+    "canonical_main_sha_not_found": "stale_branch",
+    "done_pr_not_merged": "hidden_fallback",
+    "done_without_merged_sha": "hidden_fallback",
+    "head_sha_not_found": "stale_branch",
+    "merged_sha_mismatch": "invalid_input",
+    "merged_sha_not_found": "stale_branch",
+    "merged_sha_not_on_canonical_main": "stale_branch",
+    "missing_canonical_main_sha": "missing_data",
+    "progress_without_pushed_head": "missing_data",
+    "pr_state_unavailable": "broken_connection",
+    "review_without_provenance": "missing_data",
+    "stale_file_lease": "failed_gate",
+    "stale_resource_lease": "failed_gate",
+    "stale_task_claim": "failed_gate",
 }
 
 # Plan-level sections that are not per-task (kept verbatim from the seed snapshot).
@@ -887,6 +965,47 @@ def _slug_token(value: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", (value or "").strip().lower()).strip("_")
 
 
+def fail_fix_signal_schema() -> Dict[str, Any]:
+    return {
+        "schema": "fail_fix_signal.v1",
+        "required_fields": list(FAIL_FIX_REQUIRED_FIELDS),
+        "failure_classes": {
+            key: dict(value)
+            for key, value in sorted(FAIL_FIX_FAILURE_CLASSES.items())
+        },
+        "reporting_rule": (
+            "Preserve the original failing signal. Do not replace it with a placeholder, "
+            "silent default, optimistic status, or hidden fallback."
+        ),
+        "visible_fallback_rule": (
+            "Fallbacks are allowed only when they are named and leave an auditable "
+            "red/yellow signal such as a BUG report, reconcile finding, monitor event, "
+            "task comment, or blocker."
+        ),
+    }
+
+
+def _failure_class_detail(failure_class: str) -> Optional[Dict[str, Any]]:
+    detail = FAIL_FIX_FAILURE_CLASSES.get(_slug_token(failure_class or ""))
+    return dict(detail) if detail else None
+
+
+def _reconcile_failure_class(code: str) -> str:
+    return RECONCILE_FAILURE_CLASS_BY_CODE.get(
+        _slug_token(code or ""), "failed_gate")
+
+
+def _annotate_reconcile_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
+    failure_class = finding.get("failure_class") or _reconcile_failure_class(
+        str(finding.get("code") or ""))
+    detail = _failure_class_detail(failure_class) or {}
+    annotated = dict(finding)
+    annotated["failure_class"] = failure_class
+    annotated["expected_signal"] = annotated.get(
+        "expected_signal") or detail.get("expected_signal")
+    return annotated
+
+
 def _bug_title(surface: str, observed: str, explicit_title: str = "") -> str:
     if explicit_title and explicit_title.strip():
         return explicit_title.strip()[:160]
@@ -905,12 +1024,15 @@ def _bug_report_description(report: Dict[str, Any]) -> str:
         evidence_text = json.dumps(evidence, indent=2, sort_keys=True)
     else:
         evidence_text = str(evidence or "")
+    failure_detail = _failure_class_detail(str(report.get("failure_class") or "")) or {}
+    failure_label = failure_detail.get("label") or report.get("failure_class") or "(unspecified)"
     return "\n".join([
         f"Bug submitted by: {report.get('source_agent')}",
         f"Source task: {report.get('source_task')}",
         f"Affected surface: {report.get('affected_surface')}",
         f"Severity hint: {report.get('severity_hint')}",
-        f"Failure class: {report.get('failure_class') or '(unspecified)'}",
+        f"Failure class: {failure_label}",
+        f"Expected fail-fix signal: {failure_detail.get('expected_signal') or '(unspecified)'}",
         f"Duplicate of: {report.get('duplicate_of') or '(none)'}",
         "",
         "Observed behavior:",
@@ -1237,6 +1359,8 @@ def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
             if not active_agents:
                 payload = {
                     "actor": actor,
+                    "failure_class": "unbound_identity",
+                    "expected_signal": FAIL_FIX_FAILURE_CLASSES["unbound_identity"]["expected_signal"],
                     "reason": "system_principal_write_without_active_agent",
                     "message": (
                         "This write came from a shared system token, but no active "
@@ -1325,8 +1449,10 @@ def submit_bug(data: Dict[str, Any], actor: str = "agent",
         return {
             "error": "invalid_failure_class",
             "allowed": sorted(BUG_FAILURE_CLASSES),
-            "message": "failure_class is optional, but supplied values must match the BUG-1 taxonomy.",
+            "schema": fail_fix_signal_schema(),
+            "message": "failure_class is optional, but supplied values must match fail_fix_signal.v1.",
         }
+    failure_detail = _failure_class_detail(failure_class) if failure_class else None
 
     with _conn(project) as c:
         source = c.execute("SELECT * FROM tasks WHERE task_id=?", (source_task,)).fetchone()
@@ -1366,6 +1492,22 @@ def submit_bug(data: Dict[str, Any], actor: str = "agent",
         "severity_hint": severity,
         "affected_surface": str(payload.get("affected_surface") or "").strip(),
         "failure_class": failure_class or None,
+        "failure_class_detail": failure_detail,
+        "fail_fix_signal": {
+            "schema": "fail_fix_signal.v1",
+            "source": "submit_bug",
+            "failure_class": failure_class or None,
+            "severity": severity,
+            "affected_surface": str(payload.get("affected_surface") or "").strip(),
+            "observed_behavior": str(payload.get("observed_behavior") or "").strip(),
+            "expected_behavior": str(payload.get("expected_behavior") or "").strip(),
+            "repro_steps": payload.get("repro_steps"),
+            "evidence": _parse_jsonish(payload.get("evidence")),
+            "task_id": source_task,
+            "expected_signal": (
+                failure_detail or {}
+            ).get("expected_signal") or str(payload.get("expected_behavior") or "").strip(),
+        },
         "duplicate_of": duplicate_of or None,
     }
     task = create_task({
@@ -4336,11 +4478,18 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
         if identity_state.get("status") != "clear":
             response["identity"] = identity_state
         if not delivery.get("reachable"):
+            failure_class = (
+                "unbound_identity"
+                if delivery.get("status") == "identity_unbound"
+                else "unreachable_agent"
+            )
             response["warning"] = delivery.get("message")
             response["fallback"] = {
                 "task_comment": task_exists,
                 "reason": delivery.get("reason"),
                 "takeover_safe": delivery.get("takeover_safe", True),
+                "failure_class": failure_class,
+                "expected_signal": FAIL_FIX_FAILURE_CLASSES[failure_class]["expected_signal"],
             }
         if requires_ack:
             monitor = _create_ack_monitor(c, msg_id, from_agent, to_agent, task_id,
@@ -4358,6 +4507,8 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                      "from_agent": from_agent,
                      "to_agent": to_agent,
                      "delivery": delivery,
+                     "failure_class": failure_class,
+                     "expected_signal": FAIL_FIX_FAILURE_CLASSES[failure_class]["expected_signal"],
                  }, sort_keys=True), now),
             )
             if task_exists:
@@ -4377,7 +4528,11 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                     "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
                     "VALUES (?,?,?,?,?)",
                     (task_id, "switchboard/delivery", "comment",
-                     json.dumps({"text": fallback_text}, sort_keys=True), now),
+                     json.dumps({
+                         "text": fallback_text,
+                         "failure_class": failure_class,
+                         "expected_signal": FAIL_FIX_FAILURE_CLASSES[failure_class]["expected_signal"],
+                     }, sort_keys=True), now),
                 )
         _idem_store(c, "send", idem_key, from_agent, payload, response)
         return response
@@ -4599,14 +4754,19 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
             msg = c.execute("SELECT * FROM agent_messages WHERE id=?",
                             (int(mon.get("target_id") or 0),)).fetchone()
             if not msg:
-                result = {"reason": "target_missing"}
+                result = {
+                    "reason": "target_missing",
+                    "failure_class": "missing_data",
+                    "expected_signal": FAIL_FIX_FAILURE_CLASSES["missing_data"]["expected_signal"],
+                }
                 c.execute(
                     "UPDATE coordination_monitors SET status='cancelled', resolved_at=?, "
                     "last_checked_at=?, updated_at=?, result_json=? WHERE id=?",
                     (now, now, now, json.dumps(result, sort_keys=True), mon["id"]),
                 )
                 events.append({"monitor_id": mon["id"], "status": "cancelled",
-                               "reason": "target_missing"})
+                               "reason": "target_missing",
+                               "failure_class": "missing_data"})
                 continue
             if msg["acked_at"] is not None:
                 result = {"acked_at": msg["acked_at"], "ack_response": msg["ack_response"]}
@@ -4627,7 +4787,9 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
             if deadline is not None and deadline <= now:
                 action = (mon.get("on_timeout") or {}).get("action") or "notify_sender"
                 result = {"reason": "ack_timeout", "deadline": deadline, "fired_at": now,
-                          "on_timeout": action}
+                          "on_timeout": action,
+                          "failure_class": "unreachable_agent",
+                          "expected_signal": FAIL_FIX_FAILURE_CLASSES["unreachable_agent"]["expected_signal"]}
                 c.execute(
                     "UPDATE coordination_monitors SET status='fired', fired_at=?, "
                     "last_checked_at=?, updated_at=?, result_json=? WHERE id=?",
@@ -4635,7 +4797,9 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                 )
                 payload = {"monitor_id": mon["id"], "message_id": msg["id"],
                            "from_agent": msg["from_agent"], "to_agent": msg["to_agent"],
-                           "deadline": deadline}
+                           "deadline": deadline,
+                           "failure_class": "unreachable_agent",
+                           "expected_signal": FAIL_FIX_FAILURE_CLASSES["unreachable_agent"]["expected_signal"]}
                 c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                           (msg["task_id"], "switchboard/monitor", "monitor.timeout",
                            json.dumps(payload, sort_keys=True), now))
@@ -4652,7 +4816,9 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                                   "to_agent": msg["from_agent"], "task_id": msg["task_id"],
                                   "message": notice, "requires_ack": True,
                                   "signal": "ack_timeout", "priority": 100,
-                                  "sent_at": now}
+                                  "sent_at": now,
+                                  "failure_class": "unreachable_agent",
+                                  "expected_signal": FAIL_FIX_FAILURE_CLASSES["unreachable_agent"]["expected_signal"]}
                 c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                           (msg["task_id"], "switchboard/monitor", "message.sent",
                            json.dumps(notice_payload, sort_keys=True), now))
@@ -4678,7 +4844,8 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                     )
                 fired += 1
                 event = {"monitor_id": mon["id"], "status": "fired",
-                         "message_id": msg["id"], "notice_id": cur.lastrowid}
+                         "message_id": msg["id"], "notice_id": cur.lastrowid,
+                         "failure_class": "unreachable_agent"}
                 if wake:
                     event["wake_id"] = wake["wake_id"]
                     event["wake_status"] = wake["status"]
@@ -5211,6 +5378,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         },
         "fail_fix_early_policy": {
             "summary": "Surface real failures immediately and repair them before they spread.",
+            "schema": fail_fix_signal_schema(),
             "surface_immediately": [
                 "missing data",
                 "broken connections",
@@ -5235,6 +5403,10 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 "When a gate uncovers an environment, ingestion, normalization, protocol, "
                 "auth, or workflow problem, treat the discovered problem as part of the task "
                 "until it is repaired or deliberately handed off."
+            ),
+            "bug_reporting": (
+                "If the failure is product-level or repeated, file it through submit_bug with "
+                "one of the fail_fix_signal.v1 failure_class values and complete evidence."
             ),
         },
         "bug_intake_policy": bug_intake_policy(),
@@ -5580,6 +5752,7 @@ def _reconcile_signature(findings: List[Dict[str, Any]]) -> str:
         "severity": f.get("severity") or "",
         "task_id": f.get("task_id") or "",
         "code": f.get("code") or "",
+        "failure_class": f.get("failure_class") or "",
         "detail": f.get("detail") or "",
     } for f in sorted(findings, key=lambda x: (
         x.get("task_id") or "", x.get("code") or "", x.get("severity") or ""))]
@@ -5594,7 +5767,11 @@ def _format_reconcile_alert(project: str, findings: List[Dict[str, Any]],
     ]
     for f in findings[:limit]:
         task = f.get("task_id") or "board"
-        lines.append(f"- [{f.get('severity')}] {task} {f.get('code')}: {f.get('detail')}")
+        failure_class = f.get("failure_class") or "failed_gate"
+        lines.append(
+            f"- [{f.get('severity')}] {task} {f.get('code')} "
+            f"({failure_class}): {f.get('detail')}"
+        )
     if len(findings) > limit:
         lines.append(f"- ... {len(findings) - limit} more; run reconcile(project={project!r}) for full detail.")
     lines.append("Treat this as a Switchboard-owned drift interrupt: fix provenance, release stale claims, or document the exception.")
@@ -5701,6 +5878,7 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         findings.append({"severity": "medium", "task_id": None,
                          "code": "missing_canonical_main_sha",
                          "detail": "No canonical main SHA recorded yet; wait for a default-branch push webhook or set meta."})
+    findings = [_annotate_reconcile_finding(f) for f in findings]
     append_activity("reconcile.completed", "reconcile",
                     {"findings": len(findings), "backfilled": backfilled},
                     task_id=None, project=project)

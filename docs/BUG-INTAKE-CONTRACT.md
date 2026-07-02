@@ -6,6 +6,10 @@ Switchboard agents are expected to surface bugs as soon as they find them, but t
 not turn every discovered bug into unsupervised implementation work. Bug intake is a triage lane,
 not a dispatch bypass.
 
+Fail-and-fix-early reports use the shared
+[`fail_fix_signal.v1`](FAIL-FIX-SIGNAL-SCHEMA.md) taxonomy so BUG intake, reconcile, monitors,
+task-comment fallbacks, and QA-9 negative tests speak the same language.
+
 ## Role
 
 A Bug Intake Agent receives agent-discovered bugs, normalizes them into reproducible reports,
@@ -30,7 +34,7 @@ Every submitted bug report should preserve the failing signal and include:
 | `evidence` | Yes | Logs, PR, URL, file path, screenshot, trace, or command output summary. |
 | `severity_hint` | Yes | Reporter estimate: `low`, `medium`, `high`, or `critical`. |
 | `affected_surface` | Yes | UI, MCP, REST, adapter, reconcile, CI, docs, scheduler, auth, etc. |
-| `failure_class` | Recommended | Missing data, broken connection, invalid input, stale branch, absent permission, malformed payload, failed gate, unreachable agent, unbound identity, hidden fallback. |
+| `failure_class` | Recommended | Canonical `fail_fix_signal.v1` class: `missing_data`, `broken_connection`, `invalid_input`, `stale_branch`, `absent_permission`, `malformed_payload`, `failed_gate`, `unreachable_agent`, `unbound_identity`, or `hidden_fallback`. |
 | `duplicate_of` | If known | Canonical `BUG-*` task. |
 
 Missing required fields keep the bug in intake/needs-info state. The intake agent should ask the
@@ -44,6 +48,10 @@ Agents file complete bug reports through `submit_bug(...)` over MCP or
 Successful submission creates one `BUG` task in `Triage` with structured `bug_report` state,
 source task/agent linkage, and the original evidence payload. Submission does not create
 implementation work, mark any task Ready, claim work, wake an agent, or bypass the human gate.
+
+If `failure_class` is supplied, intake stores both `failure_class_detail` and a nested
+`fail_fix_signal` record. If the class is unknown, submission fails closed and returns the schema;
+no BUG task is created.
 
 ## Severity Rubric
 

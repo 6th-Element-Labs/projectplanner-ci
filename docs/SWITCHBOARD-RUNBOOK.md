@@ -147,6 +147,10 @@ invalid inputs, stale branch state, absent credentials, failed tests, and malfor
 be reported at the point they are detected. Do not replace them with placeholder values or hidden
 defaults that let downstream work keep moving on false assumptions.
 
+Use [`fail_fix_signal.v1`](FAIL-FIX-SIGNAL-SCHEMA.md) for any product-level or repeated failure.
+The same taxonomy is emitted by BUG intake, reconcile findings, monitor timeouts, and visible
+task-comment fallbacks.
+
 Operationally, this means:
 
 - ingestion, normalization, protocol adapters, CI gates, monitors, and workflow execution should
@@ -158,6 +162,8 @@ Operationally, this means:
   even if the bug is in the environment or process rather than the first code change;
 - if the current agent cannot fix the issue safely, it must leave a precise blocker with the
   observed command, failing input, expected signal, and next action.
+- if the issue is product-level or repeated, file it through `submit_bug` with a canonical
+  `failure_class` instead of leaving it as chat-only noise.
 
 This is why the CI fallback posts `Switchboard CI / VM gate` instead of silently replacing GitHub
 Actions: GitHub Actions remains visibly broken, while PRs still get a concrete pass/fail signal.

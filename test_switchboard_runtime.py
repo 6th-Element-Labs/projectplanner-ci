@@ -102,6 +102,11 @@ try:
        "working agreement tells agents not to hide failures")
     ok("visible" in policy["fallback_rule"] and "original failing signal" in policy["fallback_rule"],
        "working agreement allows only visible fallbacks")
+    schema = policy.get("schema") or {}
+    ok(schema.get("schema") == "fail_fix_signal.v1" and
+       "failure_class" in schema.get("required_fields", []) and
+       "hidden_fallback" in schema.get("failure_classes", {}),
+       "working agreement publishes fail_fix_signal.v1 taxonomy")
     bug_policy = agreement.get("bug_intake_policy", {})
     ok(bug_policy.get("scope") == "write:bug_intake" and
        "create implementation work outside the BUG lane"
@@ -252,6 +257,8 @@ try:
        "send_agent_message marks absent target agents as unreachable")
     ok(msg.get("fallback", {}).get("task_comment") is True,
        "unreachable directed messages advertise the visible task-comment fallback")
+    ok(msg.get("fallback", {}).get("failure_class") == "unreachable_agent",
+       "unreachable directed messages classify their visible fallback")
     message_task_after_send = store.get_task(message_task["task_id"], project=P)
     ok(any(a["kind"] == "message.delivery_unreachable"
            for a in message_task_after_send["activity"]),
@@ -259,6 +266,10 @@ try:
     ok(any(a["kind"] == "comment" and a["actor"] == "switchboard/delivery"
            for a in message_task_after_send["activity"]),
        "unreachable directed messages add a visible fallback task comment")
+    ok(any(a["kind"] == "comment" and
+           a["payload"].get("failure_class") == "unreachable_agent"
+           for a in message_task_after_send["activity"]),
+       "visible fallback task comments carry a failure class")
     ok(msg.get("monitor_id") and msg.get("monitor", {}).get("kind") == "ack_deadline",
        "requires_ack creates a durable ack monitor")
     seconds_msg = store.send_agent_message(
@@ -308,9 +319,16 @@ try:
     ok(swept["fired"] == 1, "sweep_coordination_monitors fires timed-out ack monitor")
     timed_status = store.get_message_status(timed["id"], project=P)
     ok(timed_status["monitor"]["status"] == "fired", "timed-out monitor stays fired until resolved")
+    ok(timed_status["monitor"]["result"]["failure_class"] == "unreachable_agent",
+       "timed-out monitors preserve failure class in result")
     timeout_notice = store.list_unacked_messages("codex/TEST#1", project=P)
     ok(any(m.get("signal") == "ack_timeout" for m in timeout_notice),
        "ack timeout sends a notice back to the sender")
+    timeout_task_after = store.get_task(message_task["task_id"], project=P)
+    ok(any(a["kind"] == "monitor.timeout" and
+           a["payload"].get("failure_class") == "unreachable_agent"
+           for a in timeout_task_after["activity"]),
+       "monitor timeout activity is typed as unreachable_agent")
     wake_timed = store.send_agent_message(
         "codex/TEST#1",
         "claude/TEST#2",
@@ -364,6 +382,10 @@ try:
     unbound = store.get_task(unbound_task["task_id"], project=P)
     ok(any(a["kind"] == "principal.unbound_write" for a in unbound["activity"]),
        "shared env-token task comments create an unbound principal audit")
+    ok(any(a["kind"] == "principal.unbound_write" and
+           a["payload"].get("failure_class") == "unbound_identity"
+           for a in unbound["activity"]),
+       "unbound principal audits carry a failure class")
     ok(unbound["identity"]["status"] == "unbound_live_runtime_possible" and
        unbound["identity"]["takeover_safe"] is False,
        "task detail surfaces recent unbound activity as takeover risk")
@@ -380,6 +402,8 @@ try:
     ok(unbound_msg["delivery_status"] == "identity_unbound" and
        unbound_msg["fallback"]["takeover_safe"] is False,
        "directed message reports identity_unbound when task has recent unbound activity")
+    ok(unbound_msg["fallback"]["failure_class"] == "unbound_identity",
+       "identity-unbound directed messages classify the fallback")
     unbound_takeover = store.claim_task(
         unbound_task["task_id"],
         "codex/TAKEOVER#1",
@@ -1013,7 +1037,8 @@ try:
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (bad["task_id"], "legacy", "edit", "{\"status\":\"Done\"}", 0))
     report = store.reconcile(project=P)
-    ok(any(f["code"] == "done_without_merged_sha" and f["task_id"] == bad["task_id"]
+    ok(any(f["code"] == "done_without_merged_sha" and f["task_id"] == bad["task_id"] and
+           f["failure_class"] == "hidden_fallback" and f.get("expected_signal")
            for f in report["findings"]), "reconcile flags Done without merged_sha")
     alert = store.run_reconcile_alerts(
         project=P, alert_to="codex/test", actor="test/reconcile",
@@ -1022,7 +1047,8 @@ try:
        "reconcile_alerts sends an actionable alert when drift exists")
     alert_msgs = [m for m in store.list_unacked_messages("codex/test", project=P)
                   if m.get("signal") == "reconcile_alert"]
-    ok(any(bad["task_id"] in m["message"] and "done_without_merged_sha" in m["message"]
+    ok(any(bad["task_id"] in m["message"] and "done_without_merged_sha" in m["message"] and
+           "hidden_fallback" in m["message"]
            for m in alert_msgs), "reconcile_alert message names the drifting task")
     duplicate_alert = store.run_reconcile_alerts(
         project=P, alert_to="codex/test", actor="test/reconcile",
