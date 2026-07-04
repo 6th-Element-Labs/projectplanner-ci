@@ -1,4 +1,5 @@
 import importlib.util
+import tempfile
 from pathlib import Path
 
 
@@ -69,4 +70,27 @@ except gate.GateError:
 else:
     raise AssertionError("missing token should fail closed")
 
-print("\n10 passed, 0 failed")
+with tempfile.TemporaryDirectory(prefix="switchboard-pr-gate-") as tmp:
+    log_path = Path(tmp) / "gate.log"
+    gate._write_preflight_log(log_path, Path(tmp), {
+        "status": "red",
+        "project": "switchboard",
+        "intended_branch": "master",
+        "repo_path": tmp,
+        "target_ref": "HEAD",
+        "target_sha": "abc123",
+        "upstream_ref": "origin/master",
+        "upstream_sha": "def456",
+        "branch_distance": {"behind": 2, "ahead": 1},
+        "dirty": True,
+        "dirty_count": 1,
+        "findings": [{"severity": "high", "code": "target_branch_behind_upstream",
+                      "detail": "Target is behind.", "blocking": True}],
+    })
+    text = log_path.read_text(encoding="utf-8")
+    ok("Switchboard review git preflight" in text,
+       "gate log includes review preflight header")
+    ok("target_branch_behind_upstream" in text and "branch_distance" in text,
+       "gate log includes stale-branch evidence")
+
+print("\n12 passed, 0 failed")

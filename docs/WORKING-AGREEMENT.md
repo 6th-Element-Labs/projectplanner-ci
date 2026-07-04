@@ -74,8 +74,9 @@ session so the fleet stays in sync.
   PRs with strict dependency and frontend syntax checks.
 - Push the updated branch and verify the PR points at the pushed head.
 - Merge through GitHub or the configured merge queue only when review and required checks are green.
-  For Switchboard PRs, the `Switchboard CI / Core conformance and smoke tests` check should be
-  green before merge unless a human explicitly accepts the risk and records why.
+  For Switchboard PRs, the `Switchboard CI / VM gate` check should be green before merge unless a
+  human explicitly accepts the risk and records why. Treat a red/yellow review git preflight as a
+  stale-branch or dirty-worktree gate, not as a normal test failure to wave away.
 - After merge, fetch/pull the target branch, verify the changed content is present, and record the
   resulting `merged_sha` or target branch head.
 - Let the GitHub webhook or default-branch provenance path mark `Done`. If the webhook is down, run

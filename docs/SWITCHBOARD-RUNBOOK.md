@@ -134,6 +134,12 @@ PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
 The production gate is `projectplanner-ci-gate.timer`, which polls open non-draft PRs and posts
 the `Switchboard CI / VM gate` status from the Plan VM.
 
+Review/audit preflight: the VM gate now writes a `Switchboard review git preflight` header before
+running tests. That header records project, intended branch, target SHA, upstream SHA, branch
+distance, and dirty-worktree state. A red preflight, such as target branch behind upstream or dirty
+worktree, fails before reviewer/check agents run. A yellow preflight is allowed only with an
+explicit operator override and must remain visible in the report or task comment.
+
 GitHub Actions `startup_failure` rule: this private repo has produced Actions runs with
 `conclusion=startup_failure`, `jobs=[]`, and `path=BuildFailed` before any checkout/setup step.
 Treat those as CI-infra failures, not test results. Do not merge on a vague "red but probably

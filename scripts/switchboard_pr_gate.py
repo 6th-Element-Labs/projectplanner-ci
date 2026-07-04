@@ -21,6 +21,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+import review_preflight
+
 
 DEFAULT_REPO = "6th-Element-Labs/projectplanner"
 DEFAULT_CONTEXT = "Switchboard CI / VM gate"
@@ -158,12 +160,39 @@ def _cleanup_worktree(cache: Path, run_dir: Path) -> None:
     shutil.rmtree(run_dir, ignore_errors=True)
 
 
-def run_switchboard_gate(worktree: Path, log_path: Path, *, timeout_s: int) -> None:
+def _write_preflight_log(log_path: Path, worktree: Path, preflight: Dict[str, Any]) -> None:
+    with log_path.open("w", encoding="utf-8") as log:
+        log.write(f"Switchboard CI VM gate started at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
+        log.write(f"worktree={worktree}\n\n")
+        log.write(review_preflight.format_preflight_header(preflight))
+        log.write("\n")
+
+
+def _pr_preflight(worktree: Path, pr: Dict[str, Any], *, repo: str) -> Dict[str, Any]:
+    base = pr.get("base") or {}
+    upstream = (base.get("sha") or base.get("ref") or "").strip()
+    return review_preflight.run_git_review_preflight(
+        worktree,
+        target_ref="HEAD",
+        upstream_ref=upstream,
+        intended_project="switchboard",
+        intended_branch=(base.get("ref") or ""),
+        require_clean=True,
+        allow_dirty=False,
+        allow_behind=False,
+    )
+
+
+def run_switchboard_gate(worktree: Path, log_path: Path, *, timeout_s: int,
+                         preflight: Optional[Dict[str, Any]] = None) -> None:
     env = os.environ.copy()
     venv_python = worktree / ".venv" / "bin" / "python"
     with log_path.open("w", encoding="utf-8") as log:
         log.write(f"Switchboard CI VM gate started at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
         log.write(f"worktree={worktree}\n\n")
+        if preflight:
+            log.write(review_preflight.format_preflight_header(preflight))
+            log.write("\n")
         log.flush()
         _run(["python3", "-m", "venv", ".venv"], cwd=worktree, stdout=log)
         _run([str(venv_python), "-m", "pip", "install", "--disable-pip-version-check",
@@ -193,11 +222,17 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
     cache = _ensure_cache_repo(work_root, source_repo, repo)
     run_dir = _prepare_worktree(cache, work_root, pr, run_tag)
     try:
-        run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s)
+        preflight = _pr_preflight(run_dir, pr, repo=repo)
+        if preflight.get("status") != "pass":
+            _write_preflight_log(log_path, run_dir, preflight)
+            raise GateError("Switchboard review preflight failed: " +
+                            "; ".join(f.get("code", "unknown") for f in preflight.get("findings", [])))
+        run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s, preflight=preflight)
         post_status(repo, sha, "success", context=context,
                     description="Switchboard VM gate passed", target_url=pr_url,
                     token=token)
-        return {"pr": number, "sha": sha, "state": "success", "log": str(log_path)}
+        return {"pr": number, "sha": sha, "state": "success", "log": str(log_path),
+                "preflight": preflight}
     except Exception as exc:
         post_status(repo, sha, "failure", context=context,
                     description=f"Switchboard VM gate failed: {exc}", target_url=pr_url,
