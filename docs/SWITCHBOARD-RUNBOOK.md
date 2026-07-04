@@ -183,6 +183,20 @@ require either:
   `switchboard_session` cookie; or
 - an adapter/MCP bearer token such as `PM_MCP_TOKEN` or an explicit principal token.
 
+`PM_MCP_TOKEN` and `PM_AUTH_TOKEN` are compatibility shared tokens. They authenticate a caller but
+do not, by themselves, identify the agent or automation responsible for a task mutation. Public
+task writes that use those tokens must bind identity before the mutation:
+
+- agent work passes `agent_id` for a currently registered/heartbeat-active agent;
+- deliberate automation passes `system_actor` plus `system_reason`;
+- otherwise the write fails closed with `failure_class=unbound_identity` and no task row/comment
+  is created.
+
+Recommended adapter sequence: fetch the working agreement, `register_agent`, drain directed inbox
+and ack-required messages, claim/confirm the task, then call write tools such as `add_comment`,
+`update_task`, or `complete_claim` with the same `agent_id`. If more than one live agent is bound
+to the task, the server requires `agent_id` instead of inferring an author.
+
 First admin bootstrap is intentionally narrow:
 
 ```bash

@@ -389,6 +389,93 @@ try:
     ok(unbound["identity"]["status"] == "unbound_live_runtime_possible" and
        unbound["identity"]["takeover_safe"] is False,
        "task detail surfaces recent unbound activity as takeover risk")
+    binding_probe = store.create_task({"workstream_id": "BIND", "title": "binding guard"},
+                                      actor="seed", project=P)
+    unbound_binding = store.resolve_write_actor(
+        "env-mcp-token",
+        project=P,
+        task_id=binding_probe["task_id"],
+        principal_id="env-mcp-token",
+    )
+    ok(unbound_binding.get("ok") is False and
+       unbound_binding.get("error") == "shared_token_requires_bound_actor",
+       "public shared-token write resolver rejects unbound task mutations")
+    explicit_missing_reason = store.resolve_write_actor(
+        "env-mcp-token",
+        project=P,
+        task_id=binding_probe["task_id"],
+        system_actor="switchboard/fixture",
+        principal_id="env-mcp-token",
+    )
+    ok(explicit_missing_reason.get("ok") is False and
+       explicit_missing_reason.get("error") == "system_reason_required",
+       "shared-token system actor writes require an explicit reason")
+    explicit_system = store.resolve_write_actor(
+        "env-mcp-token",
+        project=P,
+        task_id=binding_probe["task_id"],
+        system_actor="switchboard/fixture",
+        system_reason="seed test fixture",
+        principal_id="env-mcp-token",
+    )
+    ok(explicit_system.get("ok") is True and
+       explicit_system.get("actor") == "switchboard/fixture" and
+       explicit_system.get("binding") == "explicit_system_actor",
+       "shared-token resolver binds deliberate automation writes to system_actor")
+    inferred_probe = store.create_task({"workstream_id": "BIND", "title": "inferred agent"},
+                                       actor="seed", project=P)
+    store.register_agent(
+        agent_id="codex/BIND#1",
+        runtime="codex",
+        model="gpt-5",
+        lane="BIND",
+        task_id=inferred_probe["task_id"],
+        control={"mode": "repo_edit"},
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    inferred_binding = store.resolve_write_actor(
+        "env-mcp-token",
+        project=P,
+        task_id=inferred_probe["task_id"],
+        principal_id="env-mcp-token",
+    )
+    ok(inferred_binding.get("ok") is True and
+       inferred_binding.get("actor") == "codex/BIND#1" and
+       inferred_binding.get("binding") == "inferred_registered_agent",
+       "shared-token resolver can infer the only live registered task agent")
+    store.register_agent(
+        agent_id="claude/BIND#2",
+        runtime="claude-code",
+        model="opus",
+        lane="BIND",
+        task_id=inferred_probe["task_id"],
+        control={"mode": "repo_edit"},
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    ambiguous_binding = store.resolve_write_actor(
+        "env-mcp-token",
+        project=P,
+        task_id=inferred_probe["task_id"],
+        principal_id="env-mcp-token",
+    )
+    ok(ambiguous_binding.get("ok") is False and
+       ambiguous_binding.get("error") == "agent_id_required",
+       "shared-token resolver requires agent_id when multiple live agents are on a task")
+    chosen_binding = store.resolve_write_actor(
+        "env-mcp-token",
+        project=P,
+        task_id=inferred_probe["task_id"],
+        agent_id="claude/BIND#2",
+        principal_id="env-mcp-token",
+    )
+    ok(chosen_binding.get("ok") is True and
+       chosen_binding.get("actor") == "claude/BIND#2" and
+       chosen_binding.get("binding") == "registered_agent",
+       "shared-token resolver accepts an explicit live registered agent_id")
     unbound_msg = store.send_agent_message(
         "codex/TEST#1",
         "claude/UNBOUND#1",

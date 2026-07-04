@@ -13,6 +13,16 @@ session so the fleet stays in sync.
 2. `register_agent(...)` — announce presence (the adapter does this for you when installed).
 3. Drain your inbox (`list_unacked_messages` / `inbox`) and `ack` anything handled.
 
+## Bound write identity
+- Compatibility env tokens such as `PM_MCP_TOKEN` and `PM_AUTH_TOKEN` authenticate the transport,
+  not the author of a task mutation. Before task writes, bind the write to a live registered agent
+  by passing `agent_id`, or use an explicit automation identity with `system_actor` and
+  `system_reason`.
+- Naked shared-token task writes fail closed with `failure_class=unbound_identity`. If multiple
+  live agents are on the same task, pass `agent_id` so Switchboard never guesses the author.
+- Normal agent order is: register, drain directed inbox/acks, claim or confirm the task, then
+  write comments/task updates/claim-completion evidence with the registered `agent_id`.
+
 ## Definition of Done
 - Use `complete_claim(claim_id, evidence={...})` to release your claim and record what you verified.
 - Agent completion moves the task to `In Review`, even if the implementation is finished and a PR

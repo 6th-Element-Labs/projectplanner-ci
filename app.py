@@ -132,6 +132,44 @@ def _actor_from_request(request: Request, fallback: str = "user") -> str:
     return auth.actor(p) if p else fallback
 
 
+def _resolve_public_write_actor(request: Request, project: str, body: dict,
+                                task_id: str = "", scopes=("write:tasks",)):
+    principal = _principal(request, project, scopes, dev_actor="web")
+    binding = store.resolve_write_actor(
+        auth.actor(principal),
+        project=project,
+        task_id=task_id,
+        agent_id=(body or {}).get("agent_id") or "",
+        system_actor=(body or {}).get("system_actor") or "",
+        system_reason=(body or {}).get("system_reason") or "",
+        principal_id=principal.get("id") or "",
+    )
+    if not binding.get("ok"):
+        raise HTTPException(409, binding)
+    return binding
+
+
+def _record_public_write_binding(task_id: str, binding: dict, project: str) -> None:
+    if not task_id or not isinstance(binding, dict):
+        return
+    if binding.get("binding") in ("principal", None):
+        return
+    store.append_activity(
+        "principal.write_bound",
+        "switchboard/identity",
+        store.write_binding_activity_payload(binding),
+        task_id=task_id,
+        project=project,
+    )
+
+
+def _without_write_binding_fields(body: dict) -> dict:
+    clean = dict(body or {})
+    for key in ("agent_id", "system_actor", "system_reason"):
+        clean.pop(key, None)
+    return clean
+
+
 def _attach_server_timing(response: Response, started_at: float) -> Response:
     elapsed_ms = (time.perf_counter() - started_at) * 1000
     metric = f"app;dur={elapsed_ms:.1f}"
@@ -527,28 +565,40 @@ async def get_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
 
 @app.post("/api/tasks")
 async def create_task(request: Request, body: dict = Body(...), project: str = Query(...)):
-    actor = _actor_from_request(request, body.pop("_actor", "user"))
-    t = store.create_task(body, actor=actor, project=_proj(project))
+    project = _proj(project)
+    body = dict(body or {})
+    binding = _resolve_public_write_actor(request, project, body)
+    actor = binding["actor"]
+    t = store.create_task(_without_write_binding_fields(body), actor=actor, project=project)
     if not t:
         raise HTTPException(400, "workstream_id and title are required")
+    _record_public_write_binding(t.get("task_id") or "", binding, project)
     return t
 
 
 @app.patch("/api/tasks/{task_id}")
 async def patch_task(request: Request, task_id: str, body: dict = Body(...), project: str = Query(...)):
-    actor = _actor_from_request(request, body.pop("_actor", "user"))
-    t = store.update_task(task_id, body, actor=actor, project=_proj(project))
+    project = _proj(project)
+    body = dict(body or {})
+    binding = _resolve_public_write_actor(request, project, body, task_id=task_id)
+    actor = binding["actor"]
+    t = store.update_task(task_id, _without_write_binding_fields(body),
+                          actor=actor, project=project)
     if not t:
         raise HTTPException(404, "task not found")
     if t.get("error") == "done_requires_merge_provenance":
         raise HTTPException(409, t.get("message") or "Done requires merge provenance")
+    _record_public_write_binding(task_id, binding, project)
     return t
 
 
 @app.post("/api/tasks/{task_id}/verify_offline")
 async def verify_task_offline(request: Request, task_id: str, body: dict = Body(default={}),
                               project: str = Query(...)):
-    actor = _actor_from_request(request, body.pop("_actor", "switchboard/operator"))
+    project = _proj(project)
+    body = dict(body or {})
+    binding = _resolve_public_write_actor(request, project, body, task_id=task_id)
+    actor = binding["actor"]
     result = store.mark_task_offline_done(
         task_id,
         evidence=body.get("evidence") or body.get("evidence_json") or {},
@@ -557,12 +607,13 @@ async def verify_task_offline(request: Request, task_id: str, body: dict = Body(
         verifier=body.get("verifier") or actor,
         reviewed_at=body.get("reviewed_at"),
         actor=actor,
-        project=_proj(project),
+        project=project,
     )
     if result.get("error") == "task not found":
         raise HTTPException(404, result)
     if result.get("error"):
         raise HTTPException(409, result)
+    _record_public_write_binding(task_id, binding, project)
     return result
 
 
@@ -634,11 +685,14 @@ async def api_revoke_claim(request: Request, task_id: str, claim_id: str,
 
 @app.post("/api/tasks/{task_id}/comment")
 async def comment(request: Request, task_id: str, body: dict = Body(...), project: str = Query(...)):
+    project = _proj(project)
+    body = dict(body or {})
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text required")
-    t = store.add_comment(task_id, _actor_from_request(request, body.get("actor", "user")),
-                          text, project=_proj(project))
+    binding = _resolve_public_write_actor(request, project, body, task_id=task_id)
+    _record_public_write_binding(task_id, binding, project)
+    t = store.add_comment(task_id, binding["actor"], text, project=project)
     if not t:
         raise HTTPException(404, "task not found")
     return t

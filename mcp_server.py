@@ -96,6 +96,37 @@ def _require_write(ctx, project: str = "maxwell", scopes=("write:tasks",)):
         raise ValueError(str(e))
 
 
+def _resolve_write_actor(principal, project: str = "maxwell", task_id: str = "",
+                         agent_id: str = "", system_actor: str = "",
+                         system_reason: str = ""):
+    binding = store.resolve_write_actor(
+        auth.actor(principal),
+        project=project,
+        task_id=task_id,
+        agent_id=agent_id,
+        system_actor=system_actor,
+        system_reason=system_reason,
+        principal_id=principal.get("id") or "",
+    )
+    if not binding.get("ok"):
+        return binding
+    return binding
+
+
+def _write_binding_comment(task_id: str, binding, project: str = "maxwell") -> None:
+    if not task_id or not isinstance(binding, dict):
+        return
+    if binding.get("binding") in ("principal", None):
+        return
+    store.append_activity(
+        "principal.write_bound",
+        "switchboard/identity",
+        store.write_binding_activity_payload(binding),
+        task_id=task_id,
+        project=project,
+    )
+
+
 def _dep_ids(s):
     """Parse a comma/space/newline-separated list of task ids into a deduped, upper-cased list."""
     out, seen = [], set()
@@ -974,7 +1005,8 @@ def claim_task(task_id: str, agent_id: str, ctx: Context,
 
 @mcp.tool()
 def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status: str = "",
-                   project: str = "maxwell") -> str:
+                   project: str = "maxwell", agent_id: str = "",
+                   system_actor: str = "", system_reason: str = "") -> str:
     """Mark a task claim completed, release its task lease, and record completion evidence.
 
     This moves the task to In Review. Done is reserved for GitHub/default-branch merge
@@ -983,8 +1015,20 @@ def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status
     a JSON object string with branch, head_sha, pr_url/pr_number, or a verification note.
     """
     principal = _require_write(ctx, project, ("write:ixp",))
+    target = store.claim_binding_target(claim_id, project=project)
+    binding = _resolve_write_actor(
+        principal,
+        project=project,
+        task_id=target.get("task_id") or "",
+        agent_id=agent_id or target.get("agent_id") or "",
+        system_actor=system_actor,
+        system_reason=system_reason,
+    )
+    if not binding.get("ok"):
+        return _dumps(binding)
+    _write_binding_comment(target.get("task_id") or "", binding, project)
     return _dumps(store.complete_claim(claim_id, evidence=evidence, final_status=final_status,
-                                      actor=auth.actor(principal), project=project))
+                                      actor=binding["actor"], project=project))
 
 
 @mcp.tool()
@@ -1534,7 +1578,8 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
                 owner_org: str = "", owner_person_or_role: str = "", assignee: str = "",
                 phase: str = "", start_date: str = "", finish_date: str = "",
                 risk_level: str = "", is_blocking: str = "", depends_on: str = "",
-                project: str = "maxwell") -> str:
+                project: str = "maxwell", agent_id: str = "",
+                system_actor: str = "", system_reason: str = "") -> str:
     """Update only the fields you pass on a task. status: Not Started|In Progress|In Review|Blocked|Done;
     Done fails closed unless merge/default-branch provenance is already recorded for the task;
     dates: YYYY-MM-DD; is_blocking: 'true'/'false'. depends_on: comma/space-separated task ids that
@@ -1542,7 +1587,12 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
     incremental edge use add_dependency/remove_dependency). Audited as the authenticated actor.
     project selects the board ('maxwell' default, 'helm', or 'switchboard') — writes go ONLY to that board."""
     principal = _require_write(ctx, project)
-    actor_name = auth.actor(principal)
+    binding = _resolve_write_actor(
+        principal, project=project, task_id=task_id, agent_id=agent_id,
+        system_actor=system_actor, system_reason=system_reason)
+    if not binding.get("ok"):
+        return _dumps(binding)
+    actor_name = binding["actor"]
     fields = {}
     for k, v in (("title", title), ("description", description), ("status", status),
                  ("owner_org", owner_org), ("owner_person_or_role", owner_person_or_role),
@@ -1561,6 +1611,7 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
         fields["depends_on"] = new_deps
     if not fields:
         return "no fields to update"
+    _write_binding_comment(task_id, binding, project)
     t = store.update_task(task_id, fields, actor=actor_name, project=project)
     return _dumps(agent._task_brief(t)) if t else "no such task"
 
@@ -1569,13 +1620,19 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
 def create_task(workstream_id: str, title: str, ctx: Context, description: str = "",
                 owner_org: str = "", owner_person_or_role: str = "", status: str = "",
                 phase: str = "", risk_level: str = "", depends_on: str = "",
-                project: str = "maxwell") -> str:
+                project: str = "maxwell", agent_id: str = "",
+                system_actor: str = "", system_reason: str = "") -> str:
     """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm;
     PROTO/ADAPTER/ENFORCE/... for Switchboard). depends_on:
     comma/space-separated task ids this task dependsOn (e.g. 'BOAT-1, WX-10'). Returns the created task.
     Actor 'MCP'. project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     principal = _require_write(ctx, project)
-    actor_name = auth.actor(principal)
+    binding = _resolve_write_actor(
+        principal, project=project, agent_id=agent_id,
+        system_actor=system_actor, system_reason=system_reason)
+    if not binding.get("ok"):
+        return _dumps(binding)
+    actor_name = binding["actor"]
     deps = _dep_ids(depends_on)
     unknown = _unknown_ids(deps, project)
     if unknown:   # FAIL LOUD: refuse to create a task carrying edges to non-existent tasks
@@ -1586,6 +1643,8 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
             "status": status or None, "phase": phase or None, "risk_level": risk_level or None,
             "depends_on": deps}
     t = store.create_task(data, actor=actor_name, project=project)
+    if t:
+        _write_binding_comment(t.get("task_id") or "", binding, project)
     return _dumps(agent._task_brief(t)) if t else "workstream_id and title required"
 
 
@@ -1620,11 +1679,19 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
 
 
 @mcp.tool()
-def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell") -> str:
+def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell",
+                agent_id: str = "", system_actor: str = "",
+                system_reason: str = "") -> str:
     """Add a note to a task's activity log (audited as actor 'MCP').
     project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
     principal = _require_write(ctx, project)
-    t = store.add_comment(task_id, auth.actor(principal), text, project=project)
+    binding = _resolve_write_actor(
+        principal, project=project, task_id=task_id, agent_id=agent_id,
+        system_actor=system_actor, system_reason=system_reason)
+    if not binding.get("ok"):
+        return _dumps(binding)
+    _write_binding_comment(task_id, binding, project)
+    t = store.add_comment(task_id, binding["actor"], text, project=project)
     return "ok" if t else "no such task"
 
 

@@ -2370,6 +2370,158 @@ def _is_unbound_system_actor(actor: str) -> bool:
     )
 
 
+def _active_agent_presence_in(c: sqlite3.Connection, agent_id: str,
+                              now: float) -> Optional[Dict[str, Any]]:
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return None
+    row = c.execute("SELECT * FROM agent_presence WHERE agent_id=?", (agent_id,)).fetchone()
+    if not row:
+        return None
+    presence = _presence_row(row, now=now)
+    return None if presence.get("stale") else presence
+
+
+def resolve_write_actor(actor: str,
+                        project: str = DEFAULT_PROJECT,
+                        task_id: str = "",
+                        agent_id: str = "",
+                        system_actor: str = "",
+                        system_reason: str = "",
+                        principal_id: str = "") -> Dict[str, Any]:
+    """Resolve a public write actor, binding shared env tokens before mutation.
+
+    Compatibility env tokens are intentionally broad system principals. They
+    must not leave task/activity rows authored as a naked `env-*-token`: callers
+    either bind them to a live registered agent, or declare an explicit system
+    actor and reason that remains audit-visible.
+    """
+    now = time.time()
+    actor = (actor or "").strip() or "unknown"
+    task_id = (task_id or "").strip()
+    agent_id = (agent_id or "").strip()
+    system_actor = (system_actor or "").strip()
+    system_reason = (system_reason or "").strip()
+    if not _is_unbound_system_actor(actor):
+        return {"ok": True, "actor": actor, "binding": "principal", "principal_id": principal_id}
+
+    base_error = {
+        "ok": False,
+        "error": "shared_token_requires_bound_actor",
+        "failure_class": "unbound_identity",
+        "expected_signal": FAIL_FIX_FAILURE_CLASSES["unbound_identity"]["expected_signal"],
+        "principal_actor": actor,
+        "principal_id": principal_id,
+        "task_id": task_id or None,
+        "remediation": [
+            "Pass agent_id for a live registered agent before mutating task state.",
+            "Or pass system_actor plus system_reason for deliberate automation/system writes.",
+            "Register/heartbeat the runtime first if this is agent work.",
+        ],
+    }
+
+    if system_actor:
+        if _is_unbound_system_actor(system_actor):
+            return {
+                **base_error,
+                "error": "system_actor_must_be_explicit",
+                "message": "system_actor must name the automation, not the shared env token.",
+            }
+        if not system_reason:
+            return {
+                **base_error,
+                "error": "system_reason_required",
+                "message": "system_actor writes through a shared token require system_reason.",
+            }
+        return {
+            "ok": True,
+            "actor": system_actor,
+            "binding": "explicit_system_actor",
+            "principal_actor": actor,
+            "principal_id": principal_id,
+            "system_reason": system_reason,
+        }
+
+    with _conn(project) as c:
+        if agent_id:
+            presence = _active_agent_presence_in(c, agent_id, now)
+            if not presence:
+                return {
+                    **base_error,
+                    "error": "agent_not_registered",
+                    "agent_id": agent_id,
+                    "message": "agent_id is not currently registered/heartbeat-active.",
+                }
+            presence_task = (presence.get("task_id") or "").strip()
+            if task_id and presence_task and presence_task != task_id:
+                return {
+                    **base_error,
+                    "error": "agent_registered_on_different_task",
+                    "agent_id": agent_id,
+                    "registered_task_id": presence_task,
+                    "message": "agent_id is live but not bound to this task.",
+                }
+            return {
+                "ok": True,
+                "actor": agent_id,
+                "binding": "registered_agent",
+                "principal_actor": actor,
+                "principal_id": principal_id,
+                "agent_id": agent_id,
+            }
+        if task_id:
+            active_agents = _active_agent_ids_for_task(c, task_id, now)
+            if len(active_agents) == 1:
+                return {
+                    "ok": True,
+                    "actor": active_agents[0],
+                    "binding": "inferred_registered_agent",
+                    "principal_actor": actor,
+                    "principal_id": principal_id,
+                    "agent_id": active_agents[0],
+                }
+            if len(active_agents) > 1:
+                return {
+                    **base_error,
+                    "error": "agent_id_required",
+                    "active_agents": active_agents,
+                    "message": "multiple live agents are bound to this task; pass agent_id.",
+                }
+    return {
+        **base_error,
+        "message": "shared-token writes require a bound live agent or explicit system actor/reason.",
+    }
+
+
+def write_binding_activity_payload(binding: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "binding": binding.get("binding"),
+        "actor": binding.get("actor"),
+        "agent_id": binding.get("agent_id"),
+        "principal_actor": binding.get("principal_actor"),
+        "principal_id": binding.get("principal_id"),
+        "system_reason": binding.get("system_reason"),
+    }
+
+
+def claim_binding_target(claim_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    claim_id = (claim_id or "").strip()
+    if not claim_id:
+        return {}
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
+    if not row:
+        return {}
+    return {
+        "claim_id": row["id"],
+        "task_id": row["task_id"],
+        "agent_id": row["agent_id"],
+        "active": row["status"] == "active" and float(row["expires_at"] or 0) > now,
+        "principal_id": row["principal_id"],
+    }
+
+
 def _identity_risk_window_s() -> int:
     try:
         return max(60, int(os.environ.get("PM_IDENTITY_RISK_WINDOW_S", "1800")))
