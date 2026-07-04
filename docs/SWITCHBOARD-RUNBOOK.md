@@ -145,6 +145,13 @@ distance, and dirty-worktree state. A red preflight, such as target branch behin
 worktree, fails before reviewer/check agents run. A yellow preflight is allowed only with an
 explicit operator override and must remain visible in the report or task comment.
 
+Verifier resume rule: review/audit workflows that spawn skeptic verifier agents should write a
+`switchboard.review_verifier_run.v1` checkpoint with one deterministic job per
+finding/lens pair, using `review_verifier_runs.py`. Reruns must load the checkpoint and schedule
+only missing or retryable jobs. Token-limit/rate-limit failures are recorded as structured job
+states, final reports must include verifier completion ratios, and reports fail closed while a
+load-bearing finding is missing any required verifier lens.
+
 GitHub Actions `startup_failure` rule: this private repo has produced Actions runs with
 `conclusion=startup_failure`, `jobs=[]`, and `path=BuildFailed` before any checkout/setup step.
 Treat those as CI-infra failures, not test results. Do not merge on a vague "red but probably
