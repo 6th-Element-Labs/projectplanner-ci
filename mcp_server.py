@@ -832,10 +832,49 @@ def request_runner_kill(runner_session_id: str, ctx: Context,
 
 
 @mcp.tool()
+def request_runner_health(runner_session_id: str, ctx: Context,
+                          reason: str = "", project: str = "maxwell") -> str:
+    """Request host-side runner health from an environment that supports it.
+
+    Unsupported runtimes return a refused control request with reason=not_supported.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.request_runner_control(
+        runner_session_id, "health", reason=reason,
+        actor=auth.actor(principal), principal_id=principal["id"], project=project))
+
+
+@mcp.tool()
+def request_runner_logs(runner_session_id: str, ctx: Context,
+                        reason: str = "", project: str = "maxwell") -> str:
+    """Request host-side runner logs from an environment that supports it.
+
+    Unsupported runtimes return a refused control request with reason=not_supported.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.request_runner_control(
+        runner_session_id, "logs", reason=reason,
+        actor=auth.actor(principal), principal_id=principal["id"], project=project))
+
+
+@mcp.tool()
+def request_runner_open(runner_session_id: str, ctx: Context,
+                        reason: str = "", project: str = "maxwell") -> str:
+    """Request a host-side open action when the runtime explicitly advertises runner_open.
+
+    Unsupported runtimes return a refused control request with reason=not_supported.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.request_runner_control(
+        runner_session_id, "open", reason=reason,
+        actor=auth.actor(principal), principal_id=principal["id"], project=project))
+
+
+@mcp.tool()
 def list_runner_control_requests(project: str = "maxwell", status: str = "",
                                  host_id: str = "",
                                  runner_session_id: str = "") -> str:
-    """List pending/completed runner snapshot/kill/restart control requests."""
+    """List pending/completed runner snapshot/kill/restart/health/log/open control requests."""
     return _dumps(store.list_runner_control_requests(
         status=status, host_id=host_id, runner_session_id=runner_session_id,
         project=project))

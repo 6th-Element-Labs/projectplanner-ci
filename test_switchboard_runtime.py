@@ -639,7 +639,7 @@ try:
     )
     ok(refused_restart.get("requested") is False and
        refused_restart["status"] == "refused" and
-       refused_restart["result"]["reason"] == "action_not_supported",
+       refused_restart["result"]["reason"] == "not_supported",
        "restart request for unmanaged session is visibly refused")
     exact_target = store.create_task({"workstream_id": "EXACT", "title": "human-selected"},
                                      actor="seed", project=P)

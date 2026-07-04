@@ -280,17 +280,34 @@ def supervisor_action(action, runner_session_id, options=None):
     options = options or {}
     if action == "snapshot":
         cmd = ["python3", SUPERVISOR, "snapshot", runner_session_id]
+    elif action == "health":
+        cmd = ["python3", SUPERVISOR, "status", runner_session_id]
+    elif action == "logs":
+        cmd = ["python3", SUPERVISOR, "snapshot", runner_session_id]
     elif action == "kill":
         cmd = ["python3", SUPERVISOR, "kill", runner_session_id,
                "--grace-seconds", str(options.get("grace_seconds") or 5.0),
                "--signal", options.get("signal") or "TERM"]
+    elif action == "open":
+        return {"error": "not_supported", "reason": "runner_open is not implemented by this host"}
     else:
         return {"error": f"unsupported runner action {action}"}
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if out.returncode != 0:
             return {"error": "supervisor_failed", "stderr": out.stderr[-4000:]}
-        return json.loads(out.stdout or "{}")
+        data = json.loads(out.stdout or "{}")
+        if action == "health":
+            started = data.get("started_at")
+            data["health"] = {
+                "status": data.get("status") or "unknown",
+                "alive": bool(data.get("alive")),
+                "uptime_seconds": max(0.0, time.time() - float(started)) if started else None,
+            }
+        elif action == "logs":
+            snap = data.get("last_snapshot") or {}
+            data["logs"] = {"log_tail": snap.get("log_tail") or "", "log_path": data.get("log_path")}
+        return data
     except Exception as e:
         return {"error": type(e).__name__, "message": str(e)}
 
@@ -313,8 +330,16 @@ def handle_runner_controls(inventory):
         action = req.get("action")
         result = supervisor_action(action, req.get("runner_session_id"), req.get("options") or {})
         snapshot = result.get("last_snapshot") or result.get("snapshot") or {}
+        if action == "health" and not snapshot:
+            snapshot = {"captured_at": time.time(), "source": "supervisor_status",
+                        "status": result.get("status"), "alive": result.get("alive"),
+                        "health": result.get("health") or {}}
         if action == "snapshot" and not snapshot:
             snapshot = result
+        if action == "logs" and not snapshot:
+            snapshot = {"captured_at": time.time(), "source": "supervisor_logs",
+                        "log_tail": (result.get("logs") or {}).get("log_tail") or "",
+                        "log_path": (result.get("logs") or {}).get("log_path")}
         status = "failed" if result.get("error") else "completed"
         _try("POST", P_COMPLETE_RUNNER_CONTROL,
              {"project": PROJECT, "host_id": host_id, "request_id": req_id,

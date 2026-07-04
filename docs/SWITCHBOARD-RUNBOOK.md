@@ -333,6 +333,23 @@ runner-control requests; only the owning Agent Host claims them and calls the lo
 Unmanaged or hostless sessions cannot advertise `runner_kill`, and kill/restart control never
 marks task work complete.
 
+Runner rows also expose an `environment` block for triage before intervention: `status`,
+`uptime_seconds`, `failure_reason`, `last_command`, `last_result`, `log_tail`, and per-action
+`capabilities`. Supported control actions are `snapshot`, `kill`, `restart`, `health`, `logs`,
+and `open`; unsupported actions are recorded as refused control requests with
+`reason=not_supported`. The Agent Host currently answers `health` from supervisor status and
+`logs` from supervisor snapshots. `open` is an explicit future host capability, not assumed.
+
+```bash
+curl -s "$PM_BASE/ixp/v1/runner_sessions?project=switchboard&task_id=HARDEN-24&include_stale=true" \
+  -H "Authorization: Bearer $PM_OPERATOR_TOKEN"
+
+curl -s "$PM_BASE/ixp/v1/request_runner_health" \
+  -H "Authorization: Bearer $PM_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"project":"switchboard","runner_session_id":"run_...","reason":"operator triage"}'
+```
+
 ### 3.1 Run the P0 message-only host on the Plan VM
 
 ```bash

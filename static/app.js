@@ -1302,7 +1302,7 @@ const TeepPlan = {
             return;
         }
         body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
-            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Claim</th><th>Fidelity</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
+            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Claim</th><th>Fidelity</th><th>Environment</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
             <tbody>${sessions.map((s) => this._runnerSessionRow(s)).join('')}</tbody>
         </table></div>`;
         body.querySelectorAll('[data-runner-action]').forEach((btn) => {
@@ -1317,12 +1317,18 @@ const TeepPlan = {
     _runnerSessionRow(s) {
         const actions = s.available_actions || [];
         const canSnap = actions.includes('snapshot');
+        const canHealth = actions.includes('health');
+        const canLogs = actions.includes('logs');
         const canKill = actions.includes('kill');
         const snap = s.last_snapshot || {};
+        const env = s.environment || {};
         const snapText = snap.captured_at ? new Date(snap.captured_at * 1000).toLocaleTimeString() : '—';
         const statusColor = s.stale ? 'yellow' : (s.status === 'running' ? 'green' : 'secondary');
         const ctrl = s.control || {};
         const fidelity = ctrl.runner_kill ? 'T3 runner kill' : (ctrl.managed_process ? 'Managed' : 'Advisory');
+        const uptime = env.uptime_seconds == null ? '' : `${Math.round(env.uptime_seconds / 60)}m`;
+        const logTail = env.log_tail ? `<div class="text-secondary small text-truncate" style="max-width:220px" title="${this.esc(env.log_tail)}">${this.esc(env.log_tail.split('\n').slice(-1)[0])}</div>` : '';
+        const failure = env.failure_reason ? `<div class="text-danger small">${this.esc(env.failure_reason)}</div>` : '';
         const btn = (action, icon, label, color, disabled) =>
             `<button class="btn btn-sm btn-${color}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-action="${action}"${disabled ? ' disabled' : ''} title="${this.esc(label)}"><i class="ti ti-${icon}"></i></button>`;
         return `<tr>
@@ -1331,8 +1337,11 @@ const TeepPlan = {
             <td>${this.esc(s.runtime || '—')}<div class="text-secondary small">${this.esc(s.agent_id || '')}</div></td>
             <td class="font-monospace small">${this.esc(s.claim_id || '—')}</td>
             <td>${this.esc(fidelity)}</td>
+            <td><span class="badge bg-${statusColor}-lt">${this.esc(env.status || s.status || 'unknown')}</span>${uptime ? `<span class="text-secondary small ms-1">${this.esc(uptime)}</span>` : ''}${failure}${logTail}</td>
             <td class="text-secondary small">${this.esc(snapText)}</td>
             <td class="text-end"><div class="btn-list justify-content-end flex-nowrap">
+                ${btn('health', 'activity-heartbeat', 'Health', 'outline-secondary', !canHealth)}
+                ${btn('logs', 'file-text', 'Logs', 'outline-secondary', !canLogs)}
                 ${btn('snapshot', 'camera', 'Snapshot', 'outline-secondary', !canSnap)}
                 ${btn('kill', 'square', 'Kill', 'outline-danger', !canKill)}
             </div></td>
@@ -1346,8 +1355,15 @@ const TeepPlan = {
         };
         if (!runnerId || !action) return;
         if (action === 'kill' && !window.confirm(`Request runner kill for ${runnerId}?`)) return;
-        flash(action === 'kill' ? 'Requesting kill…' : 'Requesting snapshot…');
-        const endpoint = action === 'kill' ? '/ixp/v1/request_runner_kill' : '/ixp/v1/request_runner_snapshot';
+        flash(action === 'kill' ? 'Requesting kill…' : `Requesting ${action}…`);
+        const endpoints = {
+            kill: '/ixp/v1/request_runner_kill',
+            snapshot: '/ixp/v1/request_runner_snapshot',
+            health: '/ixp/v1/request_runner_health',
+            logs: '/ixp/v1/request_runner_logs',
+            open: '/ixp/v1/request_runner_open',
+        };
+        const endpoint = endpoints[action] || '/ixp/v1/request_runner_snapshot';
         try {
             const res = await fetch(endpoint, {
                 method: 'POST',

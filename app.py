@@ -1316,6 +1316,51 @@ async def ixp_request_runner_restart(request: Request, body: dict = Body(...)):
     return result
 
 
+@app.post("/ixp/v1/request_runner_health")
+async def ixp_request_runner_health(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+    result = store.request_runner_control(
+        body.get("runner_session_id") or body.get("id") or "",
+        "health",
+        reason=body.get("reason") or "",
+        options=body.get("options") or {},
+        actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/request_runner_logs")
+async def ixp_request_runner_logs(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+    result = store.request_runner_control(
+        body.get("runner_session_id") or body.get("id") or "",
+        "logs",
+        reason=body.get("reason") or "",
+        options=body.get("options") or {},
+        actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/request_runner_open")
+async def ixp_request_runner_open(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+    result = store.request_runner_control(
+        body.get("runner_session_id") or body.get("id") or "",
+        "open",
+        reason=body.get("reason") or "",
+        options=body.get("options") or {},
+        actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.get("/ixp/v1/runner_controls")
 async def ixp_runner_controls(project: str = Query(store.DEFAULT_PROJECT),
                               status: str = "", host_id: str = "",

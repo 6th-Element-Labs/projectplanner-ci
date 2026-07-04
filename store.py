@@ -2704,17 +2704,70 @@ def _normalize_runner_control(control: Dict[str, Any], host_id: str) -> Dict[str
 
 def _runner_available_actions(session: Dict[str, Any]) -> List[str]:
     control = session.get("control") or {}
+    metadata = session.get("metadata") or {}
     status = str(session.get("status") or "").lower()
     if session.get("stale") or status in {"exited", "killed", "failed", "completed"}:
         return []
     actions: List[str] = []
+    has_host = bool(session.get("host_id"))
     if control.get("managed_process") and session.get("host_id"):
-        actions.append("snapshot")
+        actions.extend(["health", "snapshot"])
+    if has_host and (metadata.get("log_path") or control.get("runner_logs")):
+        actions.append("logs")
+    if has_host and control.get("runner_open"):
+        actions.append("open")
     if control.get("runner_kill"):
         actions.append("kill")
     if control.get("runner_restart"):
         actions.append("restart")
-    return actions
+    return sorted(dict.fromkeys(actions))
+
+
+def _runner_control_capabilities(session: Dict[str, Any]) -> Dict[str, str]:
+    available = set(session.get("available_actions") or [])
+    return {action: ("supported" if action in available else "not_supported")
+            for action in sorted(RUNNER_CONTROL_ACTIONS)}
+
+
+def _text_tail(value: Any, limit: int = 4000) -> str:
+    text = str(value or "")
+    return text[-limit:] if len(text) > limit else text
+
+
+def _runner_environment(session: Dict[str, Any], now: float) -> Dict[str, Any]:
+    metadata = session.get("metadata") or {}
+    snapshot = session.get("last_snapshot") or {}
+    status = "stale" if session.get("stale") else (session.get("status") or "unknown")
+    started_at = session.get("started_at")
+    uptime = None
+    if started_at:
+        try:
+            uptime = max(0.0, now - float(started_at))
+        except (TypeError, ValueError):
+            uptime = None
+    last_result = (
+        metadata.get("last_result")
+        or snapshot.get("last_result")
+        or snapshot.get("result")
+        or {}
+    )
+    failure_reason = (
+        metadata.get("failure_reason")
+        or metadata.get("last_error")
+        or snapshot.get("failure_reason")
+        or snapshot.get("error")
+        or (last_result.get("error") if isinstance(last_result, dict) else "")
+    )
+    return {
+        "status": status,
+        "uptime_seconds": uptime,
+        "failure_reason": failure_reason or None,
+        "last_command": metadata.get("command") or session.get("command"),
+        "last_result": last_result or None,
+        "log_tail": _text_tail(snapshot.get("log_tail") or metadata.get("log_tail") or ""),
+        "log_path": metadata.get("log_path"),
+        "capabilities": _runner_control_capabilities(session),
+    }
 
 
 def _runner_session_row(row: sqlite3.Row, now: Optional[float] = None,
@@ -2730,6 +2783,7 @@ def _runner_session_row(row: sqlite3.Row, now: Optional[float] = None,
     d["expires_at"] = expires_at
     d["stale"] = now >= expires_at
     d["available_actions"] = _runner_available_actions(d)
+    d["environment"] = _runner_environment(d, now)
     if include_claim and c is not None and d.get("claim_id"):
         claim = c.execute("SELECT * FROM task_claims WHERE id=?", (d["claim_id"],)).fetchone()
         d["claim"] = dict(claim) if claim else None
@@ -3331,7 +3385,7 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
                            project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     action = (action or "").strip().lower()
-    if action not in {"snapshot", "kill", "restart"}:
+    if action not in RUNNER_CONTROL_ACTIONS:
         return {"requested": False, "error": "unsupported_action", "action": action}
     with _conn(project) as c:
         row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
@@ -3347,8 +3401,9 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
         result = {}
         if req_status == "refused":
             result = {
-                "reason": "action_not_supported",
+                "reason": "not_supported",
                 "available_actions": sorted(available),
+                "capabilities": (session.get("environment") or {}).get("capabilities") or {},
                 "control": session.get("control") or {},
             }
         c.execute(
@@ -6027,6 +6082,7 @@ def archive_task(task_id: str, reason: str = "", actor: str = "system",
 TERMINAL_TASK_STATUSES = {"Done", "Cancelled", "Canceled"}
 TERMINAL_WAKE_STATUSES = {"completed", "failed", "cancelled"}
 TERMINAL_RUNNER_STATUSES = {"exited", "killed", "failed", "completed", "expired"}
+RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open"}
 
 
 def _cleanup_age_seconds(now: float, timestamp: Optional[float]) -> Optional[float]:
