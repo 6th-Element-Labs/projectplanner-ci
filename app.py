@@ -248,7 +248,7 @@ async def _auth_boundary(request: Request, call_next):
             started_at,
         )
     required_scopes = ("write:system",) if (
-        path == "/api/projects" or path.startswith(("/api/access/", "/api/audit/"))
+        path == "/api/projects" or path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))
     ) else ("write:tasks",)
     try:
         request.state.principal = auth.authenticate_request(
@@ -1060,6 +1060,40 @@ async def audit_export(request: Request, project: str = Query(store.DEFAULT_PROJ
         data,
         headers={"Content-Disposition": f'attachment; filename="{project}-audit-export.json"'},
     )
+
+
+@app.get("/api/cleanup/candidates")
+async def cleanup_candidates(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+                             kinds: str = "", proof_task_age_days: float = 14):
+    project = _proj(project)
+    _principal(request, project, ("write:system",), dev_actor="switchboard/operator")
+    data = store.cleanup_candidates(
+        project=project,
+        proof_task_age_days=proof_task_age_days,
+        include_kinds=store.coerce_csv_list(kinds),
+    )
+    if data.get("error"):
+        raise HTTPException(400, data)
+    return data
+
+
+@app.post("/api/cleanup/apply")
+async def apply_cleanup(request: Request, body: dict = Body(default={})):
+    body = body or {}
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:system",), dev_actor="switchboard/operator")
+    result = store.apply_cleanup(
+        project=project,
+        candidate_ids=store.coerce_csv_list(body.get("candidate_ids") or body.get("ids") or []),
+        dry_run=body.get("dry_run") is not False,
+        actor=auth.actor(principal),
+        reason=body.get("reason") or "operator lifecycle cleanup",
+        proof_task_age_days=float(body.get("proof_task_age_days") or 14),
+        include_kinds=store.coerce_csv_list(body.get("kinds") or body.get("include_kinds") or []),
+    )
+    if result.get("error"):
+        raise HTTPException(400, result)
+    return result
 
 
 # ---- Deck rebrand (one-stop: drop a .pptx, get it back on-brand) ------------

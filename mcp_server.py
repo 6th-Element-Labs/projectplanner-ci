@@ -1538,6 +1538,44 @@ def get_audit_export(ctx: Context, project: str = "maxwell") -> str:
 
 
 @mcp.tool()
+def list_cleanup_candidates(ctx: Context, project: str = "maxwell",
+                            kinds: str = "", proof_task_age_days: float = 14) -> str:
+    """List stale lifecycle cleanup candidates without changing board state.
+
+    Requires write:system. Candidates cover stale agent presence, expired runner sessions,
+    orphan/expired claims and leases, old wake intents, fired/orphan monitors, and old terminal
+    proof/sentinel tasks that can be archived without deleting provenance.
+    """
+    _require_write(ctx, project, ("write:system",))
+    return _dumps(store.cleanup_candidates(
+        project=project,
+        proof_task_age_days=proof_task_age_days,
+        include_kinds=store.coerce_csv_list(kinds),
+    ))
+
+
+@mcp.tool()
+def apply_cleanup(ctx: Context, project: str = "maxwell", candidate_ids: str = "",
+                  dry_run: bool = True, reason: str = "operator lifecycle cleanup",
+                  kinds: str = "", proof_task_age_days: float = 14) -> str:
+    """Dry-run or apply safe lifecycle cleanup with an audit trail.
+
+    Pass comma/newline-separated candidate_ids to limit scope. With dry_run=false, each mutation
+    writes cleanup activity and uses archive/resolve paths rather than raw deletion.
+    """
+    principal = _require_write(ctx, project, ("write:system",))
+    return _dumps(store.apply_cleanup(
+        project=project,
+        candidate_ids=store.coerce_csv_list(candidate_ids),
+        dry_run=dry_run,
+        actor=auth.actor(principal),
+        reason=reason,
+        proof_task_age_days=proof_task_age_days,
+        include_kinds=store.coerce_csv_list(kinds),
+    ))
+
+
+@mcp.tool()
 def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "agent",
                         display_name: str = "", scopes: str = "", role: str = "",
                         principal_id: str = "") -> str:

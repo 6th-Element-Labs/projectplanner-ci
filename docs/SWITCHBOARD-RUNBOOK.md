@@ -228,6 +228,26 @@ spend/outcomes/KPIs, scoped principals, role grants, and archived task snapshots
 credential material such as token hashes, password hashes, session hashes, and raw bearer/session
 tokens is omitted.
 
+Lifecycle cleanup is also a `write:system` operator path. It is dry-run first and preserves
+provenance through `cleanup.*` activity plus archive snapshots instead of raw deletion:
+
+```bash
+curl -s "$PM_BASE/api/cleanup/candidates?project=switchboard" \
+  -H "Authorization: Bearer $PM_SYSTEM_TOKEN"
+
+curl -s "$PM_BASE/api/cleanup/apply" \
+  -H "Authorization: Bearer $PM_SYSTEM_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"project":"switchboard","dry_run":true}'
+```
+
+The candidate list covers stale agent registrations, expired runner sessions, expired/orphaned
+claims and leases, old wake intents, fired/orphan monitors, and old terminal proof/sentinel tasks.
+To apply a bounded cleanup, pass `candidate_ids` and set `dry_run:false`; old proof/sentinel tasks
+are archived with snapshots, runner sessions are marked `expired`, claims are abandoned with a
+cleanup reason, wakes/monitors are cancelled or resolved, and stale agent presence rows are removed
+from the live registry only after their snapshot is written to activity.
+
 ACCESS role state lives in the central project registry: orgs, users, org memberships, project
 ownership metadata, and project role grants. Inspect it with `GET /api/access/model?project=...`.
 Admins can grant a project role with `POST /api/access/project_role?project=...`:
