@@ -152,6 +152,13 @@ only missing or retryable jobs. Token-limit/rate-limit failures are recorded as 
 states, final reports must include verifier completion ratios, and reports fail closed while a
 load-bearing finding is missing any required verifier lens.
 
+Claim evidence rule: task comments and completion evidence may describe deliverables, reports,
+generated pages, server wiring, or artifacts, but narrative text is not proof. When a comment or
+completion payload names those things, declare repo-accessible evidence with `evidence_paths`,
+`evidence_urls`, or `evidence_refs`. Reconcile emits red/yellow `claim_without_evidence` or
+`claim_evidence_missing` findings when claimed artifacts cannot be tied back to a repo path,
+HTTP(S) URL, or reachable git ref; audit exports include the full claim-to-evidence report.
+
 GitHub Actions `startup_failure` rule: this private repo has produced Actions runs with
 `conclusion=startup_failure`, `jobs=[]`, and `path=BuildFailed` before any checkout/setup step.
 Treat those as CI-infra failures, not test results. Do not merge on a vague "red but probably

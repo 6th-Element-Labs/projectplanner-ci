@@ -11,6 +11,8 @@ import urllib.request
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+import evidence_claims
+
 DB_PATH = os.environ.get("PM_DB_PATH", os.path.join(os.path.dirname(__file__), "taikun_pm.db"))
 SEED_PATH = os.environ.get("PM_SEED_PATH", os.path.join(os.path.dirname(__file__), "seed_plan.json"))
 HELM_DB_PATH = os.environ.get("PM_HELM_DB_PATH", os.path.join(os.path.dirname(__file__), "helm.db"))
@@ -583,6 +585,8 @@ FAIL_FIX_FAILURE_CLASSES = {
 BUG_FAILURE_CLASSES = set(FAIL_FIX_FAILURE_CLASSES)
 RECONCILE_FAILURE_CLASS_BY_CODE = {
     "canonical_main_sha_not_found": "stale_branch",
+    "claim_evidence_missing": "missing_data",
+    "claim_without_evidence": "missing_data",
     "done_pr_not_merged": "hidden_fallback",
     "done_without_merged_sha": "hidden_fallback",
     "head_sha_not_found": "stale_branch",
@@ -5079,6 +5083,13 @@ def _audit_activity_rows(c: sqlite3.Connection) -> List[Dict[str, Any]]:
     return rows
 
 
+def _evidence_claim_reports(c: sqlite3.Connection) -> List[Dict[str, Any]]:
+    rows = _audit_table_rows(c, "activity", order_by="created_at, id")
+    for row in rows:
+        row["payload"] = _json_payload(row.get("payload") or "")
+    return evidence_claims.evaluate_activities(rows, os.path.dirname(__file__))
+
+
 def _audit_tasks(c: sqlite3.Connection, project: str) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
     rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
@@ -5141,6 +5152,8 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     with _conn(project) as c:
         tasks = _audit_tasks(c, project)
         activity = _audit_activity_rows(c)
+        evidence_claim_reports = evidence_claims.evaluate_activities(
+            activity, os.path.dirname(__file__))
         claims = _audit_table_rows(c, "task_claims", order_by="claimed_at, id")
         messages = _audit_table_rows(c, "agent_messages", order_by="sent_at, id")
         monitors = _audit_json_rows(
@@ -5199,6 +5212,9 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "summary": {
             "task_count": len(tasks),
             "activity_count": len(activity),
+            "evidence_claim_count": len(evidence_claim_reports),
+            "evidence_claim_status_counts": evidence_claims.summarize_reports(
+                evidence_claim_reports)["status_counts"],
             "claim_count": len(claims),
             "message_count": len(messages),
             "principal_count": len(principals),
@@ -5213,6 +5229,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         },
         "tasks": tasks,
         "activity": activity,
+        "evidence_claims": _audit_redact(evidence_claim_reports),
         "claims": claims,
         "messages": messages,
         "monitors": monitors,
@@ -7291,6 +7308,27 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 findings.append({"severity": "medium", "task_id": lease["task_id"],
                                  "code": "stale_resource_lease",
                                  "detail": f"{lease['resource_type']} lease {lease['id']} by {lease['agent_id']} expired without release."})
+        for report in _evidence_claim_reports(c):
+            if report.get("status") == "pass":
+                continue
+            artifacts = ", ".join(report.get("claim", {}).get("artifacts") or [])
+            evidence_values = []
+            declared = report.get("declared_evidence") or {}
+            for key in ("paths", "urls", "refs"):
+                evidence_values.extend(declared.get(key) or [])
+            detail = report.get("detail") or "Claim evidence could not be verified."
+            if artifacts:
+                detail += f" Claimed artifact(s): {artifacts}."
+            if evidence_values:
+                detail += f" Declared evidence: {', '.join(evidence_values)}."
+            findings.append({
+                "severity": report.get("severity") or "medium",
+                "task_id": report.get("task_id"),
+                "code": report.get("code") or "claim_without_evidence",
+                "failure_class": report.get("failure_class") or "missing_data",
+                "detail": detail,
+                "evidence_claim": report,
+            })
         cursor = c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0]
     external_findings, external_checks, backfilled = _external_reconcile_findings(
         tasks, git_states, agreement.get("canonical_main_sha") or "", project=project)
