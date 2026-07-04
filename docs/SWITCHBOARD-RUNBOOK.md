@@ -210,6 +210,19 @@ confirming login, remove `PM_BOOTSTRAP_ADMIN_PASSWORD` from the environment and 
 For manual bootstrap, POST `/api/auth/bootstrap` from localhost, or provide `PM_BOOTSTRAP_TOKEN`
 and send it as `X-Switchboard-Bootstrap-Token`.
 
+Operators with `write:system` can download a redacted enterprise evidence bundle:
+
+```bash
+curl -s "$PM_BASE/api/audit/export?project=switchboard" \
+  -H "Authorization: Bearer $PM_SYSTEM_TOKEN" > switchboard-audit-export.json
+```
+
+The export is `switchboard.audit_export.v1` JSON. It includes tasks, activity, claims, directed
+messages, monitors, runner sessions/control requests, Git and offline provenance, Tally
+spend/outcomes/KPIs, scoped principals, role grants, and archived task snapshots. Stored
+credential material such as token hashes, password hashes, session hashes, and raw bearer/session
+tokens is omitted.
+
 ACCESS role state lives in the central project registry: orgs, users, org memberships, project
 ownership metadata, and project role grants. Inspect it with `GET /api/access/model?project=...`.
 Admins can grant a project role with `POST /api/access/project_role?project=...`:

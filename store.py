@@ -4972,6 +4972,213 @@ def project_tally(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     }
 
 
+_AUDIT_REDACT_KEYS = {
+    "password",
+    "password_hash",
+    "raw_token",
+    "secret",
+    "session_hash",
+    "token",
+    "token_hash",
+}
+
+
+def _audit_redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if str(key).lower() in _AUDIT_REDACT_KEYS:
+                continue
+            else:
+                out[key] = _audit_redact(item)
+        return out
+    if isinstance(value, list):
+        return [_audit_redact(item) for item in value]
+    return value
+
+
+def _audit_table_rows(c: sqlite3.Connection, table: str,
+                      order_by: str = "") -> List[Dict[str, Any]]:
+    sql = f"SELECT * FROM {table}"
+    if order_by:
+        sql += f" ORDER BY {order_by}"
+    rows = [dict(r) for r in c.execute(sql).fetchall()]
+    return [_audit_redact(r) for r in rows]
+
+
+def _audit_json_rows(c: sqlite3.Connection, table: str, json_columns: Tuple[str, ...],
+                     order_by: str = "") -> List[Dict[str, Any]]:
+    rows = _audit_table_rows(c, table, order_by=order_by)
+    for row in rows:
+        for column in json_columns:
+            if column in row:
+                key = column[:-5] if column.endswith("_json") else column
+                row[key] = _audit_redact(_json_payload(row.pop(column)))
+    return rows
+
+
+def _audit_activity_rows(c: sqlite3.Connection) -> List[Dict[str, Any]]:
+    rows = _audit_table_rows(c, "activity", order_by="created_at, id")
+    for row in rows:
+        row["payload"] = _audit_redact(_json_payload(row.get("payload") or ""))
+    return rows
+
+
+def _audit_tasks(c: sqlite3.Connection, project: str) -> List[Dict[str, Any]]:
+    tasks: List[Dict[str, Any]] = []
+    rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
+    for row in rows:
+        task = _task_row(row)
+        task["git_state"] = _load_git_state(c, task["task_id"])
+        task["provenance"] = _provenance_summary(task["git_state"])
+        task["active_claims"] = _active_task_claims_in(c, task["task_id"])
+        task["tally"] = task_tally(task["task_id"], project=project)
+        tasks.append(_audit_redact(task))
+    return tasks
+
+
+def _audit_registry_scope(project: str) -> Dict[str, Any]:
+    init_project_registry()
+    with _registry_conn() as c:
+        project_access = c.execute(
+            "SELECT * FROM project_access WHERE project_id=?", (project,)
+        ).fetchone()
+        role_grants = c.execute(
+            "SELECT * FROM project_role_grants WHERE project_id=? "
+            "ORDER BY created_at, subject_kind, subject_id, role",
+            (project,),
+        ).fetchall()
+        orgs = []
+        users = []
+        memberships = []
+        org_id = project_access["org_id"] if project_access and project_access["org_id"] else ""
+        if org_id:
+            orgs = c.execute("SELECT * FROM orgs WHERE id=? ORDER BY id", (org_id,)).fetchall()
+            memberships = c.execute(
+                "SELECT * FROM org_memberships WHERE org_id=? ORDER BY created_at, org_id, user_id",
+                (org_id,),
+            ).fetchall()
+            user_ids = sorted({m["user_id"] for m in memberships})
+            if user_ids:
+                placeholders = ",".join("?" for _ in user_ids)
+                users = c.execute(
+                    f"SELECT * FROM users WHERE id IN ({placeholders}) ORDER BY id",
+                    user_ids,
+                ).fetchall()
+    return _audit_redact({
+        "project_access": dict(project_access) if project_access else None,
+        "project_role_grants": [dict(r) for r in role_grants],
+        "orgs": [dict(r) for r in orgs],
+        "users": [dict(r) for r in users],
+        "org_memberships": [dict(r) for r in memberships],
+    })
+
+
+def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Versioned enterprise evidence bundle for audit/retention.
+
+    The bundle preserves the evidence graph needed to answer who acted, under whose authority, at
+    what cost, and with what proof, without exposing bearer token hashes, password hashes, session
+    hashes, or raw secrets.
+    """
+    init_db(project)
+    generated_at = time.time()
+    with _conn(project) as c:
+        tasks = _audit_tasks(c, project)
+        activity = _audit_activity_rows(c)
+        claims = _audit_table_rows(c, "task_claims", order_by="claimed_at, id")
+        messages = _audit_table_rows(c, "agent_messages", order_by="sent_at, id")
+        monitors = _audit_json_rows(
+            c, "coordination_monitors",
+            ("condition_json", "on_timeout_json", "result_json"),
+            order_by="created_at, id",
+        )
+        principals = [
+            public_principal_record(_principal_from_row(row), project=project)
+            for row in c.execute("SELECT * FROM principals ORDER BY created_at, id").fetchall()
+        ]
+        access_sessions = _audit_table_rows(
+            c, "auth_sessions", order_by="created_at, session_id")
+        presence = [_presence_row(row, now=generated_at)
+                    for row in c.execute(
+                        "SELECT * FROM agent_presence ORDER BY registered_at, agent_id"
+                    ).fetchall()]
+        resource_leases = _audit_json_rows(c, "resource_leases", ("names",),
+                                           order_by="claimed_at, id")
+        wake_intents = _audit_json_rows(
+            c, "wake_intents", ("selector_json", "policy_json", "result_json"),
+            order_by="requested_at, wake_id",
+        )
+        runner_sessions = [
+            _runner_session_row(row, now=generated_at, include_claim=True, c=c)
+            for row in c.execute(
+                "SELECT * FROM runner_sessions ORDER BY updated_at, runner_session_id"
+            ).fetchall()
+        ]
+        runner_controls = _audit_json_rows(
+            c, "runner_control_requests",
+            ("snapshot_json", "result_json", "options_json"),
+            order_by="requested_at, request_id",
+        )
+        git_state = [_git_state_row(row) for row in c.execute(
+            "SELECT * FROM task_git_state ORDER BY updated_at, task_id"
+        ).fetchall()]
+        spend = [_spend_row(row) for row in c.execute(
+            "SELECT * FROM llm_spend ORDER BY created_at, id"
+        ).fetchall()]
+        outcomes = [_outcome_row(row) for row in c.execute(
+            "SELECT * FROM outcomes ORDER BY created_at, id"
+        ).fetchall()]
+        kpis = [dict(row) for row in c.execute(
+            "SELECT * FROM kpis ORDER BY created_at, id"
+        ).fetchall()]
+        outcome_links = [dict(row) for row in c.execute(
+            "SELECT * FROM outcome_kpi_links ORDER BY created_at, id"
+        ).fetchall()]
+        archived_tasks = _audit_json_rows(
+            c, "archived_tasks", ("snapshot_json",), order_by="created_at, archive_id")
+    bundle = {
+        "schema": "switchboard.audit_export.v1",
+        "project": project,
+        "generated_at": generated_at,
+        "summary": {
+            "task_count": len(tasks),
+            "activity_count": len(activity),
+            "claim_count": len(claims),
+            "message_count": len(messages),
+            "principal_count": len(principals),
+            "runner_session_count": len(runner_sessions),
+            "outcome_count": len(outcomes),
+            "spend_count": len(spend),
+        },
+        "access": {
+            "principals": _audit_redact(principals),
+            "sessions": access_sessions,
+            **_audit_registry_scope(project),
+        },
+        "tasks": tasks,
+        "activity": activity,
+        "claims": claims,
+        "messages": messages,
+        "monitors": monitors,
+        "agent_presence": _audit_redact(presence),
+        "resource_leases": resource_leases,
+        "wake_intents": wake_intents,
+        "runner_sessions": _audit_redact(runner_sessions),
+        "runner_control_requests": runner_controls,
+        "git_state": _audit_redact(git_state),
+        "economics": {
+            "project_tally": _audit_redact(project_tally(project=project)),
+            "spend_rows": _audit_redact(spend),
+            "outcomes": _audit_redact(outcomes),
+            "kpis": _audit_redact(kpis),
+            "outcome_kpi_links": _audit_redact(outcome_links),
+        },
+        "archives": {"tasks": archived_tasks},
+    }
+    return _audit_redact(bundle)
+
+
 def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:
     """Active leases using an existing connection — not released and not TTL-expired."""
     rows = c.execute("SELECT * FROM file_leases WHERE released_at IS NULL").fetchall()

@@ -1526,6 +1526,18 @@ def list_scoped_tokens(ctx: Context, project: str = "maxwell",
 
 
 @mcp.tool()
+def get_audit_export(ctx: Context, project: str = "maxwell") -> str:
+    """Return the redacted enterprise audit evidence bundle for one project.
+
+    Requires write:system. The bundle includes task/activity history, claims, messages,
+    runner/session/control evidence, Git/offline provenance, Tally economics, and access
+    principal/role history without exposing token hashes or raw secrets.
+    """
+    _require_write(ctx, project, ("write:system",))
+    return _dumps(store.audit_export(project=project))
+
+
+@mcp.tool()
 def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "agent",
                         display_name: str = "", scopes: str = "", role: str = "",
                         principal_id: str = "") -> str:

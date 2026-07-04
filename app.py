@@ -248,7 +248,7 @@ async def _auth_boundary(request: Request, call_next):
             started_at,
         )
     required_scopes = ("write:system",) if (
-        path == "/api/projects" or path.startswith("/api/access/")
+        path == "/api/projects" or path.startswith(("/api/access/", "/api/audit/"))
     ) else ("write:tasks",)
     try:
         request.state.principal = auth.authenticate_request(
@@ -1049,6 +1049,17 @@ async def export_xml(workstream: str = None, owner: str = None, risk: str = None
     xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, person, _proj(project)))
     return Response(content=xml, media_type="text/xml",
                     headers={"Content-Disposition": 'attachment; filename="project-plan.xml"'})
+
+
+@app.get("/api/audit/export")
+async def audit_export(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    project = _proj(project)
+    _principal(request, project, ("write:system",), dev_actor="auditor")
+    data = store.audit_export(project=project)
+    return JSONResponse(
+        data,
+        headers={"Content-Disposition": f'attachment; filename="{project}-audit-export.json"'},
+    )
 
 
 # ---- Deck rebrand (one-stop: drop a .pptx, get it back on-brand) ------------

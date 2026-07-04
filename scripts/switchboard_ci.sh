@@ -49,6 +49,7 @@ section "Python compile"
 "$PYTHON" -m compileall -q . -x '(^|/)(\.git|\.venv|__pycache__)(/|$)|(^|/)\._'
 
 run_test test_activity_payloads.py
+run_test test_audit_export.py
 run_test test_adapter_conformance.py
 run_test test_agent_bootstrap.py
 run_test test_agent_host.py
