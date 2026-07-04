@@ -881,6 +881,83 @@ def list_runner_control_requests(project: str = "maxwell", status: str = "",
 
 
 @mcp.tool()
+def claim_external_effect(effect_type: str, target: str, resource: str,
+                          payload_json: str, ctx: Context,
+                          project: str = "maxwell", task_id: str = "",
+                          claim_id: str = "", agent_id: str = "",
+                          idem_key: str = "",
+                          idempotency_window_seconds: int = 0) -> str:
+    """Atomically claim an external side effect before touching a provider.
+
+    Replays return the existing effect. If the existing effect is not verified, callers
+    must read back provider state before issuing it again.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        payload = json.loads(payload_json or "{}")
+    except Exception:
+        return _dumps({"error": "payload_json must be a JSON object string"})
+    return _dumps(store.claim_external_effect(
+        effect_type, target, resource, payload,
+        task_id=task_id or None, claim_id=claim_id, agent_id=agent_id,
+        idem_key=idem_key, idempotency_window_seconds=idempotency_window_seconds,
+        actor=auth.actor(principal), principal_id=principal["id"], project=project))
+
+
+@mcp.tool()
+def mark_external_effect_issued(effect_key: str, ctx: Context,
+                                readback_json: str = "{}",
+                                project: str = "maxwell") -> str:
+    """Mark an already-claimed external side effect as issued to the provider."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        readback = json.loads(readback_json or "{}")
+    except Exception:
+        return _dumps({"error": "readback_json must be a JSON object string"})
+    return _dumps(store.mark_external_effect_issued(
+        effect_key, readback=readback, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def verify_external_effect(effect_key: str, ctx: Context,
+                           readback_json: str = "{}",
+                           project: str = "maxwell") -> str:
+    """Confirm an external side effect only after provider readback or explicit proof."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        readback = json.loads(readback_json or "{}")
+    except Exception:
+        return _dumps({"error": "readback_json must be a JSON object string"})
+    return _dumps(store.verify_external_effect(
+        effect_key, readback=readback, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def fail_external_effect(effect_key: str, error: str, ctx: Context,
+                         readback_json: str = "{}", dead_letter: bool = False,
+                         project: str = "maxwell") -> str:
+    """Record a failed or dead-lettered external side effect with visible error state."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        readback = json.loads(readback_json or "{}")
+    except Exception:
+        return _dumps({"error": "readback_json must be a JSON object string"})
+    return _dumps(store.fail_external_effect(
+        effect_key, error=error, readback=readback, dead_letter=dead_letter,
+        actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def list_external_effects(project: str = "maxwell", effect_type: str = "",
+                          status: str = "", task_id: str = "",
+                          target: str = "") -> str:
+    """List external side effects by type/status/task/target."""
+    return _dumps(store.list_external_effects(
+        effect_type=effect_type, status=status, task_id=task_id,
+        target=target, project=project))
+
+
+@mcp.tool()
 def claim_runner_control(host_id: str, request_id: str, ctx: Context,
                          project: str = "maxwell") -> str:
     """Agent Host claims a pending runner control request for one of its sessions."""

@@ -887,6 +887,40 @@ def init_db(project: str = DEFAULT_PROJECT):
                 created_at    REAL NOT NULL,
                 PRIMARY KEY (idem_key, operation)
             );
+            CREATE TABLE IF NOT EXISTS external_side_effects (
+                effect_key     TEXT PRIMARY KEY,
+                project        TEXT NOT NULL,
+                effect_type    TEXT NOT NULL,
+                target         TEXT NOT NULL,
+                resource       TEXT NOT NULL,
+                task_id        TEXT,
+                claim_id       TEXT,
+                agent_id       TEXT,
+                status         TEXT NOT NULL,
+                payload_hash   TEXT NOT NULL,
+                payload_json   TEXT NOT NULL DEFAULT '{}',
+                idem_key       TEXT,
+                window_key     TEXT,
+                requested_by   TEXT,
+                claimed_by     TEXT,
+                issued_by      TEXT,
+                verified_by    TEXT,
+                principal_id   TEXT,
+                retry_count    INTEGER NOT NULL DEFAULT 0,
+                last_error     TEXT,
+                readback_json  TEXT NOT NULL DEFAULT '{}',
+                requested_at   REAL NOT NULL,
+                claimed_at     REAL,
+                issued_at      REAL,
+                verified_at    REAL,
+                updated_at     REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_external_effects_status
+                ON external_side_effects(status, effect_type, updated_at);
+            CREATE INDEX IF NOT EXISTS ix_external_effects_task
+                ON external_side_effects(task_id, status);
+            CREATE INDEX IF NOT EXISTS ix_external_effects_resource
+                ON external_side_effects(effect_type, target, resource);
             CREATE TABLE IF NOT EXISTS llm_spend (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
                 request_id        TEXT,
@@ -1000,7 +1034,8 @@ def init_db(project: str = DEFAULT_PROJECT):
                 result_json       TEXT NOT NULL DEFAULT '{}',
                 task_id           TEXT,
                 principal_id      TEXT,
-                idem_key          TEXT
+                idem_key          TEXT,
+                effect_key        TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_wake_intents_status
                 ON wake_intents(status, deadline, requested_at);
@@ -1046,7 +1081,8 @@ def init_db(project: str = DEFAULT_PROJECT):
                 completed_at      REAL,
                 snapshot_json     TEXT NOT NULL DEFAULT '{}',
                 result_json       TEXT NOT NULL DEFAULT '{}',
-                options_json      TEXT NOT NULL DEFAULT '{}'
+                options_json      TEXT NOT NULL DEFAULT '{}',
+                effect_key        TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_runner_control_status
                 ON runner_control_requests(status, host_id, requested_at);
@@ -1080,6 +1116,8 @@ def init_db(project: str = DEFAULT_PROJECT):
             "ALTER TABLE agent_messages ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE agent_messages ADD COLUMN idem_key TEXT",
             "ALTER TABLE agent_messages ADD COLUMN principal_id TEXT",
+            "ALTER TABLE wake_intents ADD COLUMN effect_key TEXT",
+            "ALTER TABLE runner_control_requests ADD COLUMN effect_key TEXT",
         ]:
             try:
                 c.execute(col_sql)
@@ -1957,6 +1995,217 @@ def _idem_store(c: sqlite3.Connection, operation: str, idem_key: str,
         "VALUES (?,?,?,?,?,?)",
         (idem_key, operation, actor, _request_hash(payload), json.dumps(response, sort_keys=True), time.time()),
     )
+
+
+EXTERNAL_EFFECT_TERMINAL_STATUSES = {"verified", "failed", "dead_letter", "void"}
+
+
+def _canonical_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    return json.loads(json.dumps(payload or {}, sort_keys=True, separators=(",", ":")))
+
+
+def _payload_hash(payload: Optional[Dict[str, Any]]) -> str:
+    return _request_hash(_canonical_payload(payload))
+
+
+def _effect_window_key(now: float, idempotency_window_seconds: int = 0) -> str:
+    window = int(idempotency_window_seconds or 0)
+    return f"window:{window}:{int(now // window)}" if window > 0 else "permanent"
+
+
+def make_external_effect_key(effect_type: str, target: str, resource: str,
+                             payload: Optional[Dict[str, Any]] = None,
+                             idempotency_window_seconds: int = 0,
+                             now: Optional[float] = None,
+                             project: str = DEFAULT_PROJECT) -> Dict[str, str]:
+    """Deterministic key for external effects that must not double-fire."""
+    now = time.time() if now is None else float(now)
+    effect_type = (effect_type or "").strip().lower()
+    target = (target or "").strip()
+    resource = (resource or "").strip()
+    payload_hash = _payload_hash(payload)
+    window_key = _effect_window_key(now, idempotency_window_seconds)
+    basis = {
+        "project": project,
+        "effect_type": effect_type,
+        "target": target,
+        "resource": resource,
+        "payload_hash": payload_hash,
+        "window_key": window_key,
+    }
+    digest = hashlib.sha256(json.dumps(basis, sort_keys=True).encode("utf-8")).hexdigest()
+    return {"effect_key": "effect-" + digest[:32],
+            "payload_hash": payload_hash, "window_key": window_key}
+
+
+def _external_effect_row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if not row:
+        return None
+    d = dict(row)
+    d["payload"] = _json_obj(d.pop("payload_json", "{}"), {})
+    d["readback"] = _json_obj(d.pop("readback_json", "{}"), {})
+    return d
+
+
+def _claim_external_effect_in(c: sqlite3.Connection, effect_type: str, target: str,
+                              resource: str, payload: Optional[Dict[str, Any]] = None,
+                              task_id: Optional[str] = None, claim_id: str = "",
+                              agent_id: str = "", idem_key: str = "",
+                              idempotency_window_seconds: int = 0,
+                              actor: str = "system", principal_id: str = "",
+                              project: str = DEFAULT_PROJECT,
+                              now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else float(now)
+    payload = _canonical_payload(payload)
+    key = make_external_effect_key(
+        effect_type, target, resource, payload,
+        idempotency_window_seconds=idempotency_window_seconds, now=now, project=project)
+    effect_key = key["effect_key"]
+    row = c.execute("SELECT * FROM external_side_effects WHERE effect_key=?",
+                    (effect_key,)).fetchone()
+    if row:
+        effect = _external_effect_row(row)
+        out = {"claimed": False, "effect": effect, "effect_key": effect_key,
+               "idempotent": effect["status"] == "verified"}
+        if effect["status"] == "verified":
+            out["verified"] = True
+            out["proof"] = effect.get("readback") or {}
+        elif effect["status"] in EXTERNAL_EFFECT_TERMINAL_STATUSES:
+            out["reason"] = f"effect is {effect['status']}"
+        else:
+            out["reason"] = f"effect already {effect['status']}"
+            out["readback_required"] = True
+        return out
+    c.execute(
+        "INSERT INTO external_side_effects(effect_key, project, effect_type, target, "
+        "resource, task_id, claim_id, agent_id, status, payload_hash, payload_json, "
+        "idem_key, window_key, requested_by, claimed_by, principal_id, requested_at, "
+        "claimed_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            effect_key, project, (effect_type or "").strip().lower(), target, resource,
+            task_id, claim_id or None, agent_id or None, "claimed", key["payload_hash"],
+            json.dumps(payload, sort_keys=True), idem_key or None, key["window_key"],
+            actor, actor, principal_id or None, now, now, now,
+        ),
+    )
+    event = {"effect_key": effect_key, "effect_type": (effect_type or "").strip().lower(),
+             "target": target, "resource": resource, "payload_hash": key["payload_hash"],
+             "status": "claimed", "claim_id": claim_id or None, "agent_id": agent_id or None}
+    c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+              (task_id, actor, "side_effect.claimed", json.dumps(event, sort_keys=True), now))
+    row = c.execute("SELECT * FROM external_side_effects WHERE effect_key=?",
+                    (effect_key,)).fetchone()
+    return {"claimed": True, "effect": _external_effect_row(row), "effect_key": effect_key}
+
+
+def claim_external_effect(effect_type: str, target: str, resource: str,
+                          payload: Optional[Dict[str, Any]] = None,
+                          task_id: Optional[str] = None, claim_id: str = "",
+                          agent_id: str = "", idem_key: str = "",
+                          idempotency_window_seconds: int = 0,
+                          actor: str = "system", principal_id: str = "",
+                          project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    with _conn(project) as c:
+        return _claim_external_effect_in(
+            c, effect_type, target, resource, payload, task_id=task_id,
+            claim_id=claim_id, agent_id=agent_id, idem_key=idem_key,
+            idempotency_window_seconds=idempotency_window_seconds, actor=actor,
+            principal_id=principal_id, project=project)
+
+
+def _update_external_effect_in(c: sqlite3.Connection, effect_key: str, status: str,
+                               readback: Optional[Dict[str, Any]] = None,
+                               last_error: str = "", actor: str = "system",
+                               task_id: Optional[str] = None,
+                               project: str = DEFAULT_PROJECT,
+                               now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else float(now)
+    row = c.execute("SELECT * FROM external_side_effects WHERE effect_key=?",
+                    (effect_key,)).fetchone()
+    if not row:
+        return {"error": "effect_not_found", "effect_key": effect_key}
+    effect = _external_effect_row(row)
+    status = (status or "").strip().lower()
+    if status not in {"issued", "verified", "failed", "dead_letter", "void"}:
+        return {"error": "unsupported_effect_status", "status": status}
+    readback_obj = _canonical_payload(readback if readback is not None else effect.get("readback"))
+    sets = ["status=?", "readback_json=?", "updated_at=?"]
+    vals: List[Any] = [status, json.dumps(readback_obj, sort_keys=True), now]
+    if status == "issued":
+        sets.extend(["issued_at=COALESCE(issued_at, ?)", "issued_by=COALESCE(issued_by, ?)"])
+        vals.extend([now, actor])
+    if status == "verified":
+        sets.extend(["verified_at=COALESCE(verified_at, ?)", "verified_by=COALESCE(verified_by, ?)"])
+        vals.extend([now, actor])
+    if last_error:
+        sets.append("last_error=?")
+        vals.append(last_error)
+    elif status in {"issued", "verified"}:
+        sets.append("last_error=NULL")
+    if status in {"failed", "dead_letter"}:
+        sets.append("retry_count=retry_count+1")
+    vals.append(effect_key)
+    c.execute(f"UPDATE external_side_effects SET {', '.join(sets)} WHERE effect_key=?", vals)
+    row = c.execute("SELECT * FROM external_side_effects WHERE effect_key=?",
+                    (effect_key,)).fetchone()
+    updated = _external_effect_row(row)
+    event = {"effect_key": effect_key, "effect_type": updated["effect_type"],
+             "target": updated["target"], "resource": updated["resource"],
+             "status": status, "readback": readback_obj}
+    if last_error:
+        event["last_error"] = last_error
+    c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+              (task_id or updated.get("task_id"), actor, f"side_effect.{status}",
+               json.dumps(event, sort_keys=True), now))
+    return {"effect_key": effect_key, "effect": updated}
+
+
+def mark_external_effect_issued(effect_key: str, readback: Optional[Dict[str, Any]] = None,
+                                actor: str = "system",
+                                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    with _conn(project) as c:
+        return _update_external_effect_in(c, effect_key, "issued", readback=readback,
+                                          actor=actor, project=project)
+
+
+def verify_external_effect(effect_key: str, readback: Optional[Dict[str, Any]] = None,
+                           actor: str = "system",
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    with _conn(project) as c:
+        return _update_external_effect_in(c, effect_key, "verified", readback=readback,
+                                          actor=actor, project=project)
+
+
+def fail_external_effect(effect_key: str, error: str, readback: Optional[Dict[str, Any]] = None,
+                         dead_letter: bool = False, actor: str = "system",
+                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    with _conn(project) as c:
+        return _update_external_effect_in(
+            c, effect_key, "dead_letter" if dead_letter else "failed",
+            readback=readback or {}, last_error=error or "effect_failed",
+            actor=actor, project=project)
+
+
+def list_external_effects(effect_type: str = "", status: str = "", task_id: str = "",
+                          target: str = "", project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    init_db(project)
+    q = "SELECT * FROM external_side_effects WHERE 1=1"
+    params: List[Any] = []
+    if effect_type:
+        q += " AND effect_type=?"; params.append(effect_type.strip().lower())
+    if status:
+        q += " AND status=?"; params.append(status.strip().lower())
+    if task_id:
+        q += " AND task_id=?"; params.append(task_id)
+    if target:
+        q += " AND target=?"; params.append(target)
+    q += " ORDER BY updated_at DESC, effect_key"
+    with _conn(project) as c:
+        return [_external_effect_row(row) for row in c.execute(q, params).fetchall()]
 
 
 def append_activity(kind: str, actor: str, payload: Optional[Dict[str, Any]] = None,
@@ -3146,7 +3395,7 @@ def host_status(host_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
 def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
                         reason: str, source: str, policy: Dict[str, Any],
                         task_id: Optional[str], principal_id: str, actor: str,
-                        now: float, idem_key: str = "") -> Dict[str, Any]:
+                        now: float, idem_key: str = "", effect_key: str = "") -> Dict[str, Any]:
     deadline_s = (policy.get("deadline_seconds") or policy.get("claim_timeout_s") or
                   policy.get("ttl_s"))
     deadline = now + float(deadline_s) if deadline_s else None
@@ -3158,15 +3407,16 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
     wake_id = "wake-" + uuid.uuid4().hex[:16]
     c.execute(
         "INSERT INTO wake_intents(wake_id, source, reason, selector_json, policy_json, "
-        "status, requested_at, deadline, result_json, task_id, principal_id, idem_key) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "status, requested_at, deadline, result_json, task_id, principal_id, idem_key, effect_key) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (wake_id, source, reason, json.dumps(selector, sort_keys=True),
          json.dumps(policy, sort_keys=True), status, now, deadline,
-         json.dumps(result, sort_keys=True), task_id, principal_id or None, idem_key or None),
+         json.dumps(result, sort_keys=True), task_id, principal_id or None,
+         idem_key or None, effect_key or None),
     )
     payload = {"wake_id": wake_id, "source": source, "reason": reason,
                "selector": selector, "policy": policy, "status": status,
-               "eligible_host_count": len(eligible)}
+               "eligible_host_count": len(eligible), "effect_key": effect_key or None}
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (task_id, actor, "wake.requested", json.dumps(payload, sort_keys=True), now))
     if not eligible:
@@ -3203,10 +3453,31 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             hit = _idem_hit(c, "request_wake", idem_key, actor, payload)
             if hit is not None:
                 return hit
+            effect_claim = _claim_external_effect_in(
+                c, "wake", "agent_host", json.dumps(selector, sort_keys=True),
+                payload, task_id=task_id, agent_id=selector.get("agent_id") or "",
+                idem_key=idem_key, actor=actor, principal_id=principal_id,
+                project=project, now=now)
+            if not effect_claim.get("claimed"):
+                out = {"requested": False, "reason": effect_claim.get("reason"),
+                       "effect": effect_claim.get("effect"),
+                       "effect_key": effect_claim.get("effect_key"),
+                       "readback_required": effect_claim.get("readback_required", False)}
+                if effect_claim.get("verified"):
+                    out["verified"] = True
+                    out["proof"] = effect_claim.get("proof")
+                _idem_store(c, "request_wake", idem_key, actor, payload, out)
+                return out
             wake = _insert_wake_intent(
                 c, selector=selector, reason=reason or "wake requested",
                 source=source or actor, policy=policy, task_id=task_id,
-                principal_id=principal_id, actor=actor, now=now, idem_key=idem_key)
+                principal_id=principal_id, actor=actor, now=now, idem_key=idem_key,
+                effect_key=effect_claim["effect_key"])
+            _update_external_effect_in(
+                c, effect_claim["effect_key"], "issued",
+                readback={"wake_id": wake["wake_id"], "wake_status": wake["status"]},
+                actor=actor, task_id=task_id, project=project, now=now)
+            wake["effect_key"] = effect_claim["effect_key"]
             _idem_store(c, "request_wake", idem_key, actor, payload, wake)
             return wake
     except sqlite3.OperationalError as exc:
@@ -3335,6 +3606,16 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                     actor=actor,
                     now=now,
                 )
+            if wake.get("effect_key"):
+                effect_readback = {"wake_id": wake_id, "status": status,
+                                   "runner_session_id": runner_session_id or None,
+                                   "agent_id": agent_id or None, "result": result}
+                _update_external_effect_in(
+                    c, wake["effect_key"],
+                    "verified" if status == "completed" else "failed",
+                    readback=effect_readback,
+                    last_error="" if status == "completed" else result.get("reason", "launch_failed"),
+                    actor=actor, task_id=wake.get("task_id"), project=project, now=now)
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _sqlite_busy(exc):
@@ -3399,6 +3680,28 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
                     "runner_session_id": runner_session_id}
         session = _runner_session_row(row, now=now, include_claim=True, c=c)
         available = set(session.get("available_actions") or [])
+        effect_payload = {
+            "runner_session_id": runner_session_id,
+            "host_id": session.get("host_id"),
+            "action": action,
+            "options": options or {},
+        }
+        effect_claim = _claim_external_effect_in(
+            c, "runner_control", session.get("host_id") or "agent_host",
+            f"{runner_session_id}:{action}", effect_payload,
+            task_id=session.get("task_id") or None,
+            claim_id=session.get("claim_id") or "",
+            agent_id=session.get("agent_id") or "",
+            actor=actor, principal_id=principal_id, project=project, now=now)
+        if not effect_claim.get("claimed"):
+            out = {"requested": False, "reason": effect_claim.get("reason"),
+                   "effect": effect_claim.get("effect"),
+                   "effect_key": effect_claim.get("effect_key"),
+                   "readback_required": effect_claim.get("readback_required", False)}
+            if effect_claim.get("verified"):
+                out["verified"] = True
+                out["proof"] = effect_claim.get("proof")
+            return out
         request_id = "runnerreq-" + uuid.uuid4().hex[:16]
         snapshot = _runner_snapshot_from_session(session, reason=f"before_{action}")
         req_status = "pending" if action in available else "refused"
@@ -3413,7 +3716,7 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
         c.execute(
             "INSERT INTO runner_control_requests(request_id, runner_session_id, host_id, "
             "action, status, reason, requested_by, principal_id, requested_at, "
-            "snapshot_json, result_json, options_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "snapshot_json, result_json, options_json, effect_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 request_id,
                 runner_session_id,
@@ -3427,8 +3730,14 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
                 json.dumps(snapshot, sort_keys=True),
                 json.dumps(result, sort_keys=True),
                 json.dumps(options or {}, sort_keys=True),
+                effect_claim["effect_key"],
             ),
         )
+        _update_external_effect_in(
+            c, effect_claim["effect_key"], "issued" if req_status == "pending" else "failed",
+            readback={"request_id": request_id, "status": req_status, "result": result},
+            last_error="" if req_status == "pending" else "not_supported",
+            actor=actor, task_id=session.get("task_id") or None, project=project, now=now)
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (session.get("task_id") or None, actor,
                    f"runner.{action}_{'requested' if req_status == 'pending' else 'refused'}",
@@ -3437,6 +3746,7 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
                                "host_id": session.get("host_id"),
                                "status": req_status,
                                "reason": reason or "",
+                               "effect_key": effect_claim["effect_key"],
                                "available_actions": sorted(available),
                                "snapshot": snapshot}, sort_keys=True), now))
         out = _runner_control_row(c.execute(
@@ -3542,9 +3852,18 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
                   (session.get("task_id") or None, actor, f"runner.{req['action']}_{final_status}",
                    json.dumps({"request_id": request_id,
                                "runner_session_id": req["runner_session_id"],
+                               "effect_key": req.get("effect_key"),
                                "status": final_status,
                                "result": merged_result,
                                "snapshot": snapshot}, sort_keys=True), now))
+        if req.get("effect_key"):
+            _update_external_effect_in(
+                c, req["effect_key"],
+                "verified" if final_status == "completed" else "failed",
+                readback={"request_id": request_id, "status": final_status,
+                          "result": merged_result, "snapshot": snapshot},
+                last_error="" if final_status == "completed" else merged_result.get("error", final_status),
+                actor=actor, task_id=session.get("task_id") or None, project=project, now=now)
         row = c.execute("SELECT * FROM runner_control_requests WHERE request_id=?",
                         (request_id,)).fetchone()
     return _runner_control_row(row)
@@ -3570,6 +3889,11 @@ def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (wake.get("task_id"), actor, "wake.cancelled",
                        json.dumps({"wake_id": wake_id, "reason": reason}, sort_keys=True), now))
+            if wake.get("effect_key"):
+                _update_external_effect_in(
+                    c, wake["effect_key"], "void",
+                    readback={"wake_id": wake_id, "status": "cancelled", "reason": reason},
+                    actor=actor, task_id=wake.get("task_id"), project=project, now=now)
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _sqlite_busy(exc):
@@ -3602,6 +3926,14 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                           (wake.get("task_id"), "switchboard/wake", "wake.failed",
                            json.dumps({"wake_id": wake["wake_id"], "reason": "deadline_expired"},
                                       sort_keys=True), now))
+                if wake.get("effect_key"):
+                    _update_external_effect_in(
+                        c, wake["effect_key"], "failed",
+                        readback={"wake_id": wake["wake_id"], "status": "failed",
+                                  "reason": "deadline_expired"},
+                        last_error="deadline_expired",
+                        actor="switchboard/wake", task_id=wake.get("task_id"),
+                        project=project, now=now)
                 failed += 1
                 events.append({"wake_id": wake["wake_id"], "status": "failed",
                                "reason": "deadline_expired"})
@@ -5188,6 +5520,11 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             ("snapshot_json", "result_json", "options_json"),
             order_by="requested_at, request_id",
         )
+        side_effects = _audit_json_rows(
+            c, "external_side_effects",
+            ("payload_json", "readback_json"),
+            order_by="requested_at, effect_key",
+        )
         git_state = [_git_state_row(row) for row in c.execute(
             "SELECT * FROM task_git_state ORDER BY updated_at, task_id"
         ).fetchall()]
@@ -5219,6 +5556,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "message_count": len(messages),
             "principal_count": len(principals),
             "runner_session_count": len(runner_sessions),
+            "side_effect_count": len(side_effects),
             "outcome_count": len(outcomes),
             "spend_count": len(spend),
         },
@@ -5238,6 +5576,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "wake_intents": wake_intents,
         "runner_sessions": _audit_redact(runner_sessions),
         "runner_control_requests": runner_controls,
+        "external_side_effects": _audit_redact(side_effects),
         "git_state": _audit_redact(git_state),
         "economics": {
             "project_tally": _audit_redact(project_tally(project=project)),

@@ -167,6 +167,15 @@ attached, URL-backed, reachable by git ref, or explicitly declared `non_reproduc
 reason. Missing required roots are red; non-reproducible roots stay yellow in final reports; finding
 summaries should distinguish repo-state findings from external-temp/external-versioned findings.
 
+External side-effect rule: any Switchboard workflow that may change state outside the Switchboard
+database should claim an `external_side_effects` row before touching the provider. The effect key is
+deterministic over project, effect type, target, resource, payload hash, and idempotency window. If a
+replay sees an unverified effect, read back provider/host state before issuing again; if it sees a
+verified effect, return the recorded proof. Wake intents and runner-control requests are wired into
+this ledger now; GitHub writes, notifications, provider pulls, hosted dispatch, and audit exports
+should use the generic `claim_external_effect` -> `mark_external_effect_issued` ->
+`verify_external_effect`/`fail_external_effect` path as they adopt it.
+
 GitHub Actions `startup_failure` rule: this private repo has produced Actions runs with
 `conclusion=startup_failure`, `jobs=[]`, and `path=BuildFailed` before any checkout/setup step.
 Treat those as CI-infra failures, not test results. Do not merge on a vague "red but probably

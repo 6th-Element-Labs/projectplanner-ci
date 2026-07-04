@@ -1370,6 +1370,77 @@ async def ixp_runner_controls(project: str = Query(store.DEFAULT_PROJECT),
         project=_proj(project))}
 
 
+@app.get("/ixp/v1/external_effects")
+async def ixp_external_effects(project: str = Query(store.DEFAULT_PROJECT),
+                               effect_type: str = "", status: str = "",
+                               task_id: str = "", target: str = ""):
+    return {"effects": store.list_external_effects(
+        effect_type=effect_type, status=status, task_id=task_id,
+        target=target, project=_proj(project))}
+
+
+@app.post("/ixp/v1/claim_external_effect")
+async def ixp_claim_external_effect(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "agent")
+    result = store.claim_external_effect(
+        body.get("effect_type") or "",
+        body.get("target") or "",
+        body.get("resource") or "",
+        body.get("payload") or {},
+        task_id=body.get("task_id") or body.get("task"),
+        claim_id=body.get("claim_id") or "",
+        agent_id=body.get("agent_id") or "",
+        idem_key=body.get("idem_key") or "",
+        idempotency_window_seconds=int(body.get("idempotency_window_seconds") or 0),
+        actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/mark_external_effect_issued")
+async def ixp_mark_external_effect_issued(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
+    result = store.mark_external_effect_issued(
+        body.get("effect_key") or body.get("id") or "",
+        readback=body.get("readback") or {},
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/verify_external_effect")
+async def ixp_verify_external_effect(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
+    result = store.verify_external_effect(
+        body.get("effect_key") or body.get("id") or "",
+        readback=body.get("readback") or {},
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/fail_external_effect")
+async def ixp_fail_external_effect(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
+    result = store.fail_external_effect(
+        body.get("effect_key") or body.get("id") or "",
+        error=body.get("error") or "effect_failed",
+        readback=body.get("readback") or {},
+        dead_letter=bool(body.get("dead_letter")),
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.post("/ixp/v1/claim_runner_control")
 async def ixp_claim_runner_control(request: Request, body: dict = Body(...)):
     project = _body_project(body)
