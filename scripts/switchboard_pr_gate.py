@@ -27,6 +27,7 @@ import review_preflight
 DEFAULT_REPO = "6th-Element-Labs/projectplanner"
 DEFAULT_CONTEXT = "Switchboard CI / VM gate"
 DEFAULT_WORKDIR = "/var/lib/projectplanner/ci-gate"
+MIN_PYTHON_VERSION = (3, 10)
 
 
 class GateError(RuntimeError):
@@ -57,6 +58,79 @@ def _run(cmd: List[str], *, cwd: Optional[Path] = None, env: Optional[Dict[str, 
     return subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env, text=True,
                           stdout=stdout, stderr=subprocess.STDOUT if stdout else None,
                           check=check, timeout=timeout)
+
+
+def _python_info(executable: str) -> Optional[Dict[str, Any]]:
+    if not executable:
+        return None
+    try:
+        proc = subprocess.run(
+            [executable, "-c",
+             "import json,sys; print(json.dumps({'executable': sys.executable, "
+             "'version': list(sys.version_info[:3])}))"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        info = json.loads(proc.stdout.strip())
+    except json.JSONDecodeError:
+        return None
+    version = tuple(int(x) for x in (info.get("version") or [])[:2])
+    if len(version) < 2:
+        return None
+    info["supported"] = version >= MIN_PYTHON_VERSION
+    info["version_text"] = ".".join(str(x) for x in (info.get("version") or []))
+    return info
+
+
+def _python_candidates(source_repo: Path, explicit: str = "") -> Iterable[Dict[str, str]]:
+    explicit = (explicit or os.environ.get("SWITCHBOARD_CI_PYTHON") or "").strip()
+    if explicit:
+        yield {"source": "explicit", "path": explicit}
+    env_python = (os.environ.get("PYTHON") or "").strip()
+    if env_python and env_python != explicit:
+        yield {"source": "PYTHON", "path": env_python}
+    repo_python = source_repo / ".venv" / "bin" / "python"
+    yield {"source": "repo_venv", "path": str(repo_python)}
+    for name in ("python3.12", "python3.11", "python3.10", "python3"):
+        resolved = shutil.which(name) or ""
+        if resolved:
+            yield {"source": name, "path": resolved}
+
+
+def select_ci_python(source_repo: Path, explicit: str = "") -> Dict[str, Any]:
+    seen = set()
+    rejected = []
+    for candidate in _python_candidates(source_repo, explicit=explicit):
+        path = candidate["path"]
+        if path in seen:
+            continue
+        seen.add(path)
+        info = _python_info(path)
+        if not info:
+            rejected.append({**candidate, "reason": "not_executable"})
+            continue
+        record = {**candidate, **info}
+        if record.get("supported"):
+            return record
+        rejected.append({**record, "reason": "unsupported_version"})
+    details = ", ".join(
+        f"{r.get('source')}={r.get('path')}:{r.get('version_text') or r.get('reason')}"
+        for r in rejected
+    )
+    raise GateError(
+        "No supported Python runtime found for Switchboard VM gate. "
+        "Need Python 3.10+ because strict CI installs mcp>=1.9. "
+        "Set SWITCHBOARD_CI_PYTHON to a supported interpreter or provision /opt/projectplanner/.venv. "
+        f"Checked: {details or 'no candidates'}"
+    )
 
 
 def _github_request(method: str, path: str, *, token: str, body: Optional[Dict[str, Any]] = None) -> Any:
@@ -184,17 +258,23 @@ def _pr_preflight(worktree: Path, pr: Dict[str, Any], *, repo: str) -> Dict[str,
 
 
 def run_switchboard_gate(worktree: Path, log_path: Path, *, timeout_s: int,
-                         preflight: Optional[Dict[str, Any]] = None) -> None:
+                         preflight: Optional[Dict[str, Any]] = None,
+                         python_runtime: Optional[Dict[str, Any]] = None) -> None:
     env = os.environ.copy()
     venv_python = worktree / ".venv" / "bin" / "python"
+    python_runtime = python_runtime or select_ci_python(worktree)
     with log_path.open("w", encoding="utf-8") as log:
         log.write(f"Switchboard CI VM gate started at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
         log.write(f"worktree={worktree}\n\n")
         if preflight:
             log.write(review_preflight.format_preflight_header(preflight))
             log.write("\n")
+        log.write("Switchboard CI Python runtime\n")
+        log.write(f"source={python_runtime.get('source')}\n")
+        log.write(f"executable={python_runtime.get('executable') or python_runtime.get('path')}\n")
+        log.write(f"version={python_runtime.get('version_text')}\n\n")
         log.flush()
-        _run(["python3", "-m", "venv", ".venv"], cwd=worktree, stdout=log)
+        _run([python_runtime["path"], "-m", "venv", ".venv"], cwd=worktree, stdout=log)
         _run([str(venv_python), "-m", "pip", "install", "--disable-pip-version-check",
               "-r", "requirements.txt"], cwd=worktree, stdout=log, timeout=timeout_s)
         env.update({
@@ -208,6 +288,7 @@ def run_switchboard_gate(worktree: Path, log_path: Path, *, timeout_s: int,
 
 def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
                     work_root: Path, source_repo: Path, timeout_s: int,
+                    python_executable: str = "",
                     keep_worktree: bool = False) -> Dict[str, Any]:
     number = int(pr["number"])
     sha = pr["head"]["sha"]
@@ -222,12 +303,14 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
     cache = _ensure_cache_repo(work_root, source_repo, repo)
     run_dir = _prepare_worktree(cache, work_root, pr, run_tag)
     try:
+        python_runtime = select_ci_python(source_repo, explicit=python_executable)
         preflight = _pr_preflight(run_dir, pr, repo=repo)
         if preflight.get("status") != "pass":
             _write_preflight_log(log_path, run_dir, preflight)
             raise GateError("Switchboard review preflight failed: " +
                             "; ".join(f.get("code", "unknown") for f in preflight.get("findings", [])))
-        run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s, preflight=preflight)
+        run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
+                             preflight=preflight, python_runtime=python_runtime)
         post_status(repo, sha, "success", context=context,
                     description="Switchboard VM gate passed", target_url=pr_url,
                     token=token)
@@ -267,6 +350,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                                str(Path.cwd())))
     parser.add_argument("--timeout-s", type=int,
                         default=int(os.environ.get("SWITCHBOARD_CI_TIMEOUT_SECONDS", "1800")))
+    parser.add_argument("--python", default=os.environ.get("SWITCHBOARD_CI_PYTHON", ""),
+                        help="Python 3.10+ interpreter used to create the PR gate venv. "
+                             "Defaults to SWITCHBOARD_CI_PYTHON, PYTHON, repo .venv, then python3.12/3.11/3.10.")
     parser.add_argument("--keep-worktree", action="store_true",
                         default=os.environ.get("SWITCHBOARD_CI_KEEP_WORKTREE", "").lower()
                         in ("1", "true", "yes"))
@@ -289,6 +375,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = run_gate_for_pr(pr, repo=args.repo, token=token, context=args.context,
                                  work_root=root, source_repo=source_repo,
                                  timeout_s=args.timeout_s,
+                                 python_executable=args.python,
                                  keep_worktree=args.keep_worktree)
         print(json.dumps(result, sort_keys=True))
         results.append(result)

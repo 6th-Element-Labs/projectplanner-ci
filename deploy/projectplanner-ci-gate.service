@@ -12,6 +12,7 @@ Group=ubuntu
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
 Environment=SWITCHBOARD_CI_WORKDIR=/var/lib/projectplanner/ci-gate
+Environment=SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py ci_gate_prs
 StandardOutput=journal
 StandardError=journal

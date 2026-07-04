@@ -86,7 +86,7 @@ systemctl is-active actions.runner.6th-Element-Labs-projectplanner.plan-vm-switc
 ## Update live code
 ```bash
 cd /opt/projectplanner && git pull && .venv/bin/pip install -r requirements.txt
-PYTHON=.venv/bin/python SWITCHBOARD_CI_STRICT=1 scripts/switchboard_ci.sh
+PYTHON=.venv/bin/python SWITCHBOARD_CI_PYTHON=.venv/bin/python SWITCHBOARD_CI_STRICT=1 scripts/switchboard_ci.sh
 sudo systemctl restart projectplanner projectplanner-mcp
 sudo systemctl restart projectplanner-monitors.timer
 sudo cp deploy/projectplanner-reconcile.service deploy/projectplanner-reconcile.timer /etc/systemd/system/
@@ -132,6 +132,11 @@ The job checks out open non-draft PRs into `/var/lib/projectplanner/ci-gate`, ru
 `scripts/switchboard_ci.sh` in strict mode, and posts a commit status named
 `Switchboard CI / VM gate` to each PR head SHA. It needs a token with commit-status write access in
 `PM_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN`.
+
+The gate must create its test venv with Python 3.10+ because strict CI installs `mcp>=1.9`.
+`projectplanner-ci-gate.service` pins `SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python`;
+if that interpreter is missing or unsupported, the gate posts a red status with the checked
+candidate list instead of silently falling back to ambient `python3`.
 
 ## Rename safety
 

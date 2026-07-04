@@ -44,6 +44,10 @@ ok("Environment=PM_AUTH_MODE=required" in mcp_unit,
    "Production MCP unit forces PM_AUTH_MODE=required")
 ok("PM_AUTH_MODE=required" in provision,
    "Provisioning docs make production auth mode explicit")
+ok("SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python" in provision
+   and "Environment=SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python" in
+   Path("deploy/projectplanner-ci-gate.service").read_text(encoding="utf-8"),
+   "VM gate pins an explicit Python 3.10+ runtime")
 
 print("\n%d passed, %d failed" % (passed, failed))
 raise SystemExit(1 if failed else 0)

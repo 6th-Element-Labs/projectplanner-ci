@@ -108,7 +108,8 @@ produce normal queued jobs again. Strict mode requires Python 3.10+ because the 
 dependency requires it:
 
 ```bash
-SWITCHBOARD_CI_STRICT=1 SWITCHBOARD_CI_REQUIRE_NODE=1 scripts/switchboard_ci.sh
+PYTHON=.venv/bin/python SWITCHBOARD_CI_PYTHON=.venv/bin/python \
+  SWITCHBOARD_CI_STRICT=1 SWITCHBOARD_CI_REQUIRE_NODE=1 scripts/switchboard_ci.sh
 ```
 
 Merge rule: a branch can move to `In Review` with branch/head/PR evidence, but it should not be
@@ -128,11 +129,15 @@ Confirm `projectplanner-ci-gate.timer` is active, run the strict gate on the Pla
 Python 3.10+ environment, and record the risk before merge. The manual command is:
 
 ```bash
-PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
+PM_GITHUB_TOKEN=... SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python \
+  scripts/switchboard_pr_gate.py --pr 18
 ```
 
 The production gate is `projectplanner-ci-gate.timer`, which polls open non-draft PRs and posts
 the `Switchboard CI / VM gate` status from the Plan VM.
+The service pins `SWITCHBOARD_CI_PYTHON` to the project venv and every gate log records the
+selected interpreter and version. If no Python 3.10+ runtime is available, the gate posts red
+with the checked candidate list instead of silently falling back to ambient `python3`.
 
 Review/audit preflight: the VM gate now writes a `Switchboard review git preflight` header before
 running tests. That header records project, intended branch, target SHA, upstream SHA, branch
