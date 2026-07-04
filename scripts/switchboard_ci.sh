@@ -60,6 +60,7 @@ run_test test_codex_adapter.py
 run_test test_codex_supervisor.py
 run_test test_control_plane_fail_fast.py
 run_test test_evidence_claims.py
+run_test test_external_artifact_roots.py
 run_test test_frontend_project_state.py
 run_test test_github_webhook.py
 run_test test_ci_gate_policy.py

@@ -159,6 +159,14 @@ completion payload names those things, declare repo-accessible evidence with `ev
 `claim_evidence_missing` findings when claimed artifacts cannot be tied back to a repo path,
 HTTP(S) URL, or reachable git ref; audit exports include the full claim-to-evidence report.
 
+External artifact root rule: review/build workflows that consume external worktrees, generated
+reports, temp roots, uploaded artifacts, URLs, or git refs should write and check a
+`switchboard.external_artifact_roots.v1` manifest with `external_artifact_roots.py` before creating
+green reports or derived artifacts. Required roots must exist and be repo-owned, versioned,
+attached, URL-backed, reachable by git ref, or explicitly declared `non_reproducible` with a
+reason. Missing required roots are red; non-reproducible roots stay yellow in final reports; finding
+summaries should distinguish repo-state findings from external-temp/external-versioned findings.
+
 GitHub Actions `startup_failure` rule: this private repo has produced Actions runs with
 `conclusion=startup_failure`, `jobs=[]`, and `path=BuildFailed` before any checkout/setup step.
 Treat those as CI-infra failures, not test results. Do not merge on a vague "red but probably
