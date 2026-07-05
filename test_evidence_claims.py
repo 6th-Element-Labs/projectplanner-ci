@@ -2,6 +2,7 @@
 """HARDEN-28 claim-to-evidence verification regression."""
 import os
 import shutil
+import subprocess
 import tempfile
 
 _TMP = tempfile.mkdtemp(prefix="evidence-claims-")
@@ -124,6 +125,43 @@ try:
         finding(report, verified_completion["task_id"], "claim_evidence_missing") is None
         and finding(report, verified_completion["task_id"], "claim_without_evidence") is None,
         "completion with repo evidence path is not flagged",
+    )
+
+    squash_merged = store.create_task(
+        {"workstream_id": "BUG", "title": "squash-merged claim head disappeared"},
+        actor="test",
+        project=P,
+    )
+    squash_claim = store.claim_task(
+        squash_merged["task_id"],
+        "codex/BUG-26",
+        actor="codex/BUG-26",
+        project=P,
+    )
+    store.complete_claim(
+        squash_claim["claim_id"],
+        evidence={
+            "branch": "codex/BUG-26-reconcile-squash",
+            "head_sha": "0" * 40,
+            "pr_url": "https://github.com/6th-Element-Labs/projectplanner/pull/91",
+        },
+        actor="codex/BUG-26",
+        project=P,
+    )
+    store.mark_task_merged(
+        squash_merged["task_id"],
+        subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        pr_number=91,
+        pr_url="https://github.com/6th-Element-Labs/projectplanner/pull/91",
+        branch="codex/BUG-26-reconcile-squash",
+        head_sha="0" * 40,
+        actor="github-webhook",
+        project=P,
+    )
+    squash_report = store.reconcile(project=P)
+    ok(
+        finding(squash_report, squash_merged["task_id"], "claim_evidence_missing") is None,
+        "squash-merged Done task trusts merged_sha instead of missing pre-squash claim head",
     )
 
     direct = evidence_claims.evaluate_activity(

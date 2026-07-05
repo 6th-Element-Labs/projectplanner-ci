@@ -8984,8 +8984,14 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 findings.append({"severity": "medium", "task_id": lease["task_id"],
                                  "code": "stale_resource_lease",
                                  "detail": f"{lease['resource_type']} lease {lease['id']} by {lease['agent_id']} expired without release."})
+        tasks_by_id = {task["task_id"]: task for task in tasks}
         for report in _evidence_claim_reports(c):
             if report.get("status") == "pass":
+                continue
+            task_id = report.get("task_id")
+            task = tasks_by_id.get(task_id) if task_id else None
+            if (task and task.get("status") == "Done"
+                    and _has_done_provenance(git_states.get(task_id, {}))):
                 continue
             artifacts = ", ".join(report.get("claim", {}).get("artifacts") or [])
             evidence_values = []
