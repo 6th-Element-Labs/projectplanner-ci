@@ -1198,6 +1198,19 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ON deliverable_task_links(deliverable_id, milestone_id);
             CREATE INDEX IF NOT EXISTS ix_deliverable_links_task
                 ON deliverable_task_links(project_id, task_id);
+            CREATE TABLE IF NOT EXISTS deliverable_breakdown_proposals (
+                id                         TEXT PRIMARY KEY,
+                deliverable_id             TEXT NOT NULL,
+                status                     TEXT NOT NULL DEFAULT 'proposed',
+                proposed_by                TEXT,
+                approved_by                TEXT,
+                payload_json               TEXT NOT NULL DEFAULT '{}',
+                created_at                 REAL NOT NULL,
+                updated_at                 REAL NOT NULL,
+                approved_at                REAL
+            );
+            CREATE INDEX IF NOT EXISTS ix_breakdown_proposals_deliverable
+                ON deliverable_breakdown_proposals(deliverable_id, status, updated_at);
             CREATE TABLE IF NOT EXISTS agent_hosts (
                 host_id            TEXT PRIMARY KEY,
                 hostname           TEXT,
@@ -1521,6 +1534,7 @@ DELIVERABLE_STATUSES = {
 DELIVERABLE_MILESTONE_STATUSES = {
     "not_started", "in_progress", "blocked", "in_review", "done", "skipped"
 }
+BREAKDOWN_PROPOSAL_STATUSES = {"proposed", "approved", "rejected", "superseded"}
 
 
 def normalize_deliverable_id(value: str = "", title: str = "") -> str:
@@ -2051,6 +2065,587 @@ def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
         "publication_blocked_count": publication_blocked,
         "status_counts": dict(sorted(status_counts.items())),
         "done_with_proof_ratio": (done / total) if total else 0.0,
+    }
+
+
+def _breakdown_proposal_row(row: sqlite3.Row) -> Dict[str, Any]:
+    d = dict(row)
+    d["payload"] = _json_payload(d.pop("payload_json", ""))
+    return d
+
+
+def _validate_breakdown_payload(payload: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    parsed = _parse_jsonish(payload)
+    if not isinstance(parsed, dict):
+        return None, "breakdown payload must be a JSON object"
+    milestones = parsed.get("milestones")
+    if isinstance(milestones, str):
+        milestones = _parse_jsonish(milestones)
+    if not isinstance(milestones, list) or not milestones:
+        return None, "breakdown payload requires a non-empty milestones array"
+    normalized: List[Dict[str, Any]] = []
+    for idx, milestone in enumerate(milestones):
+        if not isinstance(milestone, dict):
+            return None, f"milestones[{idx}] must be an object"
+        title = (milestone.get("title") or "").strip()
+        if not title:
+            return None, f"milestones[{idx}] requires title"
+        tasks = milestone.get("tasks") or []
+        if tasks and not isinstance(tasks, list):
+            return None, f"milestones[{idx}].tasks must be an array"
+        normalized_tasks: List[Dict[str, Any]] = []
+        for t_idx, task in enumerate(tasks):
+            if not isinstance(task, dict):
+                return None, f"milestones[{idx}].tasks[{t_idx}] must be an object"
+            task_project = (task.get("project_id") or task.get("task_project") or "").strip()
+            workstream_id = (task.get("workstream_id") or "").strip()
+            task_title = (task.get("title") or "").strip()
+            if not task_project:
+                return None, f"milestones[{idx}].tasks[{t_idx}] requires project_id"
+            if not has_project(task_project):
+                return None, f"unknown linked project: {task_project}"
+            if not workstream_id or not task_title:
+                return None, (
+                    f"milestones[{idx}].tasks[{t_idx}] requires workstream_id and title"
+                )
+            normalized_tasks.append(dict(task, project_id=task_project,
+                                         workstream_id=workstream_id, title=task_title))
+        normalized.append({
+            "id": (milestone.get("id") or "").strip() or None,
+            "title": title,
+            "description": milestone.get("description"),
+            "status": (milestone.get("status") or "not_started").strip().lower(),
+            "sort_order": milestone.get("sort_order"),
+            "acceptance_criteria": milestone.get("acceptance_criteria") or [],
+            "proof_requirements": milestone.get("proof_requirements") or {},
+            "tasks": normalized_tasks,
+        })
+    return {"milestones": normalized, "notes": parsed.get("notes")}, None
+
+
+def unlink_task_from_deliverable(deliverable_id: str, task_project: str, task_id: str,
+                                 actor: str = "user",
+                                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Remove a cross-project task link from a deliverable without mutating the task."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    task_project = (task_project or "").strip()
+    task_id = (task_id or "").strip().upper()
+    if not task_project or not task_id:
+        return {"error": "task_project and task_id are required"}
+    now = time.time()
+    with _conn(project) as c:
+        if not _deliverable_exists_in(c, deliverable_id):
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        row = c.execute(
+            "SELECT id FROM deliverable_task_links "
+            "WHERE deliverable_id=? AND project_id=? AND task_id=?",
+            (deliverable_id, task_project, task_id),
+        ).fetchone()
+        if not row:
+            return {"error": "unknown task link", "deliverable_id": deliverable_id,
+                    "project_id": task_project, "task_id": task_id}
+        c.execute(
+            "DELETE FROM deliverable_task_links "
+            "WHERE deliverable_id=? AND project_id=? AND task_id=?",
+            (deliverable_id, task_project, task_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.task_unlinked",
+                   json.dumps({"deliverable_id": deliverable_id, "project_id": task_project,
+                               "task_id": task_id}, sort_keys=True), now))
+    return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
+
+
+def update_mission_narrative(deliverable_id: str, narrative: str, actor: str = "user",
+                             project: str = DEFAULT_PROJECT,
+                             append: bool = False) -> Dict[str, Any]:
+    """Store or append the operator-facing mission narrative on a deliverable."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    text = (narrative or "").strip()
+    if not text:
+        return {"error": "narrative is required"}
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
+                        (deliverable_id,)).fetchone()
+        if not row:
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        metadata = _json_payload(row["metadata_json"])
+        if append and metadata.get("narrative"):
+            metadata["narrative"] = f"{metadata['narrative'].rstrip()}\n\n{text}"
+        else:
+            metadata["narrative"] = text
+        metadata["narrative_updated_at"] = now
+        metadata["narrative_updated_by"] = actor
+        c.execute(
+            "UPDATE deliverables SET metadata_json=?, updated_at=? WHERE id=?",
+            (json.dumps(metadata, sort_keys=True), now, deliverable_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.narrative_updated",
+                   json.dumps({"deliverable_id": deliverable_id}, sort_keys=True), now))
+    return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
+
+
+def propose_deliverable_breakdown(deliverable_id: str, payload: Any, actor: str = "user",
+                                  project: str = DEFAULT_PROJECT,
+                                  proposal_id: str = "") -> Dict[str, Any]:
+    """Store a milestone/task breakdown proposal without creating board tasks."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    normalized, err = _validate_breakdown_payload(payload)
+    if err:
+        return {"error": err}
+    pid = (proposal_id or "").strip() or f"proposal-{deliverable_id}-{uuid.uuid4().hex[:10]}"
+    now = time.time()
+    with _conn(project) as c:
+        if not _deliverable_exists_in(c, deliverable_id):
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        c.execute(
+            "UPDATE deliverable_breakdown_proposals SET status='superseded', updated_at=? "
+            "WHERE deliverable_id=? AND status='proposed'",
+            (now, deliverable_id),
+        )
+        c.execute(
+            """INSERT INTO deliverable_breakdown_proposals
+               (id, deliverable_id, status, proposed_by, approved_by, payload_json,
+                created_at, updated_at, approved_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (pid, deliverable_id, "proposed", actor, None,
+             json.dumps(normalized, sort_keys=True), now, now, None),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.breakdown_proposed",
+                   json.dumps({"deliverable_id": deliverable_id, "proposal_id": pid},
+                              sort_keys=True), now))
+    proposal = None
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM deliverable_breakdown_proposals WHERE id=?",
+                        (pid,)).fetchone()
+        if row:
+            proposal = _breakdown_proposal_row(row)
+    deliverable = get_deliverable(deliverable_id, project=project)
+    return {
+        "schema": "switchboard.deliverable_breakdown_proposal.v1",
+        "project_id": project,
+        "deliverable_id": deliverable_id,
+        "proposal": proposal,
+        "deliverable": deliverable,
+        "tasks_created": False,
+    }
+
+
+def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
+                                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Materialize an approved breakdown into milestones, tasks, and deliverable links."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    proposal_id = (proposal_id or "").strip()
+    if not proposal_id:
+        return {"error": "proposal_id is required"}
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM deliverable_breakdown_proposals WHERE id=?",
+                        (proposal_id,)).fetchone()
+        if not row:
+            return {"error": "unknown proposal", "proposal_id": proposal_id}
+        proposal = _breakdown_proposal_row(row)
+    if proposal["status"] != "proposed":
+        return {"error": "proposal is not pending approval", "proposal_id": proposal_id,
+                "status": proposal["status"]}
+    deliverable_id = proposal["deliverable_id"]
+    payload = proposal.get("payload") or {}
+    created_tasks: List[Dict[str, Any]] = []
+    for milestone in payload.get("milestones") or []:
+        milestone_result = add_deliverable_milestone(
+            deliverable_id,
+            milestone,
+            actor=actor,
+            project=project,
+        )
+        if milestone_result.get("error"):
+            return milestone_result
+        milestone_id = milestone.get("id")
+        for item in milestone_result.get("milestones") or []:
+            if milestone_id and item.get("id") == milestone_id:
+                break
+            if item.get("title") == milestone.get("title"):
+                milestone_id = item.get("id")
+                break
+        if not milestone_id:
+            return {"error": "failed to resolve created milestone id",
+                    "milestone_title": milestone.get("title")}
+        for task_spec in milestone.get("tasks") or []:
+            task_project = task_spec["project_id"]
+            created = create_task({
+                "workstream_id": task_spec["workstream_id"],
+                "workstream_name": task_spec.get("workstream_name"),
+                "title": task_spec["title"],
+                "description": task_spec.get("description"),
+                "owner_org": task_spec.get("owner_org"),
+                "owner_person_or_role": task_spec.get("owner_person_or_role"),
+                "assignee": task_spec.get("assignee"),
+                "phase": task_spec.get("phase"),
+                "status": task_spec.get("status") or "Not Started",
+                "depends_on": task_spec.get("depends_on") or [],
+            }, actor=actor, project=task_project)
+            if not created:
+                return {"error": "failed to create proposed task",
+                        "project_id": task_project,
+                        "workstream_id": task_spec["workstream_id"],
+                        "title": task_spec["title"]}
+            link_result = link_task_to_deliverable(
+                deliverable_id,
+                task_project,
+                created["task_id"],
+                milestone_id=milestone_id,
+                data={
+                    "role": task_spec.get("role") or "contributes",
+                    "blocks_deliverable": bool(task_spec.get("blocks_deliverable")),
+                    "proof_required": task_spec.get("proof_required") or {},
+                    "metadata": task_spec.get("metadata") or {},
+                },
+                actor=actor,
+                project=project,
+            )
+            if link_result.get("error"):
+                return link_result
+            created_tasks.append({
+                "project_id": task_project,
+                "task_id": created["task_id"],
+                "milestone_id": milestone_id,
+            })
+    now = time.time()
+    with _conn(project) as c:
+        c.execute(
+            "UPDATE deliverable_breakdown_proposals "
+            "SET status='approved', approved_by=?, approved_at=?, updated_at=? WHERE id=?",
+            (actor, now, now, proposal_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.breakdown_approved",
+                   json.dumps({"deliverable_id": deliverable_id, "proposal_id": proposal_id,
+                               "created_task_count": len(created_tasks)}, sort_keys=True), now))
+    return {
+        "schema": "switchboard.deliverable_breakdown_approval.v1",
+        "project_id": project,
+        "proposal_id": proposal_id,
+        "deliverable_id": deliverable_id,
+        "created_tasks": created_tasks,
+        "deliverable": get_deliverable(deliverable_id, project=project),
+        "mission_status": get_mission_status(project=project, deliverable_id=deliverable_id),
+    }
+
+
+def _resolve_mission_deliverable(project: str, deliverable_id: str = "",
+                               board_id: str = "", mission_id: str = "") -> Dict[str, Any]:
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    deliverable_id = (deliverable_id or "").strip()
+    board_id = (board_id or mission_id or "").strip()
+    if deliverable_id:
+        deliverable = get_deliverable(deliverable_id, project=project)
+        if not deliverable:
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id,
+                    "project_id": project}
+        return {"deliverable": deliverable, "board_id": deliverable.get("board_id")}
+    if board_id:
+        board = get_project_board(board_id, project=project)
+        if not board:
+            return {"error": "unknown board", "board_id": board_id, "project_id": project}
+        deliverables = list_deliverables(project=project, board_id=board_id)
+        if not deliverables:
+            return {"error": "no deliverable for board", "board_id": board_id,
+                    "project_id": project, "board": board}
+        if len(deliverables) > 1:
+            return {
+                "error": "multiple deliverables for board; pass deliverable_id",
+                "board_id": board_id,
+                "project_id": project,
+                "board": board,
+                "deliverable_ids": [d["id"] for d in deliverables],
+            }
+        return {"deliverable": deliverables[0], "board": board, "board_id": board_id}
+    return {"error": "deliverable_id or board_id/mission_id is required", "project_id": project}
+
+
+def _enriched_mission_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
+    enriched = dict(link)
+    task_project = link.get("project_id")
+    task_id = link.get("task_id")
+    if not has_project(task_project):
+        enriched["task_detail"] = {"error": "unknown project", "project_id": task_project}
+        return enriched
+    task = get_task(task_id, project=task_project)
+    if not task:
+        enriched["task_detail"] = {"error": "unknown task", "project_id": task_project,
+                                   "task_id": task_id}
+        return enriched
+    with _conn(task_project) as c:
+        claims = _active_task_claims_in(c, task_id)
+    enriched["task_detail"] = {
+        "task_id": task["task_id"],
+        "title": task.get("title"),
+        "status": task.get("status"),
+        "assignee": task.get("assignee"),
+        "workstream": task.get("_wsId"),
+        "dependency_state": task.get("dependency_state"),
+        "provenance": task.get("provenance"),
+        "git_state": task.get("git_state"),
+        "external_ci": task.get("external_ci"),
+        "publication": task.get("publication"),
+        "human_gate": _task_human_gate_state(task),
+        "active_claims": claims,
+    }
+    return enriched
+
+
+def _mission_blockers(deliverable: Dict[str, Any],
+                      linked_tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    blockers: List[Dict[str, Any]] = []
+    if deliverable.get("status") == "blocked":
+        blockers.append({
+            "kind": "deliverable_blocked",
+            "deliverable_id": deliverable.get("id"),
+            "message": "Deliverable status is blocked",
+        })
+    for link in linked_tasks:
+        detail = link.get("task_detail") or link.get("task") or {}
+        if detail.get("error"):
+            blockers.append({
+                "kind": "missing_task_snapshot",
+                "project_id": link.get("project_id"),
+                "task_id": link.get("task_id"),
+                "message": detail.get("error"),
+            })
+            continue
+        if detail.get("status") == "Blocked":
+            blockers.append({
+                "kind": "task_blocked",
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "blocks_deliverable": bool(link.get("blocks_deliverable")),
+            })
+        dep = detail.get("dependency_state") or {}
+        if not dep.get("satisfied"):
+            for blocking in dep.get("blocking") or []:
+                blockers.append({
+                    "kind": "dependency_unsatisfied",
+                    "project_id": link.get("project_id"),
+                    "task_id": detail.get("task_id"),
+                    "title": detail.get("title"),
+                    "blocking_task_id": blocking.get("task_id"),
+                    "blocking_status": blocking.get("status"),
+                })
+        gate = detail.get("human_gate") or {}
+        if gate.get("blocked"):
+            blockers.append({
+                "kind": "human_gate",
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "reason": gate.get("reason"),
+            })
+        proof_required = link.get("proof_required") or {}
+        external_ci = detail.get("external_ci") or {}
+        if (proof_required.get("external_ci_passed")
+                or (external_ci.get("gate") or {}).get("required")):
+            if not external_ci.get("passed"):
+                blockers.append({
+                    "kind": "external_ci",
+                    "project_id": link.get("project_id"),
+                    "task_id": detail.get("task_id"),
+                    "title": detail.get("title"),
+                })
+        publication = detail.get("publication") or {}
+        if (proof_required.get("publication_evidence")
+                or proof_required.get("public_mirror_published")
+                or (publication.get("gate") or {}).get("required")):
+            if not publication.get("passed"):
+                blockers.append({
+                    "kind": "publication_evidence",
+                    "project_id": link.get("project_id"),
+                    "task_id": detail.get("task_id"),
+                    "title": detail.get("title"),
+                })
+        if link.get("blocks_deliverable"):
+            provenance = detail.get("provenance") or {}
+            if not (detail.get("status") == "Done" and provenance.get("terminal")):
+                blockers.append({
+                    "kind": "blocking_task_incomplete",
+                    "project_id": link.get("project_id"),
+                    "task_id": detail.get("task_id"),
+                    "title": detail.get("title"),
+                    "status": detail.get("status"),
+                })
+    return blockers
+
+
+def _mission_next_actions(deliverable: Dict[str, Any],
+                          linked_tasks: List[Dict[str, Any]],
+                          pending_proposal: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    actions: List[Dict[str, Any]] = []
+    if pending_proposal and pending_proposal.get("status") == "proposed":
+        actions.append({
+            "action": "approve_breakdown",
+            "proposal_id": pending_proposal.get("id"),
+            "reason": "A milestone/task breakdown is waiting for approval",
+        })
+    for link in linked_tasks:
+        detail = link.get("task_detail") or {}
+        if detail.get("error"):
+            actions.append({
+                "action": "repair_task_link",
+                "project_id": link.get("project_id"),
+                "task_id": link.get("task_id"),
+                "reason": detail.get("error"),
+            })
+            continue
+        status = detail.get("status")
+        claims = detail.get("active_claims") or []
+        dep = detail.get("dependency_state") or {}
+        if status == "Not Started" and dep.get("ready") and not claims:
+            actions.append({
+                "action": "claim_task",
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "reason": "Ready and unclaimed",
+            })
+        elif status == "In Review":
+            actions.append({
+                "action": "verify_merge_provenance",
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "reason": "Awaiting merge/default-branch provenance for Done",
+            })
+        elif status == "In Progress" and not claims:
+            actions.append({
+                "action": "resume_or_claim",
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "reason": "In progress without an active claim",
+            })
+        gate = detail.get("human_gate") or {}
+        if gate.get("blocked"):
+            actions.append({
+                "action": "request_human_approval",
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "reason": gate.get("reason") or "Human gate blocked",
+            })
+    if not linked_tasks and not (deliverable.get("milestones") or []):
+        actions.append({
+            "action": "propose_breakdown",
+            "reason": "No milestones or linked tasks yet",
+        })
+    return actions
+
+
+def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
+                       board_id: str = "", mission_id: str = "") -> Dict[str, Any]:
+    """Return a mission cockpit rollup: end state, milestones, proof, blockers, next actions."""
+    scope = _resolve_mission_deliverable(project, deliverable_id=deliverable_id,
+                                          board_id=board_id, mission_id=mission_id)
+    if scope.get("error"):
+        return scope
+    deliverable = scope["deliverable"]
+    board = scope.get("board") or deliverable.get("board")
+    metadata = deliverable.get("metadata") or {}
+    linked_tasks = [_enriched_mission_task_link(link)
+                      for link in (deliverable.get("task_links") or [])]
+    milestone_task_counts: Dict[str, int] = {}
+    for link in deliverable.get("task_links") or []:
+        mid = link.get("milestone_id")
+        if mid:
+            milestone_task_counts[mid] = milestone_task_counts.get(mid, 0) + 1
+    milestones = []
+    for milestone in deliverable.get("milestones") or []:
+        item = dict(milestone)
+        item["linked_task_count"] = milestone_task_counts.get(milestone.get("id"), 0)
+        milestones.append(item)
+    active_work = []
+    done_with_proof = []
+    active_agents: Dict[str, Dict[str, Any]] = {}
+    for link in linked_tasks:
+        detail = link.get("task_detail") or {}
+        if detail.get("error"):
+            continue
+        status = detail.get("status")
+        claims = detail.get("active_claims") or []
+        provenance = detail.get("provenance") or {}
+        if status == "Done" and provenance.get("terminal"):
+            done_with_proof.append({
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "provenance": provenance,
+                "git_state": detail.get("git_state"),
+            })
+        elif status in ("In Progress", "In Review") or claims:
+            active_work.append({
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "status": status,
+                "assignee": detail.get("assignee"),
+                "active_claims": claims,
+                "milestone_id": link.get("milestone_id"),
+                "role": link.get("role"),
+            })
+        for claim in claims:
+            agent_id = claim.get("agent_id")
+            if agent_id and agent_id not in active_agents:
+                active_agents[agent_id] = {
+                    "agent_id": agent_id,
+                    "claim_id": claim.get("claim_id"),
+                    "task_id": detail.get("task_id"),
+                    "project_id": link.get("project_id"),
+                }
+    pending_proposal = None
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT * FROM deliverable_breakdown_proposals "
+            "WHERE deliverable_id=? AND status='proposed' "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (deliverable.get("id"),),
+        ).fetchone()
+        if row:
+            pending_proposal = _breakdown_proposal_row(row)
+    blockers = _mission_blockers(deliverable, linked_tasks)
+    return {
+        "schema": "switchboard.mission_status.v1",
+        "project_id": project,
+        "board_id": scope.get("board_id") or deliverable.get("board_id"),
+        "mission_id": scope.get("board_id") or deliverable.get("board_id"),
+        "deliverable_id": deliverable.get("id"),
+        "board": board,
+        "deliverable": {
+            "id": deliverable.get("id"),
+            "title": deliverable.get("title"),
+            "status": deliverable.get("status"),
+            "end_state": deliverable.get("end_state") or (board or {}).get("end_state"),
+            "why_it_matters": deliverable.get("why_it_matters"),
+            "acceptance_criteria": deliverable.get("acceptance_criteria"),
+            "policy_constraints": deliverable.get("policy_constraints"),
+            "proof_requirements": deliverable.get("proof_requirements"),
+        },
+        "narrative": metadata.get("narrative"),
+        "narrative_updated_at": metadata.get("narrative_updated_at"),
+        "progress": deliverable.get("progress") or deliverable_progress(deliverable),
+        "milestones": milestones,
+        "linked_tasks": linked_tasks,
+        "blockers": blockers,
+        "active_work": active_work,
+        "done_with_proof": done_with_proof,
+        "active_agents": list(active_agents.values()),
+        "pending_proposal": pending_proposal,
+        "next_actions": _mission_next_actions(deliverable, linked_tasks, pending_proposal),
     }
 
 

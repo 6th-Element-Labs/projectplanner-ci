@@ -670,6 +670,87 @@ async def link_task_to_deliverable(request: Request, deliverable_id: str,
     return result
 
 
+@app.delete("/api/deliverables/{deliverable_id}/task_links")
+async def unlink_task_from_deliverable(request: Request, deliverable_id: str,
+                                       task_project: str = Query(...),
+                                       task_id: str = Query(...),
+                                       project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    result = store.unlink_task_from_deliverable(
+        deliverable_id, task_project, task_id,
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.get("/api/mission_status")
+async def mission_status_query(project: str = Query(...), deliverable_id: str = "",
+                               board_id: str = "", mission_id: str = ""):
+    project = _proj(project)
+    result = store.get_mission_status(
+        project=project, deliverable_id=deliverable_id,
+        board_id=board_id, mission_id=mission_id)
+    if result.get("error"):
+        code = 404 if "unknown" in result["error"] or "no deliverable" in result["error"] else 400
+        raise HTTPException(code, result["error"])
+    return result
+
+
+@app.get("/api/deliverables/{deliverable_id}/mission_status")
+async def deliverable_mission_status(deliverable_id: str, project: str = Query(...)):
+    project = _proj(project)
+    result = store.get_mission_status(project=project, deliverable_id=deliverable_id)
+    if result.get("error"):
+        code = 404 if "unknown" in result["error"] else 400
+        raise HTTPException(code, result["error"])
+    return result
+
+
+@app.patch("/api/deliverables/{deliverable_id}/narrative")
+async def update_mission_narrative(request: Request, deliverable_id: str,
+                                   body: dict = Body(...),
+                                   project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    result = store.update_mission_narrative(
+        deliverable_id, payload.get("narrative") or "",
+        actor=auth.actor(principal), project=project,
+        append=bool(payload.get("append")))
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/api/deliverables/{deliverable_id}/breakdown_proposals")
+async def propose_deliverable_breakdown(request: Request, deliverable_id: str,
+                                        body: dict = Body(...),
+                                        project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    result = store.propose_deliverable_breakdown(
+        deliverable_id, payload, actor=auth.actor(principal), project=project,
+        proposal_id=payload.get("proposal_id") or "")
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/api/deliverables/breakdown_proposals/{proposal_id}/approve")
+async def approve_deliverable_breakdown(request: Request, proposal_id: str,
+                                        project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    result = store.approve_deliverable_breakdown(
+        proposal_id, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.get("/api/board")
 async def board(project: str = Query(store.DEFAULT_PROJECT)):
     return store.board_payload(_proj(project))

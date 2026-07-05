@@ -1963,6 +1963,120 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
 
 
 @mcp.tool()
+def create_board(title: str, ctx: Context, project: str = "maxwell",
+                 board_id: str = "", kind: str = "board", status: str = "active",
+                 purpose: str = "", end_state: str = "", description: str = "",
+                 owner_org: str = "", owner_person_or_role: str = "",
+                 metadata_json: str = "") -> str:
+    """Alias for create_project_board with kind defaulting to board."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.create_project_board({
+        "id": board_id,
+        "title": title,
+        "kind": kind or "board",
+        "status": status,
+        "purpose": purpose,
+        "end_state": end_state,
+        "description": description,
+        "owner_org": owner_org,
+        "owner_person_or_role": owner_person_or_role,
+        "metadata": metadata_json,
+    }, actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def create_mission(title: str, ctx: Context, project: str = "maxwell",
+                   mission_id: str = "", board_id: str = "", status: str = "active",
+                   purpose: str = "", end_state: str = "", description: str = "",
+                   owner_org: str = "", owner_person_or_role: str = "",
+                   metadata_json: str = "") -> str:
+    """Alias for create_project_board with kind=mission."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.create_project_board({
+        "id": mission_id or board_id,
+        "title": title,
+        "kind": "mission",
+        "status": status,
+        "purpose": purpose,
+        "end_state": end_state,
+        "description": description,
+        "owner_org": owner_org,
+        "owner_person_or_role": owner_person_or_role,
+        "metadata": metadata_json,
+    }, actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def unlink_task_from_deliverable(deliverable_id: str, task_project: str, task_id: str,
+                                 ctx: Context, project: str = "maxwell") -> str:
+    """Remove a cross-project task link from a deliverable without mutating the task."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.unlink_task_from_deliverable(
+        deliverable_id, task_project, task_id,
+        actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def get_mission_status(project: str = "maxwell", deliverable_id: str = "",
+                       board_id: str = "", mission_id: str = "") -> str:
+    """Mission cockpit rollup: end state, milestones, linked tasks, proof, blockers, next actions."""
+    return _dumps(store.get_mission_status(
+        project=project, deliverable_id=deliverable_id,
+        board_id=board_id, mission_id=mission_id))
+
+
+@mcp.tool()
+def mission_status(project: str = "maxwell", deliverable_id: str = "",
+                   board_id: str = "", mission_id: str = "") -> str:
+    """Alias for get_mission_status."""
+    return get_mission_status(project=project, deliverable_id=deliverable_id,
+                              board_id=board_id, mission_id=mission_id)
+
+
+@mcp.tool()
+def update_mission_narrative(deliverable_id: str, narrative: str, ctx: Context,
+                             project: str = "maxwell", append: bool = False) -> str:
+    """Store or append the operator-facing mission narrative on a deliverable."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.update_mission_narrative(
+        deliverable_id, narrative, actor=auth.actor(principal),
+        project=project, append=append)
+    return _dumps(result)
+
+
+@mcp.tool()
+def propose_deliverable_breakdown(deliverable_id: str, milestones_json: str,
+                                  ctx: Context, project: str = "maxwell",
+                                  proposal_id: str = "", notes: str = "") -> str:
+    """Propose milestones and future tasks without creating board tasks until approved."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    try:
+        milestones = json.loads(milestones_json)
+    except json.JSONDecodeError:
+        return _dumps({"error": "milestones_json must be valid JSON"})
+    payload = {"milestones": milestones}
+    if notes:
+        payload["notes"] = notes
+    result = store.propose_deliverable_breakdown(
+        deliverable_id, payload, actor=auth.actor(principal),
+        project=project, proposal_id=proposal_id)
+    return _dumps(result)
+
+
+@mcp.tool()
+def approve_deliverable_breakdown(proposal_id: str, ctx: Context,
+                                  project: str = "maxwell") -> str:
+    """Approve a breakdown proposal and materialize milestones, tasks, and links."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.approve_deliverable_breakdown(
+        proposal_id, actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
 def list_scoped_tokens(ctx: Context, project: str = "maxwell",
                        include_revoked: bool = False, kind: str = "") -> str:
     """List bearer principals for one project without exposing token hashes or raw tokens.

@@ -218,6 +218,74 @@ try:
        export["deliverables"]["boards"][0]["id"] == mission["id"] and
        export["deliverables"]["task_links"][0]["task_id"] == "RENDER-1",
        "audit export includes project boards, deliverable records, and links")
+
+    status = store.get_mission_status(project="qa-deliv-home",
+                                      deliverable_id="helm-cpp-webgpu-renderer")
+    ok(status.get("schema") == "switchboard.mission_status.v1" and
+       status.get("deliverable_id") == "helm-cpp-webgpu-renderer" and
+       bool((status.get("deliverable") or {}).get("end_state")),
+       "mission status resolves deliverable end state")
+    ok(len(status.get("linked_tasks") or []) == 1 and
+       status["progress"]["linked_task_count"] == 1,
+       "mission status includes linked task rollup")
+    ok(any(a.get("action") == "claim_task" for a in status.get("next_actions") or []),
+       "mission status suggests claim for ready linked task")
+
+    board_status = store.get_mission_status(project="qa-deliv-home",
+                                            board_id=mission["id"])
+    ok(board_status.get("deliverable_id") == "helm-cpp-webgpu-renderer",
+       "mission status resolves deliverable from board/mission id")
+
+    narrative = store.update_mission_narrative(
+        "helm-cpp-webgpu-renderer",
+        "Cross-board renderer mission is active.",
+        actor="test",
+        project="qa-deliv-home",
+    )
+    ok((narrative.get("metadata") or {}).get("narrative") ==
+       "Cross-board renderer mission is active.",
+       "mission narrative is stored on deliverable metadata")
+
+    proposal = store.propose_deliverable_breakdown(
+        "helm-cpp-webgpu-renderer",
+        {
+            "milestones": [{
+                "title": "Prove parity",
+                "tasks": [{
+                    "project_id": "qa-deliv-target",
+                    "workstream_id": "RENDER",
+                    "title": "Fixture parity gate",
+                }],
+            }],
+        },
+        actor="test",
+        project="qa-deliv-home",
+    )
+    ok(proposal.get("tasks_created") is False and
+       proposal.get("proposal", {}).get("status") == "proposed",
+       "breakdown proposal stores draft without creating tasks")
+    target_before = store.list_tasks(project="qa-deliv-target")
+    ok(len(target_before) == 1, "proposal alone does not create target tasks")
+
+    approved = store.approve_deliverable_breakdown(
+        proposal["proposal"]["id"], actor="test", project="qa-deliv-home")
+    ok(len(approved.get("created_tasks") or []) == 1,
+       "approved breakdown creates and links proposed tasks")
+    target_after = store.list_tasks(project="qa-deliv-target")
+    ok(len(target_after) == 2, "approved breakdown creates task on target project")
+
+    unlinked = store.unlink_task_from_deliverable(
+        "helm-cpp-webgpu-renderer",
+        "qa-deliv-target",
+        "RENDER-1",
+        actor="test",
+        project="qa-deliv-home",
+    )
+    ok(len(unlinked.get("task_links") or []) == 1 and
+       all(l.get("task_id") != "RENDER-1" for l in unlinked["task_links"]),
+       "unlink removes one task link without deleting the task")
+    ok(store.get_task("RENDER-1", project="qa-deliv-target") is not None,
+       "unlink does not delete the linked task")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

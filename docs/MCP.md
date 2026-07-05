@@ -104,6 +104,14 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   `add_deliverable_milestone(...)`, and `link_task_to_deliverable(...)` — build the cross-epic and
   cross-board mission rollup. Linked tasks are validated by explicit `task_project + task_id` and
   are not moved or mutated.
+- `create_board(...)`, `create_mission(...)` — aliases for `create_project_board` with
+  `kind=board` or `kind=mission`.
+- `unlink_task_from_deliverable(...)`, `get_mission_status(...)`, `mission_status(...)` —
+  remove cross-project links and return the mission cockpit rollup (end state, milestones, linked
+  tasks, proof, blockers, active work, next actions).
+- `update_mission_narrative(...)`, `propose_deliverable_breakdown(...)`, and
+  `approve_deliverable_breakdown(...)` — store operator narrative and draft milestone/task
+  breakdowns without creating tasks until approval.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.

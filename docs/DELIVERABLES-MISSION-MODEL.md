@@ -167,10 +167,22 @@ Initial REST routes:
 
 ## Next Surfaces
 
-`DELIVERABLES-2` should build on this model:
+`DELIVERABLES-2` adds:
 
 - `unlink_task_from_deliverable`
-- `mission_status`
+- `get_mission_status` / `mission_status`
+- `update_mission_narrative`
+- `propose_deliverable_breakdown` / `approve_deliverable_breakdown`
+- MCP aliases `create_board` / `create_mission`
 
-Later tasks should add breakdown proposal approval, deliverable-aware scheduling, Mission Page UI,
-generated narrative, coordinator loops, and KPI/cost rollups.
+Matching REST routes:
+
+- `DELETE /api/deliverables/{deliverable_id}/task_links?project=&task_project=&task_id=`
+- `GET /api/mission_status?project=&deliverable_id=&board_id=`
+- `GET /api/deliverables/{deliverable_id}/mission_status?project=`
+- `PATCH /api/deliverables/{deliverable_id}/narrative?project=`
+- `POST /api/deliverables/{deliverable_id}/breakdown_proposals?project=`
+- `POST /api/deliverables/breakdown_proposals/{proposal_id}/approve?project=`
+
+Later tasks should add deliverable-aware scheduling, Mission Page UI, generated narrative,
+coordinator loops, and KPI/cost rollups.
