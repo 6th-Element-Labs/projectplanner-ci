@@ -8074,6 +8074,39 @@ def get_project_github_repo(project: str = DEFAULT_PROJECT) -> str:
     return ((topology.get("roles") or {}).get("canonical") or {}).get("repo", "").strip()
 
 
+def get_project_repo_role(repo: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Classify one GitHub repo against a project's repo_topology roles."""
+    repo_norm = _normalize_repo_slug(repo)
+    topology = get_project_repo_topology(project=project)
+    roles = topology.get("roles") or {}
+    matches: List[Dict[str, Any]] = []
+    for role, data in roles.items():
+        role_repo = (data or {}).get("repo") or ""
+        if repo_norm and _normalize_repo_slug(role_repo) == repo_norm:
+            matches.append({
+                "role": role,
+                "repo": role_repo,
+                "authority": list((data or {}).get("authority") or []),
+                "default_branch": (data or {}).get("default_branch") or "",
+            })
+    selected = next((m for m in matches if m["role"] == "canonical"), None)
+    selected = selected or (matches[0] if matches else {})
+    role = selected.get("role") or "unknown"
+    return {
+        "project": project,
+        "repo": repo,
+        "normalized_repo": repo_norm,
+        "matched": bool(matches),
+        "role": role,
+        "canonical": role == "canonical",
+        "evidence_only": role in {"public_ci", "public", "release"},
+        "authority": selected.get("authority") or [],
+        "default_branch": selected.get("default_branch") or "",
+        "matches": matches,
+        "code_repo_gate": topology.get("code_repo_gate"),
+    }
+
+
 def _validate_github_repo(repo: str) -> Tuple[str, str]:
     clean = (repo or "").strip()
     if clean and not GITHUB_REPO_RE.match(clean):
@@ -8770,6 +8803,10 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                 for task in tasks:
                     task_id = task["task_id"]
                     state = git_states.get(task_id, {})
+                    state_repo = _github_repo_from_pr_url(state.get("pr_url") or "")
+                    state_role = get_project_repo_role(state_repo, project) if state_repo else {}
+                    if state_repo and not state_role.get("canonical"):
+                        continue
                     for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
                         if (field == "head_sha" and task.get("status") == "Done"
                                 and state.get("merged_sha")):
@@ -8810,6 +8847,7 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
         for task in pr_tasks:
             state = git_states.get(task["task_id"], {})
             pr_repo = _github_repo_from_pr_url(state.get("pr_url") or "") or repo
+            role_info = get_project_repo_role(pr_repo, project)
             pr = _github_pr(pr_repo, int(state.get("pr_number") or 0), token=token)
             if not pr:
                 findings.append({"severity": "medium", "task_id": task["task_id"],
@@ -8817,6 +8855,20 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  "detail": f"Could not fetch recorded PR state from GitHub repo {pr_repo}."})
                 continue
             merged = bool(pr.get("merged_at"))
+            if not role_info.get("canonical"):
+                findings.append({
+                    "severity": "high" if merged or task.get("status") == "Done" else "medium",
+                    "task_id": task["task_id"],
+                    "code": "repo_role_cannot_mark_done",
+                    "detail": (
+                        f"Recorded PR is in repo role {role_info.get('role') or 'unknown'} "
+                        f"({pr_repo}); only the project canonical repo can mark code work Done."
+                    ),
+                    "repo_role": role_info.get("role") or "unknown",
+                    "repo": pr_repo,
+                    "failure_class": "failed_gate",
+                })
+                continue
             if task.get("status") == "Done" and not merged:
                 findings.append({"severity": "high", "task_id": task["task_id"],
                                  "code": "done_pr_not_merged",

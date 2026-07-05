@@ -35,6 +35,12 @@ def activity_count(task_id, kind):
 try:
     store.init_project_registry()
     store.init_db(P)
+    store.set_project_repo_topology(
+        project=P,
+        canonical_repo="6th-Element-Labs/projectplanner",
+        public_ci_repo="6th-Element-Labs/public-ci",
+        public_repo="6th-Element-Labs/projectplanner-public",
+    )
     ready = store.create_task({"workstream_id": "TEST", "title": "ready direct"}, actor="seed", project=P)
     store.update_task(ready["task_id"], {"status": "In Review"}, actor="seed", project=P)
     not_ready = store.create_task({"workstream_id": "TEST", "title": "not ready direct"},
@@ -146,6 +152,119 @@ try:
        activity_count(pr_task["task_id"], "git.pr_merged") == merged_events,
        "PR merged webhook replay is idempotent")
 
+    public_ci_task = store.create_task({"workstream_id": "HARDEN", "title": "public CI evidence"},
+                                       actor="seed", project=P)
+    public_ci_payload = {
+        "action": "opened",
+        "repository": {
+            "full_name": "6th-Element-Labs/public-ci",
+            "name": "public-ci",
+            "default_branch": "main",
+        },
+        "pull_request": {
+            "number": 142,
+            "title": f"ci({public_ci_task['task_id']}): verification mirror",
+            "body": "",
+            "html_url": "https://github.com/6th-Element-Labs/public-ci/pull/142",
+            "head": {"ref": f"ci/{public_ci_task['task_id']}", "sha": "cihead"},
+            "base": {"ref": "main"},
+        },
+    }
+    public_ci_opened = github_sync.handle_pr(public_ci_payload, P)
+    ok(public_ci_opened["reason"] == "repo_role_cannot_mark_done" and
+       public_ci_opened["skipped_tasks"][0]["repo_role"] == "public_ci",
+       "public-CI PR opened webhook is evidence-only")
+    ok(store.get_task(public_ci_task["task_id"], project=P)["status"] == "Not Started",
+       "public-CI PR opened webhook does not move task to In Review")
+    public_ci_payload["action"] = "closed"
+    public_ci_payload["pull_request"]["merged"] = True
+    public_ci_payload["pull_request"]["merge_commit_sha"] = "cimerge"
+    public_ci_merged = github_sync.handle_pr(public_ci_payload, P)
+    ok(public_ci_merged["reason"] == "repo_role_cannot_mark_done" and
+       store.get_task(public_ci_task["task_id"], project=P)["status"] == "Not Started",
+       "public-CI PR merge cannot mark code work Done")
+    ok(activity_count(public_ci_task["task_id"], "git.repo_role_rejected") >= 2,
+       "wrong-role webhook writes a visible task activity signal")
+    ci_push = github_sync.handle_push({
+        "ref": "refs/heads/main",
+        "repository": {
+            "full_name": "6th-Element-Labs/public-ci",
+            "name": "public-ci",
+            "default_branch": "main",
+        },
+        "after": "cipushsha",
+        "commits": [{"id": "cipushsha", "message": f"ci({public_ci_task['task_id']}): mirror"}],
+    }, P)
+    ok(ci_push["reason"] == "repo_role_cannot_mark_done" and
+       store.get_meta("canonical_main_sha", project=P) == "mergeabc",
+       "public-CI push does not advance canonical main or backfill Done")
+
+    public_task = store.create_task({"workstream_id": "HARDEN", "title": "public mirror evidence"},
+                                    actor="seed", project=P)
+    public_payload = {
+        "action": "closed",
+        "repository": {
+            "full_name": "6th-Element-Labs/projectplanner-public",
+            "name": "projectplanner-public",
+            "default_branch": "main",
+        },
+        "pull_request": {
+            "number": 144,
+            "title": f"publish({public_task['task_id']}): mirror snapshot",
+            "body": "",
+            "html_url": "https://github.com/6th-Element-Labs/projectplanner-public/pull/144",
+            "head": {"ref": f"publish/{public_task['task_id']}", "sha": "publichead"},
+            "base": {"ref": "main"},
+            "merged": True,
+            "merge_commit_sha": "publicmerge",
+        },
+    }
+    public_merged = github_sync.handle_pr(public_payload, P)
+    ok(public_merged["reason"] == "repo_role_cannot_mark_done" and
+       public_merged["skipped_tasks"][0]["repo_role"] == "public" and
+       store.get_task(public_task["task_id"], project=P)["status"] == "Not Started",
+       "public mirror PR merge cannot mark code work Done")
+
+    legacy_ci_task = store.create_task({"workstream_id": "HARDEN", "title": "legacy public CI PR"},
+                                       actor="seed", project=P)
+    store.mark_task_pr_opened(
+        legacy_ci_task["task_id"], 143,
+        "https://github.com/6th-Element-Labs/public-ci/pull/143",
+        f"ci/{legacy_ci_task['task_id']}", "legacycihead",
+        actor="seed", project=P)
+    original_github_pr = store._github_pr
+
+    def fake_public_ci_pr(repo, pr_number, token=""):
+        if repo != "6th-Element-Labs/public-ci":
+            return {
+                "merged_at": "2026-07-05T22:11:47Z" if int(pr_number) == 42 else None,
+                "merge_commit_sha": "mergeabc" if int(pr_number) == 42 else "",
+                "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+                "base": {"ref": "master", "repo": {"default_branch": "master"}},
+                "head": {"ref": "codex/canonical", "sha": "canonicalhead"},
+            }
+        return {
+            "merged_at": "2026-07-05T22:30:00Z",
+            "merge_commit_sha": "legacycimerge",
+            "html_url": f"https://github.com/{repo}/pull/{pr_number}",
+            "base": {"ref": "main", "repo": {"default_branch": "main"}},
+            "head": {"ref": f"ci/{legacy_ci_task['task_id']}", "sha": "legacycihead"},
+        }
+
+    store._github_pr = fake_public_ci_pr
+    try:
+        public_ci_report = store.reconcile(project=P)
+    finally:
+        store._github_pr = original_github_pr
+    legacy_ci_after = store.get_task(legacy_ci_task["task_id"], project=P)
+    ok(legacy_ci_after["status"] == "In Review" and not legacy_ci_after["git_state"].get("merged_sha"),
+       "reconcile does not stamp Done from a public-CI PR")
+    ok(any(f["task_id"] == legacy_ci_task["task_id"] and
+           f["code"] == "repo_role_cannot_mark_done" and
+           f["repo_role"] == "public_ci"
+           for f in public_ci_report["findings"]),
+       "reconcile reports wrong-role PR evidence")
+
     release_task = store.create_task({"workstream_id": "HARDEN", "title": "release target"},
                                      actor="seed", project=P)
     release_payload = {
@@ -214,6 +333,42 @@ try:
        "dynamic project non-default PR merge marks task Done")
     ok(not store.get_meta("canonical_main_sha", project="vulkan"),
        "dynamic non-default PR merge does not advance canonical main SHA")
+
+    shadow_created = store.create_project(
+        "Shadow Project", project_id="shadow", actor="seed",
+        github_repo="6th-Element-Labs/projectplanner")
+    ok(shadow_created.get("created") is True,
+       "test fixture creates second project on the same canonical repo")
+    shadow_task = store.create_task(
+        {"workstream_id": "SHADOW", "title": "same repo explicit route"},
+        actor="seed", project="shadow")
+    shadow_payload = {
+        "action": "opened",
+        "repository": {
+            "full_name": "6th-Element-Labs/projectplanner",
+            "name": "projectplanner",
+            "default_branch": "master",
+        },
+        "pull_request": {
+            "number": 138,
+            "title": f"fix({shadow_task['task_id']}): explicit project route",
+            "body": "",
+            "html_url": "https://github.com/6th-Element-Labs/projectplanner/pull/138",
+            "head": {
+                "ref": f"codex/{shadow_task['task_id']}-explicit",
+                "sha": "shadowhead",
+            },
+            "base": {"ref": "master"},
+        },
+    }
+    ok(github_sync.resolve_project(shadow_payload, "") == "",
+       "ambiguous same-repo webhook requires explicit project")
+    ok(github_sync.resolve_project(shadow_payload, "shadow") == "shadow",
+       "explicit project still routes same-repo webhook")
+    shadow_opened = github_sync.handle_pr(shadow_payload, "shadow")
+    ok(shadow_opened["in_review_tasks"] == [shadow_task["task_id"]] and
+       store.get_task(shadow_task["task_id"], project="shadow")["status"] == "In Review",
+       "same-repo explicit project updates only the selected board")
 
     cross_repo_task = store.create_task(
         {"workstream_id": "CONVERT", "title": "dynamic cross-repo PR evidence"},

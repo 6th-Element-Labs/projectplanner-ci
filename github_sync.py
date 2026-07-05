@@ -28,24 +28,29 @@ def _project_for_repo(full_name: str) -> str:
     repo = (full_name or "").strip().lower()
     if not repo:
         return ""
-    matches = []
+    role_matches = []
+    canonical_matches = []
     for project_id in store.project_ids():
         try:
             store.init_db(project_id)
-            configured = (store.get_project_github_repo(project_id) or "").strip().lower()
+            role = store.get_project_repo_role(repo, project=project_id)
         except Exception:
             continue
-        if configured == repo:
-            matches.append(project_id)
-    if not matches:
+        if role.get("matched"):
+            role_matches.append({"project": project_id, **role})
+        if role.get("canonical"):
+            canonical_matches.append(project_id)
+    if len(canonical_matches) == 1:
+        return canonical_matches[0]
+    if len(canonical_matches) > 1:
+        return "__ambiguous_repo_role__"
+    if not role_matches:
         return ""
-    # More than one board can technically point at one repo; explicit ?project=...
-    # remains the unambiguous route. Prefer non-default boards so a legacy global
-    # PM_GITHUB_REPO cannot steal Helm/Switchboard/dynamic project webhooks.
-    for project_id in matches:
-        if project_id != store.DEFAULT_PROJECT:
-            return project_id
-    return matches[0]
+    if len(role_matches) == 1:
+        return role_matches[0]["project"]
+    # Shared evidence repos such as public-CI can belong to many projects. In that
+    # case the webhook must use explicit ?project=... instead of guessing.
+    return "__ambiguous_repo_role__"
 
 
 def resolve_project(payload: Dict[str, Any], requested_project: str = "") -> str:
@@ -62,6 +67,8 @@ def resolve_project(payload: Dict[str, Any], requested_project: str = "") -> str
     full_name = (repo.get("full_name") or "").lower()
     name = (repo.get("name") or "").lower()
     configured_project = _project_for_repo(full_name)
+    if configured_project == "__ambiguous_repo_role__":
+        return ""
     if configured_project:
         return configured_project
     if full_name.endswith("/projectplanner") or full_name.endswith("/switchboard") or name in {
@@ -72,6 +79,41 @@ def resolve_project(payload: Dict[str, Any], requested_project: str = "") -> str
     if full_name.endswith("/helm") or name == "helm":
         return "helm"
     return store.DEFAULT_PROJECT
+
+
+def _repo_role(repo: str, project: str) -> Dict[str, Any]:
+    return store.get_project_repo_role(repo, project=project)
+
+
+def _role_skip(task_id: str, role_info: Dict[str, Any], reason: str) -> Dict[str, str]:
+    return {
+        "task_id": task_id,
+        "reason": reason,
+        "repo_role": role_info.get("role") or "unknown",
+        "repo": role_info.get("repo") or "",
+    }
+
+
+def _record_repo_role_rejection(task_id: str, role_info: Dict[str, Any],
+                                event: str, pr_number: Any = None,
+                                pr_url: str = "", project: str = "") -> None:
+    if not task_id or not store.get_task(task_id, project):
+        return
+    store.append_activity(
+        "git.repo_role_rejected",
+        "github-webhook",
+        {
+            "event": event,
+            "repo": role_info.get("repo"),
+            "repo_role": role_info.get("role"),
+            "canonical_required": True,
+            "reason": "only canonical repo webhooks can change code Done provenance",
+            "pr_number": pr_number,
+            "pr_url": pr_url,
+        },
+        task_id=task_id,
+        project=project,
+    )
 
 
 def task_ids_for_pr(pr: Dict[str, Any]) -> List[str]:
@@ -91,6 +133,29 @@ def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         return {"action": "ignored", "reason": f"push to {ref!r}, not default branch"}
 
     repo = payload.get("repository", {}).get("full_name", "?")
+    role_info = _repo_role(repo, project)
+    if not role_info.get("canonical"):
+        store.append_activity(
+            "git.repo_role_rejected",
+            "github-webhook",
+            {
+                "event": "push",
+                "repo": repo,
+                "repo_role": role_info.get("role"),
+                "canonical_required": True,
+                "reason": "push webhook is not from the project canonical repo",
+            },
+            task_id=None,
+            project=project,
+        )
+        return {
+            "action": "ignored",
+            "reason": "repo_role_cannot_mark_done",
+            "repo": repo,
+            "repo_role": role_info.get("role"),
+            "canonical_required": True,
+        }
+
     commits = payload.get("commits") or []
     head_sha = payload.get("after", "")
     store.update_canonical_main_sha(head_sha, "github-webhook", project)
@@ -134,6 +199,7 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         return {"action": "ignored", "reason": f"unsupported PR action {action!r}"}
 
     repo = payload.get("repository", {}).get("full_name", "?")
+    role_info = _repo_role(repo, project)
     default = payload.get("repository", {}).get("default_branch", "main")
     base = (pr.get("base") or {}).get("ref", "")
     pr_num = pr.get("number")
@@ -141,6 +207,22 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     branch = (pr.get("head") or {}).get("ref", "")
     head_sha = (pr.get("head") or {}).get("sha", "")
     pr_url = pr.get("html_url", "")
+    if not role_info.get("canonical"):
+        skipped = []
+        for task_id in task_ids:
+            _record_repo_role_rejection(
+                task_id, role_info, f"pull_request.{action}",
+                pr_number=pr_num, pr_url=pr_url, project=project)
+            skipped.append(_role_skip(task_id, role_info, "repo_role_cannot_mark_done"))
+        return {
+            "action": "ignored",
+            "reason": "repo_role_cannot_mark_done",
+            "repo": repo,
+            "repo_role": role_info.get("role"),
+            "canonical_required": True,
+            "task_ids": task_ids,
+            "skipped_tasks": skipped,
+        }
 
     if action in ("opened", "reopened", "ready_for_review", "synchronize"):
         touched: List[str] = []
