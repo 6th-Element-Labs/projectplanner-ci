@@ -2086,6 +2086,99 @@ def approve_deliverable_breakdown(proposal_id: str, ctx: Context,
 
 
 @mcp.tool()
+def submit_deliverable_outcome(deliverable_id: str, outcome: str, ctx: Context,
+                               project: str = "maxwell",
+                               target_projects_json: str = "",
+                               policy_constraints_json: str = "",
+                               acceptance_criteria: str = "",
+                               use_llm: bool = False) -> str:
+    """Submit a coordinator outcome and generate a milestone/task breakdown draft for review."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.submit_deliverable_outcome(
+        deliverable_id, outcome, actor=auth.actor(principal), project=project,
+        target_projects=target_projects_json or None,
+        policy_constraints=policy_constraints_json or None,
+        acceptance_criteria=acceptance_criteria or None,
+        use_llm=use_llm,
+    )
+    return _dumps(result)
+
+
+@mcp.tool()
+def get_deliverable_breakdown_proposal(proposal_id: str,
+                                       project: str = "maxwell") -> str:
+    """Fetch one deliverable breakdown proposal with deliverable context."""
+    if not store.has_project(project):
+        return _dumps({"error": f"unknown project: {project}", "project": project})
+    result = store.get_deliverable_breakdown_proposal(proposal_id, project=project)
+    return _dumps(result or {"error": "unknown proposal", "proposal_id": proposal_id})
+
+
+@mcp.tool()
+def list_deliverable_breakdown_proposals(deliverable_id: str = "",
+                                         project: str = "maxwell",
+                                         status: str = "") -> str:
+    """List breakdown proposals for one deliverable, optionally filtered by status."""
+    if not store.has_project(project):
+        return _dumps({"error": f"unknown project: {project}", "project": project})
+    return _dumps({
+        "project": project,
+        "deliverable_id": deliverable_id or None,
+        "proposals": store.list_deliverable_breakdown_proposals(
+            deliverable_id=deliverable_id, project=project, status=status),
+    })
+
+
+@mcp.tool()
+def update_deliverable_breakdown_proposal(proposal_id: str, milestones_json: str,
+                                          ctx: Context, project: str = "maxwell",
+                                          outcome: str = "", notes: str = "") -> str:
+    """Edit a pending breakdown proposal before approval."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    try:
+        milestones = json.loads(milestones_json)
+    except json.JSONDecodeError:
+        return _dumps({"error": "milestones_json must be valid JSON"})
+    payload = {"milestones": milestones}
+    if notes:
+        payload["notes"] = notes
+    if outcome:
+        payload["outcome"] = outcome
+    result = store.update_deliverable_breakdown_proposal(
+        proposal_id, payload, actor=auth.actor(principal), project=project,
+        outcome_text=outcome)
+    return _dumps(result)
+
+
+@mcp.tool()
+def reject_deliverable_breakdown(proposal_id: str, reason: str, ctx: Context,
+                                 project: str = "maxwell") -> str:
+    """Reject a pending breakdown proposal with an audited reason."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.reject_deliverable_breakdown(
+        proposal_id, reason, actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def defer_deliverable_breakdown(proposal_id: str, reason: str, ctx: Context,
+                                project: str = "maxwell",
+                                defer_until: str = "") -> str:
+    """Defer a pending breakdown proposal with an audited reason."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    until = None
+    if defer_until.strip():
+        try:
+            until = float(defer_until)
+        except ValueError:
+            return _dumps({"error": "defer_until must be a unix timestamp"})
+    result = store.defer_deliverable_breakdown(
+        proposal_id, reason, actor=auth.actor(principal), project=project,
+        defer_until=until)
+    return _dumps(result)
+
+
+@mcp.tool()
 def list_scoped_tokens(ctx: Context, project: str = "maxwell",
                        include_revoked: bool = False, kind: str = "") -> str:
     """List bearer principals for one project without exposing token hashes or raw tokens.

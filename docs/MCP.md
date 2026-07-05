@@ -112,6 +112,10 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `update_mission_narrative(...)`, `propose_deliverable_breakdown(...)`, and
   `approve_deliverable_breakdown(...)` — store operator narrative and draft milestone/task
   breakdowns without creating tasks until approval.
+- `submit_deliverable_outcome(...)`, `get_deliverable_breakdown_proposal(...)`,
+  `list_deliverable_breakdown_proposals(...)`, `update_deliverable_breakdown_proposal(...)`,
+  `reject_deliverable_breakdown(...)`, and `defer_deliverable_breakdown(...)` — coordinator
+  outcome intake, human editing, and audited reject/defer before materialization.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.

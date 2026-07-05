@@ -165,24 +165,25 @@ Initial REST routes:
 - `POST /api/deliverables/{deliverable_id}/milestones?project={project}`
 - `POST /api/deliverables/{deliverable_id}/task_links?project={project}`
 
+## Breakdown Workflow (DELIVERABLES-3)
+
+Coordinator/human flow:
+
+1. `submit_deliverable_outcome(project, deliverable_id, outcome, target_projects_json, ...)`
+   generates a deterministic milestone/task draft grouped for review. Optional
+   `PM_DELIVERABLE_BREAKDOWN_LLM=1` may refine the draft when the LLM gateway is available.
+2. Humans edit the pending proposal with `update_deliverable_breakdown_proposal`, or reject/defer
+   with audited reasons via `reject_deliverable_breakdown` / `defer_deliverable_breakdown`.
+3. `approve_deliverable_breakdown` materializes milestones and either creates new tasks
+   (`action=create`, explicit `project_id + workstream_id + title`) or links existing tasks
+   (`action=link`, explicit `project_id + task_id`) — never without explicit project routing.
+
+Task drafts in a proposal use:
+
+- `action: create` — requires `project_id`, `workstream_id`, `title`
+- `action: link` — requires `project_id`, `task_id`
+
 ## Next Surfaces
-
-`DELIVERABLES-2` adds:
-
-- `unlink_task_from_deliverable`
-- `get_mission_status` / `mission_status`
-- `update_mission_narrative`
-- `propose_deliverable_breakdown` / `approve_deliverable_breakdown`
-- MCP aliases `create_board` / `create_mission`
-
-Matching REST routes:
-
-- `DELETE /api/deliverables/{deliverable_id}/task_links?project=&task_project=&task_id=`
-- `GET /api/mission_status?project=&deliverable_id=&board_id=`
-- `GET /api/deliverables/{deliverable_id}/mission_status?project=`
-- `PATCH /api/deliverables/{deliverable_id}/narrative?project=`
-- `POST /api/deliverables/{deliverable_id}/breakdown_proposals?project=`
-- `POST /api/deliverables/breakdown_proposals/{proposal_id}/approve?project=`
 
 Later tasks should add deliverable-aware scheduling, Mission Page UI, generated narrative,
 coordinator loops, and KPI/cost rollups.

@@ -1204,6 +1204,10 @@ def init_db(project: str = DEFAULT_PROJECT):
                 status                     TEXT NOT NULL DEFAULT 'proposed',
                 proposed_by                TEXT,
                 approved_by                TEXT,
+                reviewed_by                TEXT,
+                outcome_text               TEXT,
+                review_reason              TEXT,
+                deferred_until             REAL,
                 payload_json               TEXT NOT NULL DEFAULT '{}',
                 created_at                 REAL NOT NULL,
                 updated_at                 REAL NOT NULL,
@@ -1331,6 +1335,10 @@ def init_db(project: str = DEFAULT_PROJECT):
             "ALTER TABLE runner_control_requests ADD COLUMN effect_key TEXT",
             "ALTER TABLE deliverables ADD COLUMN board_id TEXT",
             "ALTER TABLE deliverable_task_links ADD COLUMN board_id TEXT",
+            "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN outcome_text TEXT",
+            "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN review_reason TEXT",
+            "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN deferred_until REAL",
+            "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN reviewed_by TEXT",
         ]:
             try:
                 c.execute(col_sql)
@@ -1534,7 +1542,7 @@ DELIVERABLE_STATUSES = {
 DELIVERABLE_MILESTONE_STATUSES = {
     "not_started", "in_progress", "blocked", "in_review", "done", "skipped"
 }
-BREAKDOWN_PROPOSAL_STATUSES = {"proposed", "approved", "rejected", "superseded"}
+BREAKDOWN_PROPOSAL_STATUSES = {"proposed", "approved", "rejected", "superseded", "deferred"}
 
 
 def normalize_deliverable_id(value: str = "", title: str = "") -> str:
@@ -2074,6 +2082,34 @@ def _breakdown_proposal_row(row: sqlite3.Row) -> Dict[str, Any]:
     return d
 
 
+def _validate_breakdown_task_spec(milestone_idx: int, task_idx: int,
+                                  task: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    task_project = (task.get("project_id") or task.get("task_project") or "").strip()
+    if not task_project:
+        return None, f"milestones[{milestone_idx}].tasks[{task_idx}] requires project_id"
+    if not has_project(task_project):
+        return None, f"unknown linked project: {task_project}"
+    action = (task.get("action") or "create").strip().lower()
+    if action == "link":
+        task_id = (task.get("task_id") or "").strip().upper()
+        if not task_id:
+            return None, f"milestones[{milestone_idx}].tasks[{task_idx}] link requires task_id"
+        if not get_task(task_id, project=task_project):
+            return None, (
+                f"unknown linked task {task_id} on project {task_project}"
+            )
+        return dict(task, action="link", project_id=task_project, task_id=task_id), None
+    workstream_id = (task.get("workstream_id") or "").strip()
+    task_title = (task.get("title") or "").strip()
+    if not workstream_id or not task_title:
+        return None, (
+            f"milestones[{milestone_idx}].tasks[{task_idx}] create requires "
+            "workstream_id and title"
+        )
+    return dict(task, action="create", project_id=task_project,
+                workstream_id=workstream_id, title=task_title), None
+
+
 def _validate_breakdown_payload(payload: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     parsed = _parse_jsonish(payload)
     if not isinstance(parsed, dict):
@@ -2097,19 +2133,10 @@ def _validate_breakdown_payload(payload: Any) -> Tuple[Optional[Dict[str, Any]],
         for t_idx, task in enumerate(tasks):
             if not isinstance(task, dict):
                 return None, f"milestones[{idx}].tasks[{t_idx}] must be an object"
-            task_project = (task.get("project_id") or task.get("task_project") or "").strip()
-            workstream_id = (task.get("workstream_id") or "").strip()
-            task_title = (task.get("title") or "").strip()
-            if not task_project:
-                return None, f"milestones[{idx}].tasks[{t_idx}] requires project_id"
-            if not has_project(task_project):
-                return None, f"unknown linked project: {task_project}"
-            if not workstream_id or not task_title:
-                return None, (
-                    f"milestones[{idx}].tasks[{t_idx}] requires workstream_id and title"
-                )
-            normalized_tasks.append(dict(task, project_id=task_project,
-                                         workstream_id=workstream_id, title=task_title))
+            normalized_task, err = _validate_breakdown_task_spec(idx, t_idx, task)
+            if err:
+                return None, err
+            normalized_tasks.append(normalized_task)
         normalized.append({
             "id": (milestone.get("id") or "").strip() or None,
             "title": title,
@@ -2120,7 +2147,31 @@ def _validate_breakdown_payload(payload: Any) -> Tuple[Optional[Dict[str, Any]],
             "proof_requirements": milestone.get("proof_requirements") or {},
             "tasks": normalized_tasks,
         })
-    return {"milestones": normalized, "notes": parsed.get("notes")}, None
+    target_projects = parsed.get("target_projects") or []
+    if isinstance(target_projects, str):
+        target_projects = _parse_jsonish(target_projects)
+    if target_projects and not isinstance(target_projects, list):
+        return None, "target_projects must be an array"
+    for tp_idx, target in enumerate(target_projects or []):
+        if isinstance(target, str):
+            if not has_project(target.strip()):
+                return None, f"unknown target project: {target.strip()}"
+            continue
+        if not isinstance(target, dict):
+            return None, f"target_projects[{tp_idx}] must be an object or project id string"
+        pid = (target.get("project_id") or target.get("project") or "").strip()
+        if not pid or not has_project(pid):
+            return None, f"unknown target project: {pid or target}"
+    return {
+        "schema": parsed.get("schema") or "switchboard.deliverable_breakdown_draft.v1",
+        "outcome": parsed.get("outcome"),
+        "target_projects": target_projects or [],
+        "policy_constraints": parsed.get("policy_constraints") or {},
+        "acceptance_criteria": parsed.get("acceptance_criteria") or [],
+        "milestones": normalized,
+        "notes": parsed.get("notes"),
+        "generation": parsed.get("generation") or {},
+    }, None
 
 
 def unlink_task_from_deliverable(deliverable_id: str, task_project: str, task_id: str,
@@ -2191,7 +2242,8 @@ def update_mission_narrative(deliverable_id: str, narrative: str, actor: str = "
 
 def propose_deliverable_breakdown(deliverable_id: str, payload: Any, actor: str = "user",
                                   project: str = DEFAULT_PROJECT,
-                                  proposal_id: str = "") -> Dict[str, Any]:
+                                  proposal_id: str = "",
+                                  outcome_text: str = "") -> Dict[str, Any]:
     """Store a milestone/task breakdown proposal without creating board tasks."""
     if not has_project(project):
         return {"error": f"unknown project: {project}"}
@@ -2199,6 +2251,7 @@ def propose_deliverable_breakdown(deliverable_id: str, payload: Any, actor: str 
     if err:
         return {"error": err}
     pid = (proposal_id or "").strip() or f"proposal-{deliverable_id}-{uuid.uuid4().hex[:10]}"
+    outcome = (outcome_text or normalized.get("outcome") or "").strip() or None
     now = time.time()
     with _conn(project) as c:
         if not _deliverable_exists_in(c, deliverable_id):
@@ -2210,31 +2263,189 @@ def propose_deliverable_breakdown(deliverable_id: str, payload: Any, actor: str 
         )
         c.execute(
             """INSERT INTO deliverable_breakdown_proposals
-               (id, deliverable_id, status, proposed_by, approved_by, payload_json,
+               (id, deliverable_id, status, proposed_by, approved_by, reviewed_by,
+                outcome_text, review_reason, deferred_until, payload_json,
                 created_at, updated_at, approved_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (pid, deliverable_id, "proposed", actor, None,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (pid, deliverable_id, "proposed", actor, None, None, outcome, None, None,
              json.dumps(normalized, sort_keys=True), now, now, None),
         )
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (None, actor, "deliverable.breakdown_proposed",
-                   json.dumps({"deliverable_id": deliverable_id, "proposal_id": pid},
-                              sort_keys=True), now))
-    proposal = None
+                   json.dumps({"deliverable_id": deliverable_id, "proposal_id": pid,
+                               "outcome": outcome}, sort_keys=True), now))
+    return get_deliverable_breakdown_proposal(pid, project=project) or {
+        "error": "proposal not found", "proposal_id": pid}
+
+
+def get_deliverable_breakdown_proposal(proposal_id: str,
+                                       project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    proposal_id = (proposal_id or "").strip()
+    if not proposal_id:
+        return {"error": "proposal_id is required"}
     with _conn(project) as c:
         row = c.execute("SELECT * FROM deliverable_breakdown_proposals WHERE id=?",
-                        (pid,)).fetchone()
-        if row:
-            proposal = _breakdown_proposal_row(row)
-    deliverable = get_deliverable(deliverable_id, project=project)
+                        (proposal_id,)).fetchone()
+    if not row:
+        return None
+    proposal = _breakdown_proposal_row(row)
     return {
         "schema": "switchboard.deliverable_breakdown_proposal.v1",
         "project_id": project,
-        "deliverable_id": deliverable_id,
+        "deliverable_id": proposal["deliverable_id"],
         "proposal": proposal,
-        "deliverable": deliverable,
-        "tasks_created": False,
+        "deliverable": get_deliverable(proposal["deliverable_id"], project=project),
+        "tasks_created": proposal.get("status") == "approved",
     }
+
+
+def list_deliverable_breakdown_proposals(deliverable_id: str = "",
+                                         project: str = DEFAULT_PROJECT,
+                                         status: str = "") -> List[Dict[str, Any]]:
+    if not has_project(project):
+        return []
+    deliverable_id = (deliverable_id or "").strip()
+    status = (status or "").strip().lower()
+    query = "SELECT * FROM deliverable_breakdown_proposals WHERE 1=1"
+    params: List[Any] = []
+    if deliverable_id:
+        query += " AND deliverable_id=?"
+        params.append(deliverable_id)
+    if status:
+        if status not in BREAKDOWN_PROPOSAL_STATUSES:
+            return []
+        query += " AND status=?"
+        params.append(status)
+    query += " ORDER BY updated_at DESC, created_at DESC, id"
+    with _conn(project) as c:
+        rows = c.execute(query, params).fetchall()
+    return [_breakdown_proposal_row(r) for r in rows]
+
+
+def update_deliverable_breakdown_proposal(proposal_id: str, payload: Any,
+                                          actor: str = "user",
+                                          project: str = DEFAULT_PROJECT,
+                                          outcome_text: str = "") -> Dict[str, Any]:
+    """Edit a pending breakdown proposal before approval."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    proposal_id = (proposal_id or "").strip()
+    if not proposal_id:
+        return {"error": "proposal_id is required"}
+    normalized, err = _validate_breakdown_payload(payload)
+    if err:
+        return {"error": err}
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM deliverable_breakdown_proposals WHERE id=?",
+                        (proposal_id,)).fetchone()
+        if not row:
+            return {"error": "unknown proposal", "proposal_id": proposal_id}
+        if row["status"] != "proposed":
+            return {"error": "only proposed breakdowns can be edited",
+                    "proposal_id": proposal_id, "status": row["status"]}
+        outcome = (outcome_text or normalized.get("outcome") or row["outcome_text"] or "").strip()
+        c.execute(
+            "UPDATE deliverable_breakdown_proposals "
+            "SET payload_json=?, outcome_text=?, updated_at=? WHERE id=?",
+            (json.dumps(normalized, sort_keys=True), outcome or None, now, proposal_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.breakdown_updated",
+                   json.dumps({"proposal_id": proposal_id,
+                               "deliverable_id": row["deliverable_id"]}, sort_keys=True), now))
+    return get_deliverable_breakdown_proposal(proposal_id, project=project) or {
+        "error": "proposal not found", "proposal_id": proposal_id}
+
+
+def _finalize_breakdown_review(proposal_id: str, status: str, actor: str,
+                               project: str, reason: str = "",
+                               deferred_until: Optional[float] = None) -> Dict[str, Any]:
+    if status not in BREAKDOWN_PROPOSAL_STATUSES:
+        return {"error": "invalid proposal status", "allowed": sorted(BREAKDOWN_PROPOSAL_STATUSES)}
+    reason = (reason or "").strip()
+    if status in ("rejected", "deferred") and not reason:
+        return {"error": f"{status} requires reason"}
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM deliverable_breakdown_proposals WHERE id=?",
+                        (proposal_id,)).fetchone()
+        if not row:
+            return {"error": "unknown proposal", "proposal_id": proposal_id}
+        if row["status"] != "proposed":
+            return {"error": "proposal is not pending review", "proposal_id": proposal_id,
+                    "status": row["status"]}
+        c.execute(
+            "UPDATE deliverable_breakdown_proposals "
+            "SET status=?, review_reason=?, reviewed_by=?, deferred_until=?, updated_at=? "
+            "WHERE id=?",
+            (status, reason or None, actor, deferred_until, now, proposal_id),
+        )
+        kind = f"deliverable.breakdown_{status}"
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, kind,
+                   json.dumps({"proposal_id": proposal_id,
+                               "deliverable_id": row["deliverable_id"],
+                               "reason": reason,
+                               "deferred_until": deferred_until}, sort_keys=True), now))
+    return get_deliverable_breakdown_proposal(proposal_id, project=project) or {
+        "error": "proposal not found", "proposal_id": proposal_id}
+
+
+def reject_deliverable_breakdown(proposal_id: str, reason: str, actor: str = "user",
+                                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Reject a pending breakdown proposal with an audited reason."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    return _finalize_breakdown_review(
+        (proposal_id or "").strip(), "rejected", actor, project, reason=reason)
+
+
+def defer_deliverable_breakdown(proposal_id: str, reason: str, actor: str = "user",
+                                project: str = DEFAULT_PROJECT,
+                                defer_until: Optional[float] = None) -> Dict[str, Any]:
+    """Defer a pending breakdown proposal with an audited reason."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    return _finalize_breakdown_review(
+        (proposal_id or "").strip(), "deferred", actor, project,
+        reason=reason, deferred_until=defer_until)
+
+
+def submit_deliverable_outcome(deliverable_id: str, outcome: str, actor: str = "user",
+                               project: str = DEFAULT_PROJECT,
+                               target_projects: Any = None,
+                               policy_constraints: Any = None,
+                               acceptance_criteria: Any = None,
+                               use_llm: bool = False) -> Dict[str, Any]:
+    """Generate and store a breakdown proposal from a coordinator outcome statement."""
+    import deliverable_breakdown
+
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    outcome = (outcome or "").strip()
+    if not outcome:
+        return {"error": "outcome is required"}
+    deliverable = get_deliverable(deliverable_id, project=project)
+    if not deliverable:
+        return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+    try:
+        draft = deliverable_breakdown.generate_breakdown_draft(
+            outcome,
+            deliverable=deliverable,
+            target_projects=target_projects,
+            policy_constraints=policy_constraints,
+            acceptance_criteria=acceptance_criteria,
+            project=project,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if use_llm:
+        draft = deliverable_breakdown.maybe_enrich_with_llm(draft, project=project)
+    return propose_deliverable_breakdown(
+        deliverable_id, draft, actor=actor, project=project, outcome_text=outcome)
 
 
 def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
@@ -2257,6 +2468,7 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
     deliverable_id = proposal["deliverable_id"]
     payload = proposal.get("payload") or {}
     created_tasks: List[Dict[str, Any]] = []
+    linked_tasks: List[Dict[str, Any]] = []
     for milestone in payload.get("milestones") or []:
         milestone_result = add_deliverable_milestone(
             deliverable_id,
@@ -2278,27 +2490,38 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
                     "milestone_title": milestone.get("title")}
         for task_spec in milestone.get("tasks") or []:
             task_project = task_spec["project_id"]
-            created = create_task({
-                "workstream_id": task_spec["workstream_id"],
-                "workstream_name": task_spec.get("workstream_name"),
-                "title": task_spec["title"],
-                "description": task_spec.get("description"),
-                "owner_org": task_spec.get("owner_org"),
-                "owner_person_or_role": task_spec.get("owner_person_or_role"),
-                "assignee": task_spec.get("assignee"),
-                "phase": task_spec.get("phase"),
-                "status": task_spec.get("status") or "Not Started",
-                "depends_on": task_spec.get("depends_on") or [],
-            }, actor=actor, project=task_project)
-            if not created:
-                return {"error": "failed to create proposed task",
-                        "project_id": task_project,
-                        "workstream_id": task_spec["workstream_id"],
-                        "title": task_spec["title"]}
+            action = task_spec.get("action") or "create"
+            if action == "link":
+                task_id = task_spec["task_id"]
+            else:
+                created = create_task({
+                    "workstream_id": task_spec["workstream_id"],
+                    "workstream_name": task_spec.get("workstream_name"),
+                    "title": task_spec["title"],
+                    "description": task_spec.get("description"),
+                    "owner_org": task_spec.get("owner_org"),
+                    "owner_person_or_role": task_spec.get("owner_person_or_role"),
+                    "assignee": task_spec.get("assignee"),
+                    "phase": task_spec.get("phase"),
+                    "status": task_spec.get("status") or "Not Started",
+                    "depends_on": task_spec.get("depends_on") or [],
+                }, actor=actor, project=task_project)
+                if not created:
+                    return {"error": "failed to create proposed task",
+                            "project_id": task_project,
+                            "workstream_id": task_spec["workstream_id"],
+                            "title": task_spec["title"]}
+                task_id = created["task_id"]
+                created_tasks.append({
+                    "project_id": task_project,
+                    "task_id": task_id,
+                    "milestone_id": milestone_id,
+                    "action": "create",
+                })
             link_result = link_task_to_deliverable(
                 deliverable_id,
                 task_project,
-                created["task_id"],
+                task_id,
                 milestone_id=milestone_id,
                 data={
                     "role": task_spec.get("role") or "contributes",
@@ -2311,28 +2534,50 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
             )
             if link_result.get("error"):
                 return link_result
-            created_tasks.append({
-                "project_id": task_project,
-                "task_id": created["task_id"],
-                "milestone_id": milestone_id,
-            })
+            if action == "link":
+                linked_tasks.append({
+                    "project_id": task_project,
+                    "task_id": task_id,
+                    "milestone_id": milestone_id,
+                    "action": "link",
+                })
+    deliverable_existing = get_deliverable(deliverable_id, project=project) or {}
+    deliverable_patch: Dict[str, Any] = {
+        "id": deliverable_id,
+        "title": deliverable_existing.get("title") or deliverable_id,
+    }
+    if payload.get("acceptance_criteria"):
+        deliverable_patch["acceptance_criteria"] = payload["acceptance_criteria"]
+    if payload.get("policy_constraints"):
+        merged_policy = dict(deliverable_existing.get("policy_constraints") or {})
+        merged_policy.update(payload["policy_constraints"])
+        deliverable_patch["policy_constraints"] = merged_policy
+    if payload.get("outcome"):
+        deliverable_patch["end_state"] = payload["outcome"]
+    if len(deliverable_patch) > 2:
+        patched = create_deliverable(deliverable_patch, actor=actor, project=project)
+        if patched.get("error"):
+            return patched
     now = time.time()
     with _conn(project) as c:
         c.execute(
             "UPDATE deliverable_breakdown_proposals "
-            "SET status='approved', approved_by=?, approved_at=?, updated_at=? WHERE id=?",
-            (actor, now, now, proposal_id),
+            "SET status='approved', approved_by=?, reviewed_by=?, approved_at=?, updated_at=? "
+            "WHERE id=?",
+            (actor, actor, now, now, proposal_id),
         )
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (None, actor, "deliverable.breakdown_approved",
                    json.dumps({"deliverable_id": deliverable_id, "proposal_id": proposal_id,
-                               "created_task_count": len(created_tasks)}, sort_keys=True), now))
+                               "created_task_count": len(created_tasks),
+                               "linked_task_count": len(linked_tasks)}, sort_keys=True), now))
     return {
         "schema": "switchboard.deliverable_breakdown_approval.v1",
         "project_id": project,
         "proposal_id": proposal_id,
         "deliverable_id": deliverable_id,
         "created_tasks": created_tasks,
+        "linked_tasks": linked_tasks,
         "deliverable": get_deliverable(deliverable_id, project=project),
         "mission_status": get_mission_status(project=project, deliverable_id=deliverable_id),
     }

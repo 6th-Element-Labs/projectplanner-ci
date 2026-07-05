@@ -751,6 +751,103 @@ async def approve_deliverable_breakdown(request: Request, proposal_id: str,
     return result
 
 
+@app.post("/api/deliverables/{deliverable_id}/outcome")
+async def submit_deliverable_outcome(request: Request, deliverable_id: str,
+                                     body: dict = Body(...),
+                                     project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    result = store.submit_deliverable_outcome(
+        deliverable_id, payload.get("outcome") or "",
+        actor=auth.actor(principal), project=project,
+        target_projects=payload.get("target_projects"),
+        policy_constraints=payload.get("policy_constraints"),
+        acceptance_criteria=payload.get("acceptance_criteria"),
+        use_llm=bool(payload.get("use_llm")),
+    )
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.get("/api/deliverables/breakdown_proposals")
+async def list_deliverable_breakdown_proposals(deliverable_id: str = "",
+                                               project: str = Query(...),
+                                               status: str = ""):
+    project = _proj(project)
+    return {
+        "project": project,
+        "deliverable_id": deliverable_id or None,
+        "proposals": store.list_deliverable_breakdown_proposals(
+            deliverable_id=deliverable_id, project=project, status=status),
+    }
+
+
+@app.get("/api/deliverables/breakdown_proposals/{proposal_id}")
+async def get_deliverable_breakdown_proposal(proposal_id: str,
+                                             project: str = Query(...)):
+    project = _proj(project)
+    result = store.get_deliverable_breakdown_proposal(proposal_id, project=project)
+    if not result:
+        raise HTTPException(404, "proposal not found")
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.patch("/api/deliverables/breakdown_proposals/{proposal_id}")
+async def update_deliverable_breakdown_proposal(request: Request, proposal_id: str,
+                                                body: dict = Body(...),
+                                                project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    result = store.update_deliverable_breakdown_proposal(
+        proposal_id, payload, actor=auth.actor(principal), project=project,
+        outcome_text=payload.get("outcome") or "")
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/api/deliverables/breakdown_proposals/{proposal_id}/reject")
+async def reject_deliverable_breakdown(request: Request, proposal_id: str,
+                                       body: dict = Body(...),
+                                       project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    result = store.reject_deliverable_breakdown(
+        proposal_id, payload.get("reason") or "",
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/api/deliverables/breakdown_proposals/{proposal_id}/defer")
+async def defer_deliverable_breakdown(request: Request, proposal_id: str,
+                                      body: dict = Body(...),
+                                      project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    defer_until = payload.get("defer_until")
+    if defer_until not in (None, ""):
+        try:
+            defer_until = float(defer_until)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "defer_until must be a unix timestamp")
+    result = store.defer_deliverable_breakdown(
+        proposal_id, payload.get("reason") or "",
+        actor=auth.actor(principal), project=project,
+        defer_until=defer_until)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.get("/api/board")
 async def board(project: str = Query(store.DEFAULT_PROJECT)):
     return store.board_payload(_proj(project))
