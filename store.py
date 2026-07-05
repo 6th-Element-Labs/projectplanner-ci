@@ -2625,33 +2625,18 @@ def _registry_project_ids() -> List[str]:
 def _find_deliverable_links_for_task(task_project: str, task_id: str,
                                      mission_project: str = "",
                                      deliverable_id: str = "") -> List[Dict[str, Any]]:
-    """Return deliverable links that reference a board task."""
-    task_project = (task_project or "").strip()
-    task_id = (task_id or "").strip()
-    deliverable_id = (deliverable_id or "").strip()
+    """Return deliverable links for claim/mission rollup using the same scan as task detail."""
+    links = list_task_deliverable_links(task_id, project=task_project)
     mission_project = (mission_project or "").strip()
-    if not task_project or not task_id:
-        return []
-    search = ([mission_project] if mission_project and has_project(mission_project)
-              else _registry_project_ids())
-    matches: List[Dict[str, Any]] = []
-    for mp in search:
-        with _conn(mp) as c:
-            try:
-                sql = ("SELECT * FROM deliverable_task_links "
-                       "WHERE project_id=? AND task_id=?")
-                params: List[Any] = [task_project, task_id]
-                if deliverable_id:
-                    sql += " AND deliverable_id=?"
-                    params.append(deliverable_id)
-                rows = c.execute(sql, params).fetchall()
-            except sqlite3.OperationalError:
-                continue
-            for row in rows:
-                link = _deliverable_link_row(row)
-                link["mission_project"] = mp
-                matches.append(link)
-    return matches
+    deliverable_id = (deliverable_id or "").strip()
+    if mission_project:
+        links = [link for link in links
+                 if (link.get("deliverable_home_project") or "") == mission_project]
+    if deliverable_id:
+        links = [link for link in links if (link.get("deliverable_id") or "") == deliverable_id]
+    for link in links:
+        link["mission_project"] = link.get("deliverable_home_project")
+    return links
 
 
 def _record_mission_claim_completion(mission_project: str, deliverable_id: str,
@@ -2684,10 +2669,9 @@ def _record_mission_claim_completion(mission_project: str, deliverable_id: str,
     deliverable_status = deliverable.get("status")
     if (progress.get("in_review_count", 0) > 0
             and deliverable_status in ("approved", "in_progress", "proposed")):
-        create_deliverable({"id": deliverable_id,
-                            "title": deliverable.get("title") or deliverable_id,
-                            "status": "in_review"},
-                           actor=actor, project=mission_project)
+        with _conn(mission_project) as c:
+            c.execute("UPDATE deliverables SET status=?, updated_at=? WHERE id=?",
+                      ("in_review", now, deliverable_id))
         deliverable = get_deliverable(deliverable_id, project=mission_project) or deliverable
         progress = deliverable.get("progress") or deliverable_progress(deliverable)
         payload["progress"] = progress
@@ -3808,6 +3792,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
             else:
                 t["rationale"] = raw_rationale
         _apply_terminal_done_view(t)
+        _enrich_task_project_context(t, project=project)
         return t
 
 
@@ -10319,6 +10304,192 @@ def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: st
     return {"project": project, "repo_topology": get_project_repo_topology(project=project)}
 
 
+REPO_ROLE_LABELS = {
+    "canonical": "Done / code truth",
+    "public_ci": "CI verification only",
+    "public": "Public mirror publication evidence only",
+    "release": "Release evidence only",
+}
+
+
+def _repo_role_summary(role: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    data = data or {}
+    repo = (data.get("repo") or "").strip()
+    placeholder = (data.get("repo_placeholder") or "").strip()
+    return {
+        "role": role,
+        "label": REPO_ROLE_LABELS.get(role, role),
+        "repo": repo or placeholder or None,
+        "configured": bool(data.get("configured")),
+        "default_branch": data.get("default_branch") or "",
+        "authority": list(data.get("authority") or []),
+        "description": data.get("description") or "",
+    }
+
+
+def repo_topology_role_guide(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Operator/agent cheat sheet: which repo controls Done, CI, and publication."""
+    topology = get_project_repo_topology(project)
+    roles = topology.get("roles") or {}
+    canonical = roles.get("canonical") or {}
+    public_ci = roles.get("public_ci") or {}
+    public = roles.get("public") or {}
+    release = roles.get("release") or {}
+    ci_message = "public_ci verifies canonical SHAs but is not code truth."
+    if project == "helm":
+        ci_message += " helm-ci is CI-only; canonical Done remains private Helm merge provenance."
+    return {
+        "project": project,
+        "topology_type": topology.get("topology_type"),
+        "done_authority": {
+            "role": "canonical",
+            "repo": (canonical.get("repo") or "").strip() or None,
+            "default_branch": canonical.get("default_branch") or "",
+            "message": "Only the canonical repo can mark code work Done via merge provenance.",
+        },
+        "ci_verification": {
+            "role": "public_ci",
+            "repo": ((public_ci.get("repo") or "").strip()
+                     or (public_ci.get("repo_placeholder") or "").strip() or None),
+            "default_branch": public_ci.get("default_branch") or "",
+            "message": ci_message,
+        },
+        "publication_evidence": {
+            "role": "public",
+            "repo": ((public.get("repo") or "").strip()
+                     or (public.get("repo_placeholder") or "").strip() or None),
+            "default_branch": public.get("default_branch") or "",
+            "message": "public mirror roles carry publish evidence only; they never prove code Done.",
+        },
+        "release_evidence": {
+            "role": "release",
+            "repo": (release.get("repo") or "").strip() or None,
+            "message": "release roles carry release/packaging evidence only.",
+        },
+        "role_summaries": [
+            _repo_role_summary(role, data)
+            for role, data in (
+                ("canonical", canonical),
+                ("public_ci", public_ci),
+                ("public", public),
+                ("release", release),
+            )
+        ],
+    }
+
+
+def list_task_deliverable_links(task_id: str, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """Return deliverable links for one task, including cross-project mission rollups.
+
+    Link rows live in the deliverable home project database, so this scans every routable
+    project for rows matching the explicit task_project + task_id pair.
+    """
+    tid = (task_id or "").strip().upper()
+    task_project = (project or DEFAULT_PROJECT).strip()
+    if not tid or not has_project(task_project):
+        return []
+    links: List[Dict[str, Any]] = []
+    seen: set = set()
+    query = (
+        """SELECT l.*, d.title AS deliverable_title, d.status AS deliverable_status
+           FROM deliverable_task_links l
+           JOIN deliverables d ON d.id = l.deliverable_id
+           WHERE l.task_id=? AND l.project_id=?
+           ORDER BY l.updated_at DESC, l.id"""
+    )
+    for deliverable_project in project_ids():
+        if not has_project(deliverable_project):
+            continue
+        with _conn(deliverable_project) as c:
+            try:
+                rows = c.execute(query, (tid, task_project)).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            for row in rows:
+                link_id = row["id"]
+                dedupe = (deliverable_project, link_id)
+                if dedupe in seen:
+                    continue
+                seen.add(dedupe)
+                link = _deliverable_link_row(row)
+                link["deliverable_home_project"] = deliverable_project
+                link["deliverable_title"] = row["deliverable_title"]
+                link["deliverable_status"] = row["deliverable_status"]
+                if link.get("board_id"):
+                    board_row = c.execute("SELECT * FROM project_boards WHERE id=?",
+                                          (link["board_id"],)).fetchone()
+                    link["board"] = (_project_board_row(board_row, project=deliverable_project)
+                                     if board_row else {"error": "unknown board",
+                                                        "board_id": link["board_id"],
+                                                        "project_id": deliverable_project})
+                links.append(link)
+    links.sort(key=lambda item: (-(item.get("updated_at") or 0), item.get("id") or ""))
+    return links
+
+
+def get_project_context(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    topology = get_project_repo_topology(project)
+    access = project_access(project)
+    boards = list_project_boards(project=project)
+    hierarchy = topology.get("project_hierarchy") or _project_hierarchy_contract(project)
+    return {
+        "project": project,
+        "project_label": next((p.get("label") for p in projects() if p["id"] == project), project),
+        "project_boundary": access.get("boundary") or "",
+        "project_purpose": access.get("purpose") or "",
+        "project_hierarchy": hierarchy,
+        "hierarchy_stack": [
+            {"level": "project", "id": project, "label": hierarchy.get("project_id") or project},
+            {"level": "board_or_mission",
+             "note": hierarchy["children"]["boards_missions_deliverables"]},
+            {"level": "epic_or_workstream",
+             "note": hierarchy["children"]["epics_workstreams_tasks"]},
+            {"level": "task", "note": "atomic execution unit with provenance and gates"},
+        ],
+        "repo_topology": topology,
+        "repo_role_guide": repo_topology_role_guide(project),
+        "boards_missions": boards,
+        "code_repo_gate": topology.get("code_repo_gate"),
+    }
+
+
+def _task_hierarchy_breadcrumb(task: Dict[str, Any], project: str,
+                               links: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    breadcrumb = [
+        {"level": "project", "id": project},
+        {"level": "workstream", "id": task.get("_wsId"), "label": task.get("_wsName")},
+        {"level": "task", "id": task.get("task_id"), "title": task.get("title")},
+    ]
+    if links is None:
+        links = list_task_deliverable_links(task.get("task_id") or "", project=project)
+    if links:
+        first = links[0]
+        board = first.get("board") or {}
+        breadcrumb.insert(1, {
+            "level": board.get("kind") or "mission",
+            "id": first.get("board_id"),
+            "title": (board.get("title") if isinstance(board, dict) else None) or first.get("board_id"),
+            "deliverable_id": first.get("deliverable_id"),
+            "deliverable_title": first.get("deliverable_title"),
+        })
+    return breadcrumb
+
+
+def _enrich_task_project_context(task: Dict[str, Any], project: str = DEFAULT_PROJECT) -> None:
+    ctx = get_project_context(project)
+    links = list_task_deliverable_links(task.get("task_id") or "", project=project)
+    task["project_context"] = {
+        "project": project,
+        "project_hierarchy": ctx.get("project_hierarchy"),
+        "hierarchy_breadcrumb": _task_hierarchy_breadcrumb(task, project, links=links),
+        "repo_topology": ctx.get("repo_topology"),
+        "repo_role_guide": ctx.get("repo_role_guide"),
+        "boards_missions": ctx.get("boards_missions"),
+        "deliverable_links": links,
+        "code_repo_gate": ctx.get("code_repo_gate"),
+    }
+
+
 def create_project(name: str, project_id: str = "", label: str = "", pretitle: str = "",
                    actor: str = "system", seed_path: str = "",
                    github_repo: str = "", owner_principal_id: str = "",
@@ -10430,6 +10601,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "project_purpose": access.get("purpose") or f"{project} work control plane",
         "project_owner": access.get("owner_user_id") or access.get("org_id") or "",
         "repo_topology": repo_topology,
+        "repo_role_guide": repo_topology_role_guide(project),
         "code_repo_gate": repo_topology.get("code_repo_gate"),
         "protocol": protocol_envelope(),
         "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),
@@ -11417,4 +11589,5 @@ def board_payload(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     })
     payload["rollups"] = board_rollups(project=project, tasks=tasks)
     payload["workstreams"] = list(by_ws.values())
+    payload["project_context"] = get_project_context(project)
     return payload

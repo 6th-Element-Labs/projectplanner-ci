@@ -36,6 +36,7 @@ const TeepPlan = {
     plan: null,
     tasks: [],          // flattened: every task + _wsId / _wsName
     tally: null,        // project-level spend/outcome/KPI rollup
+    projectContext: null, // project hierarchy + repo role guide from api/board
     deliverables: [],
     missionStatus: null,
     selectedDeliverableId: '',
@@ -125,6 +126,7 @@ const TeepPlan = {
             const res = await fetch('api/board');
             if (!res.ok) throw new Error(`HTTP ${res.status} loading the board`);
             this.plan = await res.json();
+            this.projectContext = this.plan.project_context || null;
             try { this.people = (await (await fetch('api/people')).json()).people || []; } catch (e) { this.people = []; }
             try { this.tally = await (await fetch(`tally/v1/project?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`)).json(); } catch (e) { this.tally = null; }
         } catch (err) {
@@ -436,6 +438,63 @@ const TeepPlan = {
         if (gate.required && !pub.passed) bits.push(`<span class="text-danger small">${this.esc(gate.message || 'required')}</span>`);
         return bits.join(' ');
     },
+    projectContextHtml(ctx) {
+        if (!ctx) return '';
+        const guide = ctx.repo_role_guide || {};
+        const roleRow = (title, item, icon, tone) => {
+            if (!item) return '';
+            const repo = item.repo ? `<code>${this.esc(item.repo)}</code>` : '<span class="text-secondary">not configured</span>';
+            const branch = item.default_branch ? ` · ${this.esc(item.default_branch)}` : '';
+            return `<div class="col-md-6"><div class="card card-sm h-100"><div class="card-body">
+                <div class="subheader text-${tone} mb-1"><i class="ti ti-${icon} me-1"></i>${this.esc(title)}</div>
+                <div class="mb-1">${repo}${branch}</div>
+                <div class="text-secondary small">${this.esc(item.message || '')}</div>
+            </div></div></div>`;
+        };
+        const boards = (ctx.boards_missions || []).slice(0, 6).map((b) =>
+            `<span class="badge bg-secondary-lt me-1 mb-1"><i class="ti ti-${b.kind === 'board' ? 'layout-kanban' : 'target'} me-1"></i>${this.esc(b.title || b.id)}</span>`
+        ).join('') || '<span class="text-secondary small">none yet</span>';
+        const stack = (ctx.hierarchy_stack || []).map((s) =>
+            `<span class="badge bg-azure-lt me-1">${this.esc(s.level)}</span>`
+        ).join('');
+        return `<div class="card mb-3"><div class="card-body">
+            <div class="d-flex align-items-center mb-2">
+                <div class="subheader mb-0">Project authority &amp; repo roles</div>
+                <span class="badge bg-azure-lt ms-auto">${this.esc(ctx.project || '')}</span>
+            </div>
+            <div class="text-secondary small mb-3">Hierarchy: ${stack}</div>
+            <div class="row g-2 mb-3">
+                ${roleRow('Done authority', guide.done_authority, 'git-merge', 'green')}
+                ${roleRow('CI verification', guide.ci_verification, 'cloud-check', 'azure')}
+                ${roleRow('Publication evidence', guide.publication_evidence, 'upload', 'orange')}
+            </div>
+            <div class="subheader mb-1">Boards / missions</div>
+            <div>${boards}</div>
+        </div></div>`;
+    },
+    taskProjectContextHtml(t) {
+        const ctx = (t && t.project_context) || this.projectContext;
+        if (!ctx) return '';
+        const guide = ctx.repo_role_guide || {};
+        const crumb = (ctx.hierarchy_breadcrumb || []).map((c) => {
+            const label = c.title || c.label || c.id || c.level;
+            return `<span class="badge bg-secondary-lt me-1">${this.esc(c.level)} · ${this.esc(label || '—')}</span>`;
+        }).join('');
+        const links = (ctx.deliverable_links || []).map((l) =>
+            `<span class="badge bg-purple-lt me-1"><i class="ti ti-package me-1"></i>${this.esc(l.deliverable_title || l.deliverable_id)}</span>`
+        ).join('') || '<span class="text-secondary small">not linked to a deliverable</span>';
+        const doneRepo = ((guide.done_authority || {}).repo) || '—';
+        const ciRepo = ((guide.ci_verification || {}).repo) || '—';
+        const pubRepo = ((guide.publication_evidence || {}).repo) || '—';
+        return `<div class="subheader mb-2">Project context</div>
+            <div class="datagrid mb-3">
+                <div class="datagrid-item"><div class="datagrid-title">Hierarchy</div><div class="datagrid-content">${crumb || '—'}</div></div>
+                <div class="datagrid-item"><div class="datagrid-title">Done repo</div><div class="datagrid-content"><code>${this.esc(doneRepo)}</code></div></div>
+                <div class="datagrid-item"><div class="datagrid-title">CI repo</div><div class="datagrid-content"><code>${this.esc(ciRepo)}</code></div></div>
+                <div class="datagrid-item"><div class="datagrid-title">Public mirror</div><div class="datagrid-content"><code>${this.esc(pubRepo)}</code></div></div>
+                <div class="datagrid-item"><div class="datagrid-title">Deliverable links</div><div class="datagrid-content">${links}</div></div>
+            </div>`;
+    },
     initials(name) {
         if (!name) return '';
         // drop "(TEEP)"-style org tags and any word without a letter (e.g. "+", "·")
@@ -492,6 +551,7 @@ const TeepPlan = {
         const exec = (this.plan.executive_summary || '').split('\n').filter(Boolean);
         const tl = this.plan.timeline_note || '';
         el.innerHTML =
+            (this.projectContext ? this.projectContextHtml(this.projectContext) : '') +
             exec.map((p) => `<p>${this.esc(p)}</p>`).join('') +
             (tl ? `<h4 class="mt-3">Timeline &amp; realistic duration</h4><p class="text-secondary">${this.esc(tl)}</p>` : '');
     },
@@ -1016,6 +1076,7 @@ const TeepPlan = {
                     <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(t.status || '—')} · ${pct}% complete</div>
                     <div class="subheader mb-2">Economics</div>
                     ${this.tallyDetailHtml(tally)}
+                    ${this.taskProjectContextHtml(t)}
                     <div class="subheader mb-2">Properties</div>
                     <div class="datagrid mb-3">
                         <div class="datagrid-item"><div class="datagrid-title">Status</div>
@@ -2745,6 +2806,7 @@ const TeepPlan = {
     async _reloadBoardData() {
         try {
             this.plan = await (await fetch('api/board')).json();
+            this.projectContext = this.plan.project_context || null;
             this.flatten();
             this.renderBoard();
             this.renderTasks();
@@ -2996,7 +3058,8 @@ const TeepPlan = {
                 </div>
             </div>`;
 
-        el.innerHTML = kpiStrip + `<div class="row row-cards">${myWork}${rightRail}</div>`;
+        el.innerHTML = (this.projectContext ? this.projectContextHtml(this.projectContext) : '') +
+            kpiStrip + `<div class="row row-cards">${myWork}${rightRail}</div>`;
 
         // Open the task modal from a clicked row. wireEvents() does not delegate
         // exec-content, so bind once here (re-renders reuse the same element).

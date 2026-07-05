@@ -232,12 +232,18 @@ Tally outcome/KPI rule:
 Protocol compatibility:
 - `get_working_agreement` includes `protocol.version`, `protocol.profile`,
   `protocol.profiles`, `protocol.compatible_versions`, and `protocol.field_aliases`.
-- `get_working_agreement` and `get_project_contract` include `repo_topology` and
-  `code_repo_gate`. `repo_topology.scope` is `project`; Switchboard `project` ids are the top-level
-  authority boundary, while `project_boards` / Board/Mission ids are first-class outcome cockpits
-  under that Project. Agents should treat `repo_topology.roles.canonical` as the only repo that can
-  prove code Done, `repo_topology.roles.public_ci` as shared verification evidence only, and
-  `repo_topology.roles.public` as public mirror publication evidence only.
+- `get_working_agreement` and `get_project_contract` include `repo_topology`,
+  `repo_role_guide`, and `code_repo_gate`. `get_task` (full) and REST `GET /api/tasks/{id}`
+  include `project_context` with hierarchy breadcrumbs, repo role guide, boards/missions,
+  and deliverable links. `GET /api/board` and `GET /api/projects/{project}/context` expose
+  the same project-level context for operators. `repo_topology.scope` is `project`; Switchboard
+  `project` ids are the top-level authority boundary, while `project_boards` / Board/Mission ids
+  are first-class outcome cockpits under that Project. Agents should treat
+  `repo_topology.roles.canonical` as the only repo that can prove code Done,
+  `repo_topology.roles.public_ci` as shared verification evidence only, and
+  `repo_topology.roles.public` as public mirror publication evidence only. For Helm,
+  `repo_role_guide.ci_verification` documents that `helm-ci` is CI-only and canonical Done
+  remains private Helm merge provenance.
 - `register_agent` may include `protocol_json` / REST `protocol`; the response includes
   `protocol_compatibility`.
 

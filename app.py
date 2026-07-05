@@ -552,6 +552,11 @@ async def project_repo_topology(project: str):
     return store.get_project_repo_topology(project=_proj(project))
 
 
+@app.get("/api/projects/{project}/context")
+async def project_context(project: str):
+    return store.get_project_context(project=_proj(project))
+
+
 @app.post("/api/projects/{project}/repo_topology")
 async def set_project_repo_topology(request: Request, project: str, body: dict = Body(...)):
     _principal(request, "switchboard", ("write:system",), dev_actor="web")

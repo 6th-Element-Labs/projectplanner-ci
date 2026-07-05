@@ -255,6 +255,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "",
     access = store.project_access(selected)
     repo_topology = store.get_project_repo_topology(selected)
     boards_missions = store.list_project_boards(project=selected)
+    repo_role_guide = store.repo_topology_role_guide(selected)
     lane_tasks = store.list_tasks(workstream=ws, project=selected) if ws else []
     lane_name = None
     for lt in lane_tasks:
@@ -320,6 +321,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "",
         "project_hierarchy": repo_topology.get("project_hierarchy"),
         "boards_missions": boards_missions,
         "repo_topology": repo_topology,
+        "repo_role_guide": repo_role_guide,
         "code_repo_gate": repo_topology.get("code_repo_gate"),
         "local_docs_policy": (
             "Do not assume repo-local docs such as docs/EPICS.md define this project. "

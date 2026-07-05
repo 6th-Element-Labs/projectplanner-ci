@@ -210,6 +210,47 @@ Operationally, this means:
 This is why the CI fallback posts `Switchboard CI / VM gate` instead of silently replacing GitHub
 Actions: GitHub Actions remains visibly broken, while PRs still get a concrete pass/fail signal.
 
+## 2.3 Project hierarchy and repo roles
+
+Switchboard models a **Project** as the repo/trust/policy/access/CI/model/budget/Done authority
+boundary. Under each Project:
+
+- **Board / Mission** ids are outcome cockpits (`project_boards`, deliverables).
+- **Epic / workstream / task** rows are execution planning below that layer.
+
+Repo roles live on the **Project**, not on a board/mission. Read them from MCP/REST instead of
+chat memory:
+
+| Question | Source | Rule |
+|---|---|---|
+| Which repo controls Done? | `repo_topology.roles.canonical` or `repo_role_guide.done_authority` | Only canonical merge provenance can mark code work Done |
+| Which repo runs CI? | `repo_topology.roles.public_ci` or `repo_role_guide.ci_verification` | Verification evidence only; never code truth |
+| Which repo is public/publish evidence? | `repo_topology.roles.public` or `repo_role_guide.publication_evidence` | Publication evidence only; never Done |
+
+Agent surfaces:
+
+```text
+get_working_agreement(project="switchboard")
+get_project_contract(project="helm", task_id="ENGINE-1")
+get_task(task_id="REPO-5", project="switchboard")   # includes project_context
+```
+
+Operator surfaces:
+
+```text
+GET /api/projects/switchboard/context
+GET /api/board?project=helm                          # includes project_context
+```
+
+Helm built-in topology:
+
+- **canonical:** `StevenRidder/Helm` — private code truth and Done authority
+- **public_ci:** `StevenRidder/helm-ci` — shared CI sandbox; verifies canonical SHAs only
+- **public:** public mirror placeholder — publication evidence only via `publish-public-mirror.sh`
+
+The cockpit UI shows the same role guide on Exec Summary, About, and task detail when
+`project_context` is present.
+
 ## 3. Operator login
 
 Production runs with `PM_AUTH_MODE=required`. In that mode, board/API/control reads and writes
