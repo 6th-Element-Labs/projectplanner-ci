@@ -36,6 +36,9 @@ const TeepPlan = {
     plan: null,
     tasks: [],          // flattened: every task + _wsId / _wsName
     tally: null,        // project-level spend/outcome/KPI rollup
+    deliverables: [],
+    missionStatus: null,
+    selectedDeliverableId: '',
     wsMeta: {},         // workstream_id -> {name, lead_org}
     gantt: null,        // ApexCharts instance
     ganttMode: 'task',  // default 'task' (per-task detail) · 'workstream' = 12-bar overview
@@ -48,6 +51,14 @@ const TeepPlan = {
     OWNER_COLOR: { 'Taikun': 'blue', 'TEEP': 'teal', 'Sensirion/Nubo': 'orange', 'IFS Merrick': 'purple', 'Joint': 'cyan' },
     RISK_COLOR: { Low: 'green', Medium: 'yellow', High: 'red' },
     STATUS_COLOR: { 'Not Started': 'secondary', 'In Progress': 'blue', 'In Review': 'azure', 'Blocked': 'red', 'Done': 'green' },
+    DELIVERABLE_STATUS_COLOR: {
+        proposed: 'secondary', approved: 'azure', in_progress: 'blue', blocked: 'red',
+        in_review: 'yellow', done: 'green', archived: 'secondary',
+    },
+    MILESTONE_STATUS_COLOR: {
+        not_started: 'secondary', in_progress: 'blue', blocked: 'red',
+        in_review: 'azure', done: 'green', skipped: 'secondary',
+    },
     WS_COLOR: {
         SEN: 'azure', FMP: 'blue', SCADA: 'cyan', IFS: 'teal', SSO: 'indigo', BEDROCK: 'purple',
         GW: 'pink', REG: 'lime', AGENT: 'orange', REPORT: 'yellow', DATA: 'green', CUTOVER: 'red'
@@ -138,6 +149,7 @@ const TeepPlan = {
         this.setupGantt();
         this.loadSignals();
         this.initInbox();
+        this._missionDeliverableFromUrl();
         const ds = document.getElementById('data-status');
         if (ds) { ds.className = 'badge bg-green-lt'; ds.textContent = `${this.tasks.length} tasks`; }
     },
@@ -952,13 +964,15 @@ const TeepPlan = {
         this.gantt.render();
     },
 
-    async openTask(id) {
+    async openTask(id, project) {
         let t = this.tasks.find((x) => x.task_id === id);
-        if (!t) return;
+        if (!t && !project) return;
+        const proj = (project || window.PM_PROJECT || 'maxwell').trim();
         try {
-            const fresh = await (await fetch(`api/tasks/${encodeURIComponent(id)}`)).json();
-            if (fresh && fresh.task_id) t = Object.assign({}, t, fresh);
+            const fresh = await (await fetch(`api/tasks/${encodeURIComponent(id)}?project=${encodeURIComponent(proj)}`)).json();
+            if (fresh && fresh.task_id) t = Object.assign({}, t || {}, fresh);
         } catch (e) { /* fall back to in-memory task */ }
+        if (!t) return;
         const meta = (label, val) => `<div class="col-6 mb-2"><div class="text-secondary" style="font-size:12px">${label}</div><div>${val}</div></div>`;
         const owner = this.esc(t.owner_org || '—') + (t.owner_person_or_role ? ' · ' + this.esc(t.owner_person_or_role) : '');
         const dates = `${this.esc(t.start_date || '?')} – ${this.esc(t.finish_date || '?')}`;
@@ -3016,6 +3030,204 @@ const TeepPlan = {
         return `api/export.${kind}` + (qs ? `?${qs}` : '');
     },
 
+    _missionDeliverableFromUrl() {
+        try {
+            const u = new URL(window.location.href);
+            const d = (u.searchParams.get('deliverable') || u.searchParams.get('mission') || '').trim();
+            if (d) this.selectedDeliverableId = d;
+            if (u.hash === '#tab-mission' || d) {
+                const tab = document.querySelector('a[href="#tab-mission"]');
+                if (tab && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(tab).show();
+            }
+        } catch (e) { /* ignore */ }
+    },
+
+    _setMissionDeliverableInUrl(id) {
+        try {
+            const u = new URL(window.location.href);
+            if (id) u.searchParams.set('deliverable', id);
+            else u.searchParams.delete('deliverable');
+            window.history.replaceState({}, '', u.toString());
+        } catch (e) { /* ignore */ }
+    },
+
+    async loadDeliverables() {
+        const res = await fetch('api/deliverables');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        this.deliverables = data.deliverables || [];
+    },
+
+    async loadMissionStatus(deliverableId) {
+        const id = (deliverableId || '').trim();
+        if (!id) { this.missionStatus = null; return null; }
+        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_status`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+        this.missionStatus = data;
+        return data;
+    },
+
+    async refreshMissionPage() {
+        const el = document.getElementById('mission-page');
+        const picker = document.getElementById('mission-deliverable-picker');
+        if (!el) return;
+        el.innerHTML = '<div class="text-secondary small">Loading mission…</div>';
+        try { await this.loadDeliverables(); }
+        catch (e) {
+            el.innerHTML = `<div class="alert alert-danger mb-0">Could not load deliverables: ${this.esc(e.message)}</div>`;
+            return;
+        }
+        if (picker) {
+            const cur = this.selectedDeliverableId;
+            picker.innerHTML = this.deliverables.length
+                ? this.deliverables.map((d) =>
+                    `<option value="${this.esc(d.id)}"${d.id === cur ? ' selected' : ''}>${this.esc(d.title || d.id)}</option>`).join('')
+                : '<option value="">No deliverables yet</option>';
+            if (!cur && this.deliverables.length) {
+                this.selectedDeliverableId = this.deliverables[0].id;
+                picker.value = this.selectedDeliverableId;
+            }
+        }
+        if (!this.selectedDeliverableId) {
+            el.innerHTML = `<div class="empty py-5"><div class="empty-icon"><i class="ti ti-target-arrow"></i></div>
+                <p class="empty-title">No mission deliverables</p>
+                <p class="empty-subtitle text-secondary">Create a deliverable under this project to open a live mission cockpit.</p></div>`;
+            return;
+        }
+        try {
+            await this.loadMissionStatus(this.selectedDeliverableId);
+            this._setMissionDeliverableInUrl(this.selectedDeliverableId);
+            this.renderMissionPage();
+        } catch (e) {
+            el.innerHTML = `<div class="alert alert-danger mb-0">Could not load mission status: ${this.esc(e.message)}</div>`;
+        }
+    },
+
+    _missionBadge(status, map, fallback) {
+        const key = String(status || '').toLowerCase().replace(/\s+/g, '_');
+        const color = map[key] || fallback || 'secondary';
+        return `<span class="badge bg-${color}-lt text-uppercase">${this.esc(String(status || 'unknown').replace(/_/g, ' '))}</span>`;
+    },
+
+    _missionConfidence(conf) {
+        if (conf == null || conf === '') return '<span class="text-secondary">—</span>';
+        const pct = Math.round(Number(conf) * 100);
+        const color = pct >= 70 ? 'green' : (pct >= 40 ? 'yellow' : 'red');
+        return `<span class="badge bg-${color}-lt">${pct}% confidence</span>`;
+    },
+
+    _missionKv(obj) {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '<div class="text-secondary small">—</div>';
+        const entries = Object.entries(obj);
+        if (!entries.length) return '<div class="text-secondary small">—</div>';
+        return `<div class="datagrid">${entries.map(([k, v]) =>
+            `<div class="datagrid-item"><div class="datagrid-title">${this.esc(k)}</div><div class="datagrid-content">${this.esc(typeof v === 'object' ? JSON.stringify(v) : v)}</div></div>`).join('')}</div>`;
+    },
+
+    _missionRecentChanges(linkedTasks) {
+        const events = [];
+        (linkedTasks || []).forEach((link) => {
+            const d = link.task_detail || link.task || {};
+            if (d.error) return;
+            const gs = d.git_state || {};
+            if (gs.merged_at) events.push({ ts: Number(gs.merged_at), kind: 'merge', text: 'Merged with provenance', taskId: d.task_id, projectId: link.project_id });
+            if (gs.pushed_at) events.push({ ts: Number(gs.pushed_at), kind: 'push', text: 'Branch pushed', taskId: d.task_id, projectId: link.project_id });
+        });
+        events.sort((a, b) => b.ts - a.ts);
+        const top = events.filter((e) => e.ts > 0).slice(0, 8);
+        if (!top.length) return '<div class="text-secondary small">No recent git/provenance signals on linked tasks yet.</div>';
+        return `<div class="list-group list-group-flush">${top.map((e) =>
+            `<div class="list-group-item px-0"><div class="d-flex gap-2"><span class="badge bg-secondary-lt">${this.esc(e.kind)}</span>
+            <div><div>${this.esc(e.text)} · <a href="#" data-linked-task="${this.esc(e.taskId)}" data-linked-project="${this.esc(e.projectId)}">${this.esc(e.taskId)}</a></div>
+            <div class="text-secondary small">${new Date(e.ts * 1000).toLocaleString()}</div></div></div></div>`).join('')}</div>`;
+    },
+
+    _missionPolicyDrift(status) {
+        const d = status.deliverable || {};
+        const driftBlockers = (status.blockers || []).filter((b) =>
+            ['external_ci', 'publication_evidence', 'human_gate'].includes(b.kind));
+        let html = '';
+        if (Object.keys(d.policy_constraints || {}).length) {
+            html += `<div class="subheader mb-2">Policy constraints</div>${this._missionKv(d.policy_constraints)}`;
+        }
+        if (Object.keys(d.proof_requirements || {}).length) {
+            html += `<div class="subheader mb-2 mt-3">Proof requirements</div>${this._missionKv(d.proof_requirements)}`;
+        }
+        if (driftBlockers.length) {
+            html += `<div class="alert alert-warning mt-3 mb-0"><div class="fw-semibold mb-1">Policy / architecture drift signals</div><ul class="mb-0 ps-3">${driftBlockers.map((b) =>
+                `<li>${this.esc(b.kind)} · ${this.esc(b.title || b.task_id || b.message || '')}</li>`).join('')}</ul></div>`;
+        }
+        return html || '<div class="text-secondary small">No policy constraints recorded on this deliverable.</div>';
+    },
+
+    renderMissionPage() {
+        const el = document.getElementById('mission-page');
+        const s = this.missionStatus;
+        if (!el || !s) return;
+        const d = s.deliverable || {};
+        const board = s.board || {};
+        const prog = s.progress || {};
+        const pctDone = Math.round((prog.done_with_proof_ratio || 0) * 100);
+        const header = `<div class="d-flex flex-wrap align-items-start gap-3 mb-4"><div class="flex-fill">
+            <div class="text-secondary small mb-1">${this.esc(s.project_id || window.PM_PROJECT || '')}${s.board_id ? ' · ' + this.esc(s.board_id) : ''}</div>
+            <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
+            <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)}</div>
+        </div></div>`;
+        const kpi = `<div class="row row-cards mb-4">${[
+            ['Done with proof', prog.done_with_proof_count || 0, 'ti-circle-check', 'green'],
+            ['In review', prog.in_review_count || 0, 'ti-eye-check', 'azure'],
+            ['Active / claimed', (s.active_work || []).length, 'ti-bolt', 'blue'],
+            ['Blockers', (s.blockers || []).length, 'ti-alert-triangle', 'red'],
+            ['Linked tasks', prog.linked_task_count || 0, 'ti-link', 'secondary'],
+            ['Progress', `${pctDone}%`, 'ti-chart-donut', 'primary'],
+        ].map(([label, value, icon, color]) => `<div class="col-6 col-md-4 col-xl-2"><div class="card card-sm"><div class="card-body">
+            <div class="d-flex"><div class="subheader">${this.esc(label)}</div><div class="ms-auto text-${color}"><i class="ti ${icon}"></i></div></div>
+            <div class="h2 mb-0 mt-1">${this.esc(value)}</div></div></div></div>`).join('')}</div>`;
+        const narrative = s.narrative ? `<div class="card mb-4"><div class="card-body"><div class="subheader mb-2">Live brief</div><p class="mb-0" style="white-space:pre-wrap">${this.esc(s.narrative)}</p></div></div>` : '';
+        const endState = `<div class="row g-3 mb-4"><div class="col-md-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">End state</h3></div><div class="card-body"><p class="mb-0" style="white-space:pre-wrap">${this.esc(d.end_state || '—')}</p></div></div></div>
+            <div class="col-md-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Why it matters</h3></div><div class="card-body"><p class="mb-0" style="white-space:pre-wrap">${this.esc(d.why_it_matters || '—')}</p></div></div></div></div>`;
+        const milestones = s.milestones || [];
+        const milestoneMap = milestones.length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Milestone progress</h3></div><div class="card-body"><div class="row g-3">${milestones.map((m) => {
+            const sc = this.MILESTONE_STATUS_COLOR[m.status] || 'secondary';
+            return `<div class="col-12 col-md-6 col-xl-4"><div class="card card-sm h-100"><div class="card-status-start bg-${sc}"></div><div class="card-body">
+                <div class="d-flex mb-2">${this._missionBadge(m.status, this.MILESTONE_STATUS_COLOR)}<span class="ms-auto text-secondary small">${this.esc(String(m.linked_task_count || 0))} linked</span></div>
+                <div class="fw-semibold">${this.esc(m.title || m.id)}</div></div></div></div>`;
+        }).join('')}</div></div></div>` : '<div class="card mb-4"><div class="card-body text-secondary small">No milestones defined yet.</div></div>';
+        const activeRows = (s.active_work || []).map((w) => `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this._missionBadge(w.status, this.STATUS_COLOR)}</td><td>${this.esc(w.assignee || '—')}</td><td class="small">${this.esc((w.active_claims || []).map((c) => c.agent_id).join(', ') || '—')}</td></tr>`).join('') || '<tr><td colspan="5" class="text-secondary">No active linked work</td></tr>';
+        const doneRows = (s.done_with_proof || []).map((w) => {
+            const pr = (w.provenance || {}).pr_url || (w.git_state || {}).pr_url;
+            return `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this.esc((w.provenance || {}).label || 'Done with proof')}</td><td>${pr ? `<a href="${this.esc(pr)}" target="_blank" rel="noopener">PR</a>` : '—'}</td></tr>`;
+        }).join('') || '<tr><td colspan="4" class="text-secondary">Nothing Done-with-proof yet</td></tr>';
+        const linkedRows = (s.linked_tasks || []).map((link) => {
+            const dtl = link.task_detail || link.task || {};
+            return `<tr><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td></tr>`;
+        }).join('') || '<tr><td colspan="6" class="text-secondary">No cross-project links</td></tr>';
+        const blockerHtml = (s.blockers || []).length ? `<div class="card mb-4 border-danger"><div class="card-header"><h3 class="card-title text-red">Blockers</h3></div><div class="list-group list-group-flush">${(s.blockers || []).map((b) =>
+            `<div class="list-group-item"><div class="fw-semibold">${this.esc(b.kind || 'blocker')}</div><div>${this.esc(b.title || b.message || b.task_id || '')}</div></div>`).join('')}</div></div>` : '';
+        const nextActions = (s.next_actions || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Next best actions</h3></div><div class="list-group list-group-flush">${(s.next_actions || []).map((a) =>
+            `<div class="list-group-item"><span class="badge bg-primary-lt me-2">${this.esc(a.action || 'action')}</span>${this.esc(a.title || a.reason || '')}${a.task_id ? ` <span class="text-secondary small">· ${this.esc(a.project_id || '')} ${this.esc(a.task_id)}</span>` : ''}</div>`).join('')}</div></div>` : '';
+        const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
+            `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td>${this.esc(a.project_id || '')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
+        el.innerHTML = header + kpi + narrative + endState + milestoneMap + nextActions + blockerHtml +
+            `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
+            <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
+            agents +
+            `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Linked tasks across projects</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Milestone</th><th>Role</th></tr></thead><tbody>${linkedRows}</tbody></table></div></div>` +
+            `<div class="row g-3"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Architecture / policy</h3></div><div class="card-body">${this._missionPolicyDrift(s)}</div></div></div>
+            <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Recent changes</h3></div><div class="card-body">${this._missionRecentChanges(s.linked_tasks)}</div></div></div></div>`;
+        if (s.pending_proposal) {
+            el.insertAdjacentHTML('beforeend', `<div class="alert alert-azure mt-3">Pending breakdown proposal awaiting approval.</div>`);
+        }
+    },
+
+    async openLinkedTask(taskId, projectId) {
+        const pid = (projectId || window.PM_PROJECT || 'maxwell').trim();
+        const id = (taskId || '').trim().toUpperCase();
+        if (!id) return;
+        await this.openTask(id, pid);
+    },
+
     // ---- events ----------------------------------------------------------
     wireEvents() {
         ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking', 'f-hidedone'].forEach((id) => {
@@ -3107,6 +3319,25 @@ const TeepPlan = {
         if (inboxSim) inboxSim.addEventListener('click', () => { const box = document.getElementById('inbox-sim-box'); if (window.bootstrap) window.bootstrap.Collapse.getOrCreateInstance(box).toggle(); });
         const inboxSimGo = document.getElementById('inbox-sim-go');
         if (inboxSimGo) inboxSimGo.addEventListener('click', () => this.simulateInbox());
+        const missionTab = document.querySelector('a[href="#tab-mission"]');
+        if (missionTab) missionTab.addEventListener('shown.bs.tab', () => this.refreshMissionPage());
+        const missionRefresh = document.getElementById('mission-refresh');
+        if (missionRefresh) missionRefresh.addEventListener('click', () => this.refreshMissionPage());
+        const missionPicker = document.getElementById('mission-deliverable-picker');
+        if (missionPicker) missionPicker.addEventListener('change', (e) => {
+            this.selectedDeliverableId = e.target.value || '';
+            this.refreshMissionPage();
+        });
+        const missionPage = document.getElementById('mission-page');
+        if (missionPage && !this._missionWired) {
+            this._missionWired = true;
+            missionPage.addEventListener('click', (e) => {
+                const a = e.target.closest('[data-linked-task]');
+                if (!a || !missionPage.contains(a)) return;
+                e.preventDefault();
+                this.openLinkedTask(a.getAttribute('data-linked-task'), a.getAttribute('data-linked-project'));
+            });
+        }
     },
 };
 
