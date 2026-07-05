@@ -75,6 +75,32 @@ try:
     ok(good.status_code == 200 and good.json()["title"] == TITLE,
        "task create accepts valid bearer token")
 
+    store.create_project_board(
+        {
+            "id": "switchboard-live-mission",
+            "title": "Switchboard Live Mission",
+            "kind": "mission",
+        },
+        actor="test",
+        project=P,
+    )
+    board_read = client.get(
+        f"/api/projects/{P}/boards",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    ok(board_read.status_code == 200 and
+       board_read.json()["boards"][0]["id"] == "switchboard-live-mission",
+       "project path read resolves bearer auth against the path project")
+
+    board_write = client.post(
+        f"/api/projects/{P}/boards",
+        json={"id": "switchboard-access-rollout", "title": "Switchboard Access Rollout"},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    ok(board_write.status_code == 200 and
+       board_write.json()["id"] == "switchboard-access-rollout",
+       "project path write resolves bearer auth against the path project")
+
     unbound_env = client.post(
         f"/api/tasks?project={P}",
         json={"workstream_id": "QA", "title": ENV_TITLE},

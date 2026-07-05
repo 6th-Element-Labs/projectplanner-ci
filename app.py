@@ -181,10 +181,12 @@ def _attach_server_timing(response: Response, started_at: float) -> Response:
 
 
 def _request_project(request: Request, path: str) -> str:
-    if path == "/api/projects" or (
-        path.startswith("/api/projects/") and path.endswith("/repo_topology")
-    ):
+    if path == "/api/projects":
         return "switchboard"
+    if path.startswith("/api/projects/"):
+        parts = path.split("/")
+        if len(parts) > 3 and parts[3]:
+            return parts[3]
     return request.query_params.get("project") or store.DEFAULT_PROJECT
 
 
