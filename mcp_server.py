@@ -1227,10 +1227,15 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
                max_risk: str = "", max_budget_usd: float = 0.0,
                ttl_seconds: int = 1800, idem_key: str = "",
                override_identity_risk: bool = False,
-               project: str = "maxwell") -> str:
+               project: str = "maxwell", deliverable_id: str = "",
+               board_id: str = "", mission_id: str = "",
+               milestone_id: str = "") -> str:
     """Atomically claim the next unblocked task for this agent. This is the first +TXP
     scheduler primitive: dependency-aware, idempotent, constraint-scored, and returns
-    dispatch_reason plus budget/model guidance."""
+    dispatch_reason plus budget/model guidance.
+
+    When deliverable_id or board_id/mission_id is set, only tasks linked to that mission
+    deliverable are eligible. milestone_id optionally narrows to one milestone."""
     principal = _require_write(ctx, project, ("write:ixp",))
     lane_list = [x.strip().upper() for x in lanes.replace("\n", ",").split(",") if x.strip()]
     cap_list = [x.strip() for x in capabilities.replace("\n", ",").split(",") if x.strip()]
@@ -1240,7 +1245,8 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
         principal_id=principal["id"], actor=auth.actor(principal),
         ttl_seconds=ttl_seconds, idem_key=idem_key,
         override_identity_risk=override_identity_risk,
-        project=project))
+        project=project, deliverable_id=deliverable_id,
+        board_id=board_id, mission_id=mission_id, milestone_id=milestone_id))
 
 
 @mcp.tool()
@@ -1265,14 +1271,16 @@ def claim_task(task_id: str, agent_id: str, ctx: Context,
 @mcp.tool()
 def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status: str = "",
                    project: str = "maxwell", agent_id: str = "",
-                   system_actor: str = "", system_reason: str = "") -> str:
+                   system_actor: str = "", system_reason: str = "",
+                   mission_project: str = "") -> str:
     """Mark a task claim completed, release its task lease, and record completion evidence.
 
     This moves the task to In Review. Done is reserved for GitHub/default-branch merge
     provenance; if final_status='Done' is passed, Switchboard records the request but keeps
     the task In Review until merged_sha/default-branch SHA is stamped. evidence should be
     a JSON object string with branch, head_sha, pr_url/pr_number, or a verification note.
-    """
+    Optional deliverable_id, milestone_id, and mission_project in evidence refresh mission
+    progress without counting agent completion as Done."""
     principal = _require_write(ctx, project, ("write:ixp",))
     target = store.claim_binding_target(claim_id, project=project)
     binding = _resolve_write_actor(
@@ -1287,7 +1295,8 @@ def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status
         return _dumps(binding)
     _write_binding_comment(target.get("task_id") or "", binding, project)
     return _dumps(store.complete_claim(claim_id, evidence=evidence, final_status=final_status,
-                                      actor=binding["actor"], project=project))
+                                      actor=binding["actor"], project=project,
+                                      mission_project=mission_project))
 
 
 @mcp.tool()

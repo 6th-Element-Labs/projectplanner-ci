@@ -2370,6 +2370,302 @@ def _resolve_mission_deliverable(project: str, deliverable_id: str = "",
     return {"error": "deliverable_id or board_id/mission_id is required", "project_id": project}
 
 
+def _registry_project_ids() -> List[str]:
+    init_project_registry()
+    with _registry_conn() as c:
+        rows = c.execute("SELECT id FROM projects ORDER BY id").fetchall()
+    return [r["id"] for r in rows if has_project(r["id"])]
+
+
+def _find_deliverable_links_for_task(task_project: str, task_id: str,
+                                     mission_project: str = "",
+                                     deliverable_id: str = "") -> List[Dict[str, Any]]:
+    """Return deliverable links that reference a board task."""
+    task_project = (task_project or "").strip()
+    task_id = (task_id or "").strip()
+    deliverable_id = (deliverable_id or "").strip()
+    mission_project = (mission_project or "").strip()
+    if not task_project or not task_id:
+        return []
+    search = ([mission_project] if mission_project and has_project(mission_project)
+              else _registry_project_ids())
+    matches: List[Dict[str, Any]] = []
+    for mp in search:
+        with _conn(mp) as c:
+            try:
+                sql = ("SELECT * FROM deliverable_task_links "
+                       "WHERE project_id=? AND task_id=?")
+                params: List[Any] = [task_project, task_id]
+                if deliverable_id:
+                    sql += " AND deliverable_id=?"
+                    params.append(deliverable_id)
+                rows = c.execute(sql, params).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            for row in rows:
+                link = _deliverable_link_row(row)
+                link["mission_project"] = mp
+                matches.append(link)
+    return matches
+
+
+def _record_mission_claim_completion(mission_project: str, deliverable_id: str,
+                                     task_project: str, task_id: str,
+                                     claim_id: str, status: str,
+                                     milestone_id: str = "",
+                                     actor: str = "system") -> Dict[str, Any]:
+    """Refresh mission progress after a linked task claim completes."""
+    deliverable = get_deliverable(deliverable_id, project=mission_project)
+    if not deliverable:
+        return {"error": "unknown deliverable", "deliverable_id": deliverable_id,
+                "mission_project": mission_project}
+    progress = deliverable.get("progress") or deliverable_progress(deliverable)
+    now = time.time()
+    payload = {
+        "schema": "switchboard.mission_claim_completion.v1",
+        "mission_project": mission_project,
+        "deliverable_id": deliverable_id,
+        "milestone_id": (milestone_id or "").strip() or None,
+        "task_project": task_project,
+        "task_id": task_id,
+        "claim_id": claim_id,
+        "task_status": status,
+        "progress": progress,
+    }
+    with _conn(mission_project) as c:
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.claim_completed",
+                   json.dumps(payload, sort_keys=True), now))
+    deliverable_status = deliverable.get("status")
+    if (progress.get("in_review_count", 0) > 0
+            and deliverable_status in ("approved", "in_progress", "proposed")):
+        create_deliverable({"id": deliverable_id,
+                            "title": deliverable.get("title") or deliverable_id,
+                            "status": "in_review"},
+                           actor=actor, project=mission_project)
+        deliverable = get_deliverable(deliverable_id, project=mission_project) or deliverable
+        progress = deliverable.get("progress") or deliverable_progress(deliverable)
+        payload["progress"] = progress
+        payload["deliverable_status"] = deliverable.get("status")
+    return payload
+
+
+def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
+                               capabilities: Any = None,
+                               max_risk: str = "", max_budget_usd: Optional[float] = None,
+                               principal_id: str = "", actor: str = "system",
+                               ttl_seconds: int = 1800, idem_key: str = "",
+                               override_identity_risk: bool = False,
+                               mission_project: str = DEFAULT_PROJECT,
+                               deliverable_id: str = "", board_id: str = "",
+                               mission_id: str = "", milestone_id: str = "") -> Dict[str, Any]:
+    """Claim the next ready task linked to a deliverable/mission."""
+    now = time.time()
+    lanes = coerce_csv_list(lanes)
+    capabilities = coerce_csv_list(capabilities)
+    lane_set = {x.strip().upper() for x in lanes}
+    cap_set = {x.strip().lower() for x in capabilities}
+    max_risk_value = _risk_value(max_risk)
+    milestone_id = (milestone_id or "").strip()
+    payload = {"agent_id": agent_id, "lanes": sorted(lane_set),
+               "capabilities": sorted(capabilities or []), "max_risk": max_risk,
+               "max_budget_usd": max_budget_usd, "ttl_seconds": ttl_seconds,
+               "override_identity_risk": bool(override_identity_risk),
+               "deliverable_id": (deliverable_id or "").strip(),
+               "board_id": (board_id or "").strip(),
+               "mission_id": (mission_id or "").strip(),
+               "milestone_id": milestone_id,
+               "mission_scope": True}
+    with _conn(mission_project) as mission_c:
+        hit = _idem_hit(mission_c, "claim_next", idem_key, actor, payload)
+        if hit is not None:
+            return hit
+        scope = _resolve_mission_deliverable(
+            mission_project, deliverable_id=deliverable_id,
+            board_id=board_id, mission_id=mission_id)
+        if scope.get("error"):
+            _idem_store(mission_c, "claim_next", idem_key, actor, payload, scope)
+            return scope
+        deliverable = scope["deliverable"]
+        resolved_deliverable_id = deliverable["id"]
+        links = list(deliverable.get("task_links") or [])
+        if milestone_id:
+            links = [l for l in links if (l.get("milestone_id") or "") == milestone_id]
+        if not links:
+            response = {
+                "claimed": False,
+                "reason": "no_milestone_tasks" if milestone_id else "no_linked_tasks",
+                "deliverable_id": resolved_deliverable_id,
+                "milestone_id": milestone_id or None,
+                "mission_project": mission_project,
+                "retry_after_seconds": 60,
+                "dispatch_reason": {
+                    "policy": "mission_scope.v1",
+                    "deliverable_id": resolved_deliverable_id,
+                    "milestone_id": milestone_id or None,
+                    "linked_task_count": 0,
+                    "skipped": {},
+                    "candidate_count": 0,
+                },
+            }
+            _idem_store(mission_c, "claim_next", idem_key, actor, payload, response)
+            return response
+
+        eligible: List[Tuple[Any, ...]] = []
+        skipped = {"active_claim": 0, "status": 0, "lane": 0, "dependencies": 0,
+                   "human_approval": 0, "capability_mismatch": 0, "risk": 0, "budget": 0,
+                   "identity_unknown": 0, "missing_task": 0, "unknown_project": 0}
+        human_gates: Dict[str, Dict[str, Any]] = {}
+        identity_risks: Dict[str, Dict[str, Any]] = {}
+
+        for link in links:
+            task_project = (link.get("project_id") or "").strip()
+            task_id = (link.get("task_id") or "").strip()
+            if not has_project(task_project):
+                skipped["unknown_project"] += 1
+                continue
+            with _conn(task_project) as c:
+                row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+                if not row:
+                    skipped["missing_task"] += 1
+                    continue
+                active = c.execute(
+                    "SELECT 1 FROM task_claims WHERE task_id=? AND status='active' AND expires_at>?",
+                    (task_id, now),
+                ).fetchone()
+                if active:
+                    skipped["active_claim"] += 1
+                    continue
+                task = _task_row(row)
+                if task.get("status") not in READY_TASK_STATUSES:
+                    skipped["status"] += 1
+                    continue
+                if lane_set and (task.get("_wsId") or "").upper() not in lane_set:
+                    skipped["lane"] += 1
+                    continue
+                rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
+                by_id = {t["task_id"]: t for t in [_task_row(r) for r in rows]}
+                if not _deps_done(task, by_id):
+                    skipped["dependencies"] += 1
+                    continue
+                gate = _task_human_gate_state(task)
+                if gate["blocked"]:
+                    skipped["human_approval"] += 1
+                    human_gates[task_id] = gate
+                    continue
+                identity_risk = _identity_takeover_risk_in(c, task_id, now)
+                if identity_risk and not override_identity_risk:
+                    skipped["identity_unknown"] += 1
+                    identity_risks[task_id] = identity_risk
+                    continue
+                required_caps = _task_required_capabilities(task)
+                if required_caps and not set(required_caps).issubset(cap_set):
+                    skipped["capability_mismatch"] += 1
+                    continue
+                if max_risk_value and _risk_value(task.get("risk_level") or "") > max_risk_value:
+                    skipped["risk"] += 1
+                    continue
+                tally = _task_tally_snapshot(c, task_id)
+                score = _dispatch_score(task, lane_set, cap_set, tally, max_budget_usd)
+                if score["budget"]["status"] == "over_budget":
+                    skipped["budget"] += 1
+                    continue
+                if identity_risk and override_identity_risk:
+                    score["identity_override"] = identity_risk
+                eligible.append((
+                    score["score"], -int(task.get("sort_order") or 0), task_id,
+                    task, score, task_project, link,
+                ))
+
+        dispatch_base = {
+            "policy": "mission_scope.v1",
+            "deliverable_id": resolved_deliverable_id,
+            "milestone_id": milestone_id or None,
+            "linked_task_count": len(links),
+            "skipped": skipped,
+            "human_gates": human_gates,
+            "identity_risks": identity_risks,
+        }
+        if not eligible:
+            response = {
+                "claimed": False,
+                "reason": "no_unblocked_work",
+                "deliverable_id": resolved_deliverable_id,
+                "milestone_id": milestone_id or None,
+                "mission_project": mission_project,
+                "retry_after_seconds": 60,
+                "cursor": mission_c.execute(
+                    "SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0],
+                "dispatch_reason": {**dispatch_base, "candidate_count": 0},
+            }
+            _idem_store(mission_c, "claim_next", idem_key, actor, payload, response)
+            return response
+
+        _, _, task_id, task, selected_score, task_project, link = sorted(
+            eligible, key=lambda x: (-x[0], -x[1], x[2]))[0]
+        claim_id = "taskclaim-" + uuid.uuid4().hex[:16]
+        lease_id = "lease-" + uuid.uuid4().hex[:16]
+        expires_at = now + max(60, int(ttl_seconds or 1800))
+        with _conn(task_project) as c:
+            c.execute(
+                "INSERT INTO task_claims(id, task_id, agent_id, principal_id, status, claimed_at, "
+                "expires_at, idem_key) VALUES (?,?,?,?,?,?,?,?)",
+                (claim_id, task_id, agent_id, principal_id or None, "active",
+                 now, expires_at, idem_key or None),
+            )
+            c.execute(
+                "INSERT INTO resource_leases(id, agent_id, principal_id, task_id, resource_type, "
+                "names, claimed_at, ttl_seconds) VALUES (?,?,?,?,?,?,?,?)",
+                (lease_id, agent_id, principal_id or None, task_id, "task",
+                 json.dumps([task_id]), now, max(60, int(ttl_seconds or 1800))),
+            )
+            c.execute("UPDATE tasks SET status='In Progress', assignee=?, updated_at=? WHERE task_id=?",
+                      (agent_id, now, task_id))
+            dispatch_reason = {**dispatch_base,
+                               "score": selected_score["score"],
+                               "factors": selected_score["factors"],
+                               "required_capabilities": selected_score["required_capabilities"],
+                               "matched_capabilities": selected_score["matched_capabilities"],
+                               "candidate_count": len(eligible),
+                               "task_project": task_project}
+            if selected_score.get("identity_override"):
+                dispatch_reason["identity_override"] = selected_score["identity_override"]
+            payload_event = {"claim_id": claim_id, "lease_id": lease_id,
+                             "task_id": task_id, "task_project": task_project,
+                             "agent_id": agent_id, "deliverable_id": resolved_deliverable_id,
+                             "milestone_id": link.get("milestone_id"),
+                             "dispatch_reason": dispatch_reason}
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (task_id, actor, "task.claimed",
+                       json.dumps(payload_event, sort_keys=True), now))
+            claimed_task = _task_row(c.execute("SELECT * FROM tasks WHERE task_id=?",
+                                               (task_id,)).fetchone())
+        mission_c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (None, actor, "deliverable.claim_started",
+             json.dumps({"claim_id": claim_id, "task_id": task_id,
+                         "task_project": task_project,
+                         "deliverable_id": resolved_deliverable_id,
+                         "milestone_id": link.get("milestone_id"),
+                         "agent_id": agent_id}, sort_keys=True), now))
+        response = {
+            "claimed": True,
+            "claim_id": claim_id,
+            "task": claimed_task,
+            "task_project": task_project,
+            "mission_project": mission_project,
+            "deliverable_id": resolved_deliverable_id,
+            "milestone_id": link.get("milestone_id"),
+            "lease": {"lease_id": lease_id, "resource_type": "task",
+                      "names": [task_id], "expires_at": expires_at},
+            "budget": selected_score["budget"],
+            "dispatch_reason": dispatch_reason,
+            "recommendation": _model_recommendation(task, selected_score),
+        }
+        _idem_store(mission_c, "claim_next", idem_key, actor, payload, response)
+        return response
+
+
 def _enriched_mission_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
     enriched = dict(link)
     task_project = link.get("project_id")
@@ -2618,6 +2914,7 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
         if row:
             pending_proposal = _breakdown_proposal_row(row)
     blockers = _mission_blockers(deliverable, linked_tasks)
+    economics = deliverable_tally(deliverable.get("id"), project=project)
     return {
         "schema": "switchboard.mission_status.v1",
         "project_id": project,
@@ -2646,6 +2943,201 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
         "active_agents": list(active_agents.values()),
         "pending_proposal": pending_proposal,
         "next_actions": _mission_next_actions(deliverable, linked_tasks, pending_proposal),
+        "economics": economics if not economics.get("error") else economics,
+    }
+
+
+def _empty_economics_totals() -> Dict[str, Any]:
+    return {
+        "linked_task_count": 0,
+        "tasks_with_spend": 0,
+        "tasks_with_verified_outcomes": 0,
+        "verified_outcomes": 0,
+        "proposed_outcomes": 0,
+        "rejected_outcomes": 0,
+        "superseded_outcomes": 0,
+        "verified_kpi_contribution": 0.0,
+        "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}},
+        "unit_cost": {
+            "cost_per_verified_outcome": None,
+            "cost_per_kpi_contribution_unit": None,
+        },
+    }
+
+
+def _finalize_economics_totals(totals: Dict[str, Any]) -> Dict[str, Any]:
+    if totals["verified_outcomes"]:
+        totals["unit_cost"]["cost_per_verified_outcome"] = round(
+            totals["spend"]["cost_usd"] / totals["verified_outcomes"], 6)
+    if totals["verified_kpi_contribution"]:
+        totals["unit_cost"]["cost_per_kpi_contribution_unit"] = round(
+            totals["spend"]["cost_usd"] / totals["verified_kpi_contribution"], 6)
+    return totals
+
+
+def _task_proof_bucket(task: Dict[str, Any]) -> str:
+    if _is_terminal_done_task(task):
+        return "proven"
+    status = task.get("status")
+    if status == "In Review":
+        return "in_review"
+    if status == "In Progress":
+        return "active"
+    return "other"
+
+
+def _merge_task_tally_into_totals(totals: Dict[str, Any], tally: Dict[str, Any]) -> None:
+    spend = tally.get("spend") or {}
+    outcomes = tally.get("outcomes") or {}
+    verified = int(outcomes.get("verified") or 0)
+    proposed = int(outcomes.get("proposed") or 0)
+    rejected = int(outcomes.get("rejected") or 0)
+    superseded = int(outcomes.get("superseded") or 0)
+    cost = float(spend.get("cost_usd") or 0.0)
+    kpi_groups = tally.get("kpis") or []
+    kpi_contribution = round(sum(float(k.get("verified_contribution") or 0.0)
+                                 for k in kpi_groups), 6)
+    totals["linked_task_count"] += 1
+    _merge_spend_totals(totals["spend"], spend)
+    totals["verified_outcomes"] += verified
+    totals["proposed_outcomes"] += proposed
+    totals["rejected_outcomes"] += rejected
+    totals["superseded_outcomes"] += superseded
+    totals["verified_kpi_contribution"] = round(
+        totals["verified_kpi_contribution"] + kpi_contribution, 6)
+    if cost:
+        totals["tasks_with_spend"] += 1
+    if verified:
+        totals["tasks_with_verified_outcomes"] += 1
+
+
+def _merge_kpi_group(target: Dict[str, Dict[str, Any]], tally: Dict[str, Any],
+                     project_id: str) -> None:
+    spend = tally.get("spend") or {}
+    for group in tally.get("kpis") or []:
+        kpi_id = group.get("kpi_id")
+        if not kpi_id:
+            continue
+        key = f"{project_id}:{kpi_id}"
+        entry = target.setdefault(key, {
+            "project_id": project_id,
+            "kpi_id": kpi_id,
+            "name": group.get("name"),
+            "unit": group.get("unit"),
+            "direction": group.get("direction"),
+            "verified_contribution": 0.0,
+            "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}},
+            "unit_cost": {"cost_per_contribution_unit": None},
+            "links": [],
+        })
+        entry["verified_contribution"] = round(
+            entry["verified_contribution"] + float(group.get("verified_contribution") or 0.0), 6)
+        _merge_spend_totals(entry["spend"], spend)
+        entry["links"].extend(group.get("links") or [])
+
+
+def deliverable_tally(deliverable_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Aggregate Tally economics across all tasks linked to a deliverable/mission.
+
+    Proven spend (Done + terminal provenance) is separated from in-flight In Review / In Progress
+    spend so mission operators can see cost-to-outcome for merged work vs unproven spend.
+    """
+    deliverable = get_deliverable(deliverable_id, project=project, include_task_snapshots=False)
+    if not deliverable:
+        return {"error": "unknown deliverable", "deliverable_id": deliverable_id,
+                "project_id": project}
+    combined = _empty_economics_totals()
+    proven = _empty_economics_totals()
+    in_review = _empty_economics_totals()
+    by_milestone: Dict[str, Dict[str, Any]] = {}
+    by_task: List[Dict[str, Any]] = []
+    kpi_index: Dict[str, Dict[str, Any]] = {}
+    milestone_titles = {m.get("id"): m.get("title")
+                          for m in (deliverable.get("milestones") or [])}
+
+    for link in deliverable.get("task_links") or []:
+        task_project = link.get("project_id")
+        task_id = link.get("task_id")
+        milestone_id = link.get("milestone_id") or ""
+        if not has_project(task_project):
+            continue
+        task = get_task(task_id, project=task_project)
+        if not task:
+            continue
+        tally = task_tally(task_id, project=task_project)
+        proof_bucket = _task_proof_bucket(task)
+        _merge_task_tally_into_totals(combined, tally)
+        if proof_bucket == "proven":
+            _merge_task_tally_into_totals(proven, tally)
+        elif proof_bucket in ("in_review", "active"):
+            _merge_task_tally_into_totals(in_review, tally)
+        _merge_kpi_group(kpi_index, tally, task_project)
+
+        ms = by_milestone.setdefault(milestone_id or "__unassigned__", {
+            "milestone_id": milestone_id or None,
+            "title": milestone_titles.get(milestone_id) or ("Unassigned" if not milestone_id else milestone_id),
+            "combined": _empty_economics_totals(),
+            "proven": _empty_economics_totals(),
+            "in_review": _empty_economics_totals(),
+            "by_task": [],
+        })
+        _merge_task_tally_into_totals(ms["combined"], tally)
+        if proof_bucket == "proven":
+            _merge_task_tally_into_totals(ms["proven"], tally)
+        elif proof_bucket in ("in_review", "active"):
+            _merge_task_tally_into_totals(ms["in_review"], tally)
+        task_row = {
+            "project_id": task_project,
+            "task_id": task_id,
+            "title": task.get("title"),
+            "status": task.get("status"),
+            "proof_bucket": proof_bucket,
+            "milestone_id": milestone_id or None,
+            "role": link.get("role"),
+            "spend": tally.get("spend") or {},
+            "outcomes": tally.get("outcomes") or {},
+            "unit_cost": tally.get("unit_cost") or {},
+            "verified_kpi_contribution": round(sum(
+                float(k.get("verified_contribution") or 0.0)
+                for k in (tally.get("kpis") or [])), 6),
+            "kpis": tally.get("kpis") or [],
+        }
+        by_task.append(task_row)
+        ms["by_task"].append(task_row)
+
+    for bucket in (combined, proven, in_review):
+        _finalize_economics_totals(bucket)
+    milestone_rows = []
+    for ms in by_milestone.values():
+        for key in ("combined", "proven", "in_review"):
+            _finalize_economics_totals(ms[key])
+        milestone_rows.append(ms)
+    milestone_rows.sort(key=lambda x: (x.get("milestone_id") is None,
+                                      x.get("title") or ""))
+    kpis = []
+    for entry in kpi_index.values():
+        if entry["verified_contribution"]:
+            entry["unit_cost"]["cost_per_contribution_unit"] = round(
+                entry["spend"]["cost_usd"] / entry["verified_contribution"], 6)
+        kpis.append(entry)
+    kpis.sort(key=lambda x: (-float(x["spend"]["cost_usd"] or 0.0),
+                             x.get("project_id") or "", x.get("kpi_id") or ""))
+    by_task.sort(key=lambda x: (-float((x.get("spend") or {}).get("cost_usd") or 0.0),
+                                x.get("project_id") or "", x.get("task_id") or ""))
+
+    return {
+        "schema": "switchboard.deliverable_tally.v1",
+        "project_id": project,
+        "deliverable_id": deliverable_id,
+        "board_id": deliverable.get("board_id"),
+        "totals": {
+            "combined": combined,
+            "proven": proven,
+            "in_review": in_review,
+        },
+        "by_milestone": milestone_rows,
+        "by_task": by_task,
+        "kpis": kpis,
     }
 
 
@@ -6415,13 +6907,28 @@ def claim_next(agent_id: str, lanes: Any = None,
                principal_id: str = "", actor: str = "system",
                ttl_seconds: int = 1800, idem_key: str = "",
                override_identity_risk: bool = False,
-               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+               project: str = DEFAULT_PROJECT,
+               deliverable_id: str = "", board_id: str = "",
+               mission_id: str = "", milestone_id: str = "") -> Dict[str, Any]:
     """Atomically claim the highest-priority unblocked task for an agent.
 
     This is the first TXP slice: deterministic, dependency-aware, and intentionally
     conservative. More sophisticated cost/reliability scoring can layer onto the same
     task_claims/activity records.
+
+    When deliverable_id or board_id/mission_id is provided, only linked mission tasks
+    are eligible — the scheduler never wanders outside that deliverable scope.
     """
+    if (deliverable_id or board_id or mission_id):
+        return _claim_next_mission_scoped(
+            agent_id, lanes=lanes, capabilities=capabilities,
+            max_risk=max_risk, max_budget_usd=max_budget_usd,
+            principal_id=principal_id, actor=actor,
+            ttl_seconds=ttl_seconds, idem_key=idem_key,
+            override_identity_risk=override_identity_risk,
+            mission_project=project,
+            deliverable_id=deliverable_id, board_id=board_id,
+            mission_id=mission_id, milestone_id=milestone_id)
     now = time.time()
     lanes = coerce_csv_list(lanes)
     capabilities = coerce_csv_list(capabilities)
@@ -6551,7 +7058,8 @@ def claim_next(agent_id: str, lanes: Any = None,
 
 def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
                    actor: str = "system",
-                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+                   project: str = DEFAULT_PROJECT,
+                   mission_project: str = "") -> Dict[str, Any]:
     now = time.time()
     evidence_obj = _parse_evidence(evidence)
     requested_status = (final_status or evidence_obj.get("final_status") or evidence_obj.get("status") or "").strip()
@@ -6677,6 +7185,22 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
     if done_gate:
         response["done_gate"] = done_gate
         response["warning"] = done_gate["message"]
+    deliverable_id = (evidence_obj.get("deliverable_id") or "").strip()
+    milestone_id = (evidence_obj.get("milestone_id") or "").strip()
+    mp = (evidence_obj.get("mission_project") or mission_project or "").strip()
+    if not deliverable_id or not mp:
+        matches = _find_deliverable_links_for_task(project, row["task_id"],
+                                                   mission_project=mp,
+                                                   deliverable_id=deliverable_id)
+        if len(matches) == 1:
+            deliverable_id = matches[0]["deliverable_id"]
+            mp = matches[0]["mission_project"]
+            if not milestone_id:
+                milestone_id = (matches[0].get("milestone_id") or "").strip()
+    if deliverable_id and mp:
+        response["mission"] = _record_mission_claim_completion(
+            mp, deliverable_id, project, row["task_id"], claim_id, next_status,
+            milestone_id=milestone_id, actor=actor)
     return response
 
 

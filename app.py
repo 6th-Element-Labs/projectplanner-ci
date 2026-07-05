@@ -1934,7 +1934,11 @@ async def txp_claim_next(request: Request, body: dict = Body(...)):
         ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
         idem_key=body.get("idem_key") or "",
         override_identity_risk=bool(body.get("override_identity_risk")),
-        project=project)
+        project=project,
+        deliverable_id=body.get("deliverable_id") or "",
+        board_id=body.get("board_id") or "",
+        mission_id=body.get("mission_id") or "",
+        milestone_id=body.get("milestone_id") or "")
 
 
 @app.post("/txp/v1/claim_task")
@@ -2016,7 +2020,8 @@ async def txp_complete_claim(request: Request, body: dict = Body(...)):
     principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
     return store.complete_claim(body.get("claim_id") or "", evidence=body.get("evidence") or {},
                                 final_status=body.get("final_status") or "",
-                                actor=auth.actor(principal), project=project)
+                                actor=auth.actor(principal), project=project,
+                                mission_project=body.get("mission_project") or "")
 
 
 @app.post("/txp/v1/abandon_claim")
