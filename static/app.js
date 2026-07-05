@@ -253,21 +253,29 @@ const TeepPlan = {
         const dep = (t && t.dependency_state) || {};
         const rat = (t && t.rationale_state) || {};
         const ident = (t && t.identity) || {};
+        const terminal = (t && t.terminal_state) || {};
         const depStatus = dep.satisfied
             ? (dep.ready ? 'Ready' : 'Dependencies satisfied')
             : `${dep.blocked_by_count || 0} blocking`;
         const depClass = dep.satisfied ? 'green' : 'red';
-        const rationaleStatus = rat.stale ? 'Stale rationale ignored' : 'Rationale current';
-        const rationaleClass = rat.stale ? 'yellow' : 'green';
-        const identityStatus = ident.status && ident.status !== 'clear'
+        const rationaleStatus = terminal.terminal
+            ? 'Terminal truth wins'
+            : (rat.stale ? 'Stale rationale ignored' : 'Rationale current');
+        const rationaleClass = rat.stale && !terminal.terminal ? 'yellow' : 'green';
+        const identityStatus = terminal.terminal
+            ? 'Terminal Done'
+            : (ident.status && ident.status !== 'clear'
             ? (ident.takeover_safe === false ? 'Identity takeover risk' : this.esc(ident.status))
-            : 'Identity clear';
-        const identityClass = ident.status && ident.status !== 'clear' ? 'red' : 'green';
+            : 'Identity clear');
+        const identityClass = (!terminal.terminal && ident.status && ident.status !== 'clear') ? 'red' : 'green';
         const deps = (dep.dependencies || []).map((d) => {
             const cls = d.done ? 'green' : (d.missing ? 'red' : 'yellow');
             return `<span class="badge bg-${cls}-lt me-1">${this.esc(d.task_id)}${d.status ? ` · ${this.esc(d.status)}` : ''}</span>`;
         }).join('') || '<span class="text-secondary">none</span>';
         const flags = (rat.flags || []).map((f) => `<span class="badge bg-yellow-lt me-1">${this.esc(f)}</span>`).join('');
+        const suppressed = terminal.suppressed_derived
+            ? `<div class="col-12 small text-secondary">Historical derived state suppressed: ${this.esc(Object.keys(terminal.suppressed_derived).join(', '))}</div>`
+            : '';
         return `<div class="card mb-3" id="control-truth-panel">
             <div class="card-header py-2">
                 <div class="d-flex align-items-center gap-2">
@@ -282,6 +290,7 @@ const TeepPlan = {
                     <div class="col-md-4"><span class="badge bg-${identityClass}-lt">${identityStatus}</span></div>
                     <div class="col-12 small">${deps}</div>
                     ${flags ? `<div class="col-12 small">${flags}</div>` : ''}
+                    ${suppressed}
                 </div>
             </div>
         </div>`;

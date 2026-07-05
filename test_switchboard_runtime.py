@@ -712,6 +712,30 @@ try:
                                        actor="github-webhook", project=P)
     ok(opened["status"] == "In Review" and opened["git_state"]["pr_number"] == 1,
        "PR open records review provenance")
+    provider_first = store.create_task({"workstream_id": "TEST", "title": "provider evidence first"},
+                                       actor="seed", project=P)
+    provider_claim = store.claim_task(
+        provider_first["task_id"],
+        agent_id="codex/PROVIDER#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    store.mark_task_pr_opened(provider_first["task_id"], 4, "https://example/pr/4",
+                              "codex/provider-first", "providerhead",
+                              actor="github-webhook", project=P)
+    store.complete_claim(
+        provider_claim["claim_id"],
+        evidence={"branch": "codex/provider-first", "head_sha": "stalehead",
+                  "pr_number": 4, "pr_url": "https://example/pr/4"},
+        actor=auth.actor(p),
+        project=P,
+    )
+    provider_after = store.get_task(provider_first["task_id"], project=P)
+    ok(provider_after["git_state"]["head_sha"] == "providerhead",
+       "complete_claim preserves existing webhook PR head over stale claim evidence")
+    ok(provider_after["git_state"]["evidence"]["provider_evidence_preserved"]["conflicts"]["head_sha"]["claim"] == "stalehead",
+       "complete_claim records stale claim evidence conflict")
     merged = store.mark_task_merged(first["task_id"], "merge789", 1, "https://example/pr/1",
                                     "claude/TEST-1-first", "abc123",
                                     actor="github-webhook", project=P)
@@ -745,6 +769,60 @@ try:
        "late complete_claim preserves terminal Done status")
     ok(late_after["active_claims"] == [] and late_after["git_state"]["merged_sha"] == "latemerge",
        "late complete_claim releases claim and keeps merge provenance")
+    terminal_dirty = store.create_task({"workstream_id": "TEST", "title": "terminal dirty derived"},
+                                       actor="seed", project=P)
+    store.register_agent(
+        agent_id="codex/TERMINAL#1",
+        runtime="codex",
+        lane="TEST",
+        task_id=terminal_dirty["task_id"],
+        ttl_s=600,
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    terminal_claim = store.claim_task(
+        terminal_dirty["task_id"],
+        agent_id="codex/TERMINAL#1",
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    store.set_agent_state(
+        terminal_dirty["task_id"],
+        "codex/TERMINAL#1",
+        {"phase": "pr_open", "next_step": "wait for CI"},
+        project=P,
+    )
+    store.set_task_summary(
+        terminal_dirty["task_id"],
+        "Still in review and blocked on CI.",
+        activity_cursor=1,
+        project=P,
+    )
+    store.mark_task_pr_opened(terminal_dirty["task_id"], 3, "https://example/pr/3",
+                              "codex/terminal-dirty", "dirtyhead",
+                              actor="github-webhook", project=P)
+    store.mark_task_merged(terminal_dirty["task_id"], "dirtymerge", 3, "https://example/pr/3",
+                           "codex/terminal-dirty", "dirtyhead",
+                           actor="github-webhook", project=P)
+    terminal_after = store.get_task(terminal_dirty["task_id"], project=P)
+    ok(terminal_claim.get("claimed") and terminal_after["status"] == "Done",
+       "fixture creates terminal Done with stale derived work state")
+    ok(terminal_after["terminal_state"]["terminal"] is True and
+       terminal_after["terminal_state"]["provenance_type"] == "github_pr_merged",
+       "terminal Done exposes canonical provenance authority")
+    ok(terminal_after["agent_state"] == {} and terminal_after["active_claims"] == [],
+       "terminal Done suppresses stale agent_state and active claims")
+    ok(terminal_after["identity"]["status"] == "terminal_done" and
+       terminal_after["identity"]["active_agents"] == [],
+       "terminal Done suppresses live identity as scheduling truth")
+    ok(terminal_after["terminal_state"]["suppressed_derived"]["agent_state_agents"] ==
+       ["codex/TERMINAL#1"] and
+       terminal_after["terminal_state"]["suppressed_derived"]["active_claim_count"] == 1,
+       "terminal Done keeps auditable suppression metadata")
+    ok(terminal_after["rationale_state"]["stale"] and terminal_after["rationale"] is None,
+       "terminal Done still flags stale generated rationale without surfacing it as truth")
     direct = store.create_task({"workstream_id": "TEST", "title": "direct default"},
                                actor="seed", project=P)
     store.update_task(direct["task_id"], {"status": "In Review"}, actor="seed", project=P)

@@ -1256,6 +1256,61 @@ def _rationale_state(rationale: str, task: Dict[str, Any],
     return state
 
 
+def _is_terminal_done_task(task: Dict[str, Any]) -> bool:
+    return task.get("status") == "Done" and _has_done_provenance(task.get("git_state") or {})
+
+
+def _apply_terminal_done_view(task: Dict[str, Any]) -> None:
+    """Make task-detail reads authoritative after Done provenance lands.
+
+    Working-state blobs, live registrations, and claims are useful while a task is moving.
+    Once merge/offline provenance marks Done, those blobs become historical breadcrumbs. Keep
+    enough signal for operators to debug drift, but do not expose stale derived fields as
+    current scheduling truth.
+    """
+    if not _is_terminal_done_task(task):
+        return
+    provenance = task.get("provenance") or _provenance_summary(task.get("git_state") or {})
+    stale_agent_state = task.get("agent_state") or {}
+    stale_claims = task.get("active_claims") or []
+    identity = task.get("identity") or {}
+    suppressed: Dict[str, Any] = {}
+    if stale_agent_state:
+        suppressed["agent_state_agents"] = sorted(stale_agent_state.keys())
+    if stale_claims:
+        suppressed["active_claim_count"] = len(stale_claims)
+        suppressed["active_claim_ids"] = [
+            c.get("claim_id") for c in stale_claims if c.get("claim_id")
+        ]
+    if identity.get("active_agents"):
+        suppressed["identity_active_agents"] = list(identity.get("active_agents") or [])
+    task["terminal_state"] = {
+        "terminal": True,
+        "authority": "status_git_state_provenance",
+        "provenance_type": provenance.get("type"),
+        "message": (
+            "Task is terminal Done. Consumers should trust status, git_state, and "
+            "provenance over historical agent_state, active_claims, identity, or rationale."
+        ),
+    }
+    if suppressed:
+        task["terminal_state"]["suppressed_derived"] = suppressed
+    task["agent_state"] = {}
+    task["active_claims"] = []
+    task["identity"] = {
+        "active_agents": [],
+        "recent_unbound_activity": identity.get("recent_unbound_activity") or [],
+        "risk_window_seconds": identity.get("risk_window_seconds") or IDENTITY_RISK_WINDOW_S,
+        "takeover_safe": True,
+        "status": "terminal_done",
+        "reason": "terminal_done_with_provenance",
+        "message": (
+            "Identity and takeover risk are closed because the task is already Done "
+            "with recorded provenance."
+        ),
+    }
+
+
 def bug_intake_policy() -> Dict[str, Any]:
     return json.loads(json.dumps(BUG_INTAKE_POLICY))
 
@@ -1673,6 +1728,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
                 t["rationale"] = None
             else:
                 t["rationale"] = raw_rationale
+        _apply_terminal_done_view(t)
         return t
 
 
@@ -4070,6 +4126,50 @@ def _task_required_capabilities(task: Dict[str, Any]) -> List[str]:
     return sorted({c.strip().lower() for c in caps if c and c.strip()})
 
 
+def _same_pr_reference(current: Dict[str, Any], evidence_obj: Dict[str, Any]) -> bool:
+    current_pr = current.get("pr_number")
+    incoming_pr = evidence_obj.get("pr_number")
+    if current_pr is not None and incoming_pr is not None and str(current_pr) == str(incoming_pr):
+        return True
+    current_url = (current.get("pr_url") or "").strip()
+    incoming_url = (evidence_obj.get("pr_url") or "").strip()
+    return bool(current_url and incoming_url and current_url == incoming_url)
+
+
+def _preserve_provider_pr_evidence(current: Dict[str, Any],
+                                   updates: Dict[str, Any],
+                                   evidence_obj: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep webhook/GitHub PR evidence authoritative over later stale claim evidence."""
+    if not _same_pr_reference(current, evidence_obj):
+        return updates
+    provider = {
+        field: current.get(field)
+        for field in ("branch", "head_sha", "pr_number", "pr_url")
+        if current.get(field) not in (None, "")
+    }
+    if not provider:
+        return updates
+    claim_evidence = dict(evidence_obj)
+    conflicts = {}
+    for field, provider_value in provider.items():
+        claim_value = evidence_obj.get(field)
+        if claim_value not in (None, "") and str(claim_value) != str(provider_value):
+            conflicts[field] = {"claim": claim_value, "provider": provider_value}
+        updates[field] = provider_value
+    if current.get("pushed_at"):
+        updates["pushed_at"] = current.get("pushed_at")
+    preserved_evidence = dict(evidence_obj)
+    preserved_evidence.update(provider)
+    if conflicts:
+        preserved_evidence["claim_evidence"] = claim_evidence
+        preserved_evidence["provider_evidence_preserved"] = {
+            "source": "existing_pr_evidence",
+            "conflicts": conflicts,
+        }
+    updates["evidence"] = preserved_evidence
+    return updates
+
+
 def _task_tally_snapshot(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
     outcomes = [_outcome_row(r) for r in c.execute(
         "SELECT * FROM outcomes WHERE task_id=?", (task_id,)).fetchall()]
@@ -4425,7 +4525,8 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
         c.execute("UPDATE tasks SET status=?, updated_at=? WHERE task_id=? "
                   "AND status NOT IN ('Done', 'Cancelled', 'Canceled')",
                   (next_status, now, row["task_id"]))
-        git_state = _upsert_git_state(c, row["task_id"], {
+        current_git = _load_git_state(c, row["task_id"])
+        git_updates = {
             "branch": evidence_obj.get("branch"),
             "head_sha": evidence_obj.get("head_sha"),
             "pushed_at": pushed_at,
@@ -4435,7 +4536,9 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
             "merged_at": merged_at,
             "in_main_content": True if evidence_obj.get("merged_sha") else None,
             "evidence": evidence_obj,
-        })
+        }
+        git_updates = _preserve_provider_pr_evidence(current_git, git_updates, evidence_obj)
+        git_state = _upsert_git_state(c, row["task_id"], git_updates)
         status_row = c.execute("SELECT status FROM tasks WHERE task_id=?",
                                (row["task_id"],)).fetchone()
         stored_status = status_row["status"] if status_row else next_status

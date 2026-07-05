@@ -160,7 +160,8 @@ try:
 
     app_js = Path("static/app.js").read_text(encoding="utf-8")
     ok("controlTruthHtml(t)" in app_js and "dependency_state" in app_js
-       and "rationale_state" in app_js and "identity" in app_js,
+       and "rationale_state" in app_js and "identity" in app_js
+       and "terminal_state" in app_js,
        "UI task modal renders structured board truth")
     ok("_loadTaskMonitors(taskId)" in app_js and "/ixp/v1/monitors?" in app_js
        and "task_id=${encodeURIComponent(taskId)}" in app_js,
