@@ -181,7 +181,9 @@ def _attach_server_timing(response: Response, started_at: float) -> Response:
 
 
 def _request_project(request: Request, path: str) -> str:
-    if path == "/api/projects":
+    if path == "/api/projects" or (
+        path.startswith("/api/projects/") and path.endswith("/repo_topology")
+    ):
         return "switchboard"
     return request.query_params.get("project") or store.DEFAULT_PROJECT
 
@@ -250,7 +252,9 @@ async def _auth_boundary(request: Request, call_next):
             started_at,
         )
     required_scopes = ("write:system",) if (
-        path == "/api/projects" or path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))
+        path == "/api/projects" or
+        (path.startswith("/api/projects/") and path.endswith("/repo_topology")) or
+        path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))
     ) else ("write:tasks",)
     try:
         request.state.principal = auth.authenticate_request(
@@ -539,6 +543,42 @@ async def create_project(request: Request, body: dict = Body(...)):
     if created.get("error"):
         raise HTTPException(400, created["error"])
     return created
+
+
+@app.get("/api/projects/{project}/repo_topology")
+async def project_repo_topology(project: str):
+    return store.get_project_repo_topology(project=_proj(project))
+
+
+@app.post("/api/projects/{project}/repo_topology")
+async def set_project_repo_topology(request: Request, project: str, body: dict = Body(...)):
+    _principal(request, "switchboard", ("write:system",), dev_actor="web")
+    result = store.set_project_repo_topology(
+        project=_proj(project),
+        canonical_repo=body.get("canonical_repo") or body.get("private_repo") or "",
+        public_ci_repo=body.get("public_ci_repo") or body.get("ci_repo") or "",
+        public_repo=body.get("public_repo") or "",
+        release_repo=body.get("release_repo") or "",
+        topology_type=body.get("topology_type") or "",
+        canonical_default_branch=body.get("canonical_default_branch") or body.get("default_branch") or "",
+        public_ci_required_status_contexts=(
+            body.get("public_ci_required_status_contexts") or
+            body.get("ci_required_status_contexts") or
+            body.get("required_status_contexts") or
+            ""
+        ),
+        public_ci_sync_scripts=(
+            body.get("public_ci_sync_scripts") or
+            body.get("ci_sync_scripts") or
+            body.get("sync_scripts") or
+            ""
+        ),
+        public_publish_scripts=body.get("public_publish_scripts") or body.get("publish_scripts") or "",
+        release_publish_scripts=body.get("release_publish_scripts") or "",
+    )
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
 
 
 @app.get("/api/board")

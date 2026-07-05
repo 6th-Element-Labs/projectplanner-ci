@@ -54,7 +54,7 @@ mcp = FastMCP(
         "projectplanner product work. Omit project (or use 'maxwell') only for the Maxwell plan. "
         "Writes go ONLY to the named board — they can never cross. At boot, call prepare_agent_session "
         "with your runtime plus assigned task_id/lane/project; it lists boards, validates the selected "
-        "project, and returns a project-bound startup prompt plus a board-derived project_contract. "
+        "project, and returns a project-bound startup prompt plus a project-level project_contract. "
         "For lane ownership, deliverables, dependencies, and file-boundary hints, use "
         "get_project_contract/project_contract rather than assuming repo-local docs are universal. "
         "Use search_tasks/get_task to read, board_summary for the at-a-glance board, get_plan_signals "
@@ -251,6 +251,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
     if task and not ws:
         ws = task.get("_wsId") or ""
     access = store.project_access(selected)
+    repo_topology = store.get_project_repo_topology(selected)
     lane_tasks = store.list_tasks(workstream=ws, project=selected) if ws else []
     lane_name = None
     for lt in lane_tasks:
@@ -273,10 +274,13 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
         active_agents = []
     return {
         "ok": True,
-        "source_of_truth": "switchboard_board",
+        "source_of_truth": "switchboard_project_contract",
         "project": selected,
         "project_label": _project_label(selected),
         "project_access": access,
+        "project_hierarchy": repo_topology.get("project_hierarchy"),
+        "repo_topology": repo_topology,
+        "code_repo_gate": repo_topology.get("code_repo_gate"),
         "local_docs_policy": (
             "Do not assume repo-local docs such as docs/EPICS.md define this project. "
             "Use this Switchboard project contract, get_task, search_tasks, task activity, and active leases "
@@ -295,6 +299,10 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
         "operating_rules": [
             f'Pass project="{selected}" on every Switchboard MCP call.',
             access.get("boundary") or f"Only work belonging to project={selected} belongs here.",
+            "Treat Project as the repo/trust/policy/access/CI/model/budget/Done authority boundary.",
+            "Treat current project/workspace ids as compatibility aliases until boards/missions/deliverables are first-class children.",
+            "Treat repo_topology.roles.canonical as the only code-truth / Done authority.",
+            "Treat repo_topology.roles.public_ci as verification evidence only, even when it is a shared public repo.",
             "Read task description, deliverable, exit_criteria, dependencies, and recent activity before editing.",
             "If file ownership is unclear, check active leases/agent state and ask the board or human before writing.",
             "Do not import Helm lane/file ownership into non-Helm projects.",
@@ -396,7 +404,7 @@ def list_projects() -> str:
 
 @mcp.tool()
 def get_project_contract(project: str = "maxwell", lane: str = "", task_id: str = "") -> str:
-    """Return the board-derived project/lane/task contract for any Switchboard project.
+    """Return the project-level project/lane/task contract for any Switchboard project.
 
     This is the project-agnostic replacement for assuming repo-local files such as
     docs/EPICS.md describe the active board. It returns the selected project, lane tasks,
@@ -1701,6 +1709,49 @@ def set_project_github_repo(repo: str, ctx: Context, project: str = "maxwell") -
     if not result.get("error"):
         store.append_activity("project.github_repo_configured", auth.actor(principal),
                               {"project": project, "github_repo": repo},
+                              task_id=None, project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def set_project_repo_topology(ctx: Context, project: str = "maxwell",
+                              canonical_repo: str = "", public_ci_repo: str = "",
+                              public_repo: str = "", release_repo: str = "",
+                              topology_type: str = "",
+                              canonical_default_branch: str = "",
+                              public_ci_required_status_contexts: str = "",
+                              public_ci_sync_scripts: str = "",
+                              public_publish_scripts: str = "",
+                              release_publish_scripts: str = "",
+                              ci_repo: str = "", ci_required_status_contexts: str = "",
+                              ci_sync_scripts: str = "") -> str:
+    """Configure first-class repository roles for a project.
+
+    canonical_repo is the only code-truth / Done authority. public_ci_repo is a
+    shared public CI sandbox for verification evidence only. public_repo and
+    release_repo are publication/release evidence roles only. ci_* arguments are
+    accepted as aliases for public_ci_* during migration.
+    """
+    principal = _require_write(ctx, "switchboard", ("write:system",))
+    result = store.set_project_repo_topology(
+        project=project,
+        canonical_repo=canonical_repo,
+        public_ci_repo=public_ci_repo,
+        public_repo=public_repo,
+        release_repo=release_repo,
+        topology_type=topology_type,
+        canonical_default_branch=canonical_default_branch,
+        public_ci_required_status_contexts=public_ci_required_status_contexts,
+        public_ci_sync_scripts=public_ci_sync_scripts,
+        public_publish_scripts=public_publish_scripts,
+        release_publish_scripts=release_publish_scripts,
+        ci_repo=ci_repo,
+        ci_required_status_contexts=ci_required_status_contexts,
+        ci_sync_scripts=ci_sync_scripts,
+    )
+    if not result.get("error"):
+        store.append_activity("project.repo_topology_configured", auth.actor(principal),
+                              {"project": project, "repo_topology": result.get("repo_topology")},
                               task_id=None, project=project)
     return _dumps(result)
 

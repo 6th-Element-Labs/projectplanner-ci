@@ -100,8 +100,9 @@ try:
        "task_id alone selects Vulkan")
     ok(inferred_task["lane"] == "SEAM" and inferred_task["task"]["task_id"] == "SEAM-1",
        "task selection returns lane and task brief")
-    ok(inferred_task["project_contract"]["source_of_truth"] == "switchboard_board",
-       "boot response includes a board-derived project contract")
+    ok(inferred_task["project_contract"]["source_of_truth"] == "switchboard_project_contract" and
+       inferred_task["project_contract"]["project_hierarchy"]["scope"] == "project",
+       "boot response includes a project-level project contract")
     ok("Do not assume repo-local docs" in inferred_task["project_contract"]["local_docs_policy"],
        "project contract warns against repo-local doc assumptions")
 

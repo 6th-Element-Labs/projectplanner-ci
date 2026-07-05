@@ -64,6 +64,12 @@ session so the fleet stays in sync.
 - See [`docs/BUG-INTAKE-CONTRACT.md`](BUG-INTAKE-CONTRACT.md).
 
 ## Git discipline
+- Read `repo_topology` from `get_working_agreement(project)` or `get_project_contract(project)`
+  before making code provenance claims. `repo_topology.scope` is `project`: Project is the
+  repo/trust/policy/access/CI/model/budget/Done boundary. Boards, missions, and deliverables sit
+  under Projects as outcome cockpits. `repo_topology.roles.canonical` is the only code-truth / Done
+  authority. `repo_topology.roles.public_ci` may be a shared public CI repo, but it is verification
+  evidence only; it never proves code Done by itself.
 - **Push your branch before you claim progress.** Committed-but-unpushed work is invisible to
   the fleet and gets lost (it already did once).
 - Open or update a PR for implemented work and include `branch`, `head_sha`, and `pr_url` /

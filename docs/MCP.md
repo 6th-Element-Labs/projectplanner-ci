@@ -20,10 +20,10 @@ Reads (open):
 - `list_projects()` — list routable boards.
 - `prepare_agent_session(runtime, agent_id?, project?, task_id?, lane?)` — boot-time project
   resolver. It validates or infers the selected project and returns a project-bound startup prompt,
-  first calls, and a board-derived `project_contract`.
+  first calls, and a project-level `project_contract`.
 - `get_project_contract(project, lane?, task_id?)` — project-agnostic lane/task contract from the
-  board: selected project, lane tasks, assigned task deliverable/exit criteria, dependency status,
-  active agents, and the local-docs policy.
+  selected Project workspace: selected project, lane tasks, assigned task deliverable/exit criteria,
+  dependency status, active agents, repo topology, and the local-docs policy.
 - `search_tasks(workstream?, status?, owner_person?, blocking?, query?)` — filter the live plan.
 - `get_task(task_id)` — full detail (description, fields, recent activity).
 - `board_summary()` — project + rollups + one line per task.
@@ -41,9 +41,9 @@ Reads (open):
 
 Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated actor):
 - `create_project(name, project_id?, label?, pretitle?, github_repo?, purpose?, boundary?, org_id?)`
-  — create a routed board; pass `github_repo="owner/repo"` to wire GitHub PR provenance in the
-  same step. Project DBs are physically separate, and the creator receives an explicit admin grant
-  on the new project.
+  — create a routed Project workspace; pass `github_repo="owner/repo"` to wire the canonical GitHub PR
+  provenance repo in the same step. Project DBs are physically separate, the canonical repo also
+  appears in `repo_topology`, and the creator receives an explicit admin grant on the new project.
 - `create_task(workstream_id, title, ...)`
 - `update_task(task_id, ...only the fields you pass...)`
 - `add_comment(task_id, text)`
@@ -71,7 +71,15 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   available, checks recorded SHAs and PR state against git/GitHub. It also reports expired active
   task claims and unreleased resource/file leases as stale claims.
 - `set_project_github_repo(project, repo)` — update the repo binding later if a board was created
-  before the repository existed or the repo moved.
+  before the repository existed or the repo moved. This updates `repo_topology.roles.canonical`.
+- `set_project_repo_topology(project, canonical_repo?, public_ci_repo?, public_repo?,
+  release_repo?, topology_type?, canonical_default_branch?, public_ci_required_status_contexts?,
+  public_ci_sync_scripts?, public_publish_scripts?, release_publish_scripts?)` — configure the
+  first-class repo roles for a Project, not a board/mission/deliverable. `canonical` is the only
+  code-truth / Done authority.
+  `public_ci` is a shared public CI sandbox for verification evidence only; `public` and `release`
+  are publication/release evidence roles only. Legacy `ci_*` arguments are accepted as aliases for
+  `public_ci_*`.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
@@ -181,6 +189,11 @@ Tally outcome/KPI rule:
 Protocol compatibility:
 - `get_working_agreement` includes `protocol.version`, `protocol.profile`,
   `protocol.profiles`, `protocol.compatible_versions`, and `protocol.field_aliases`.
+- `get_working_agreement` and `get_project_contract` include `repo_topology` and
+  `code_repo_gate`. `repo_topology.scope` is `project`; current Switchboard `project`/workspace ids
+  are compatibility aliases until boards/missions/deliverables are modeled as first-class children
+  under Projects. Agents should treat `repo_topology.roles.canonical` as the only repo that can prove
+  code Done, and `repo_topology.roles.public_ci` as shared verification evidence only.
 - `register_agent` may include `protocol_json` / REST `protocol`; the response includes
   `protocol_compatibility`.
 

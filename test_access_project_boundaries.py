@@ -113,6 +113,30 @@ try:
     ok(project.get("owner_grant", {}).get("subject_id") == admin_id and
        project.get("owner_grant", {}).get("role") == "admin",
        "project creator receives explicit admin grant on new project")
+    initial_topology = client.get(f"/api/projects/{NEW}/repo_topology")
+    ok(initial_topology.status_code == 200 and
+       initial_topology.json()["scope"] == "project" and
+       initial_topology.json()["project_hierarchy"]["compatibility"]
+       ["repo_topology_is_board_level_truth"] is False and
+       initial_topology.json()["roles"]["canonical"]["repo"] == "6th-Element-Labs/projectplanner",
+       "REST repo_topology exposes project-scoped canonical repo")
+    topology_update = client.post(
+        f"/api/projects/{NEW}/repo_topology",
+        json={
+            "public_ci_repo": "6th-Element-Labs/public-CI",
+            "public_ci_required_status_contexts": "public-ci/full-suite",
+        },
+    )
+    ok(topology_update.status_code == 200 and
+       topology_update.json()["repo_topology"]["roles"]["public_ci"]["repo"] ==
+       "6th-Element-Labs/public-CI",
+       "REST repo_topology configures shared public-CI")
+    bad_topology = client.post(
+        f"/api/projects/{NEW}/repo_topology",
+        json={"public_ci_repo": "bad repo name"},
+    )
+    ok(bad_topology.status_code == 400,
+       "REST repo_topology rejects invalid repo names")
 
     duplicate = client.post(
         "/api/projects",

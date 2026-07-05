@@ -2,6 +2,7 @@
 bundled plan snapshot. One file, zero ops (see ADR 0007). No shared DB touched."""
 import json
 import hashlib
+import copy
 import os
 import re
 import sqlite3
@@ -51,6 +52,70 @@ BUILTIN_PROJECTS = {
 BUILTIN_GITHUB_REPOS = {
     "helm": "StevenRidder/Helm",
     "switchboard": "6th-Element-Labs/projectplanner",
+}
+DEFAULT_PUBLIC_CI_REPO = (os.environ.get("PM_PUBLIC_CI_REPO") or "").strip()
+REPO_TOPOLOGY_SCHEMA = "switchboard.project_repo_topology.v1"
+BUILTIN_REPO_TOPOLOGIES = {
+    "helm": {
+        "schema": REPO_TOPOLOGY_SCHEMA,
+        "topology_type": "private_canonical_public_mirror_public_ci",
+        "roles": {
+            "canonical": {
+                "repo": "StevenRidder/Helm",
+                "default_branch": "main",
+                "authority": ["done", "merge_provenance", "code_truth"],
+                "description": "Private canonical Helm repo. Only this role can satisfy code Done.",
+            },
+            "public_ci": {
+                "repo": DEFAULT_PUBLIC_CI_REPO or "StevenRidder/helm-ci",
+                "repo_placeholder": "<public-CI>",
+                "default_branch": "main",
+                "authority": ["verification_only"],
+                "required_status_contexts": ["helm-ci/full-suite"],
+                "sync_scripts": ["scripts/ci-sandbox.sh"],
+                "shared": True,
+                "description": "Shared public CI sandbox. Verifies the canonical SHA but is not code truth.",
+            },
+            "public": {
+                "repo": "",
+                "repo_placeholder": "<public mirror>",
+                "default_branch": "main",
+                "authority": ["publish_evidence_only"],
+                "publish_scripts": ["scripts/publish-public-mirror.sh"],
+                "description": "Public source mirror. Publication evidence only; never code Done.",
+            },
+        },
+    },
+    "switchboard": {
+        "schema": REPO_TOPOLOGY_SCHEMA,
+        "topology_type": "private_canonical_public_mirror_public_ci",
+        "roles": {
+            "canonical": {
+                "repo": "6th-Element-Labs/projectplanner",
+                "default_branch": "master",
+                "authority": ["done", "merge_provenance", "code_truth"],
+                "description": "Canonical Switchboard/projectplanner repo.",
+            },
+            "public_ci": {
+                "repo": DEFAULT_PUBLIC_CI_REPO,
+                "repo_placeholder": "<public-CI>",
+                "default_branch": "main",
+                "authority": ["verification_only"],
+                "required_status_contexts": [],
+                "sync_scripts": [],
+                "shared": True,
+                "description": "Shared public CI sandbox. Verifies canonical SHAs but is not code truth.",
+            },
+            "public": {
+                "repo": "",
+                "repo_placeholder": "<switchboard public mirror>",
+                "default_branch": "main",
+                "authority": ["publish_evidence_only"],
+                "publish_scripts": [],
+                "description": "Public Switchboard mirror. Publication evidence only; never code Done.",
+            },
+        },
+    },
 }
 # Back-compat for older call sites that only need the built-in project set. New code should call
 # project_ids(), has_project(), projects(), or _resolve() so dynamic projects are included.
@@ -7954,13 +8019,33 @@ def _project_env_suffix(project: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", (project or "").upper()).strip("_")
 
 
-def get_project_github_repo(project: str = DEFAULT_PROJECT) -> str:
-    """Repository used for PR-state reconciliation on one board.
+def _project_hierarchy_contract(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    return {
+        "scope": "project",
+        "project_id": project,
+        "authority_boundary": [
+            "repo",
+            "trust",
+            "policy",
+            "access",
+            "ci",
+            "model",
+            "budget",
+            "done",
+        ],
+        "children": {
+            "boards_missions_deliverables": "outcome cockpits under the Project boundary",
+            "epics_workstreams_tasks": "execution planning below boards/missions/deliverables",
+        },
+        "compatibility": {
+            "current_switchboard_project_id": project,
+            "project_arg_is_workspace_alias": True,
+            "repo_topology_is_board_level_truth": False,
+        },
+    }
 
-    Multi-project deployments cannot rely on one global PM_GITHUB_REPO: Helm, Switchboard,
-    Vulkan, and Maxwell can all be live at once. Project meta/env wins, then built-in
-    dogfood defaults, with the legacy global env kept for the default board and Switchboard.
-    """
+
+def _legacy_project_github_repo(project: str = DEFAULT_PROJECT) -> str:
     configured = (get_meta("github_repo", "", project=project) or "").strip()
     if configured:
         return configured
@@ -7978,6 +8063,17 @@ def get_project_github_repo(project: str = DEFAULT_PROJECT) -> str:
     return ""
 
 
+def get_project_github_repo(project: str = DEFAULT_PROJECT) -> str:
+    """Canonical repository used for PR-state reconciliation on one board.
+
+    New deployments should read get_project_repo_topology() for all repo roles. This
+    compatibility helper still returns the canonical repo so older reconcile and webhook
+    paths remain centered on the code-truth repository.
+    """
+    topology = get_project_repo_topology(project=project)
+    return ((topology.get("roles") or {}).get("canonical") or {}).get("repo", "").strip()
+
+
 def _validate_github_repo(repo: str) -> Tuple[str, str]:
     clean = (repo or "").strip()
     if clean and not GITHUB_REPO_RE.match(clean):
@@ -7985,12 +8081,253 @@ def _validate_github_repo(repo: str) -> Tuple[str, str]:
     return clean, ""
 
 
+def _coerce_str_list(value) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, tuple):
+        return [str(x).strip() for x in value if str(x).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except Exception:
+            pass
+    return [x.strip() for x in re.split(r"[\n,]+", text) if x.strip()]
+
+
+def _repo_role_template(role: str) -> Dict[str, Any]:
+    authority = {
+        "canonical": ["done", "merge_provenance", "code_truth"],
+        "public_ci": ["verification_only"],
+        "public": ["publish_evidence_only"],
+        "release": ["release_evidence_only"],
+    }.get(role, [])
+    return {
+        "repo": "",
+        "default_branch": "",
+        "authority": authority,
+        "required_status_contexts": [],
+        "sync_scripts": [],
+        "publish_scripts": [],
+        "configured": False,
+    }
+
+
+def _merge_repo_role(roles: Dict[str, Dict[str, Any]], role: str, data) -> None:
+    if not isinstance(data, dict):
+        return
+    role = "public_ci" if role == "ci" else role
+    target = roles.setdefault(role, _repo_role_template(role))
+    for key, value in data.items():
+        if key in {"required_status_contexts", "sync_scripts", "publish_scripts"}:
+            merged = _coerce_str_list(value)
+            if merged:
+                target[key] = merged
+        elif value is not None:
+            target[key] = value
+
+
+def get_project_repo_topology(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Repository role contract for one Project authority boundary.
+
+    The canonical role is the only code-truth / Done authority. Public CI,
+    public mirror, and release roles are evidence-only carriers. Missing
+    canonical repo is exposed as a blocked gate so code-work projects cannot
+    silently claim merge provenance.
+    """
+    raw = get_meta("repo_topology", {}, project=project) or {}
+    raw_error = ""
+    if raw and not isinstance(raw, dict):
+        raw_error = "repo_topology meta must be an object"
+        raw = {}
+
+    roles: Dict[str, Dict[str, Any]] = {
+        "canonical": _repo_role_template("canonical"),
+        "public_ci": _repo_role_template("public_ci"),
+        "public": _repo_role_template("public"),
+        "release": _repo_role_template("release"),
+    }
+    topology_type = "single_repo"
+    built_in = copy.deepcopy(BUILTIN_REPO_TOPOLOGIES.get(project) or {})
+    if built_in.get("topology_type"):
+        topology_type = str(built_in.get("topology_type"))
+    for role, data in (built_in.get("roles") or {}).items():
+        _merge_repo_role(roles, role, data)
+
+    if raw.get("topology_type"):
+        topology_type = str(raw.get("topology_type")).strip() or topology_type
+    if isinstance(raw.get("roles"), dict):
+        for role, data in raw.get("roles", {}).items():
+            _merge_repo_role(roles, str(role), data)
+
+    flattened = {
+        "canonical_repo": ("canonical", "repo"),
+        "private_repo": ("canonical", "repo"),
+        "canonical_default_branch": ("canonical", "default_branch"),
+        "default_branch": ("canonical", "default_branch"),
+        "public_ci_repo": ("public_ci", "repo"),
+        "ci_repo": ("public_ci", "repo"),
+        "public_ci_default_branch": ("public_ci", "default_branch"),
+        "ci_default_branch": ("public_ci", "default_branch"),
+        "public_ci_required_status_contexts": ("public_ci", "required_status_contexts"),
+        "ci_required_status_contexts": ("public_ci", "required_status_contexts"),
+        "required_status_contexts": ("public_ci", "required_status_contexts"),
+        "public_ci_sync_scripts": ("public_ci", "sync_scripts"),
+        "ci_sync_scripts": ("public_ci", "sync_scripts"),
+        "sync_scripts": ("public_ci", "sync_scripts"),
+        "public_repo": ("public", "repo"),
+        "public_default_branch": ("public", "default_branch"),
+        "public_publish_scripts": ("public", "publish_scripts"),
+        "publish_scripts": ("public", "publish_scripts"),
+        "release_repo": ("release", "repo"),
+        "release_default_branch": ("release", "default_branch"),
+        "release_publish_scripts": ("release", "publish_scripts"),
+    }
+    for key, (role, field) in flattened.items():
+        if key in raw and raw.get(key) not in (None, ""):
+            role_data = roles.setdefault(role, _repo_role_template(role))
+            if field in {"required_status_contexts", "sync_scripts", "publish_scripts"}:
+                role_data[field] = _coerce_str_list(raw.get(key))
+            else:
+                role_data[field] = str(raw.get(key)).strip()
+
+    if not (roles.get("canonical") or {}).get("repo"):
+        roles["canonical"]["repo"] = _legacy_project_github_repo(project)
+
+    missing: List[str] = []
+    warnings: List[str] = []
+    invalid: List[Dict[str, str]] = []
+    if raw_error:
+        warnings.append(raw_error)
+    for role, data in roles.items():
+        for field in ("required_status_contexts", "sync_scripts", "publish_scripts"):
+            data[field] = _coerce_str_list(data.get(field))
+        repo, error = _validate_github_repo(data.get("repo", ""))
+        data["repo"] = repo
+        data["configured"] = bool(repo)
+        if error:
+            data["configured"] = False
+            invalid.append({"role": role, "field": "repo", "error": error, "value": repo})
+    if invalid:
+        warnings.append("one or more repo roles have invalid owner/name values")
+    if not roles["canonical"].get("configured"):
+        missing.append("roles.canonical.repo")
+
+    gate_passed = not missing and not any(item.get("role") == "canonical" for item in invalid)
+    gate = {
+        "name": "canonical_repo_configured",
+        "passed": gate_passed,
+        "status": "passed" if gate_passed else "blocked",
+        "message": (
+            "canonical repo configured; code Done must be proven from this repo"
+            if gate_passed else
+            "missing canonical repo; code-work Done cannot be proven by webhook/reconcile"
+        ),
+    }
+    return {
+        "schema": REPO_TOPOLOGY_SCHEMA,
+        "scope": "project",
+        "project": project,
+        "project_hierarchy": _project_hierarchy_contract(project),
+        "topology_type": topology_type,
+        "roles": roles,
+        "aliases": {"ci": "public_ci", "private": "canonical"},
+        "authority": {
+            "done": "canonical",
+            "merge_provenance": "canonical",
+            "ci_verification": "public_ci",
+            "publication": "public",
+            "release": "release",
+        },
+        "code_repo_gate": gate,
+        "valid": gate_passed,
+        "missing": missing,
+        "invalid": invalid,
+        "warnings": warnings,
+        "notes": [
+            "canonical repo is the only code-truth and Done authority",
+            "public_ci/public/release repos are evidence roles and cannot mark code work Done",
+        ],
+    }
+
+
 def set_project_github_repo(repo: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     repo, error = _validate_github_repo(repo)
     if error:
         return {"error": error, "repo": repo, "project": project}
     set_meta("github_repo", repo, project=project)
-    return {"project": project, "github_repo": repo}
+    topology = get_meta("repo_topology", {}, project=project) or {}
+    if isinstance(topology, dict) and topology:
+        roles = topology.setdefault("roles", {})
+        canonical = roles.setdefault("canonical", {})
+        canonical["repo"] = repo
+        set_meta("repo_topology", topology, project=project)
+    return {"project": project, "github_repo": repo,
+            "repo_topology": get_project_repo_topology(project=project)}
+
+
+def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: str = "",
+                              public_ci_repo: str = "", public_repo: str = "",
+                              release_repo: str = "", topology_type: str = "",
+                              canonical_default_branch: str = "",
+                              public_ci_required_status_contexts=None,
+                              public_ci_sync_scripts=None,
+                              public_publish_scripts=None,
+                              release_publish_scripts=None,
+                              ci_repo: str = "", ci_required_status_contexts=None,
+                              ci_sync_scripts=None) -> Dict[str, Any]:
+    if ci_repo and not public_ci_repo:
+        public_ci_repo = ci_repo
+    if ci_required_status_contexts and not public_ci_required_status_contexts:
+        public_ci_required_status_contexts = ci_required_status_contexts
+    if ci_sync_scripts and not public_ci_sync_scripts:
+        public_ci_sync_scripts = ci_sync_scripts
+
+    updates = {
+        "canonical": {"repo": canonical_repo, "default_branch": canonical_default_branch},
+        "public_ci": {"repo": public_ci_repo,
+                      "required_status_contexts": public_ci_required_status_contexts,
+                      "sync_scripts": public_ci_sync_scripts},
+        "public": {"repo": public_repo, "publish_scripts": public_publish_scripts},
+        "release": {"repo": release_repo, "publish_scripts": release_publish_scripts},
+    }
+    for role, data in updates.items():
+        repo = (data.get("repo") or "").strip()
+        if repo:
+            _, error = _validate_github_repo(repo)
+            if error:
+                return {"error": error, "repo": repo, "role": role, "project": project}
+
+    topology = get_meta("repo_topology", {}, project=project) or {}
+    if not isinstance(topology, dict):
+        topology = {}
+    topology["schema"] = REPO_TOPOLOGY_SCHEMA
+    if (topology_type or "").strip():
+        topology["topology_type"] = topology_type.strip()
+    roles = topology.setdefault("roles", {})
+    for role, data in updates.items():
+        target = roles.setdefault(role, {})
+        repo = (data.get("repo") or "").strip()
+        if repo:
+            target["repo"] = repo
+        default_branch = (data.get("default_branch") or "").strip()
+        if default_branch:
+            target["default_branch"] = default_branch
+        for field in ("required_status_contexts", "sync_scripts", "publish_scripts"):
+            values = _coerce_str_list(data.get(field))
+            if values:
+                target[field] = values
+    set_meta("repo_topology", topology, project=project)
+    canonical = ((topology.get("roles") or {}).get("canonical") or {}).get("repo", "").strip()
+    if canonical:
+        set_meta("github_repo", canonical, project=project)
+    return {"project": project, "repo_topology": get_project_repo_topology(project=project)}
 
 
 def create_project(name: str, project_id: str = "", label: str = "", pretitle: str = "",
@@ -8040,6 +8377,7 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
                 "pretitle": existing.get("pretitle", ""), "db": existing["db"],
                 "seed": existing.get("seed"),
                 "github_repo": get_project_github_repo(pid) or None,
+                "repo_topology": get_project_repo_topology(pid),
                 "access": access, "owner_grant": grant or None}}
 
     base_dir = os.environ.get("PM_DYNAMIC_PROJECTS_DIR") or os.path.dirname(PROJECT_REGISTRY_DB_PATH)
@@ -8087,6 +8425,7 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
     return {"created": True, "project": {"id": pid, "label": project_label,
             "pretitle": project_pretitle, "db": db_path, "seed": seed,
             "github_repo": get_project_github_repo(pid) or None,
+            "repo_topology": get_project_repo_topology(pid),
             "access": access, "owner_grant": grant or None}}
 
 
@@ -8094,11 +8433,15 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Canonical connect-time rules for agents in this workspace."""
     override = get_meta("working_agreement", {}, project=project) or {}
     access = project_access(project)
+    repo_topology = get_project_repo_topology(project)
     default = {
         "project": project,
+        "project_hierarchy": repo_topology.get("project_hierarchy"),
         "project_boundary": access.get("boundary") or f"Only work belonging to project={project} belongs here.",
         "project_purpose": access.get("purpose") or f"{project} work control plane",
         "project_owner": access.get("owner_user_id") or access.get("org_id") or "",
+        "repo_topology": repo_topology,
+        "code_repo_gate": repo_topology.get("code_repo_gate"),
         "protocol": protocol_envelope(),
         "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),
         "branch_convention": "claude/<TASK-ID>-<slug>",

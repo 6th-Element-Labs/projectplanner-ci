@@ -201,6 +201,13 @@ Bearer <token>`.
 - `POST /api/projects`
   - requires `write:system` on `project=switchboard`; creates an isolated project DB,
     records purpose/boundary metadata, and grants the creator admin on the new project.
+- `GET /api/projects/{project}/repo_topology`
+  - requires `read`; returns Project-scoped repository roles. `canonical` is the only
+    code-truth/Done authority; `public_ci` is shared verification evidence only. Current
+    `project` path ids are workspace compatibility aliases, not board-level repo authority.
+- `POST /api/projects/{project}/repo_topology`
+  - requires `write:system` on `project=switchboard`; configures Project-level canonical,
+    shared public-CI, public mirror, and release evidence repository roles.
 - `POST /api/tasks/{task_id}/move?project=...`
   - requires `write:system`; moves a task across isolated project DBs only with explicit
     source/destination projects and audited dependency handling.
