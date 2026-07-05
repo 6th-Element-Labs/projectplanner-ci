@@ -252,6 +252,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
         ws = task.get("_wsId") or ""
     access = store.project_access(selected)
     repo_topology = store.get_project_repo_topology(selected)
+    boards_missions = store.list_project_boards(project=selected)
     lane_tasks = store.list_tasks(workstream=ws, project=selected) if ws else []
     lane_name = None
     for lt in lane_tasks:
@@ -279,6 +280,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
         "project_label": _project_label(selected),
         "project_access": access,
         "project_hierarchy": repo_topology.get("project_hierarchy"),
+        "boards_missions": boards_missions,
         "repo_topology": repo_topology,
         "code_repo_gate": repo_topology.get("code_repo_gate"),
         "local_docs_policy": (
@@ -300,7 +302,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
             f'Pass project="{selected}" on every Switchboard MCP call.',
             access.get("boundary") or f"Only work belonging to project={selected} belongs here.",
             "Treat Project as the repo/trust/policy/access/CI/model/budget/Done authority boundary.",
-            "Treat current project/workspace ids as compatibility aliases until boards/missions/deliverables are first-class children.",
+            "Use Project Board/Mission ids for outcome cockpits under the selected Project; do not invent unknown board_id values.",
             "Treat repo_topology.roles.canonical as the only code-truth / Done authority.",
             "Treat repo_topology.roles.public_ci as verification evidence only, even when it is a shared public repo.",
             "Read task description, deliverable, exit_criteria, dependencies, and recent activity before editing.",
@@ -1753,6 +1755,158 @@ def set_project_repo_topology(ctx: Context, project: str = "maxwell",
         store.append_activity("project.repo_topology_configured", auth.actor(principal),
                               {"project": project, "repo_topology": result.get("repo_topology")},
                               task_id=None, project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def create_project_board(title: str, ctx: Context, project: str = "maxwell",
+                         board_id: str = "", mission_id: str = "",
+                         kind: str = "mission", status: str = "active",
+                         purpose: str = "", end_state: str = "",
+                         description: str = "", owner_org: str = "",
+                         owner_person_or_role: str = "",
+                         metadata_json: str = "") -> str:
+    """Create/update a first-class Board/Mission child under one Project.
+
+    Project remains the repo/trust/policy/access/CI/model/budget/Done boundary.
+    Boards/Missions are live outcome cockpits under that Project. Unknown projects fail closed.
+    """
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.create_project_board({
+        "id": board_id or mission_id,
+        "title": title,
+        "kind": kind,
+        "status": status,
+        "purpose": purpose,
+        "end_state": end_state,
+        "description": description,
+        "owner_org": owner_org,
+        "owner_person_or_role": owner_person_or_role,
+        "metadata": metadata_json,
+    }, actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def get_project_board(board_id: str, project: str = "maxwell") -> str:
+    """Fetch one Board/Mission child by id from one Project."""
+    if not store.has_project(project):
+        return _dumps({"error": f"unknown project: {project}", "project": project})
+    result = store.get_project_board(board_id, project=project)
+    return _dumps(result or {"error": "unknown board", "board_id": board_id, "project": project})
+
+
+@mcp.tool()
+def list_project_boards(project: str = "maxwell", kind: str = "",
+                        status: str = "") -> str:
+    """List Board/Mission children under one Project, optionally filtered by kind/status."""
+    if not store.has_project(project):
+        return _dumps({"error": f"unknown project: {project}", "project": project})
+    return _dumps({"project": project, "boards": store.list_project_boards(
+        project=project, kind=kind, status=status)})
+
+
+@mcp.tool()
+def create_deliverable(title: str, ctx: Context, project: str = "maxwell",
+                       deliverable_id: str = "", board_id: str = "",
+                       mission_id: str = "", status: str = "proposed",
+                       owner_org: str = "", owner_person_or_role: str = "",
+                       end_state: str = "", why_it_matters: str = "",
+                       confidence: str = "",
+                       acceptance_criteria: str = "",
+                       policy_constraints_json: str = "",
+                       proof_requirements_json: str = "",
+                       kpi_links: str = "", metadata_json: str = "") -> str:
+    """Create/update a deliverable under one Project and optional Board/Mission.
+
+    If board_id/mission_id is supplied it must already exist in the owning project.
+    """
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.create_deliverable({
+        "id": deliverable_id,
+        "board_id": board_id or mission_id,
+        "title": title,
+        "status": status,
+        "owner_org": owner_org,
+        "owner_person_or_role": owner_person_or_role,
+        "end_state": end_state,
+        "why_it_matters": why_it_matters,
+        "confidence": confidence,
+        "acceptance_criteria": acceptance_criteria,
+        "policy_constraints": policy_constraints_json,
+        "proof_requirements": proof_requirements_json,
+        "kpi_links": kpi_links,
+        "metadata": metadata_json,
+    }, actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def get_deliverable(deliverable_id: str, project: str = "maxwell") -> str:
+    """Fetch one deliverable with milestones, cross-project task links, progress, and board context."""
+    if not store.has_project(project):
+        return _dumps({"error": f"unknown project: {project}", "project": project})
+    result = store.get_deliverable(deliverable_id, project=project)
+    return _dumps(result or {"error": "unknown deliverable",
+                             "deliverable_id": deliverable_id, "project": project})
+
+
+@mcp.tool()
+def list_deliverables(project: str = "maxwell", board_id: str = "") -> str:
+    """List deliverables owned by one Project, optionally scoped to a Board/Mission id."""
+    if not store.has_project(project):
+        return _dumps({"error": f"unknown project: {project}", "project": project})
+    return _dumps({"project": project, "board_id": board_id or None,
+                   "deliverables": store.list_deliverables(project=project,
+                                                            board_id=board_id)})
+
+
+@mcp.tool()
+def add_deliverable_milestone(deliverable_id: str, title: str, ctx: Context,
+                              project: str = "maxwell", milestone_id: str = "",
+                              description: str = "", status: str = "not_started",
+                              sort_order: str = "",
+                              acceptance_criteria: str = "",
+                              proof_requirements_json: str = "") -> str:
+    """Create/update a milestone inside a deliverable."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.add_deliverable_milestone(deliverable_id, {
+        "id": milestone_id,
+        "title": title,
+        "description": description,
+        "status": status,
+        "sort_order": sort_order,
+        "acceptance_criteria": acceptance_criteria,
+        "proof_requirements": proof_requirements_json,
+    }, actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
+def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: str,
+                             ctx: Context, project: str = "maxwell",
+                             milestone_id: str = "", board_id: str = "",
+                             mission_id: str = "", role: str = "contributes",
+                             blocks_deliverable: bool = False,
+                             proof_required_json: str = "",
+                             metadata_json: str = "") -> str:
+    """Link an existing task from an explicit project into a deliverable/mission rollup.
+
+    The target task is validated in task_project. The operation does not move or mutate it.
+    """
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.link_task_to_deliverable(
+        deliverable_id, task_project, task_id, milestone_id=milestone_id,
+        data={
+            "board_id": board_id or mission_id,
+            "role": role,
+            "blocks_deliverable": blocks_deliverable,
+            "proof_required": proof_required_json,
+            "metadata": metadata_json,
+        },
+        actor=auth.actor(principal),
+        project=project,
+    )
     return _dumps(result)
 
 

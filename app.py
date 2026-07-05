@@ -581,6 +581,93 @@ async def set_project_repo_topology(request: Request, project: str, body: dict =
     return result
 
 
+@app.get("/api/projects/{project}/boards")
+async def list_project_boards(project: str, kind: str = "", status: str = ""):
+    project = _proj(project)
+    return {"project": project, "boards": store.list_project_boards(
+        project=project, kind=kind, status=status)}
+
+
+@app.post("/api/projects/{project}/boards")
+async def create_project_board(request: Request, project: str, body: dict = Body(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    result = store.create_project_board(body or {}, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.get("/api/projects/{project}/boards/{board_id}")
+async def get_project_board(project: str, board_id: str):
+    project = _proj(project)
+    result = store.get_project_board(board_id, project=project)
+    if not result:
+        raise HTTPException(404, "board not found")
+    return result
+
+
+@app.get("/api/deliverables")
+async def list_deliverables(project: str = Query(store.DEFAULT_PROJECT), board_id: str = ""):
+    project = _proj(project)
+    return {"project": project, "board_id": board_id or None,
+            "deliverables": store.list_deliverables(project=project, board_id=board_id)}
+
+
+@app.post("/api/deliverables")
+async def create_deliverable(request: Request, body: dict = Body(...),
+                             project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    result = store.create_deliverable(body or {}, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.get("/api/deliverables/{deliverable_id}")
+async def get_deliverable(deliverable_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    project = _proj(project)
+    result = store.get_deliverable(deliverable_id, project=project)
+    if not result:
+        raise HTTPException(404, "deliverable not found")
+    return result
+
+
+@app.post("/api/deliverables/{deliverable_id}/milestones")
+async def add_deliverable_milestone(request: Request, deliverable_id: str,
+                                    body: dict = Body(...),
+                                    project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    result = store.add_deliverable_milestone(
+        deliverable_id, body or {}, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/api/deliverables/{deliverable_id}/task_links")
+async def link_task_to_deliverable(request: Request, deliverable_id: str,
+                                   body: dict = Body(...),
+                                   project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    result = store.link_task_to_deliverable(
+        deliverable_id,
+        payload.get("task_project") or payload.get("project_id") or "",
+        payload.get("task_id") or "",
+        milestone_id=payload.get("milestone_id") or "",
+        data=payload,
+        actor=auth.actor(principal),
+        project=project,
+    )
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.get("/api/board")
 async def board(project: str = Query(store.DEFAULT_PROJECT)):
     return store.board_payload(_proj(project))

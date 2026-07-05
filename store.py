@@ -1103,8 +1103,23 @@ def init_db(project: str = DEFAULT_PROJECT):
                 generated_at    REAL NOT NULL,
                 activity_cursor INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS project_boards (
+                id                         TEXT PRIMARY KEY,
+                title                      TEXT NOT NULL,
+                kind                       TEXT NOT NULL DEFAULT 'mission',
+                status                     TEXT NOT NULL DEFAULT 'active',
+                owner_org                  TEXT,
+                owner_person_or_role       TEXT,
+                purpose                    TEXT,
+                end_state                  TEXT,
+                description                TEXT,
+                metadata_json              TEXT NOT NULL DEFAULT '{}',
+                created_at                 REAL NOT NULL,
+                updated_at                 REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS deliverables (
                 id                         TEXT PRIMARY KEY,
+                board_id                   TEXT,
                 title                      TEXT NOT NULL,
                 status                     TEXT NOT NULL DEFAULT 'proposed',
                 owner_org                  TEXT,
@@ -1137,6 +1152,7 @@ def init_db(project: str = DEFAULT_PROJECT):
             CREATE TABLE IF NOT EXISTS deliverable_task_links (
                 id                         TEXT PRIMARY KEY,
                 deliverable_id             TEXT NOT NULL,
+                board_id                   TEXT,
                 milestone_id               TEXT,
                 project_id                 TEXT NOT NULL,
                 task_id                    TEXT NOT NULL,
@@ -1270,6 +1286,8 @@ def init_db(project: str = DEFAULT_PROJECT):
             "ALTER TABLE agent_messages ADD COLUMN principal_id TEXT",
             "ALTER TABLE wake_intents ADD COLUMN effect_key TEXT",
             "ALTER TABLE runner_control_requests ADD COLUMN effect_key TEXT",
+            "ALTER TABLE deliverables ADD COLUMN board_id TEXT",
+            "ALTER TABLE deliverable_task_links ADD COLUMN board_id TEXT",
         ]:
             try:
                 c.execute(col_sql)
@@ -1464,6 +1482,9 @@ def _apply_terminal_done_view(task: Dict[str, Any]) -> None:
 
 
 DELIVERABLE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{1,127}$")
+PROJECT_BOARD_ID_RE = DELIVERABLE_ID_RE
+PROJECT_BOARD_KINDS = {"board", "mission"}
+PROJECT_BOARD_STATUSES = {"proposed", "active", "paused", "blocked", "done", "archived"}
 DELIVERABLE_STATUSES = {
     "proposed", "approved", "in_progress", "blocked", "in_review", "done", "archived"
 }
@@ -1483,6 +1504,21 @@ def normalize_deliverable_id(value: str = "", title: str = "") -> str:
     if not DELIVERABLE_ID_RE.match(candidate):
         raise ValueError(
             "deliverable id must be 2-128 chars and start with a letter; "
+            "letters, digits, '_', '-', '.', and ':' are allowed"
+        )
+    return candidate
+
+
+def normalize_project_board_id(value: str = "", title: str = "") -> str:
+    raw = (value or "").strip()
+    if raw:
+        candidate = raw
+    else:
+        slug = normalize_project_id(title or "")
+        candidate = f"mission-{slug}" if slug else f"mission-{uuid.uuid4().hex[:12]}"
+    if not PROJECT_BOARD_ID_RE.match(candidate):
+        raise ValueError(
+            "board id must be 2-128 chars and start with a letter; "
             "letters, digits, '_', '-', '.', and ':' are allowed"
         )
     return candidate
@@ -1529,6 +1565,15 @@ def _deliverable_row(row: sqlite3.Row) -> Dict[str, Any]:
     ):
         out_key = key[:-5] if key.endswith("_json") else key
         d[out_key] = _json_payload(d.pop(key, ""))
+    d["mission_id"] = d.get("board_id") or None
+    return d
+
+
+def _project_board_row(row: sqlite3.Row, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    d = dict(row)
+    d["project_id"] = project
+    d["mission_id"] = d.get("id")
+    d["metadata"] = _json_payload(d.pop("metadata_json", ""))
     return d
 
 
@@ -1541,10 +1586,100 @@ def _deliverable_milestone_row(row: sqlite3.Row) -> Dict[str, Any]:
 
 def _deliverable_link_row(row: sqlite3.Row) -> Dict[str, Any]:
     d = dict(row)
+    d["mission_id"] = d.get("board_id") or None
     d["blocks_deliverable"] = bool(d.get("blocks_deliverable"))
     d["proof_required"] = _json_payload(d.pop("proof_required_json", ""))
     d["metadata"] = _json_payload(d.pop("metadata_json", ""))
     return d
+
+
+def _project_board_exists_in(c: sqlite3.Connection, board_id: str) -> bool:
+    return bool(c.execute("SELECT 1 FROM project_boards WHERE id=?",
+                          (board_id,)).fetchone())
+
+
+def create_project_board(data: Dict[str, Any], actor: str = "user",
+                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Create or update a first-class Board/Mission child under a Project."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return {"error": "title required"}
+    try:
+        board_id = normalize_project_board_id(
+            data.get("id") or data.get("board_id") or data.get("mission_id"), title)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    kind = (data.get("kind") or "mission").strip().lower()
+    if kind not in PROJECT_BOARD_KINDS:
+        return {"error": "invalid board kind", "allowed": sorted(PROJECT_BOARD_KINDS)}
+    status = (data.get("status") or "active").strip().lower()
+    if status not in PROJECT_BOARD_STATUSES:
+        return {"error": "invalid board status", "allowed": sorted(PROJECT_BOARD_STATUSES)}
+    now = time.time()
+    with _conn(project) as c:
+        c.execute(
+            """INSERT INTO project_boards
+               (id, title, kind, status, owner_org, owner_person_or_role, purpose,
+                end_state, description, metadata_json, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title,
+                kind=excluded.kind,
+                status=excluded.status,
+                owner_org=excluded.owner_org,
+                owner_person_or_role=excluded.owner_person_or_role,
+                purpose=excluded.purpose,
+                end_state=excluded.end_state,
+                description=excluded.description,
+                metadata_json=excluded.metadata_json,
+                updated_at=excluded.updated_at""",
+            (
+                board_id, title, kind, status, data.get("owner_org"),
+                data.get("owner_person_or_role"), data.get("purpose"),
+                data.get("end_state"), data.get("description"),
+                _json_object_field(data.get("metadata", data.get("metadata_json"))),
+                now, now,
+            ),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "project_board.upsert",
+                   json.dumps({"project_id": project, "board_id": board_id, "kind": kind,
+                               "title": title}, sort_keys=True), now))
+    return get_project_board(board_id, project=project) or {"error": "board not found"}
+
+
+def get_project_board(board_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    if not has_project(project):
+        return None
+    bid = (board_id or "").strip()
+    if not bid:
+        return None
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM project_boards WHERE id=?", (bid,)).fetchone()
+    return _project_board_row(row, project=project) if row else None
+
+
+def list_project_boards(project: str = DEFAULT_PROJECT, kind: str = "",
+                        status: str = "") -> List[Dict[str, Any]]:
+    if not has_project(project):
+        return []
+    clauses = []
+    args: List[Any] = []
+    if (kind or "").strip():
+        clauses.append("kind=?")
+        args.append(kind.strip().lower())
+    if (status or "").strip():
+        clauses.append("status=?")
+        args.append(status.strip().lower())
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _conn(project) as c:
+        rows = c.execute(
+            f"SELECT * FROM project_boards{where} ORDER BY updated_at DESC, id",
+            args,
+        ).fetchall()
+    return [_project_board_row(row, project=project) for row in rows]
 
 
 def _deliverable_exists_in(c: sqlite3.Connection, deliverable_id: str) -> bool:
@@ -1583,16 +1718,20 @@ def create_deliverable(data: Dict[str, Any], actor: str = "user",
             confidence_value = max(0.0, min(1.0, float(confidence)))
         except (TypeError, ValueError):
             return {"error": "confidence must be a number between 0 and 1"}
+    board_id = (data.get("board_id") or data.get("mission_id") or "").strip() or None
     now = time.time()
     with _conn(project) as c:
+        if board_id and not _project_board_exists_in(c, board_id):
+            return {"error": "unknown board", "board_id": board_id, "project_id": project}
         c.execute(
             """INSERT INTO deliverables
-               (id, title, status, owner_org, owner_person_or_role, end_state,
+               (id, board_id, title, status, owner_org, owner_person_or_role, end_state,
                 why_it_matters, confidence, acceptance_criteria_json,
                 policy_constraints_json, proof_requirements_json, kpi_links_json,
                 metadata_json, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
+                board_id=COALESCE(excluded.board_id, deliverables.board_id),
                 title=excluded.title,
                 status=excluded.status,
                 owner_org=excluded.owner_org,
@@ -1607,20 +1746,21 @@ def create_deliverable(data: Dict[str, Any], actor: str = "user",
                 metadata_json=excluded.metadata_json,
                 updated_at=excluded.updated_at""",
             (
-                deliverable_id, title, status, data.get("owner_org"),
+                deliverable_id, board_id, title, status, data.get("owner_org"),
                 data.get("owner_person_or_role"), data.get("end_state"),
                 data.get("why_it_matters"), confidence_value,
                 _json_list_field(data.get("acceptance_criteria")),
                 _json_object_field(data.get("policy_constraints")),
                 _json_object_field(data.get("proof_requirements")),
                 _json_list_field(data.get("kpi_links")),
-                _json_object_field(data.get("metadata")),
+                _json_object_field(data.get("metadata", data.get("metadata_json"))),
                 now, now,
             ),
         )
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (None, actor, "deliverable.upsert",
-                   json.dumps({"deliverable_id": deliverable_id, "title": title},
+                   json.dumps({"deliverable_id": deliverable_id, "board_id": board_id,
+                               "title": title},
                               sort_keys=True), now))
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
@@ -1699,6 +1839,7 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     if not target:
         return {"error": "unknown linked task", "project_id": task_project, "task_id": task_id}
     payload = data or {}
+    requested_board_id = (payload.get("board_id") or payload.get("mission_id") or "").strip() or None
     link_id = (payload.get("id") or payload.get("link_id") or
                f"link-{deliverable_id}-{task_project}-{task_id}")
     role = (payload.get("role") or "contributes").strip() or "contributes"
@@ -1706,16 +1847,28 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     with _conn(project) as c:
         if not _deliverable_exists_in(c, deliverable_id):
             return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        deliverable_row = c.execute("SELECT board_id FROM deliverables WHERE id=?",
+                                    (deliverable_id,)).fetchone()
+        deliverable_board_id = (deliverable_row["board_id"] if deliverable_row else "") or None
+        if requested_board_id and not _project_board_exists_in(c, requested_board_id):
+            return {"error": "unknown board", "board_id": requested_board_id,
+                    "project_id": project}
+        if requested_board_id and deliverable_board_id and requested_board_id != deliverable_board_id:
+            return {"error": "board mismatch", "board_id": requested_board_id,
+                    "deliverable_board_id": deliverable_board_id,
+                    "deliverable_id": deliverable_id}
+        board_id = requested_board_id or deliverable_board_id
         mid = (milestone_id or payload.get("milestone_id") or "").strip() or None
         if mid and not _deliverable_milestone_exists_in(c, deliverable_id, mid):
             return {"error": "unknown milestone", "deliverable_id": deliverable_id,
                     "milestone_id": mid}
         c.execute(
             """INSERT INTO deliverable_task_links
-               (id, deliverable_id, milestone_id, project_id, task_id, role,
+               (id, deliverable_id, board_id, milestone_id, project_id, task_id, role,
                 blocks_deliverable, proof_required_json, metadata_json, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(deliverable_id, project_id, task_id) DO UPDATE SET
+                board_id=excluded.board_id,
                 milestone_id=excluded.milestone_id,
                 role=excluded.role,
                 blocks_deliverable=excluded.blocks_deliverable,
@@ -1723,16 +1876,17 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
                 metadata_json=excluded.metadata_json,
                 updated_at=excluded.updated_at""",
             (
-                link_id, deliverable_id, mid, task_project, task_id, role,
+                link_id, deliverable_id, board_id, mid, task_project, task_id, role,
                 1 if payload.get("blocks_deliverable") else 0,
                 _json_object_field(payload.get("proof_required")),
-                _json_object_field(payload.get("metadata")),
+                _json_object_field(payload.get("metadata", payload.get("metadata_json"))),
                 now, now,
             ),
         )
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (None, actor, "deliverable.task_linked",
-                   json.dumps({"deliverable_id": deliverable_id, "project_id": task_project,
+                   json.dumps({"deliverable_id": deliverable_id, "board_id": board_id,
+                               "project_id": task_project,
                                "task_id": task_id, "milestone_id": mid},
                               sort_keys=True), now))
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
@@ -1768,6 +1922,13 @@ def get_deliverable(deliverable_id: str, project: str = DEFAULT_PROJECT,
         if not row:
             return None
         deliverable = _deliverable_row(row)
+        if deliverable.get("board_id"):
+            board_row = c.execute("SELECT * FROM project_boards WHERE id=?",
+                                  (deliverable["board_id"],)).fetchone()
+            deliverable["board"] = (_project_board_row(board_row, project=project)
+                                    if board_row else {"error": "unknown board",
+                                                       "board_id": deliverable["board_id"],
+                                                       "project_id": project})
         milestones = [
             _deliverable_milestone_row(r)
             for r in c.execute(
@@ -1792,11 +1953,20 @@ def get_deliverable(deliverable_id: str, project: str = DEFAULT_PROJECT,
     return deliverable
 
 
-def list_deliverables(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+def list_deliverables(project: str = DEFAULT_PROJECT, board_id: str = "") -> List[Dict[str, Any]]:
     if not has_project(project):
         return []
+    board_id = (board_id or "").strip()
     with _conn(project) as c:
-        rows = c.execute("SELECT id FROM deliverables ORDER BY updated_at DESC, id").fetchall()
+        if board_id:
+            if not _project_board_exists_in(c, board_id):
+                return []
+            rows = c.execute(
+                "SELECT id FROM deliverables WHERE board_id=? ORDER BY updated_at DESC, id",
+                (board_id,),
+            ).fetchall()
+        else:
+            rows = c.execute("SELECT id FROM deliverables ORDER BY updated_at DESC, id").fetchall()
     return [d for d in (get_deliverable(r["id"], project=project) for r in rows) if d]
 
 
@@ -6582,6 +6752,9 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         outcome_links = [dict(row) for row in c.execute(
             "SELECT * FROM outcome_kpi_links ORDER BY created_at, id"
         ).fetchall()]
+        project_boards = [_project_board_row(row, project=project) for row in c.execute(
+            "SELECT * FROM project_boards ORDER BY updated_at, id"
+        ).fetchall()]
         deliverables = [_deliverable_row(row) for row in c.execute(
             "SELECT * FROM deliverables ORDER BY updated_at, id"
         ).fetchall()]
@@ -6611,6 +6784,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "external_ci_run_count": len(external_ci_runs),
             "outcome_count": len(outcomes),
             "spend_count": len(spend),
+            "project_board_count": len(project_boards),
             "deliverable_count": len(deliverables),
         },
         "access": {
@@ -6640,6 +6814,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "outcome_kpi_links": _audit_redact(outcome_links),
         },
         "deliverables": {
+            "boards": project_boards,
             "records": deliverables,
             "milestones": deliverable_milestones,
             "task_links": deliverable_task_links,

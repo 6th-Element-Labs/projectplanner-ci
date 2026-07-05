@@ -1,25 +1,42 @@
-# Deliverables And Mission Model
+# Project Boards, Missions, And Deliverables
 
-Switchboard now has a product-outcome layer above boards, workstreams, and tasks.
+Switchboard now has a product-outcome layer under Projects.
 
 The core rule is:
 
 ```text
-Boards own execution.
-Deliverables own outcomes.
+Projects own repo/trust/policy/access/CI/model/budget/Done authority.
+Boards/Missions own live outcome cockpits.
+Epics/workstreams/tasks own execution.
+Deliverables define what shipped value means inside a Board/Mission.
 ```
 
-Tasks still live in exactly one project database and one workstream. A deliverable lives in one
-owning project database, but it may link tasks from any project through explicit
+Tasks still live in exactly one project database and one workstream. A Board/Mission lives in one
+owning Project database. A deliverable also lives in one owning Project database and may attach to
+one Board/Mission, but it may link tasks from any project through explicit
 `project_id + task_id` references. This lets an operator track a mission such as "Helm C++ + WebGPU
 Renderer" across `helmrenderer`, `helm`, and `vulkan` without moving tasks or cross-polluting board
 state.
 
 ## Data Model
 
+`project_boards`
+
+- `id`: stable board/mission id, such as `helm-cpp-webgpu-renderer`
+- `title`
+- `kind`: `board` or `mission`
+- `status`: `proposed`, `active`, `paused`, `blocked`, `done`, or `archived`
+- `owner_org`
+- `owner_person_or_role`
+- `purpose`
+- `end_state`
+- `description`
+- `metadata_json`
+
 `deliverables`
 
 - `id`: stable outcome id, such as `helm-cpp-webgpu-renderer`
+- `board_id`: optional owning Board/Mission id inside the same Project
 - `title`
 - `status`: `proposed`, `approved`, `in_progress`, `blocked`, `in_review`, `done`, or `archived`
 - `owner_org`
@@ -48,6 +65,7 @@ state.
 `deliverable_task_links`
 
 - `deliverable_id`
+- `board_id`
 - `milestone_id`
 - `project_id`
 - `task_id`
@@ -56,9 +74,9 @@ state.
 - `proof_required_json`
 - `metadata_json`
 
-`project_id` is always explicit. Unknown projects fail closed. Linked tasks are validated by
-reading the target project directly; the link operation does not mutate the target task or write
-into the target project database.
+`project_id` is always explicit. Unknown projects fail closed. Unknown `board_id` / `mission_id`
+values fail closed. Linked tasks are validated by reading the target project directly; the link
+operation does not mutate the target task or write into the target project database.
 
 ## Progress Semantics
 
@@ -123,15 +141,34 @@ Milestones:
 - Feedback inbox to plan proposal flow.
 - UI permissions and restricted controls.
 
-## Next Surfaces
+## MCP/API Surfaces
 
-`DELIVERABLES-2` should expose this model through MCP tools:
+Initial tools:
 
+- `create_project_board`
+- `get_project_board`
+- `list_project_boards`
 - `create_deliverable`
 - `get_deliverable`
 - `list_deliverables`
 - `add_deliverable_milestone`
 - `link_task_to_deliverable`
+
+Initial REST routes:
+
+- `GET /api/projects/{project}/boards`
+- `POST /api/projects/{project}/boards`
+- `GET /api/projects/{project}/boards/{board_id}`
+- `GET /api/deliverables?project={project}&board_id={board_id}`
+- `POST /api/deliverables?project={project}`
+- `GET /api/deliverables/{deliverable_id}?project={project}`
+- `POST /api/deliverables/{deliverable_id}/milestones?project={project}`
+- `POST /api/deliverables/{deliverable_id}/task_links?project={project}`
+
+## Next Surfaces
+
+`DELIVERABLES-2` should build on this model:
+
 - `unlink_task_from_deliverable`
 - `mission_status`
 

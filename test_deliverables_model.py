@@ -46,9 +46,43 @@ try:
     )
     ok(target_task["task_id"] == "RENDER-1", "linked task exists on target project")
 
+    mission = store.create_project_board(
+        {
+            "id": "helm-cpp-webgpu-renderer",
+            "title": "Helm C++ + WebGPU Renderer",
+            "kind": "mission",
+            "status": "active",
+            "purpose": "Coordinate cross-board chart-renderer work as one visible outcome.",
+            "end_state": (
+                "Helm renders chart layers in the browser from shared C++ "
+                "nautical semantics with WebGPU visible to users."
+            ),
+        },
+        actor="test",
+        project="qa-deliv-home",
+    )
+    ok(mission["id"] == "helm-cpp-webgpu-renderer" and
+       mission["project_id"] == "qa-deliv-home",
+       "mission board is created as a child of the owning project")
+    ok(store.list_project_boards(project="qa-deliv-home")[0]["id"] == mission["id"],
+       "project board list returns mission children")
+
+    unknown_board_deliverable = store.create_deliverable(
+        {
+            "id": "bad-board-deliverable",
+            "title": "Bad board deliverable",
+            "board_id": "missing-board",
+        },
+        actor="test",
+        project="qa-deliv-home",
+    )
+    ok(unknown_board_deliverable.get("error") == "unknown board",
+       "deliverable creation fails closed on unknown board id")
+
     deliverable = store.create_deliverable(
         {
             "id": "helm-cpp-webgpu-renderer",
+            "board_id": mission["id"],
             "title": "Helm C++ + WebGPU Renderer",
             "status": "approved",
             "owner_org": "6th Element Labs",
@@ -71,8 +105,23 @@ try:
     )
     ok(deliverable["id"] == "helm-cpp-webgpu-renderer",
        "deliverable record is created in owning project")
+    ok(deliverable["board_id"] == mission["id"] and
+       deliverable["board"]["title"] == mission["title"],
+       "deliverable carries first-class board/mission context")
     ok(deliverable["policy_constraints"]["runtime_language"] == "c++",
        "structured policy constraints survive round trip")
+
+    updated_without_board = store.create_deliverable(
+        {
+            "id": "helm-cpp-webgpu-renderer",
+            "title": "Helm C++ + WebGPU Renderer",
+            "status": "in_progress",
+        },
+        actor="test",
+        project="qa-deliv-home",
+    )
+    ok(updated_without_board["board_id"] == mission["id"],
+       "deliverable upsert without board_id preserves existing mission link")
 
     with_milestone = store.add_deliverable_milestone(
         "helm-cpp-webgpu-renderer",
@@ -95,6 +144,7 @@ try:
         "RENDER-1",
         milestone_id=milestone_id,
         data={
+            "board_id": mission["id"],
             "role": "implementation",
             "blocks_deliverable": True,
             "proof_required": {"merged_sha": True},
@@ -104,6 +154,8 @@ try:
     )
     ok(linked["task_links"][0]["project_id"] == "qa-deliv-target",
        "task link stores explicit linked project id")
+    ok(linked["task_links"][0]["board_id"] == mission["id"],
+       "task link inherits explicit mission id")
     ok(linked["task_links"][0]["task"]["title"] == "WebGPU ingest path",
        "get_deliverable can read linked task snapshot by explicit project")
     ok(linked["progress"]["linked_task_count"] == 1 and
@@ -136,6 +188,16 @@ try:
     ok(missing_task.get("error") == "unknown linked task",
        "unknown linked task fails closed")
 
+    board_mismatch = store.link_task_to_deliverable(
+        "helm-cpp-webgpu-renderer",
+        "qa-deliv-target",
+        "RENDER-1",
+        data={"board_id": "missing-board"},
+        project="qa-deliv-home",
+    )
+    ok(board_mismatch.get("error") == "unknown board",
+       "task link fails closed on unknown board id")
+
     bad_confidence = store.create_deliverable(
         {"title": "Bad confidence", "confidence": "not-a-number"},
         project="qa-deliv-home",
@@ -146,11 +208,16 @@ try:
     listed = store.list_deliverables(project="qa-deliv-home")
     ok(len(listed) == 1 and listed[0]["id"] == "helm-cpp-webgpu-renderer",
        "list_deliverables returns the mission")
+    scoped = store.list_deliverables(project="qa-deliv-home", board_id=mission["id"])
+    ok(len(scoped) == 1 and scoped[0]["board_id"] == mission["id"],
+       "list_deliverables can scope by mission board id")
 
     export = store.audit_export(project="qa-deliv-home")
-    ok(export["summary"]["deliverable_count"] == 1 and
+    ok(export["summary"]["project_board_count"] == 1 and
+       export["summary"]["deliverable_count"] == 1 and
+       export["deliverables"]["boards"][0]["id"] == mission["id"] and
        export["deliverables"]["task_links"][0]["task_id"] == "RENDER-1",
-       "audit export includes deliverable records and links")
+       "audit export includes project boards, deliverable records, and links")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

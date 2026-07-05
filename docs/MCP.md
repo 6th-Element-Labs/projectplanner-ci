@@ -80,6 +80,21 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   `public_ci` is a shared public CI sandbox for verification evidence only; `public` and `release`
   are publication/release evidence roles only. Legacy `ci_*` arguments are accepted as aliases for
   `public_ci_*`.
+- `create_project_board(title, project, board_id?, mission_id?, kind?, status?, purpose?,
+  end_state?, description?, owner_org?, owner_person_or_role?, metadata_json?)` — create a
+  first-class Board/Mission child under a Project. Project remains the repo/trust/policy/access/CI/
+  model/budget/Done boundary; Boards/Missions are live outcome cockpits.
+- `get_project_board(board_id, project)` and `list_project_boards(project, kind?, status?)` —
+  discover Board/Mission children for a Project.
+- `create_deliverable(title, project, deliverable_id?, board_id?, mission_id?, status?,
+  owner_org?, owner_person_or_role?, end_state?, why_it_matters?, confidence?,
+  acceptance_criteria?, policy_constraints_json?, proof_requirements_json?, kpi_links?,
+  metadata_json?)` — create a deliverable, optionally attached to an existing Board/Mission.
+  Unknown `board_id` / `mission_id` fails closed.
+- `get_deliverable(deliverable_id, project)`, `list_deliverables(project, board_id?)`,
+  `add_deliverable_milestone(...)`, and `link_task_to_deliverable(...)` — build the cross-epic and
+  cross-board mission rollup. Linked tasks are validated by explicit `task_project + task_id` and
+  are not moved or mutated.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
@@ -190,10 +205,10 @@ Protocol compatibility:
 - `get_working_agreement` includes `protocol.version`, `protocol.profile`,
   `protocol.profiles`, `protocol.compatible_versions`, and `protocol.field_aliases`.
 - `get_working_agreement` and `get_project_contract` include `repo_topology` and
-  `code_repo_gate`. `repo_topology.scope` is `project`; current Switchboard `project`/workspace ids
-  are compatibility aliases until boards/missions/deliverables are modeled as first-class children
-  under Projects. Agents should treat `repo_topology.roles.canonical` as the only repo that can prove
-  code Done, and `repo_topology.roles.public_ci` as shared verification evidence only.
+  `code_repo_gate`. `repo_topology.scope` is `project`; Switchboard `project` ids are the top-level
+  authority boundary, while `project_boards` / Board/Mission ids are first-class outcome cockpits
+  under that Project. Agents should treat `repo_topology.roles.canonical` as the only repo that can
+  prove code Done, and `repo_topology.roles.public_ci` as shared verification evidence only.
 - `register_agent` may include `protocol_json` / REST `protocol`; the response includes
   `protocol_compatibility`.
 
