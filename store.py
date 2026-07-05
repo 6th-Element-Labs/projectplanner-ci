@@ -1688,6 +1688,7 @@ def _decorate_deliverable_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
         "status": task.get("status"),
         "workstream": task.get("_wsId"),
         "provenance": task.get("provenance"),
+        "external_ci": task.get("external_ci"),
     }
     return link
 
@@ -1738,6 +1739,7 @@ def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
     links = deliverable.get("task_links") or []
     status_counts: Dict[str, int] = {}
     done = in_review = blocked = 0
+    external_ci_required = external_ci_passed = external_ci_blocked = 0
     for link in links:
         task = link.get("task") or {}
         status = task.get("status") or "Unknown"
@@ -1748,12 +1750,24 @@ def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
             in_review += 1
         elif status == "Blocked":
             blocked += 1
+        proof_required = link.get("proof_required") or {}
+        external_ci = task.get("external_ci") or {}
+        gate = external_ci.get("gate") or {}
+        if proof_required.get("external_ci_passed") or gate.get("required"):
+            external_ci_required += 1
+            if external_ci.get("passed"):
+                external_ci_passed += 1
+            else:
+                external_ci_blocked += 1
     total = len(links)
     return {
         "linked_task_count": total,
         "done_with_proof_count": done,
         "in_review_count": in_review,
         "blocked_count": blocked,
+        "external_ci_required_count": external_ci_required,
+        "external_ci_passed_count": external_ci_passed,
+        "external_ci_blocked_count": external_ci_blocked,
         "status_counts": dict(sorted(status_counts.items())),
         "done_with_proof_ratio": (done / total) if total else 0.0,
     }
@@ -2117,6 +2131,7 @@ def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
         for r in c.execute(q, p).fetchall():
             t = _task_row(r)
             t["provenance"] = _provenance_summary(_load_git_state(c, t["task_id"]))
+            t["external_ci"] = _task_external_ci_summary_in(c, t["task_id"])
             tasks.append(t)
         return tasks
 
@@ -2166,6 +2181,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["identity"] = _task_identity_state_in(c, task_id, now)
         t["dependency_state"] = _dependency_state_in(c, t)
         t["human_gate"] = _task_human_gate_state(t)
+        t["external_ci"] = _external_ci_review_gate(t, c=c, project=project)
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
             raw_rationale = s["rationale"]
@@ -2784,6 +2800,124 @@ def list_external_ci_runs(task_id: str = "", source_project: str = "",
     q += " ORDER BY updated_at DESC, run_id"
     with _conn(project) as c:
         return [_external_ci_row(row) for row in c.execute(q, params).fetchall()]
+
+
+def _sha_matches(candidate: str, target: str) -> bool:
+    cand = (candidate or "").strip().lower()
+    want = (target or "").strip().lower()
+    if not cand or not want:
+        return False
+    return cand.startswith(want) or want.startswith(cand)
+
+
+def _task_external_ci_summary_in(c: sqlite3.Connection, task_id: str,
+                                 source_sha: str = "") -> Dict[str, Any]:
+    rows = [
+        _external_ci_row(row)
+        for row in c.execute(
+            "SELECT * FROM external_ci_runs WHERE task_id=? "
+            "ORDER BY updated_at DESC, run_id",
+            (task_id,),
+        ).fetchall()
+    ]
+    if source_sha:
+        rows = [r for r in rows if _sha_matches(r.get("source_sha") or "", source_sha)]
+    success = [r for r in rows if r.get("status") == "success" and r.get("conclusion") == "success"]
+    failures = [r for r in rows if r.get("status") in {"failure", "error", "cancelled"}]
+    pending = [r for r in rows if r.get("status") in {"requested", "mirrored", "triggered", "running"}]
+    latest = rows[0] if rows else None
+    passed = bool(success)
+    if passed:
+        status = "passed"
+        selected = success[0]
+    elif pending:
+        status = "pending"
+        selected = latest
+    elif failures:
+        status = "failed"
+        selected = latest
+    else:
+        status = "missing"
+        selected = None
+    return {
+        "status": status,
+        "passed": passed,
+        "required": False,
+        "source_sha": source_sha or ((selected or {}).get("source_sha") if selected else None),
+        "run_count": len(rows),
+        "success_count": len(success),
+        "failure_count": len(failures),
+        "pending_count": len(pending),
+        "latest": selected,
+        "runs": rows[:5],
+    }
+
+
+def task_external_ci_summary(task_id: str, source_sha: str = "",
+                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    with _conn(project) as c:
+        return _task_external_ci_summary_in(c, task_id, source_sha=source_sha)
+
+
+def _external_ci_required_from(task: Dict[str, Any],
+                               evidence: Optional[Dict[str, Any]] = None) -> bool:
+    evidence = evidence or {}
+    if evidence.get("external_ci_required") is True:
+        return True
+    gates = evidence.get("required_gates") or evidence.get("review_gates") or []
+    if isinstance(gates, str):
+        gates = coerce_csv_list(gates)
+    if any(str(g).strip().lower() in {"external_ci", "external_ci_passed"} for g in gates):
+        return True
+    state = task.get("agent_state") or {}
+    for key in ("review_gate", "review_gates", "proof_requirements"):
+        value = state.get(key) or {}
+        if isinstance(value, dict) and (
+                value.get("external_ci_required") or value.get("external_ci_passed")):
+            return True
+    text = "\n".join(str(task.get(k) or "") for k in (
+        "entry_criteria", "exit_criteria", "deliverable"))
+    return "external_ci_passed" in text or "external ci passed" in text.lower()
+
+
+def _external_ci_review_gate(task: Dict[str, Any],
+                             evidence: Optional[Dict[str, Any]] = None,
+                             c: Optional[sqlite3.Connection] = None,
+                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    evidence = evidence or {}
+    source_sha = (
+        evidence.get("external_ci_source_sha")
+        or evidence.get("source_sha")
+        or evidence.get("head_sha")
+        or (task.get("git_state") or {}).get("head_sha")
+        or ""
+    )
+    if c is None:
+        with _conn(project) as own:
+            summary = _task_external_ci_summary_in(own, task["task_id"], source_sha=source_sha)
+    else:
+        summary = _task_external_ci_summary_in(c, task["task_id"], source_sha=source_sha)
+    required = _external_ci_required_from(task, evidence)
+    summary["required"] = required
+    summary["gate"] = {
+        "name": "external_ci_passed",
+        "required": required,
+        "passed": summary["passed"],
+        "status": (
+            "passed" if summary["passed"] else
+            "blocked" if required else
+            "not_required"
+        ),
+        "message": (
+            "External CI mirror passed for this source SHA."
+            if summary["passed"] else
+            "External CI mirror evidence is required before review/merge."
+            if required else
+            "External CI mirror evidence is optional for this task."
+        ),
+    }
+    return summary
 
 
 def make_external_effect_key(effect_type: str, target: str, resource: str,
@@ -5256,6 +5390,12 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
         }
         git_updates = _preserve_provider_pr_evidence(current_git, git_updates, evidence_obj)
         git_state = _upsert_git_state(c, row["task_id"], git_updates)
+        task_snapshot_row = c.execute("SELECT * FROM tasks WHERE task_id=?",
+                                      (row["task_id"],)).fetchone()
+        task_snapshot = _task_row(task_snapshot_row) if task_snapshot_row else {"task_id": row["task_id"]}
+        task_snapshot["git_state"] = git_state
+        external_ci_gate = _external_ci_review_gate(
+            task_snapshot, evidence=evidence_obj, c=c, project=project)
         status_row = c.execute("SELECT status FROM tasks WHERE task_id=?",
                                (row["task_id"],)).fetchone()
         stored_status = status_row["status"] if status_row else next_status
@@ -5272,16 +5412,28 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
                        json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
                                    "done_gate": done_gate,
                                    "source": "complete_claim"}, sort_keys=True), now))
+        if external_ci_gate.get("required"):
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"], actor, "task.review_gate",
+                       json.dumps({"claim_id": claim_id,
+                                   "gate": external_ci_gate.get("gate"),
+                                   "external_ci": external_ci_gate,
+                                   "source": "complete_claim"}, sort_keys=True), now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (row["task_id"], actor, "task.claim.completed",
                    json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
                                "requested_status": requested_status or None,
                                "next_status": next_status,
                                "done_gate": done_gate,
+                               "review_gate": external_ci_gate.get("gate")
+                               if external_ci_gate.get("required") else None,
                                "terminal_status_preserved": terminal_status_preserved},
                               sort_keys=True), now))
     response = {"completed": True, "claim_id": claim_id, "task_id": row["task_id"],
                 "status": next_status, "git_state": git_state}
+    if external_ci_gate.get("required"):
+        response["review_gate"] = external_ci_gate.get("gate")
+        response["external_ci"] = external_ci_gate
     if done_gate:
         response["done_gate"] = done_gate
         response["warning"] = done_gate["message"]

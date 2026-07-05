@@ -255,7 +255,7 @@ def _task_brief(t, full=False):
             b["rationale_state"] = t.get("rationale_state")
         if t.get("rationale_raw") is not None:
             b["rationale_raw"] = t.get("rationale_raw")
-        for key in ("git_state", "provenance", "active_claims", "identity", "human_gate",
+        for key in ("git_state", "provenance", "external_ci", "active_claims", "identity", "human_gate",
                     "terminal_state"):
             if t.get(key) is not None:
                 b[key] = t.get(key)

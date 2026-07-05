@@ -394,6 +394,19 @@ const TeepPlan = {
         if (p.type === 'github_pr_open') return `<span class="badge bg-azure-lt"><i class="ti ti-git-pull-request me-1"></i>PR evidence</span>`;
         return `<span class="badge bg-secondary-lt">${this.esc(p.label || p.type)}</span>`;
     },
+    externalCiDetail(t) {
+        const ci = (t && t.external_ci) || {};
+        const gate = ci.gate || {};
+        const status = ci.status || 'missing';
+        const cls = status === 'passed' ? 'green' : (status === 'failed' ? 'red' : (status === 'pending' ? 'yellow' : 'secondary'));
+        const label = gate.required ? `External CI ${status}` : (ci.run_count ? `External CI ${status}` : 'none');
+        const latest = ci.latest || {};
+        const bits = [`<span class="badge bg-${cls}-lt"><i class="ti ti-cloud-check me-1"></i>${this.esc(label)}</span>`];
+        if (latest.run_url) bits.push(`<a class="small" href="${this.esc(latest.run_url)}" target="_blank" rel="noopener">run</a>`);
+        if (ci.source_sha) bits.push(`<span class="font-monospace small">${this.esc(String(ci.source_sha).slice(0, 12))}</span>`);
+        if (gate.required && !ci.passed) bits.push(`<span class="text-danger small">${this.esc(gate.message || 'required')}</span>`);
+        return bits.join(' ');
+    },
     initials(name) {
         if (!name) return '';
         // drop "(TEEP)"-style org tags and any word without a letter (e.g. "+", "·")
@@ -977,6 +990,7 @@ const TeepPlan = {
                         <div class="datagrid-item"><div class="datagrid-title">Status</div>
                             <div class="datagrid-content"><select id="details-status" class="form-select form-select-sm" style="max-width:200px">${statusOpts}</select></div></div>
                         ${dg('Done provenance', provenanceHtml)}
+                        ${dg('External CI', this.externalCiDetail(t))}
                         ${dg('Owner', av(t.owner_person_or_role || t.owner_org) + owner)}
                         ${dg('Assignee', t.assignee ? av(t.assignee) + this.esc(t.assignee) : '—')}
                         ${dg('Phase', this.esc(t.phase || '—'))}

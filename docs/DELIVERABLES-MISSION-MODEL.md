@@ -67,9 +67,13 @@ Mission progress is derived from linked task state:
 - `Done` counts as done only when the task has terminal provenance.
 - `In Review` is reported separately.
 - `Blocked` is reported separately.
+- External CI mirror proof is reported separately as required/passed/blocked counts when a
+  deliverable link or task gate requires `external_ci_passed`.
 - Missing or unreachable linked task snapshots remain visible as errors.
 
 This mirrors Switchboard's Done policy: green means merged/proven, not "an agent said it was done."
+Public CI proof can satisfy a review/verification gate for a private source SHA, but it is not
+merge provenance and does not make a task Done.
 
 ## Example: Helm C++ + WebGPU Renderer
 

@@ -69,6 +69,27 @@ try:
         "title": "surface parity fixture",
         "depends_on": dep["task_id"],
     }, actor="seed", project=P)
+    ci_run = store.create_external_ci_run(
+        {
+            "source_project": P,
+            "source_sha": "c" * 40,
+            "mirror_repo": "6th-Element-Labs/projectplanner-ci",
+            "workflow": "strict.yml",
+            "task_id": task["task_id"],
+        },
+        actor="seed",
+        project=P,
+    )
+    store.update_external_ci_run(
+        ci_run["run_id"],
+        {
+            "status": "success",
+            "conclusion": "success",
+            "run_url": "https://github.com/6th-Element-Labs/projectplanner-ci/actions/runs/88",
+        },
+        actor="seed",
+        project=P,
+    )
     store.set_task_summary(
         task["task_id"],
         f"Blocked on dependencies including {dep['task_id']}.",
@@ -123,6 +144,8 @@ try:
        "active claims match REST and MCP task detail")
     ok(rest_task["identity"]["status"] == mcp_task["identity"]["status"] == "clear",
        "identity state matches REST and MCP task detail")
+    ok(rest_task["external_ci"]["status"] == mcp_task["external_ci"]["status"] == "passed",
+       "external CI evidence matches REST and MCP task detail")
 
     rest_identity = client.get(
         f"/api/tasks/{identity_task['task_id']}", params={"project": P}).json()
@@ -161,7 +184,7 @@ try:
     app_js = Path("static/app.js").read_text(encoding="utf-8")
     ok("controlTruthHtml(t)" in app_js and "dependency_state" in app_js
        and "rationale_state" in app_js and "identity" in app_js
-       and "terminal_state" in app_js,
+       and "terminal_state" in app_js and "externalCiDetail(t)" in app_js,
        "UI task modal renders structured board truth")
     ok("_loadTaskMonitors(taskId)" in app_js and "/ixp/v1/monitors?" in app_js
        and "task_id=${encodeURIComponent(taskId)}" in app_js,

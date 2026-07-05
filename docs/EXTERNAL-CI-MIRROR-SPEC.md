@@ -162,6 +162,27 @@ Successful external CI can satisfy a review or claim gate once configured, but i
 task `Done` by itself. `Done` still requires default-branch merge provenance or verified offline
 evidence.
 
+## Task And Mission Surfaces
+
+`CI-MIRROR-3` makes external CI proof visible in the same surfaces agents already read:
+
+- task detail includes `external_ci.status`, `source_sha`, `mirror_repo`, `run_url`, `conclusion`,
+  recent runs, and an `external_ci_passed` review gate.
+- MCP `get_task` and REST `GET /api/tasks/{task_id}` expose the same `external_ci` payload.
+- board rows expose compact external CI status so operators can scan proof state.
+- deliverable/mission task links include each linked task's external CI proof summary.
+- deliverable progress includes external CI required/passed/blocked counts.
+
+Configured review gates:
+
+- A task or claim can require external CI by including `external_ci_passed` in task gate text,
+  `agent_state.review_gate`, `agent_state.proof_requirements`, or claim evidence
+  `required_gates` / `review_gates`.
+- `complete_claim` records a visible `task.review_gate` activity payload when external CI is
+  required.
+- Missing required external CI blocks review/merge confidence, but it does not promote or demote
+  `Done`. Merge provenance remains the only code-task Done signal.
+
 ## Example
 
 ```json
