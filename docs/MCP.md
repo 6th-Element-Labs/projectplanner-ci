@@ -65,7 +65,7 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `claim_next(...)`, `complete_claim(...)`, `abandon_claim(...)`, `revoke_claim(...)`
 - `report_usage(...)`, `record_outcome(...)`, `verify_outcome(...)`, `reject_outcome(...)`
 - `create_kpi(...)`, `update_kpi_value(...)`, `link_outcome_to_kpi(...)`
-- `get_task_tally(...)`, `get_kpi_tally(...)`
+- `get_task_tally(...)`, `get_kpi_tally(...)`, `get_deliverable_tally(...)`
 - `reconcile(project)` — provenance drift report; always flags board contradictions like
   naked `Done` without merge/default-branch SHA, and when canonical main / GitHub config is
   available, checks recorded SHAs and PR state against git/GitHub. It also reports expired active

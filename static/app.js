@@ -3143,6 +3143,62 @@ const TeepPlan = {
             <div class="text-secondary small">${new Date(e.ts * 1000).toLocaleString()}</div></div></div></div>`).join('')}</div>`;
     },
 
+    _missionEconomicsHtml(economics) {
+        const econ = economics || {};
+        const totals = econ.totals || {};
+        const combined = totals.combined || {};
+        const proven = totals.proven || {};
+        const inReview = totals.in_review || {};
+        const spend = combined.spend || {};
+        const unit = combined.unit_cost || {};
+        const metric = (label, value, sub, icon) => `<div class="col-6 col-lg-3"><div class="card card-sm"><div class="card-body p-3">
+            <div class="subheader"><i class="ti ti-${icon} me-1"></i>${label}</div>
+            <div class="h2 mb-0 mt-1">${value}</div>
+            <div class="text-secondary small">${sub}</div>
+        </div></div></div>`;
+        const taskRows = (econ.by_task || []).length ? (econ.by_task || []).map((t) => {
+            const bucket = t.proof_bucket === 'proven' ? 'green' : (t.proof_bucket === 'in_review' ? 'azure' : 'secondary');
+            return `<tr><td><a href="#" data-linked-task="${this.esc(t.task_id)}" data-linked-project="${this.esc(t.project_id)}">${this.esc(t.task_id)}</a></td>
+                <td>${this.esc(t.title || '')}</td><td><span class="badge bg-${bucket}-lt">${this.esc(t.proof_bucket || 'other')}</span></td>
+                <td class="text-end">${this.money((t.spend || {}).cost_usd || 0)}</td>
+                <td class="text-end">${this.compact((t.outcomes || {}).verified || 0)}</td>
+                <td class="text-end">${this.money((t.unit_cost || {}).cost_per_verified_outcome)}</td></tr>`;
+        }).join('') : '<tr><td colspan="6" class="text-secondary text-center py-3">No linked task economics yet.</td></tr>';
+        const msRows = (econ.by_milestone || []).length ? (econ.by_milestone || []).map((m) => `<tr>
+            <td>${this.esc(m.title || m.milestone_id || 'Unassigned')}</td>
+            <td class="text-end">${this.money(((m.combined || {}).spend || {}).cost_usd || 0)}</td>
+            <td class="text-end">${this.money(((m.proven || {}).spend || {}).cost_usd || 0)}</td>
+            <td class="text-end">${this.money(((m.in_review || {}).spend || {}).cost_usd || 0)}</td>
+            <td class="text-end">${this.compact((m.combined || {}).verified_outcomes || 0)}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="text-secondary text-center py-3">No milestone economics yet.</td></tr>';
+        const kpiRows = (econ.kpis || []).length ? (econ.kpis || []).map((k) => `<tr>
+            <td><span class="fw-semibold">${this.esc(k.name || k.kpi_id || 'KPI')}</span><div class="text-secondary small">${this.esc(k.project_id || '')}</div></td>
+            <td class="text-end">${this.compact(k.verified_contribution || 0)} ${this.esc(k.unit || '')}</td>
+            <td class="text-end">${this.money((k.spend || {}).cost_usd || 0)}</td>
+            <td class="text-end">${this.money((k.unit_cost || {}).cost_per_contribution_unit)}</td>
+        </tr>`).join('') : '<tr><td colspan="4" class="text-secondary text-center py-3">No KPI movement yet.</td></tr>';
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-cash me-2"></i>Mission economics</h3></div><div class="card-body">
+            <div class="row row-cards mb-3">
+                ${metric('Total spend', this.money(spend.cost_usd || 0), `${this.compact(spend.total_tokens || 0)} tokens`, 'cash')}
+                ${metric('Proven spend', this.money((proven.spend || {}).cost_usd || 0), `${this.compact(proven.verified_outcomes || 0)} verified outcomes`, 'circle-check')}
+                ${metric('In-review spend', this.money((inReview.spend || {}).cost_usd || 0), 'unproven / in-flight work', 'eye-check')}
+                ${metric('Cost / outcome', this.money(unit.cost_per_verified_outcome), 'verified only', 'receipt-2')}
+            </div>
+            <div class="row g-3">
+                <div class="col-lg-6"><div class="subheader mb-2">By milestone</div><div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+                    <thead><tr><th>Milestone</th><th class="text-end">Total</th><th class="text-end">Proven</th><th class="text-end">In review</th><th class="text-end">Verified</th></tr></thead>
+                    <tbody>${msRows}</tbody></table></div></div>
+                <div class="col-lg-6"><div class="subheader mb-2">KPI movement</div><div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+                    <thead><tr><th>KPI</th><th class="text-end">Movement</th><th class="text-end">Spend</th><th class="text-end">Cost / unit</th></tr></thead>
+                    <tbody>${kpiRows}</tbody></table></div></div>
+            </div>
+            <div class="subheader mb-2 mt-3">By linked task</div>
+            <div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+                <thead><tr><th>Task</th><th>Title</th><th>Proof</th><th class="text-end">Spend</th><th class="text-end">Verified</th><th class="text-end">Cost / outcome</th></tr></thead>
+                <tbody>${taskRows}</tbody></table></div>
+        </div></div>`;
+    },
+
     _missionPolicyDrift(status) {
         const d = status.deliverable || {};
         const driftBlockers = (status.blockers || []).filter((b) =>
@@ -3209,7 +3265,7 @@ const TeepPlan = {
             `<div class="list-group-item"><span class="badge bg-primary-lt me-2">${this.esc(a.action || 'action')}</span>${this.esc(a.title || a.reason || '')}${a.task_id ? ` <span class="text-secondary small">· ${this.esc(a.project_id || '')} ${this.esc(a.task_id)}</span>` : ''}</div>`).join('')}</div></div>` : '';
         const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
             `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td>${this.esc(a.project_id || '')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
-        el.innerHTML = header + kpi + narrative + endState + milestoneMap + nextActions + blockerHtml +
+        el.innerHTML = header + kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap + nextActions + blockerHtml +
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +

@@ -231,6 +231,74 @@ try:
     ok(any(a.get("action") == "claim_task" for a in status.get("next_actions") or []),
        "mission status suggests claim for ready linked task")
 
+    store.report_usage(source="agent_report", confidence="reported",
+                       task_id="RENDER-1", cost_usd=2.0,
+                       prompt_tokens=200, completion_tokens=50,
+                       project="qa-deliv-target")
+    proven_outcome = store.record_outcome("feature", "WebGPU ingest shipped",
+                                          task_id="RENDER-1", project="qa-deliv-target")
+    store.verify_outcome(proven_outcome["id"], verifier="test",
+                         verification="fixture parity", project="qa-deliv-target")
+    target_kpi = store.create_kpi("renderer milestones", "milestone", "increase",
+                                    project="qa-deliv-target")
+    store.link_outcome_to_kpi(proven_outcome["id"], target_kpi["id"], contribution=1,
+                              confidence="measured", project="qa-deliv-target")
+    review_task = store.create_task(
+        {"workstream_id": "RENDER", "title": "Shader parity review",
+         "status": "In Review"},
+        actor="test",
+        project="qa-deliv-target",
+    )
+    store.link_task_to_deliverable(
+        "helm-cpp-webgpu-renderer",
+        "qa-deliv-target",
+        review_task["task_id"],
+        milestone_id=milestone_id,
+        data={"role": "review", "board_id": mission["id"]},
+        actor="test",
+        project="qa-deliv-home",
+    )
+    store.report_usage(source="agent_report", confidence="reported",
+                       task_id=review_task["task_id"], cost_usd=1.5,
+                       prompt_tokens=100, completion_tokens=25,
+                       project="qa-deliv-target")
+    store.mark_task_merged("RENDER-1", "deadbeef" * 5, pr_number=42,
+                           project="qa-deliv-target")
+
+    economics = store.deliverable_tally("helm-cpp-webgpu-renderer",
+                                        project="qa-deliv-home")
+    ok(economics.get("schema") == "switchboard.deliverable_tally.v1",
+       "deliverable tally exposes schema")
+    ok(economics["totals"]["combined"]["spend"]["cost_usd"] == 3.5,
+       "deliverable tally combines spend across linked tasks")
+    ok(economics["totals"]["proven"]["spend"]["cost_usd"] == 2.0,
+       "deliverable tally separates proven spend")
+    ok(economics["totals"]["in_review"]["spend"]["cost_usd"] == 1.5,
+       "deliverable tally separates in-review spend")
+    ok(economics["totals"]["proven"]["verified_outcomes"] == 1,
+       "proven bucket counts verified outcomes on merged tasks")
+    ok(any(t["task_id"] == "RENDER-1" and t["proof_bucket"] == "proven"
+           for t in economics["by_task"]),
+       "task economics include proof bucket")
+    ok(any(m.get("milestone_id") == milestone_id and
+           m["combined"]["spend"]["cost_usd"] >= 3.5
+           for m in economics["by_milestone"]),
+       "milestone economics roll up linked task spend")
+    ok(any(k.get("kpi_id") == target_kpi["id"] for k in economics["kpis"]),
+       "deliverable tally includes cross-project KPI movement")
+
+    status_with_econ = store.get_mission_status(project="qa-deliv-home",
+                                                deliverable_id="helm-cpp-webgpu-renderer")
+    ok((status_with_econ.get("economics") or {}).get("schema") ==
+       "switchboard.deliverable_tally.v1",
+       "mission status embeds deliverable economics")
+    ok(status_with_econ["economics"]["totals"]["combined"]["unit_cost"]
+       ["cost_per_verified_outcome"] == 3.5,
+       "mission status economics expose combined cost per verified outcome")
+    ok(status_with_econ["economics"]["totals"]["proven"]["unit_cost"]
+       ["cost_per_verified_outcome"] == 2.0,
+       "mission status economics expose proven cost per verified outcome")
+
     board_status = store.get_mission_status(project="qa-deliv-home",
                                             board_id=mission["id"])
     ok(board_status.get("deliverable_id") == "helm-cpp-webgpu-renderer",
@@ -265,14 +333,14 @@ try:
        proposal.get("proposal", {}).get("status") == "proposed",
        "breakdown proposal stores draft without creating tasks")
     target_before = store.list_tasks(project="qa-deliv-target")
-    ok(len(target_before) == 1, "proposal alone does not create target tasks")
+    ok(len(target_before) == 2, "proposal alone does not create target tasks")
 
     approved = store.approve_deliverable_breakdown(
         proposal["proposal"]["id"], actor="test", project="qa-deliv-home")
     ok(len(approved.get("created_tasks") or []) == 1,
        "approved breakdown creates and links proposed tasks")
     target_after = store.list_tasks(project="qa-deliv-target")
-    ok(len(target_after) == 2, "approved breakdown creates task on target project")
+    ok(len(target_after) == 3, "approved breakdown creates task on target project")
 
     unlinked = store.unlink_task_from_deliverable(
         "helm-cpp-webgpu-renderer",
@@ -281,7 +349,7 @@ try:
         actor="test",
         project="qa-deliv-home",
     )
-    ok(len(unlinked.get("task_links") or []) == 1 and
+    ok(len(unlinked.get("task_links") or []) == 2 and
        all(l.get("task_id") != "RENDER-1" for l in unlinked["task_links"]),
        "unlink removes one task link without deleting the task")
     ok(store.get_task("RENDER-1", project="qa-deliv-target") is not None,

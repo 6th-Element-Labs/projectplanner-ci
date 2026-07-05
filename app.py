@@ -2277,6 +2277,14 @@ async def tally_project(project: str = Query(store.DEFAULT_PROJECT)):
     return store.project_tally(project=_proj(project))
 
 
+@app.get("/tally/v1/deliverable/{deliverable_id}")
+async def tally_deliverable(deliverable_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    result = store.deliverable_tally(deliverable_id, project=_proj(project))
+    if result.get("error"):
+        raise HTTPException(404, result["error"])
+    return result
+
+
 @app.get("/ixp/v1/reconcile")
 async def ixp_reconcile(project: str = Query(store.DEFAULT_PROJECT)):
     return store.reconcile(project=_proj(project))

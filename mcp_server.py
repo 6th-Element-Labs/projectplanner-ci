@@ -1484,6 +1484,12 @@ def get_kpi_tally(kpi_id: str, project: str = "maxwell") -> str:
 
 
 @mcp.tool()
+def get_deliverable_tally(deliverable_id: str, project: str = "maxwell") -> str:
+    """Deliverable/mission economics: spend, verified outcomes, KPI movement, and proven vs in-review split."""
+    return _dumps(store.deliverable_tally(deliverable_id, project=project))
+
+
+@mcp.tool()
 def reconcile(project: str = "maxwell") -> str:
     """Run the local board/git-provenance drift report. This first pass catches board-internal
     contradictions such as Done without merged_sha or In Review without PR/branch evidence."""
@@ -2031,7 +2037,7 @@ def unlink_task_from_deliverable(deliverable_id: str, task_project: str, task_id
 @mcp.tool()
 def get_mission_status(project: str = "maxwell", deliverable_id: str = "",
                        board_id: str = "", mission_id: str = "") -> str:
-    """Mission cockpit rollup: end state, milestones, linked tasks, proof, blockers, next actions."""
+    """Mission cockpit rollup: end state, milestones, linked tasks, proof, blockers, economics, next actions."""
     return _dumps(store.get_mission_status(
         project=project, deliverable_id=deliverable_id,
         board_id=board_id, mission_id=mission_id))
