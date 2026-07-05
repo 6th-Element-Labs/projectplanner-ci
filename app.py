@@ -37,6 +37,7 @@ import digest  # noqa: E402
 import transcribe  # noqa: E402
 import dispatch  # noqa: E402
 import export  # noqa: E402
+import external_ci_mirror  # noqa: E402
 import inbox as inbox_mod  # noqa: E402
 import intake  # noqa: E402
 import github_sync  # noqa: E402
@@ -1378,6 +1379,54 @@ async def ixp_external_effects(project: str = Query(store.DEFAULT_PROJECT),
     return {"effects": store.list_external_effects(
         effect_type=effect_type, status=status, task_id=task_id,
         target=target, project=_proj(project))}
+
+
+@app.get("/ixp/v1/external_ci_runs")
+async def ixp_external_ci_runs(project: str = Query(store.DEFAULT_PROJECT),
+                               task_id: str = "", source_project: str = "",
+                               source_sha: str = "", status: str = ""):
+    return {"runs": store.list_external_ci_runs(
+        task_id=task_id, source_project=source_project,
+        source_sha=source_sha, status=status, project=_proj(project))}
+
+
+@app.get("/ixp/v1/external_ci_runs/{run_id}")
+async def ixp_external_ci_run(run_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    run = store.get_external_ci_run(run_id, project=_proj(project))
+    if not run:
+        raise HTTPException(404, "external_ci_run not found")
+    return run
+
+
+@app.post("/ixp/v1/external_ci_mirror/request")
+async def ixp_request_external_ci_mirror(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "agent")
+    source_path = (body.get("source_path") or body.get("source_checkout") or "").strip()
+    payload = dict(body.get("run") or body)
+    payload.pop("source_path", None)
+    payload.pop("source_checkout", None)
+    result = external_ci_mirror.request_external_ci_mirror_run(
+        payload, source_path, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result)
+    return result
+
+
+@app.post("/ixp/v1/external_ci_mirror/poll")
+async def ixp_poll_external_ci_mirror(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "agent")
+    source_path = (body.get("source_path") or body.get("source_checkout") or "").strip()
+    result = external_ci_mirror.poll_external_ci_mirror_run(
+        body.get("run_id") or "", source_path, actor=auth.actor(principal), project=project,
+        poll_interval_seconds=float(body.get("poll_interval_seconds") or 15),
+        timeout_seconds=float(body.get("timeout_seconds") or 1800))
+    if result.get("error"):
+        raise HTTPException(400, result)
+    return result
 
 
 @app.post("/ixp/v1/claim_external_effect")

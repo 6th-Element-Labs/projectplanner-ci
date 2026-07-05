@@ -21,6 +21,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 import agent
 import auth
 import digest as digest_mod
+import external_ci_mirror
 import intake as intake_mod
 import notify as notify_mod
 import rag
@@ -955,6 +956,86 @@ def list_external_effects(project: str = "maxwell", effect_type: str = "",
     return _dumps(store.list_external_effects(
         effect_type=effect_type, status=status, task_id=task_id,
         target=target, project=project))
+
+
+@mcp.tool()
+def list_external_ci_runs(project: str = "maxwell", task_id: str = "",
+                          source_project: str = "", source_sha: str = "",
+                          status: str = "") -> str:
+    """List public CI mirror runs tracked by Switchboard."""
+    return _dumps(store.list_external_ci_runs(
+        task_id=task_id, source_project=source_project,
+        source_sha=source_sha, status=status, project=project))
+
+
+@mcp.tool()
+def get_external_ci_run(run_id: str, project: str = "maxwell") -> str:
+    """Read one public CI mirror run by Switchboard run id."""
+    run = store.get_external_ci_run(run_id, project=project)
+    return _dumps(run) if run else _dumps({"error": "external_ci_run not found", "run_id": run_id})
+
+
+@mcp.tool()
+def request_external_ci_mirror_run(source_path: str, mirror_repo: str, workflow: str,
+                                   ctx: Context, source_project: str = "",
+                                   source_repo: str = "", source_branch: str = "",
+                                   source_sha: str = "", mirror_branch: str = "",
+                                   mirror_remote_url: str = "", task_id: str = "",
+                                   claim_id: str = "", agent_id: str = "",
+                                   workflow_inputs_json: str = "{}",
+                                   poll_interval_seconds: float = 15.0,
+                                   timeout_seconds: float = 1800.0,
+                                   idem_key: str = "",
+                                   project: str = "maxwell") -> str:
+    """Mirror an exact private source SHA to a disposable public CI branch and poll Actions.
+
+    Agents should request this from their private/source-of-truth checkout. They must not
+    edit or develop in the public CI repo. Switchboard records sync/trigger/poll/test
+    failures with distinct failure_class values on the external_ci_run.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        workflow_inputs = json.loads(workflow_inputs_json or "{}")
+    except Exception:
+        return _dumps({"error": "workflow_inputs_json must be a JSON object string"})
+    payload = {
+        "source_project": source_project or project,
+        "source_repo": source_repo,
+        "source_branch": source_branch,
+        "source_sha": source_sha,
+        "mirror_repo": mirror_repo,
+        "mirror_branch": mirror_branch,
+        "mirror_remote_url": mirror_remote_url,
+        "workflow": workflow,
+        "workflow_inputs": workflow_inputs,
+        "task_id": task_id,
+        "claim_id": claim_id,
+        "agent_id": agent_id,
+        "principal_id": principal["id"],
+        "poll_interval_seconds": poll_interval_seconds,
+        "timeout_seconds": timeout_seconds,
+        "idem_key": idem_key,
+        "request": {
+            "workflow_inputs": workflow_inputs,
+            "poll_interval_seconds": poll_interval_seconds,
+            "timeout_seconds": timeout_seconds,
+        },
+    }
+    return _dumps(external_ci_mirror.request_external_ci_mirror_run(
+        payload, source_path, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def poll_external_ci_mirror_run(run_id: str, source_path: str, ctx: Context,
+                                poll_interval_seconds: float = 15.0,
+                                timeout_seconds: float = 1800.0,
+                                project: str = "maxwell") -> str:
+    """Resume polling one external CI mirror run after trigger or agent/session interruption."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(external_ci_mirror.poll_external_ci_mirror_run(
+        run_id, source_path, actor=auth.actor(principal), project=project,
+        poll_interval_seconds=poll_interval_seconds,
+        timeout_seconds=timeout_seconds))
 
 
 @mcp.tool()

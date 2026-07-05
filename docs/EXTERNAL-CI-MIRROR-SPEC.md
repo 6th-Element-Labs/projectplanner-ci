@@ -99,6 +99,61 @@ Meaning:
 These classes are intentionally separate so agents know whether to fix code, fix mirror plumbing,
 or wait/retry provider state.
 
+## Operational Tool Contract
+
+`CI-MIRROR-2` adds an executable mirror runner plus MCP/API tools.
+
+Normal agent path:
+
+```text
+private/source checkout
+  -> request_external_ci_mirror_run(...)
+  -> Switchboard creates external_ci_runs row and side-effect reservation
+  -> git push <source_sha>:refs/heads/ci/<task-id>/<sha-prefix> to mirror repo
+  -> gh workflow run <workflow> --repo <mirror_repo> --ref <mirror_branch>
+  -> gh run list/view polling
+  -> external_ci_runs result + external_side_effects readback updated
+```
+
+MCP tools:
+
+- `request_external_ci_mirror_run`: create/resume a mirror run, push, dispatch, poll, and record
+  the result.
+- `poll_external_ci_mirror_run`: resume polling an existing run after a runtime/session
+  interruption.
+- `list_external_ci_runs`: list tracked mirror runs by task, source project/SHA, or status.
+- `get_external_ci_run`: read one mirror run.
+
+REST/API endpoints:
+
+- `GET /ixp/v1/external_ci_runs`
+- `GET /ixp/v1/external_ci_runs/{run_id}`
+- `POST /ixp/v1/external_ci_mirror/request`
+- `POST /ixp/v1/external_ci_mirror/poll`
+
+Required request fields for execution:
+
+- `source_path`: local private/source-of-truth Git checkout path.
+- `source_project`
+- `source_sha`
+- `mirror_repo`
+- `workflow`
+- `task_id` when attaching to task evidence.
+
+Optional request fields:
+
+- `source_repo`: defaults from `source_project` when that project has a configured GitHub repo.
+- `source_branch`
+- `mirror_branch`: defaults to `ci/<task-id>/<source-sha-prefix>`.
+- `mirror_remote_url`: defaults to `https://github.com/<mirror_repo>.git`.
+- `workflow_inputs`: passed as sorted `-f key=value` arguments to `gh workflow run`.
+- `poll_interval_seconds` and `timeout_seconds`.
+
+The runner requires local `git` and `gh` provider access. Missing credentials, missing local SHAs,
+failed pushes, failed workflow dispatch, polling failures, and red workflows are all written back
+as visible `external_ci_runs.failure_class` values. A public CI run may verify a private SHA, but it
+does not mark a task `Done`.
+
 ## Evidence Semantics
 
 An external CI run is verification evidence for a private source SHA. It is not merge provenance.
