@@ -1527,6 +1527,29 @@ async def ixp_external_ci_run(run_id: str, project: str = Query(store.DEFAULT_PR
     return run
 
 
+@app.get("/ixp/v1/publication_evidence")
+async def ixp_publication_evidence(project: str = Query(store.DEFAULT_PROJECT),
+                                   task_id: str = "", source_project: str = "",
+                                   source_sha: str = "", public_repo: str = ""):
+    return {"publication_evidence": store.list_publication_evidence(
+        task_id=task_id, source_project=source_project,
+        source_sha=source_sha, public_repo=public_repo, project=_proj(project))}
+
+
+@app.post("/ixp/v1/publication_evidence")
+async def ixp_record_publication_evidence(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "agent")
+    payload = dict(body.get("publication") or body)
+    payload["principal_id"] = principal["id"]
+    result = store.create_publication_evidence(
+        payload, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result)
+    return result
+
+
 @app.post("/ixp/v1/external_ci_mirror/request")
 async def ixp_request_external_ci_mirror(request: Request, body: dict = Body(...)):
     project = _body_project(body)

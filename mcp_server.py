@@ -986,6 +986,58 @@ def get_external_ci_run(run_id: str, project: str = "maxwell") -> str:
 
 
 @mcp.tool()
+def list_publication_evidence(project: str = "maxwell", task_id: str = "",
+                              source_project: str = "", source_sha: str = "",
+                              public_repo: str = "") -> str:
+    """List public mirror publication evidence tracked by Switchboard."""
+    return _dumps(store.list_publication_evidence(
+        task_id=task_id, source_project=source_project,
+        source_sha=source_sha, public_repo=public_repo, project=project))
+
+
+@mcp.tool()
+def record_publication_evidence(ctx: Context, source_sha: str, public_ref: str,
+                                project: str = "maxwell", source_project: str = "",
+                                source_repo: str = "", public_repo: str = "",
+                                public_sha: str = "", public_tag: str = "",
+                                script: str = "", guard_status: str = "unknown",
+                                guard_json: str = "{}", artifact_url: str = "",
+                                task_id: str = "", claim_id: str = "",
+                                agent_id: str = "", publication_id: str = "",
+                                published_at: float = 0.0) -> str:
+    """Record public mirror publication evidence for a canonical source SHA."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        guard = json.loads(guard_json or "{}")
+    except Exception:
+        return _dumps({"error": "guard_json must be a JSON object string"})
+    if not isinstance(guard, dict):
+        return _dumps({"error": "guard_json must be a JSON object string"})
+    payload = {
+        "publication_id": publication_id,
+        "source_project": source_project or project,
+        "source_repo": source_repo,
+        "source_sha": source_sha,
+        "public_repo": public_repo,
+        "public_ref": public_ref,
+        "public_sha": public_sha,
+        "public_tag": public_tag,
+        "script": script,
+        "guard_status": guard_status,
+        "guard": guard,
+        "artifact_url": artifact_url,
+        "task_id": task_id,
+        "claim_id": claim_id,
+        "agent_id": agent_id,
+        "principal_id": principal["id"],
+    }
+    if published_at:
+        payload["published_at"] = published_at
+    return _dumps(store.create_publication_evidence(
+        payload, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
 def request_external_ci_mirror_run(source_path: str, mirror_repo: str, workflow: str,
                                    ctx: Context, source_project: str = "",
                                    source_repo: str = "", source_branch: str = "",

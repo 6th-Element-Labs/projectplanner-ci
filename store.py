@@ -659,6 +659,8 @@ RECONCILE_FAILURE_CLASS_BY_CODE = {
     "merged_sha_not_found": "stale_branch",
     "merged_sha_not_on_canonical_main": "stale_branch",
     "missing_canonical_main_sha": "missing_data",
+    "publish_drift_stale_public_mirror": "stale_branch",
+    "publication_evidence_missing": "missing_data",
     "progress_without_pushed_head": "missing_data",
     "pr_state_unavailable": "broken_connection",
     "review_without_provenance": "missing_data",
@@ -1024,6 +1026,34 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ON external_ci_runs(status, updated_at);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_external_ci_effect
                 ON external_ci_runs(effect_key) WHERE effect_key IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS publication_evidence (
+                publication_id  TEXT PRIMARY KEY,
+                source_project  TEXT NOT NULL,
+                source_repo     TEXT NOT NULL,
+                source_sha      TEXT NOT NULL,
+                public_repo     TEXT NOT NULL,
+                public_ref      TEXT NOT NULL,
+                public_sha      TEXT,
+                public_tag      TEXT,
+                script          TEXT,
+                guard_status    TEXT NOT NULL DEFAULT 'unknown',
+                guard_json      TEXT NOT NULL DEFAULT '{}',
+                artifact_url    TEXT,
+                task_id         TEXT,
+                claim_id        TEXT,
+                agent_id        TEXT,
+                actor           TEXT,
+                principal_id    TEXT,
+                published_at    REAL NOT NULL,
+                created_at      REAL NOT NULL,
+                updated_at      REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_publication_evidence_task
+                ON publication_evidence(task_id, updated_at);
+            CREATE INDEX IF NOT EXISTS ix_publication_evidence_source
+                ON publication_evidence(source_project, source_sha);
+            CREATE INDEX IF NOT EXISTS ix_publication_evidence_public
+                ON publication_evidence(public_repo, public_ref);
             CREATE TABLE IF NOT EXISTS llm_spend (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
                 request_id        TEXT,
@@ -1908,6 +1938,7 @@ def _decorate_deliverable_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
         "workstream": task.get("_wsId"),
         "provenance": task.get("provenance"),
         "external_ci": task.get("external_ci"),
+        "publication": task.get("publication"),
     }
     return link
 
@@ -1975,6 +2006,7 @@ def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
     status_counts: Dict[str, int] = {}
     done = in_review = blocked = 0
     external_ci_required = external_ci_passed = external_ci_blocked = 0
+    publication_required = publication_passed = publication_blocked = 0
     for link in links:
         task = link.get("task") or {}
         status = task.get("status") or "Unknown"
@@ -1994,6 +2026,17 @@ def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
                 external_ci_passed += 1
             else:
                 external_ci_blocked += 1
+        publication = task.get("publication") or {}
+        publication_gate = publication.get("gate") or {}
+        if (proof_required.get("publication_evidence")
+                or proof_required.get("public_mirror_published")
+                or proof_required.get("publish_evidence")
+                or publication_gate.get("required")):
+            publication_required += 1
+            if publication.get("passed"):
+                publication_passed += 1
+            else:
+                publication_blocked += 1
     total = len(links)
     return {
         "linked_task_count": total,
@@ -2003,6 +2046,9 @@ def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
         "external_ci_required_count": external_ci_required,
         "external_ci_passed_count": external_ci_passed,
         "external_ci_blocked_count": external_ci_blocked,
+        "publication_required_count": publication_required,
+        "publication_passed_count": publication_passed,
+        "publication_blocked_count": publication_blocked,
         "status_counts": dict(sorted(status_counts.items())),
         "done_with_proof_ratio": (done / total) if total else 0.0,
     }
@@ -2367,6 +2413,7 @@ def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
             t = _task_row(r)
             t["provenance"] = _provenance_summary(_load_git_state(c, t["task_id"]))
             t["external_ci"] = _task_external_ci_summary_in(c, t["task_id"])
+            t["publication"] = _task_publication_summary_in(c, t["task_id"])
             tasks.append(t)
         return tasks
 
@@ -2417,6 +2464,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["dependency_state"] = _dependency_state_in(c, t)
         t["human_gate"] = _task_human_gate_state(t)
         t["external_ci"] = _external_ci_review_gate(t, c=c, project=project)
+        t["publication"] = _publication_review_gate(t, c=c, project=project)
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
             raw_rationale = s["rationale"]
@@ -3150,6 +3198,339 @@ def _external_ci_review_gate(task: Dict[str, Any],
             "External CI mirror evidence is required before review/merge."
             if required else
             "External CI mirror evidence is optional for this task."
+        ),
+    }
+    return summary
+
+
+PUBLICATION_GUARD_STATUSES = {"passed", "failed", "warning", "unknown"}
+
+
+def _publication_row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if not row:
+        return None
+    d = dict(row)
+    d["guard"] = _json_obj(d.pop("guard_json", "{}"), {})
+    d["repo_role"] = "public"
+    d["evidence_only"] = True
+    return d
+
+
+def _validate_publication_guard_status(value: str) -> str:
+    clean = (value or "unknown").strip().lower()
+    return clean if clean in PUBLICATION_GUARD_STATUSES else ""
+
+
+def _repo_mismatch(got: str, expected: str) -> bool:
+    return bool(got and expected and _normalize_repo_slug(got) != _normalize_repo_slug(expected))
+
+
+def _publication_topology_contract(source_project: str,
+                                   data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    data = data or {}
+    topology = get_project_repo_topology(source_project)
+    roles = topology.get("roles") or {}
+    canonical = roles.get("canonical") or {}
+    public = roles.get("public") or {}
+    script = (data.get("script") or data.get("publish_script") or "").strip()
+    if not script:
+        scripts = _coerce_str_list(public.get("publish_scripts"))
+        script = scripts[0] if scripts else ""
+    return {
+        "schema": "switchboard.publication_topology_contract.v1",
+        "source_project": source_project,
+        "source_repo": (canonical.get("repo") or "").strip(),
+        "public_repo": (public.get("repo") or data.get("public_repo") or "").strip(),
+        "publish_scripts": _coerce_str_list(public.get("publish_scripts")),
+        "script": script or None,
+        "repo_topology_schema": topology.get("schema"),
+        "repo_topology_valid": topology.get("valid"),
+        "code_repo_gate": topology.get("code_repo_gate"),
+        "public_role": public,
+        "canonical_role": canonical,
+        "evidence_only": True,
+        "authority": "publish_evidence_only",
+    }
+
+
+def _publication_request_payload(data: Dict[str, Any], project: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    source_project = (data.get("source_project") or project or DEFAULT_PROJECT).strip()
+    if not has_project(source_project):
+        return {}, {"error": f"unknown source project: {source_project}"}
+    task_id = (data.get("task_id") or "").strip().upper()
+    if task_id and not get_task(task_id, project=project):
+        return {}, {"error": "unknown task", "task_id": task_id, "project": project}
+    contract = _publication_topology_contract(source_project, data)
+    if not (contract.get("code_repo_gate") or {}).get("passed"):
+        return {}, {"error": "canonical source repo is not configured",
+                    "source_project": source_project,
+                    "code_repo_gate": contract.get("code_repo_gate")}
+    source_repo, source_repo_error = _validate_github_repo(
+        data.get("source_repo") or contract.get("source_repo") or get_project_github_repo(source_project))
+    if source_repo_error:
+        return {}, {"error": source_repo_error, "repo": source_repo, "field": "source_repo"}
+    if not source_repo:
+        return {}, {"error": "source_repo required", "source_project": source_project}
+    if _repo_mismatch(source_repo, contract.get("source_repo") or ""):
+        return {}, {"error": "source_repo must match repo_topology.roles.canonical.repo",
+                    "repo": source_repo, "expected": contract.get("source_repo"),
+                    "field": "source_repo", "source_project": source_project}
+    public_repo, public_repo_error = _validate_github_repo(
+        data.get("public_repo") or contract.get("public_repo") or "")
+    if public_repo_error:
+        return {}, {"error": public_repo_error, "repo": public_repo, "field": "public_repo"}
+    if not public_repo:
+        return {}, {"error": "public_repo required",
+                    "hint": "configure repo_topology.roles.public.repo or pass public_repo"}
+    configured_public = ((contract.get("public_role") or {}).get("repo") or "").strip()
+    if _repo_mismatch(public_repo, configured_public):
+        return {}, {"error": "public_repo must match repo_topology.roles.public.repo",
+                    "repo": public_repo, "expected": configured_public,
+                    "field": "public_repo", "source_project": source_project}
+    source_sha = (data.get("source_sha") or "").strip()
+    if not GIT_SHA_RE.match(source_sha):
+        return {}, {"error": "source_sha must be a 7-64 character hex Git SHA"}
+    public_sha = (data.get("public_sha") or "").strip()
+    if public_sha and not GIT_SHA_RE.match(public_sha):
+        return {}, {"error": "public_sha must be a 7-64 character hex Git SHA",
+                    "field": "public_sha"}
+    public_ref = (data.get("public_ref") or data.get("ref") or "").strip()
+    public_tag = (data.get("public_tag") or data.get("tag") or "").strip() or None
+    if not public_ref and public_tag:
+        public_ref = f"refs/tags/{public_tag}"
+    if not public_ref:
+        return {}, {"error": "public_ref required"}
+    guard_status = _validate_publication_guard_status(
+        data.get("guard_status") or (data.get("guard") or {}).get("status") or "unknown")
+    if not guard_status:
+        return {}, {"error": "invalid publication guard_status",
+                    "allowed": sorted(PUBLICATION_GUARD_STATUSES)}
+    published_at = data.get("published_at") or data.get("timestamp")
+    try:
+        published_at = float(published_at) if published_at not in (None, "") else time.time()
+    except (TypeError, ValueError):
+        return {}, {"error": "published_at must be a unix timestamp"}
+    return {
+        "source_project": source_project,
+        "source_repo": source_repo,
+        "source_sha": source_sha.lower(),
+        "public_repo": public_repo,
+        "public_ref": public_ref,
+        "public_sha": public_sha.lower() or None,
+        "public_tag": public_tag,
+        "script": (data.get("script") or data.get("publish_script") or contract.get("script") or "").strip() or None,
+        "guard_status": guard_status,
+        "guard": data.get("guard") or data.get("guard_result") or {},
+        "artifact_url": (data.get("artifact_url") or "").strip() or None,
+        "task_id": task_id or None,
+        "claim_id": (data.get("claim_id") or "").strip() or None,
+        "agent_id": (data.get("agent_id") or "").strip() or None,
+        "principal_id": (data.get("principal_id") or "").strip() or None,
+        "published_at": published_at,
+        "topology_contract": contract,
+    }, {}
+
+
+def create_publication_evidence(data: Dict[str, Any], actor: str = "system",
+                                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    normalized, error = _publication_request_payload(data or {}, project)
+    if error:
+        return error
+    now = time.time()
+    publication_id = (data.get("publication_id") or "pub-" + uuid.uuid4().hex[:16]).strip()
+    with _conn(project) as c:
+        existing = c.execute(
+            "SELECT * FROM publication_evidence WHERE publication_id=?",
+            (publication_id,),
+        ).fetchone()
+        if existing:
+            out = _publication_row(existing)
+            out["idempotent"] = True
+            return out
+        c.execute(
+            """INSERT INTO publication_evidence
+               (publication_id, source_project, source_repo, source_sha, public_repo,
+                public_ref, public_sha, public_tag, script, guard_status, guard_json,
+                artifact_url, task_id, claim_id, agent_id, actor, principal_id,
+                published_at, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                publication_id, normalized["source_project"], normalized["source_repo"],
+                normalized["source_sha"], normalized["public_repo"], normalized["public_ref"],
+                normalized["public_sha"], normalized["public_tag"], normalized["script"],
+                normalized["guard_status"], json.dumps(normalized["guard"], sort_keys=True),
+                normalized["artifact_url"], normalized["task_id"], normalized["claim_id"],
+                normalized["agent_id"], actor, normalized["principal_id"],
+                normalized["published_at"], now, now,
+            ),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (normalized["task_id"], actor, "publication.recorded",
+                   json.dumps({"publication_id": publication_id,
+                               "source_project": normalized["source_project"],
+                               "source_repo": normalized["source_repo"],
+                               "source_sha": normalized["source_sha"],
+                               "public_repo": normalized["public_repo"],
+                               "public_ref": normalized["public_ref"],
+                               "public_sha": normalized["public_sha"],
+                               "public_tag": normalized["public_tag"],
+                               "script": normalized["script"],
+                               "guard_status": normalized["guard_status"],
+                               "artifact_url": normalized["artifact_url"],
+                               "evidence_only": True}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM publication_evidence WHERE publication_id=?",
+                        (publication_id,)).fetchone()
+    return _publication_row(row)
+
+
+def list_publication_evidence(task_id: str = "", source_project: str = "",
+                              source_sha: str = "", public_repo: str = "",
+                              project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    init_db(project)
+    q = "SELECT * FROM publication_evidence WHERE 1=1"
+    params: List[Any] = []
+    if task_id:
+        q += " AND task_id=?"; params.append(task_id.strip().upper())
+    if source_project:
+        q += " AND source_project=?"; params.append(source_project.strip())
+    if source_sha:
+        q += " AND source_sha=?"; params.append(source_sha.strip().lower())
+    if public_repo:
+        q += " AND public_repo=?"; params.append(public_repo.strip())
+    q += " ORDER BY updated_at DESC, publication_id"
+    with _conn(project) as c:
+        return [_publication_row(row) for row in c.execute(q, params).fetchall()]
+
+
+def _task_publication_summary_in(c: sqlite3.Connection, task_id: str,
+                                 source_sha: str = "") -> Dict[str, Any]:
+    rows = [
+        _publication_row(row)
+        for row in c.execute(
+            "SELECT * FROM publication_evidence WHERE task_id=? "
+            "ORDER BY updated_at DESC, publication_id",
+            (task_id,),
+        ).fetchall()
+    ]
+    matched = rows
+    if source_sha:
+        matched = [r for r in rows if _sha_matches(r.get("source_sha") or "", source_sha)]
+    passed = [r for r in matched if r.get("guard_status") == "passed"]
+    failed = [r for r in matched if r.get("guard_status") == "failed"]
+    latest = matched[0] if matched else (rows[0] if rows else None)
+    if passed:
+        status = "published"
+        selected = passed[0]
+    elif matched and failed:
+        status = "failed"
+        selected = latest
+    elif matched:
+        status = "unknown"
+        selected = latest
+    elif source_sha and rows:
+        status = "stale"
+        selected = latest
+    else:
+        status = "missing"
+        selected = None
+    return {
+        "status": status,
+        "passed": bool(passed),
+        "required": False,
+        "source_repo": (selected or {}).get("source_repo"),
+        "source_sha": source_sha or ((selected or {}).get("source_sha") if selected else None),
+        "public_repo": (selected or {}).get("public_repo"),
+        "public_ref": (selected or {}).get("public_ref"),
+        "public_sha": (selected or {}).get("public_sha"),
+        "public_tag": (selected or {}).get("public_tag"),
+        "script": (selected or {}).get("script"),
+        "guard_status": (selected or {}).get("guard_status"),
+        "artifact_url": (selected or {}).get("artifact_url"),
+        "published_at": (selected or {}).get("published_at"),
+        "publication_count": len(matched),
+        "total_publication_count": len(rows),
+        "latest": selected,
+        "runs": rows[:5],
+        "repo_role": "public",
+        "evidence_only": True,
+    }
+
+
+def task_publication_summary(task_id: str, source_sha: str = "",
+                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    with _conn(project) as c:
+        return _task_publication_summary_in(c, task_id, source_sha=source_sha)
+
+
+def _publication_required_from(task: Dict[str, Any],
+                               evidence: Optional[Dict[str, Any]] = None) -> bool:
+    evidence = evidence or {}
+    if evidence.get("publication_required") is True or evidence.get("publish_required") is True:
+        return True
+    gates = evidence.get("required_gates") or evidence.get("review_gates") or []
+    if isinstance(gates, str):
+        gates = coerce_csv_list(gates)
+    wanted = {"publication", "publication_evidence", "publish_evidence",
+              "public_mirror_published", "release_evidence"}
+    if any(str(g).strip().lower() in wanted for g in gates):
+        return True
+    state = task.get("agent_state") or {}
+    for key in ("review_gate", "review_gates", "proof_requirements"):
+        value = state.get(key) or {}
+        if isinstance(value, dict) and (
+                value.get("publication_required")
+                or value.get("publication_evidence")
+                or value.get("publish_evidence")):
+            return True
+    text = "\n".join(str(task.get(k) or "") for k in (
+        "entry_criteria", "exit_criteria", "deliverable"))
+    lowered = text.lower()
+    return (
+        "publication_evidence" in lowered
+        or "public_mirror_published" in lowered
+        or "publish evidence" in lowered
+        or "release evidence" in lowered
+    )
+
+
+def _publication_review_gate(task: Dict[str, Any],
+                             evidence: Optional[Dict[str, Any]] = None,
+                             c: Optional[sqlite3.Connection] = None,
+                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    evidence = evidence or {}
+    git_state = task.get("git_state") or {}
+    source_sha = (
+        evidence.get("publication_source_sha")
+        or evidence.get("source_sha")
+        or evidence.get("head_sha")
+        or git_state.get("merged_sha")
+        or git_state.get("head_sha")
+        or ""
+    )
+    if c is None:
+        with _conn(project) as own:
+            summary = _task_publication_summary_in(own, task["task_id"], source_sha=source_sha)
+    else:
+        summary = _task_publication_summary_in(c, task["task_id"], source_sha=source_sha)
+    required = _publication_required_from(task, evidence)
+    summary["required"] = required
+    summary["gate"] = {
+        "name": "publication_evidence",
+        "required": required,
+        "passed": summary["passed"],
+        "status": (
+            "passed" if summary["passed"] else
+            "blocked" if required else
+            "not_required"
+        ),
+        "message": (
+            "Public mirror publication evidence passed for this source SHA."
+            if summary["passed"] else
+            "Public mirror publication evidence is required before publish/release review."
+            if required else
+            "Public mirror publication evidence is optional for this task."
         ),
     }
     return summary
@@ -5631,6 +6012,8 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
         task_snapshot["git_state"] = git_state
         external_ci_gate = _external_ci_review_gate(
             task_snapshot, evidence=evidence_obj, c=c, project=project)
+        publication_gate = _publication_review_gate(
+            task_snapshot, evidence=evidence_obj, c=c, project=project)
         status_row = c.execute("SELECT status FROM tasks WHERE task_id=?",
                                (row["task_id"],)).fetchone()
         stored_status = status_row["status"] if status_row else next_status
@@ -5654,14 +6037,32 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
                                    "gate": external_ci_gate.get("gate"),
                                    "external_ci": external_ci_gate,
                                    "source": "complete_claim"}, sort_keys=True), now))
+        if publication_gate.get("required"):
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"], actor, "task.review_gate",
+                       json.dumps({"claim_id": claim_id,
+                                   "gate": publication_gate.get("gate"),
+                                   "publication": publication_gate,
+                                   "source": "complete_claim"}, sort_keys=True), now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (row["task_id"], actor, "task.claim.completed",
                    json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
                                "requested_status": requested_status or None,
                                "next_status": next_status,
                                "done_gate": done_gate,
-                               "review_gate": external_ci_gate.get("gate")
-                               if external_ci_gate.get("required") else None,
+                               "review_gate": (
+                                   external_ci_gate.get("gate")
+                                   if external_ci_gate.get("required") else
+                                   publication_gate.get("gate")
+                                   if publication_gate.get("required") else None),
+                               "review_gates": [
+                                   gate for gate in (
+                                       external_ci_gate.get("gate")
+                                       if external_ci_gate.get("required") else None,
+                                       publication_gate.get("gate")
+                                       if publication_gate.get("required") else None,
+                                   ) if gate
+                               ],
                                "terminal_status_preserved": terminal_status_preserved},
                               sort_keys=True), now))
     response = {"completed": True, "claim_id": claim_id, "task_id": row["task_id"],
@@ -5669,6 +6070,15 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
     if external_ci_gate.get("required"):
         response["review_gate"] = external_ci_gate.get("gate")
         response["external_ci"] = external_ci_gate
+    if publication_gate.get("required"):
+        response.setdefault("review_gate", publication_gate.get("gate"))
+        response["publication"] = publication_gate
+        response["review_gates"] = [
+            gate for gate in (
+                response.get("review_gate") if external_ci_gate.get("required") else None,
+                publication_gate.get("gate"),
+            ) if gate
+        ]
     if done_gate:
         response["done_gate"] = done_gate
         response["warning"] = done_gate["message"]
@@ -6737,6 +7147,11 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             ("artifacts_json", "request_json", "result_json"),
             order_by="requested_at, run_id",
         )
+        publication_evidence = _audit_json_rows(
+            c, "publication_evidence",
+            ("guard_json",),
+            order_by="published_at, publication_id",
+        )
         git_state = [_git_state_row(row) for row in c.execute(
             "SELECT * FROM task_git_state ORDER BY updated_at, task_id"
         ).fetchall()]
@@ -6782,6 +7197,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "runner_session_count": len(runner_sessions),
             "side_effect_count": len(side_effects),
             "external_ci_run_count": len(external_ci_runs),
+            "publication_evidence_count": len(publication_evidence),
             "outcome_count": len(outcomes),
             "spend_count": len(spend),
             "project_board_count": len(project_boards),
@@ -6805,6 +7221,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "runner_control_requests": runner_controls,
         "external_side_effects": _audit_redact(side_effects),
         "external_ci_runs": _audit_redact(external_ci_runs),
+        "publication_evidence": _audit_redact(publication_evidence),
         "git_state": _audit_redact(git_state),
         "economics": {
             "project_tally": _audit_redact(project_tally(project=project)),
@@ -9081,6 +9498,66 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
     return findings, checks, backfilled
 
 
+def _publication_reconcile_findings(tasks: List[Dict[str, Any]],
+                                    git_states: Dict[str, Dict[str, Any]],
+                                    project: str = DEFAULT_PROJECT) -> Tuple[
+                                        List[Dict[str, Any]],
+                                        Dict[str, Any],
+                                    ]:
+    findings: List[Dict[str, Any]] = []
+    checked = 0
+    stale = 0
+    missing = 0
+    with _conn(project) as c:
+        for task in tasks:
+            task_id = task["task_id"]
+            state = git_states.get(task_id, {})
+            source_sha = state.get("merged_sha") or state.get("head_sha") or ""
+            summary = _task_publication_summary_in(c, task_id, source_sha=source_sha)
+            checked += 1
+            required = _publication_required_from(task, state.get("evidence") or {})
+            if required and not summary.get("passed"):
+                missing += 1
+                findings.append({
+                    "severity": "medium",
+                    "task_id": task_id,
+                    "code": "publication_evidence_missing",
+                    "detail": (
+                        "Task requires public mirror publication evidence, but no passed "
+                        "publication record matches the current source SHA."
+                    ),
+                    "repo_role": "public",
+                    "expected_source_sha": source_sha or None,
+                    "failure_class": "missing_data",
+                })
+            if summary.get("status") != "stale":
+                continue
+            latest = summary.get("latest") or {}
+            stale += 1
+            findings.append({
+                "severity": "medium",
+                "task_id": task_id,
+                "code": "publish_drift_stale_public_mirror",
+                "detail": (
+                    "Public mirror evidence is stale: latest publication points at "
+                    f"{latest.get('source_sha') or 'unknown'} but current source SHA is "
+                    f"{source_sha or 'unknown'}."
+                ),
+                "repo_role": "public",
+                "public_repo": latest.get("public_repo") or "",
+                "public_ref": latest.get("public_ref") or "",
+                "latest_source_sha": latest.get("source_sha") or "",
+                "expected_source_sha": source_sha or "",
+                "failure_class": "stale_branch",
+            })
+    return findings, {
+        "publication_evidence": "checked",
+        "publication_tasks_checked": checked,
+        "publication_missing_count": missing,
+        "publication_stale_count": stale,
+    }
+
+
 SEVERITY_VALUE = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
@@ -9242,6 +9719,10 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     external_findings, external_checks, backfilled = _external_reconcile_findings(
         tasks, git_states, agreement.get("canonical_main_sha") or "", project=project)
     findings.extend(external_findings)
+    publication_findings, publication_checks = _publication_reconcile_findings(
+        tasks, git_states, project=project)
+    findings.extend(publication_findings)
+    external_checks.update(publication_checks)
     if not (agreement.get("canonical_main_sha") or get_meta("canonical_main_sha", None, project=project)):
         findings.append({"severity": "medium", "task_id": None,
                          "code": "missing_canonical_main_sha",

@@ -70,6 +70,7 @@ run_test test_ci_gate_policy.py
 run_test test_langgraph_adapter.py
 run_test test_mcp_dependencies.py
 run_test test_project_creation.py
+run_test test_publication_evidence.py
 run_test test_review_preflight.py
 run_test test_review_verifier_runs.py
 run_test test_runner_environment.py

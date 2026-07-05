@@ -407,6 +407,23 @@ const TeepPlan = {
         if (gate.required && !ci.passed) bits.push(`<span class="text-danger small">${this.esc(gate.message || 'required')}</span>`);
         return bits.join(' ');
     },
+    publicationDetail(t) {
+        const pub = (t && t.publication) || {};
+        const gate = pub.gate || {};
+        const status = pub.status || 'missing';
+        const cls = status === 'published' ? 'green' : (status === 'failed' || status === 'stale' ? 'red' : (status === 'unknown' ? 'yellow' : 'secondary'));
+        const label = gate.required ? `Publication ${status}` : (pub.total_publication_count ? `Publication ${status}` : 'none');
+        const latest = pub.latest || {};
+        const bits = [`<span class="badge bg-${cls}-lt"><i class="ti ti-upload me-1"></i>${this.esc(label)}</span>`];
+        const artifactUrl = pub.artifact_url || latest.artifact_url || '';
+        if (artifactUrl) bits.push(`<a class="small" href="${this.esc(artifactUrl)}" target="_blank" rel="noopener">artifact</a>`);
+        if (pub.source_sha) bits.push(`<span class="font-monospace small">${this.esc(String(pub.source_sha).slice(0, 12))}</span>`);
+        const publicRepo = pub.public_repo || latest.public_repo || '';
+        const publicRef = pub.public_ref || latest.public_ref || '';
+        if (publicRepo || publicRef) bits.push(`<span class="text-secondary small">${this.esc(`${publicRepo || 'public'}${publicRef ? ' · ' + publicRef : ''}`)}</span>`);
+        if (gate.required && !pub.passed) bits.push(`<span class="text-danger small">${this.esc(gate.message || 'required')}</span>`);
+        return bits.join(' ');
+    },
     initials(name) {
         if (!name) return '';
         // drop "(TEEP)"-style org tags and any word without a letter (e.g. "+", "·")
@@ -991,6 +1008,7 @@ const TeepPlan = {
                             <div class="datagrid-content"><select id="details-status" class="form-select form-select-sm" style="max-width:200px">${statusOpts}</select></div></div>
                         ${dg('Done provenance', provenanceHtml)}
                         ${dg('External CI', this.externalCiDetail(t))}
+                        ${dg('Publication', this.publicationDetail(t))}
                         ${dg('Owner', av(t.owner_person_or_role || t.owner_org) + owner)}
                         ${dg('Assignee', t.assignee ? av(t.assignee) + this.esc(t.assignee) : '—')}
                         ${dg('Phase', this.esc(t.phase || '—'))}

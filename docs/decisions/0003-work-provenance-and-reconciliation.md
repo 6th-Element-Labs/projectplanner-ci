@@ -111,7 +111,7 @@ an on-demand MCP/REST tool runs **content-based, not ancestry-based** checks and
 | Uncommitted / dirty worktree | agent heartbeat reports a `dirty` flag; or proxy: `In Progress` with no pushed branch after N h | dirty worktrees holding real work |
 | `Done` with no `merged_sha` | board query | self-declared "done" that never merged |
 | Merge SHA not in `main` content | `merged_sha` reachable from `origin/main` **and** not subsequently reverted (key-file spot-check) — **never** `git branch --merged` | squash + revert blindness |
-| private `main` ↔ public mirror drift | compare `origin/main` (minus export-ignored) against the public mirror's last published ref | the public-mirror staleness/race |
+| private `main` ↔ public mirror drift | compare canonical source SHA against the latest `publication_evidence` public ref/SHA | the public-mirror staleness/race, reported as publish drift rather than merge drift |
 
 `reconcile` turns the five-agent forensic dig into a five-second dashboard check. Its report is
 the "how do we avoid this again" surface; a non-empty report is a release blocker.

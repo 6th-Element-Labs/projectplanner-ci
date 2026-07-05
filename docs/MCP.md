@@ -69,7 +69,8 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `reconcile(project)` — provenance drift report; always flags board contradictions like
   naked `Done` without merge/default-branch SHA, and when canonical main / GitHub config is
   available, checks recorded SHAs and PR state against git/GitHub. It also reports expired active
-  task claims and unreleased resource/file leases as stale claims.
+  task claims and unreleased resource/file leases as stale claims. Public mirror publication drift
+  is reported as `publish_drift_stale_public_mirror`, not as merge drift.
 - `set_project_github_repo(project, repo)` — update the repo binding later if a board was created
   before the repository existed or the repo moved. This updates `repo_topology.roles.canonical`.
 - `set_project_repo_topology(project, canonical_repo?, public_ci_repo?, public_repo?,
@@ -80,6 +81,14 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   `public_ci` is a shared public CI sandbox for verification evidence only; `public` and `release`
   are publication/release evidence roles only. Legacy `ci_*` arguments are accepted as aliases for
   `public_ci_*`.
+- `record_publication_evidence(project, source_project?, source_sha, public_repo?, public_ref,
+  public_sha?, public_tag?, script?, guard_status?, guard_json?, artifact_url?, task_id?, claim_id?,
+  agent_id?)` — record evidence that a canonical source SHA was published to a public mirror/release
+  ref. `public_repo` defaults from `repo_topology.roles.public.repo`; `script` defaults from
+  `repo_topology.roles.public.publish_scripts`. This evidence can satisfy publish/release gates such
+  as `publication_evidence`, but it is evidence-only and cannot satisfy code `Done`.
+- `list_publication_evidence(project, task_id?, source_project?, source_sha?, public_repo?)` — list
+  recorded public mirror publication proof.
 - `create_project_board(title, project, board_id?, mission_id?, kind?, status?, purpose?,
   end_state?, description?, owner_org?, owner_person_or_role?, metadata_json?)` — create a
   first-class Board/Mission child under a Project. Project remains the repo/trust/policy/access/CI/
@@ -208,7 +217,8 @@ Protocol compatibility:
   `code_repo_gate`. `repo_topology.scope` is `project`; Switchboard `project` ids are the top-level
   authority boundary, while `project_boards` / Board/Mission ids are first-class outcome cockpits
   under that Project. Agents should treat `repo_topology.roles.canonical` as the only repo that can
-  prove code Done, and `repo_topology.roles.public_ci` as shared verification evidence only.
+  prove code Done, `repo_topology.roles.public_ci` as shared verification evidence only, and
+  `repo_topology.roles.public` as public mirror publication evidence only.
 - `register_agent` may include `protocol_json` / REST `protocol`; the response includes
   `protocol_compatibility`.
 
