@@ -25,6 +25,12 @@ Current reference transport:
 Runtime-specific packs should reuse `run_p0_conformance(...)` with their own REST, MCP, or SDK
 client instead of inventing new smoke semantics per adapter.
 
+Badge language and public-package boundaries live in
+[`docs/IXP-CONFORMANCE.md`](../docs/IXP-CONFORMANCE.md) and
+[`docs/IXP-PUBLIC-PACKAGE.md`](../docs/IXP-PUBLIC-PACKAGE.md). Do not call an adapter
+`IXP-core conformant` unless it publishes the fixture command, protocol/profile, verification
+date, and known deviations.
+
 ## Runtime Packs
 
 - `claude-code/` - Claude Code session start and pre-tool guard.

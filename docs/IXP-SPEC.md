@@ -7,6 +7,9 @@
   outcome-settlement (`OXP`) are separate profiles layered on this core (out of scope here;
   see [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md), [`TALLY-SPEC.md`](TALLY-SPEC.md), and
   PRD §8.4, §8.7).
+- **Public package:** publishing, license posture, governance, and badge wording are defined in
+  [`IXP-PUBLIC-PACKAGE.md`](IXP-PUBLIC-PACKAGE.md) and
+  [`IXP-CONFORMANCE.md`](IXP-CONFORMANCE.md).
 - **One-line:** the model-agnostic wire contract any agent — behind any LLM, in any runtime
   — speaks to coordinate with other agents over a shared, durable substrate.
 

@@ -73,6 +73,8 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/PRODUCT_ROADMAP.md`](docs/PRODUCT_ROADMAP.md) | Switchboard product roadmap, competitive positioning, moat, and commercial wedges |
 | [`docs/MARKET-LANDSCAPE.md`](docs/MARKET-LANDSCAPE.md) | Living market tracker for agent collaboration, governance, security, orchestration, and workplace-suite moves |
 | [`docs/P0-SPEC.md`](docs/P0-SPEC.md) | Switchboard P0 implementation floor: authenticated writes, agent identity, REST/MCP parity, idempotency, and `IXP-core` conformance |
+| [`docs/IXP-PUBLIC-PACKAGE.md`](docs/IXP-PUBLIC-PACKAGE.md) | Public protocol package boundary: open specs/adapters/conformance, license posture, governance, and hosted/commercial line |
+| [`docs/IXP-CONFORMANCE.md`](docs/IXP-CONFORMANCE.md) | Conformance badge language, required evidence, non-claims, and current reference fixture status |
 | [`docs/RUNTIME-ADAPTERS-SPEC.md`](docs/RUNTIME-ADAPTERS-SPEC.md) | Runtime adapter packs for Claude Code, Codex, Cursor, LangGraph, raw OpenAI loops, and generic REST clients |
 | [`docs/INTERRUPT-TIERS-SPEC.md`](docs/INTERRUPT-TIERS-SPEC.md) | Visible stop/redirect guarantees: advisory poll, hook-level deny, runner kill, and managed control |
 | [`docs/CLAIM-NEXT-SPEC.md`](docs/CLAIM-NEXT-SPEC.md) | `claim_next` / `+TXP` dispatch profile: atomic task assignment, task claims, budget/model guidance |
