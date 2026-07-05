@@ -236,7 +236,9 @@ def _dependency_contract(project: str, task) -> list[dict]:
     return out
 
 
-def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
+def _project_contract(project: str, lane: str = "", task_id: str = "",
+                      deliverable_id: str = "", board_id: str = "",
+                      mission_id: str = "", milestone_id: str = "") -> dict:
     selected = _resolve_project_input(project) or store.DEFAULT_PROJECT
     if not store.has_project(selected):
         return {
@@ -273,6 +275,42 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
         ] if ws else []
     except Exception:
         active_agents = []
+    mission_context = None
+    deliverable_scope = bool((deliverable_id or board_id or mission_id).strip())
+    if deliverable_scope:
+        mission_context = store.get_mission_status(
+            project=selected,
+            deliverable_id=deliverable_id,
+            board_id=board_id,
+            mission_id=mission_id,
+        )
+    operating_rules = [
+        f'Pass project="{selected}" on every Switchboard MCP call.',
+        access.get("boundary") or f"Only work belonging to project={selected} belongs here.",
+        "Treat Project as the repo/trust/policy/access/CI/model/budget/Done authority boundary.",
+        "Use Project Board/Mission ids for outcome cockpits under the selected Project; do not invent unknown board_id values.",
+        "Boards and workstreams own execution; deliverables own outcomes, end_state, and cross-board proof rollup.",
+        "Treat repo_topology.roles.canonical as the only code-truth / Done authority.",
+        "Treat repo_topology.roles.public_ci as verification evidence only, even when it is a shared public repo.",
+        "Read task description, deliverable, exit_criteria, dependencies, and recent activity before editing.",
+        "If file ownership is unclear, check active leases/agent state and ask the board or human before writing.",
+        "Do not import Helm lane/file ownership into non-Helm projects.",
+    ]
+    recommended_reads = [x for x in [
+        f'get_task(task_id="{tid}", project="{selected}")' if tid else None,
+        f'search_tasks(workstream="{ws}", project="{selected}")' if ws else None,
+        f'get_agent_state(task_id="{tid}", project="{selected}")' if tid else None,
+    ] if x]
+    if deliverable_scope and mission_context and not mission_context.get("error"):
+        did = mission_context.get("deliverable_id") or deliverable_id
+        recommended_reads = [
+            f'get_mission_status(project="{selected}", deliverable_id="{did}")',
+            f'get_deliverable("{did}", project="{selected}")',
+        ] + recommended_reads
+        if (milestone_id or "").strip():
+            recommended_reads.insert(1,
+                f'claim_next(agent_id=..., project="{selected}", deliverable_id="{did}", '
+                f'milestone_id="{milestone_id.strip()}")')
     return {
         "ok": True,
         "source_of_truth": "switchboard_project_contract",
@@ -298,22 +336,12 @@ def _project_contract(project: str, lane: str = "", task_id: str = "") -> dict:
         "assigned_task": _task_contract_brief(task),
         "dependency_status": _dependency_contract(selected, task),
         "active_agents_in_lane": active_agents,
-        "operating_rules": [
-            f'Pass project="{selected}" on every Switchboard MCP call.',
-            access.get("boundary") or f"Only work belonging to project={selected} belongs here.",
-            "Treat Project as the repo/trust/policy/access/CI/model/budget/Done authority boundary.",
-            "Use Project Board/Mission ids for outcome cockpits under the selected Project; do not invent unknown board_id values.",
-            "Treat repo_topology.roles.canonical as the only code-truth / Done authority.",
-            "Treat repo_topology.roles.public_ci as verification evidence only, even when it is a shared public repo.",
-            "Read task description, deliverable, exit_criteria, dependencies, and recent activity before editing.",
-            "If file ownership is unclear, check active leases/agent state and ask the board or human before writing.",
-            "Do not import Helm lane/file ownership into non-Helm projects.",
-        ],
-        "recommended_reads": [x for x in [
-            f'get_task(task_id="{tid}", project="{selected}")' if tid else None,
-            f'search_tasks(workstream="{ws}", project="{selected}")' if ws else None,
-            f'get_agent_state(task_id="{tid}", project="{selected}")' if tid else None,
-        ] if x],
+        "deliverable_scope": deliverable_scope,
+        "mission_context": mission_context,
+        "milestone_id": (milestone_id or "").strip() or None,
+        "deliverable_first_startup_doc": "docs/DELIVERABLE-FIRST-STARTUP.md",
+        "operating_rules": operating_rules,
+        "recommended_reads": recommended_reads,
     }
 
 
@@ -341,8 +369,11 @@ def _project_label(project: str) -> str:
     return project
 
 
-def _agent_bootstrap_prompt(project: str, agent_id: str, task_id: str, lane: str) -> str:
+def _agent_bootstrap_prompt(project: str, agent_id: str, task_id: str, lane: str,
+                            deliverable_id: str = "", board_id: str = "",
+                            mission_id: str = "", milestone_id: str = "") -> str:
     access = store.project_access(project)
+    deliverable_scope = bool((deliverable_id or board_id or mission_id).strip())
     lines = [
         f'You are enlisting on Switchboard project="{project}" ({_project_label(project)}).',
         f'Every board/MCP call in this session must include project="{project}".',
@@ -350,25 +381,46 @@ def _agent_bootstrap_prompt(project: str, agent_id: str, task_id: str, lane: str
         f'Project purpose: {access.get("purpose") or f"{project} work control plane"}',
         'Do not use project="helm", project="maxwell", or any other board unless prepare_agent_session selects it.',
         "Use the returned project_contract as the canonical lane/task contract. Do not assume docs/EPICS.md or other repo-local docs apply unless this selected project/task explicitly says so.",
+        "Ownership: boards/workstreams own execution; deliverables own outcomes, end_state, milestones, and cross-board proof rollup.",
+    ]
+    if deliverable_scope:
+        scope_ref = (deliverable_id or board_id or mission_id).strip()
+        lines.append(
+            f'Deliverable-first boot: read get_mission_status for "{scope_ref}" before editing. '
+            "Inspect end_state, acceptance_criteria, policy_constraints, milestones, linked_tasks, "
+            "blockers, and next_actions. See docs/DELIVERABLE-FIRST-STARTUP.md."
+        )
+        if (milestone_id or "").strip():
+            lines.append(f'Milestone scope: {milestone_id.strip()}')
+    lines.extend([
         "Boot sequence:",
         f'1. get_working_agreement(project="{project}")',
         f'2. register_agent(agent_id="{agent_id}", runtime="<your-runtime>", lane="{lane or "<lane>"}", '
         f'task_id="{task_id or "<task-id>"}", project="{project}", control_json="{{...}}", protocol_json="{{...}}")',
         f'3. list_unacked_messages(to_agent="{agent_id}", project="{project}")',
         f'4. list_unblock_requests(owner_agent="{agent_id}", project="{project}")',
-    ]
+    ])
+    step = 5
+    if deliverable_scope:
+        did = deliverable_id or board_id or mission_id
+        lines.append(
+            f'{step}. get_mission_status(project="{project}", deliverable_id="{did.strip()}")'
+        )
+        step += 1
     if task_id:
-        lines.append(f'5. get_task(task_id="{task_id}", project="{project}")')
+        lines.append(f'{step}. get_task(task_id="{task_id}", project="{project}")')
     elif lane:
-        lines.append(f'5. search_tasks(workstream="{lane}", project="{project}")')
+        lines.append(f'{step}. search_tasks(workstream="{lane}", project="{project}")')
     else:
-        lines.append(f'5. board_summary(project="{project}")')
+        lines.append(f'{step}. board_summary(project="{project}")')
     lines.append('If a task or lane is missing, stop and call prepare_agent_session again before doing work.')
     return "\n".join(lines)
 
 
 def _first_calls(project: str, agent_id: str, runtime: str, model: str,
-                 task_id: str, lane: str, agreement: dict) -> list[dict]:
+                 task_id: str, lane: str, agreement: dict,
+                 deliverable_id: str = "", board_id: str = "",
+                 mission_id: str = "", milestone_id: str = "") -> list[dict]:
     register_args = {
         "agent_id": agent_id,
         "runtime": runtime or "<runtime>",
@@ -386,8 +438,21 @@ def _first_calls(project: str, agent_id: str, runtime: str, model: str,
         {"tool": "list_unblock_requests", "args": {"owner_agent": agent_id, "project": project}},
         {"tool": "get_project_contract", "args": {
             "project": project, "task_id": task_id or "", "lane": lane or "",
+            "deliverable_id": deliverable_id or "",
+            "board_id": board_id or "",
+            "mission_id": mission_id or "",
+            "milestone_id": milestone_id or "",
         }},
     ]
+    if (deliverable_id or board_id or mission_id).strip():
+        ms_args = {"project": project}
+        if deliverable_id:
+            ms_args["deliverable_id"] = deliverable_id
+        if board_id:
+            ms_args["board_id"] = board_id
+        if mission_id:
+            ms_args["mission_id"] = mission_id
+        calls.append({"tool": "get_mission_status", "args": ms_args})
     if task_id:
         calls.append({"tool": "get_task", "args": {"task_id": task_id, "project": project}})
     elif lane:
@@ -405,21 +470,30 @@ def list_projects() -> str:
 
 
 @mcp.tool()
-def get_project_contract(project: str = "maxwell", lane: str = "", task_id: str = "") -> str:
+def get_project_contract(project: str = "maxwell", lane: str = "", task_id: str = "",
+                       deliverable_id: str = "", board_id: str = "",
+                       mission_id: str = "", milestone_id: str = "") -> str:
     """Return the project-level project/lane/task contract for any Switchboard project.
 
     This is the project-agnostic replacement for assuming repo-local files such as
     docs/EPICS.md describe the active board. It returns the selected project, lane tasks,
     assigned task deliverable/exit criteria/dependencies, active agents in the lane, and
-    operating rules. Use it at boot and whenever a repo contains docs for a different project.
+    operating rules. When deliverable_id or board_id/mission_id is set, it also returns
+    mission_context from get_mission_status. Use it at boot and whenever a repo contains
+    docs for a different project.
     """
-    return _dumps(_project_contract(project=project, lane=lane, task_id=task_id))
+    return _dumps(_project_contract(
+        project=project, lane=lane, task_id=task_id,
+        deliverable_id=deliverable_id, board_id=board_id,
+        mission_id=mission_id, milestone_id=milestone_id))
 
 
 @mcp.tool()
 def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = "",
                           task_id: str = "", lane: str = "", model: str = "",
-                          intent: str = "") -> str:
+                          intent: str = "", deliverable_id: str = "",
+                          board_id: str = "", mission_id: str = "",
+                          milestone_id: str = "") -> str:
     """Boot-time resolver for autonomous agents.
 
     Call this BEFORE get_working_agreement/register_agent/claim_next. It lists available
@@ -427,6 +501,10 @@ def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = 
     any explicit project choice, and returns a project-bound startup prompt plus exact first
     MCP calls. This prevents agents from silently landing on the default Maxwell board or
     doing Vulkan work on Helm.
+
+    When deliverable_id or board_id/mission_id is set, the session is deliverable-first:
+    project is the mission-home project that owns the deliverable record, and first_calls
+    include get_mission_status before task work begins.
     """
     tid = (task_id or "").strip().upper()
     ws = (lane or "").strip().upper()
@@ -527,6 +605,11 @@ def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = 
 
     agreement = store.get_working_agreement(project=selected)
     chosen_agent_id = _suggest_agent_id(runtime, agent_id, tid, ws, task)
+    contract = _project_contract(
+        selected, lane=ws, task_id=tid,
+        deliverable_id=deliverable_id, board_id=board_id,
+        mission_id=mission_id, milestone_id=milestone_id)
+    deliverable_scope = bool((deliverable_id or board_id or mission_id).strip())
     return _dumps({
         "ok": True,
         "status": "ready",
@@ -539,11 +622,22 @@ def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = 
         "lane": ws,
         "agent_id": chosen_agent_id,
         "intent": intent,
+        "deliverable_scope": deliverable_scope,
+        "deliverable_id": (deliverable_id or "").strip() or None,
+        "board_id": (board_id or "").strip() or None,
+        "mission_id": (mission_id or "").strip() or None,
+        "milestone_id": (milestone_id or "").strip() or None,
         "warnings": warnings,
         "working_agreement": agreement,
-        "project_contract": _project_contract(selected, lane=ws, task_id=tid),
-        "first_calls": _first_calls(selected, chosen_agent_id, runtime, model, tid, ws, agreement),
-        "startup_prompt": _agent_bootstrap_prompt(selected, chosen_agent_id, tid, ws),
+        "project_contract": contract,
+        "first_calls": _first_calls(
+            selected, chosen_agent_id, runtime, model, tid, ws, agreement,
+            deliverable_id=deliverable_id, board_id=board_id,
+            mission_id=mission_id, milestone_id=milestone_id),
+        "startup_prompt": _agent_bootstrap_prompt(
+            selected, chosen_agent_id, tid, ws,
+            deliverable_id=deliverable_id, board_id=board_id,
+            mission_id=mission_id, milestone_id=milestone_id),
     })
 
 

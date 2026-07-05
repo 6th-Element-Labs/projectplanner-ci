@@ -185,5 +185,7 @@ Task drafts in a proposal use:
 
 ## Next Surfaces
 
-Later tasks should add deliverable-aware scheduling, Mission Page UI, generated narrative,
-coordinator loops, and KPI/cost rollups.
+Deliverable-aware scheduling, Mission Page UI, generated narrative, coordinator loops, and
+KPI/cost rollups are tracked on the DELIVERABLES workstream. Agent startup from
+`deliverable_id` / `mission_id` is documented in
+[`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).

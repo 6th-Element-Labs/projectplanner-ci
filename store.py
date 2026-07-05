@@ -10521,6 +10521,39 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "inbox(unacked)",
             "check+claim before first write",
         ],
+        "deliverable_first_startup": {
+            "doc": "docs/DELIVERABLE-FIRST-STARTUP.md",
+            "ownership": {
+                "projects": "repo/trust/policy/access/CI/model/budget/Done authority",
+                "boards_missions": "live outcome cockpits; boards own execution routing",
+                "deliverables": "shipped-value definition, end_state, milestones, cross-board proof rollup",
+                "tasks": "execution units on exactly one project workstream",
+            },
+            "mission_home_project": (
+                "The project database that owns the deliverable record. Pass this as project= "
+                "on mission tools even when linked tasks live on other projects."
+            ),
+            "boot_sequence": [
+                "prepare_agent_session(project=<mission_home>, deliverable_id=... | board_id=... | mission_id=...)",
+                "get_mission_status(project=<mission_home>, deliverable_id=...)",
+                "Read end_state, acceptance_criteria, policy_constraints, milestones, linked_tasks, blockers, next_actions",
+                "Workers: claim_next(agent_id, project=<mission_home>, deliverable_id=..., milestone_id=...)",
+                "Workers: complete_claim(..., project=<task_project>, evidence={mission_project, deliverable_id, milestone_id, branch, head_sha, pr_url})",
+            ],
+            "coordinator_sequence": [
+                "get_mission_status",
+                "Follow next_actions (approve_breakdown, claim_task, verify_merge_provenance, request_human_approval)",
+                "claim_next(deliverable_id=...) or approve_deliverable_breakdown",
+                "update_mission_narrative when material state changes",
+            ],
+        },
+        "session_start_sequence_deliverable": [
+            "prepare_agent_session(project, deliverable_id|board_id|mission_id)",
+            "get_mission_status",
+            "register_agent",
+            "inbox(unacked)",
+            "claim_next(deliverable_id=...) or claim_task on an explicit linked task",
+        ],
         "agent_completion_rule": "complete_claim(evidence=...) records branch/head_sha/PR/offline evidence and moves to In Review; agents cannot mark Done. Done is reserved for GitHub/default-branch merge provenance or verifier-stamped offline evidence.",
     }
     agreement = {**default, **override, "project": project}

@@ -18,10 +18,14 @@ agent-collaboration product itself.
 
 Reads (open):
 - `list_projects()` — list routable boards.
-- `prepare_agent_session(runtime, agent_id?, project?, task_id?, lane?)` — boot-time project
-  resolver. It validates or infers the selected project and returns a project-bound startup prompt,
-  first calls, and a project-level `project_contract`.
-- `get_project_contract(project, lane?, task_id?)` — project-agnostic lane/task contract from the
+- `prepare_agent_session(runtime, agent_id?, project?, task_id?, lane?, deliverable_id?,
+  board_id?, mission_id?, milestone_id?)` — boot-time project resolver. It validates or infers
+  the selected project and returns a project-bound startup prompt, first calls, and a project-level
+  `project_contract`. When `deliverable_id` or `board_id`/`mission_id` is set, the session is
+  deliverable-first: `first_calls` include `get_mission_status` and `project_contract` carries
+  `mission_context`. See [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).
+- `get_project_contract(project, lane?, task_id?, deliverable_id?, board_id?, mission_id?,
+  milestone_id?)` — project-agnostic lane/task contract from the board.
   selected Project workspace: selected project, lane tasks, assigned task deliverable/exit criteria,
   dependency status, active agents, repo topology, and the local-docs policy.
 - `search_tasks(workstream?, status?, owner_person?, blocking?, query?)` — filter the live plan.
@@ -153,6 +157,9 @@ Scheduled reconcile alert rule:
 Project contract rule:
 - At boot, agents should call `prepare_agent_session(...)` before registration and use the returned
   `selected_project` on every call.
+- For cross-board outcomes, boot with `deliverable_id` or `board_id`/`mission_id` on
+  `prepare_agent_session` and read `get_mission_status` before editing. Boards own execution;
+  deliverables own outcomes. See [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).
 - Agents should treat `project_contract` / `get_project_contract(...)` as the canonical lane/task
   contract for the selected board. Do not assume repo-local docs such as `docs/EPICS.md` describe
   the active project unless the selected project or task explicitly points there.

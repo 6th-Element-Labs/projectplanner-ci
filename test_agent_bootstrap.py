@@ -137,6 +137,46 @@ try:
        "missing project/task/lane asks the agent to choose")
     ok(any(p["id"] == "vulkan" for p in needs_choice["projects"]),
        "choice response lists dynamic projects")
+
+    store.create_project("Boot Home", project_id="qa-boot-home", actor="test")
+    store.create_project("Boot Target", project_id="qa-boot-target", actor="test")
+    store.create_task({"workstream_id": "RENDER", "title": "Linked worker task"},
+                      actor="test", project="qa-boot-target")
+    mission = store.create_project_board(
+        {"id": "boot-mission", "title": "Boot Mission", "kind": "mission", "status": "active"},
+        actor="test", project="qa-boot-home")
+    store.create_deliverable(
+        {"id": "boot-mission", "board_id": mission["id"], "title": "Boot Mission",
+         "status": "approved", "end_state": "Cross-board ingest works.",
+         "acceptance_criteria": ["fixture loads"], "policy_constraints": {"renderer": "webgpu"}},
+        actor="test", project="qa-boot-home")
+    ms = store.add_deliverable_milestone(
+        "boot-mission", {"title": "Build ingest", "status": "in_progress"},
+        actor="test", project="qa-boot-home")
+    milestone_id = ms["milestones"][0]["id"]
+    store.link_task_to_deliverable(
+        "boot-mission", "qa-boot-target", "RENDER-1", milestone_id=milestone_id,
+        actor="test", project="qa-boot-home")
+
+    deliverable_boot = call_boot(
+        runtime="cursor", project="qa-boot-home", deliverable_id="boot-mission",
+        milestone_id=milestone_id)
+    ok(deliverable_boot["ok"] is True and deliverable_boot.get("deliverable_scope") is True,
+       "prepare_agent_session advertises deliverable scope")
+    ok(deliverable_boot["project_contract"].get("mission_context", {}).get("deliverable_id") == "boot-mission",
+       "project contract includes mission_context for deliverable boot")
+    ok(any(c["tool"] == "get_mission_status" for c in deliverable_boot["first_calls"]),
+       "deliverable boot first_calls include get_mission_status")
+    ok("Deliverable-first boot" in deliverable_boot["startup_prompt"],
+       "startup prompt advertises deliverable-first boot flow")
+    ok("boards/workstreams own execution" in deliverable_boot["startup_prompt"],
+       "startup prompt states boards own execution and deliverables own outcomes")
+
+    agreement = json.loads(mcp_server.get_working_agreement(project="qa-boot-home"))
+    ok(agreement.get("deliverable_first_startup", {}).get("doc") == "docs/DELIVERABLE-FIRST-STARTUP.md",
+       "get_working_agreement advertises deliverable-first startup doc")
+    ok("session_start_sequence_deliverable" in agreement,
+       "get_working_agreement includes deliverable session start sequence")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
