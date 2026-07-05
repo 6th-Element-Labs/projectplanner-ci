@@ -158,16 +158,19 @@ try:
                                project=P)
         client = TestClient(app)
         denied = client.get(f"/api/cleanup/candidates?project={P}")
+        denied_apply = client.post("/api/cleanup/apply",
+                                   json={"project": P, "dry_run": True})
         allowed = client.get(f"/api/cleanup/candidates?project={P}",
                              headers={"Authorization": f"Bearer {token}"})
         dry_rest = client.post("/api/cleanup/apply",
                                json={"project": P, "dry_run": True},
                                headers={"Authorization": f"Bearer {token}"})
         ok(denied.status_code == 401, "REST cleanup candidates require auth")
+        ok(denied_apply.status_code == 401, "REST cleanup apply still requires auth")
         ok(allowed.status_code == 200 and "candidates" in allowed.json(),
            "REST cleanup candidates returns a plan")
         ok(dry_rest.status_code == 200 and dry_rest.json()["dry_run"] is True,
-           "REST cleanup apply defaults to dry-run")
+           "REST cleanup apply accepts body-scoped project and defaults to dry-run")
     except ModuleNotFoundError as exc:
         print(f"  SKIP  FastAPI cleanup smoke requires optional dependency: {exc.name}")
 finally:

@@ -921,6 +921,44 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ON external_side_effects(task_id, status);
             CREATE INDEX IF NOT EXISTS ix_external_effects_resource
                 ON external_side_effects(effect_type, target, resource);
+            CREATE TABLE IF NOT EXISTS external_ci_runs (
+                run_id          TEXT PRIMARY KEY,
+                source_project  TEXT NOT NULL,
+                source_repo     TEXT NOT NULL,
+                source_branch   TEXT,
+                source_sha      TEXT NOT NULL,
+                mirror_repo     TEXT NOT NULL,
+                mirror_branch   TEXT NOT NULL,
+                workflow        TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'requested',
+                conclusion      TEXT,
+                run_url         TEXT,
+                logs_url        TEXT,
+                artifacts_json  TEXT NOT NULL DEFAULT '[]',
+                failure_class   TEXT,
+                failure_reason  TEXT,
+                task_id         TEXT,
+                claim_id        TEXT,
+                agent_id        TEXT,
+                actor           TEXT,
+                principal_id    TEXT,
+                effect_key      TEXT,
+                request_json    TEXT NOT NULL DEFAULT '{}',
+                result_json     TEXT NOT NULL DEFAULT '{}',
+                requested_at    REAL NOT NULL,
+                mirrored_at     REAL,
+                triggered_at    REAL,
+                completed_at    REAL,
+                updated_at      REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_external_ci_task
+                ON external_ci_runs(task_id, updated_at);
+            CREATE INDEX IF NOT EXISTS ix_external_ci_source
+                ON external_ci_runs(source_project, source_sha);
+            CREATE INDEX IF NOT EXISTS ix_external_ci_status
+                ON external_ci_runs(status, updated_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_external_ci_effect
+                ON external_ci_runs(effect_key) WHERE effect_key IS NOT NULL;
             CREATE TABLE IF NOT EXISTS llm_spend (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
                 request_id        TEXT,
@@ -2464,6 +2502,18 @@ def _idem_store(c: sqlite3.Connection, operation: str, idem_key: str,
 
 
 EXTERNAL_EFFECT_TERMINAL_STATUSES = {"verified", "failed", "dead_letter", "void"}
+EXTERNAL_CI_STATUSES = {
+    "requested", "mirrored", "triggered", "running", "success", "failure", "cancelled", "error"
+}
+EXTERNAL_CI_TERMINAL_STATUSES = {"success", "failure", "cancelled", "error"}
+EXTERNAL_CI_FAILURE_CLASSES = {
+    "mirror_sync_failed": "stale_branch",
+    "workflow_trigger_failed": "broken_connection",
+    "workflow_poll_failed": "broken_connection",
+    "workflow_failed": "failed_gate",
+}
+GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+WORKFLOW_REF_RE = re.compile(r"^[A-Za-z0-9_.@:/-]+$")
 
 
 def _canonical_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2477,6 +2527,263 @@ def _payload_hash(payload: Optional[Dict[str, Any]]) -> str:
 def _effect_window_key(now: float, idempotency_window_seconds: int = 0) -> str:
     window = int(idempotency_window_seconds or 0)
     return f"window:{window}:{int(now // window)}" if window > 0 else "permanent"
+
+
+def default_external_ci_mirror_branch(task_id: str, source_sha: str) -> str:
+    task = re.sub(r"[^A-Za-z0-9_.-]+", "-", (task_id or "task").strip()).strip("-") or "task"
+    sha = (source_sha or "").strip()[:12] or "unknown"
+    return f"ci/{task}/{sha}"
+
+
+def _external_ci_row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if not row:
+        return None
+    d = dict(row)
+    d["artifacts"] = _json_obj(d.pop("artifacts_json", "[]"), [])
+    d["request"] = _json_obj(d.pop("request_json", "{}"), {})
+    d["result"] = _json_obj(d.pop("result_json", "{}"), {})
+    return d
+
+
+def _validate_external_ci_status(status: str) -> str:
+    clean = (status or "requested").strip().lower()
+    return clean if clean in EXTERNAL_CI_STATUSES else ""
+
+
+def _validate_external_ci_failure_class(value: str) -> str:
+    clean = (value or "").strip().lower()
+    return clean if not clean or clean in EXTERNAL_CI_FAILURE_CLASSES else ""
+
+
+def _external_ci_request_payload(data: Dict[str, Any], project: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    source_project = (data.get("source_project") or project or DEFAULT_PROJECT).strip()
+    if not has_project(source_project):
+        return {}, {"error": f"unknown source project: {source_project}"}
+    task_id = (data.get("task_id") or "").strip().upper()
+    if task_id and not get_task(task_id, project=project):
+        return {}, {"error": "unknown task", "task_id": task_id, "project": project}
+    source_repo, source_repo_error = _validate_github_repo(
+        data.get("source_repo") or get_project_github_repo(source_project))
+    if source_repo_error:
+        return {}, {"error": source_repo_error, "repo": source_repo, "field": "source_repo"}
+    if not source_repo:
+        return {}, {"error": "source_repo required", "source_project": source_project}
+    mirror_repo, mirror_repo_error = _validate_github_repo(data.get("mirror_repo") or "")
+    if mirror_repo_error:
+        return {}, {"error": mirror_repo_error, "repo": mirror_repo, "field": "mirror_repo"}
+    if not mirror_repo:
+        return {}, {"error": "mirror_repo required"}
+    source_sha = (data.get("source_sha") or "").strip()
+    if not GIT_SHA_RE.match(source_sha):
+        return {}, {"error": "source_sha must be a 7-64 character hex Git SHA"}
+    workflow = (data.get("workflow") or "").strip()
+    if not workflow:
+        return {}, {"error": "workflow required"}
+    if not WORKFLOW_REF_RE.match(workflow):
+        return {}, {"error": "workflow contains unsupported characters"}
+    mirror_branch = (data.get("mirror_branch") or
+                     default_external_ci_mirror_branch(task_id, source_sha)).strip()
+    if not mirror_branch.startswith("ci/"):
+        return {}, {"error": "mirror_branch must be under ci/"}
+    status = _validate_external_ci_status(data.get("status") or "requested")
+    if not status:
+        return {}, {"error": "invalid external CI status",
+                    "allowed": sorted(EXTERNAL_CI_STATUSES)}
+    failure_class = _validate_external_ci_failure_class(data.get("failure_class") or "")
+    if (data.get("failure_class") or "") and not failure_class:
+        return {}, {"error": "invalid external CI failure_class",
+                    "allowed": sorted(EXTERNAL_CI_FAILURE_CLASSES)}
+    return {
+        "source_project": source_project,
+        "source_repo": source_repo,
+        "source_branch": (data.get("source_branch") or "").strip() or None,
+        "source_sha": source_sha.lower(),
+        "mirror_repo": mirror_repo,
+        "mirror_branch": mirror_branch,
+        "workflow": workflow,
+        "status": status,
+        "conclusion": (data.get("conclusion") or "").strip() or None,
+        "run_url": (data.get("run_url") or "").strip() or None,
+        "logs_url": (data.get("logs_url") or "").strip() or None,
+        "artifacts": data.get("artifacts") or [],
+        "failure_class": failure_class or None,
+        "failure_reason": (data.get("failure_reason") or "").strip() or None,
+        "task_id": task_id or None,
+        "claim_id": (data.get("claim_id") or "").strip() or None,
+        "agent_id": (data.get("agent_id") or "").strip() or None,
+        "principal_id": (data.get("principal_id") or "").strip() or None,
+        "request": data.get("request") or {},
+        "result": data.get("result") or {},
+    }, {}
+
+
+def create_external_ci_run(data: Dict[str, Any], actor: str = "system",
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    normalized, error = _external_ci_request_payload(data or {}, project)
+    if error:
+        return error
+    now = time.time()
+    run_id = (data.get("run_id") or "ecir-" + uuid.uuid4().hex[:16]).strip()
+    side_payload = {
+        "source_project": normalized["source_project"],
+        "source_repo": normalized["source_repo"],
+        "source_branch": normalized["source_branch"],
+        "source_sha": normalized["source_sha"],
+        "mirror_repo": normalized["mirror_repo"],
+        "mirror_branch": normalized["mirror_branch"],
+        "workflow": normalized["workflow"],
+        "task_id": normalized["task_id"],
+        "claim_id": normalized["claim_id"],
+    }
+    with _conn(project) as c:
+        effect = _claim_external_effect_in(
+            c,
+            "external_ci_mirror",
+            normalized["mirror_repo"],
+            normalized["mirror_branch"],
+            side_payload,
+            task_id=normalized["task_id"],
+            claim_id=normalized["claim_id"] or "",
+            agent_id=normalized["agent_id"] or "",
+            idem_key=(data.get("idem_key") or ""),
+            actor=actor,
+            principal_id=normalized["principal_id"] or "",
+            project=project,
+            now=now,
+        )
+        effect_key = effect["effect_key"]
+        existing = c.execute("SELECT * FROM external_ci_runs WHERE effect_key=?",
+                             (effect_key,)).fetchone()
+        if existing:
+            out = _external_ci_row(existing)
+            out["idempotent"] = True
+            out["side_effect"] = effect
+            return out
+        c.execute(
+            """INSERT INTO external_ci_runs
+               (run_id, source_project, source_repo, source_branch, source_sha,
+                mirror_repo, mirror_branch, workflow, status, conclusion, run_url,
+                logs_url, artifacts_json, failure_class, failure_reason, task_id,
+                claim_id, agent_id, actor, principal_id, effect_key, request_json,
+                result_json, requested_at, mirrored_at, triggered_at, completed_at,
+                updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                run_id, normalized["source_project"], normalized["source_repo"],
+                normalized["source_branch"], normalized["source_sha"], normalized["mirror_repo"],
+                normalized["mirror_branch"], normalized["workflow"], normalized["status"],
+                normalized["conclusion"], normalized["run_url"], normalized["logs_url"],
+                json.dumps(normalized["artifacts"], sort_keys=True),
+                normalized["failure_class"], normalized["failure_reason"], normalized["task_id"],
+                normalized["claim_id"], normalized["agent_id"], actor,
+                normalized["principal_id"], effect_key,
+                json.dumps(normalized["request"], sort_keys=True),
+                json.dumps(normalized["result"], sort_keys=True),
+                now,
+                now if normalized["status"] in {"mirrored", "triggered", "running", "success", "failure"} else None,
+                now if normalized["status"] in {"triggered", "running", "success", "failure"} else None,
+                now if normalized["status"] in EXTERNAL_CI_TERMINAL_STATUSES else None,
+                now,
+            ),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (normalized["task_id"], actor, "external_ci.requested",
+                   json.dumps({"run_id": run_id, "effect_key": effect_key,
+                               "source_project": normalized["source_project"],
+                               "source_repo": normalized["source_repo"],
+                               "source_sha": normalized["source_sha"],
+                               "mirror_repo": normalized["mirror_repo"],
+                               "mirror_branch": normalized["mirror_branch"],
+                               "workflow": normalized["workflow"]}, sort_keys=True), now))
+        row = c.execute("SELECT * FROM external_ci_runs WHERE run_id=?", (run_id,)).fetchone()
+    out = _external_ci_row(row)
+    out["side_effect"] = effect
+    return out
+
+
+def update_external_ci_run(run_id: str, fields: Dict[str, Any], actor: str = "system",
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    init_db(project)
+    allowed = {"status", "conclusion", "run_url", "logs_url", "artifacts",
+               "failure_class", "failure_reason", "result"}
+    updates = {k: v for k, v in (fields or {}).items() if k in allowed}
+    if not updates:
+        return get_external_ci_run(run_id, project=project) or {"error": "external_ci_run not found"}
+    status = _validate_external_ci_status(updates.get("status") or "")
+    if "status" in updates and not status:
+        return {"error": "invalid external CI status", "allowed": sorted(EXTERNAL_CI_STATUSES)}
+    failure_class = _validate_external_ci_failure_class(updates.get("failure_class") or "")
+    if (updates.get("failure_class") or "") and not failure_class:
+        return {"error": "invalid external CI failure_class",
+                "allowed": sorted(EXTERNAL_CI_FAILURE_CLASSES)}
+    now = time.time()
+    sets: List[str] = ["updated_at=?"]
+    vals: List[Any] = [now]
+    if "status" in updates:
+        sets.append("status=?"); vals.append(status)
+        if status in {"mirrored", "triggered", "running", "success", "failure"}:
+            sets.append("mirrored_at=COALESCE(mirrored_at, ?)")
+            vals.append(now)
+        if status in {"triggered", "running", "success", "failure"}:
+            sets.append("triggered_at=COALESCE(triggered_at, ?)")
+            vals.append(now)
+        if status in EXTERNAL_CI_TERMINAL_STATUSES:
+            sets.append("completed_at=COALESCE(completed_at, ?)")
+            vals.append(now)
+    for key, column in (("conclusion", "conclusion"), ("run_url", "run_url"),
+                        ("logs_url", "logs_url"), ("failure_reason", "failure_reason")):
+        if key in updates:
+            sets.append(f"{column}=?"); vals.append((updates.get(key) or "").strip() or None)
+    if "failure_class" in updates:
+        sets.append("failure_class=?"); vals.append(failure_class or None)
+    if "artifacts" in updates:
+        sets.append("artifacts_json=?")
+        vals.append(json.dumps(updates.get("artifacts") or [], sort_keys=True))
+    if "result" in updates:
+        sets.append("result_json=?")
+        vals.append(json.dumps(updates.get("result") or {}, sort_keys=True))
+    vals.append(run_id)
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM external_ci_runs WHERE run_id=?", (run_id,)).fetchone()
+        if not row:
+            return {"error": "external_ci_run not found", "run_id": run_id}
+        c.execute(f"UPDATE external_ci_runs SET {', '.join(sets)} WHERE run_id=?", vals)
+        if "status" in updates:
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"], actor, "external_ci.status",
+                       json.dumps({"run_id": run_id, "status": status,
+                                   "conclusion": updates.get("conclusion")},
+                                  sort_keys=True), now))
+        updated = c.execute("SELECT * FROM external_ci_runs WHERE run_id=?",
+                            (run_id,)).fetchone()
+    return _external_ci_row(updated)
+
+
+def get_external_ci_run(run_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    init_db(project)
+    with _conn(project) as c:
+        return _external_ci_row(c.execute(
+            "SELECT * FROM external_ci_runs WHERE run_id=?", (run_id,)).fetchone())
+
+
+def list_external_ci_runs(task_id: str = "", source_project: str = "",
+                          source_sha: str = "", status: str = "",
+                          project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    init_db(project)
+    q = "SELECT * FROM external_ci_runs WHERE 1=1"
+    params: List[Any] = []
+    if task_id:
+        q += " AND task_id=?"; params.append(task_id.strip().upper())
+    if source_project:
+        q += " AND source_project=?"; params.append(source_project.strip())
+    if source_sha:
+        q += " AND source_sha=?"; params.append(source_sha.strip().lower())
+    if status:
+        q += " AND status=?"; params.append(status.strip().lower())
+    q += " ORDER BY updated_at DESC, run_id"
+    with _conn(project) as c:
+        return [_external_ci_row(row) for row in c.execute(q, params).fetchall()]
 
 
 def make_external_effect_key(effect_type: str, target: str, resource: str,
@@ -6038,6 +6345,11 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             ("payload_json", "readback_json"),
             order_by="requested_at, effect_key",
         )
+        external_ci_runs = _audit_json_rows(
+            c, "external_ci_runs",
+            ("artifacts_json", "request_json", "result_json"),
+            order_by="requested_at, run_id",
+        )
         git_state = [_git_state_row(row) for row in c.execute(
             "SELECT * FROM task_git_state ORDER BY updated_at, task_id"
         ).fetchall()]
@@ -6079,6 +6391,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "principal_count": len(principals),
             "runner_session_count": len(runner_sessions),
             "side_effect_count": len(side_effects),
+            "external_ci_run_count": len(external_ci_runs),
             "outcome_count": len(outcomes),
             "spend_count": len(spend),
             "deliverable_count": len(deliverables),
@@ -6100,6 +6413,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "runner_sessions": _audit_redact(runner_sessions),
         "runner_control_requests": runner_controls,
         "external_side_effects": _audit_redact(side_effects),
+        "external_ci_runs": _audit_redact(external_ci_runs),
         "git_state": _audit_redact(git_state),
         "economics": {
             "project_tally": _audit_redact(project_tally(project=project)),

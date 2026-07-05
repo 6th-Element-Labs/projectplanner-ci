@@ -203,6 +203,7 @@ def _auth_exempt_path(path: str) -> bool:
     return (
         path == "/health" or
         path == "/api/github/webhook" or
+        path == "/api/cleanup/apply" or
         path.startswith("/api/auth/")
     )
 
