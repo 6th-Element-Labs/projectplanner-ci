@@ -8,10 +8,12 @@ contract as every other runtime.
 ## How it works
 1. **MCP** — point Cursor at `https://plan.taikunai.com/mcp` (same server). The IXP/board tools
    are then available in-session.
-2. **A Cursor Rule** carries the session-start handshake + the hard rule, so the model runs it:
-   - paste the contents of [`rule.md`](rule.md) into a Cursor Project Rule (always-applied).
-   - it instructs: at session start call `get_working_agreement` → `register_agent` → drain
-     inbox; **never set a task to `Done`** (move only to `In Review`); claim files before editing.
+2. **A Cursor Rule** carries the session-start handshake + the hard rule, so the model runs it.
+   This repo ships it at [`.cursor/rules/switchboard.mdc`](../../.cursor/rules/switchboard.mdc)
+   (always-applied). It instructs: at session start call `prepare_agent_session` →
+   `get_working_agreement` → `register_agent` → drain inbox; **never set a task to `Done`**
+   (move only to `In Review`); claim files before editing. See [`.cursor/README.md`](../../.cursor/README.md)
+   for local vs Cloud Agent MCP setup.
 3. **Enforcement** — for a *managed* Cursor runner that can shell out before a tool, call the
    raw-loop guard (`adapters/openai-loop/openai_loop_adapter.guard_tool`) — identical core,
    identical verdicts. Without that, Cursor is advisory only.
