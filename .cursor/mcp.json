@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "taikun-plan": {
+      "url": "https://plan.taikunai.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:PM_MCP_TOKEN}"
+      }
+    }
+  }
+}

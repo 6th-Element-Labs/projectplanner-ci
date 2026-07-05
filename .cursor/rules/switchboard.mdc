@@ -1,0 +1,29 @@
+---
+alwaysApply: true
+---
+
+# Switchboard (plan.taikunai.com)
+
+This project uses the **taikun-plan** MCP server at `https://plan.taikunai.com/mcp`.
+
+## Session start
+
+Before doing board work in an agent session:
+
+1. Call `prepare_agent_session` with your runtime and assigned `project` / `task_id` / `lane` when known.
+2. Call `get_working_agreement(project)` and follow it for the whole session.
+3. Call `register_agent`.
+4. Drain your inbox / pending acks.
+
+Use the `project` returned by `prepare_agent_session` on every MCP call (`switchboard` for this repo's product work).
+
+## Hard rules
+
+- Never set a task to `Done`. Use `complete_claim(evidence=...)` to move work to **In Review**.
+- `Done` is reserved for merge/default-branch provenance recorded by webhook or reconcile.
+- Claim files / resources before editing when the board requires it.
+- If unsure about lane ownership or deliverables, call `get_project_contract(project)` — do not assume repo-local docs describe the active board.
+
+## Auth
+
+Writes require `PM_MCP_TOKEN` (or a scoped Switchboard token) in your environment. Set it before starting Cursor if you need create/update tools.
