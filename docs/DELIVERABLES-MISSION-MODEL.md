@@ -167,8 +167,6 @@ Initial REST routes:
 
 ## Breakdown Workflow (DELIVERABLES-3)
 
-Coordinator/human flow:
-
 1. `submit_deliverable_outcome(project, deliverable_id, outcome, target_projects_json, ...)`
    generates a deterministic milestone/task draft grouped for review. Optional
    `PM_DELIVERABLE_BREAKDOWN_LLM=1` may refine the draft when the LLM gateway is available.
@@ -183,9 +181,46 @@ Task drafts in a proposal use:
 - `action: create` — requires `project_id`, `workstream_id`, `title`
 - `action: link` — requires `project_id`, `task_id`
 
+## Mission Brief (DELIVERABLES-6)
+
+`generate_mission_brief` builds a structured operator brief (`switchboard.mission_brief.v1`) from
+durable mission events: linked task status/provenance, blockers, milestones, next actions, and
+recent deliverable activity. The brief is not a chat transcript.
+
+- MCP: `generate_mission_brief`, `get_mission_brief`
+- REST: `POST /api/deliverables/{deliverable_id}/mission_brief?project=`
+- `get_mission_status` includes `mission_brief`, `narrative_state`, and `narrative_source`
+- `narrative_state` flags stale/contradictory manual or generated text (similar to `rationale_state`)
+- Manual edits via `update_mission_narrative` set `narrative_source=manual`
+
+## Workstream status
+
+```mermaid
+flowchart LR
+  D2[DELIVERABLES-2 Done] --> D3[3: breakdown workflow ✓]
+  D2 --> D4[4: deliverable-aware dispatch ✓]
+  D2 --> D5[5: Mission Page UI ✓]
+  D5 --> D6[6: generated narrative ✓]
+  D3 --> D7[7: coordinator loop]
+  D4 --> D7
+  D6 --> D7
+  D5 --> D8[8: dogfood missions]
+  D6 --> D8
+  D2 --> D9[9: economics/KPI rollup ✓]
+  D4 --> D10[10: agent startup contract ✓]
+
+  classDef done fill:#d4edda,stroke:#28a745,color:#155724
+  classDef review fill:#fff3cd,stroke:#ffc107,color:#856404
+  classDef todo fill:#e9ecef,stroke:#6c757d,color:#495057
+
+  class D2,D3,D4,D5,D6,D9,D10 done
+  class D7,D8 todo
+```
+
+Legend: ✓ Done · ◐ In Review · plain = Not Started. Board: `switchboard` / workstream `DELIVERABLES`.
+
 ## Next Surfaces
 
-Deliverable-aware scheduling, Mission Page UI, generated narrative, coordinator loops, and
-KPI/cost rollups are tracked on the DELIVERABLES workstream. Agent startup from
-`deliverable_id` / `mission_id` is documented in
+Coordinator loops and deeper dogfood are tracked on the DELIVERABLES workstream. Agent startup
+from `deliverable_id` / `mission_id` is documented in
 [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).

@@ -3131,6 +3131,44 @@ const TeepPlan = {
         return data;
     },
 
+    async generateMissionBrief() {
+        const id = (this.selectedDeliverableId || '').trim();
+        if (!id) return;
+        const el = document.getElementById('mission-page');
+        if (el) el.insertAdjacentHTML('afterbegin', '<div class="alert alert-info mb-3" id="mission-brief-busy">Generating live brief…</div>');
+        try {
+            const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_brief`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+            this.missionStatus = data.mission_status || data;
+            this.renderMissionPage();
+        } catch (e) {
+            alert(`Could not generate mission brief: ${e.message}`);
+        } finally {
+            document.getElementById('mission-brief-busy')?.remove();
+        }
+    },
+
+    _missionBriefHtml(s) {
+        const brief = s.mission_brief || {};
+        const state = s.narrative_state || {};
+        let html = '';
+        if (state.stale) {
+            html += `<div class="alert alert-warning mb-3"><div class="fw-semibold">Brief may be stale</div>
+                <div class="small">${this.esc(state.message || '')}${state.flags?.length ? ' Flags: ' + this.esc(state.flags.join(', ')) : ''}</div></div>`;
+        }
+        const text = brief.summary_markdown || s.narrative;
+        if (!text) return html;
+        const citeCount = (brief.citations || []).length;
+        html += `<div class="card mb-4"><div class="card-body">
+            <div class="d-flex align-items-center mb-2"><div class="subheader mb-0">Live product brief</div>
+            <span class="badge bg-blue-lt ms-2">${this.esc(s.narrative_source || 'generated')}</span>
+            ${citeCount ? `<span class="text-secondary small ms-auto">${citeCount} citations</span>` : ''}</div>
+            <p class="mb-2 small text-secondary">${this.esc(brief.honesty_note || '')}</p>
+            <div class="mb-0" style="white-space:pre-wrap">${this.esc(text)}</div></div></div>`;
+        return html;
+    },
+
     async refreshMissionPage() {
         const el = document.getElementById('mission-page');
         const picker = document.getElementById('mission-deliverable-picker');
@@ -3303,7 +3341,7 @@ const TeepPlan = {
         ].map(([label, value, icon, color]) => `<div class="col-6 col-md-4 col-xl-2"><div class="card card-sm"><div class="card-body">
             <div class="d-flex"><div class="subheader">${this.esc(label)}</div><div class="ms-auto text-${color}"><i class="ti ${icon}"></i></div></div>
             <div class="h2 mb-0 mt-1">${this.esc(value)}</div></div></div></div>`).join('')}</div>`;
-        const narrative = s.narrative ? `<div class="card mb-4"><div class="card-body"><div class="subheader mb-2">Live brief</div><p class="mb-0" style="white-space:pre-wrap">${this.esc(s.narrative)}</p></div></div>` : '';
+        const narrative = this._missionBriefHtml(s);
         const endState = `<div class="row g-3 mb-4"><div class="col-md-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">End state</h3></div><div class="card-body"><p class="mb-0" style="white-space:pre-wrap">${this.esc(d.end_state || '—')}</p></div></div></div>
             <div class="col-md-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Why it matters</h3></div><div class="card-body"><p class="mb-0" style="white-space:pre-wrap">${this.esc(d.why_it_matters || '—')}</p></div></div></div></div>`;
         const milestones = s.milestones || [];
@@ -3442,6 +3480,8 @@ const TeepPlan = {
         if (missionTab) missionTab.addEventListener('shown.bs.tab', () => this.refreshMissionPage());
         const missionRefresh = document.getElementById('mission-refresh');
         if (missionRefresh) missionRefresh.addEventListener('click', () => this.refreshMissionPage());
+        const missionGenerate = document.getElementById('mission-generate-brief');
+        if (missionGenerate) missionGenerate.addEventListener('click', () => this.generateMissionBrief());
         const missionPicker = document.getElementById('mission-deliverable-picker');
         if (missionPicker) missionPicker.addEventListener('change', (e) => {
             this.selectedDeliverableId = e.target.value || '';

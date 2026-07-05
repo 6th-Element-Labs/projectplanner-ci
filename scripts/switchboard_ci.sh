@@ -71,6 +71,8 @@ run_test test_github_webhook.py
 run_test test_ci_gate_policy.py
 run_test test_langgraph_adapter.py
 run_test test_mcp_dependencies.py
+run_test test_mission_narrative.py
+run_test test_mission_page.py
 run_test test_project_creation.py
 run_test test_publication_evidence.py
 run_test test_repo_hierarchy_surface.py

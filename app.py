@@ -713,6 +713,24 @@ async def deliverable_mission_status(deliverable_id: str, project: str = Query(.
     return result
 
 
+    return result
+
+
+@app.post("/api/deliverables/{deliverable_id}/mission_brief")
+async def generate_mission_brief(request: Request, deliverable_id: str,
+                                 project: str = Query(...),
+                                 persist: bool = Query(True)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    result = store.generate_mission_brief(
+        project=project, deliverable_id=deliverable_id,
+        actor=auth.actor(principal), persist=persist)
+    if result.get("error"):
+        code = 404 if "unknown" in result["error"] else 400
+        raise HTTPException(code, result["error"])
+    return result
+
+
 @app.patch("/api/deliverables/{deliverable_id}/narrative")
 async def update_mission_narrative(request: Request, deliverable_id: str,
                                    body: dict = Body(...),

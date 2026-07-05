@@ -120,6 +120,8 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   `list_deliverable_breakdown_proposals(...)`, `update_deliverable_breakdown_proposal(...)`,
   `reject_deliverable_breakdown(...)`, and `defer_deliverable_breakdown(...)` — coordinator
   outcome intake, human editing, and audited reject/defer before materialization.
+- `generate_mission_brief(...)`, and `get_mission_brief(...)` — structured live product brief
+  from durable task/provenance/activity events; exposes `narrative_state` stale/contradiction flags.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.

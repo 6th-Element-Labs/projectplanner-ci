@@ -2159,6 +2159,42 @@ def update_mission_narrative(deliverable_id: str, narrative: str, ctx: Context,
 
 
 @mcp.tool()
+def generate_mission_brief(deliverable_id: str, ctx: Context, project: str = "maxwell",
+                           board_id: str = "", mission_id: str = "",
+                           persist: bool = True) -> str:
+    """Generate a structured live mission brief from durable task/provenance events."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.generate_mission_brief(
+        project=project, deliverable_id=deliverable_id,
+        board_id=board_id, mission_id=mission_id,
+        actor=auth.actor(principal), persist=persist)
+    return _dumps(result)
+
+
+@mcp.tool()
+def get_mission_brief(deliverable_id: str, project: str = "maxwell",
+                      board_id: str = "", mission_id: str = "") -> str:
+    """Return stored/generated mission brief fields from mission_status."""
+    if not store.has_project(project):
+        return _dumps({"error": f"unknown project: {project}", "project": project})
+    status = store.get_mission_status(
+        project=project, deliverable_id=deliverable_id,
+        board_id=board_id, mission_id=mission_id)
+    if status.get("error"):
+        return _dumps(status)
+    return _dumps({
+        "schema": "switchboard.mission_brief_view.v1",
+        "project_id": project,
+        "deliverable_id": status.get("deliverable_id"),
+        "mission_brief": status.get("mission_brief"),
+        "narrative_state": status.get("narrative_state"),
+        "narrative": status.get("narrative"),
+        "brief_generated_at": status.get("brief_generated_at"),
+        "narrative_source": status.get("narrative_source"),
+    })
+
+
+@mcp.tool()
 def propose_deliverable_breakdown(deliverable_id: str, milestones_json: str,
                                   ctx: Context, project: str = "maxwell",
                                   proposal_id: str = "", notes: str = "") -> str:

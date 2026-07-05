@@ -132,9 +132,22 @@ try:
     ok(body.get("narrative") == "Access rollout is active across boards.",
        "mission page can show live narrative")
 
+    brief_res = client.post(
+        f"/api/deliverables/{deliverable['id']}/mission_brief",
+        params={"project": HOME},
+    )
+    ok(brief_res.status_code == 200, "POST mission_brief returns 200")
+    brief_body = brief_res.json()
+    ok((brief_body.get("mission_brief") or {}).get("schema") == "switchboard.mission_brief.v1",
+       "mission brief generation returns structured brief")
+    ok(isinstance((brief_body.get("narrative_state") or {}), dict),
+       "mission brief generation returns narrative_state")
+
     index = client.get("/")
     ok(index.status_code == 200 and "tab-mission" in index.text,
        "index.html exposes Mission tab shell")
+    ok("mission-generate-brief" in index.text,
+       "index.html exposes generate brief control")
     ok("mission-page" in index.text and "mission-deliverable-picker" in index.text,
        "index.html exposes mission page containers")
 
@@ -144,6 +157,8 @@ try:
         "refreshMissionPage",
         "renderMissionPage",
         "loadMissionStatus",
+        "generateMissionBrief",
+        "_missionBriefHtml",
         "openLinkedTask",
         "_missionPolicyDrift",
     ):

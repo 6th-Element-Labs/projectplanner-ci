@@ -2230,6 +2230,7 @@ def update_mission_narrative(deliverable_id: str, narrative: str, actor: str = "
             metadata["narrative"] = text
         metadata["narrative_updated_at"] = now
         metadata["narrative_updated_by"] = actor
+        metadata["narrative_source"] = "manual"
         c.execute(
             "UPDATE deliverables SET metadata_json=?, updated_at=? WHERE id=?",
             (json.dumps(metadata, sort_keys=True), now, deliverable_id),
@@ -3144,7 +3145,7 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
             pending_proposal = _breakdown_proposal_row(row)
     blockers = _mission_blockers(deliverable, linked_tasks)
     economics = deliverable_tally(deliverable.get("id"), project=project)
-    return {
+    result = {
         "schema": "switchboard.mission_status.v1",
         "project_id": project,
         "board_id": scope.get("board_id") or deliverable.get("board_id"),
@@ -3174,6 +3175,104 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
         "next_actions": _mission_next_actions(deliverable, linked_tasks, pending_proposal),
         "economics": economics if not economics.get("error") else economics,
     }
+    return _attach_mission_brief_fields(result, project=project)
+
+
+def _deliverable_activity(project: str, deliverable_id: str, limit: int = 12) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    with _conn(project) as c:
+        for row in c.execute(
+            "SELECT actor, kind, payload, created_at FROM activity "
+            "WHERE kind LIKE 'deliverable.%' ORDER BY created_at DESC LIMIT ?",
+            (max(limit * 8, 40),),
+        ).fetchall():
+            payload = _json_payload(row["payload"])
+            if isinstance(payload, dict) and payload.get("deliverable_id") not in (
+                None, deliverable_id,
+            ):
+                continue
+            rows.append({
+                "actor": row["actor"],
+                "kind": row["kind"],
+                "payload": payload,
+                "created_at": row["created_at"],
+            })
+            if len(rows) >= limit:
+                break
+    return rows
+
+
+def _attach_mission_brief_fields(mission_status: Dict[str, Any],
+                                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    if mission_status.get("error"):
+        return mission_status
+    import mission_narrative
+
+    deliverable_id = mission_status.get("deliverable_id") or ""
+    deliverable = get_deliverable(deliverable_id, project=project) if deliverable_id else None
+    metadata = (deliverable or {}).get("metadata") or {}
+    stored_brief = metadata.get("generated_brief") or {}
+    mission_status["mission_brief"] = stored_brief or None
+    mission_status["narrative_state"] = mission_narrative.narrative_state(
+        mission_status, metadata=metadata, stored_brief=stored_brief)
+    mission_status["brief_generated_at"] = metadata.get("brief_generated_at")
+    mission_status["narrative_source"] = metadata.get("narrative_source")
+    return mission_status
+
+
+def generate_mission_brief(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
+                           board_id: str = "", mission_id: str = "",
+                           actor: str = "system", persist: bool = True) -> Dict[str, Any]:
+    """Generate a structured mission brief from durable events and optionally persist it."""
+    import mission_narrative
+
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    status = get_mission_status(project=project, deliverable_id=deliverable_id,
+                                board_id=board_id, mission_id=mission_id)
+    if status.get("error"):
+        return status
+    deliverable_id = status.get("deliverable_id") or deliverable_id
+    activity = _deliverable_activity(project, deliverable_id)
+    brief = mission_narrative.build_mission_brief(status, recent_activity=activity)
+    narrative_state = mission_narrative.narrative_state(status, stored_brief=brief)
+    result = {
+        "schema": "switchboard.mission_brief_result.v1",
+        "project_id": project,
+        "deliverable_id": deliverable_id,
+        "mission_brief": brief,
+        "narrative_state": narrative_state,
+        "mission_status": status,
+    }
+    if not persist:
+        return result
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
+                        (deliverable_id,)).fetchone()
+        if not row:
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        metadata = _json_payload(row["metadata_json"])
+        metadata["generated_brief"] = brief
+        metadata["brief_generated_at"] = now
+        metadata["brief_generated_by"] = actor
+        metadata["brief_fingerprint"] = brief.get("source_fingerprint")
+        metadata["narrative"] = brief.get("summary_markdown")
+        metadata["narrative_updated_at"] = now
+        metadata["narrative_updated_by"] = actor
+        metadata["narrative_source"] = "generated"
+        c.execute(
+            "UPDATE deliverables SET metadata_json=?, updated_at=? WHERE id=?",
+            (json.dumps(metadata, sort_keys=True), now, deliverable_id),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.brief_generated",
+                   json.dumps({"deliverable_id": deliverable_id,
+                               "source_fingerprint": brief.get("source_fingerprint")},
+                              sort_keys=True), now))
+    result["mission_status"] = get_mission_status(
+        project=project, deliverable_id=deliverable_id)
+    return result
 
 
 def _empty_economics_totals() -> Dict[str, Any]:
