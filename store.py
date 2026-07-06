@@ -244,8 +244,12 @@ def hash_token(token: str) -> str:
 
 def projects() -> List[Dict[str, Any]]:
     """The switcher's source of truth — [{id, label, pretitle}]."""
+    visible = (os.environ.get("PM_TOP_LEVEL_PROJECTS") or "").strip()
+    allowed = {p.strip() for p in visible.split(",") if p.strip()} if visible else None
     out = []
     for k, v in _project_map().items():
+        if allowed is not None and k not in allowed:
+            continue
         access = project_access(k)
         out.append({
             "id": k,
@@ -256,7 +260,7 @@ def projects() -> List[Dict[str, Any]]:
             "owner_user_id": access.get("owner_user_id") or "",
             "org_id": access.get("org_id") or "",
         })
-    return out
+    return sorted(out, key=lambda p: p["id"])
 
 
 def role_scopes(role: str) -> List[str]:
