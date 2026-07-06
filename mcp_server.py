@@ -2140,6 +2140,15 @@ def get_mission_status(project: str = "maxwell", deliverable_id: str = "",
 
 
 @mcp.tool()
+def get_deliverable_dependency_graph(project: str = "maxwell", deliverable_id: str = "",
+                                     board_id: str = "", mission_id: str = "") -> str:
+    """Strategic dependency map: task nodes, depends_on edges, external blockers, mermaid flowchart."""
+    return _dumps(store.get_deliverable_dependency_graph(
+        project=project, deliverable_id=deliverable_id,
+        board_id=board_id, mission_id=mission_id))
+
+
+@mcp.tool()
 def mission_status(project: str = "maxwell", deliverable_id: str = "",
                    board_id: str = "", mission_id: str = "") -> str:
     """Alias for get_mission_status."""

@@ -40,6 +40,11 @@ const TeepPlan = {
     deliverables: [],
     missionStatus: null,
     selectedDeliverableId: '',
+    missionGraph: null,
+    _missionDagRenderId: 0,
+    _missionPollMs: 10000,   // live cockpit poll interval (ms)
+    _missionLiveTimer: null,
+    _missionSig: null,
     wsMeta: {},         // workstream_id -> {name, lead_org}
     gantt: null,        // ApexCharts instance
     ganttMode: 'task',  // default 'task' (per-task detail) · 'workstream' = 12-bar overview
@@ -152,6 +157,7 @@ const TeepPlan = {
         this.loadSignals();
         this.initInbox();
         this._missionDeliverableFromUrl();
+        await this._maybeDefaultToDeliverableTab();
         const ds = document.getElementById('data-status');
         if (ds) { ds.className = 'badge bg-green-lt'; ds.textContent = `${this.tasks.length} tasks`; }
     },
@@ -616,7 +622,7 @@ const TeepPlan = {
                 ? col.map((t) => this.taskCard(t)).join('')
                 : `<div class="text-secondary text-center py-4 small">—</div>`;
             return `
-                <div class="col-12 col-lg">
+                <div class="tk-board-col">
                     <div class="d-flex align-items-center mb-3 px-1">
                         <span class="status-dot bg-${color} me-2"></span>
                         <span class="h3 m-0">${this.esc(phase)}</span>
@@ -3099,8 +3105,27 @@ const TeepPlan = {
             const d = (u.searchParams.get('deliverable') || u.searchParams.get('mission') || '').trim();
             if (d) this.selectedDeliverableId = d;
             if (u.hash === '#tab-mission' || d) {
-                const tab = document.querySelector('a[href="#tab-mission"]');
+                // Target the TOP tab (in .nav-tabs) — that's the element Bootstrap fires
+                // shown.bs.tab on, which drives refreshMissionPage. The sidebar link shares
+                // href="#tab-mission" and would otherwise win document.querySelector.
+                const tab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
                 if (tab && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(tab).show();
+            }
+        } catch (e) { /* ignore */ }
+    },
+
+    async _maybeDefaultToDeliverableTab() {
+        try {
+            const u = new URL(window.location.href);
+            if (u.hash && u.hash !== '#tab-mission') return;
+            if (u.searchParams.get('deliverable') || u.searchParams.get('mission')) return;
+            await this.loadDeliverables();
+            if (!this.deliverables.length) return;
+            if (!this.selectedDeliverableId) this.selectedDeliverableId = this.deliverables[0].id;
+            const tab = document.querySelector('a[href="#tab-mission"]');
+            if (tab && window.bootstrap) {
+                window.bootstrap.Tab.getOrCreateInstance(tab).show();
+                await this.refreshMissionPage();
             }
         } catch (e) { /* ignore */ }
     },
@@ -3128,6 +3153,16 @@ const TeepPlan = {
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
         this.missionStatus = data;
+        return data;
+    },
+
+    async loadDependencyGraph(deliverableId) {
+        const id = (deliverableId || '').trim();
+        if (!id) { this.missionGraph = null; return null; }
+        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/dependency_graph`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+        this.missionGraph = data;
         return data;
     },
 
@@ -3197,7 +3232,10 @@ const TeepPlan = {
             return;
         }
         try {
-            await this.loadMissionStatus(this.selectedDeliverableId);
+            await Promise.all([
+                this.loadMissionStatus(this.selectedDeliverableId),
+                this.loadDependencyGraph(this.selectedDeliverableId),
+            ]);
             this._setMissionDeliverableInUrl(this.selectedDeliverableId);
             this.renderMissionPage();
         } catch (e) {
@@ -3318,6 +3356,155 @@ const TeepPlan = {
         return html || '<div class="text-secondary small">No policy constraints recorded on this deliverable.</div>';
     },
 
+    _missionDependencyGraphHtml(graph) {
+        const g = graph || this.missionGraph;
+        if (!g || g.error) {
+            return '<div class="card mb-4"><div class="card-body text-secondary small">No dependency graph yet — link tasks with depends_on to populate the strategic map.</div></div>';
+        }
+        const stats = g.stats || {};
+        const legend = [
+            ['done', 'Done ✓ proof', '#d4edda', '#28a745'],
+            ['done_unproven', 'Done (no proof)', '#d1f0e8', '#20c997'],
+            ['in_progress', 'In progress', '#cfe2ff', '#0d6efd'],
+            ['in_review', 'In review', '#fff3cd', '#ffc107'],
+            ['blocked', 'Blocked', '#f8d7da', '#dc3545'],
+            ['todo', 'Not started', '#e9ecef', '#6c757d'],
+            ['external', 'External blocker', '#f8f9fa', '#adb5bd'],
+        ].map(([key, label, fill, stroke]) =>
+            `<span class="badge me-2 mb-1" style="background:${fill};color:#333;border:1px solid ${stroke}">${this.esc(label)}</span>`).join('');
+        const pills = (g.nodes || []).map((n) => {
+            const colors = {
+                done: 'bg-green-lt',
+                done_unproven: 'bg-teal-lt',
+                in_progress: 'bg-blue-lt',
+                in_review: 'bg-yellow-lt',
+                blocked: 'bg-red-lt',
+                todo: 'bg-secondary-lt',
+                external: 'bg-secondary-lt',
+                missing: 'bg-secondary-lt',
+            };
+            // External blockers render dashed/grey in the graph — keep the pill grey too.
+            const cls = n.external ? 'bg-secondary-lt' : (colors[n.state] || 'bg-secondary-lt');
+            return `<a href="#" class="badge ${cls} me-1 mb-1 text-reset mission-dag-node" data-linked-task="${this.esc(n.id)}" data-linked-project="${this.esc(n.project_id || '')}">${this.esc(n.id)}</a>`;
+        }).join('');
+        return `<div class="card mb-4" id="mission-dag-panel"><div class="card-header">
+            <h3 class="card-title"><i class="ti ti-git-fork me-2"></i>Dependency map</h3>
+            <div class="card-actions text-secondary small">${[
+                [stats.done_count, 'done'],
+                [stats.done_unproven_count, 'done · no proof'],
+                [stats.in_progress_count, 'in progress'],
+                [stats.in_review_count, 'in review'],
+                [stats.blocked_count, 'blocked'],
+                [stats.todo_count, 'not started'],
+                [stats.external_node_count, 'external'],
+            ].filter(([n]) => n).map(([n, l]) => `${n} ${l}`).join(' · ') || 'no tasks'}</div>
+        </div><div class="card-body">
+            <div class="mb-2">${legend}</div>
+            <div id="mission-dag-graph" class="mission-dag-graph overflow-auto mb-3"></div>
+            <div class="small text-secondary mb-1">Tasks in this deliverable</div>
+            <div class="d-flex flex-wrap">${pills || '<span class="text-secondary small">No linked tasks</span>'}</div>
+        </div></div>`;
+    },
+
+    async _renderMissionMermaid() {
+        const host = document.getElementById('mission-dag-graph');
+        const g = this.missionGraph;
+        if (!host || !g?.mermaid) return;
+        if (!window.mermaid) {
+            host.innerHTML = '<div class="text-secondary small">Mermaid renderer unavailable.</div>';
+            return;
+        }
+        try {
+            if (!window.__missionMermaidInit) {
+                window.mermaid.initialize({
+                    startOnLoad: false,
+                    securityLevel: 'strict',
+                    theme: 'neutral',
+                    flowchart: {
+                        useMaxWidth: false, htmlLabels: true, curve: 'basis',
+                        nodeSpacing: 45, rankSpacing: 70, padding: 14,
+                        subGraphTitleMargin: { top: 6, bottom: 10 },
+                    },
+                });
+                window.__missionMermaidInit = true;
+            }
+            this._missionDagRenderId += 1;
+            const renderId = `mission-dag-${this._missionDagRenderId}`;
+            const { svg } = await window.mermaid.render(renderId, g.mermaid);
+            host.innerHTML = svg;
+            this._wireMissionGraphClicks(host);
+        } catch (e) {
+            host.innerHTML = `<div class="alert alert-warning mb-2">Could not render graph: ${this.esc(e.message)}</div>
+                <pre class="small mb-0" style="white-space:pre-wrap">${this.esc(g.mermaid)}</pre>`;
+        }
+    },
+
+    _wireMissionGraphClicks(host) {
+        if (!host || !(this.missionGraph?.nodes || []).length) return;
+        const nodes = this.missionGraph.nodes;
+        host.querySelectorAll('.node').forEach((nodeEl) => {
+            nodeEl.style.cursor = 'pointer';
+            nodeEl.addEventListener('click', (e) => {
+                e.preventDefault();
+                const label = (nodeEl.textContent || '').toUpperCase();
+                const hit = nodes.find((n) => label.includes(String(n.id || '').toUpperCase()));
+                if (hit) this.openLinkedTask(hit.id, hit.project_id);
+            });
+        });
+    },
+
+    // ---- Live mission cockpit -------------------------------------------
+    // Poll the deliverable's status + dependency graph while the tab is open and
+    // the browser tab is visible, and re-render ONLY when something actually
+    // changed (task status, active work, blockers) — so it tracks agents in real
+    // time without flickering the graph on every tick.
+    _missionSignature() {
+        const s = this.missionStatus || {};
+        const g = this.missionGraph || {};
+        const nodeSig = (g.nodes || []).map((n) => `${n.id}:${n.state}`).sort();
+        const active = (s.active_work || []).map((w) => `${w.task_id}:${w.status}:${(w.active_claims || []).length}`).sort();
+        const blockers = (s.blockers || []).map((b) => `${b.kind || ''}:${b.task_id || ''}`).sort();
+        return JSON.stringify([nodeSig, active, blockers, s.progress || {}, g.stats || {}, (s.deliverable || {}).status]);
+    },
+
+    _missionLiveStamp(changed) {
+        const el = document.getElementById('mission-live-stamp');
+        if (!el) return;
+        const d = new Date();
+        const t = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+        el.textContent = changed ? `updated ${t}` : `checked ${t}`;
+    },
+
+    async _missionLiveTick() {
+        if (document.hidden) return;
+        const tab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
+        if (!tab || !tab.classList.contains('active')) return;   // only when the tab is showing
+        const id = (this.selectedDeliverableId || '').trim();
+        if (!id || this._missionLiveBusy) return;
+        this._missionLiveBusy = true;
+        try {
+            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id)]);
+        } catch (e) {
+            this._missionLiveBusy = false;
+            return;   // transient (agent mid-write, network blip) — try again next tick
+        }
+        this._missionLiveBusy = false;
+        const sig = this._missionSignature();
+        const changed = sig !== this._missionSig;
+        if (changed) this.renderMissionPage();   // renderMissionPage refreshes _missionSig + stamp
+        else this._missionLiveStamp(false);
+    },
+
+    _startMissionLive() {
+        this._stopMissionLive();
+        this._missionLiveStamp(false);
+        this._missionLiveTimer = window.setInterval(() => this._missionLiveTick(), this._missionPollMs || 10000);
+    },
+
+    _stopMissionLive() {
+        if (this._missionLiveTimer) { window.clearInterval(this._missionLiveTimer); this._missionLiveTimer = null; }
+    },
+
     renderMissionPage() {
         const el = document.getElementById('mission-page');
         const s = this.missionStatus;
@@ -3330,6 +3517,10 @@ const TeepPlan = {
             <div class="text-secondary small mb-1">${this.esc(s.project_id || window.PM_PROJECT || '')}${s.board_id ? ' · ' + this.esc(s.board_id) : ''}</div>
             <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
             <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)}</div>
+        </div>
+        <div class="text-end">
+            <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
+            <div id="mission-live-stamp" class="text-secondary small mt-1"></div>
         </div></div>`;
         const kpi = `<div class="row row-cards mb-4">${[
             ['Done with proof', prog.done_with_proof_count || 0, 'ti-circle-check', 'green'],
@@ -3366,7 +3557,7 @@ const TeepPlan = {
             `<div class="list-group-item"><span class="badge bg-primary-lt me-2">${this.esc(a.action || 'action')}</span>${this.esc(a.title || a.reason || '')}${a.task_id ? ` <span class="text-secondary small">· ${this.esc(a.project_id || '')} ${this.esc(a.task_id)}</span>` : ''}</div>`).join('')}</div></div>` : '';
         const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
             `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td>${this.esc(a.project_id || '')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
-        el.innerHTML = header + kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap + nextActions + blockerHtml +
+        el.innerHTML = header + this._missionDependencyGraphHtml() + kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap + nextActions + blockerHtml +
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +
@@ -3376,6 +3567,11 @@ const TeepPlan = {
         if (s.pending_proposal) {
             el.insertAdjacentHTML('beforeend', `<div class="alert alert-azure mt-3">Pending breakdown proposal awaiting approval.</div>`);
         }
+        this._renderMissionMermaid();
+        // Re-baseline the live signature so the poller only re-renders on the NEXT
+        // real change, and stamp the freshly-rendered "updated" time.
+        this._missionSig = this._missionSignature();
+        this._missionLiveStamp(true);
     },
 
     async openLinkedTask(taskId, projectId) {
@@ -3476,7 +3672,9 @@ const TeepPlan = {
         if (inboxSim) inboxSim.addEventListener('click', () => { const box = document.getElementById('inbox-sim-box'); if (window.bootstrap) window.bootstrap.Collapse.getOrCreateInstance(box).toggle(); });
         const inboxSimGo = document.getElementById('inbox-sim-go');
         if (inboxSimGo) inboxSimGo.addEventListener('click', () => this.simulateInbox());
-        const missionTab = document.querySelector('a[href="#tab-mission"]');
+        // Bootstrap fires shown.bs.tab on the TOP tab trigger (in .nav-tabs), not the
+        // sidebar link that shares the same href — so listen on the top tab.
+        const missionTab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
         if (missionTab) missionTab.addEventListener('shown.bs.tab', () => this.refreshMissionPage());
         const missionRefresh = document.getElementById('mission-refresh');
         if (missionRefresh) missionRefresh.addEventListener('click', () => this.refreshMissionPage());
@@ -3495,6 +3693,21 @@ const TeepPlan = {
                 if (!a || !missionPage.contains(a)) return;
                 e.preventDefault();
                 this.openLinkedTask(a.getAttribute('data-linked-task'), a.getAttribute('data-linked-project'));
+            });
+        }
+        // Live cockpit: poll while the Deliverable tab is showing and the browser
+        // tab is visible; stop when the user leaves either.
+        if (!this._missionLiveWired) {
+            this._missionLiveWired = true;
+            document.addEventListener('shown.bs.tab', (e) => {
+                const href = (e.target && e.target.getAttribute) ? e.target.getAttribute('href') : '';
+                if (href === '#tab-mission') this._startMissionLive();
+                else this._stopMissionLive();
+            });
+            document.addEventListener('visibilitychange', () => {
+                const tab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
+                if (document.hidden) this._stopMissionLive();
+                else if (tab && tab.classList.contains('active')) this._startMissionLive();
             });
         }
     },

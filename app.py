@@ -713,6 +713,16 @@ async def deliverable_mission_status(deliverable_id: str, project: str = Query(.
     return result
 
 
+@app.get("/api/deliverables/{deliverable_id}/dependency_graph")
+async def deliverable_dependency_graph(deliverable_id: str, project: str = Query(...)):
+    project = _proj(project)
+    result = store.get_deliverable_dependency_graph(project=project, deliverable_id=deliverable_id)
+    if result.get("error"):
+        code = 404 if "unknown" in result["error"] else 400
+        raise HTTPException(code, result["error"])
+    return result
+
+
 @app.post("/api/deliverables/{deliverable_id}/coordinator_tick")
 async def run_mission_coordinator_tick(request: Request, deliverable_id: str,
                                        project: str = Query(...)):

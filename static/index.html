@@ -33,6 +33,16 @@
       .tk-act-body.tk-clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
       .tk-act-toggle{font-size:.75rem;font-weight:500;color:var(--tblr-primary);cursor:pointer;display:none}
       .tk-act-item.tk-expandable .tk-act-toggle{display:inline-block}
+      .mission-dag-graph{min-height:8rem}
+      .mission-dag-graph svg{max-width:none;height:auto}
+      .mission-dag-graph .node{cursor:pointer}
+      /* Board: Monday/Trello-style lanes that scroll sideways instead of squeezing
+         every phase column into one viewport width. */
+      #board{display:flex;flex-wrap:nowrap;gap:1rem;overflow-x:auto;overflow-y:visible;
+             padding-bottom:.75rem;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;
+             overscroll-behavior-x:contain}
+      #board > .tk-board-col{flex:0 0 clamp(17rem,22vw,21rem);min-width:17rem;scroll-snap-align:start}
+      #board > .tk-board-col > div:last-child{min-height:2rem}
     </style>
 </head>
 <body class="layout-fluid tk-sidebar-collapsed">
@@ -78,7 +88,7 @@
                         <li class="nav-item"><a class="nav-link" href="#tab-plan" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-flag"></i></span><span class="nav-link-title">Milestones</span></a></li>
                         <li class="nav-item"><a class="nav-link" href="#tab-risks" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-alert-triangle"></i></span><span class="nav-link-title">Risks</span></a></li>
                         <li class="nav-item"><a class="nav-link" href="#tab-pulse" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-activity-heartbeat"></i></span><span class="nav-link-title">Pulse</span></a></li>
-                        <li class="nav-item"><a class="nav-link" href="#tab-mission" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Mission</span></a></li>
+                        <li class="nav-item"><a class="nav-link" href="#tab-mission" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverable</span></a></li>
                     </ul>
 
                     <div class="mt-auto"></div>
@@ -216,24 +226,24 @@
                             <a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-checklist me-1"></i>Action Queue</a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-mission" role="tab"><i class="ti ti-target-arrow me-1"></i>Mission</a>
+                            <a class="nav-link" data-bs-toggle="tab" href="#tab-mission" role="tab"><i class="ti ti-target-arrow me-1"></i>Deliverable</a>
                         </li>
                     </ul>
 
                     <div class="tab-content">
                         <!-- Board -->
                         <div class="tab-pane" id="tab-board" role="tabpanel">
-                            <div class="row g-3 mt-1" id="board"></div>
+                            <div class="mt-1" id="board"></div>
                         </div>
                         <!-- Epics (collapsible workstream → phase → tasks) -->
                         <div class="tab-pane" id="tab-epics" role="tabpanel">
                             <div class="mt-3" id="epics-content"></div>
                         </div>
-                        <!-- Mission cockpit (one deliverable outcome surface) -->
+                        <!-- Deliverable board (strategic map + mission cockpit) -->
                         <div class="tab-pane" id="tab-mission" role="tabpanel">
                             <div class="card mt-3">
                                 <div class="card-header">
-                                    <h3 class="card-title"><i class="ti ti-target-arrow me-2"></i>Mission cockpit</h3>
+                                    <h3 class="card-title"><i class="ti ti-target-arrow me-2"></i>Deliverable board</h3>
                                     <div class="card-actions btn-list align-items-center">
                                         <select id="mission-deliverable-picker" class="form-select form-select-sm" style="min-width:14rem" aria-label="Select deliverable"></select>
                                         <button id="mission-generate-brief" class="btn btn-sm btn-primary" type="button"><i class="ti ti-sparkles me-1"></i>Generate brief</button>
@@ -421,9 +431,10 @@
     <datalist id="people-list"></datalist>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script src="/vendor/apexcharts/apexcharts.min.js"></script>
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js?v=29"></script>
+    <script src="app.js?v=33"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script>
       // Keep the sidebar nav highlight in sync with the active tab (sidebar + top tabs share tab targets).
@@ -452,6 +463,16 @@
         });
         var active = document.querySelector('.nav-tabs .nav-link.active');
         if (active) sync(active.getAttribute('href'));
+        // Deep-link: honor a #tab-<name> hash on load so a shared or refreshed URL
+        // (e.g. ?project=vulkan#tab-board) opens that tab. #tab-mission has its own
+        // richer handler in app.js (it also resolves the selected deliverable), so
+        // leave that one alone here.
+        (function () {
+          var h = (location.hash || '').trim();
+          if (!/^#tab-[a-z0-9-]+$/i.test(h) || h === '#tab-mission') return;
+          var top = document.querySelector('.nav-tabs [data-bs-toggle="tab"][href="' + h + '"]');
+          if (top && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(top).show();
+        })();
       })();
     </script>
 </body>

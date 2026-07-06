@@ -2920,6 +2920,7 @@ def _enriched_mission_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
         "status": task.get("status"),
         "assignee": task.get("assignee"),
         "workstream": task.get("_wsId"),
+        "depends_on": task.get("depends_on") or [],
         "dependency_state": task.get("dependency_state"),
         "provenance": task.get("provenance"),
         "git_state": task.get("git_state"),
@@ -3180,6 +3181,39 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
         "economics": economics if not economics.get("error") else economics,
     }
     return _attach_mission_brief_fields(result, project=project)
+
+
+def get_deliverable_dependency_graph(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
+                                     board_id: str = "", mission_id: str = "") -> Dict[str, Any]:
+    """Return task-level depends_on graph for a deliverable (strategic map layer)."""
+    import mission_graph
+
+    scope = _resolve_mission_deliverable(project, deliverable_id=deliverable_id,
+                                          board_id=board_id, mission_id=mission_id)
+    if scope.get("error"):
+        return scope
+    deliverable = scope["deliverable"]
+    deliverable_id = deliverable.get("id") or deliverable_id
+    linked_tasks = [_enriched_mission_task_link(link)
+                    for link in (deliverable.get("task_links") or [])]
+
+    def _lookup(task_project: str, task_id: str, fallback: bool = False) -> Optional[Dict[str, Any]]:
+        proj = project if fallback else (task_project or project)
+        task = get_task(task_id, project=proj)
+        if not task and fallback and proj != project:
+            task = get_task(task_id, project=project)
+        if not task:
+            return None
+        out = dict(task)
+        out["_project_id"] = proj
+        return out
+
+    return mission_graph.build_dependency_graph(
+        linked_tasks,
+        deliverable_id=deliverable_id,
+        project_id=project,
+        task_lookup=_lookup,
+    )
 
 
 def _deliverable_activity(project: str, deliverable_id: str, limit: int = 12) -> List[Dict[str, Any]]:
