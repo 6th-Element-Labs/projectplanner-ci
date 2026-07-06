@@ -158,6 +158,7 @@ const TeepPlan = {
         this.initInbox();
         this._missionDeliverableFromUrl();
         await this._maybeDefaultToDeliverableTab();
+        await this.initHeaderDeliverableSwitcher();
         const ds = document.getElementById('data-status');
         if (ds) { ds.className = 'badge bg-green-lt'; ds.textContent = `${this.tasks.length} tasks`; }
     },
@@ -3225,6 +3226,7 @@ const TeepPlan = {
                 picker.value = this.selectedDeliverableId;
             }
         }
+        this._syncHeaderDeliverable();
         if (!this.selectedDeliverableId) {
             el.innerHTML = `<div class="empty py-5"><div class="empty-icon"><i class="ti ti-target-arrow"></i></div>
                 <p class="empty-title">No mission deliverables</p>
@@ -3503,6 +3505,38 @@ const TeepPlan = {
 
     _stopMissionLive() {
         if (this._missionLiveTimer) { window.clearInterval(this._missionLiveTimer); this._missionLiveTimer = null; }
+    },
+
+    // Header deliverable switcher (top bar): mirrors the mission-tab picker so switching
+    // deliverables is a first-class global action. Hidden when the project has none.
+    _syncHeaderDeliverable() {
+        const sel = document.getElementById('header-deliverable-switcher');
+        const wrap = document.getElementById('header-deliverable-wrap');
+        if (!sel) return;
+        const list = this.deliverables || [];
+        if (!list.length) { if (wrap) wrap.style.display = 'none'; return; }
+        if (wrap) wrap.style.display = '';
+        const cur = this.selectedDeliverableId || list[0].id;
+        sel.innerHTML = list.map((d) =>
+            `<option value="${this.esc(d.id)}"${d.id === cur ? ' selected' : ''}>${this.esc(d.title || d.id)}</option>`).join('');
+        if (cur) sel.value = cur;
+        if (!sel._wired) {
+            sel._wired = true;
+            sel.addEventListener('change', () => {
+                this.selectedDeliverableId = sel.value || '';
+                const tab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
+                if (tab && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(tab).show();
+                this.refreshMissionPage();
+            });
+        }
+    },
+
+    async initHeaderDeliverableSwitcher() {
+        try { await this.loadDeliverables(); } catch (e) { this.deliverables = []; }
+        if (!this.selectedDeliverableId && (this.deliverables || []).length) {
+            this.selectedDeliverableId = this.deliverables[0].id;
+        }
+        this._syncHeaderDeliverable();
     },
 
     renderMissionPage() {

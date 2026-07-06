@@ -43,96 +43,50 @@
              overscroll-behavior-x:contain}
       #board > .tk-board-col{flex:0 0 clamp(17rem,22vw,21rem);min-width:17rem;scroll-snap-align:start}
       #board > .tk-board-col > div:last-child{min-height:2rem}
+      /* Unified top bar (sidebar removed): full-width content + compact switcher chips. */
+      /* Kill the old sidebar's reserved gutter — taikun-ui.js still re-adds the
+         persisted tk-sidebar-collapsed class, whose rule outranks a bare .page-wrapper. */
+      .page-wrapper,
+      body.tk-sidebar-collapsed .page-wrapper{margin-inline-start:0 !important;margin-left:0 !important}
+      .tk-topbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color)}
+      .tk-switch{display:flex;align-items:center;gap:.4rem;background:var(--tblr-bg-surface-secondary,#f6f7f9);
+        border:1px solid var(--tblr-border-color);border-radius:.5rem;padding:.1rem .5rem}
+      .tk-switch>label{margin:0;font-size:.7rem;text-transform:uppercase;letter-spacing:.03em;
+        color:var(--tblr-secondary);font-weight:600;white-space:nowrap;display:flex;align-items:center;gap:.25rem}
+      .tk-switch>select{border:0;background:transparent;box-shadow:none !important;padding:.2rem 1.3rem .2rem .15rem;
+        height:auto;min-width:7rem;max-width:16rem;font-weight:600;color:var(--tblr-body-color)}
     </style>
 </head>
-<body class="layout-fluid tk-sidebar-collapsed">
+<body class="layout-fluid">
     <div class="page">
 
-        <!-- ================= LEFT VERTICAL NAVBAR ================= -->
-        <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="light">
-            <div class="container-fluid">
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu" aria-controls="sidebar-menu" aria-expanded="false" aria-label="Toggle navigation">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                <h1 class="navbar-brand navbar-brand-autodark">
-                    <a href="#tab-exec" data-bs-toggle="tab" class="text-reset text-decoration-none d-flex align-items-center" aria-label="Taikun — home">
-                        <svg viewBox="168.5 168.5 302.7 302.7" fill="currentColor" aria-hidden="true" style="height:34px;width:34px;flex:0 0 auto;color:var(--tblr-primary);"><defs><clipPath clipPathUnits="userSpaceOnUse" id="tk-mark-clip"><path clip-rule="evenodd" d="m 3451.39,2273.83 -99.65,-34.31 z m -2102.78,156.88 v -262.12 l 157.02,-54.07 60.08,-145.06 -72.78,-149.26 327.27,-327.27 149.26,72.78 145.06,-60.09 54.09,-157.01 h 462.77 l 54.09,157.01 145.07,60.09 149.25,-72.78 327.27,327.27 -72.77,149.26 60.07,145.06 157.03,54.07 v 105.24 l -99.65,-34.32 -131.63,-45.33 c -31.53,-76.23 -62.94,-152.52 -94.7,-228.65 l 61.04,-125.02 -226.95,-226.96 -125.05,60.98 c -76.15,-31.75 -152.42,-63.22 -228.69,-94.71 l -45.28,-131.56 h -320.96 l -45.29,131.56 c -76.26,31.49 -152.53,62.96 -228.69,94.71 l -125.05,-60.98 -226.94,226.96 3.42,7.01 57.61,118.01 c -31.75,76.13 -63.16,152.42 -94.7,228.65 l -131.63,45.34 v 129.76 h 214.85 v -135.37 h 99.65 v 311.52 h -99.65 v -114.72 h -214.85 z m 2102.78,-61.43 v 262.13 l -157.03,54.07 -60.07,145.06 72.77,149.26 -327.27,327.27 -149.25,-72.78 -145.07,60.09 -54.09,157.01 h -462.77 l -54.09,-157.01 -145.06,-60.09 -149.26,72.78 -327.27,-327.27 72.78,-149.26 -60.08,-145.06 -157.02,-54.07 v -105.25 l 99.64,34.32 131.63,45.34 c 31.54,76.23 62.95,152.51 94.7,228.65 l -61.03,125.02 226.94,226.96 125.05,-60.99 c 76.16,31.76 152.43,63.23 228.69,94.72 l 45.29,131.56 h 320.96 l 45.28,-131.56 c 76.27,-31.49 152.54,-62.96 228.69,-94.72 l 125.05,60.99 226.95,-226.96 -61.04,-125.02 c 31.76,-76.14 63.17,-152.42 94.7,-228.65 l 131.63,-45.34 v -129.77 h -202.9 v 119.88 h -99.65 v -320.82 h 99.65 v 139.51 h 202.9 z m -633.21,464.28 V 1946.8 h 99.65 v 886.76 z m -231.02,-61.97 v -469.52 h 99.65 v 469.52 z m -231.02,264.9 V 1763.5 h 99.66 V 3036.49 Z M 2125.13,2478.3 v -467.46 h 99.65 v 467.46 z m -231.01,351.13 v -879.52 h 99.65 v 879.52 z"/></clipPath></defs>
-  <path d="m 3451.39,2273.83 -99.65,-34.31 z m -2102.78,156.88 v -262.12 l 157.02,-54.07 60.08,-145.06 -72.78,-149.26 327.27,-327.27 149.26,72.78 145.06,-60.09 54.09,-157.01 h 462.77 l 54.09,157.01 145.07,60.09 149.25,-72.78 327.27,327.27 -72.77,149.26 60.07,145.06 157.03,54.07 v 105.24 l -99.65,-34.32 -131.63,-45.33 c -31.53,-76.23 -62.94,-152.52 -94.7,-228.65 l 61.04,-125.02 -226.95,-226.96 -125.05,60.98 c -76.15,-31.75 -152.42,-63.22 -228.69,-94.71 l -45.28,-131.56 h -320.96 l -45.29,131.56 c -76.26,31.49 -152.53,62.96 -228.69,94.71 l -125.05,-60.98 -226.94,226.96 3.42,7.01 57.61,118.01 c -31.75,76.13 -63.16,152.42 -94.7,228.65 l -131.63,45.34 v 129.76 h 214.85 v -135.37 h 99.65 v 311.52 h -99.65 v -114.72 h -214.85 z m 2102.78,-61.43 v 262.13 l -157.03,54.07 -60.07,145.06 72.77,149.26 -327.27,327.27 -149.25,-72.78 -145.07,60.09 -54.09,157.01 h -462.77 l -54.09,-157.01 -145.06,-60.09 -149.26,72.78 -327.27,-327.27 72.78,-149.26 -60.08,-145.06 -157.02,-54.07 v -105.25 l 99.64,34.32 131.63,45.34 c 31.54,76.23 62.95,152.51 94.7,228.65 l -61.03,125.02 226.94,226.96 125.05,-60.99 c 76.16,31.76 152.43,63.23 228.69,94.72 l 45.29,131.56 h 320.96 l 45.28,-131.56 c 76.27,-31.49 152.54,-62.96 228.69,-94.72 l 125.05,60.99 226.95,-226.96 -61.04,-125.02 c 31.76,-76.14 63.17,-152.42 94.7,-228.65 l 131.63,-45.34 v -129.77 h -202.9 v 119.88 h -99.65 v -320.82 h 99.65 v 139.51 h 202.9 z m -633.21,464.28 V 1946.8 h 99.65 v 886.76 z m -231.02,-61.97 v -469.52 h 99.65 v 469.52 z m -231.02,264.9 V 1763.5 h 99.66 V 3036.49 Z M 2125.13,2478.3 v -467.46 h 99.65 v 467.46 z m -231.01,351.13 v -879.52 h 99.65 v 879.52 h -99.65" transform="matrix(0.13333333,0,0,-0.13333333,0,640)" clip-path="url(#tk-mark-clip)"/></svg>
-                    </a>
-                </h1>
-                <div class="navbar-collapse collapse" id="sidebar-menu">
-                    <!-- Project switcher — toggle between boards (Maxwell, Helm, …). Each is a
-                         separate db; switching never writes, so one project can't overwrite another. -->
-                    <div class="px-3 pt-2 pb-1">
-                        <label class="form-label small text-secondary mb-1" for="project-switcher"><i class="ti ti-folders me-1"></i>Project</label>
-                        <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
-                    </div>
-                    <ul class="navbar-nav pt-lg-2">
-                        <li class="nav-item"><a class="nav-link" href="#tab-exec" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-home-2"></i></span><span class="nav-link-title">Home</span></a></li>
-                        <li class="nav-item active"><a class="nav-link" href="#tab-exec" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-list-check"></i></span><span class="nav-link-title">My work</span></a></li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="#tab-inbox" data-bs-toggle="tab">
-                                <span class="nav-link-icon"><i class="ti ti-checklist"></i></span>
-                                <span class="nav-link-title">Action Queue</span>
-                                <span class="badge badge-sm bg-red-lt ms-auto">4</span>
-                            </a>
-                        </li>
-                        <li class="nav-item"><a class="nav-link" href="#tab-pulse" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-chart-bar"></i></span><span class="nav-link-title">Reports</span></a></li>
-                        <li class="nav-item"><a class="nav-link" href="#tab-ask" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask Taikun</span></a></li>
-                    </ul>
-
-                    <div class="subheader mt-3 px-3">Views</div>
-                    <ul class="navbar-nav">
-                        <li class="nav-item"><a class="nav-link" href="#tab-board" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-layout-kanban"></i></span><span class="nav-link-title">Board</span></a></li>
-                        <li class="nav-item"><a class="nav-link" href="#tab-gantt" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-timeline"></i></span><span class="nav-link-title">Gantt</span></a></li>
-                        <li class="nav-item"><a class="nav-link" href="#tab-plan" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-flag"></i></span><span class="nav-link-title">Milestones</span></a></li>
-                        <li class="nav-item"><a class="nav-link" href="#tab-risks" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-alert-triangle"></i></span><span class="nav-link-title">Risks</span></a></li>
-                        <li class="nav-item"><a class="nav-link" href="#tab-pulse" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-activity-heartbeat"></i></span><span class="nav-link-title">Pulse</span></a></li>
-                        <li class="nav-item"><a class="nav-link" href="#tab-mission" data-bs-toggle="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverable</span></a></li>
-                    </ul>
-
-                    <div class="mt-auto"></div>
-                    <div class="border-top pt-2 mt-3">
-                        <div class="nav-item">
-                            <a href="#" class="nav-link" onclick="return false">
-                                <span class="avatar avatar-sm rounded-circle bg-secondary-lt me-2">SR</span>
-                                <span class="nav-link-title">
-                                    <span class="d-block">Steve Ridder</span>
-                                    <span class="d-block text-secondary small">steve@taikunai.com</span>
-                                </span>
-                                <span class="nav-link-icon ms-auto"><i class="ti ti-settings"></i></span>
-                            </a>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </aside>
 
         <div class="page-wrapper">
 
-            <!-- Page Header -->
-            <div class="page-header d-print-none">
+            <!-- Unified top bar: brand + project/deliverable switchers + actions.
+                 Replaces the old left sidebar, which only duplicated the top tabs. -->
+            <div class="page-header d-print-none tk-topbar">
                 <div class="container-xl">
-                    <div class="row g-2 align-items-center">
-                        <div class="col-auto">
-                            <button class="btn btn-icon btn-outline-secondary d-none d-lg-inline-flex" data-tk-sidebar-toggle title="Show / hide sidebar" aria-label="Toggle sidebar"><i class="ti ti-layout-sidebar-left-expand"></i></button>
+                    <div class="d-flex align-items-center gap-2 flex-wrap py-2">
+                        <a href="#tab-exec" data-bs-toggle="tab" class="text-reset d-flex align-items-center me-1" aria-label="Taikun — home">
+                            <img src="taikun-mark.svg" alt="Taikun" style="height:30px;width:30px;flex:0 0 auto"/>
+                        </a>
+                        <div class="tk-switch">
+                            <label for="project-switcher"><i class="ti ti-folders"></i>Project</label>
+                            <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
                         </div>
-                        <div class="col">
-                            <div class="page-pretitle">TEEP Barnett · TotalEnergies E&amp;P</div>
-                            <h2 class="page-title mb-0">Project Maxwell — Phase-1 Pilot Plan</h2>
+                        <div class="tk-switch" id="header-deliverable-wrap" style="display:none">
+                            <label for="header-deliverable-switcher"><i class="ti ti-target-arrow"></i>Deliverable</label>
+                            <select id="header-deliverable-switcher" class="form-select form-select-sm" aria-label="Switch deliverable"></select>
                         </div>
-                        <div class="col-auto ms-auto d-print-none">
-                            <div class="btn-list align-items-center">
-                                <span id="data-status" class="badge bg-secondary-lt">Loading…</span>
-                                <span id="plan-generated" class="badge bg-secondary-lt"></span>
-                                <button id="btn-new-task" class="btn btn-primary btn-sm"><i class="ti ti-plus me-1"></i>New task</button>
-                                <a id="dl-xlsx" href="api/export.xlsx" class="btn btn-outline-primary btn-sm">
-                                    <i class="ti ti-file-spreadsheet me-1"></i>Excel
-                                </a>
-                                <a id="dl-xml" href="api/export.xml" class="btn btn-outline-primary btn-sm">
-                                    <i class="ti ti-brand-windows me-1"></i>MS Project
-                                </a>
-                            </div>
+                        <div class="page-pretitle d-none"></div>
+                        <h2 class="page-title d-none"></h2>
+                        <div class="ms-auto btn-list align-items-center">
+                            <span id="data-status" class="badge bg-secondary-lt">Loading…</span>
+                            <span id="plan-generated" class="badge bg-secondary-lt"></span>
+                            <button id="btn-new-task" class="btn btn-primary btn-sm"><i class="ti ti-plus me-1"></i>New task</button>
+                            <a id="dl-xlsx" href="api/export.xlsx" class="btn btn-outline-primary btn-sm"><i class="ti ti-file-spreadsheet me-1"></i>Excel</a>
+                            <a id="dl-xml" href="api/export.xml" class="btn btn-outline-primary btn-sm"><i class="ti ti-brand-windows me-1"></i>MS Project</a>
                         </div>
                     </div>
                 </div>
@@ -434,7 +388,7 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script src="/vendor/apexcharts/apexcharts.min.js"></script>
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js?v=33"></script>
+    <script src="app.js?v=34"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script>
       // Keep the sidebar nav highlight in sync with the active tab (sidebar + top tabs share tab targets).
