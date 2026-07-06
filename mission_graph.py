@@ -184,30 +184,22 @@ def _emit_node_line(node: Dict[str, Any], indent: str) -> str:
 
 def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
                              edges: List[Dict[str, Any]]) -> str:
-    """Render a left-to-right flowchart, grouping nodes into labeled subgraphs by
-    workstream so the DAG reads as organized clusters instead of a flat hairball.
-    Cross-workstream edges then make the real dependencies between areas obvious.
+    """Render a clean, layered top-down dependency flowchart.
+
+    Nodes are ranked by dependency depth (prerequisites on top, dependents below)
+    and placed by Mermaid/dagre with no per-workstream wrapper boxes. An earlier
+    version wrapped each workstream in a `subgraph` cluster to "organize" the DAG,
+    but that forced dagre to keep every workstream contiguous and route the many
+    cross-workstream edges around the cluster walls — a hairball of crossing
+    arrows. The workstream is already spelled out in every task-id prefix
+    (CHART-1, ENGINE-2, WINDOWS-1), so the boxes added visual noise, not signal.
+    Direction is TB so the graph reads as a plain flowchart; flip to LR here if a
+    horizontal (scroll-right) layout is ever preferred.
     """
-    lines = ["flowchart LR"]
+    lines = ["flowchart TB"]
 
-    # Group by workstream, preserving the id-sorted node order within each group.
-    groups: Dict[str, List[Dict[str, Any]]] = {}
     for node in nodes:
-        ws = (node.get("workstream") or "").strip() or "Other"
-        groups.setdefault(ws, []).append(node)
-
-    if len(groups) <= 1:
-        # A single workstream needs no wrapping box — it adds no structure.
-        for node in nodes:
-            lines.append(_emit_node_line(node, "  "))
-    else:
-        for ws in sorted(groups):
-            sg_id = _mermaid_id(f"ws_{ws}")
-            lines.append(f'  subgraph {sg_id}["{ws.replace(chr(34), chr(39))}"]')
-            lines.append("    direction LR")
-            for node in groups[ws]:
-                lines.append(_emit_node_line(node, "    "))
-            lines.append("  end")
+        lines.append(_emit_node_line(node, "  "))
 
     for edge in edges:
         src = _mermaid_id(edge.get("from") or "")

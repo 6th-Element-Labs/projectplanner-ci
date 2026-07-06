@@ -62,8 +62,10 @@ try:
     ok(any(n.get("id") == "EXTERNAL-1" and n.get("external") for n in graph["nodes"]),
        "external depends_on renders stub node")
     ok(len(graph.get("edges") or []) == 3, "depends_on edges materialized")
-    ok("DELIV-2" in graph.get("mermaid", "") and "flowchart LR" in graph.get("mermaid", ""),
-       "mermaid flowchart LR emitted")
+    ok("DELIV-2" in graph.get("mermaid", "") and "flowchart TB" in graph.get("mermaid", ""),
+       "mermaid flowchart TB emitted")
+    ok("subgraph" not in graph.get("mermaid", ""),
+       "no per-workstream subgraph clusters (clean layered DAG)")
     ok(mission_graph.node_execution_state({"status": "Done", "provenance": {"terminal": True}}) == "done",
        "terminal Done maps to done")
     ok(mission_graph.node_execution_state({"status": "In Review"}) == "in_review",
