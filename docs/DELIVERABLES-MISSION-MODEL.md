@@ -193,6 +193,23 @@ recent deliverable activity. The brief is not a chat transcript.
 - `narrative_state` flags stale/contradictory manual or generated text (similar to `rationale_state`)
 - Manual edits via `update_mission_narrative` set `narrative_source=manual`
 
+## Dogfood Mission Fixtures (DELIVERABLES-8)
+
+`deliverable_dogfood_fixtures.py` seeds four isolated mission proofs used by
+`test_deliverables_dogfood.py` and CI:
+
+1. **QA scratch** — `qa-scratch-cross-board` spanning `qa2scratch20260702a` and
+   `qa2target20260702a`
+2. **Helm renderer** — `helm-cpp-webgpu-renderer` spanning `helmrenderer`, `helm`, and `vulkan`
+3. **Access rollout** — `switchboard-access-rollout` across `ACCESS`, `HARDEN`, and `QA`
+   workstreams on `switchboard`
+4. **Stale/blocked signals** — `stale-blocked-signals` on `qa2stale20260702a` with optimistic
+   manual narrative and stale generated-brief flags
+
+Each fixture proves `get_mission_status` / REST mission pages show cross-project links,
+progress, active work, Done-with-proof, blockers, narrative, and next actions without writing
+deliverable records into linked project databases.
+
 ## Workstream status
 
 ```mermaid
@@ -204,7 +221,7 @@ flowchart LR
   D3 --> D7[7: coordinator loop]
   D4 --> D7
   D6 --> D7
-  D5 --> D8[8: dogfood missions]
+  D5 --> D8[8: dogfood missions ✓]
   D6 --> D8
   D2 --> D9[9: economics/KPI rollup ✓]
   D4 --> D10[10: agent startup contract ✓]
@@ -213,14 +230,13 @@ flowchart LR
   classDef review fill:#fff3cd,stroke:#ffc107,color:#856404
   classDef todo fill:#e9ecef,stroke:#6c757d,color:#495057
 
-  class D2,D3,D4,D5,D6,D9,D10 done
-  class D7,D8 todo
+  class D2,D3,D4,D5,D6,D8,D9,D10 done
+  class D7 todo
 ```
 
 Legend: ✓ Done · ◐ In Review · plain = Not Started. Board: `switchboard` / workstream `DELIVERABLES`.
 
 ## Next Surfaces
 
-Coordinator loops and deeper dogfood are tracked on the DELIVERABLES workstream. Agent startup
-from `deliverable_id` / `mission_id` is documented in
-[`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).
+Coordinator loops are tracked as DELIVERABLES-7. Agent startup from `deliverable_id` /
+`mission_id` is documented in [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).

@@ -60,6 +60,7 @@ run_test test_codex_adapter.py
 run_test test_codex_supervisor.py
 run_test test_control_plane_fail_fast.py
 run_test test_deliverables_breakdown.py
+run_test test_deliverables_dogfood.py
 run_test test_deliverables_model.py
 run_test test_evidence_claims.py
 run_test test_external_ci_mirror_evidence.py
