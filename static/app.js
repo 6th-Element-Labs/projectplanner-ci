@@ -445,39 +445,12 @@ const TeepPlan = {
         if (gate.required && !pub.passed) bits.push(`<span class="text-danger small">${this.esc(gate.message || 'required')}</span>`);
         return bits.join(' ');
     },
-    projectContextHtml(ctx) {
-        if (!ctx) return '';
-        const guide = ctx.repo_role_guide || {};
-        const roleRow = (title, item, icon, tone) => {
-            if (!item) return '';
-            const repo = item.repo ? `<code>${this.esc(item.repo)}</code>` : '<span class="text-secondary">not configured</span>';
-            const branch = item.default_branch ? ` · ${this.esc(item.default_branch)}` : '';
-            return `<div class="col-md-6"><div class="card card-sm h-100"><div class="card-body">
-                <div class="subheader text-${tone} mb-1"><i class="ti ti-${icon} me-1"></i>${this.esc(title)}</div>
-                <div class="mb-1">${repo}${branch}</div>
-                <div class="text-secondary small">${this.esc(item.message || '')}</div>
-            </div></div></div>`;
-        };
-        const boards = (ctx.boards_missions || []).slice(0, 6).map((b) =>
-            `<span class="badge bg-secondary-lt me-1 mb-1"><i class="ti ti-${b.kind === 'board' ? 'layout-kanban' : 'target'} me-1"></i>${this.esc(b.title || b.id)}</span>`
-        ).join('') || '<span class="text-secondary small">none yet</span>';
-        const stack = (ctx.hierarchy_stack || []).map((s) =>
-            `<span class="badge bg-azure-lt me-1">${this.esc(s.level)}</span>`
-        ).join('');
-        return `<div class="card mb-3"><div class="card-body">
-            <div class="d-flex align-items-center mb-2">
-                <div class="subheader mb-0">Project authority &amp; repo roles</div>
-                <span class="badge bg-azure-lt ms-auto">${this.esc(ctx.project || '')}</span>
-            </div>
-            <div class="text-secondary small mb-3">Hierarchy: ${stack}</div>
-            <div class="row g-2 mb-3">
-                ${roleRow('Done authority', guide.done_authority, 'git-merge', 'green')}
-                ${roleRow('CI verification', guide.ci_verification, 'cloud-check', 'azure')}
-                ${roleRow('Publication evidence', guide.publication_evidence, 'upload', 'orange')}
-            </div>
-            <div class="subheader mb-1">Boards / missions</div>
-            <div>${boards}</div>
-        </div></div>`;
+    projectContextHtml() {
+        // Removed from the exec view: the "Project authority & repo roles" card
+        // (Done/CI/publication provenance internals + a boards/missions strip now
+        // redundant with the header deliverable switcher). Per-task provenance still
+        // lives in the task detail via taskProjectContextHtml().
+        return '';
     },
     taskProjectContextHtml(t) {
         const ctx = (t && t.project_context) || this.projectContext;
