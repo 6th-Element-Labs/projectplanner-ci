@@ -122,6 +122,9 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   outcome intake, human editing, and audited reject/defer before materialization.
 - `generate_mission_brief(...)`, and `get_mission_brief(...)` — structured live product brief
   from durable task/provenance/activity events; exposes `narrative_state` stale/contradiction flags.
+- `run_mission_coordinator(...)` — one deliverable-scoped coordinator tick: brief refresh,
+  mission-scoped dispatch via `claim_next(deliverable_id=...)`, merge monitoring, or human
+  escalation; audited as `deliverable.coordinator_tick`.
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.

@@ -2172,6 +2172,41 @@ def generate_mission_brief(deliverable_id: str, ctx: Context, project: str = "ma
 
 
 @mcp.tool()
+def run_mission_coordinator(deliverable_id: str, ctx: Context, project: str = "maxwell",
+                          board_id: str = "", mission_id: str = "",
+                          coordinator_agent_id: str = "", worker_agent_id: str = "",
+                          auto_claim: bool = True, auto_wake: bool = False,
+                          auto_refresh_brief: bool = True, policy_json: str = "",
+                          idem_key: str = "") -> str:
+    """Run one deliverable-scoped coordinator tick: refresh brief, dispatch, monitor, or escalate."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    policy = {
+        "auto_claim": auto_claim,
+        "auto_wake": auto_wake,
+        "auto_refresh_brief": auto_refresh_brief,
+        "worker_agent_id": worker_agent_id,
+    }
+    if policy_json:
+        try:
+            extra = json.loads(policy_json)
+        except json.JSONDecodeError as exc:
+            return _dumps({"error": f"invalid policy_json: {exc}"})
+        if not isinstance(extra, dict):
+            return _dumps({"error": "policy_json must be a JSON object"})
+        policy.update(extra)
+    return _dumps(store.run_mission_coordinator_tick(
+        project=project,
+        deliverable_id=deliverable_id,
+        board_id=board_id,
+        mission_id=mission_id,
+        coordinator_agent_id=coordinator_agent_id,
+        actor=auth.actor(principal),
+        idem_key=idem_key,
+        policy=policy,
+    ))
+
+
+@mcp.tool()
 def get_mission_brief(deliverable_id: str, project: str = "maxwell",
                       board_id: str = "", mission_id: str = "") -> str:
     """Return stored/generated mission brief fields from mission_status."""

@@ -3275,6 +3275,67 @@ def generate_mission_brief(project: str = DEFAULT_PROJECT, deliverable_id: str =
     return result
 
 
+def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
+                               board_id: str = "", mission_id: str = "",
+                               coordinator_agent_id: str = "", actor: str = "system",
+                               idem_key: str = "", policy: Any = None) -> Dict[str, Any]:
+    """Run one deliverable-scoped coordinator tick: brief refresh, dispatch, or escalation."""
+    import mission_coordinator
+
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    policy_obj = _parse_jsonish(policy) if policy not in (None, "") else None
+    if policy_obj is not None and not isinstance(policy_obj, dict):
+        return {"error": "policy must be a JSON object"}
+    payload = {
+        "deliverable_id": (deliverable_id or "").strip(),
+        "board_id": (board_id or "").strip(),
+        "mission_id": (mission_id or "").strip(),
+        "coordinator_agent_id": (coordinator_agent_id or "").strip(),
+        "policy": policy_obj or {},
+    }
+    with _conn(project) as c:
+        hit = _idem_hit(c, "run_mission_coordinator_tick", idem_key, actor, payload)
+        if hit is not None:
+            return hit
+        status = get_mission_status(
+            project=project, deliverable_id=deliverable_id,
+            board_id=board_id, mission_id=mission_id)
+        if status.get("error"):
+            _idem_store(c, "run_mission_coordinator_tick", idem_key, actor, payload, status)
+            return status
+        resolved_id = status.get("deliverable_id") or deliverable_id
+        result = mission_coordinator.run_coordinator_tick(
+            status,
+            mission_project=project,
+            coordinator_agent_id=coordinator_agent_id,
+            actor=actor,
+            policy=policy_obj,
+        )
+        now = time.time()
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (None, actor, "deliverable.coordinator_tick",
+             json.dumps({
+                 "schema": result.get("schema"),
+                 "deliverable_id": resolved_id,
+                 "coordinator_agent_id": coordinator_agent_id or None,
+                 "status": result.get("status"),
+                 "plan": result.get("plan"),
+                 "executed": result.get("executed"),
+                 "escalations": result.get("escalations"),
+                 "dispatch": {
+                     "claimed": bool((result.get("dispatch") or {}).get("claimed")),
+                     "claim_id": (result.get("dispatch") or {}).get("claim_id"),
+                     "task_id": ((result.get("dispatch") or {}).get("task") or {}).get("task_id"),
+                 } if result.get("dispatch") else None,
+             }, sort_keys=True), now))
+        result["mission_status"] = get_mission_status(
+            project=project, deliverable_id=resolved_id)
+        _idem_store(c, "run_mission_coordinator_tick", idem_key, actor, payload, result)
+        return result
+
+
 def _empty_economics_totals() -> Dict[str, Any]:
     return {
         "linked_task_count": 0,
@@ -10815,6 +10876,7 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             ],
             "coordinator_sequence": [
                 "get_mission_status",
+                "run_mission_coordinator(deliverable_id=..., coordinator_agent_id=..., worker_agent_id=...)",
                 "Follow next_actions (approve_breakdown, claim_task, verify_merge_provenance, request_human_approval)",
                 "claim_next(deliverable_id=...) or approve_deliverable_breakdown",
                 "update_mission_narrative when material state changes",

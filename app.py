@@ -713,6 +713,26 @@ async def deliverable_mission_status(deliverable_id: str, project: str = Query(.
     return result
 
 
+@app.post("/api/deliverables/{deliverable_id}/coordinator_tick")
+async def run_mission_coordinator_tick(request: Request, deliverable_id: str,
+                                       project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    body = body or {}
+    result = store.run_mission_coordinator_tick(
+        project=project,
+        deliverable_id=deliverable_id,
+        board_id=body.get("board_id") or "",
+        mission_id=body.get("mission_id") or "",
+        coordinator_agent_id=body.get("coordinator_agent_id") or "",
+        actor=auth.actor(principal),
+        idem_key=body.get("idem_key") or "",
+        policy=body.get("policy"),
+    )
+    if result.get("error"):
+        code = 404 if "unknown" in result["error"] else 400
+        raise HTTPException(code, result["error"])
     return result
 
 

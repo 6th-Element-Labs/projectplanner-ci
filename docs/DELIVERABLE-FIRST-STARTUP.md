@@ -130,7 +130,7 @@ update_mission_narrative(
 
 Rules for coordinators:
 
-- Prefer `next_actions` from `get_mission_status` over inventing tasks.
+- Prefer `run_mission_coordinator` or `next_actions` from `get_mission_status` over inventing tasks.
 - Use `propose_deliverable_breakdown` / `approve_deliverable_breakdown` for new work — never
   create tasks without explicit project routing.
 - Interrupt humans only for approval, architecture drift, budget/risk changes, or blocked decisions.
@@ -145,6 +145,7 @@ Rules for coordinators:
 | `get_mission_status` | `deliverable_id` or `board_id`/`mission_id` |
 | `claim_next` | `deliverable_id`, optional `milestone_id`; `project`=mission home |
 | `complete_claim` | evidence: `deliverable_id`, `mission_project`, `milestone_id` |
+| `run_mission_coordinator` | `deliverable_id`, `coordinator_agent_id`, `worker_agent_id`, optional `policy_json` |
 | `get_working_agreement` | includes `deliverable_first_startup` and `session_start_sequence_deliverable` |
 
 See also [`DELIVERABLES-MISSION-MODEL.md`](DELIVERABLES-MISSION-MODEL.md) and [`MCP.md`](MCP.md).

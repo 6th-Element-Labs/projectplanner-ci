@@ -210,6 +210,23 @@ Each fixture proves `get_mission_status` / REST mission pages show cross-project
 progress, active work, Done-with-proof, blockers, narrative, and next actions without writing
 deliverable records into linked project databases.
 
+## Mission Coordinator Loop (DELIVERABLES-7)
+
+`run_mission_coordinator` executes one deliverable-scoped coordinator tick. It reads
+`get_mission_status.next_actions`, refreshes the mission brief when stale, and either:
+
+- **dispatches** ready linked work via `claim_next(deliverable_id=...)` when `auto_claim` and
+  `worker_agent_id` are set;
+- **monitors** In Review tasks via `verify_merge_provenance` (never marks Done);
+- **escalates** to humans for approval gates, breakdown approval, or blocked decisions; or
+- returns **idle** / **mission_complete** when there is nothing to do.
+
+Every tick is audited as `deliverable.coordinator_tick` on the mission-home project and scoped to
+`deliverable_id`. Idempotent replays use `idem_key`.
+
+- MCP: `run_mission_coordinator`
+- REST: `POST /api/deliverables/{deliverable_id}/coordinator_tick?project=`
+
 ## Workstream status
 
 ```mermaid
@@ -218,7 +235,7 @@ flowchart LR
   D2 --> D4[4: deliverable-aware dispatch ✓]
   D2 --> D5[5: Mission Page UI ✓]
   D5 --> D6[6: generated narrative ✓]
-  D3 --> D7[7: coordinator loop]
+  D3 --> D7[7: coordinator loop ✓]
   D4 --> D7
   D6 --> D7
   D5 --> D8[8: dogfood missions ✓]
@@ -230,13 +247,13 @@ flowchart LR
   classDef review fill:#fff3cd,stroke:#ffc107,color:#856404
   classDef todo fill:#e9ecef,stroke:#6c757d,color:#495057
 
-  class D2,D3,D4,D5,D6,D8,D9,D10 done
-  class D7 todo
+  class D2,D3,D4,D5,D6,D7,D8,D9,D10 done
 ```
 
 Legend: ✓ Done · ◐ In Review · plain = Not Started. Board: `switchboard` / workstream `DELIVERABLES`.
 
 ## Next Surfaces
 
-Coordinator loops are tracked as DELIVERABLES-7. Agent startup from `deliverable_id` /
-`mission_id` is documented in [`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).
+The DELIVERABLES workstream (D1–D11) is complete. Follow-on policy enforcement is tracked on the
+POLICY workstream. Agent startup from `deliverable_id` / `mission_id` is documented in
+[`DELIVERABLE-FIRST-STARTUP.md`](DELIVERABLE-FIRST-STARTUP.md).

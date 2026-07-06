@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Tests for deliverable-scoped mission coordinator loop (DELIVERABLES-7)."""
+import os
+import shutil
+import sys
+import tempfile
+
+_TMP = tempfile.mkdtemp(prefix="mission-coordinator-")
+os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
+os.environ["PM_HELM_DB_PATH"] = os.path.join(_TMP, "helm.db")
+os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
+os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
+os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import mission_coordinator  # noqa: E402
+import store  # noqa: E402
+
+passed = failed = 0
+
+
+def ok(condition, message):
+    global passed, failed
+    print(("  PASS  " if condition else "  FAIL  ") + message)
+    passed += 1 if condition else 0
+    failed += 0 if condition else 1
+
+
+try:
+    store.init_project_registry()
+    store.init_db("switchboard")
+    home = store.create_project("Coord Home", project_id="qa-coord-home", actor="test")
+    target = store.create_project("Coord Target", project_id="qa-coord-target", actor="test")
+    ok(home.get("created") and target.get("created"), "test projects created")
+
+    store.create_task(
+        {"workstream_id": "RENDER", "title": "Ready linked task"},
+        actor="test", project="qa-coord-target",
+    )
+    store.create_task(
+        {"workstream_id": "RENDER", "title": "Stray task", "sort_order": 999},
+        actor="test", project="qa-coord-target",
+    )
+    mission = store.create_project_board(
+        {"id": "coord-mission", "title": "Coord Mission", "kind": "mission", "status": "active"},
+        actor="test", project="qa-coord-home",
+    )
+    store.create_deliverable(
+        {"id": "coord-mission", "board_id": mission["id"], "title": "Coord Mission",
+         "status": "approved", "end_state": "Cross-board ingest works."},
+        actor="test", project="qa-coord-home",
+    )
+    ms = store.add_deliverable_milestone(
+        "coord-mission", {"title": "Build ingest", "status": "in_progress"},
+        actor="test", project="qa-coord-home",
+    )
+    milestone_id = ms["milestones"][0]["id"]
+    store.link_task_to_deliverable(
+        "coord-mission", "qa-coord-target", "RENDER-1", milestone_id=milestone_id,
+        actor="test", project="qa-coord-home",
+    )
+
+    status = store.get_mission_status(project="qa-coord-home", deliverable_id="coord-mission")
+    plan = mission_coordinator.coordinator_tick_plan(
+        status, policy={"auto_claim": True, "worker_agent_id": "agent/worker"})
+    ok(plan.get("status") == "dispatch_ready" and
+       plan.get("dispatch", {}).get("action") == "claim_task",
+       "coordinator plan selects claim_task for ready linked work")
+
+    tick = store.run_mission_coordinator_tick(
+        project="qa-coord-home",
+        deliverable_id="coord-mission",
+        coordinator_agent_id="agent/coordinator",
+        actor="test",
+        policy={"auto_claim": True, "worker_agent_id": "agent/worker",
+                "auto_refresh_brief": True},
+        idem_key="tick-1",
+    )
+    ok(tick.get("schema") == "switchboard.mission_coordinator_tick.v1",
+       "coordinator tick returns v1 schema")
+    ok(tick.get("status") == "claimed" and tick.get("dispatch", {}).get("claimed"),
+       "coordinator tick claims ready linked task via deliverable scope")
+    ok(tick.get("dispatch", {}).get("task_project") == "qa-coord-target",
+       "coordinator dispatch records cross-project task_project")
+    ok(tick.get("deliverable_id") == "coord-mission",
+       "coordinator tick is scoped to deliverable_id")
+
+    audit = store.audit_export(project="qa-coord-home")
+    ok(any(a.get("kind") == "deliverable.coordinator_tick"
+           for a in audit.get("activity") or []),
+       "coordinator tick is audited on mission-home project")
+
+    store.abandon_claim(tick["dispatch"]["claim_id"], "test reset", project="qa-coord-target")
+    store.update_task("RENDER-1", {"status": "Not Started", "assignee": None},
+                      actor="test", project="qa-coord-target")
+
+    store.set_agent_state("RENDER-1", "human_gate", {
+        "required": True,
+        "approval_reason": "Needs sign-off",
+    }, project="qa-coord-target")
+    gated = store.get_mission_status(project="qa-coord-home", deliverable_id="coord-mission")
+    gated_plan = mission_coordinator.coordinator_tick_plan(gated)
+    ok(gated_plan.get("status") == "human_required",
+       "human gate escalates without auto-claim")
+
+    gated_tick = store.run_mission_coordinator_tick(
+        project="qa-coord-home",
+        deliverable_id="coord-mission",
+        coordinator_agent_id="agent/coordinator",
+        actor="test",
+        policy={"auto_claim": True, "worker_agent_id": "agent/worker"},
+        idem_key="tick-gated",
+    )
+    ok(gated_tick.get("status") == "human_required" and gated_tick.get("escalations"),
+       "coordinator tick returns human_required for approval gates")
+
+    store.set_agent_state("RENDER-1", "human_gate", {
+        "required": True,
+        "approved": True,
+        "approved_by": "test",
+        "approval_reason": "Signed off",
+    }, project="qa-coord-target")
+    store.update_task("RENDER-1", {"status": "In Review", "assignee": None},
+                      actor="test", project="qa-coord-target")
+    review_status = store.get_mission_status(
+        project="qa-coord-home", deliverable_id="coord-mission")
+    review_plan = mission_coordinator.coordinator_tick_plan(review_status)
+    ok(review_plan.get("status") == "monitor" and
+       review_plan.get("monitors", [{}])[0].get("action") == "verify_merge_provenance",
+       "In Review tasks monitor merge provenance instead of claiming Done")
+
+    idem_repeat = store.run_mission_coordinator_tick(
+        project="qa-coord-home",
+        deliverable_id="coord-mission",
+        coordinator_agent_id="agent/coordinator",
+        actor="test",
+        policy={"auto_claim": True, "worker_agent_id": "agent/worker",
+                "auto_refresh_brief": True},
+        idem_key="tick-1",
+    )
+    ok(idem_repeat.get("status") == "claimed" and idem_repeat.get("dispatch", {}).get("claimed"),
+       "coordinator tick is idempotent by idem_key")
+finally:
+    shutil.rmtree(_TMP, ignore_errors=True)
+
+print("\n%d passed, %d failed" % (passed, failed))
+sys.exit(1 if failed else 0)
