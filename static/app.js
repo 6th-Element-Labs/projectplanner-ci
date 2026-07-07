@@ -153,14 +153,14 @@ const TeepPlan = {
         this.buildFilters();
         const dl = document.getElementById('people-list');
         if (dl) dl.innerHTML = (this.people || []).map((p) => `<option value="${this.esc(p)}"></option>`).join('');
-        this.renderBoard();
-        this.renderTasks();
-        this.renderEpics();
-        this.renderTables();
+        // HARDEN-39: render only the active (Exec) tab now; the heavier off-screen
+        // tabs (Board, Tasks, tables, Pulse) render the first time they're shown and
+        // on every show, so nothing goes stale. Mutations/filters still re-render the
+        // visible tab via their existing render calls.
         this.renderExec();
-        this.renderTallyPulse();
         this.wireEvents();
         this.setupGantt();
+        this._wireLazyTabs();
         this.loadSignals();
         this.initInbox();
         this._missionDeliverableFromUrl();
@@ -821,7 +821,9 @@ const TeepPlan = {
     async loadSignals() {
         try { this.signals = await (await fetch('api/signals')).json(); }
         catch (e) { this.signals = null; }
-        this.renderTasks();
+        // HARDEN-39: only refresh the Tasks view if it's on-screen; otherwise it
+        // renders fresh (with signals) the next time its tab is shown.
+        if (document.getElementById('tab-epics')?.classList.contains('active')) this.renderTasks();
     },
 
     // Back-compat shim: the old flat "ToDo" per-person tab is merged into the
@@ -1048,6 +1050,25 @@ const TeepPlan = {
             document.head.appendChild(s);
         });
         return this._scriptPromises[src];
+    },
+
+    // HARDEN-39: build the heavy off-screen tabs the first time (and each time)
+    // they're shown, instead of all upfront on load. Tasks/Epics are already wired
+    // in wireEvents; this covers Board, the tables (Milestones/Decisions/Risks all
+    // come from renderTables), and Pulse. These also re-render from mutations/filter
+    // changes, so a deferred tab never shows stale data.
+    _wireLazyTabs() {
+        const paneRender = {
+            'tab-board': 'renderBoard',
+            'tab-plan': 'renderTables',
+            'tab-decisions': 'renderTables',
+            'tab-risks': 'renderTables',
+            'tab-pulse': 'renderTallyPulse',
+        };
+        Object.entries(paneRender).forEach(([pane, fn]) => {
+            document.querySelectorAll(`a[href="#${pane}"]`).forEach((tab) =>
+                tab.addEventListener('shown.bs.tab', () => this[fn]()));
+        });
     },
 
     setupGantt() {
