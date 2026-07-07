@@ -129,12 +129,18 @@ const TeepPlan = {
         try { await this.applyProject(); } catch (e) { /* switcher is best-effort */ }
         if (this._noProjects) { this.renderNoProjects(); return; }
         try {
-            const res = await fetch('api/board');
+            // HARDEN-38: fire board/people/tally concurrently — they're independent
+            // once the project is known, so the critical path isn't 3 serial round-trips.
+            const boardReq = fetch('api/board');
+            const peopleReq = fetch('api/people').then((r) => r.json()).then((d) => d.people || []).catch(() => []);
+            const tallyReq = fetch(`tally/v1/project?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`)
+                .then((r) => r.json()).catch(() => null);
+            const res = await boardReq;
             if (!res.ok) throw new Error(`HTTP ${res.status} loading the board`);
             this.plan = await res.json();
             this.projectContext = this.plan.project_context || null;
-            try { this.people = (await (await fetch('api/people')).json()).people || []; } catch (e) { this.people = []; }
-            try { this.tally = await (await fetch(`tally/v1/project?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`)).json(); } catch (e) { this.tally = null; }
+            this.people = await peopleReq;
+            this.tally = await tallyReq;
         } catch (err) {
             this.showError(err.message);
             return;

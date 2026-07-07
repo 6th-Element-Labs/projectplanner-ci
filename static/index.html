@@ -16,8 +16,9 @@
     <title>Project Maxwell Plan | Taikun Atlas</title>
     <link rel="icon" href="taikun-favicon.png" type="image/png"/>
     <link rel="shortcut icon" href="taikun-favicon.png" type="image/png"/>
-    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
-    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
+    <!-- HARDEN-38: pin Tabler versions (was @latest — a Tabler release could break the UI without warning). These are the versions @latest resolved to at pin time. -->
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/tabler-icons.min.css" rel="stylesheet"/>
     <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. Old UI preserved at /index-legacy.html. -->
@@ -397,7 +398,7 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script src="/vendor/apexcharts/apexcharts.min.js"></script>
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js?v=36"></script>
+    <script src="app.js?v=37"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script>
       // Keep the sidebar nav highlight in sync with the active tab (sidebar + top tabs share tab targets).
