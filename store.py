@@ -15799,12 +15799,16 @@ def inbox_pending_count() -> int:
         return c.execute("SELECT COUNT(*) FROM inbox WHERE status='pending'").fetchone()[0]
 
 
-def board_payload(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+# Heavy per-task fields the board list/cards never render — they surface only in
+# the task-detail modal, which re-fetches the full task via GET /api/tasks/{id}.
+# Dropping them from the (large, whole-board) payload roughly halves it on the
+# wire with zero UI change. Kept: description (board search matches it) and
+# provenance (the card's Done-proof badge reads it).
+_BOARD_LITE_DROP = ("session_health", "external_ci", "publication", "exit_criteria", "agent_state")
+
+
+def board_payload(project: str = DEFAULT_PROJECT, lite: bool = False) -> Dict[str, Any]:
     tasks = list_tasks(project=project)
-    by_ws: Dict[str, Dict[str, Any]] = {}
-    for t in tasks:
-        ws = by_ws.setdefault(t["_wsId"], {"workstream_id": t["_wsId"], "name": t["_wsName"], "tasks": []})
-        ws["tasks"].append(t)
     payload: Dict[str, Any] = {k: get_meta(k, project=project) for k in META_SECTIONS}
     payload["project"] = next((p for p in projects() if p["id"] == project), {
         "id": project,
@@ -15813,7 +15817,16 @@ def board_payload(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "purpose": project_access(project).get("purpose") or "",
         "boundary": project_access(project).get("boundary") or "",
     })
+    # Rollups are computed from the FULL tasks (they aggregate the heavy fields),
+    # then the per-workstream task copies are slimmed for the wire when lite.
     payload["rollups"] = board_rollups(project=project, tasks=tasks)
+    ws_tasks = tasks
+    if lite:
+        ws_tasks = [{k: v for k, v in t.items() if k not in _BOARD_LITE_DROP} for t in tasks]
+    by_ws: Dict[str, Dict[str, Any]] = {}
+    for t in ws_tasks:
+        ws = by_ws.setdefault(t["_wsId"], {"workstream_id": t["_wsId"], "name": t["_wsName"], "tasks": []})
+        ws["tasks"].append(t)
     payload["workstreams"] = list(by_ws.values())
     payload["project_context"] = get_project_context(project)
     return payload

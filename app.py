@@ -190,6 +190,12 @@ def _attach_server_timing(response: Response, started_at: float) -> Response:
     existing = response.headers.get("Server-Timing")
     response.headers["Server-Timing"] = f"{existing}, {metric}" if existing else metric
     response.headers["X-Switchboard-Server-Ms"] = f"{elapsed_ms:.1f}"
+    # HTML documents (app shell + login/signup/reset pages) must always revalidate
+    # so a deploy's new ?v= asset references reach browsers without a manual
+    # hard-refresh — the exact trap that locked users out after the auth cutover.
+    # Versioned assets (app.js?v=, *.css?v=) stay long-cacheable.
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 
@@ -1053,7 +1059,9 @@ async def defer_deliverable_breakdown(request: Request, proposal_id: str,
 
 @app.get("/api/board")
 async def board(project: str = Query(store.DEFAULT_PROJECT)):
-    return store.board_payload(_proj(project))
+    # lite: drop heavy per-task fields the board UI never renders (they're
+    # re-fetched by the task-detail modal), roughly halving this large payload.
+    return store.board_payload(_proj(project), lite=True)
 
 
 @app.get("/api/people")
