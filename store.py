@@ -12706,6 +12706,25 @@ def _merge_pr_evidence(git_state: Dict[str, Any],
     return evidence if any(k != "source" for k in evidence) else {}
 
 
+def _pr_references_task(pr: Dict[str, Any], task_id: str) -> bool:
+    """True when a merged PR explicitly names the task in its branch ref or title.
+
+    Guards the In Progress auto-promote path against mis-association: an In Progress
+    task's own activity may reference another task's PR (coordination chatter), and we
+    must never auto-stamp Done off that. We only promote when the PR itself carries the
+    task id, matching the branch/commit naming convention (cursor/<TASK-ID>-slug,
+    "<TASK-ID>: subject"). In Review/Done keep their existing behaviour (the agent
+    explicitly asserted the PR by advancing lifecycle), so this check does not apply there.
+    """
+    if not task_id:
+        return False
+    token = re.compile(
+        r"(?<![A-Za-z0-9])" + re.escape(task_id) + r"(?![A-Za-z0-9])", re.I)
+    head_ref = (pr.get("head") or {}).get("ref") or ""
+    title = pr.get("title") or ""
+    return bool(token.search(head_ref) or token.search(title))
+
+
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  git_states: Dict[str, Dict[str, Any]],
                                  canonical_main_sha: str,
@@ -12832,12 +12851,24 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  "code": "done_pr_not_merged",
                                  "detail": "Task is Done but the recorded GitHub PR is not merged."})
             merge_sha = pr.get("merge_commit_sha")
-            if (merged and merge_sha
-                    and task.get("status") in ("In Review", "Done")
-                    and (task.get("status") != "Done" or not state.get("merged_sha"))):
-                base_ref = ((pr.get("base") or {}).get("ref") or "").strip()
-                default_ref = (pr.get("base") or {}).get("repo", {}).get("default_branch") or ""
-                if base_ref and default_ref and base_ref == default_ref:
+            base_ref = ((pr.get("base") or {}).get("ref") or "").strip()
+            default_ref = (pr.get("base") or {}).get("repo", {}).get("default_branch") or ""
+            default_branch_merge = bool(base_ref and default_ref and base_ref == default_ref)
+            task_status = task.get("status")
+            # In Progress tasks only reach here when a PR reference was hydrated from their
+            # own activity/git_state (the agent merged without ever running complete_claim to
+            # reach In Review). Auto-promote them ONLY when the PR actually merged into the
+            # project's canonical default branch AND the PR itself names the task — never off a
+            # feature/integration branch and never from a mis-attributed PR reference.
+            stamp_eligible = (
+                (task_status in ("In Review", "Done")
+                 and (task_status != "Done" or not state.get("merged_sha")))
+                or (task_status == "In Progress"
+                    and default_branch_merge
+                    and _pr_references_task(pr, task["task_id"]))
+            )
+            if merged and merge_sha and stamp_eligible:
+                if default_branch_merge:
                     update_canonical_main_sha(merge_sha, "reconcile", project)
                 stamped = mark_task_merged(
                     task["task_id"], merge_sha,
@@ -12986,7 +13017,7 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 repo and
                 not git_state.get("pr_number") and
                 (
-                    status == "In Review" or
+                    status in ("In Review", "In Progress") or
                     (status == "Done" and not _has_done_provenance(git_state))
                 )
             )
@@ -13020,7 +13051,11 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "review_without_provenance",
                                  "detail": "Task is In Review but lacks branch/PR evidence."})
-            if status == "In Progress" and not git_state.get("head_sha"):
+            if (status == "In Progress" and not git_state.get("head_sha")
+                    and not git_state.get("pr_number")):
+                # A hydrated pr_number means this task has PR evidence pending merge-provenance
+                # evaluation below (open PR, or a merge about to be auto-stamped) — the PR checks
+                # own its provenance state, so don't also flag it as "no pushed head".
                 findings.append({"severity": "low", "task_id": task["task_id"],
                                  "code": "progress_without_pushed_head",
                                  "detail": "Task is In Progress with no reported pushed head SHA."})

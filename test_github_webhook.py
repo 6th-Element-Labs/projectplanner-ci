@@ -615,6 +615,76 @@ try:
                f["code"] == "done_without_merged_sha" for f in helm_report["findings"]),
        "legacy Done Helm PR task is not left as Done without provenance")
 
+    # BUG-27 / regression of HARDEN-15: an agent that merges its PR to canonical main but never
+    # runs complete_claim leaves the task In Progress. Reconcile (running from the projectplanner
+    # checkout, so local git reachability is skipped) must still auto-stamp Done from GitHub PR
+    # provenance — but ONLY when the merged PR is on the default branch AND names the task.
+    ip_promote = store.create_task(
+        {"workstream_id": "ENC", "title": "layer toggles merged while still In Progress"},
+        actor="seed", project="helm")
+    ip_feature = store.create_task(
+        {"workstream_id": "ENC", "title": "merged into a non-default branch only"},
+        actor="seed", project="helm")
+    ip_foreign = store.create_task(
+        {"workstream_id": "ENC", "title": "activity cites another task's merged PR"},
+        actor="seed", project="helm")
+    ip_promote_id = ip_promote["task_id"]
+    ip_feature_id = ip_feature["task_id"]
+    ip_foreign_id = ip_foreign["task_id"]
+    with store._conn("helm") as c:
+        for tid, pr_no in ((ip_promote_id, 812), (ip_feature_id, 813), (ip_foreign_id, 814)):
+            c.execute("UPDATE tasks SET status='In Progress', updated_at=? WHERE task_id=?",
+                      (0, tid))
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                (tid, "cursor/agent", "comment",
+                 '{"text":"Merged PR #%d to main"}' % pr_no, 0),
+            )
+
+    def fake_inprogress_pr(repo, pr_number, token=""):
+        n = int(pr_number)
+        if n == 812:  # merged to default branch, head ref names the task -> promote
+            head_ref = "cursor/%s-layer-toggles" % ip_promote_id
+            base = {"ref": "main", "repo": {"default_branch": "main"}}
+        elif n == 813:  # merged to a NON-default branch -> must not promote
+            head_ref = "cursor/%s-x" % ip_feature_id
+            base = {"ref": "integration", "repo": {"default_branch": "main"}}
+        else:  # 814: merged to default branch but PR names a DIFFERENT task -> must not promote
+            head_ref = "cursor/SOMEOTHER-9-unrelated"
+            base = {"ref": "main", "repo": {"default_branch": "main"}}
+        return {
+            "merged_at": "2026-07-07T00:00:00Z",
+            "merge_commit_sha": "ipmerge%d" % n,
+            "html_url": "https://github.com/%s/pull/%d" % (repo, n),
+            "base": base,
+            "head": {"ref": head_ref, "sha": "abc%d" % n},
+        }
+
+    store._github_pr = fake_inprogress_pr
+    try:
+        ip_report = store.reconcile(project="helm")
+    finally:
+        store._github_pr = original_github_pr
+    ip_promoted = store.get_task(ip_promote_id, project="helm")
+    ip_feature_r = store.get_task(ip_feature_id, project="helm")
+    ip_foreign_r = store.get_task(ip_foreign_id, project="helm")
+    ok(ip_promoted["status"] == "Done" and
+       ip_promoted["git_state"]["pr_number"] == 812 and
+       ip_promoted["git_state"]["merged_sha"] == "ipmerge812",
+       "reconcile auto-stamps an In Progress task whose PR merged to canonical main (BUG-27)")
+    ok(any(b["task_id"] == ip_promote_id and b["merged_sha"] == "ipmerge812"
+           for b in ip_report["backfilled"]),
+       "In Progress PR-merge backfill is reported")
+    ok(not any(f["task_id"] == ip_promote_id and f["code"] == "progress_without_pushed_head"
+               for f in ip_report["findings"]),
+       "auto-stamped In Progress task is not also flagged progress_without_pushed_head")
+    ok(ip_feature_r["status"] == "In Progress" and
+       not ip_feature_r["git_state"].get("merged_sha"),
+       "reconcile does NOT promote an In Progress task whose PR merged off the default branch")
+    ok(ip_foreign_r["status"] == "In Progress" and
+       not ip_foreign_r["git_state"].get("merged_sha"),
+       "reconcile does NOT promote an In Progress task from a PR that names a different task")
+
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)
 finally:
