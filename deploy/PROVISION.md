@@ -76,6 +76,9 @@ sudo systemctl enable --now projectplanner-reconcile.timer
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
 sudo systemctl enable --now projectplanner-agent-host
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
+# HARDEN-40: pin cgroup resource guards so the batch/timer jobs (narrate, ci-gate)
+# can't starve the web app on this small box. Persists across reboot; idempotent.
+sudo bash deploy/apply-resource-guards.sh
 ```
 Caddy fetches the TLS cert automatically once DNS resolves. Visit https://plan.taikunai.com/.
 The app will present the login screen in required mode. On first startup, the bootstrap admin
@@ -115,7 +118,15 @@ sudo systemctl restart caddy
 
 After deploy, `/health` stays cheap (no DB walk). Caddy uses short timeouts on `/health*` and
 active health checks on the main upstream so hung backends fail fast instead of holding clients
-for minutes. If restarts recur, bump the instance to `t4g.small` (2 GB) per HARDEN-40.
+for minutes. The cgroup guards from `deploy/apply-resource-guards.sh` give the web app a reserved
+memory floor + top CPU share so a batch spike (narrate/ci-gate) throttles instead of jamming the
+worker. If a batch job still wedges the box, stop the timers to recover fast:
+```bash
+sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,summarize,ci-gate}.timer
+sudo pkill -9 -f jobs.py   # then restart the web app if needed
+```
+If wedges recur, bump the instance to `t4g.small` (2 GB) and/or move the GitHub Actions runner +
+CI gate off this box (per HARDEN-40).
 
 **Acceptance:** `curl -m5 https://plan.taikunai.com/health` returns `200` in under 2s.
 

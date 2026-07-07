@@ -21,6 +21,12 @@ plan.taikunai.com {
     }
     handle {
         encode zstd gzip
+        # HARDEN-40: long-cache static assets (versioned app.js?v=/*.css?v= and the
+        # /vendor/* libs) so browsers don't re-fetch them every load. HTML docs are
+        # unmatched here (no extension) and keep the app's Cache-Control: no-cache,
+        # so a deploy's new ?v= refs still propagate; /api/* is likewise unmatched.
+        @static path *.js *.css *.woff *.woff2 *.ttf *.otf *.png *.jpg *.jpeg *.gif *.svg *.ico /vendor/*
+        header @static Cache-Control "public, max-age=604800"
         reverse_proxy 127.0.0.1:8110 {
             transport http {
                 dial_timeout 5s
