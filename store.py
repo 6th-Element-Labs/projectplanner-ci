@@ -18,14 +18,7 @@ import evidence_claims
 # Module-level constants + static config live in constants.py (ARCH-2); re-exported
 # here so `import store` callers keep seeing store.DEFAULT_PROJECT, store.BUILTIN_PROJECTS, etc.
 from constants import *  # noqa: F401,F403
-
-def _registry_conn():
-    os.makedirs(os.path.dirname(PROJECT_REGISTRY_DB_PATH), exist_ok=True)
-    c = sqlite3.connect(PROJECT_REGISTRY_DB_PATH)
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL")
-    return c
-
+from db.core import *  # noqa: F401,F403 — Layer-0 primitives extracted to db/core.py (ARCH-3)
 
 def init_project_registry() -> None:
     with _registry_conn() as c:
@@ -119,11 +112,6 @@ def project_ids() -> List[str]:
 
 def has_project(project: Optional[str]) -> bool:
     return (project or DEFAULT_PROJECT) in _project_map()
-
-
-def hash_token(token: str) -> str:
-    """Stable one-way token hash for principal lookup."""
-    return hashlib.sha256(("switchboard:" + (token or "")).encode("utf-8")).hexdigest()
 
 
 def projects() -> List[Dict[str, Any]]:
@@ -386,20 +374,6 @@ def ensure_bootstrap_project_owner(project_id: str, principal_id: str, login: st
             "project_access": access, "grant": grant}
 
 
-def coerce_csv_list(value: Any) -> List[str]:
-    """Normalize REST/CLI list fields that may arrive as a list or comma/newline string."""
-    if value is None:
-        return []
-    raw = value if isinstance(value, list) else [value]
-    out: List[str] = []
-    for item in raw:
-        for part in str(item).replace("\n", ",").split(","):
-            part = part.strip()
-            if part:
-                out.append(part)
-    return out
-
-
 def _resolve(project: Optional[str]) -> Dict[str, str]:
     """Map a project id -> its config. Fail CLOSED on an unknown id — never silently fall back
     to Maxwell (which could leak a write across projects)."""
@@ -586,13 +560,6 @@ DEFAULT_PEOPLE = ["Steve Ridder", "Taikun eng", "Darko", "Sahir", "Sebastian", "
                   "Michelle", "Sierra", "Clovis", "Devin", "Brent", "IFS owner", "Nubo"]
 
 
-def _sqlite_timeout_s(env_name: str, default_s: float) -> float:
-    try:
-        return max(0.0, float(os.environ.get(env_name, str(default_s))))
-    except (TypeError, ValueError):
-        return default_s
-
-
 def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
     timeout = _sqlite_timeout_s("PM_SQLITE_TIMEOUT_S", 5.0) if timeout_s is None else timeout_s
     c = sqlite3.connect(_resolve(project)["db"], timeout=timeout)
@@ -610,13 +577,6 @@ def _control_plane_conn(project: str = DEFAULT_PROJECT):
     return _conn(project, timeout_s=_control_plane_timeout_s())
 
 
-def _sqlite_busy(exc: Exception) -> bool:
-    text = str(exc).lower()
-    return isinstance(exc, sqlite3.OperationalError) and (
-        "database is locked" in text or "database is busy" in text or "locked" in text
-    )
-
-
 def _control_plane_unavailable(operation: str, project: str, started_at: float,
                                exc: Exception) -> Dict[str, Any]:
     return {
@@ -628,14 +588,6 @@ def _control_plane_unavailable(operation: str, project: str, started_at: float,
         "timeout_ms": int(_control_plane_timeout_s() * 1000),
         "message": str(exc),
     }
-
-
-def _json_size_bytes(value: Any) -> int:
-    try:
-        body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    except TypeError:
-        body = str(value).encode("utf-8")
-    return len(body)
 
 
 def _activity_cursor(project: str = DEFAULT_PROJECT) -> int:
@@ -1539,36 +1491,6 @@ def normalize_project_board_id(value: str = "", title: str = "") -> str:
             "letters, digits, '_', '-', '.', and ':' are allowed"
         )
     return candidate
-
-
-def _json_list_field(value: Any) -> str:
-    if value in (None, ""):
-        parsed: Any = []
-    elif isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            parsed = [item for item in coerce_csv_list(value)]
-    else:
-        parsed = value
-    if not isinstance(parsed, list):
-        parsed = [parsed]
-    return json.dumps(parsed, sort_keys=True)
-
-
-def _json_object_field(value: Any) -> str:
-    if value in (None, ""):
-        parsed: Any = {}
-    elif isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            parsed = {"text": value}
-    else:
-        parsed = value
-    if not isinstance(parsed, dict):
-        parsed = {"value": parsed}
-    return json.dumps(parsed, sort_keys=True)
 
 
 def _deliverable_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -3745,24 +3667,6 @@ def _bug_report_value_present(value: Any) -> bool:
     return True
 
 
-def _parse_jsonish(value: Any) -> Any:
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return ""
-        if text[0:1] in ("{", "["):
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                return {"text": value}
-        return {"text": value}
-    return value
-
-
-def _slug_token(value: str) -> str:
-    return re.sub(r"[^a-z0-9_]+", "_", (value or "").strip().lower()).strip("_")
-
-
 def fail_fix_signal_schema() -> Dict[str, Any]:
     return {
         "schema": "fail_fix_signal.v1",
@@ -3845,16 +3749,6 @@ def _bug_report_description(report: Dict[str, Any]) -> str:
         "Evidence:",
         evidence_text,
     ])
-
-
-def _json_payload(raw: str) -> Any:
-    """Parse payload JSON while preserving legacy scalar payloads."""
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"text": raw}
 
 
 def _normalize_depends_on(value: Any) -> List[str]:
@@ -4550,35 +4444,6 @@ def get_activity_delta(since_cursor: int = 0, lane: str = "",
     return {"cursor": new_cursor, "updates": list(by_task.values())}
 
 
-def _request_hash(payload: Dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
-def _idem_hit(c: sqlite3.Connection, operation: str, idem_key: str,
-              actor: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if not idem_key:
-        return None
-    row = c.execute("SELECT request_hash, response_json FROM idempotency_keys "
-                    "WHERE idem_key=? AND operation=?", (idem_key, operation)).fetchone()
-    if not row:
-        return None
-    if row["request_hash"] != _request_hash(payload):
-        return {"error": "idempotency conflict", "idem_key": idem_key, "operation": operation}
-    return json.loads(row["response_json"])
-
-
-def _idem_store(c: sqlite3.Connection, operation: str, idem_key: str,
-                actor: str, payload: Dict[str, Any], response: Dict[str, Any]) -> None:
-    if not idem_key:
-        return
-    c.execute(
-        "INSERT OR REPLACE INTO idempotency_keys"
-        "(idem_key, operation, actor, request_hash, response_json, created_at) "
-        "VALUES (?,?,?,?,?,?)",
-        (idem_key, operation, actor, _request_hash(payload), json.dumps(response, sort_keys=True), time.time()),
-    )
-
-
 EXTERNAL_EFFECT_TERMINAL_STATUSES = {"verified", "failed", "dead_letter", "void"}
 EXTERNAL_CI_STATUSES = {
     "requested", "mirrored", "triggered", "running", "success", "failure", "cancelled", "error"
@@ -4592,14 +4457,6 @@ EXTERNAL_CI_FAILURE_CLASSES = {
 }
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 WORKFLOW_REF_RE = re.compile(r"^[A-Za-z0-9_.@:/-]+$")
-
-
-def _canonical_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    return json.loads(json.dumps(payload or {}, sort_keys=True, separators=(",", ":")))
-
-
-def _payload_hash(payload: Optional[Dict[str, Any]]) -> str:
-    return _request_hash(_canonical_payload(payload))
 
 
 def _effect_window_key(now: float, idempotency_window_seconds: int = 0) -> str:
@@ -6718,17 +6575,6 @@ def list_active_agents(lane: str = "", project: str = DEFAULT_PROJECT) -> List[D
     return [p for p in (_presence_row(r, now=now) for r in rows) if not p["stale"]]
 
 
-def _json_obj(raw: Any, default: Any) -> Any:
-    if raw in (None, ""):
-        return default
-    if isinstance(raw, (dict, list)):
-        return raw
-    try:
-        return json.loads(raw)
-    except Exception:
-        return default
-
-
 def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
     now = time.time() if now is None else now
     d = dict(row)
@@ -6761,10 +6607,6 @@ def _wake_row(row: sqlite3.Row) -> Dict[str, Any]:
     d["policy"] = _json_obj(d.pop("policy_json", "{}"), {})
     d["result"] = _json_obj(d.pop("result_json", "{}"), {})
     return d
-
-
-def _truthy(value: Any) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_runner_control(control: Dict[str, Any], host_id: str) -> Dict[str, Any]:
@@ -6816,11 +6658,6 @@ def _runner_control_capabilities(session: Dict[str, Any]) -> Dict[str, str]:
     available = set(session.get("available_actions") or [])
     return {action: ("supported" if action in available else "not_supported")
             for action in sorted(RUNNER_CONTROL_ACTIONS)}
-
-
-def _text_tail(value: Any, limit: int = 4000) -> str:
-    text = str(value or "")
-    return text[-limit:] if len(text) > limit else text
 
 
 def _runner_environment(session: Dict[str, Any], now: float) -> Dict[str, Any]:
@@ -11410,20 +11247,6 @@ def _spend_row(row: sqlite3.Row) -> Dict[str, Any]:
     return out
 
 
-def _jsonish(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if not value:
-        return {}
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, dict) else {"value": parsed}
-        except Exception:
-            return {"text": value}
-    return {"value": value}
-
-
 def _outcome_row(row: sqlite3.Row) -> Dict[str, Any]:
     out = dict(row)
     out["evidence"] = json.loads(out.pop("evidence_json") or "{}")
@@ -13037,23 +12860,6 @@ TASK_MOVE_TABLES = (
 AUTOINCREMENT_TASK_TABLES = {"activity", "llm_spend", "decisions"}
 
 
-def _table_columns(c: sqlite3.Connection, table: str) -> List[str]:
-    return [r["name"] for r in c.execute(f"PRAGMA table_info({table})").fetchall()]
-
-
-def _insert_row(c: sqlite3.Connection, table: str, row: Dict[str, Any],
-                skip_columns: Optional[set] = None) -> None:
-    skip_columns = skip_columns or set()
-    cols = [col for col in _table_columns(c, table) if col in row and col not in skip_columns]
-    if not cols:
-        return
-    placeholders = ",".join("?" for _ in cols)
-    c.execute(
-        f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
-        [row[col] for col in cols],
-    )
-
-
 def _rows_for_task(c: sqlite3.Connection, table: str, task_id: str) -> List[Dict[str, Any]]:
     return [dict(r) for r in c.execute(f"SELECT * FROM {table} WHERE task_id=?",
                                        (task_id,)).fetchall()]
@@ -13812,26 +13618,6 @@ def _validate_github_repo(repo: str) -> Tuple[str, str]:
     if clean and not GITHUB_REPO_RE.match(clean):
         return clean, "github repo must be 'owner/name'"
     return clean, ""
-
-
-def _coerce_str_list(value) -> List[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(x).strip() for x in value if str(x).strip()]
-    if isinstance(value, tuple):
-        return [str(x).strip() for x in value if str(x).strip()]
-    text = str(value).strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if str(x).strip()]
-        except Exception:
-            pass
-    return [x.strip() for x in re.split(r"[\n,]+", text) if x.strip()]
 
 
 def _normalize_session_policy_profile(profile: str) -> str:
