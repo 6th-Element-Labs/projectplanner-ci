@@ -1,0 +1,16 @@
+# /etc/systemd/system/projectplanner-narrate.service
+# One-shot service: run the CEO-voice narrator drain for all projects.
+# Triggered by projectplanner-narrate.timer every ~45s (PM_NARRATE_INTERVAL).
+# Reuses the same LLM gateway as summarize; defaults to PM_NARRATE_MODEL=taikun-summarize
+# (gpt-4o-mini). No new env vars required — all PM_NARRATE_* have safe defaults.
+[Unit]
+Description=ProjectPlanner CEO-voice narrator drain
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py narrate_pending
+StandardOutput=journal
+StandardError=journal

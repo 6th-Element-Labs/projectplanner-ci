@@ -104,6 +104,26 @@ sudo cp deploy/projectplanner-agent-host.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-agent-host
 sudo systemctl restart projectplanner-agent-host
+sudo cp deploy/projectplanner-narrate.service deploy/projectplanner-narrate.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now projectplanner-narrate.timer
+sudo systemctl restart projectplanner-narrate.timer
+```
+
+## CEO-voice narrator timer
+
+`projectplanner-narrate.timer` drains the CEO-voice narrator every ~45s (see
+`docs/CEO-NARRATOR-CONTRACT.md`). It runs `jobs.py narrate_pending`, which narrates tasks
+that changed status and re-narrates deliverable headers whose brief fingerprint moved.
+It reuses the summarize LLM gateway and defaults to the cheap `taikun-summarize`
+(gpt-4o-mini) model — no new env vars required. The fingerprint + activity-cursor guards
+make idle cycles cost zero LLM calls.
+
+```bash
+systemctl list-timers projectplanner-narrate.timer
+journalctl -u projectplanner-narrate.service -n 40 --no-pager
+# one-shot backfill / manual drain:
+cd /opt/projectplanner && sudo -u ubuntu .venv/bin/python jobs.py narrate_pending
 ```
 
 ## VM-backed GitHub PR gate

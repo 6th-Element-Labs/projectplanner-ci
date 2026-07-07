@@ -1,0 +1,22 @@
+# /etc/systemd/system/projectplanner-narrate.timer
+# Fires the CEO-voice narrator drain every ~45s (matches PM_NARRATE_INTERVAL
+# default in narrate.py). Near-real-time to the operator; the fingerprint +
+# activity-cursor guards make idle cycles cost zero LLM calls.
+# To enable:
+#   sudo cp projectplanner-narrate.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now projectplanner-narrate.timer
+[Unit]
+Description=ProjectPlanner CEO-voice narrator drain (every ~45s)
+
+[Timer]
+# Monotonic cadence: first run 15s after the timer starts, then 45s after each
+# drain completes. Using OnActiveSec/OnUnitActiveSec (not OnBootSec) avoids the
+# NextElapse=infinity trap once boot is far in the past. Persistent has no effect
+# on monotonic timers, so it is intentionally omitted.
+OnActiveSec=15s
+OnUnitActiveSec=45s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
