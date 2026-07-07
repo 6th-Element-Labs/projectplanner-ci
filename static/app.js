@@ -1032,6 +1032,24 @@ const TeepPlan = {
         return !!p && p.classList.contains('active');
     },
 
+    // HARDEN-38: lazily inject a <script> once and resolve when loaded, so the
+    // ~1MB Mermaid (Mission tab) and ~500KB ApexCharts (Gantt tab) stay off the
+    // initial page load until their tab is actually opened.
+    APEXCHARTS_SRC: '/vendor/apexcharts/apexcharts.min.js',
+    MERMAID_SRC: 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js',
+    _ensureScript(src) {
+        this._scriptPromises = this._scriptPromises || {};
+        if (this._scriptPromises[src]) return this._scriptPromises[src];
+        this._scriptPromises[src] = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = src; s.async = true;
+            s.onload = () => resolve();
+            s.onerror = () => { delete this._scriptPromises[src]; reject(new Error('failed to load ' + src)); };
+            document.head.appendChild(s);
+        });
+        return this._scriptPromises[src];
+    },
+
     setupGantt() {
         const note = document.getElementById('gantt-note');
         if (note) note.textContent = (this.plan.schedule_note || '') + ' Tip: switch By workstream / By task; click a bar to drill in.';
@@ -1041,7 +1059,10 @@ const TeepPlan = {
         // a mode toggle. shown.bs.tab fires after the pane is visible + laid out,
         // so a direct render is safe.
         document.querySelectorAll('a[href="#tab-gantt"]').forEach((tab) =>
-            tab.addEventListener('shown.bs.tab', () => this.renderGantt()));
+            tab.addEventListener('shown.bs.tab', async () => {
+                try { await this._ensureScript(this.APEXCHARTS_SRC); } catch (e) { /* renderGantt guards on window.ApexCharts */ }
+                this.renderGantt();
+            }));
         ['gm-ws', 'gm-task'].forEach((id) => {
             const r = document.getElementById(id);
             if (r) r.addEventListener('change', () => { if (r.checked) { this.ganttMode = r.value; this.renderGantt(); } });
@@ -3610,6 +3631,7 @@ const TeepPlan = {
         const host = document.getElementById('mission-dag-graph');
         const g = this.missionGraph;
         if (!host || !g?.mermaid) return;
+        try { await this._ensureScript(this.MERMAID_SRC); } catch (e) { /* fall through to the unavailable message */ }
         if (!window.mermaid) {
             host.innerHTML = '<div class="text-secondary small">Mermaid renderer unavailable.</div>';
             return;
