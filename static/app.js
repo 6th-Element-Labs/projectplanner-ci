@@ -238,6 +238,51 @@ const TeepPlan = {
         if (ds) { ds.className = 'badge bg-secondary-lt'; ds.textContent = 'no access'; }
     },
 
+    // ACCESS-14/15: create a project from the web (contributors and up). Private by default.
+    openNewProject() {
+        const flash = document.getElementById('np-flash');
+        if (flash) { flash.textContent = ''; flash.className = 'small text-secondary me-auto'; }
+        const name = document.getElementById('np-name');
+        if (name) name.value = '';
+        const priv = document.querySelector('input[name="np-visibility"][value="private"]');
+        if (priv) priv.checked = true;
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('new-project-modal')).show();
+        setTimeout(() => name && name.focus(), 200);
+    },
+
+    async submitNewProject() {
+        const flash = document.getElementById('np-flash');
+        const btn = document.getElementById('np-create');
+        const setFlash = (msg, cls) => { if (flash) { flash.textContent = msg; flash.className = `small ${cls} me-auto`; } };
+        const name = (document.getElementById('np-name')?.value || '').trim();
+        const visibility = document.querySelector('input[name="np-visibility"]:checked')?.value || 'private';
+        if (!name) { setFlash('Enter a project name.', 'text-danger'); return; }
+        if (btn) btn.disabled = true;
+        setFlash('Creating…', 'text-secondary');
+        try {
+            const res = await fetch('api/projects', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, visibility }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(res.status === 403
+                    ? 'You don’t have permission to create projects.'
+                    : (data.detail || data.error || `Failed (${res.status})`));
+            }
+            const id = (data.project && data.project.id) || '';
+            setFlash('Created — switching…', 'text-success');
+            try { localStorage.setItem('pm_project', id); } catch (e) {}
+            const u = new URL(window.location.href);
+            u.searchParams.set('project', id);
+            window.location.href = u.toString();   // reload into the new project
+        } catch (e) {
+            setFlash(e.message || 'Failed to create project.', 'text-danger');
+            if (btn) btn.disabled = false;
+        }
+    },
+
     // Board/overview columns come from the phases actually present: Maxwell's 5 lifecycle phases,
     // or Helm's "Wave 1..4". Falls back to the canonical 5 when a plan has no/standard phases.
     derivePhases() {
@@ -3830,6 +3875,10 @@ const TeepPlan = {
         });
         const nb = document.getElementById('btn-new-task');
         if (nb) nb.addEventListener('click', () => this.openCreate());
+        const npBtn = document.getElementById('btn-new-project');
+        if (npBtn) npBtn.addEventListener('click', () => this.openNewProject());
+        const npCreate = document.getElementById('np-create');
+        if (npCreate) npCreate.addEventListener('click', () => this.submitNewProject());
         // Ask Taikun (plan-wide chat)
         const askSend = document.getElementById('ask-send');
         if (askSend) askSend.addEventListener('click', () => this.sendAsk());

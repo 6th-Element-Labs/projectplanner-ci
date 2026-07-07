@@ -234,8 +234,10 @@ def _auth_exempt_path(path: str) -> bool:
 
 
 def _write_required_scopes(path: str) -> tuple:
-    if (path == "/api/projects" or
-            (path.startswith("/api/projects/") and path.endswith("/repo_topology")) or
+    # ACCESS-14: creating a project needs write:projects (contributors and up), not write:system.
+    if path == "/api/projects":
+        return ("write:projects",)
+    if ((path.startswith("/api/projects/") and path.endswith("/repo_topology")) or
             path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))):
         return ("write:system",)
     return ("write:tasks",)
@@ -248,6 +250,12 @@ def _global_user_scopes(user: dict, project: str) -> list:
     scopes: set = set()
     for grant in store.principal_project_roles(project, user["id"]):
         scopes.update(grant.get("scopes") or [])
+    # ACCESS-15: if the project is in the user's accessible set (owner, invitee, or org
+    # membership — including the private→org-admin/owner rule from ACCESS-14), they can at
+    # least READ it. Aligns the read gate with the project list so "visible" means "openable";
+    # writes still require an explicit role grant.
+    if project in {p.get("id") for p in (user.get("projects") or [])}:
+        scopes.add("read")
     return sorted(scopes)
 
 

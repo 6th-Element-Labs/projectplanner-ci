@@ -2203,20 +2203,23 @@ def get_decision(decision_id: int, project: str = "maxwell") -> str:
 def create_project(name: str, ctx: Context, project_id: str = "", label: str = "",
                    pretitle: str = "", github_repo: str = "",
                    purpose: str = "", boundary: str = "",
-                   org_id: str = "") -> str:
+                   org_id: str = "", visibility: str = "private") -> str:
     """Create a new isolated project board and make it routable by all board tools.
 
-    Authenticates against project='switchboard' with write:system. `name` is the human
-    name; `project_id` is optional and defaults to a lowercase slug, e.g. name='Vulkan'
-    creates project='vulkan'. `github_repo` is optional owner/repo provenance config, e.g.
-    github_repo='StevenRidder/Helm'. Returns the created/existing project record.
+    Authenticates against project='switchboard' with write:projects (contributors and up).
+    `name` is the human name; `project_id` is optional and defaults to a lowercase slug, e.g.
+    name='Vulkan' creates project='vulkan'. `github_repo` is optional owner/repo provenance
+    config, e.g. github_repo='StevenRidder/Helm'. `visibility` is 'private' (default — only
+    the creator, invitees, and org admins see it) or 'org' (all org members). Returns the
+    created/existing project record.
     """
-    principal = _require_write(ctx, "switchboard", ("write:system",))
+    principal = _require_write(ctx, "switchboard", ("write:projects",))
     result = store.create_project(name=name, project_id=project_id, label=label,
                                   pretitle=pretitle, github_repo=github_repo,
                                   owner_principal_id=principal["id"],
                                   org_id=org_id or store.DEFAULT_ORG_ID,
                                   purpose=purpose, boundary=boundary,
+                                  visibility=(visibility or "private").strip().lower(),
                                   actor=auth.actor(principal))
     return _dumps(result)
 

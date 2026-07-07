@@ -75,6 +75,7 @@
                         <div class="tk-switch">
                             <label for="project-switcher"><i class="ti ti-folders"></i>Project</label>
                             <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
+                            <button id="btn-new-project" class="btn btn-sm btn-ghost-secondary ms-1" type="button" title="New project" aria-label="New project"><i class="ti ti-folder-plus"></i></button>
                         </div>
                         <div class="tk-switch" id="header-deliverable-wrap" style="display:none">
                             <label for="header-deliverable-switcher"><i class="ti ti-target-arrow"></i>Deliverable</label>
@@ -386,6 +387,40 @@
                     <span id="create-flash" class="small text-secondary me-auto"></span>
                     <button type="button" class="btn" data-bs-dismiss="modal">Cancel</button>
                     <button type="button" id="create-save" class="btn btn-primary"><i class="ti ti-plus me-1"></i>Create task</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New project (ACCESS-14/15) -->
+    <div class="modal modal-blur fade" id="new-project-modal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="ti ti-folder-plus me-2"></i>New project</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="np-name">Project name</label>
+                        <input type="text" id="np-name" class="form-control" placeholder="e.g. Chart Renderer" autocomplete="off">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Visibility</label>
+                        <label class="form-selectgroup-item d-block mb-1">
+                            <input type="radio" name="np-visibility" value="private" class="form-selectgroup-input" checked>
+                            <span class="form-selectgroup-label d-inline"><i class="ti ti-lock me-1"></i><strong>Private</strong> — only you, people you invite, and org admins can see it</span>
+                        </label>
+                        <label class="form-selectgroup-item d-block">
+                            <input type="radio" name="np-visibility" value="org" class="form-selectgroup-input">
+                            <span class="form-selectgroup-label d-inline"><i class="ti ti-users me-1"></i><strong>Shared</strong> — everyone in your organization can see it</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <span id="np-flash" class="small text-secondary me-auto"></span>
+                    <button type="button" class="btn" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" id="np-create" class="btn btn-primary"><i class="ti ti-folder-plus me-1"></i>Create project</button>
                 </div>
             </div>
         </div>

@@ -82,6 +82,23 @@ try:
     bad = store.set_project_access("team-board", org, visibility="secret")
     ok(bad.get("error"), "invalid visibility value is rejected")
 
+    # --- ACCESS-15: web gates align (needs fastapi; skip cleanly if absent) ----------------
+    try:
+        import app as webapp
+    except Exception as exc:  # noqa: BLE001
+        print(f"  SKIP  app-level gate checks need optional dependency: {exc}")
+    else:
+        ok(webapp._write_required_scopes("/api/projects") == ("write:projects",),
+           "POST /api/projects requires write:projects (contributors), not write:system")
+        ok(webapp._write_required_scopes("/api/access/x") == ("write:system",),
+           "admin surfaces (/api/access) still require write:system")
+        seer = {"id": "u-admin", "projects": [{"id": "contrib-secret"}]}
+        ok("read" in webapp._global_user_scopes(seer, "contrib-secret"),
+           "read gate: a user who can SEE a project (accessible set) can READ it")
+        blind = {"id": "u-peer", "projects": []}
+        ok("read" not in webapp._global_user_scopes(blind, "contrib-secret"),
+           "read gate: a user who cannot see a project gets no read on it")
+
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
