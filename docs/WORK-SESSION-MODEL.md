@@ -72,6 +72,9 @@ Audit export includes `work_sessions` and `summary.work_session_count`.
 - `get_work_session(work_session_id, project)`
 - `list_work_sessions(project, task_id?, agent_id?, status?, repo_role?)`
 - `update_work_session(work_session_id, updates_json, project)`
+- `repo_preflight(worktree_path, project, task_id?, agent_id?, repo_role?, expected_branch?,
+  expected_base_ref?)`
+- `preflight_work_session(work_session_id, project, expected_branch?, expected_base_ref?)`
 
 ## REST API
 
@@ -79,6 +82,47 @@ Audit export includes `work_sessions` and `summary.work_session_count`.
 - `POST /ixp/v1/work_sessions`
 - `GET /ixp/v1/work_sessions/{work_session_id}?project=switchboard`
 - `PATCH /ixp/v1/work_sessions/{work_session_id}`
+- `POST /ixp/v1/repo_preflight`
+- `POST /ixp/v1/work_sessions/{work_session_id}/preflight`
+
+## Repo Preflight
+
+`switchboard.repo_preflight.v1` is the fail-early check agents and hosts run before edit,
+claim, complete, or merge. It is side-effect-free unless called through
+`preflight_work_session`, which also writes the result into the Work Session.
+
+The report includes:
+
+- `verdict`: `pass`, `warn`, or `deny`.
+- `repo_path`, `remote`, `expected_repo`, `branch`, `upstream`, `head_sha`, `base_ref`,
+  `base_sha`, and `merge_base`.
+- `upstream_distance` and `base_distance` ahead/behind counts.
+- `git_status`, `dirty_files`, and `untracked_files`.
+- `merge_state` for active merge/rebase/cherry-pick/revert state.
+- `conflict_markers` and `conflict_marker_count`.
+- `resource_collisions` for active worktree leases held by another agent.
+- `findings`, each with `code`, `failure_class`, `severity`, `blocking`, and `message`.
+
+Blocking failure classes:
+
+- `dirty_worktree`
+- `conflict_markers`
+- `wrong_repo`
+- `wrong_branch`
+- `stale_base`
+- `shared_worktree_collision`
+- `detached_head`
+- `merge_or_rebase_in_progress`
+
+Warning classes:
+
+- `missing_upstream`
+- `missing_base_ref`
+- `git_signal_unavailable`
+
+Adapters should treat `deny` as a hard stop and repair the named condition before continuing.
+`warn` is visible but not automatically blocking; policy may still require a human or coordinator
+ack for warning overrides.
 
 ## Example: Helm SAT-1
 
@@ -148,7 +192,9 @@ Audit export includes `work_sessions` and `summary.work_session_count`.
 
 Later tasks deepen enforcement:
 
-- `SESSION-3`: populate hygiene from repo preflight and conflict-marker scans.
+- `SESSION-3`: populate hygiene from repo preflight and conflict-marker scans. Done here:
+  `preflight_work_session` stores `hygiene.repo_preflight`, updates `dirty_status`, branch,
+  upstream, `base_sha`, `head_sha`, and `conflict_marker_count`.
 - `SESSION-4`: add `pre_tool_check` for file writes and shell commands.
 - `SESSION-5`: gate `complete_claim` on pushed clean branch/session proof.
 - `SESSION-6`: gate merge on session/branch/provenance consistency.

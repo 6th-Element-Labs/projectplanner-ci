@@ -63,6 +63,10 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `create_work_session(...)`, `get_work_session(...)`, `list_work_sessions(...)`,
   `update_work_session(...)` — bind code work to project, repo role, branch, worktree/clone path,
   hygiene state, leases, and lifecycle before later claim/complete/merge gates enforce it.
+- `repo_preflight(...)`, `preflight_work_session(...)` — inspect a local git worktree before
+  edit/claim/complete/merge. Returns `pass`/`warn`/`deny` with typed failure classes including
+  `dirty_worktree`, `conflict_markers`, `wrong_repo`, `wrong_branch`, `stale_base`, and
+  `shared_worktree_collision`.
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
 - `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
@@ -262,6 +266,10 @@ Work Sessions:
 - REST: `GET /ixp/v1/work_sessions`, `POST /ixp/v1/work_sessions`,
   `GET /ixp/v1/work_sessions/{work_session_id}`, and
   `PATCH /ixp/v1/work_sessions/{work_session_id}`.
+- Repo hygiene: `POST /ixp/v1/repo_preflight` returns a side-effect-free git/worktree report.
+  `POST /ixp/v1/work_sessions/{work_session_id}/preflight` runs the same check for a Work Session
+  path and writes the result into `hygiene.repo_preflight`, `dirty_status`, SHAs, upstream, and
+  `conflict_marker_count`.
 - Fail-closed validation rejects unknown projects, unknown tasks, repo roles outside
   `repo_topology.roles`, malformed JSON, invalid lifecycle states, and `worktree`/`clone`
   sessions without their required paths.
@@ -273,6 +281,9 @@ Work Sessions:
   `require_work_session=true`, `session_policy_profile=code_strict`, or a task declares a strict
   session profile. Successful strict claims return `work_session_id`; missing/unsafe sessions are
   denied or skipped with typed failure classes.
+- `SESSION-3` adds repo/worktree preflight for adapters and hosts. Agents should run it before
+  editing, before strict claims, before `complete_claim`, and before merge. `deny` means stop and
+  repair; `warn` means proceed only when the warning is policy-acceptable and recorded.
 - Claim inputs: MCP accepts `work_session_id`, `work_session_json`,
   `session_policy_profile`, and `require_work_session`; REST accepts `work_session_id`,
   `work_session`, `session_policy_profile` / `policy_profile`, and `require_work_session`.

@@ -1789,6 +1789,43 @@ async def ixp_update_work_session(work_session_id: str, request: Request,
     return result
 
 
+@app.post("/ixp/v1/repo_preflight")
+async def ixp_repo_preflight(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    _principal(request, project, ("write:ixp",),
+               dev_actor=body.get("agent_id") or "repo-preflight")
+    result = store.repo_preflight(
+        worktree_path=body.get("worktree_path") or body.get("path") or "",
+        project=project,
+        task_id=body.get("task_id") or body.get("task") or "",
+        agent_id=body.get("agent_id") or "",
+        repo_role=body.get("repo_role") or "canonical",
+        expected_branch=body.get("expected_branch") or "",
+        expected_base_ref=body.get("expected_base_ref") or "",
+        scan_conflicts=bool(body.get("scan_conflicts", True)),
+    )
+    if result.get("verdict") == "deny":
+        return result
+    return result
+
+
+@app.post("/ixp/v1/work_sessions/{work_session_id}/preflight")
+async def ixp_preflight_work_session(work_session_id: str, request: Request,
+                                     body: dict = Body(default={})):
+    body = body or {}
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "work-session")
+    result = store.preflight_work_session(
+        work_session_id, actor=auth.actor(principal), project=project,
+        expected_branch=body.get("expected_branch") or "",
+        expected_base_ref=body.get("expected_base_ref") or "")
+    if result.get("error"):
+        status = 404 if result.get("error") == "work_session_not_found" else 400
+        raise HTTPException(status, result)
+    return result
+
+
 @app.post("/ixp/v1/heartbeat_runner_session")
 async def ixp_heartbeat_runner_session(request: Request, body: dict = Body(...)):
     project = _body_project(body)

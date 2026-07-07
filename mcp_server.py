@@ -972,6 +972,34 @@ def update_work_session(work_session_id: str, updates_json: str, ctx: Context,
 
 
 @mcp.tool()
+def repo_preflight(worktree_path: str, ctx: Context, project: str = "maxwell",
+                   task_id: str = "", agent_id: str = "", repo_role: str = "canonical",
+                   expected_branch: str = "", expected_base_ref: str = "",
+                   scan_conflicts: bool = True) -> str:
+    """Run a side-effect-free git/worktree preflight before edit/claim/complete/merge.
+
+    Returns pass/warn/deny with typed failure classes such as dirty_worktree,
+    conflict_markers, wrong_repo, wrong_branch, stale_base, and
+    shared_worktree_collision.
+    """
+    _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.repo_preflight(
+        worktree_path=worktree_path, project=project, task_id=task_id,
+        agent_id=agent_id, repo_role=repo_role, expected_branch=expected_branch,
+        expected_base_ref=expected_base_ref, scan_conflicts=scan_conflicts))
+
+
+@mcp.tool()
+def preflight_work_session(work_session_id: str, ctx: Context, project: str = "maxwell",
+                           expected_branch: str = "", expected_base_ref: str = "") -> str:
+    """Run repo_preflight for a Work Session path and write the result into hygiene."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.preflight_work_session(
+        work_session_id, actor=auth.actor(principal), project=project,
+        expected_branch=expected_branch, expected_base_ref=expected_base_ref))
+
+
+@mcp.tool()
 def request_runner_snapshot(runner_session_id: str, ctx: Context,
                             reason: str = "", project: str = "maxwell") -> str:
     """Request a host-side snapshot for a managed runner session."""
