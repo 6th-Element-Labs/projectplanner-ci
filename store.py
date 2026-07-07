@@ -1143,6 +1143,25 @@ def init_db(project: str = DEFAULT_PROJECT):
                 generated_at    REAL NOT NULL,
                 activity_cursor INTEGER NOT NULL DEFAULT 0
             );
+            -- NARRATE-2: CEO-voice task narration (separate store + audience from
+            -- task_summaries.rationale; see docs/CEO-NARRATOR-CONTRACT.md).
+            CREATE TABLE IF NOT EXISTS task_narrations (
+                task_id            TEXT PRIMARY KEY,
+                narration          TEXT NOT NULL,
+                generated_at       REAL NOT NULL,
+                activity_cursor    INTEGER NOT NULL DEFAULT 0,
+                source_fingerprint TEXT,
+                model              TEXT
+            );
+            -- Trigger queue: create/update_task enqueue a marker on meaningful status
+            -- transitions; the narrate_pending drain job consumes it. task_id PRIMARY KEY
+            -- dedupes a burst of transitions into one pending row.
+            CREATE TABLE IF NOT EXISTS pending_narrations (
+                task_id     TEXT PRIMARY KEY,
+                status      TEXT,
+                reason      TEXT,
+                enqueued_at REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS project_boards (
                 id                         TEXT PRIMARY KEY,
                 title                      TEXT NOT NULL,
@@ -4079,6 +4098,17 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
                 t["rationale"] = None
             else:
                 t["rationale"] = raw_rationale
+        n = c.execute(
+            "SELECT narration, source_fingerprint, generated_at FROM task_narrations "
+            "WHERE task_id=?", (task_id,)).fetchone()
+        if n:
+            narration_state = _narration_state(dict(n), t)
+            t["narration_state"] = narration_state
+            if narration_state["stale"]:
+                t["narration_raw"] = n["narration"]
+                t["narration"] = None
+            else:
+                t["narration"] = n["narration"]
         _apply_terminal_done_view(t)
         _enrich_task_project_context(t, project=project)
         return t
@@ -4128,6 +4158,11 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
             return None
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "edit", json.dumps(changed), time.time()))
+    # NARRATE-2: enqueue CEO-narration only on a real status transition, never on cosmetic
+    # edits — this is the cost guarantee. The drain job applies the trigger-status filter.
+    if "status" in changed:
+        enqueue_narration(task_id, status=str(changed.get("status") or ""),
+                          reason="status_change", project=project)
     return get_task(task_id, project)
 
 
@@ -4202,6 +4237,9 @@ def create_task(data: Dict[str, Any], actor: str = "user",
              1 if data.get("is_blocking") else 0, order, now, now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (tid, actor, "create", json.dumps({"title": title}), now))
+    # NARRATE-2: a newly created task is a meaningful transition — enqueue its first narration.
+    enqueue_narration(tid, status=(data.get("status") or "Not Started"),
+                      reason="create", project=project)
     return get_task(tid, project)
 
 
@@ -10195,6 +10233,92 @@ def set_task_summary(task_id: str, rationale: str, activity_cursor: int,
         )
 
 
+# --- NARRATE-2: CEO-voice task narration (docs/CEO-NARRATOR-CONTRACT.md) ---
+
+def _max_activity_cursor(task: Dict[str, Any]) -> int:
+    return max((a.get("id", 0) for a in (task.get("activity") or [])), default=0)
+
+
+def task_narration_fingerprint(task: Dict[str, Any]) -> str:
+    """Stable stamp of the source state a narration was written from. Recomputed on read;
+    a mismatch means the narration is stale (see _narration_state). Shared by the narrator
+    (write) and get_task (read) so both sides agree."""
+    prov = task.get("provenance") or {}
+    parts = [
+        str(task.get("status") or ""),
+        str(prov.get("type") or ""),
+        str(_max_activity_cursor(task)),
+    ]
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _narration_state(stored: Dict[str, Any], task: Dict[str, Any]) -> Dict[str, Any]:
+    """Flag a narration stale when current task state has moved past the fingerprint it was
+    written from. Discipline carried over from BUG-13/BUG-17/HARDEN-30: derived prose is never
+    shown as current truth once it contradicts the fingerprint."""
+    current_fp = task_narration_fingerprint(task)
+    stored_fp = stored.get("source_fingerprint")
+    stale = bool(stored_fp) and stored_fp != current_fp
+    state = {
+        "stale": stale,
+        "source_fingerprint": current_fp,
+        "stored_fingerprint": stored_fp,
+        "message": (
+            "CEO narration is regenerating; trust status, provenance, and progress."
+        ) if stale else None,
+    }
+    if stale:
+        state["failure_class"] = "missing_data"
+        state["expected_signal"] = "Narration should be regenerated from current task state."
+    return state
+
+
+def set_task_narration(task_id: str, narration: str, activity_cursor: int,
+                       source_fingerprint: str = "", model: str = "",
+                       project: str = DEFAULT_PROJECT) -> None:
+    """Upsert the CEO-voice narration for a task (separate store from task_summaries)."""
+    with _conn(project) as c:
+        c.execute(
+            "INSERT OR REPLACE INTO task_narrations"
+            "(task_id, narration, generated_at, activity_cursor, source_fingerprint, model) "
+            "VALUES (?,?,?,?,?,?)",
+            (task_id, narration, time.time(), activity_cursor, source_fingerprint, model),
+        )
+
+
+def get_task_narration(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    with _conn(project) as c:
+        r = c.execute("SELECT * FROM task_narrations WHERE task_id=?", (task_id,)).fetchone()
+        return dict(r) if r else None
+
+
+def enqueue_narration(task_id: str, status: str = "", reason: str = "",
+                      project: str = DEFAULT_PROJECT) -> None:
+    """Mark a task for (re)narration after a meaningful transition. Idempotent per task —
+    a burst of transitions collapses into one pending row. Called post-commit from the write
+    path; never triggers a synchronous LLM call."""
+    with _conn(project) as c:
+        c.execute(
+            "INSERT OR REPLACE INTO pending_narrations(task_id, status, reason, enqueued_at) "
+            "VALUES (?,?,?,?)",
+            (task_id, status or "", reason or "", time.time()),
+        )
+
+
+def list_pending_narrations(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT task_id, status, reason, enqueued_at FROM pending_narrations "
+            "ORDER BY enqueued_at"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def clear_pending_narration(task_id: str, project: str = DEFAULT_PROJECT) -> None:
+    with _conn(project) as c:
+        c.execute("DELETE FROM pending_narrations WHERE task_id=?", (task_id,))
+
+
 def get_task_summary(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     with _conn(project) as c:
         r = c.execute("SELECT * FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
@@ -10254,6 +10378,8 @@ TASK_MOVE_TABLES = (
     "activity",
     "task_git_state",
     "task_summaries",
+    "task_narrations",
+    "pending_narrations",
     "llm_spend",
     "outcomes",
     "task_claims",
@@ -10364,6 +10490,8 @@ def _delete_task_related_in(c: sqlite3.Connection, task_id: str, snapshot: Dict[
         "activity",
         "task_git_state",
         "task_summaries",
+        "task_narrations",
+        "pending_narrations",
         "llm_spend",
         "outcomes",
         "task_claims",

@@ -63,6 +63,22 @@ def summarize_pending():
     return total
 
 
+def narrate_pending():
+    """Drain the CEO-voice narration queue for all projects (NARRATE-2; short systemd timer,
+    ~PM_NARRATE_INTERVAL). Separate from summarize_pending: different store, audience, and
+    trigger (status transitions via pending_narrations, not any-activity). The fingerprint
+    guard means idle cycles make zero LLM calls. See docs/CEO-NARRATOR-CONTRACT.md."""
+    import narrate as narrate_mod
+    total = 0
+    for project_id in store.project_ids():
+        store.init_db(project_id)
+        results = narrate_mod.run_pending(project=project_id)
+        print(f"  [{project_id}] narrated {len(results)} task(s)")
+        total += len(results)
+    print(f"narrate_pending: {total} total")
+    return total
+
+
 def sweep_monitors():
     """Evaluate durable coordination monitors for every project.
 
@@ -198,7 +214,8 @@ def ci_gate_prs():
 
 
 JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
-        "summarize_pending": summarize_pending, "sweep_monitors": sweep_monitors,
+        "summarize_pending": summarize_pending, "narrate_pending": narrate_pending,
+        "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
         "backfill_default_branch_provenance": backfill_default_branch_provenance,
         "ci_gate_prs": ci_gate_prs}
