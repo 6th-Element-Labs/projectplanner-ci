@@ -78,6 +78,22 @@ state.
 values fail closed. Linked tasks are validated by reading the target project directly; the link
 operation does not mutate the target task or write into the target project database.
 
+### Link roles and the mission dependency map
+
+`role` decides whether a link is part of the mission's execution flow or background context:
+
+- **Flow** — `contributes` (default), `implementation`, `acceptance`: drawn in the strategic
+  dependency map (`get_deliverable_dependency_graph` / the mission page DAG).
+- **Context** — `foundation` (already-shipped groundwork the mission builds on) and `parked`
+  (frozen tracks kept for the record): linked and listed under the map, but not drawn in the
+  DAG. If a flow task `depends_on` a context task, that task is promoted into the graph with
+  its real state, so nothing on the actual path can be hidden by mislabeling.
+
+When no role is passed, the link auto-classifies: a task already **Done at link time** becomes
+`foundation`, anything else `contributes`. This keeps new deliverable boards clean by default —
+groundwork imports do not turn the flow map into disconnected islands. Pass a role explicitly
+to override (`parked` always requires an explicit tag).
+
 ## Progress Semantics
 
 Mission progress is derived from linked task state:

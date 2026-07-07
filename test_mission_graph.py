@@ -163,6 +163,36 @@ try:
         deliverable["id"], HOME, base["task_id"].lower(), actor="test", project=HOME)
     ok(not relink.get("error"), "linking with mismatched id casing succeeds")
 
+    # Auto-classified link roles: groundwork already Done at link time defaults
+    # to 'foundation' (context row), live tasks to 'contributes' (flow), and an
+    # explicit role always wins.
+    ground = store.create_task({"workstream_id": "GRAPH", "title": "Shipped groundwork"},
+                               actor="test", project=HOME)
+    store.mark_task_merged(ground["task_id"], "cafebabe" * 5, pr_number=101, project=HOME)
+    store.link_task_to_deliverable(deliverable["id"], HOME, ground["task_id"],
+                                   actor="test", project=HOME)
+    roles = {l["task_id"]: l.get("role")
+             for l in (store.get_deliverable(deliverable["id"], project=HOME)
+                       or {}).get("task_links") or []}
+    ok(roles.get(ground["task_id"].upper()) == "foundation",
+       "Done task linked without a role auto-classifies as foundation")
+    ok(roles.get(blocked["task_id"].upper()) == "contributes",
+       "live task linked without a role stays contributes")
+    g3 = store.get_deliverable_dependency_graph(project=HOME, deliverable_id=deliverable["id"])
+    ok(all(n["id"] != ground["task_id"].upper() for n in g3.get("nodes") or [])
+       and any(c["id"] == ground["task_id"].upper() for c in g3.get("context_nodes") or []),
+       "auto-foundation link lands in context_nodes, not the flow graph")
+    explicit = store.create_task({"workstream_id": "GRAPH", "title": "Done but explicit flow"},
+                                 actor="test", project=HOME)
+    store.mark_task_merged(explicit["task_id"], "deadbeef" * 5, pr_number=102, project=HOME)
+    store.link_task_to_deliverable(deliverable["id"], HOME, explicit["task_id"],
+                                   data={"role": "contributes"}, actor="test", project=HOME)
+    roles2 = {l["task_id"]: l.get("role")
+              for l in (store.get_deliverable(deliverable["id"], project=HOME)
+                        or {}).get("task_links") or []}
+    ok(roles2.get(explicit["task_id"].upper()) == "contributes",
+       "explicit role wins over auto-classification")
+
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

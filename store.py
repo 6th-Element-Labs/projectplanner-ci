@@ -1986,7 +1986,15 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     requested_board_id = (payload.get("board_id") or payload.get("mission_id") or "").strip() or None
     link_id = (payload.get("id") or payload.get("link_id") or
                f"link-{deliverable_id}-{task_project}-{task_id}")
-    role = (payload.get("role") or "contributes").strip() or "contributes"
+    role = (payload.get("role") or "").strip()
+    if not role or role.lower() == "auto":
+        # Auto-classify when the caller doesn't pick a role: a task that is
+        # already Done at link time cannot be future flow work for this
+        # deliverable — it is groundwork, so it lands in the mission map's
+        # context row ('foundation') instead of cluttering the execution DAG.
+        # mission_graph still promotes it into the graph if a flow task
+        # depends_on it, and an explicit role always wins over this default.
+        role = "foundation" if (target.get("status") or "").strip() == "Done" else "contributes"
     now = time.time()
     with _conn(project) as c:
         if not _deliverable_exists_in(c, deliverable_id):

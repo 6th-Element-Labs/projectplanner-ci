@@ -2266,13 +2266,19 @@ def add_deliverable_milestone(deliverable_id: str, title: str, ctx: Context,
 def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: str,
                              ctx: Context, project: str = "maxwell",
                              milestone_id: str = "", board_id: str = "",
-                             mission_id: str = "", role: str = "contributes",
+                             mission_id: str = "", role: str = "",
                              blocks_deliverable: bool = False,
                              proof_required_json: str = "",
                              metadata_json: str = "") -> str:
     """Link an existing task from an explicit project into a deliverable/mission rollup.
 
     The target task is validated in task_project. The operation does not move or mutate it.
+
+    role controls the mission dependency map: 'contributes' / 'implementation' /
+    'acceptance' are execution flow (drawn in the DAG); 'foundation' (shipped
+    groundwork) and 'parked' (frozen tracks) are context — listed under the map,
+    drawn only if a flow task depends_on them. Leave empty for auto: a task
+    already Done at link time becomes 'foundation', anything else 'contributes'.
     """
     principal = _require_write(ctx, project, ("write:tasks",))
     result = store.link_task_to_deliverable(
