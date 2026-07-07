@@ -10205,6 +10205,16 @@ def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",
                         branch: str = "", head_sha: str = "",
                         actor: str = "github-webhook",
                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    # Retry the whole write on a transient sqlite lock so a busy DB never silently drops the
+    # PR-open provenance event (dropped webhook -> stuck 'Not Started' task -> blocked claim gate).
+    return _retry_on_locked(lambda: _mark_task_pr_opened_impl(
+        task_id, pr_number, pr_url, branch, head_sha, actor, project))
+
+
+def _mark_task_pr_opened_impl(task_id: str, pr_number: int, pr_url: str = "",
+                              branch: str = "", head_sha: str = "",
+                              actor: str = "github-webhook",
+                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
         row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
@@ -10249,6 +10259,19 @@ def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = N
                      project: str = DEFAULT_PROJECT,
                      provenance_source: str = "",
                      task_ids_found: Any = None) -> Dict[str, Any]:
+    # Retry the whole write on a transient sqlite lock so a busy DB never silently drops the
+    # merge provenance event (dropped webhook -> task stuck In Review instead of Done).
+    return _retry_on_locked(lambda: _mark_task_merged_impl(
+        task_id, merged_sha, pr_number, pr_url, branch, head_sha, actor, project,
+        provenance_source, task_ids_found))
+
+
+def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[int] = None,
+                           pr_url: str = "", branch: str = "", head_sha: str = "",
+                           actor: str = "github-webhook",
+                           project: str = DEFAULT_PROJECT,
+                           provenance_source: str = "",
+                           task_ids_found: Any = None) -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
         row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()

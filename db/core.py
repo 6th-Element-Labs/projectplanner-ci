@@ -22,6 +22,7 @@ __all__ = [
     "_registry_conn",
     "_sqlite_timeout_s",
     "_sqlite_busy",
+    "_retry_on_locked",
     "_json_size_bytes",
     "_json_list_field",
     "_json_object_field",
@@ -80,6 +81,27 @@ def _sqlite_busy(exc: Exception) -> bool:
     return isinstance(exc, sqlite3.OperationalError) and (
         "database is locked" in text or "database is busy" in text or "locked" in text
     )
+
+
+def _retry_on_locked(thunk, attempts: int = 5, base_delay: float = 0.1):
+    """Run thunk(), retrying on a transient sqlite 'database is locked' with exponential
+    backoff; non-busy errors propagate immediately.
+
+    For provenance-critical webhook writes (mark_task_pr_opened / mark_task_merged): under
+    board write-contention the busy_timeout can still expire and raise 'database is locked',
+    which — with no retry — silently drops the PR-open/merge event and strands the task's
+    status/provenance (BUG: dropped-webhook -> stuck task -> blocked claim gate). thunk must
+    be idempotent (open its own connection each call), which these writers are.
+    """
+    for attempt in range(attempts):
+        try:
+            return thunk()
+        except sqlite3.OperationalError as exc:
+            if _sqlite_busy(exc) and attempt < attempts - 1:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+
 
 def _json_size_bytes(value: Any) -> int:
     try:

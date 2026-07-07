@@ -74,6 +74,7 @@ run_test test_ci_gate_policy.py
 run_test test_langgraph_adapter.py
 run_test test_managed_work_session.py
 run_test test_merge_gate.py
+run_test test_webhook_retry.py
 run_test test_mcp_dependencies.py
 run_test test_mission_narrative.py
 run_test test_narrate.py

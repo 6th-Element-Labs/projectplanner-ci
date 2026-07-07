@@ -53,9 +53,22 @@ Everything sits on these. No domain logic; pure plumbing.
 
 | Module | Responsibility | ~fns | ~lines | Task |
 |---|---|--:|--:|---|
-| `constants.py` | compiled regex, path/env vars, `BUILTIN_PROJECTS`, `BUILTIN_REPO_TOPOLOGIES` | — | ~300 | ARCH-2 |
-| `db/core.py` | `_conn`/`_registry_conn`/`_control_plane_conn`, sqlite busy/timeout, JSON + coercion helpers, idempotency/hash primitives, `_insert_row`, `_table_columns` | 27 | 283 | ARCH-3 |
-| `db/schema.py` | `init_db` (673), all 48 `CREATE TABLE`s, `seed_if_empty`, `init_project_registry`, `backfill_default_branch_commits` | 5 | 811 | ARCH-4 |
+| `constants.py` | compiled regex, path/env vars, `BUILTIN_PROJECTS`, `BUILTIN_REPO_TOPOLOGIES`, seed config | — | ~300 | ARCH-2 |
+| `db/core.py` | `_registry_conn`, sqlite busy/timeout, `_retry_on_locked`, JSON + coercion helpers, idempotency/hash primitives, `_insert_row`, `_table_columns` | 24 | ~300 | ARCH-3 |
+| `db/schema.py` | `apply_schema` (all 47 `CREATE TABLE`s + additive migrations), `seed_from_plan`, `init_project_registry` — the extracted bodies of `init_db`/`seed_if_empty` | 3 | ~790 | ARCH-4 |
+| `db/connection.py` | project→path resolution + sqlite connection factory: `_conn`, `_resolve`, `_project_map`, `_dynamic_projects` | 4 | ~30 | ARCH-5 |
+
+> **Reality check (post-extraction).** The rows above reflect what actually shipped, which
+> deviates from the original layer sketch in two spots the ADR anticipated:
+> - **`db/connection.py` was pulled out early (ARCH-5).** *Every* domain module needs
+>   `_conn`, and a module can't import it from the `store.py` façade without a cycle — so the
+>   connection/resolution core (a clean, zero-upward-dep closure) had to come out before the
+>   leaf/domain modules, front-loading the core of ARCH-15. It imports `db.core`/`db.schema`
+>   (downward) and is imported by everything above.
+> - **`db/schema.py` takes a connection, not a project.** `apply_schema(c)`/`seed_from_plan(c, …)`
+>   stay Layer-0 pure; the project-aware `init_db`/`seed_if_empty` wrappers — and the
+>   `_control_plane_conn`/`_control_plane_timeout_s`/`_control_plane_unavailable` factories —
+>   remain in `store.py` until ARCH-15 (they orbit `_conn`/`_resolve`).
 
 ## Layer 1 — Identity & tenancy
 
