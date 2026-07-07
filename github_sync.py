@@ -7,21 +7,11 @@ import re
 from typing import Any, Dict, List
 
 import store
+import task_id_parser
 
-_CLOSES_RE = re.compile(r"\b(?:closes?|fixes?|resolves?)\s+([A-Z][A-Z0-9]+-\d+)\b", re.I)
-_TASKID_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b", re.I)
-
-
-def _dedupe_upper(ids: List[str]) -> List[str]:
-    return list(dict.fromkeys((i or "").upper() for i in ids if i))
-
-
-def extract_task_ids(text: str) -> List[str]:
-    return _dedupe_upper(_TASKID_RE.findall(text or ""))
-
-
-def closing_task_ids(text: str) -> List[str]:
-    return _dedupe_upper([m.group(1) for m in _CLOSES_RE.finditer(text or "")])
+# Re-export parser helpers for existing imports/tests.
+extract_task_ids = task_id_parser.extract_task_ids
+closing_task_ids = task_id_parser.closing_task_ids
 
 
 def _project_for_repo(full_name: str) -> str:
@@ -117,12 +107,7 @@ def _record_repo_role_rejection(task_id: str, role_info: Dict[str, Any],
 
 
 def task_ids_for_pr(pr: Dict[str, Any]) -> List[str]:
-    title = str(pr.get("title") or "")
-    body = str(pr.get("body") or "")
-    branch = str((pr.get("head") or {}).get("ref") or "")
-    explicit_closes = closing_task_ids(f"{title}\n{body}")
-    branch_or_title = extract_task_ids(f"{title}\n{branch}")
-    return _dedupe_upper(explicit_closes + branch_or_title)
+    return task_id_parser.task_ids_for_pr(pr)
 
 
 def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:

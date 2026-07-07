@@ -11413,7 +11413,9 @@ def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",
 def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = None,
                      pr_url: str = "", branch: str = "", head_sha: str = "",
                      actor: str = "github-webhook",
-                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+                     project: str = DEFAULT_PROJECT,
+                     provenance_source: str = "",
+                     task_ids_found: Any = None) -> Dict[str, Any]:
     now = time.time()
     with _conn(project) as c:
         row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
@@ -11442,8 +11444,15 @@ def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = N
             "merged_sha": merged_sha,
             "merged_at": now,
             "in_main_content": True,
-            "evidence": {"merged_sha": merged_sha, "pr_number": pr_number,
-                         "pr_url": pr_url, "branch": branch, "head_sha": head_sha},
+            "evidence": {
+                "merged_sha": merged_sha,
+                "pr_number": pr_number,
+                "pr_url": pr_url,
+                "branch": branch,
+                "head_sha": head_sha,
+                **({"source": provenance_source} if provenance_source else {}),
+                **({"task_ids_found": task_ids_found} if task_ids_found else {}),
+            },
         })
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "git.pr_merged",
@@ -15230,69 +15239,52 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  "code": "merged_sha_mismatch",
                                  "detail": "Recorded merged_sha differs from GitHub PR merge_commit_sha."})
 
-    # Orphan-merge sweep: merged PRs on the canonical repo whose title/branch/
-    # closing refs name tasks that never entered the board workflow (no claim,
-    # no complete_claim, empty git_state) are invisible to every check above —
-    # they stay Not Started forever. The merge webhook stamps such tasks in
-    # real time when it is configured and delivered; this sweep is the
-    # self-healing backstop for missed deliveries, unwired repos, and agents
-    # that merged without recording evidence. Parse and stamp semantics mirror
-    # the webhook (github_sync.handle_pr), tightened to default-branch merges.
-    # Shared repos are fine: ids that don't resolve on this board are silently
-    # skipped, and each sibling project sweeps the same repo for its own tasks.
-    if repo:
-        sweep_limit = int(os.environ.get("PM_RECONCILE_PR_SWEEP_LIMIT", "30") or "0")
-        if sweep_limit <= 0:
-            checks["github_merged_pr_sweep"] = "disabled"
-        elif not get_project_repo_role(repo, project).get("canonical"):
-            checks["github_merged_pr_sweep"] = "skipped_repo_role"
-        else:
-            import github_sync  # local import; github_sync imports store at module level
-
-            merged_prs = _github_merged_prs(repo, token=token, limit=sweep_limit)
-            checks["github_merged_pr_sweep"] = f"swept_{len(merged_prs)}"
-            for pr in merged_prs:
-                merge_sha = pr.get("merge_commit_sha") or ""
-                base_ref = ((pr.get("base") or {}).get("ref") or "").strip()
-                default_ref = ((pr.get("base") or {}).get("repo") or {}).get("default_branch") or ""
-                if not merge_sha or not base_ref or base_ref != default_ref:
-                    continue
-                for task_id in github_sync.task_ids_for_pr(pr):
-                    task = get_task(task_id, project)
-                    if not task:
-                        continue  # id belongs to a sibling board sharing this repo
-                    if task.get("status") in ("Cancelled", "Canceled"):
-                        continue
-                    if (task.get("status") == "Done"
-                            and _has_done_provenance(git_states.get(task["task_id"], {})
-                                                     or task.get("git_state") or {})):
-                        continue
-                    stamped = mark_task_merged(
-                        task["task_id"], merge_sha,
-                        pr_number=int(pr.get("number") or 0) or None,
-                        pr_url=pr.get("html_url") or "",
-                        branch=((pr.get("head") or {}).get("ref") or ""),
-                        head_sha=((pr.get("head") or {}).get("sha") or ""),
-                        actor="reconcile",
-                        project=project,
-                    )
-                    if stamped.get("error") or stamped.get("idempotent"):
-                        continue
-                    git_states[task["task_id"]] = stamped.get("git_state") or {}
-                    backfilled.append({
-                        "task_id": task["task_id"],
-                        "pr_number": pr.get("number"),
-                        "merged_sha": merge_sha,
-                        "source": "orphan_merge_sweep",
-                    })
-                    findings.append({
-                        "severity": "low", "task_id": task["task_id"],
-                        "code": "orphan_merge_backfilled",
-                        "detail": (f"Merged PR #{pr.get('number')} references this task but the "
-                                   "board had no evidence; stamped Done from the canonical-repo "
-                                   "merge sweep."),
-                    })
+    orphan_findings, orphan_backfilled, orphan_checks = _orphan_merge_discovery_findings(
+        tasks, git_states, project=project, repo=repo, token=token)
+    findings.extend(orphan_findings)
+    backfilled.extend(orphan_backfilled)
+    checks.update(orphan_checks)
     return findings, checks, backfilled
+
+
+def _orphan_merge_discovery_findings(
+    tasks: List[Dict[str, Any]],
+    git_states: Dict[str, Dict[str, Any]],
+    *,
+    project: str,
+    repo: str,
+    token: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    import orphan_merge_discovery
+
+    lookback_days = int(os.environ.get("PM_ORPHAN_MERGE_LOOKBACK_DAYS", "30") or "30")
+    now = time.time()
+    with _conn(project) as c:
+        active_claims = {
+            row["task_id"]: dict(row)
+            for row in c.execute(
+                "SELECT id, task_id, agent_id FROM task_claims "
+                "WHERE status='active' AND expires_at>?",
+                (now,),
+            ).fetchall()
+        }
+
+    def _mark_merged(task_id: str, merged_sha: str, **kwargs: Any) -> Dict[str, Any]:
+        return mark_task_merged(task_id, merged_sha, **kwargs)
+
+    return orphan_merge_discovery.discover_orphan_merges(
+        tasks,
+        git_states,
+        project=project,
+        repo=repo or "",
+        token=token,
+        lookback_days=lookback_days,
+        active_claims=active_claims,
+        role_checker=lambda repo_slug: get_project_repo_role(repo_slug, project=project),
+        mark_merged_fn=_mark_merged,
+        append_activity_fn=append_activity,
+        now=now,
+    )
 
 
 def _publication_reconcile_findings(tasks: List[Dict[str, Any]],
