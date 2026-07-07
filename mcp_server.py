@@ -1889,6 +1889,61 @@ def project_task_receipts(ctx: Context, task_id: str, project: str = "maxwell",
 
 
 @mcp.tool()
+def list_background_jobs(ctx: Context) -> str:
+    """List resumable background jobs and DBOS eligibility boundaries (RECON-10)."""
+    return _dumps(store.list_background_jobs())
+
+
+@mcp.tool()
+def evaluate_dbos_runtime(ctx: Context) -> str:
+    """Evaluate DBOS availability and recommended runtime for eligible background jobs."""
+    return _dumps(store.evaluate_dbos_runtime())
+
+
+@mcp.tool()
+def run_background_job(ctx: Context, job_name: str, project: str = "maxwell",
+                       run_id: str = "", resume: bool = True,
+                       params_json: str = "{}") -> str:
+    """Run or resume a checkpointed background job (replay, audit export, receipts, reconcile)."""
+    project = _resolve_project_input(project)
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        params = json.loads(params_json or "{}")
+    except json.JSONDecodeError as exc:
+        return _dumps({"error": "invalid params_json", "detail": str(exc)})
+    if not isinstance(params, dict):
+        return _dumps({"error": "params_json must decode to an object"})
+    try:
+        import background_jobs
+        return _dumps(store.run_background_job(
+            project=project,
+            job_name=job_name,
+            run_id=run_id,
+            resume=resume,
+            params=params,
+            actor=auth.actor(principal),
+        ))
+    except background_jobs.JobBoundaryError as exc:
+        return _dumps({"error": "job_boundary", "detail": str(exc)})
+
+
+@mcp.tool()
+def get_background_job_run(ctx: Context, run_id: str, project: str = "maxwell") -> str:
+    """Fetch one persisted background job run manifest by run_id."""
+    project = _resolve_project_input(project)
+    return _dumps(store.get_background_job_run(project=project, run_id=run_id))
+
+
+@mcp.tool()
+def list_background_job_runs(ctx: Context, project: str = "maxwell",
+                             job_name: str = "", limit: int = 20) -> str:
+    """List recent checkpointed background job runs."""
+    project = _resolve_project_input(project)
+    return _dumps(store.list_background_job_runs(
+        project=project, job_name=job_name, limit=limit))
+
+
+@mcp.tool()
 def reconcile(project: str = "maxwell") -> str:
     """Run the local board/git-provenance drift report. This first pass catches board-internal
     contradictions such as Done without merged_sha or In Review without PR/branch evidence."""

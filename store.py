@@ -1539,6 +1539,20 @@ def init_db(project: str = DEFAULT_PROJECT):
             );
             CREATE INDEX IF NOT EXISTS ix_archived_tasks_task
                 ON archived_tasks(task_id, created_at);
+            CREATE TABLE IF NOT EXISTS background_job_runs (
+                run_id          TEXT PRIMARY KEY,
+                job_name        TEXT NOT NULL,
+                project         TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                runtime         TEXT NOT NULL DEFAULT 'local_checkpoint',
+                manifest_json   TEXT NOT NULL DEFAULT '{}',
+                created_at      REAL NOT NULL,
+                updated_at      REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_background_job_runs_job
+                ON background_job_runs(job_name, updated_at);
+            CREATE INDEX IF NOT EXISTS ix_background_job_runs_project
+                ON background_job_runs(project, updated_at);
             CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
             CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status);
             CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);
@@ -12309,6 +12323,50 @@ def project_task_receipts(project: str = DEFAULT_PROJECT, task_id: str = "",
         until_cursor=until_cursor,
         claim_id=claim_id,
     )
+
+
+def list_background_jobs() -> Dict[str, Any]:
+    """Catalog of resumable background jobs and DBOS eligibility boundaries."""
+    import background_jobs
+    return background_jobs.list_background_jobs()
+
+
+def evaluate_dbos_runtime() -> Dict[str, Any]:
+    """Evaluate whether DBOS is available and the recommended job runtime."""
+    import background_jobs
+    return background_jobs.evaluate_dbos_runtime()
+
+
+def run_background_job(project: str = DEFAULT_PROJECT, job_name: str = "",
+                       run_id: str = "", resume: bool = True,
+                       params: Any = None, actor: str = "background_job") -> Dict[str, Any]:
+    """Run or resume a checkpointed background job for one project scope."""
+    import background_jobs
+    if not (job_name or "").strip():
+        return {"error": "job_name required", "project": project}
+    return background_jobs.run_background_job(
+        project,
+        job_name.strip(),
+        run_id=run_id,
+        resume=resume,
+        params=params if isinstance(params, dict) else {},
+        actor=actor,
+    )
+
+
+def get_background_job_run(project: str = DEFAULT_PROJECT, run_id: str = "") -> Dict[str, Any]:
+    """Load one persisted background job run manifest."""
+    import background_jobs
+    if not (run_id or "").strip():
+        return {"error": "run_id required", "project": project}
+    return background_jobs.load_run(project, run_id.strip())
+
+
+def list_background_job_runs(project: str = DEFAULT_PROJECT, *,
+                             job_name: str = "", limit: int = 20) -> Dict[str, Any]:
+    """List recent background job runs for a project."""
+    import background_jobs
+    return background_jobs.list_job_runs(project, job_name=job_name, limit=limit)
 
 
 def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:

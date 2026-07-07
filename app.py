@@ -2745,6 +2745,55 @@ async def ixp_task_receipts(task_id: str,
     }
 
 
+@app.get("/ixp/v1/background_jobs")
+async def ixp_list_background_jobs():
+    return store.list_background_jobs()
+
+
+@app.get("/ixp/v1/background_jobs/evaluate_dbos")
+async def ixp_evaluate_dbos_runtime():
+    return store.evaluate_dbos_runtime()
+
+
+@app.get("/ixp/v1/background_jobs/runs")
+async def ixp_list_background_job_runs(project: str = Query(store.DEFAULT_PROJECT),
+                                     job_name: str = Query(""),
+                                     limit: int = Query(20, ge=1, le=200)):
+    return store.list_background_job_runs(
+        project=_proj(project), job_name=job_name, limit=limit)
+
+
+@app.get("/ixp/v1/background_jobs/runs/{run_id}")
+async def ixp_get_background_job_run(run_id: str,
+                                     project: str = Query(store.DEFAULT_PROJECT)):
+    result = store.get_background_job_run(project=_proj(project), run_id=run_id)
+    if result.get("error") == "run_not_found":
+        raise HTTPException(404, result["error"])
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/background_jobs/{job_name}/run")
+async def ixp_run_background_job(job_name: str, request: Request,
+                                 project: str = Query(store.DEFAULT_PROJECT)):
+    body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
+    if not isinstance(body, dict):
+        raise HTTPException(400, "JSON object required")
+    try:
+        import background_jobs
+        return store.run_background_job(
+            project=_proj(project),
+            job_name=job_name,
+            run_id=str(body.get("run_id") or ""),
+            resume=bool(body.get("resume", True)),
+            params=body.get("params") if isinstance(body.get("params"), dict) else body,
+            actor=str(body.get("actor") or "api/background_job"),
+        )
+    except background_jobs.JobBoundaryError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 # ---- GitHub webhook — §1.2 board↔git auto-sync + §1.3 "main moved" notify ----
 # Configure in GitHub → repo Settings → Webhooks:
 #   Payload URL: https://<your-host>/api/github/webhook

@@ -7,9 +7,12 @@ workflow engine. Each job is a plain function; the timer invokes this module.
   python jobs.py reconcile_alerts # run reconcile and send deduped drift alerts
   python jobs.py backfill_default_branch_provenance
                                    # bootstrap direct-default commit provenance
+  python jobs.py background_job <job_name>
+                                   # run a checkpointed background job (RECON-10)
 
 Loads /opt/projectplanner/.env via the systemd EnvironmentFile (same as the web app).
 """
+import json
 import os
 import re
 import subprocess
@@ -216,13 +219,30 @@ def ci_gate_prs():
     subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
 
 
+def background_job(job_name: str = "", project: str = ""):
+    """Run a checkpointed background job from the catalog (RECON-10)."""
+    import background_jobs
+    job_name = job_name or os.environ.get("PM_BACKGROUND_JOB", "")
+    project = project or os.environ.get("PM_BACKGROUND_JOB_PROJECT", "switchboard")
+    if not job_name:
+        raise SystemExit("usage: python jobs.py background_job <job_name>")
+    result = background_jobs.run_background_job(project, job_name, actor="jobs/background_job")
+    print(json.dumps(result.get("summary") or result, indent=2, sort_keys=True))
+    return result
+
+
 JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "summarize_pending": summarize_pending, "narrate_pending": narrate_pending,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
         "backfill_default_branch_provenance": backfill_default_branch_provenance,
-        "ci_gate_prs": ci_gate_prs}
+        "ci_gate_prs": ci_gate_prs,
+        "background_job": background_job}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else "weekly_digest"
-    JOBS.get(name, weekly_digest)()
+    fn = JOBS.get(name, weekly_digest)
+    if name == "background_job":
+        fn(sys.argv[2] if len(sys.argv) > 2 else "")
+    else:
+        fn()
