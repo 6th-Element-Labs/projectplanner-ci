@@ -120,10 +120,11 @@ DEFAULT_ORG_ID = "org-6th-element-labs"
 ROLE_SCOPES = {
     "viewer": ["read"],
     "commenter": ["read", "write:comments"],
-    "contributor": ["read", "write:tasks", "write:ixp", "write:bug_intake"],
-    "operator": ["read", "write:tasks", "write:ixp", "write:bug_intake"],
-    "admin": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"],
-    "owner": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"],
+    # write:projects lets contributors create their own projects (private by default; ACCESS-14).
+    "contributor": ["read", "write:tasks", "write:ixp", "write:bug_intake", "write:projects"],
+    "operator": ["read", "write:tasks", "write:ixp", "write:bug_intake", "write:projects"],
+    "admin": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "admin"],
+    "owner": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "admin"],
 }
 VALID_PRINCIPAL_KINDS = {"human", "user", "agent", "host", "system"}
 VALID_PRINCIPAL_SCOPES = sorted({s for scopes in ROLE_SCOPES.values() for s in scopes})

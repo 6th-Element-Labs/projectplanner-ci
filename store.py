@@ -63,7 +63,8 @@ def init_project_registry() -> None:
                 boundary      TEXT,
                 created_at    REAL NOT NULL,
                 created_by    TEXT,
-                updated_at    REAL NOT NULL
+                updated_at    REAL NOT NULL,
+                visibility    TEXT               -- 'private' | 'org' (NULL treated as 'org')
             );
             CREATE TABLE IF NOT EXISTS project_role_grants (
                 project_id   TEXT NOT NULL,
@@ -78,6 +79,10 @@ def init_project_registry() -> None:
             );
             """
         )
+        # Migration: add project_access.visibility to registries created before ACCESS-14.
+        cols = [r["name"] for r in c.execute("PRAGMA table_info(project_access)").fetchall()]
+        if "visibility" not in cols:
+            c.execute("ALTER TABLE project_access ADD COLUMN visibility TEXT")
 
 
 def normalize_project_id(value: str) -> str:
@@ -228,22 +233,27 @@ def add_org_member(org_id: str, user_id: str, role: str = "member",
 
 def set_project_access(project_id: str, org_id: str, owner_user_id: str = "",
                        purpose: str = "", boundary: str = "",
-                       created_by: str = "system") -> Dict[str, Any]:
+                       created_by: str = "system", visibility: str = "") -> Dict[str, Any]:
     init_project_registry()
     if not has_project(project_id):
         return {"error": f"unknown project: {project_id}"}
     if not org_id:
         return {"error": "org_id required"}
+    vis = (visibility or "").strip().lower()
+    if vis and vis not in ("private", "org"):
+        return {"error": "visibility must be 'private' or 'org'"}
     now = time.time()
     with _registry_conn() as c:
         c.execute(
             "INSERT INTO project_access(project_id, org_id, owner_user_id, purpose, boundary, "
-            "created_at, created_by, updated_at) VALUES (?,?,?,?,?,?,?,?) "
+            "created_at, created_by, updated_at, visibility) VALUES (?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(project_id) DO UPDATE SET org_id=excluded.org_id, "
             "owner_user_id=excluded.owner_user_id, purpose=excluded.purpose, "
-            "boundary=excluded.boundary, updated_at=excluded.updated_at",
+            "boundary=excluded.boundary, updated_at=excluded.updated_at, "
+            # only overwrite visibility when a new value was supplied — preserve on plain re-saves
+            "visibility=COALESCE(excluded.visibility, project_access.visibility)",
             (project_id, org_id, owner_user_id or None, purpose or None, boundary or None,
-             now, created_by, now),
+             now, created_by, now, vis or None),
         )
         row = c.execute("SELECT * FROM project_access WHERE project_id=?",
                         (project_id,)).fetchone()
@@ -14187,7 +14197,7 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
                    actor: str = "system", seed_path: str = "",
                    github_repo: str = "", owner_principal_id: str = "",
                    org_id: str = DEFAULT_ORG_ID, purpose: str = "",
-                   boundary: str = "") -> Dict[str, Any]:
+                   boundary: str = "", visibility: str = "") -> Dict[str, Any]:
     """Create a physically isolated project board and register it for routing.
 
     Dynamic projects mirror the built-ins: one row in the lightweight registry, one SQLite
@@ -14221,6 +14231,7 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
             purpose=purpose or current_access.get("purpose") or f"{pid} work control plane",
             boundary=boundary or current_access.get("boundary") or f"Only work belonging to project={pid} belongs here.",
             created_by=actor,
+            visibility=visibility,
         )
         grant = {}
         if owner_principal_id:
@@ -14265,6 +14276,7 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
             purpose=purpose or f"{pid} work control plane",
             boundary=boundary or f"Only work belonging to project={pid} belongs here.",
             created_by=actor,
+            visibility=visibility,
         )
         grant = {}
         if owner_principal_id:

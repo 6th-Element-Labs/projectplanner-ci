@@ -248,10 +248,14 @@ def accessible_project_ids(user_id: str, is_superadmin: bool) -> List[str]:
         for r in c.execute(
             "SELECT project_id FROM project_access WHERE owner_user_id=?", (user_id,)):
             allow.add(r["project_id"])
-        # projects belonging to orgs the user is a member of
+        # projects belonging to orgs the user is a member of. Private projects (ACCESS-14) are
+        # NOT visible to ordinary org peers — only to the owner (above), explicit grantees
+        # (above), and org admins/owners (for oversight). 'org'/NULL visibility = all members.
         for r in c.execute(
             "SELECT pa.project_id FROM project_access pa "
-            "JOIN org_memberships om ON om.org_id = pa.org_id WHERE om.user_id=?", (user_id,)):
+            "JOIN org_memberships om ON om.org_id = pa.org_id "
+            "WHERE om.user_id=? AND (COALESCE(pa.visibility, 'org') != 'private' "
+            "                        OR om.role IN ('admin', 'owner'))", (user_id,)):
             allow.add(r["project_id"])
     # preserve store.project_ids() ordering / allowlist
     return [pid for pid in all_ids if pid in allow]

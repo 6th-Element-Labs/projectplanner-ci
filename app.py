@@ -696,7 +696,10 @@ async def list_projects(request: Request):
 
 @app.post("/api/projects")
 async def create_project(request: Request, body: dict = Body(...)):
-    principal = _principal(request, "switchboard", ("write:system",), dev_actor="web")
+    # ACCESS-14: contributors (write:projects) can create projects, not just admins.
+    # Human-created projects default to private (creator + invitees + org admins see them);
+    # pass visibility="org" to make one org-wide shared.
+    principal = _principal(request, "switchboard", ("write:projects",), dev_actor="web")
     created = store.create_project(
         name=body.get("name") or body.get("label") or "",
         project_id=body.get("project_id") or body.get("id") or "",
@@ -707,6 +710,7 @@ async def create_project(request: Request, body: dict = Body(...)):
         org_id=body.get("org_id") or store.DEFAULT_ORG_ID,
         purpose=body.get("purpose") or "",
         boundary=body.get("boundary") or "",
+        visibility=(body.get("visibility") or "private").strip().lower(),
         actor=auth.actor(principal),
     )
     if created.get("error"):
