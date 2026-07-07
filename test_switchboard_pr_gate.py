@@ -169,4 +169,31 @@ with tempfile.TemporaryDirectory(prefix="switchboard-pr-gate-") as tmp:
     ok("target_branch_behind_upstream" in text and "branch_distance" in text,
        "gate log includes stale-branch evidence")
 
-print("\n17 passed, 0 failed")
+# A conflicted / un-gateable PR (no merge ref) must post a red status and return,
+# not raise uncaught — an uncaught error aborts the whole gate run and fails the
+# systemd unit, stopping every other PR's gate.
+posted = []
+_orig_post = gate.post_status
+_orig_cache = gate._ensure_cache_repo
+try:
+    gate.post_status = lambda repo, sha, state, **kw: posted.append((state, kw.get("description", "")))
+
+    def _boom(*_a, **_k):
+        raise gate.GateError("PR #167 has no merge ref; rebase or resolve conflicts before gating.")
+
+    gate._ensure_cache_repo = _boom
+    with tempfile.TemporaryDirectory(prefix="switchboard-pr-gate-crash-") as tmp:
+        result = gate.run_gate_for_pr(
+            {"number": 167, "head": {"sha": "deadbeef"}, "html_url": "https://x/pull/167"},
+            repo="6th-Element-Labs/projectplanner", token="tok",
+            context="Switchboard CI / VM gate", work_root=Path(tmp), source_repo=Path(tmp),
+            timeout_s=5)
+    ok(result["state"] == "failure" and "no merge ref" in result.get("error", ""),
+       "conflicted PR returns a failure result instead of raising")
+    ok(any(state == "failure" for state, _ in posted),
+       "conflicted PR posts a red VM-gate status")
+finally:
+    gate.post_status = _orig_post
+    gate._ensure_cache_repo = _orig_cache
+
+print("\n18 passed, 0 failed")

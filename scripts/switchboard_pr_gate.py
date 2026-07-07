@@ -376,9 +376,15 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
     post_status(repo, sha, "pending", context=context,
                 description="Switchboard VM gate is running", target_url=pr_url,
                 token=token)
-    cache = _ensure_cache_repo(work_root, source_repo, repo)
-    run_dir = _prepare_worktree(cache, work_root, pr, run_tag)
+    cache = None
+    run_dir = None
     try:
+        # Inside the try so a conflicted PR (no merge ref) or a cache/worktree
+        # failure posts a red status and returns instead of raising uncaught —
+        # an uncaught error here aborts the whole gate run, fails the systemd
+        # unit, and stops gating every other PR until the bad PR is closed.
+        cache = _ensure_cache_repo(work_root, source_repo, repo)
+        run_dir = _prepare_worktree(cache, work_root, pr, run_tag)
         python_runtime = select_ci_python(source_repo, explicit=python_executable)
         preflight = _pr_preflight(run_dir, pr, repo=repo)
         if preflight.get("status") != "pass":
@@ -399,7 +405,7 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
         return {"pr": number, "sha": sha, "state": "failure", "log": str(log_path),
                 "error": str(exc)}
     finally:
-        if not keep_worktree:
+        if run_dir is not None and cache is not None and not keep_worktree:
             _cleanup_worktree(cache, run_dir)
 
 
@@ -479,11 +485,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     for pr in _select_prs(args, args.repo, token):
         if pr.get("draft") and os.environ.get("SWITCHBOARD_CI_SKIP_DRAFTS", "1") != "0":
             continue
-        result = run_gate_for_pr(pr, repo=args.repo, token=token, context=args.context,
-                                 work_root=root, source_repo=source_repo,
-                                 timeout_s=args.timeout_s,
-                                 python_executable=args.python,
-                                 keep_worktree=args.keep_worktree)
+        try:
+            result = run_gate_for_pr(pr, repo=args.repo, token=token, context=args.context,
+                                     work_root=root, source_repo=source_repo,
+                                     timeout_s=args.timeout_s,
+                                     python_executable=args.python,
+                                     keep_worktree=args.keep_worktree)
+        except Exception as exc:  # pragma: no cover - defensive; one PR must not abort the run
+            result = {"pr": pr.get("number"), "context": args.context, "state": "error",
+                      "error": str(exc)}
         print(json.dumps(result, sort_keys=True))
         results.append(result)
     failed = [r for r in results if r.get("state") not in ("success", None)]
