@@ -2702,6 +2702,49 @@ async def ixp_simulate_dispatch(request: Request,
     )
 
 
+@app.get("/ixp/v1/receipts")
+async def ixp_list_receipts(project: str = Query(store.DEFAULT_PROJECT),
+                            task_id: str = Query(""),
+                            agent_id: str = Query(""),
+                            limit: int = Query(50, ge=1, le=500)):
+    return store.list_coordination_receipts(
+        project=_proj(project),
+        task_id=task_id,
+        agent_id=agent_id,
+        limit=limit,
+    )
+
+
+@app.get("/ixp/v1/receipts/{receipt_id}")
+async def ixp_get_receipt(receipt_id: str,
+                          project: str = Query(store.DEFAULT_PROJECT)):
+    result = store.get_coordination_receipt(project=_proj(project), receipt_id=receipt_id)
+    if result.get("error") == "receipt_not_found":
+        raise HTTPException(404, result["error"])
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.get("/ixp/v1/tasks/{task_id}/receipts")
+async def ixp_task_receipts(task_id: str,
+                            project: str = Query(store.DEFAULT_PROJECT),
+                            from_cursor: int = Query(0, ge=0),
+                            until_cursor: int = Query(0, ge=0),
+                            claim_id: str = Query("")):
+    return {
+        "project": _proj(project),
+        "task_id": task_id,
+        "receipts": store.project_task_receipts(
+            project=_proj(project),
+            task_id=task_id,
+            from_cursor=from_cursor,
+            until_cursor=until_cursor or None,
+            claim_id=claim_id,
+        ),
+    }
+
+
 # ---- GitHub webhook — §1.2 board↔git auto-sync + §1.3 "main moved" notify ----
 # Configure in GitHub → repo Settings → Webhooks:
 #   Payload URL: https://<your-host>/api/github/webhook

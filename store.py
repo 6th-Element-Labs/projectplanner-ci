@@ -12277,6 +12277,40 @@ def simulate_dispatch(project: str = DEFAULT_PROJECT, agent_id: str = "",
     )
 
 
+def get_coordination_receipt(project: str = DEFAULT_PROJECT,
+                             receipt_id: str = "") -> Dict[str, Any]:
+    """Fetch one projected coordination receipt by stable receipt id."""
+    import coordination_receipts
+    return coordination_receipts.get_coordination_receipt(project, receipt_id)
+
+
+def list_coordination_receipts(project: str = DEFAULT_PROJECT, *,
+                               task_id: str = "",
+                               agent_id: str = "",
+                               limit: int = 50) -> Dict[str, Any]:
+    """List projected coordination receipts for a project."""
+    import coordination_receipts
+    return coordination_receipts.list_coordination_receipts(
+        project, task_id=task_id, agent_id=agent_id, limit=limit)
+
+
+def project_task_receipts(project: str = DEFAULT_PROJECT, task_id: str = "",
+                          from_cursor: int = 0,
+                          until_cursor: Optional[int] = None,
+                          claim_id: str = "") -> List[Dict[str, Any]]:
+    """Project all coordination receipts for one task from activity history."""
+    import coordination_receipts
+    if not (task_id or "").strip():
+        return []
+    return coordination_receipts.project_task_receipts(
+        project,
+        task_id.strip(),
+        from_cursor=from_cursor,
+        until_cursor=until_cursor,
+        claim_id=claim_id,
+    )
+
+
 def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:
     """Active leases using an existing connection — not released and not TTL-expired."""
     rows = c.execute("SELECT * FROM file_leases WHERE released_at IS NULL").fetchall()

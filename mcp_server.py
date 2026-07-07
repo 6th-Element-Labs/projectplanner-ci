@@ -1856,6 +1856,39 @@ def simulate_dispatch(ctx: Context, agent_id: str, project: str = "maxwell",
 
 
 @mcp.tool()
+def get_coordination_receipt(ctx: Context, receipt_id: str,
+                             project: str = "maxwell") -> str:
+    """Fetch one projected coordination receipt by stable receipt id."""
+    project = _resolve_project_input(project)
+    return _dumps(store.get_coordination_receipt(project=project, receipt_id=receipt_id))
+
+
+@mcp.tool()
+def list_coordination_receipts(ctx: Context, project: str = "maxwell",
+                             task_id: str = "", agent_id: str = "",
+                             limit: int = 50) -> str:
+    """List projected coordination receipts reconstructed from append-only activity."""
+    project = _resolve_project_input(project)
+    return _dumps(store.list_coordination_receipts(
+        project=project, task_id=task_id, agent_id=agent_id, limit=limit))
+
+
+@mcp.tool()
+def project_task_receipts(ctx: Context, task_id: str, project: str = "maxwell",
+                          from_cursor: int = 0, until_cursor: int = 0,
+                          claim_id: str = "") -> str:
+    """Project coordination receipts for one task from activity history."""
+    project = _resolve_project_input(project)
+    return _dumps(store.project_task_receipts(
+        project=project,
+        task_id=task_id,
+        from_cursor=from_cursor,
+        until_cursor=until_cursor or None,
+        claim_id=claim_id,
+    ))
+
+
+@mcp.tool()
 def reconcile(project: str = "maxwell") -> str:
     """Run the local board/git-provenance drift report. This first pass catches board-internal
     contradictions such as Done without merged_sha or In Review without PR/branch evidence."""
