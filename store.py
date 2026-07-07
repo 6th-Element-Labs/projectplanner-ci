@@ -138,6 +138,7 @@ WORK_SESSION_SCHEMA = "switchboard.work_session.v1"
 MANAGED_WORK_SESSION_SCHEMA = "switchboard.managed_work_session.v1"
 WORK_SESSION_HEALTH_SCHEMA = "switchboard.session_health.v1"
 TASK_SESSION_HEALTH_SCHEMA = "switchboard.task_session_health.v1"
+EXECUTED_TEST_RUN_SCHEMA = "switchboard.executed_test_run.v1"
 SESSION_POLICY_PROFILE_SCHEMA = "switchboard.session_policy_profiles.v1"
 WORK_SESSION_STATUSES = {"proposed", "active", "blocked", "completed", "archived", "expired"}
 WORK_SESSION_STORAGE_MODES = {"worktree", "clone", "external"}
@@ -176,10 +177,11 @@ BUILTIN_SESSION_POLICY_PROFILES = {
         "requires_upstream": True,
         "requires_base_sha": True,
         "requires_tests": True,
+        "requires_executed_tests": True,
         "requires_diff_check": True,
         "merge_requires_work_session": True,
         "merge_authority": "canonical_repo_only",
-        "completion_evidence": ["branch", "head_sha", "pr_url_or_remote_ref", "tests", "git_diff_check"],
+        "completion_evidence": ["branch", "head_sha", "pr_url_or_remote_ref", "executed_test_run", "git_diff_check"],
     },
     "docs_review": {
         "profile": "docs_review",
@@ -196,6 +198,7 @@ BUILTIN_SESSION_POLICY_PROFILES = {
         "requires_upstream": False,
         "requires_base_sha": False,
         "requires_tests": False,
+        "requires_executed_tests": False,
         "requires_diff_check": False,
         "merge_requires_work_session": False,
         "merge_authority": "canonical_repo_only_when_code_changes",
@@ -216,6 +219,7 @@ BUILTIN_SESSION_POLICY_PROFILES = {
         "requires_upstream": False,
         "requires_base_sha": False,
         "requires_tests": False,
+        "requires_executed_tests": False,
         "requires_diff_check": False,
         "merge_requires_work_session": False,
         "merge_authority": "offline_verifier",
@@ -236,6 +240,7 @@ BUILTIN_SESSION_POLICY_PROFILES = {
         "requires_upstream": False,
         "requires_base_sha": False,
         "requires_tests": True,
+        "requires_executed_tests": True,
         "requires_diff_check": False,
         "merge_requires_work_session": False,
         "merge_authority": "canonical_repo_only_when_code_changes",
@@ -256,6 +261,7 @@ BUILTIN_SESSION_POLICY_PROFILES = {
         "requires_upstream": False,
         "requires_base_sha": False,
         "requires_tests": False,
+        "requires_executed_tests": False,
         "requires_diff_check": False,
         "merge_requires_work_session": False,
         "merge_authority": "none",
@@ -5567,6 +5573,15 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             f"Policy profile {profile} requires a Work Session for merge intent.",
             "missing_data",
             details={"policy_profile": profile}))
+    if profile_rules.get("requires_executed_tests"):
+        executed_test_gate = _executed_test_run_gate(merged_payload, session)
+        if not executed_test_gate.get("ok"):
+            findings.append(_merge_gate_finding(
+                executed_test_gate.get("reason") or "missing_executed_test_run",
+                "Merge gate requires a passing executed test run with output/log hash.",
+                "missing_data",
+                details={"executed_test_gate": executed_test_gate,
+                         "policy_profile": profile}))
 
     blocking = [f for f in findings if f.get("blocking")]
     ok = not blocking
@@ -10139,6 +10154,149 @@ def _completion_evidence_has_tests(evidence: Dict[str, Any],
     return bool(str(hygiene.get("verification") or "").strip())
 
 
+def _executed_test_run_candidates(evidence: Dict[str, Any],
+                                  session: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+
+    def add(value: Any, source: str) -> None:
+        if value in (None, ""):
+            return
+        if isinstance(value, dict):
+            row = dict(value)
+            row.setdefault("_source", source)
+            candidates.append(row)
+            return
+        if isinstance(value, list):
+            for item in value:
+                add(item, source)
+
+    for key in (
+        "executed_test_run",
+        "executed_test_runs",
+        "test_run",
+        "test_runs",
+        "test_results",
+        "verification_run",
+        "verification_runs",
+    ):
+        add(evidence.get(key), f"evidence.{key}")
+    hygiene = (session or {}).get("hygiene") or {}
+    for key in (
+        "executed_test_run",
+        "executed_test_runs",
+        "test_run",
+        "test_runs",
+        "test_results",
+        "verification_run",
+        "verification_runs",
+    ):
+        add(hygiene.get(key), f"hygiene.{key}")
+    return candidates
+
+
+def _executed_test_run_commands(run: Dict[str, Any]) -> List[Any]:
+    commands: List[Any] = []
+    for key in ("commands", "test_commands", "verification_commands", "checks"):
+        commands.extend(_evidence_sequence(run.get(key)))
+    if run.get("command") not in (None, ""):
+        commands.append(run.get("command"))
+    return [cmd for cmd in commands if str(cmd or "").strip()]
+
+
+def _executed_test_run_has_output_hash(run: Dict[str, Any]) -> bool:
+    for key in (
+        "output_hash",
+        "output_sha256",
+        "stdout_sha256",
+        "stderr_sha256",
+        "log_hash",
+        "logs_hash",
+        "artifact_hash",
+        "result_hash",
+    ):
+        if str(run.get(key) or "").strip():
+            return True
+    return False
+
+
+def _executed_test_run_succeeded(run: Dict[str, Any]) -> bool:
+    if run.get("executed") is False:
+        return False
+    if run.get("ok") is True or run.get("passed") is True:
+        return True
+    exit_code = run.get("exit_code", run.get("returncode"))
+    if exit_code not in (None, ""):
+        try:
+            return int(exit_code) == 0
+        except (TypeError, ValueError):
+            return False
+    status = str(run.get("status") or run.get("conclusion") or run.get("result") or "").strip().lower()
+    return status in {"pass", "passed", "success", "succeeded", "ok", "green", "completed"}
+
+
+def _executed_test_run_gate(evidence: Dict[str, Any],
+                            session: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    candidates = _executed_test_run_candidates(evidence, session)
+    problems: List[Dict[str, Any]] = []
+    session_id = str((session or {}).get("work_session_id") or "").strip()
+    session_branch = str((session or {}).get("branch") or "").strip()
+    session_head = str((session or {}).get("head_sha") or "").strip()
+    for run in candidates:
+        source = run.get("_source")
+        run_id = str(run.get("run_id") or run.get("id") or "").strip() or None
+        run_schema = str(run.get("schema") or "").strip()
+        commands = _executed_test_run_commands(run)
+        run_problems: List[Dict[str, Any]] = []
+        if run_schema and run_schema != EXECUTED_TEST_RUN_SCHEMA:
+            run_problems.append({"reason": "unknown_test_run_schema",
+                                 "message": "Executed test run schema is not recognized.",
+                                 "schema": run_schema})
+        if not commands:
+            run_problems.append({"reason": "missing_test_commands",
+                                 "message": "Executed test run must include the command(s) that ran."})
+        if not _executed_test_run_succeeded(run):
+            run_problems.append({"reason": "test_run_failed",
+                                 "message": "Executed test run did not record a passing result.",
+                                 "status": run.get("status") or run.get("conclusion"),
+                                 "exit_code": run.get("exit_code", run.get("returncode"))})
+        if not _executed_test_run_has_output_hash(run):
+            run_problems.append({"reason": "missing_test_output_hash",
+                                 "message": "Executed test run must include an output/log/artifact hash."})
+        if not any(str(run.get(key) or "").strip() for key in ("completed_at", "executed_at", "finished_at")):
+            run_problems.append({"reason": "missing_test_completion_time",
+                                 "message": "Executed test run must include completed_at/executed_at/finished_at."})
+        run_session_id = str(run.get("work_session_id") or "").strip()
+        if session_id and run_session_id and run_session_id != session_id:
+            run_problems.append({"reason": "wrong_test_work_session",
+                                 "message": "Executed test run belongs to a different Work Session.",
+                                 "test_work_session_id": run_session_id,
+                                 "work_session_id": session_id})
+        run_branch = str(run.get("branch") or "").strip()
+        if session_branch and run_branch and run_branch != session_branch:
+            run_problems.append({"reason": "stale_test_branch",
+                                 "message": "Executed test run branch does not match the Work Session.",
+                                 "test_branch": run_branch,
+                                 "work_session_branch": session_branch})
+        run_head = str(run.get("head_sha") or "").strip()
+        if session_head and run_head and run_head != session_head:
+            run_problems.append({"reason": "stale_test_head_sha",
+                                 "message": "Executed test run head_sha does not match the Work Session.",
+                                 "test_head_sha": run_head,
+                                 "work_session_head_sha": session_head})
+        if not run_problems:
+            clean = {k: v for k, v in run.items() if k != "_source"}
+            return {"ok": True, "schema": EXECUTED_TEST_RUN_SCHEMA,
+                    "source": source, "run_id": run_id, "run": clean}
+        problems.append({"source": source, "run_id": run_id, "problems": run_problems})
+    return {"ok": False, "schema": EXECUTED_TEST_RUN_SCHEMA,
+            "reason": "missing_executed_test_run" if not candidates else "invalid_executed_test_run",
+            "message": (
+                "Completion evidence must include a passing executed test run with commands, "
+                "completion time, and output/log hash."
+            ),
+            "problems": problems}
+
+
 def _completion_evidence_has_diff_check(evidence: Dict[str, Any],
                                         session: Dict[str, Any]) -> bool:
     for key in ("git_diff_check", "diff_check", "diff_check_clean"):
@@ -10287,7 +10445,15 @@ def _complete_claim_work_session_gate_in(
         problems.append({"reason": "missing_push_or_review_evidence",
                          "failure_class": "missing_data",
                          "message": "Completion evidence must include PR, pushed branch, or offline evidence."})
-    if rules.get("requires_tests") and not _completion_evidence_has_tests(evidence_obj, session):
+    executed_test_gate = None
+    if rules.get("requires_executed_tests"):
+        executed_test_gate = _executed_test_run_gate(evidence_obj, session)
+        if not executed_test_gate.get("ok"):
+            problems.append({"reason": executed_test_gate.get("reason") or "missing_executed_test_run",
+                             "failure_class": "missing_data",
+                             "message": executed_test_gate.get("message"),
+                             "executed_test_gate": executed_test_gate})
+    elif rules.get("requires_tests") and not _completion_evidence_has_tests(evidence_obj, session):
         problems.append({"reason": "missing_test_evidence", "failure_class": "missing_data",
                          "message": "Completion evidence must record relevant tests or verification."})
     if rules.get("requires_diff_check") and not _completion_evidence_has_diff_check(evidence_obj, session):
@@ -10302,10 +10468,13 @@ def _complete_claim_work_session_gate_in(
                      "policy_profile": profile,
                      "work_session_id": session.get("work_session_id")},
         )
-    return {"ok": True, "required": required, "policy_profile": profile,
+    response = {"ok": True, "required": required, "policy_profile": profile,
             "policy": rules,
             "source": "complete_claim", "work_session": session,
             "allow_dirty": allow_dirty}
+    if executed_test_gate:
+        response["executed_test_gate"] = executed_test_gate
+    return response
 
 
 def _task_tally_snapshot(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:

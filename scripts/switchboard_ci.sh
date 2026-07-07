@@ -100,6 +100,7 @@ run_test test_task_move_archive.py
 run_test test_web_write_auth.py
 run_test test_switchboard_pr_gate.py
 run_test test_unattended_proof.py
+run_test test_work_session_test_run.py
 run_test test_work_session_model.py
 run_test test_work_session_claim_binding.py
 

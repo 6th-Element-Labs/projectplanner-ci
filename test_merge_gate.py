@@ -74,6 +74,24 @@ def session_payload(task_id, branch, head_sha):
     }
 
 
+def executed_test_run(task_id, branch, head_sha, work_session_id=None, **overrides):
+    run = {
+        "schema": "switchboard.executed_test_run.v1",
+        "run_id": f"run-{task_id.lower()}",
+        "work_session_id": work_session_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "commands": ["python3 test_merge_gate.py"],
+        "exit_code": 0,
+        "status": "success",
+        "completed_at": 1234.0,
+        "output_hash": "sha256:" + "b" * 64,
+        "runner": "test",
+    }
+    run.update(overrides)
+    return run
+
+
 def github_pr(task_id, branch, head_sha, repo=REPO, pr_number=61, **overrides):
     pr = {
         "number": pr_number,
@@ -110,7 +128,8 @@ def ready_task(title, head_sha="feedfacefeedfacefeedfacefeedfacefeedface"):
             "head_sha": head_sha,
             "pr_url": f"https://github.com/{REPO}/pull/61",
             "pr_number": 61,
-            "tests": ["python3 test_merge_gate.py"],
+            "executed_test_run": executed_test_run(
+                created["task_id"], branch, head_sha, claim["work_session_id"]),
             "git_diff_check": "clean",
         },
         actor="test",
@@ -136,6 +155,9 @@ def gate_payload(created, claim, branch, head_sha, **overrides):
         "pr_url": f"https://github.com/{REPO}/pull/61",
         "pr_number": 61,
         "require_work_session": True,
+        "policy_profile": "code_strict",
+        "executed_test_run": executed_test_run(
+            created["task_id"], branch, head_sha, claim["work_session_id"]),
         "status_contexts": {CI_CONTEXT: "success"},
         "github_pr": github_pr(created["task_id"], branch, head_sha),
     }
@@ -207,6 +229,14 @@ try:
     ok(missing_ci["ok"] is False and
        any(f["code"] == "missing_required_status_contexts" for f in missing_ci["findings"]),
        "merge_gate blocks missing required CI/status context")
+
+    tests_task, tests_claim, tests_branch, tests_sha = ready_task("missing executed tests blocks")
+    missing_tests_payload = gate_payload(tests_task, tests_claim, tests_branch, tests_sha)
+    missing_tests_payload.pop("executed_test_run", None)
+    missing_tests = store.merge_gate(missing_tests_payload, actor="test", project=P)
+    ok(missing_tests["ok"] is False and
+       any(f["code"] == "missing_executed_test_run" for f in missing_tests["findings"]),
+       "merge_gate blocks missing executed test-run proof")
 
     ok_task, ok_claim, ok_branch, ok_sha = ready_task("clean merge gate passes")
     passed_gate = store.merge_gate(

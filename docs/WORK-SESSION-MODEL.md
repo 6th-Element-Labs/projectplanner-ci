@@ -236,9 +236,10 @@ Later tasks deepen enforcement:
   upstream, `base_sha`, `head_sha`, and `conflict_marker_count`.
 - `SESSION-4`: add `pre_tool_check` for file writes and shell commands.
 - `SESSION-5`: gate `complete_claim` on pushed clean branch/session proof. Done here:
-  code-strict completion requires matching branch/head SHA, PR/push/offline proof, recorded tests,
-  and clean `git diff --check`; dirty completion needs explicit allowance evidence, conflict
-  markers block, and refused completion leaves the claim active with a visible failure class.
+  code-strict completion requires matching branch/head SHA, PR/push/offline proof, a passing
+  `switchboard.executed_test_run.v1` artifact, and clean `git diff --check`; dirty completion
+  needs explicit allowance evidence, conflict markers block, and refused completion leaves the
+  claim active with a visible failure class.
 - `SESSION-6`: gate merge on session/branch/provenance consistency. Done here:
   `merge_gate` verifies canonical repo role, PR mergeability, target branch, required CI/status
   contexts, external-CI evidence when required, and clean Work Session preflight before a merge can
@@ -258,3 +259,8 @@ Later tasks deepen enforcement:
   Session is required, missing-session behavior for `pre_tool_check`, allowed storage modes,
   deny-vs-warn hygiene, test/diff evidence requirements, and merge authority. Helm code-like tasks
   default to `code_strict`; docs/review/offline work can opt into relaxed profiles explicitly.
+- `SESSION-10`: make tests an executed artifact, not a claimed command list. `code_strict` and
+  `ui_preview` profiles require a passing `switchboard.executed_test_run.v1` object during
+  completion and merge intent. The object must include commands, success/exit status, completion
+  time, and an output/log/artifact hash, and must match the bound Work Session when it names one.
+  `scripts/work_session_test_run.py` is the local runner helper for adapters and Agent Host.

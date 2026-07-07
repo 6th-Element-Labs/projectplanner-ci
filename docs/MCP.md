@@ -158,9 +158,16 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
 - For `code_strict` Work Sessions, `complete_claim` fails closed until evidence proves the bound
-  branch/head SHA, PR or pushed/offline proof, recorded tests, and clean `git diff --check`.
+  branch/head SHA, PR or pushed/offline proof, a passing executed test run, and clean
+  `git diff --check`.
   Dirty completion requires explicit `allow_dirty=true` plus `allow_dirty_reason`; conflict
   markers are never accepted.
+- Claimed test commands are not proof. Code-strict and UI-preview profiles require an
+  `executed_test_run` evidence object, or an equivalent object stored on
+  `work_session.hygiene.executed_test_runs`, using schema `switchboard.executed_test_run.v1`.
+  The run must include command(s), a success signal such as `exit_code=0`, completion time, and an
+  output/log/artifact hash. `scripts/work_session_test_run.py` can execute commands and emit this
+  JSON for adapters and runner hosts.
 - Session policy profiles are exposed in `get_working_agreement`, `get_project_contract`, and
   `work_session_contract.policy_profiles`. Built-ins are `code_strict`, `docs_review`,
   `offline_evidence`, `ui_preview`, and `no_repo`.
@@ -180,9 +187,9 @@ Safe merge rule:
 - Before merging, fetch origin, rebase/merge the task branch onto the intended target branch,
   resolve conflicts intentionally, rerun relevant tests, verify a clean committed branch, and push.
 - For code work, call `merge_gate(...)` with the task, claim/Work Session, PR, branch, head SHA,
-  target branch, and CI/status evidence. A `blocked` result means stop, repair the finding, and
-  rerun the gate. A `passed` result is permission to merge/request merge, not permission to set
-  `Done`.
+  target branch, CI/status evidence, and the executed test-run proof. A `blocked` result means
+  stop, repair the finding, and rerun the gate. A `passed` result is permission to merge/request
+  merge, not permission to set `Done`.
 - Merge through GitHub or the configured merge queue only when checks/review are green.
 - After merge, fetch the target branch, verify the content landed, record `merged_sha`, and rely on
   webhook/reconcile/backfill to mark `Done`.

@@ -75,11 +75,29 @@ def evidence(payload, **overrides):
         "branch": payload["branch"],
         "head_sha": payload["head_sha"],
         "pr_url": "https://github.example/pr/5",
-        "tests": ["python3 test_complete_claim_work_session_gate.py"],
+        "executed_test_run": executed_test_run(payload),
         "git_diff_check": "clean",
     }
     base.update(overrides)
     return base
+
+
+def executed_test_run(payload, **overrides):
+    run = {
+        "schema": "switchboard.executed_test_run.v1",
+        "run_id": f"run-{payload['task_id'].lower()}",
+        "work_session_id": payload.get("work_session_id"),
+        "branch": payload["branch"],
+        "head_sha": payload["head_sha"],
+        "commands": ["python3 test_complete_claim_work_session_gate.py"],
+        "exit_code": 0,
+        "status": "success",
+        "completed_at": 1234.0,
+        "output_hash": "sha256:" + "a" * 64,
+        "runner": "test",
+    }
+    run.update(overrides)
+    return run
 
 
 def active_claim(claim_id):
@@ -118,7 +136,8 @@ try:
     missing_push = store.complete_claim(
         push_claim["claim_id"],
         evidence={"branch": push_payload["branch"], "head_sha": push_payload["head_sha"],
-                  "tests": ["pytest"], "git_diff_check": "clean"},
+                  "executed_test_run": executed_test_run(push_payload),
+                  "git_diff_check": "clean"},
         actor="test",
         project=P,
     )
@@ -136,7 +155,26 @@ try:
     ok(stale_done["completed"] is False and stale_done["reason"] == "stale_head_sha",
        "complete_claim rejects evidence head_sha that diverges from Work Session")
 
+    claimed_tests_task, claimed_tests_claim, claimed_tests_payload = claim_strict(
+        "claimed tests are not execution proof", order=45)
+    claimed_tests = store.complete_claim(
+        claimed_tests_claim["claim_id"],
+        evidence={
+            "branch": claimed_tests_payload["branch"],
+            "head_sha": claimed_tests_payload["head_sha"],
+            "pr_url": "https://github.example/pr/6",
+            "tests": ["python3 test_complete_claim_work_session_gate.py"],
+            "git_diff_check": "clean",
+        },
+        actor="test",
+        project=P,
+    )
+    ok(claimed_tests["completed"] is False and
+       claimed_tests["reason"] == "missing_executed_test_run",
+       "complete_claim rejects claimed test commands without executed run proof")
+
     valid_task, valid_claim, valid_payload = claim_strict("valid completion allowed", order=50)
+    valid_payload["work_session_id"] = valid_claim["work_session_id"]
     valid_done = store.complete_claim(
         valid_claim["claim_id"], evidence=evidence(valid_payload), actor="test", project=P)
     ok(valid_done["completed"] is True and valid_done["status"] == "In Review" and
@@ -149,6 +187,7 @@ try:
 
     allowed_dirty_task, allowed_dirty_claim, allowed_dirty_payload = claim_strict(
         "explicit dirty allowance", order=60)
+    allowed_dirty_payload["work_session_id"] = allowed_dirty_claim["work_session_id"]
     store.update_work_session(
         allowed_dirty_claim["work_session_id"], {"dirty_status": "dirty"},
         actor="test", project=P)

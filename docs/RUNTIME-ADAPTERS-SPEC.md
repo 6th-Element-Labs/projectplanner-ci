@@ -176,7 +176,9 @@ On normal exit:
 
 ```text
 run repo preflight and refresh the Work Session
-call complete_claim with branch, head_sha, PR/push/offline proof, tests, and git diff --check
+execute the relevant test command(s) through the adapter/host runner
+attach switchboard.executed_test_run.v1 evidence with command(s), exit status, completion time, and output/log hash
+call complete_claim with branch, head_sha, PR/push/offline proof, executed_test_run, and git diff --check
 report usage if available
 release all owned leases
 ack any handled terminal signals
@@ -185,8 +187,10 @@ write final heartbeat/state
 
 For `code_strict` sessions, Switchboard refuses `complete_claim` when the Work Session is dirty
 without an explicit allowance, has conflict markers, has a mismatched branch/head SHA, lacks
-PR/push/offline proof, or does not record tests and `git diff --check`. A refusal keeps the claim
-active and returns a typed `work_session_gate` failure for repair-and-retry.
+PR/push/offline proof, lacks a passing executed test-run artifact, or does not record
+`git diff --check`. A refusal keeps the claim active and returns a typed `work_session_gate`
+failure for repair-and-retry. `scripts/work_session_test_run.py` is the local helper for adapters
+that need a small reference executor; claimed command strings alone are not accepted as proof.
 
 ### 3.4.1 Pre-merge sequence
 
@@ -206,6 +210,7 @@ merge_gate(
   target_branch,
   branch,
   head_sha,
+  executed_test_run,
   status_contexts_json,
   require_work_session=true
 )
