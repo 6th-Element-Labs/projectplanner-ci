@@ -1822,6 +1822,40 @@ def get_deliverable_tally(deliverable_id: str, project: str = "maxwell") -> str:
 
 
 @mcp.tool()
+def replay_verify(ctx: Context, project: str = "maxwell", from_cursor: int = 0,
+                  until_cursor: int = 0, task_id: str = "") -> str:
+    """Replay append-only activity and verify derived task/git state matches the live board."""
+    project = _resolve_project_input(project)
+    return _dumps(store.replay_verify(
+        project=project,
+        from_cursor=from_cursor,
+        until_cursor=until_cursor or None,
+        task_id=task_id,
+    ))
+
+
+@mcp.tool()
+def simulate_dispatch(ctx: Context, agent_id: str, project: str = "maxwell",
+                      from_cursor: int = 0, until_cursor: int = 0,
+                      lanes: str = "", capabilities: str = "",
+                      max_risk: str = "", max_budget_usd: float = 0,
+                      deliverable_id: str = "") -> str:
+    """Dry-run claim_next dispatch against a replayed snapshot without mutating live work."""
+    project = _resolve_project_input(project)
+    return _dumps(store.simulate_dispatch(
+        project=project,
+        agent_id=agent_id,
+        from_cursor=from_cursor,
+        until_cursor=until_cursor or None,
+        lanes=lanes,
+        capabilities=capabilities,
+        max_risk=max_risk,
+        max_budget_usd=max_budget_usd or None,
+        deliverable_id=deliverable_id,
+    ))
+
+
+@mcp.tool()
 def reconcile(project: str = "maxwell") -> str:
     """Run the local board/git-provenance drift report. This first pass catches board-internal
     contradictions such as Done without merged_sha or In Review without PR/branch evidence."""

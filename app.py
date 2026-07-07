@@ -2670,6 +2670,38 @@ async def ixp_reconcile(project: str = Query(store.DEFAULT_PROJECT)):
     return store.reconcile(project=_proj(project))
 
 
+@app.get("/ixp/v1/replay/verify")
+async def ixp_replay_verify(project: str = Query(store.DEFAULT_PROJECT),
+                            from_cursor: int = Query(0, ge=0),
+                            until_cursor: int = Query(0, ge=0),
+                            task_id: str = Query("")):
+    return store.replay_verify(
+        project=_proj(project),
+        from_cursor=from_cursor,
+        until_cursor=until_cursor or None,
+        task_id=task_id,
+    )
+
+
+@app.post("/ixp/v1/replay/simulate_dispatch")
+async def ixp_simulate_dispatch(request: Request,
+                                project: str = Query(store.DEFAULT_PROJECT)):
+    body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
+    if not isinstance(body, dict):
+        raise HTTPException(400, "JSON object required")
+    return store.simulate_dispatch(
+        project=_proj(project),
+        agent_id=str(body.get("agent_id") or ""),
+        from_cursor=int(body.get("from_cursor") or 0),
+        until_cursor=int(body["until_cursor"]) if body.get("until_cursor") else None,
+        lanes=body.get("lanes"),
+        capabilities=body.get("capabilities"),
+        max_risk=str(body.get("max_risk") or ""),
+        max_budget_usd=body.get("max_budget_usd"),
+        deliverable_id=str(body.get("deliverable_id") or ""),
+    )
+
+
 # ---- GitHub webhook — §1.2 board↔git auto-sync + §1.3 "main moved" notify ----
 # Configure in GitHub → repo Settings → Webhooks:
 #   Payload URL: https://<your-host>/api/github/webhook
