@@ -967,6 +967,14 @@ def get_work_session(work_session_id: str, project: str = "maxwell") -> str:
 
 
 @mcp.tool()
+def get_work_session_health(work_session_id: str, project: str = "maxwell") -> str:
+    """Read the computed health verdict for one Work Session."""
+    health = store.get_work_session_health(work_session_id, project=project)
+    return _dumps(health or {"error": "work_session_not_found",
+                            "work_session_id": work_session_id})
+
+
+@mcp.tool()
 def list_work_sessions(project: str = "maxwell", task_id: str = "",
                        agent_id: str = "", status: str = "",
                        repo_role: str = "", include_expired: bool = True) -> str:
@@ -978,6 +986,16 @@ def list_work_sessions(project: str = "maxwell", task_id: str = "",
             project=project, task_id=task_id, agent_id=agent_id, status=status,
             repo_role=repo_role, include_expired=include_expired),
     })
+
+
+@mcp.tool()
+def list_session_health(project: str = "maxwell", task_id: str = "",
+                        agent_id: str = "", status: str = "",
+                        only_unsafe: bool = False) -> str:
+    """List computed Work Session health rows and the task-level session_health aggregate."""
+    return _dumps(store.list_session_health(
+        project=project, task_id=task_id, agent_id=agent_id,
+        status=status, only_unsafe=only_unsafe))
 
 
 @mcp.tool()

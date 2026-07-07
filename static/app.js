@@ -300,10 +300,31 @@ const TeepPlan = {
             ${metric('KPI movement', this.compact(tally.verified_kpi_contribution || 0), `${kpis.length} linked KPI${kpis.length === 1 ? '' : 's'}`, 'chart-arrows-vertical')}
         </div>${kpiLine}`;
     },
+    sessionHealthPill(health) {
+        const h = health || {};
+        const status = h.status || 'no_sessions';
+        const colors = { healthy: 'green', warning: 'yellow', unsafe: 'red', no_sessions: 'secondary' };
+        const icons = { healthy: 'shield-check', warning: 'alert-triangle', unsafe: 'shield-x', no_sessions: 'folder-off' };
+        const label = status === 'no_sessions' ? 'No Work Session' : `Session ${status}`;
+        const count = h.unsafe_session_count ? ` · ${h.unsafe_session_count} unsafe` : (h.warning_session_count ? ` · ${h.warning_session_count} warn` : '');
+        const title = h.recommended_repair || label;
+        return `<span class="badge bg-${colors[status] || 'secondary'}-lt" title="${this.esc(title)}"><i class="ti ti-${icons[status] || 'shield'} me-1"></i>${this.esc(label + count)}</span>`;
+    },
+    sessionHealthDetailHtml(health) {
+        const h = health || {};
+        const findings = h.findings || [];
+        const sessions = h.active_sessions || h.latest_sessions || [];
+        const findingHtml = findings.length ? `<div class="mt-2 small">${findings.slice(0, 5).map((f) =>
+            `<div><span class="badge bg-${f.blocking ? 'red' : 'yellow'}-lt me-1">${this.esc(f.code || f.kind || 'finding')}</span>${this.esc(f.message || '')}${f.repair ? `<div class="text-secondary ms-2">${this.esc(f.repair)}</div>` : ''}</div>`).join('')}</div>` : '';
+        const sessionHtml = sessions.length ? `<div class="mt-2 small text-secondary">${sessions.slice(0, 4).map((s) =>
+            `${this.esc(s.work_session_id || '')} · ${this.esc(s.branch || 'no branch')} · ${this.esc(s.workspace_path || 'no path')}`).join('<br>')}</div>` : '';
+        return `<div>${this.sessionHealthPill(h)}${findingHtml}${sessionHtml}</div>`;
+    },
     controlTruthHtml(t) {
         const dep = (t && t.dependency_state) || {};
         const rat = (t && t.rationale_state) || {};
         const ident = (t && t.identity) || {};
+        const health = (t && t.session_health) || {};
         const terminal = (t && t.terminal_state) || {};
         const depStatus = dep.satisfied
             ? (dep.ready ? 'Ready' : 'Dependencies satisfied')
@@ -336,10 +357,12 @@ const TeepPlan = {
             </div>
             <div class="card-body py-3">
                 <div class="row g-2">
-                    <div class="col-md-4"><span class="badge bg-${depClass}-lt">${this.esc(depStatus)}</span></div>
-                    <div class="col-md-4"><span class="badge bg-${rationaleClass}-lt">${this.esc(rationaleStatus)}</span></div>
-                    <div class="col-md-4"><span class="badge bg-${identityClass}-lt">${identityStatus}</span></div>
+                    <div class="col-md-3"><span class="badge bg-${depClass}-lt">${this.esc(depStatus)}</span></div>
+                    <div class="col-md-3"><span class="badge bg-${rationaleClass}-lt">${this.esc(rationaleStatus)}</span></div>
+                    <div class="col-md-3"><span class="badge bg-${identityClass}-lt">${identityStatus}</span></div>
+                    <div class="col-md-3">${this.sessionHealthPill(health)}</div>
                     <div class="col-12 small">${deps}</div>
+                    ${health.status && health.status !== 'healthy' ? `<div class="col-12">${this.sessionHealthDetailHtml(health)}</div>` : ''}
                     ${flags ? `<div class="col-12 small">${flags}</div>` : ''}
                     ${suppressed}
                 </div>
@@ -3657,7 +3680,6 @@ const TeepPlan = {
                 <div class="d-flex mb-2">${this._missionBadge(m.status, this.MILESTONE_STATUS_COLOR)}<span class="ms-auto text-secondary small">${this.esc(String(m.linked_task_count || 0))} linked</span></div>
                 <div class="fw-semibold">${this.esc(m.title || m.id)}</div></div></div></div>`;
         }).join('')}</div></div></div>` : '<div class="card mb-4"><div class="card-body text-secondary small">No milestones defined yet.</div></div>';
-        const activeRows = (s.active_work || []).map((w) => `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this._missionBadge(w.status, this.STATUS_COLOR)}</td><td>${this.esc(w.assignee || '—')}</td><td class="small">${this.esc((w.active_claims || []).map((c) => c.agent_id).join(', ') || '—')}</td></tr>`).join('') || '<tr><td colspan="5" class="text-secondary">No active linked work</td></tr>';
         const doneRows = (s.done_with_proof || []).map((w) => {
             const pr = (w.provenance || {}).pr_url || (w.git_state || {}).pr_url;
             return `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this.esc((w.provenance || {}).label || 'Done with proof')}</td><td>${pr ? `<a href="${this.esc(pr)}" target="_blank" rel="noopener">PR</a>` : '—'}</td></tr>`;
@@ -3667,13 +3689,14 @@ const TeepPlan = {
             return `<tr><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td></tr>`;
         }).join('') || '<tr><td colspan="6" class="text-secondary">No cross-project links</td></tr>';
         const blockerHtml = (s.blockers || []).length ? `<div class="card mb-4 border-danger"><div class="card-header"><h3 class="card-title text-red">Blockers</h3></div><div class="list-group list-group-flush">${(s.blockers || []).map((b) =>
-            `<div class="list-group-item"><div class="fw-semibold">${this.esc(b.kind || 'blocker')}</div><div>${this.esc(b.title || b.message || b.task_id || '')}</div></div>`).join('')}</div></div>` : '';
+            `<div class="list-group-item"><div class="fw-semibold">${this.esc(b.kind || 'blocker')}${b.finding_code ? ` · ${this.esc(b.finding_code)}` : ''}</div><div>${this.esc(b.title || b.message || b.task_id || '')}</div>${b.repair ? `<div class="small text-secondary">${this.esc(b.repair)}</div>` : ''}</div>`).join('')}</div></div>` : '';
         const nextActions = (s.next_actions || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Next best actions</h3></div><div class="list-group list-group-flush">${(s.next_actions || []).map((a) =>
             `<div class="list-group-item"><span class="badge bg-primary-lt me-2">${this.esc(a.action || 'action')}</span>${this.esc(a.title || a.reason || '')}${a.task_id ? ` <span class="text-secondary small">· ${this.esc(a.project_id || '')} ${this.esc(a.task_id)}</span>` : ''}</div>`).join('')}</div></div>` : '';
         const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
             `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td>${this.esc(a.project_id || '')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
+        const activeRows = (s.active_work || []).map((w) => `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this._missionBadge(w.status, this.STATUS_COLOR)}</td><td>${this.sessionHealthPill(w.session_health)}</td><td>${this.esc(w.assignee || '—')}</td><td class="small">${this.esc((w.active_claims || []).map((c) => c.agent_id).join(', ') || '—')}</td></tr>`).join('') || '<tr><td colspan="6" class="text-secondary">No active linked work</td></tr>';
         el.innerHTML = header + this._missionCeoHeaderHtml(s) + this._missionDependencyGraphHtml() + kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap + nextActions + blockerHtml +
-            `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
+            `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +
             `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Linked tasks across projects</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Milestone</th><th>Role</th></tr></thead><tbody>${linkedRows}</tbody></table></div></div>` +

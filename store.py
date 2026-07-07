@@ -136,6 +136,8 @@ VALID_PRINCIPAL_KINDS = {"human", "user", "agent", "host", "system"}
 VALID_PRINCIPAL_SCOPES = sorted({s for scopes in ROLE_SCOPES.values() for s in scopes})
 WORK_SESSION_SCHEMA = "switchboard.work_session.v1"
 MANAGED_WORK_SESSION_SCHEMA = "switchboard.managed_work_session.v1"
+WORK_SESSION_HEALTH_SCHEMA = "switchboard.session_health.v1"
+TASK_SESSION_HEALTH_SCHEMA = "switchboard.task_session_health.v1"
 WORK_SESSION_STATUSES = {"proposed", "active", "blocked", "completed", "archived", "expired"}
 WORK_SESSION_STORAGE_MODES = {"worktree", "clone", "external"}
 WORK_SESSION_DIRTY_STATUSES = {"clean", "dirty", "unknown"}
@@ -3063,6 +3065,7 @@ def _enriched_mission_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
         "external_ci": task.get("external_ci"),
         "publication": task.get("publication"),
         "human_gate": _task_human_gate_state(task),
+        "session_health": task.get("session_health"),
         "active_claims": claims,
     }
     return enriched
@@ -3115,6 +3118,23 @@ def _mission_blockers(deliverable: Dict[str, Any],
                 "title": detail.get("title"),
                 "reason": gate.get("reason"),
             })
+        session_health = detail.get("session_health") or {}
+        if session_health.get("status") == "unsafe":
+            for finding in session_health.get("findings") or []:
+                if not finding.get("blocking"):
+                    continue
+                blockers.append({
+                    "kind": "unsafe_session",
+                    "project_id": link.get("project_id"),
+                    "task_id": detail.get("task_id"),
+                    "title": detail.get("title"),
+                    "failure_class": finding.get("failure_class"),
+                    "finding_code": finding.get("code"),
+                    "work_session_id": finding.get("work_session_id"),
+                    "severity": finding.get("severity"),
+                    "message": finding.get("message"),
+                    "repair": finding.get("repair"),
+                })
         proof_required = link.get("proof_required") or {}
         external_ci = detail.get("external_ci") or {}
         if (proof_required.get("external_ci_passed")
@@ -3206,6 +3226,23 @@ def _mission_next_actions(deliverable: Dict[str, Any],
                 "title": detail.get("title"),
                 "reason": gate.get("reason") or "Human gate blocked",
             })
+        session_health = detail.get("session_health") or {}
+        if session_health.get("status") == "unsafe":
+            actions.append({
+                "action": "repair_work_session",
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "reason": session_health.get("recommended_repair") or "Unsafe Work Session",
+            })
+        elif session_health.get("status") == "warning":
+            actions.append({
+                "action": "refresh_work_session_health",
+                "project_id": link.get("project_id"),
+                "task_id": detail.get("task_id"),
+                "title": detail.get("title"),
+                "reason": session_health.get("recommended_repair") or "Work Session warning",
+            })
     if not linked_tasks and not (deliverable.get("milestones") or []):
         actions.append({
             "action": "propose_breakdown",
@@ -3262,6 +3299,7 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
                 "status": status,
                 "assignee": detail.get("assignee"),
                 "active_claims": claims,
+                "session_health": detail.get("session_health"),
                 "milestone_id": link.get("milestone_id"),
                 "role": link.get("role"),
             })
@@ -4095,6 +4133,126 @@ def _upsert_git_state(c: sqlite3.Connection, task_id: str,
     return _load_git_state(c, task_id)
 
 
+def _session_health_summary(session: Dict[str, Any]) -> Dict[str, Any]:
+    health = session.get("health") or {}
+    workspace = health.get("workspace") or {}
+    return {
+        "work_session_id": session.get("work_session_id"),
+        "agent_id": session.get("agent_id"),
+        "claim_id": session.get("claim_id"),
+        "status": session.get("status"),
+        "health_status": health.get("status"),
+        "safe": health.get("safe"),
+        "storage_mode": session.get("storage_mode"),
+        "repo_role": session.get("repo_role"),
+        "branch": session.get("branch") or workspace.get("branch"),
+        "workspace_path": workspace.get("path"),
+        "head_sha": session.get("head_sha") or workspace.get("head_sha"),
+        "finding_count": health.get("finding_count", 0),
+        "blocking_count": health.get("blocking_count", 0),
+        "recommended_repair": health.get("recommended_repair"),
+        "updated_at": session.get("updated_at"),
+        "expires_at": session.get("expires_at"),
+    }
+
+
+def _task_session_health_in(c: sqlite3.Connection, task: Dict[str, Any],
+                            project: str = DEFAULT_PROJECT,
+                            active_claims: Optional[List[Dict[str, Any]]] = None,
+                            git_state: Optional[Dict[str, Any]] = None,
+                            now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    task_id = task.get("task_id") or ""
+    rows = c.execute(
+        "SELECT * FROM work_sessions WHERE task_id=? "
+        "ORDER BY updated_at DESC, work_session_id",
+        (task_id,),
+    ).fetchall()
+    sessions = [_work_session_row(row) for row in rows]
+    current_sessions = [
+        s for s in sessions
+        if s.get("status") not in {"completed", "archived"}
+    ]
+    active_sessions = [
+        s for s in current_sessions
+        if s.get("status") == "active" and (
+            not s.get("expires_at") or float(s.get("expires_at") or 0) > now
+        )
+    ]
+    unsafe = [s for s in current_sessions if (s.get("health") or {}).get("status") == "unsafe"]
+    warnings = [s for s in current_sessions if (s.get("health") or {}).get("status") == "warning"]
+    findings: List[Dict[str, Any]] = []
+    for session in unsafe + warnings:
+        health = session.get("health") or {}
+        for finding in health.get("findings") or []:
+            findings.append({
+                "code": finding.get("code"),
+                "kind": "unsafe_session" if finding.get("blocking") else "session_warning",
+                "work_session_id": session.get("work_session_id"),
+                "agent_id": session.get("agent_id"),
+                "task_id": task_id,
+                "message": finding.get("message"),
+                "failure_class": finding.get("failure_class"),
+                "severity": finding.get("severity"),
+                "blocking": bool(finding.get("blocking")),
+                "repair": finding.get("repair"),
+            })
+
+    claims = active_claims if active_claims is not None else _active_task_claims_in(c, task_id)
+    session_claim_ids = {s.get("claim_id") for s in sessions if s.get("claim_id")}
+    for claim in claims or []:
+        claim_id = claim.get("claim_id")
+        if claim_id and claim_id not in session_claim_ids:
+            findings.append({
+                "code": "active_claim_without_work_session",
+                "kind": "session_warning",
+                "claim_id": claim_id,
+                "agent_id": claim.get("agent_id"),
+                "task_id": task_id,
+                "message": "Active task claim is not bound to a Work Session.",
+                "failure_class": "missing_data",
+                "severity": "medium",
+                "blocking": False,
+                "repair": "Create/bind a Work Session for code work, or use a non-code policy profile.",
+            })
+
+    blocking = [f for f in findings if f.get("blocking")]
+    nonblocking = [f for f in findings if not f.get("blocking")]
+    status = (
+        "unsafe" if blocking else
+        "warning" if nonblocking else
+        "healthy" if sessions else
+        "no_sessions"
+    )
+    gs = git_state if git_state is not None else _load_git_state(c, task_id)
+    return {
+        "schema": TASK_SESSION_HEALTH_SCHEMA,
+        "project_id": project,
+        "task_id": task_id,
+        "status": status,
+        "safe": not blocking,
+        "blocking": bool(blocking),
+        "session_count": len(sessions),
+        "current_session_count": len(current_sessions),
+        "active_session_count": len(active_sessions),
+        "unsafe_session_count": len(unsafe),
+        "warning_session_count": len(warnings),
+        "active_claim_count": len(claims or []),
+        "findings": findings,
+        "active_sessions": [_session_health_summary(s) for s in active_sessions],
+        "latest_sessions": [_session_health_summary(s) for s in sessions[:5]],
+        "pr_url": (gs or {}).get("pr_url"),
+        "branch": (gs or {}).get("branch"),
+        "head_sha": (gs or {}).get("head_sha"),
+        "recommended_repair": (
+            (blocking or nonblocking)[0].get("repair") if (blocking or nonblocking) else
+            "No repair needed." if sessions else
+            "No Work Session is bound yet."
+        ),
+        "checked_at": now,
+    }
+
+
 def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
                assignee: Optional[str] = None, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     q = "SELECT * FROM tasks WHERE 1=1"
@@ -4113,6 +4271,7 @@ def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
             t["provenance"] = _provenance_summary(_load_git_state(c, t["task_id"]))
             t["external_ci"] = _task_external_ci_summary_in(c, t["task_id"])
             t["publication"] = _task_publication_summary_in(c, t["task_id"])
+            t["session_health"] = _task_session_health_in(c, t, project=project)
             tasks.append(t)
         return tasks
 
@@ -4173,6 +4332,8 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["human_gate"] = _task_human_gate_state(t)
         t["external_ci"] = _external_ci_review_gate(t, c=c, project=project)
         t["publication"] = _publication_review_gate(t, c=c, project=project)
+        t["session_health"] = _task_session_health_in(
+            c, t, project=project, active_claims=t["active_claims"], git_state=t["git_state"])
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
             raw_rationale = s["rationale"]
@@ -6685,6 +6846,17 @@ def work_session_contract(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "default_workspace_root": _managed_workspace_root(project, {}),
             "archive_tool": "archive_work_session_workspace",
         },
+        "health": {
+            "session_schema": WORK_SESSION_HEALTH_SCHEMA,
+            "task_schema": TASK_SESSION_HEALTH_SCHEMA,
+            "tools": ["get_work_session_health", "list_session_health"],
+            "rest": [
+                "GET /ixp/v1/work_sessions/{work_session_id}/health",
+                "GET /ixp/v1/session_health",
+            ],
+            "blocking_statuses": ["unsafe"],
+            "warning_statuses": ["warning", "no_sessions"],
+        },
         "fail_closed_rules": [
             "unknown project ids are rejected",
             "task_id must exist when supplied",
@@ -6730,7 +6902,184 @@ def _work_session_row(row: sqlite3.Row) -> Dict[str, Any]:
     d["env"] = _json_obj(d.pop("env_json", "{}"), {})
     d["schema"] = WORK_SESSION_SCHEMA
     d["session_token_hash_present"] = bool(d.pop("session_token_hash", None))
+    d["health"] = _work_session_health(d)
     return d
+
+
+def _session_health_finding(code: str, message: str, failure_class: str,
+                            severity: str = "high", blocking: bool = True,
+                            repair: str = "", **details: Any) -> Dict[str, Any]:
+    detail = FAIL_FIX_FAILURE_CLASSES.get(failure_class) or {}
+    return {
+        "code": code,
+        "message": message,
+        "failure_class": failure_class,
+        "severity": severity,
+        "blocking": bool(blocking),
+        "expected_signal": detail.get("expected_signal"),
+        "repair": repair or None,
+        **details,
+    }
+
+
+def _work_session_health(session: Dict[str, Any],
+                         now: Optional[float] = None) -> Dict[str, Any]:
+    """Summarize whether a Work Session is safe for humans/coordinators to trust."""
+    now = time.time() if now is None else now
+    findings: List[Dict[str, Any]] = []
+    session = dict(session or {})
+    work_session_id = session.get("work_session_id")
+    status = (session.get("status") or "").strip().lower()
+    dirty = (session.get("dirty_status") or "unknown").strip().lower()
+    path = session.get("worktree_path") or session.get("clone_path") or ""
+    preflight = ((session.get("hygiene") or {}).get("repo_preflight") or {})
+
+    if status == "active" and session.get("expires_at") and float(session.get("expires_at") or 0) < now:
+        findings.append(_session_health_finding(
+            "expired_active_session",
+            "Work Session is active but its lease/expiry timestamp is in the past.",
+            "stale_branch",
+            repair="Renew the session/claim or archive the abandoned workspace.",
+            work_session_id=work_session_id,
+        ))
+    if status in {"blocked", "expired"}:
+        findings.append(_session_health_finding(
+            f"{status}_work_session",
+            f"Work Session status is {status}.",
+            "failed_gate",
+            repair="Repair the recorded blocker or create a fresh managed Work Session.",
+            work_session_id=work_session_id,
+        ))
+    if status == "active" and not path:
+        findings.append(_session_health_finding(
+            "work_session_missing_path",
+            "Active Work Session has no worktree_path or clone_path.",
+            "missing_data",
+            repair="Bind the session to a workspace path or create a managed Work Session.",
+            work_session_id=work_session_id,
+        ))
+    if dirty == "dirty":
+        findings.append(_session_health_finding(
+            "dirty_work_session",
+            "Work Session reports a dirty worktree.",
+            "failed_gate",
+            repair="Commit, stash, or clean the workspace, then rerun preflight.",
+            work_session_id=work_session_id,
+        ))
+    elif dirty == "unknown" and status == "active":
+        findings.append(_session_health_finding(
+            "unknown_dirty_status",
+            "Active Work Session has not recorded a clean/dirty verdict.",
+            "missing_data",
+            severity="medium",
+            blocking=False,
+            repair="Run preflight_work_session to refresh repo hygiene.",
+            work_session_id=work_session_id,
+        ))
+    conflict_count = int(session.get("conflict_marker_count") or 0)
+    if conflict_count > 0:
+        findings.append(_session_health_finding(
+            "conflict_markers",
+            f"Work Session reports {conflict_count} file(s) with conflict markers.",
+            "failed_gate",
+            repair="Resolve conflict markers, rerun tests, then rerun preflight.",
+            work_session_id=work_session_id,
+            conflict_marker_count=conflict_count,
+        ))
+
+    if preflight:
+        verdict = (preflight.get("verdict") or "").strip().lower()
+        if verdict == "deny" or preflight.get("ok") is False:
+            findings.append(_session_health_finding(
+                "work_session_preflight_failed",
+                "Recorded repo preflight is not clean.",
+                "failed_gate",
+                repair="Repair the preflight findings and rerun preflight_work_session.",
+                work_session_id=work_session_id,
+                preflight_verdict=verdict or None,
+            ))
+        elif verdict == "warn":
+            findings.append(_session_health_finding(
+                "work_session_preflight_warn",
+                "Recorded repo preflight has warnings.",
+                "failed_gate",
+                severity="medium",
+                blocking=False,
+                repair="Review warnings before merge or completion.",
+                work_session_id=work_session_id,
+                preflight_verdict=verdict,
+            ))
+        for finding in preflight.get("findings") or []:
+            code = str(finding.get("code") or "preflight_finding")
+            blocking = bool(finding.get("blocking", True))
+            severity = str(finding.get("severity") or ("high" if blocking else "medium"))
+            failure_class = (
+                "stale_branch" if code == "stale_base"
+                else "failed_gate" if blocking
+                else "missing_data"
+            )
+            findings.append(_session_health_finding(
+                code,
+                str(finding.get("message") or code),
+                failure_class,
+                severity=severity,
+                blocking=blocking,
+                repair="Repair the repo preflight finding and rerun preflight_work_session.",
+                work_session_id=work_session_id,
+                preflight_finding=finding,
+            ))
+    elif status == "active":
+        findings.append(_session_health_finding(
+            "missing_work_session_preflight",
+            "Active Work Session has no recorded repo preflight.",
+            "missing_data",
+            severity="medium",
+            blocking=False,
+            repair="Run preflight_work_session before completion or merge.",
+            work_session_id=work_session_id,
+        ))
+
+    # Deduplicate when a failed preflight finding mirrors explicit dirty/conflict state.
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for finding in findings:
+        key = (finding.get("code"), finding.get("work_session_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(finding)
+    blocking = [f for f in deduped if f.get("blocking")]
+    warnings = [f for f in deduped if not f.get("blocking")]
+    status_value = "unsafe" if blocking else ("warning" if warnings else "healthy")
+    return {
+        "schema": WORK_SESSION_HEALTH_SCHEMA,
+        "work_session_id": work_session_id,
+        "project_id": session.get("project_id"),
+        "task_id": session.get("task_id"),
+        "agent_id": session.get("agent_id"),
+        "status": status_value,
+        "safe": not blocking,
+        "blocking": bool(blocking),
+        "finding_count": len(deduped),
+        "blocking_count": len(blocking),
+        "warning_count": len(warnings),
+        "findings": deduped,
+        "workspace": {
+            "storage_mode": session.get("storage_mode"),
+            "path": path or None,
+            "branch": session.get("branch"),
+            "repo_role": session.get("repo_role"),
+            "repo": session.get("repo"),
+            "head_sha": session.get("head_sha"),
+            "base_sha": session.get("base_sha"),
+            "upstream": session.get("upstream"),
+        },
+        "recommended_repair": (
+            (blocking or warnings)[0].get("repair") if (blocking or warnings) else
+            "No repair needed."
+        ),
+        "checked_at": now,
+    }
 
 
 def _validate_work_session_payload(payload: Dict[str, Any], project: str,
@@ -6961,6 +7310,40 @@ def list_work_sessions(project: str = DEFAULT_PROJECT, task_id: str = "",
             params,
         ).fetchall()
     return [_work_session_row(row) for row in rows]
+
+
+def get_work_session_health(work_session_id: str,
+                            project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    session = get_work_session(work_session_id, project=project)
+    if not session:
+        return None
+    return session.get("health") or _work_session_health(session)
+
+
+def list_session_health(project: str = DEFAULT_PROJECT, task_id: str = "",
+                        agent_id: str = "", status: str = "",
+                        only_unsafe: bool = False) -> Dict[str, Any]:
+    sessions = list_work_sessions(
+        project=project, task_id=task_id, agent_id=agent_id, status=status)
+    health_rows = [s.get("health") or _work_session_health(s) for s in sessions]
+    if only_unsafe:
+        health_rows = [h for h in health_rows if h.get("status") == "unsafe"]
+    task_health = None
+    if task_id:
+        task = get_task(task_id, project=project)
+        task_health = (task or {}).get("session_health")
+    return {
+        "schema": "switchboard.session_health_list.v1",
+        "project_id": project,
+        "task_id": (task_id or "").strip().upper() or None,
+        "agent_id": (agent_id or "").strip() or None,
+        "only_unsafe": bool(only_unsafe),
+        "count": len(health_rows),
+        "unsafe_count": sum(1 for h in health_rows if h.get("status") == "unsafe"),
+        "warning_count": sum(1 for h in health_rows if h.get("status") == "warning"),
+        "task_session_health": task_health,
+        "session_health": health_rows,
+    }
 
 
 def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: str = "system",

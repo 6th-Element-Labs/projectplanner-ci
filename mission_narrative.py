@@ -37,6 +37,7 @@ def brief_source_fingerprint(mission_status: Dict[str, Any]) -> str:
     for link in mission_status.get("linked_tasks") or []:
         detail = link.get("task_detail") or link.get("task") or {}
         git_state = detail.get("git_state") or {}
+        session_health = detail.get("session_health") or {}
         linked.append({
             "project_id": link.get("project_id"),
             "task_id": link.get("task_id"),
@@ -44,6 +45,16 @@ def brief_source_fingerprint(mission_status: Dict[str, Any]) -> str:
             "merged_sha": git_state.get("merged_sha"),
             "head_sha": git_state.get("head_sha"),
             "blocks": bool(link.get("blocks_deliverable")),
+            "session_health_status": session_health.get("status"),
+            "unsafe_session_count": session_health.get("unsafe_session_count"),
+            "session_findings": [
+                {
+                    "code": f.get("code"),
+                    "blocking": f.get("blocking"),
+                    "work_session_id": f.get("work_session_id"),
+                }
+                for f in (session_health.get("findings") or [])[:5]
+            ],
         })
     payload = {
         "deliverable_id": mission_status.get("deliverable_id"),
@@ -113,13 +124,19 @@ def build_mission_brief(mission_status: Dict[str, Any],
         for item in active:
             claims = ", ".join(c.get("agent_id") or "?" for c in (item.get("active_claims") or []))
             claim_note = f"; claims: {claims}" if claims else ""
+            health = item.get("session_health") or {}
+            health_note = (
+                f"; session health: {health.get('status')}"
+                if health.get("status") and health.get("status") != "no_sessions" else ""
+            )
             active_lines.append(
                 f"- {item.get('project_id')} {item.get('task_id')}: {item.get('title')} "
-                f"[{item.get('status')}]{claim_note}"
+                f"[{item.get('status')}]{claim_note}{health_note}"
             )
             active_cites.append(_cite(
                 "task", project_id=item.get("project_id"), task_id=item.get("task_id"),
-                field="status", status=item.get("status"),
+                field="status/session_health", status=item.get("status"),
+                session_health_status=health.get("status"),
             ))
     else:
         active_lines.append("No linked tasks are In Progress, In Review, or actively claimed.")
@@ -283,7 +300,7 @@ def narrative_state(mission_status: Dict[str, Any], metadata: Optional[Dict[str,
         "stored_brief_fingerprint": stored_brief.get("source_fingerprint"),
         "message": (
             "Generated or manual mission narrative may be stale; trust mission_status, "
-            "task provenance, blockers, and progress counts."
+            "task provenance, session_health, blockers, and progress counts."
         ) if stale else None,
     }
     if stale:

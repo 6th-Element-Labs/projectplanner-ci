@@ -299,6 +299,13 @@ Work Sessions:
 - Managed REST: `POST /ixp/v1/managed_work_sessions` creates a git-backed isolated workspace and
   stores it as a Work Session; `POST /ixp/v1/work_sessions/{id}/archive_workspace` archives it and
   can remove the owned workspace.
+- Health REST: `GET /ixp/v1/work_sessions/{id}/health` returns the computed
+  `switchboard.session_health.v1` verdict for one session. `GET /ixp/v1/session_health` lists
+  session health rows and, when `task_id` is supplied, the task-level
+  `switchboard.task_session_health.v1` aggregate.
+- Health MCP: `get_work_session_health(...)` and `list_session_health(...)` expose the same
+  read models to coordinator agents and adapters. `get_task(...)`, REST task detail, task lists,
+  and mission status include `session_health`.
 - Repo hygiene: `POST /ixp/v1/repo_preflight` returns a side-effect-free git/worktree report.
   `POST /ixp/v1/work_sessions/{work_session_id}/preflight` runs the same check for a Work Session
   path and writes the result into `hygiene.repo_preflight`, `dirty_status`, SHAs, upstream, and
@@ -328,6 +335,10 @@ Work Sessions:
   branch/path/base/env namespace/session token, run `git worktree add` or `git clone`, claim the
   workspace lease, preflight the result, and return a ready Work Session instead of relying on a
   prompt to remember the git ritual.
+- `SESSION-8` exposes Work Session health to humans and coordinator agents. Unsafe sessions
+  are typed blockers on task and mission read models (`kind=unsafe_session`) with recommended
+  repairs. Generated mission briefs and stale-narrative checks include `session_health` in the
+  durable source fingerprint, so live truth wins over old chat claims.
 - Claim inputs: MCP accepts `work_session_id`, `work_session_json`,
   `session_policy_profile`, and `require_work_session`; REST accepts `work_session_id`,
   `work_session`, `session_policy_profile` / `policy_profile`, and `require_work_session`.

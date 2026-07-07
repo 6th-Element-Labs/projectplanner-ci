@@ -1822,6 +1822,24 @@ async def ixp_get_work_session(work_session_id: str,
     return session
 
 
+@app.get("/ixp/v1/work_sessions/{work_session_id}/health")
+async def ixp_get_work_session_health(work_session_id: str,
+                                      project: str = Query(store.DEFAULT_PROJECT)):
+    health = store.get_work_session_health(work_session_id, project=_proj(project))
+    if not health:
+        raise HTTPException(404, "work_session_not_found")
+    return health
+
+
+@app.get("/ixp/v1/session_health")
+async def ixp_session_health(project: str = Query(store.DEFAULT_PROJECT),
+                             task_id: str = "", agent_id: str = "",
+                             status: str = "", only_unsafe: bool = False):
+    return store.list_session_health(
+        project=_proj(project), task_id=task_id, agent_id=agent_id,
+        status=status, only_unsafe=only_unsafe)
+
+
 @app.patch("/ixp/v1/work_sessions/{work_session_id}")
 async def ixp_update_work_session(work_session_id: str, request: Request,
                                   body: dict = Body(...)):

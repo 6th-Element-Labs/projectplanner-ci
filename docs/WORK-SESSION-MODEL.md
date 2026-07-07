@@ -72,6 +72,8 @@ Audit export includes `work_sessions` and `summary.work_session_count`.
 - `create_managed_work_session(managed_session_json, project)`
 - `get_work_session(work_session_id, project)`
 - `list_work_sessions(project, task_id?, agent_id?, status?, repo_role?)`
+- `get_work_session_health(work_session_id, project)`
+- `list_session_health(project, task_id?, agent_id?, status?, only_unsafe?)`
 - `update_work_session(work_session_id, updates_json, project)`
 - `archive_work_session_workspace(work_session_id, remove_workspace?, project)`
 - `repo_preflight(worktree_path, project, task_id?, agent_id?, repo_role?, expected_branch?,
@@ -84,6 +86,8 @@ Audit export includes `work_sessions` and `summary.work_session_count`.
 - `POST /ixp/v1/work_sessions`
 - `POST /ixp/v1/managed_work_sessions`
 - `GET /ixp/v1/work_sessions/{work_session_id}?project=switchboard`
+- `GET /ixp/v1/work_sessions/{work_session_id}/health?project=switchboard`
+- `GET /ixp/v1/session_health?project=switchboard&task_id=SESSION-8`
 - `PATCH /ixp/v1/work_sessions/{work_session_id}`
 - `POST /ixp/v1/work_sessions/{work_session_id}/archive_workspace`
 - `POST /ixp/v1/repo_preflight`
@@ -123,6 +127,35 @@ Warning classes:
 - `missing_upstream`
 - `missing_base_ref`
 - `git_signal_unavailable`
+
+## Session Health
+
+`switchboard.session_health.v1` is the operator-facing verdict for one Work Session. It is
+derived from Work Session fields plus `hygiene.repo_preflight`, not from chat.
+
+Unsafe findings block mission progress:
+
+- active session expired
+- Work Session status is `blocked` or `expired`
+- active session has no workspace path
+- dirty worktree
+- conflict markers
+- failed repo preflight
+- blocking preflight findings such as wrong repo, wrong branch, stale base, shared worktree
+  collision, detached HEAD, or merge/rebase in progress
+
+Warnings stay visible but do not block by themselves:
+
+- active session has `dirty_status=unknown`
+- missing preflight
+- warning-only preflight findings such as missing upstream or missing base ref
+- active task claim is not bound to a Work Session
+
+Task detail and task lists include `switchboard.task_session_health.v1`, which rolls up active
+sessions, unsafe findings, warnings, PR/branch/head evidence, and the next recommended repair.
+Mission status promotes blocking findings to `blockers[]` with `kind=unsafe_session`, so a
+deliverable page can say exactly which workspace is dirty, conflicted, stale, or otherwise unsafe.
+Completed and archived sessions remain historical and do not make a mission red.
 
 Adapters should treat `deny` as a hard stop and repair the named condition before continuing.
 `warn` is visible but not automatically blocking; policy may still require a human or coordinator
@@ -215,3 +248,6 @@ Later tasks deepen enforcement:
   stores clean `repo_preflight` hygiene, and returns a normal Work Session for strict claim binding.
   `archive_work_session_workspace` archives managed sessions and can remove owned workspace paths
   after merge cleanup.
+- `SESSION-8`: surface session health in Work Session rows, task detail, task lists, mission
+  status, mission blockers, generated mission briefs, and the board truth UI so humans and
+  coordinator agents trust typed health over stale prose.
