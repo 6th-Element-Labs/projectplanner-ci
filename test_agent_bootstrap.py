@@ -19,6 +19,9 @@ os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "dev-open"
 os.environ.pop("PM_MCP_TOKEN", None)
+# Hermetic switcher: a host-provided project filter would hide the dynamic
+# projects this suite creates and asserts on.
+os.environ.pop("PM_TOP_LEVEL_PROJECTS", None)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 

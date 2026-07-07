@@ -265,6 +265,12 @@ def run_switchboard_gate(worktree: Path, log_path: Path, *, timeout_s: int,
                          preflight: Optional[Dict[str, Any]] = None,
                          python_runtime: Optional[Dict[str, Any]] = None) -> None:
     env = os.environ.copy()
+    # The systemd gate unit inherits the production .env (board DB paths,
+    # feature flags, PM_TOP_LEVEL_PROJECTS, ...). The suite must run hermetic —
+    # every test pins the PM_* state it needs — so drop inherited PM_* config
+    # wholesale instead of chasing individual leaks per test.
+    for key in [k for k in env if k.startswith("PM_")]:
+        env.pop(key, None)
     venv_python = worktree / ".venv" / "bin" / "python"
     python_runtime = python_runtime or select_ci_python(worktree)
     with log_path.open("w", encoding="utf-8") as log:
