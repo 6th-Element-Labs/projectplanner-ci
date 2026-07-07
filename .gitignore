@@ -6,6 +6,18 @@ __pycache__/
 .env
 .venv/
 rag_cache.json
+.switchboard/
+
+# Local deploy/operator debris. Keep runtime state under /var/lib/projectplanner
+# in production; these patterns keep accidental local backups out of repo hygiene.
+._*
+**/._*
+*.bak
+*.bak.*
+*.new
+/app.js
+/scripts/seed_helm_layers_northstar.py
+
 # build_plan_artifacts.py writes these sample exports to the repo root
 teep-project-plan.xlsx
 teep-project-plan.xml

@@ -131,7 +131,7 @@ Switchboard-owned runner can honor the adapter's deny verdict; it deliberately r
 
 ## Managed process supervisor
 ```bash
-PM_RUNNER_DIR=.switchboard/runner \
+PM_RUNNER_DIR=/var/lib/projectplanner/runner \
   python3 adapters/codex/supervisor.py start \
     --agent-id codex/current --task-id ADAPTER-8 -- \
     python3 adapters/codex/codex_adapter.py session-start --claim-next --lanes ADAPTER
@@ -142,5 +142,8 @@ python3 adapters/codex/supervisor.py kill run_... --grace-seconds 5
 
 The supervisor injects `PM_RUNNER_SESSION_ID` and `PM_AGENT_ID`, stores
 `session.json` plus `stdout.log`, and snapshots cwd, branch, `HEAD`, task/claim ids, and log tail
-before kill. This is the concrete process handle behind the `runner_kill` tier; it does not yet
-claim native Codex hook support or implement a hosted `/runner/v1/*` API wrapper.
+before kill. Production hosts should set `PM_RUNNER_DIR` outside the git checkout, normally
+`/var/lib/projectplanner/runner`, so repo hygiene preflight only evaluates code state. Local
+experiments may still use a temporary directory. This is the concrete process handle behind the
+`runner_kill` tier; it does not yet claim native Codex hook support or implement a hosted
+`/runner/v1/*` API wrapper.

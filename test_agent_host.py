@@ -42,6 +42,8 @@ ok("adapters/agent_host.py --interval 10" in service_text,
    "systemd Agent Host service runs the persistent daemon loop")
 ok("PM_HOST_MAX_SESSIONS=1" in service_text,
    "systemd Agent Host service limits concurrent wake readers")
+ok("PM_RUNNER_DIR=/var/lib/projectplanner/runner" in service_text,
+   "systemd Agent Host service keeps runner artifacts outside the git checkout")
 
 for key in ("PM_HOST_LANES", "PM_AGENT_HOST_ALLOW_WORK", "PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM"):
     os.environ.pop(key, None)

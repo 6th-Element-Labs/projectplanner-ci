@@ -22,7 +22,7 @@ Those are compatibility names until the staged rename in
 │  • MCP           :8111       │         │        └─runs→ adapter handshake +         │
 │  • LLM gateway   :8095       │         │               switchboard_core.run_session │
 │  • monitor sweep (every 1m)  │         │        (claim_next→work→complete→repeat)   │
-│  COORDINATION ONLY           │         │  .switchboard/runner/  (session records)   │
+│  COORDINATION ONLY           │         │  /var/lib/projectplanner/runner            │
 │  • wake intents (durable)    │         │  host daemon polls wake intents            │
 │  • message-only wake host    │         │                                            │
 └─────────────────────────────┘         └──────────────────────────────────────────┘
@@ -82,8 +82,11 @@ set -a; . ./.env; set +a       # REQUIRED: .env redirects the data dir to /var/l
 sudo systemctl restart projectplanner projectplanner-mcp
 sudo systemctl enable --now projectplanner-monitors.timer   # durable ack/deadline sweep (every 1m)
 ```
-> The live DBs live in `/var/lib/projectplanner/` (env-redirected), not `/opt/projectplanner/`.
+> The live DBs and runner/session artifacts live in `/var/lib/projectplanner/` (env-redirected),
+> not `/opt/projectplanner/`.
 > The `*.db` files under `/opt` are empty placeholders — never point a tool at them.
+> Keep `/opt/projectplanner` as a clean git checkout so repo preflight can distinguish code dirt
+> from operational state.
 > Do not move these paths directly during the rename. Add and validate Switchboard aliases first.
 
 ## 2.1 CI and deployment gates

@@ -41,7 +41,8 @@ sudo git clone <projectplanner-remote> /opt/projectplanner
 cd /opt/projectplanner
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt -r deploy/gateway/requirements.txt
-sudo mkdir -p /var/lib/projectplanner && sudo chown ubuntu /var/lib/projectplanner
+sudo mkdir -p /var/lib/projectplanner/runner /var/lib/projectplanner/repo-hygiene-archive
+sudo chown -R ubuntu:ubuntu /var/lib/projectplanner
 cp .env.example .env   # set OPENAI_API_KEY + LLM_GATEWAY_MASTER_KEY (==PM_LLM_KEY)
 # The production units also force PM_AUTH_MODE=required; keep it explicit here for audits.
 printf '\nPM_AUTH_MODE=required\n' >> .env

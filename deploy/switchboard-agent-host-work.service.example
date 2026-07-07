@@ -20,6 +20,7 @@ Environment=PM_AGENT_HOST_ALLOW_WORK=1
 Environment=PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
 Environment=PM_HOST_MAX_SESSIONS=1
 Environment=PM_REPO_ROOT=/path/to/projectplanner
+Environment=PM_RUNNER_DIR=/var/lib/projectplanner/runner
 Environment=PM_AGENT_HOST_CLAIM_IDLE_SECONDS=6
 # Leave PM_AGENT_WORK_MODULE unset for a dry-run proof: claim_next is called, any
 # claimed task is abandoned, and no completion is fabricated. Set it to

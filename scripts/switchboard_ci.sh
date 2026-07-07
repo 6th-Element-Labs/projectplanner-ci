@@ -79,6 +79,7 @@ run_test test_mission_page.py
 run_test test_project_creation.py
 run_test test_publication_evidence.py
 run_test test_repo_hierarchy_surface.py
+run_test test_repo_hygiene_archive.py
 run_test test_repo_preflight.py
 run_test test_review_preflight.py
 run_test test_review_verifier_runs.py
