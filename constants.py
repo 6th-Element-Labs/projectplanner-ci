@@ -286,3 +286,13 @@ REPO_PREFLIGHT_WARN_CLASSES = {
     "git_signal_unavailable",
 }
 
+
+# --- seed config (moved from store.py in ARCH-4) ---
+META_SECTIONS = ["project", "generated", "schedule_start", "schedule_note", "owner_orgs",
+                 "rollups", "executive_summary", "timeline_note", "critical_path",
+                 "milestones", "consolidated_risks", "consolidated_decisions", "people",
+                 "working_agreement"]
+
+# A sensible default people list for the assignee picker (the real names in the plan).
+DEFAULT_PEOPLE = ["Steve Ridder", "Taikun eng", "Darko", "Sahir", "Sebastian", "Mike",
+                  "Michelle", "Sierra", "Clovis", "Devin", "Brent", "IFS owner", "Nubo"]
