@@ -14757,6 +14757,12 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "done_sources": ["github_pr_merged", "default_branch_backfill", "offline_evidence_verified"],
         },
         "push_before_claiming_progress": True,
+        "claim_before_starting": (
+            "Before building anything, search_tasks for the feature area and claim (or create) "
+            "the board task — this prevents two agents shipping the same work. Fleet PRs on the "
+            "canonical repo are checked by the 'Switchboard / claim gate' commit status: a PR that "
+            "references no claimed task or Work Session is flagged (SESSION-12)."
+        ),
         "merge_strategy": "squash",
         "main_writes": "PR only — never push main directly",
         "github_lifecycle": [

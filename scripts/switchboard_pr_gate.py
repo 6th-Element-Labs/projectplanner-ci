@@ -25,11 +25,14 @@ from typing import Any, Dict, Iterable, List, Optional
 # cover repo-root modules; without this the systemd ci-gate unit dies on import.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pr_provenance_gate  # noqa: E402
 import review_preflight  # noqa: E402
+import store  # noqa: E402
 
 
 DEFAULT_REPO = "6th-Element-Labs/projectplanner"
 DEFAULT_CONTEXT = "Switchboard CI / VM gate"
+DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"
 DEFAULT_WORKDIR = "/var/lib/projectplanner/ci-gate"
 MIN_PYTHON_VERSION = (3, 10)
 
@@ -179,6 +182,37 @@ def list_open_prs(repo: str, *, token: str) -> List[Dict[str, Any]]:
 
 def get_pr(repo: str, number: int, *, token: str) -> Dict[str, Any]:
     return _github_request("GET", f"repos/{repo}/pulls/{int(number)}", token=token)
+
+
+def list_pr_files(repo: str, number: int, *, token: str) -> List[str]:
+    """Changed file paths on a PR (first page) — used only for the docs-only exemption."""
+    try:
+        rows = _github_request(
+            "GET", f"repos/{repo}/pulls/{int(number)}/files?per_page=100", token=token)
+    except GateError:
+        return []
+    return [str(row.get("filename") or "") for row in rows or [] if row.get("filename")]
+
+
+def run_claim_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str,
+                          context: str) -> Optional[Dict[str, Any]]:
+    """SESSION-12 provenance gate: post a second, independent commit status that
+    checks whether a fleet PR is backed by a claimed task / Work Session. Reads the
+    production board (this process' store), never the PR worktree."""
+    mode = pr_provenance_gate.gate_mode()
+    if mode == "off":
+        return None
+    number = int(pr["number"])
+    sha = pr["head"]["sha"]
+    pr_url = pr.get("html_url", f"https://github.com/{repo}/pull/{number}")
+    changed_paths = list_pr_files(repo, number, token=token)
+    verdict = pr_provenance_gate.evaluate_pr_provenance(
+        pr, repo=repo, changed_paths=changed_paths)
+    post_status(repo, sha, verdict["state"], context=context,
+                description=verdict["context_description"], target_url=pr_url, token=token)
+    return {"pr": number, "sha": sha, "context": context, "state": verdict["state"],
+            "reason": verdict.get("reason"), "would_block": verdict.get("would_block"),
+            "mode": mode}
 
 
 def _origin_url(source_repo: Path, repo: str) -> str:
@@ -354,6 +388,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--repo", default=_repo())
     parser.add_argument("--context", default=os.environ.get("SWITCHBOARD_CI_STATUS_CONTEXT",
                                                             DEFAULT_CONTEXT))
+    parser.add_argument("--claim-context",
+                        default=os.environ.get("SWITCHBOARD_CI_CLAIM_STATUS_CONTEXT",
+                                               DEFAULT_CLAIM_CONTEXT),
+                        help="Commit-status context for the SESSION-12 provenance/claim gate. "
+                             "Mode via SWITCHBOARD_CI_CLAIM_GATE_MODE=off|warn|enforce (default warn).")
     parser.add_argument("--workdir", default=os.environ.get("SWITCHBOARD_CI_WORKDIR",
                                                             DEFAULT_WORKDIR))
     parser.add_argument("--source-repo", default=os.environ.get("SWITCHBOARD_CI_SOURCE_REPO",
@@ -382,6 +421,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     for pr in _select_prs(args, args.repo, token):
         if pr.get("draft") and os.environ.get("SWITCHBOARD_CI_SKIP_DRAFTS", "1") != "0":
             continue
+        # SESSION-12 provenance gate — independent status; a failure here (or an
+        # unexpected error) must never abort the code test gate below.
+        try:
+            claim_result = run_claim_gate_for_pr(pr, repo=args.repo, token=token,
+                                                 context=args.claim_context)
+            if claim_result:
+                print(json.dumps(claim_result, sort_keys=True))
+                results.append(claim_result)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(json.dumps({"pr": pr.get("number"), "context": args.claim_context,
+                              "state": "error", "error": str(exc)}, sort_keys=True))
         result = run_gate_for_pr(pr, repo=args.repo, token=token, context=args.context,
                                  work_root=root, source_repo=source_repo,
                                  timeout_s=args.timeout_s,
@@ -389,7 +439,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                  keep_worktree=args.keep_worktree)
         print(json.dumps(result, sort_keys=True))
         results.append(result)
-    failed = [r for r in results if r.get("state") != "success"]
+    failed = [r for r in results if r.get("state") not in ("success", None)]
     return 1 if args.fail_on_red and failed else 0
 
 
