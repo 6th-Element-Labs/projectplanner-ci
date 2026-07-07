@@ -139,6 +139,27 @@ try:
     ok((ms_fresh.get("ceo_narrative") or "").startswith("CEO narration #2"),
        "header updated after regeneration and no longer stale")
 
+    # NARRATE-6: enriched task context pulls the plan fields a bare title lacks.
+    ctx = narrate._task_context({
+        "title": "Wire the widget", "status": "Done",
+        "description": "Adds the widget wiring.",
+        "deliverable": "A working widget behind the flag.",
+        "exit_criteria": "flag on, tests green",
+        "depends_on": ["FOO-1"],
+        "dependency_state": {"dependencies": [
+            {"task_id": "FOO-1", "title": "Build the widget base", "status": "Done"}]},
+        "provenance": {"label": "Merged code", "pr_url": "https://x/pr/42"},
+        "git_state": {"evidence": {"subject": "feat: widget wiring behind PM_WIDGET flag"}},
+        "activity": [],
+    })
+    ok("A working widget behind the flag." in ctx, "context includes the deliverable / definition of done")
+    ok("flag on, tests green" in ctx, "context includes exit criteria")
+    ok("Build the widget base" in ctx, "context includes dependency titles, not just ids")
+    ok("feat: widget wiring behind PM_WIDGET flag" in ctx, "context includes the merged PR/commit summary")
+    thin = narrate._task_context({"title": "x", "status": "Not Started", "activity": []})
+    ok("Deliverable" not in thin and "Exit criteria" not in thin,
+       "absent plan fields are omitted cleanly (no empty labels)")
+
 finally:
     import shutil
     shutil.rmtree(_TMP, ignore_errors=True)

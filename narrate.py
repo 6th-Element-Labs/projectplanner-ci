@@ -72,9 +72,45 @@ def _llm(context: str, system: str = _SYSTEM) -> str:
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
+def _task_context(t: dict) -> str:
+    """Build the narrator's task prompt from plan data already on the board — no code/PR
+    fetch. NARRATE-6 widened this from title+status+desc to also include the deliverable /
+    exit criteria (what 'done' means), dependency *titles* (not just ids), and the merged
+    PR/commit subject (what was actually shipped), so 'what it is / what was delivered' has
+    real material instead of a bare title."""
+    prov = t.get("provenance") or {}
+    git = t.get("git_state") or {}
+    ev = git.get("evidence") or {}
+    deps = (t.get("dependency_state") or {}).get("dependencies") or []
+    dep_line = "; ".join(
+        f"{d.get('task_id')} — {d.get('title', '')} [{d.get('status', '')}]" for d in deps
+    ) or (", ".join(t.get("depends_on") or []) or "nothing")
+    pr_url = prov.get("pr_url") or git.get("pr_url") or ""
+    pr_subject = (ev.get("subject") or "").strip()
+    activity = t.get("activity") or []
+    parts = [
+        f"Task: {t.get('title', '')}",
+        f"Workstream: {t.get('_wsId') or '—'} · owner {t.get('owner_person_or_role') or t.get('owner_org') or '—'}",
+        f"Status: {t.get('status', '')} (phase {t.get('phase') or '—'}, risk {t.get('risk_level') or '—'})",
+        f"Provenance: {prov.get('label') or prov.get('type') or 'none'}" + (f" — {pr_url}" if pr_url else ""),
+    ]
+    if pr_subject:
+        parts.append(f"Merged PR/commit summary: {pr_subject[:400]}")
+    parts.append(f"Description: {(t.get('description') or '')[:900] or '—'}")
+    if t.get("deliverable"):
+        parts.append(f"Deliverable (definition of done): {str(t.get('deliverable'))[:400]}")
+    if t.get("exit_criteria"):
+        parts.append(f"Exit criteria: {str(t.get('exit_criteria'))[:400]}")
+    if t.get("entry_criteria"):
+        parts.append(f"Entry criteria: {str(t.get('entry_criteria'))[:300]}")
+    parts.append(f"Depends on: {dep_line}")
+    parts.append(f"Recent activity (last 30 of {len(activity)}):\n{_activity_text(activity)}")
+    return "\n".join(parts)
+
+
 def _activity_text(activity: list) -> str:
     lines = []
-    for a in activity[-20:]:
+    for a in activity[-30:]:
         kind = a.get("kind", "")
         actor = a.get("actor", "")
         payload = a.get("payload") or {}
@@ -115,16 +151,7 @@ def narrate_task(task_id: str, project: str = store.DEFAULT_PROJECT,
         if age < MIN_INTERVAL and last_cursor <= (existing.get("activity_cursor") or 0):
             return None  # too soon and no new activity
 
-    prov = t.get("provenance") or {}
-    context = (
-        f"Task: {t.get('title', '')}\n"
-        f"Status: {t.get('status', '')}\n"
-        f"Provenance: {prov.get('label') or prov.get('type') or 'none'}\n"
-        f"Depends on: {', '.join(t.get('depends_on') or []) or 'nothing'}\n"
-        f"Description: {(t.get('description') or '')[:600]}\n\n"
-        f"Recent activity (last 20 of {len(activity)}):\n"
-        f"{_activity_text(activity)}"
-    )
+    context = _task_context(t)
 
     llm = _llm_fn or _llm
     narration = llm(context)
