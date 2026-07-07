@@ -1069,9 +1069,12 @@ async def defer_deliverable_breakdown(request: Request, proposal_id: str,
 
 
 @app.get("/api/board")
-async def board(project: str = Query(store.DEFAULT_PROJECT)):
-    # lite: drop heavy per-task fields the board UI never renders (they're
-    # re-fetched by the task-detail modal), roughly halving this large payload.
+def board(project: str = Query(store.DEFAULT_PROJECT)):
+    # Sync (def, not async) on purpose: FastAPI runs it in the threadpool, so the
+    # board's SQLite I/O doesn't block the single worker's event loop — other
+    # requests (incl. /health) stay responsive while a board builds (HARDEN-36).
+    # lite: drop heavy per-task fields the board UI never renders (re-fetched by
+    # the task-detail modal); the store also serves a short-TTL cached copy.
     return store.board_payload(_proj(project), lite=True)
 
 

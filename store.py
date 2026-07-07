@@ -3849,6 +3849,30 @@ def _load_git_state(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
     return state
 
 
+def _provenance_by_task(c: sqlite3.Connection, task_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Batch equivalent of _provenance_summary(_load_git_state(c, id)) for many tasks:
+    one query for all task_git_state rows instead of one per task. This is the board
+    N+1 fix (HARDEN-34) — the whole-board list needs provenance for every card's
+    Done-proof badge, and doing it per-task was ~1 query/task."""
+    if not task_ids:
+        return {}
+    by_id: Dict[str, sqlite3.Row] = {}
+    chunk = 400  # stay well under SQLite's 999-variable limit
+    for i in range(0, len(task_ids), chunk):
+        batch = task_ids[i:i + chunk]
+        placeholders = ",".join("?" * len(batch))
+        for r in c.execute(
+            f"SELECT * FROM task_git_state WHERE task_id IN ({placeholders})", batch
+        ).fetchall():
+            by_id[r["task_id"]] = r
+    out: Dict[str, Dict[str, Any]] = {}
+    for tid in task_ids:
+        state = _git_state_row(by_id.get(tid))
+        state["provenance_type"] = _provenance_summary(state)["type"]
+        out[tid] = _provenance_summary(state)
+    return out
+
+
 def _active_task_claims_in(c: sqlite3.Connection, task_id: str,
                            now: Optional[float] = None) -> List[Dict[str, Any]]:
     now = time.time() if now is None else now
@@ -4057,6 +4081,25 @@ def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
             t["publication"] = _task_publication_summary_in(c, t["task_id"])
             t["session_health"] = _task_session_health_in(c, t, project=project)
             tasks.append(t)
+        return tasks
+
+
+def list_tasks_for_board(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """Slim, batched task list for the board/kanban and its rollups (HARDEN-34).
+
+    Returns base task rows plus `provenance` (every card's Done-proof badge),
+    with provenance loaded in ONE batched query. It deliberately skips the
+    per-task external_ci / publication / session_health enrichment that full
+    list_tasks() runs — the board never renders those (the task-detail modal
+    re-fetches them via get_task). That turns the board's ~4-queries-per-task
+    (≈1600 for a 400-task board, ~73s under swap) into 2 queries total.
+    """
+    with _conn(project) as c:
+        rows = c.execute("SELECT * FROM tasks ORDER BY sort_order").fetchall()
+        tasks = [_task_row(r) for r in rows]
+        provenance = _provenance_by_task(c, [t["task_id"] for t in tasks])
+        for t in tasks:
+            t["provenance"] = provenance.get(t["task_id"])
         return tasks
 
 
@@ -15341,9 +15384,17 @@ def inbox_pending_count() -> int:
 # provenance (the card's Done-proof badge reads it).
 _BOARD_LITE_DROP = ("session_health", "external_ci", "publication", "exit_criteria", "agent_state")
 
+# Short-TTL in-memory cache for the hot lite board (HARDEN-36). Keyed by the
+# project's latest task mutation, so any write invalidates it immediately and a
+# burst of loads (tab refocus, several viewers) rebuilds at most once per TTL.
+_BOARD_CACHE: Dict[str, Dict[str, Any]] = {}
+_BOARD_CACHE_TTL = 3.0
 
-def board_payload(project: str = DEFAULT_PROJECT, lite: bool = False) -> Dict[str, Any]:
-    tasks = list_tasks(project=project)
+
+def _build_board_payload(project: str, lite: bool) -> Dict[str, Any]:
+    # The lite path uses the batched, enrichment-free loader (HARDEN-34); rollups
+    # read only base fields (status/workstream/effort), so slim rows are enough.
+    tasks = list_tasks_for_board(project) if lite else list_tasks(project=project)
     payload: Dict[str, Any] = {k: get_meta(k, project=project) for k in META_SECTIONS}
     payload["project"] = next((p for p in projects() if p["id"] == project), {
         "id": project,
@@ -15352,8 +15403,6 @@ def board_payload(project: str = DEFAULT_PROJECT, lite: bool = False) -> Dict[st
         "purpose": project_access(project).get("purpose") or "",
         "boundary": project_access(project).get("boundary") or "",
     })
-    # Rollups are computed from the FULL tasks (they aggregate the heavy fields),
-    # then the per-workstream task copies are slimmed for the wire when lite.
     payload["rollups"] = board_rollups(project=project, tasks=tasks)
     ws_tasks = tasks
     if lite:
@@ -15364,4 +15413,21 @@ def board_payload(project: str = DEFAULT_PROJECT, lite: bool = False) -> Dict[st
         ws["tasks"].append(t)
     payload["workstreams"] = list(by_ws.values())
     payload["project_context"] = get_project_context(project)
+    return payload
+
+
+def board_payload(project: str = DEFAULT_PROJECT, lite: bool = False) -> Dict[str, Any]:
+    if not lite:
+        return _build_board_payload(project, lite=False)
+    try:
+        with _conn(project) as c:
+            latest = c.execute("SELECT MAX(updated_at) FROM tasks").fetchone()[0] or 0
+    except Exception:
+        return _build_board_payload(project, lite=True)
+    now = time.time()
+    cached = _BOARD_CACHE.get(project)
+    if cached and cached["key"] == latest and (now - cached["at"]) < _BOARD_CACHE_TTL:
+        return cached["payload"]
+    payload = _build_board_payload(project, lite=True)
+    _BOARD_CACHE[project] = {"key": latest, "at": now, "payload": payload}
     return payload
