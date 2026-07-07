@@ -35,12 +35,17 @@ External CI mirror runs make that state explicit.
 
 - `run_id`: Switchboard run id, such as `ecir-...`
 - `source_project`: Switchboard project that owns the private source repo
-- `source_repo`: private/source-of-truth GitHub repo
+- `source_repo`: private/source-of-truth GitHub repo, resolved from
+  `repo_topology.roles.canonical.repo`
 - `source_branch`
 - `source_sha`: private source SHA being verified
-- `mirror_repo`: public CI repo
+- `mirror_repo` / `ci_repo`: public CI repo resolved from
+  `repo_topology.roles.public_ci.repo`
 - `mirror_branch`: disposable branch, default `ci/<task-id>/<source-sha-prefix>`
 - `workflow`: public workflow file or ref
+- `status_context`: required status context from
+  `repo_topology.roles.public_ci.required_status_contexts`, or an explicit context selected from
+  that role
 - `status`: `requested`, `mirrored`, `triggered`, `running`, `success`, `failure`, `cancelled`, or `error`
 - `conclusion`: provider conclusion, such as `success`, `failure`, or `cancelled`
 - `run_url`
@@ -63,8 +68,8 @@ Creating an external CI run reserves an `external_side_effects` row with:
 - `effect_type`: `external_ci_mirror`
 - `target`: public mirror repo
 - `resource`: public mirror branch
-- `payload`: source project, source repo, source branch, source SHA, mirror repo, mirror branch,
-  workflow, task id, and claim id
+- `payload`: source project, source repo, source branch, source SHA, CI repo, mirror branch,
+  workflow, status context, task id, and claim id
 
 That side-effect key gives `CI-MIRROR-2` idempotency before it pushes or triggers anything.
 
@@ -136,16 +141,17 @@ Required request fields for execution:
 - `source_path`: local private/source-of-truth Git checkout path.
 - `source_project`
 - `source_sha`
-- `mirror_repo`
 - `workflow`
 - `task_id` when attaching to task evidence.
 
 Optional request fields:
 
 - `source_repo`: defaults from `source_project` when that project has a configured GitHub repo.
+- `mirror_repo` / `ci_repo`: defaults from `source_project` repo topology `roles.public_ci.repo`.
 - `source_branch`
 - `mirror_branch`: defaults to `ci/<task-id>/<source-sha-prefix>`.
 - `mirror_remote_url`: defaults to `https://github.com/<mirror_repo>.git`.
+- `status_context`: defaults from `roles.public_ci.required_status_contexts`.
 - `workflow_inputs`: passed as sorted `-f key=value` arguments to `gh workflow run`.
 - `poll_interval_seconds` and `timeout_seconds`.
 
@@ -166,8 +172,8 @@ evidence.
 
 `CI-MIRROR-3` makes external CI proof visible in the same surfaces agents already read:
 
-- task detail includes `external_ci.status`, `source_sha`, `mirror_repo`, `run_url`, `conclusion`,
-  recent runs, and an `external_ci_passed` review gate.
+- task detail includes `external_ci.status`, `source_repo`, `source_sha`, `ci_repo`, `run_url`,
+  `status_context`, `conclusion`, recent runs, and an `external_ci_passed` review gate.
 - MCP `get_task` and REST `GET /api/tasks/{task_id}` expose the same `external_ci` payload.
 - board rows expose compact external CI status so operators can scan proof state.
 - deliverable/mission task links include each linked task's external CI proof summary.
@@ -191,9 +197,10 @@ Configured review gates:
   "source_repo": "StevenRidder/Helm",
   "source_branch": "codex/WX-22-four-frame-bake",
   "source_sha": "abcdef1234567890abcdef1234567890abcdef12",
-  "mirror_repo": "6th-Element-Labs/helm-public-ci",
+  "mirror_repo": "StevenRidder/public-CI",
   "mirror_branch": "ci/WX-22/abcdef123456",
   "workflow": "strict.yml",
+  "status_context": "helm-ci/full-suite",
   "task_id": "WX-22",
   "claim_id": "taskclaim-...",
   "agent_id": "codex/WX-22-four-frame-bake"
@@ -206,11 +213,14 @@ After `CI-MIRROR-2`, the same run should include:
 {
   "status": "success",
   "conclusion": "success",
-  "run_url": "https://github.com/6th-Element-Labs/helm-public-ci/actions/runs/...",
-  "logs_url": "https://github.com/6th-Element-Labs/helm-public-ci/actions/runs/.../logs",
+  "run_url": "https://github.com/StevenRidder/public-CI/actions/runs/...",
+  "logs_url": "https://github.com/StevenRidder/public-CI/actions/runs/.../logs",
   "result": {
     "tested_public_sha": "...",
-    "source_sha": "abcdef1234567890abcdef1234567890abcdef12"
+    "source_repo": "StevenRidder/Helm",
+    "source_sha": "abcdef1234567890abcdef1234567890abcdef12",
+    "ci_repo": "StevenRidder/public-CI",
+    "status_context": "helm-ci/full-suite"
   }
 }
 ```

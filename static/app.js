@@ -508,8 +508,16 @@ const TeepPlan = {
         const label = gate.required ? `External CI ${status}` : (ci.run_count ? `External CI ${status}` : 'none');
         const latest = ci.latest || {};
         const bits = [`<span class="badge bg-${cls}-lt"><i class="ti ti-cloud-check me-1"></i>${this.esc(label)}</span>`];
-        if (latest.run_url) bits.push(`<a class="small" href="${this.esc(latest.run_url)}" target="_blank" rel="noopener">run</a>`);
+        const runUrl = ci.run_url || latest.run_url || '';
+        if (runUrl) bits.push(`<a class="small" href="${this.esc(runUrl)}" target="_blank" rel="noopener">run</a>`);
         if (ci.source_sha) bits.push(`<span class="font-monospace small">${this.esc(String(ci.source_sha).slice(0, 12))}</span>`);
+        const sourceRepo = ci.source_repo || latest.source_repo || '';
+        const ciRepo = ci.ci_repo || latest.ci_repo || latest.mirror_repo || '';
+        const context = ci.status_context || latest.status_context || '';
+        if (sourceRepo || ciRepo || context) {
+            const proof = `${sourceRepo || 'source'} -> ${ciRepo || 'ci'}${context ? ' · ' + context : ''}`;
+            bits.push(`<span class="text-secondary small">${this.esc(proof)}</span>`);
+        }
         if (gate.required && !ci.passed) bits.push(`<span class="text-danger small">${this.esc(gate.message || 'required')}</span>`);
         return bits.join(' ');
     },

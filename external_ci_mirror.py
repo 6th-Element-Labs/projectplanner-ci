@@ -86,6 +86,14 @@ def _workflow_inputs_args(inputs: Dict[str, Any]) -> List[str]:
     return args
 
 
+def _workflow_inputs_for_run(run: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
+    inputs = dict(request.get("workflow_inputs") or {})
+    inputs.setdefault("source_sha", run.get("source_sha"))
+    if run.get("status_context"):
+        inputs.setdefault("status_context", run.get("status_context"))
+    return inputs
+
+
 def _select_run(runs: Any, triggered_after: float = 0.0) -> Optional[Dict[str, Any]]:
     if not isinstance(runs, list):
         return None
@@ -226,10 +234,13 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
         {
             "status": "mirrored",
             "result": {
+                "source_repo": run.get("source_repo"),
                 "source_sha": source_sha,
                 "resolved_source_sha": resolved_sha,
+                "ci_repo": mirror_repo,
                 "mirror_remote_url": mirror_remote_url,
                 "mirror_branch": mirror_branch,
+                "status_context": run.get("status_context"),
                 "mirror_push_stdout": (push.stdout or "").strip(),
                 "mirror_push_stderr": (push.stderr or "").strip(),
             },
@@ -243,6 +254,9 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
             {
                 "mirror_repo": mirror_repo,
                 "mirror_branch": mirror_branch,
+                "status_context": run.get("status_context"),
+                "source_repo": run.get("source_repo"),
+                "ci_repo": mirror_repo,
                 "source_sha": source_sha,
                 "resolved_source_sha": resolved_sha,
             },
@@ -251,7 +265,7 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
         )
 
     trigger_args = ["gh", "workflow", "run", workflow, "--repo", mirror_repo, "--ref", mirror_branch]
-    trigger_args.extend(_workflow_inputs_args(request.get("workflow_inputs") or {}))
+    trigger_args.extend(_workflow_inputs_args(_workflow_inputs_for_run(run, request)))
     trigger = _check(trigger_args, source_path, "workflow_trigger_failed",
                      "workflow dispatch", runner)
     store.update_external_ci_run(
@@ -319,9 +333,12 @@ def _poll_run(run: Dict[str, Any], source_path: str, actor: str,
         result = {
             "provider_run": selected,
             "tested_public_sha": selected.get("headSha"),
+            "source_repo": run.get("source_repo"),
             "source_sha": run["source_sha"],
+            "ci_repo": mirror_repo,
             "mirror_repo": mirror_repo,
             "mirror_branch": mirror_branch,
+            "status_context": run.get("status_context"),
         }
         if conclusion == "success":
             updated = store.update_external_ci_run(

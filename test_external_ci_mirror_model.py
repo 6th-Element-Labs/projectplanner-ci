@@ -36,6 +36,13 @@ try:
     )
     ok(source_project.get("created") is True,
        "source project is physically created with a GitHub repo")
+    topology = store.set_project_repo_topology(
+        project="private-product",
+        public_ci_repo="6th-Element-Labs/public-ci",
+        public_ci_required_status_contexts="public-ci/full-suite",
+    )
+    ok(topology["repo_topology"]["roles"]["public_ci"]["repo"] == "6th-Element-Labs/public-ci",
+       "source project public CI repo is configured in repo_topology")
 
     task = store.create_task({"workstream_id": "CIQA", "title": "private branch proof"},
                              actor="test", project="switchboard")
@@ -56,7 +63,10 @@ try:
         project="switchboard",
     )
     ok(created["source_repo"] == "6th-Element-Labs/private-product",
-       "source_repo defaults from the source project")
+       "source_repo defaults from the source project's canonical topology")
+    ok(created["ci_repo"] == "6th-Element-Labs/public-ci" and
+       created["status_context"] == "public-ci/full-suite",
+       "external CI run records topology ci_repo and status context")
     ok(created["mirror_branch"] == f"ci/{task['task_id']}/{source_sha[:12]}",
        "mirror branch is deterministic and task/SHA scoped")
     ok(created["status"] == "requested" and created["effect_key"].startswith("effect-"),
@@ -69,8 +79,26 @@ try:
                                           project="switchboard")
     ok(len(effects) == 1 and effects[0]["target"] == "6th-Element-Labs/public-ci",
        "external CI run reserves exactly one side-effect ledger row")
+    ok(effects[0]["payload"]["ci_repo"] == "6th-Element-Labs/public-ci" and
+       effects[0]["payload"]["status_context"] == "public-ci/full-suite",
+       "side-effect payload carries ci_repo/status_context proof")
     ok(effects[0]["resource"] == created["mirror_branch"],
        "side-effect resource is the disposable public mirror branch")
+
+    topology_default = store.create_external_ci_run(
+        {
+            "source_project": "private-product",
+            "source_branch": "codex/CIQA-1-proof",
+            "source_sha": "bbbbbb1234567890abcdef1234567890abcdef12",
+            "workflow": "strict.yml",
+            "task_id": task["task_id"],
+        },
+        actor="test",
+        project="switchboard",
+    )
+    ok(topology_default["mirror_repo"] == "6th-Element-Labs/public-ci" and
+       topology_default["status_context"] == "public-ci/full-suite",
+       "mirror_repo/status_context default from repo_topology")
 
     duplicate = store.create_external_ci_run(
         {
@@ -110,7 +138,7 @@ try:
        "result artifacts and readback evidence round-trip")
 
     listed = store.list_external_ci_runs(task_id=task["task_id"], project="switchboard")
-    ok(len(listed) == 1 and listed[0]["run_id"] == created["run_id"],
+    ok(len(listed) == 2 and any(r["run_id"] == created["run_id"] for r in listed),
        "list_external_ci_runs filters by task")
 
     unknown_project = store.create_external_ci_run(
@@ -150,9 +178,21 @@ try:
     ok(bad_branch.get("error") == "mirror_branch must be under ci/",
        "mirror branch is constrained to disposable ci/ namespace")
 
+    wrong_ci_repo = store.create_external_ci_run(
+        {
+            "source_project": "private-product",
+            "source_sha": source_sha,
+            "mirror_repo": "6th-Element-Labs/wrong-ci",
+            "workflow": "strict.yml",
+        },
+        project="switchboard",
+    )
+    ok(wrong_ci_repo.get("error") == "mirror_repo must match repo_topology.roles.public_ci.repo",
+       "wrong public CI repo fails closed when topology declares the role")
+
     export = store.audit_export(project="switchboard")
-    ok(export["summary"]["external_ci_run_count"] == 1 and
-       export["external_ci_runs"][0]["source_sha"] == source_sha,
+    ok(export["summary"]["external_ci_run_count"] == 2 and
+       any(r["source_sha"] == source_sha for r in export["external_ci_runs"]),
        "audit export includes external CI mirror runs")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

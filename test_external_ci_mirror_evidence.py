@@ -35,6 +35,11 @@ try:
         github_repo="6th-Element-Labs/private-product",
         actor="test",
     )
+    store.set_project_repo_topology(
+        project="private-product",
+        public_ci_repo="6th-Element-Labs/public-ci",
+        public_ci_required_status_contexts="public-ci/full-suite",
+    )
 
     source_sha = "abcdef1234567890abcdef1234567890abcdef12"
     task = store.create_task(
@@ -68,12 +73,41 @@ try:
        completed["review_gate"]["status"] == "blocked",
        "claim completion records a blocked external CI review gate")
 
+    wrong_sha = "bbbbbb1234567890abcdef1234567890abcdef12"
+    wrong_run = store.create_external_ci_run(
+        {
+            "source_project": "private-product",
+            "source_branch": "codex/CIQA-proof",
+            "source_sha": wrong_sha,
+            "workflow": "strict.yml",
+            "task_id": task["task_id"],
+            "claim_id": claim["claim_id"],
+            "agent_id": "codex/CIQA-proof",
+        },
+        actor="test",
+        project=P,
+    )
+    store.update_external_ci_run(
+        wrong_run["run_id"],
+        {
+            "status": "success",
+            "conclusion": "success",
+            "run_url": "https://github.com/6th-Element-Labs/public-ci/actions/runs/41",
+            "result": {"tested_public_sha": "wrongpublic", "source_sha": wrong_sha},
+        },
+        actor="test",
+        project=P,
+    )
+    still_blocked = store.get_task(task["task_id"], project=P)
+    ok(still_blocked["external_ci"]["passed"] is False and
+       still_blocked["external_ci"]["gate"]["status"] == "blocked",
+       "external CI success for a different source SHA does not satisfy the gate")
+
     created = store.create_external_ci_run(
         {
             "source_project": "private-product",
             "source_branch": "codex/CIQA-proof",
             "source_sha": source_sha,
-            "mirror_repo": "6th-Element-Labs/public-ci",
             "workflow": "strict.yml",
             "task_id": task["task_id"],
             "claim_id": claim["claim_id"],
@@ -103,6 +137,11 @@ try:
     ok(detail["external_ci"]["latest"]["run_url"].endswith("/42") and
        detail["external_ci"]["source_sha"] == source_sha,
        "task detail exposes source SHA and public run URL")
+    ok(detail["external_ci"]["source_repo"] == "6th-Element-Labs/private-product" and
+       detail["external_ci"]["ci_repo"] == "6th-Element-Labs/public-ci" and
+       detail["external_ci"]["status_context"] == "public-ci/full-suite" and
+       detail["external_ci"]["evidence_only"] is True,
+       "task detail exposes source_repo/source_sha to ci_repo/run/context as verification-only")
     listed = store.list_tasks(workstream="CIQA", project=P)[0]
     ok(listed["external_ci"]["status"] == "passed",
        "board/list task rows expose compact external CI status")

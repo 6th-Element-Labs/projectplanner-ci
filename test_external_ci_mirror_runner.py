@@ -93,12 +93,10 @@ def make_request(task_id):
         "source_project": "private-product",
         "source_branch": "codex/CIQA-1-proof",
         "source_sha": "abcdef1234567890abcdef1234567890abcdef12",
-        "mirror_repo": "6th-Element-Labs/public-ci",
         "workflow": "strict.yml",
         "task_id": task_id,
         "claim_id": "claim-123",
         "agent_id": "codex/CIQA-1-proof",
-        "workflow_inputs": {"source_sha": "abcdef1234567890abcdef1234567890abcdef12"},
         "poll_interval_seconds": 1,
         "timeout_seconds": 30,
     }
@@ -113,6 +111,11 @@ try:
         github_repo="6th-Element-Labs/private-product",
         actor="test",
     )
+    store.set_project_repo_topology(
+        project="private-product",
+        public_ci_repo="6th-Element-Labs/public-ci",
+        public_ci_required_status_contexts="public-ci/full-suite",
+    )
     source_path = os.path.join(_TMP, "source")
     os.makedirs(source_path)
 
@@ -125,6 +128,9 @@ try:
         runner=runner, sleep_fn=clock.sleep, now_fn=clock.time)
     ok(success["ok"] is True and success["status"] == "success",
        "runner mirrors, dispatches, polls, and records success")
+    ok(success["ci_repo"] == "6th-Element-Labs/public-ci" and
+       success["status_context"] == "public-ci/full-suite",
+       "runner defaults ci_repo/status_context from repo_topology")
     ok(success["run_url"].endswith("/42") and success["artifacts"][0]["name"] == "strict-log",
        "success stores run URL and artifacts")
     effects = store.list_external_effects(effect_type="external_ci_mirror",
@@ -135,6 +141,11 @@ try:
            cmd[-1].endswith(":refs/heads/" + success["mirror_branch"])
            for cmd in runner.commands),
        "mirror push targets the deterministic ci/ branch")
+    workflow_runs = [cmd for cmd in runner.commands if cmd[:3] == ["gh", "workflow", "run"]]
+    ok(workflow_runs and
+       "source_sha=abcdef1234567890abcdef1234567890abcdef12" in workflow_runs[0] and
+       "status_context=public-ci/full-suite" in workflow_runs[0],
+       "workflow dispatch receives canonical source SHA and status context")
 
     duplicate_runner = FakeRunner()
     duplicate = external_ci_mirror.request_external_ci_mirror_run(
