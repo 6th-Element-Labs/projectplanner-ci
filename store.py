@@ -20,6 +20,14 @@ import evidence_claims
 from constants import *  # noqa: F401,F403
 from db.core import *  # noqa: F401,F403 — Layer-0 primitives extracted to db/core.py (ARCH-3)
 from db.schema import *  # noqa: F401,F403 — schema/DDL extracted to db/schema.py (ARCH-4)
+from db.connection import *  # noqa: F401,F403 — conn/resolve extracted to db/connection.py (ARCH-5)
+from rag_store import *        # noqa: F401,F403
+from digests_store import *    # noqa: F401,F403
+from inbox_store import *      # noqa: F401,F403
+from summaries_store import *  # noqa: F401,F403
+from decisions_store import *  # noqa: F401,F403
+from receipts_store import *   # noqa: F401,F403
+from jobs_store import *       # noqa: F401,F403
 
 
 
@@ -28,25 +36,6 @@ def normalize_project_id(value: str) -> str:
     slug = PROJECT_ID_SLUG_RE.sub("-", (value or "").strip().lower()).strip("-_")
     slug = re.sub(r"[-_]{2,}", "-", slug)
     return slug
-
-
-def _dynamic_projects() -> Dict[str, Dict[str, str]]:
-    init_project_registry()
-    with _registry_conn() as c:
-        rows = c.execute("SELECT * FROM projects ORDER BY id").fetchall()
-    return {
-        r["id"]: {
-            "db": r["db_path"],
-            "seed": r["seed_path"],
-            "label": r["label"],
-            "pretitle": r["pretitle"] or "",
-        }
-        for r in rows
-    }
-
-
-def _project_map() -> Dict[str, Dict[str, str]]:
-    return {**_dynamic_projects(), **BUILTIN_PROJECTS}
 
 
 def project_ids() -> List[str]:
@@ -322,14 +311,6 @@ def ensure_bootstrap_project_owner(project_id: str, principal_id: str, login: st
             "project_access": access, "grant": grant}
 
 
-def _resolve(project: Optional[str]) -> Dict[str, str]:
-    """Map a project id -> its config. Fail CLOSED on an unknown id — never silently fall back
-    to Maxwell (which could leak a write across projects)."""
-    p = _project_map().get(project or DEFAULT_PROJECT)
-    if not p:
-        raise ValueError(f"unknown project: {project!r}")
-    return p
-
 # Fields a PATCH may change (everything an editor touches in an Asana-style board).
 EDITABLE = ["title", "description", "owner_org", "owner_person_or_role", "assignee",
             "phase", "status", "effort_days", "duration_days", "start_date",
@@ -499,15 +480,6 @@ PROTOCOL_ENVELOPE = {
     },
 }
 
-
-
-def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
-    timeout = _sqlite_timeout_s("PM_SQLITE_TIMEOUT_S", 5.0) if timeout_s is None else timeout_s
-    c = sqlite3.connect(_resolve(project)["db"], timeout=timeout)
-    c.row_factory = sqlite3.Row
-    c.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
-    c.execute("PRAGMA journal_mode=WAL")
-    return c
 
 
 def _control_plane_timeout_s() -> float:
@@ -11283,23 +11255,6 @@ def simulate_dispatch(project: str = DEFAULT_PROJECT, agent_id: str = "",
     )
 
 
-def get_coordination_receipt(project: str = DEFAULT_PROJECT,
-                             receipt_id: str = "") -> Dict[str, Any]:
-    """Fetch one projected coordination receipt by stable receipt id."""
-    import coordination_receipts
-    return coordination_receipts.get_coordination_receipt(project, receipt_id)
-
-
-def list_coordination_receipts(project: str = DEFAULT_PROJECT, *,
-                               task_id: str = "",
-                               agent_id: str = "",
-                               limit: int = 50) -> Dict[str, Any]:
-    """List projected coordination receipts for a project."""
-    import coordination_receipts
-    return coordination_receipts.list_coordination_receipts(
-        project, task_id=task_id, agent_id=agent_id, limit=limit)
-
-
 def project_task_receipts(project: str = DEFAULT_PROJECT, task_id: str = "",
                           from_cursor: int = 0,
                           until_cursor: Optional[int] = None,
@@ -11315,50 +11270,6 @@ def project_task_receipts(project: str = DEFAULT_PROJECT, task_id: str = "",
         until_cursor=until_cursor,
         claim_id=claim_id,
     )
-
-
-def list_background_jobs() -> Dict[str, Any]:
-    """Catalog of resumable background jobs and DBOS eligibility boundaries."""
-    import background_jobs
-    return background_jobs.list_background_jobs()
-
-
-def evaluate_dbos_runtime() -> Dict[str, Any]:
-    """Evaluate whether DBOS is available and the recommended job runtime."""
-    import background_jobs
-    return background_jobs.evaluate_dbos_runtime()
-
-
-def run_background_job(project: str = DEFAULT_PROJECT, job_name: str = "",
-                       run_id: str = "", resume: bool = True,
-                       params: Any = None, actor: str = "background_job") -> Dict[str, Any]:
-    """Run or resume a checkpointed background job for one project scope."""
-    import background_jobs
-    if not (job_name or "").strip():
-        return {"error": "job_name required", "project": project}
-    return background_jobs.run_background_job(
-        project,
-        job_name.strip(),
-        run_id=run_id,
-        resume=resume,
-        params=params if isinstance(params, dict) else {},
-        actor=actor,
-    )
-
-
-def get_background_job_run(project: str = DEFAULT_PROJECT, run_id: str = "") -> Dict[str, Any]:
-    """Load one persisted background job run manifest."""
-    import background_jobs
-    if not (run_id or "").strip():
-        return {"error": "run_id required", "project": project}
-    return background_jobs.load_run(project, run_id.strip())
-
-
-def list_background_job_runs(project: str = DEFAULT_PROJECT, *,
-                             job_name: str = "", limit: int = 20) -> Dict[str, Any]:
-    """List recent background job runs for a project."""
-    import background_jobs
-    return background_jobs.list_job_runs(project, job_name=job_name, limit=limit)
 
 
 def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:
@@ -11458,50 +11369,6 @@ def list_unblock_requests(owner_agent: str,
     """Return unacked blocking dep requests directed to this agent."""
     msgs = list_unacked_messages(owner_agent, project=project)
     return [m for m in msgs if "[DEP REQUEST]" in (m.get("message") or "")]
-
-
-def record_decision(task_id: Optional[str], author: str, title: str,
-                    context: str, decision: str, rationale: str,
-                    supersedes: Optional[int] = None,
-                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """Append an architectural decision record (ADR-lite) to the decisions log.
-    Immutable once written — to reverse, record a new decision with status='superseded'
-    and reference the old id in supersedes. Returns the full record."""
-    now = time.time()
-    with _conn(project) as c:
-        cur = c.execute(
-            "INSERT INTO decisions(task_id, author, title, context, decision, rationale, "
-            "supersedes, created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (task_id, author, title, context, decision, rationale, supersedes, now),
-        )
-        dec_id = cur.lastrowid
-        if supersedes:
-            c.execute("UPDATE decisions SET status='superseded' WHERE id=?", (supersedes,))
-    return {"id": dec_id, "task_id": task_id, "author": author, "title": title,
-            "context": context, "decision": decision, "rationale": rationale,
-            "status": "accepted", "supersedes": supersedes, "created_at": now}
-
-
-def list_decisions(task_id: Optional[str] = None, status: str = "",
-                   project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
-    """List decisions, optionally filtered by task_id and/or status ('accepted',
-    'superseded', 'proposed'). Returns newest-first."""
-    q = "SELECT * FROM decisions WHERE 1=1"
-    p: List[Any] = []
-    if task_id:
-        q += " AND task_id=?"; p.append(task_id)
-    if status:
-        q += " AND status=?"; p.append(status)
-    q += " ORDER BY id DESC"
-    with _conn(project) as c:
-        rows = c.execute(q, p).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_decision(decision_id: int, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
-    with _conn(project) as c:
-        r = c.execute("SELECT * FROM decisions WHERE id=?", (decision_id,)).fetchone()
-    return dict(r) if r else None
 
 
 def set_agent_state(task_id: str, agent_id: str, state: Dict[str, Any],
@@ -11971,17 +11838,6 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
             "fired": fired, "events": events, "wake_sweep": wake_sweep}
 
 
-def set_task_summary(task_id: str, rationale: str, activity_cursor: int,
-                     project: str = DEFAULT_PROJECT) -> None:
-    """Upsert the Haiku-generated rationale for a task."""
-    with _conn(project) as c:
-        c.execute(
-            "INSERT OR REPLACE INTO task_summaries(task_id, rationale, generated_at, activity_cursor) "
-            "VALUES (?,?,?,?)",
-            (task_id, rationale, time.time(), activity_cursor),
-        )
-
-
 # --- NARRATE-2: CEO-voice task narration (docs/CEO-NARRATOR-CONTRACT.md) ---
 
 def _max_activity_cursor(task: Dict[str, Any]) -> int:
@@ -12066,40 +11922,6 @@ def list_pending_narrations(project: str = DEFAULT_PROJECT) -> List[Dict[str, An
 def clear_pending_narration(task_id: str, project: str = DEFAULT_PROJECT) -> None:
     with _conn(project) as c:
         c.execute("DELETE FROM pending_narrations WHERE task_id=?", (task_id,))
-
-
-def get_task_summary(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
-    with _conn(project) as c:
-        r = c.execute("SELECT * FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
-        return dict(r) if r else None
-
-
-def get_tasks_needing_summary(project: str = DEFAULT_PROJECT,
-                              min_interval: int = 900) -> List[str]:
-    """Task IDs that have activity AND either no summary yet or new activity since the last
-    summary (and enough time has passed to re-run — min_interval seconds)."""
-    now = time.time()
-    cutoff = now - min_interval
-    with _conn(project) as c:
-        rows = c.execute(
-            """SELECT t.task_id,
-                      MAX(a.id) AS max_act,
-                      s.activity_cursor,
-                      s.generated_at
-               FROM tasks t
-               JOIN activity a ON a.task_id = t.task_id
-               LEFT JOIN task_summaries s ON s.task_id = t.task_id
-               GROUP BY t.task_id""",
-        ).fetchall()
-    result = []
-    for row in rows:
-        task_id, max_act, cursor, gen_at = row[0], row[1], row[2], row[3]
-        no_summary = cursor is None
-        new_activity = (not no_summary) and (max_act > cursor)
-        interval_ok = gen_at is None or gen_at < cutoff
-        if (no_summary or new_activity) and interval_ok:
-            result.append(task_id)
-    return result
 
 
 def list_active_leases(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
@@ -14502,119 +14324,8 @@ def activity_since(ts: float) -> List[Dict[str, Any]]:
              "payload": json.loads(r["payload"] or "{}"), "created_at": r["created_at"]} for r in rows]
 
 
-def _digest_row(r):
-    return {"id": r["id"], "created_at": r["created_at"], "since_ts": r["since_ts"],
-            "content": r["content"], "meta": json.loads(r["meta"] or "{}")}
-
-
-def add_digest(since_ts: float, content: str, meta: Optional[Dict[str, Any]] = None) -> int:
-    with _conn() as c:
-        cur = c.execute("INSERT INTO digests(created_at, since_ts, content, meta) VALUES (?,?,?,?)",
-                        (time.time(), since_ts, content, json.dumps(meta or {})))
-        return cur.lastrowid
-
-
-def last_digest() -> Optional[Dict[str, Any]]:
-    with _conn() as c:
-        r = c.execute("SELECT * FROM digests ORDER BY id DESC LIMIT 1").fetchone()
-        return _digest_row(r) if r else None
-
-
-def list_digests(limit: int = 20) -> List[Dict[str, Any]]:
-    with _conn() as c:
-        rows = c.execute("SELECT * FROM digests ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        return [_digest_row(r) for r in rows]
-
-
 # ---- incremental RAG corpus (Phase 5) — ingested artifacts, persisted + shared --------
-def add_rag_chunk(source_kind: str, label: str, text: str, embedding: List[float]):
-    with _conn() as c:
-        c.execute("INSERT INTO rag_docs(source_kind, label, text, embedding, created_at) VALUES (?,?,?,?,?)",
-                  (source_kind, label, text, json.dumps(embedding), time.time()))
-
-
-def all_rag_chunks() -> List[Dict[str, Any]]:
-    with _conn() as c:
-        rows = c.execute("SELECT label, text, embedding FROM rag_docs ORDER BY id").fetchall()
-    return [{"label": r["label"], "text": r["text"], "embedding": json.loads(r["embedding"])} for r in rows]
-
-
-def rag_docs_max_id() -> int:
-    with _conn() as c:
-        return c.execute("SELECT COALESCE(MAX(id), 0) FROM rag_docs").fetchone()[0]
-
-
-def all_rag_rows() -> List[Dict[str, Any]]:
-    """rag_docs rows WITH ids — for re-embedding in place (rag.reembed_dynamic)."""
-    with _conn() as c:
-        rows = c.execute("SELECT id, source_kind, label, text FROM rag_docs ORDER BY id").fetchall()
-    return [{"id": r["id"], "source_kind": r["source_kind"], "label": r["label"], "text": r["text"]} for r in rows]
-
-
-def update_rag_embedding(rag_id: int, embedding: List[float]):
-    with _conn() as c:
-        c.execute("UPDATE rag_docs SET embedding=? WHERE id=?", (json.dumps(embedding), rag_id))
-
-
 # ---- Live Inbox queue (Phase 5.5) — triaged inbound artifacts awaiting review ----------
-def _inbox_row(r):
-    return {"id": r["id"], "source": r["source"], "external_id": r["external_id"],
-            "sender": r["sender"], "subject": r["subject"], "summary": r["summary"],
-            "triage": json.loads(r["triage"] or "{}"), "status": r["status"],
-            "received_at": r["received_at"], "created_at": r["created_at"]}
-
-
-def inbox_exists(source: str, external_id: str) -> bool:
-    if not external_id:
-        return False
-    with _conn() as c:
-        return bool(c.execute("SELECT 1 FROM inbox WHERE source=? AND external_id=?",
-                              (source, external_id)).fetchone())
-
-
-def add_inbox_item(source, external_id, sender, subject, summary, triage, received_at=None) -> int:
-    with _conn() as c:
-        cur = c.execute(
-            "INSERT INTO inbox(source,external_id,sender,subject,summary,triage,status,received_at,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (source, external_id, sender, subject, summary, json.dumps(triage or {}), "pending",
-             received_at or time.time(), time.time()))
-        return cur.lastrowid
-
-
-def list_inbox(status: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-    with _conn() as c:
-        if status:
-            rows = c.execute("SELECT * FROM inbox WHERE status=? ORDER BY id DESC LIMIT ?",
-                             (status, limit)).fetchall()
-        else:
-            rows = c.execute("SELECT * FROM inbox ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-    return [_inbox_row(r) for r in rows]
-
-
-def get_inbox_item(item_id: int) -> Optional[Dict[str, Any]]:
-    with _conn() as c:
-        r = c.execute("SELECT * FROM inbox WHERE id=?", (item_id,)).fetchone()
-        return _inbox_row(r) if r else None
-
-
-def set_inbox_status(item_id: int, status: str):
-    with _conn() as c:
-        c.execute("UPDATE inbox SET status=? WHERE id=?", (status, item_id))
-
-
-def update_inbox_triage(item_id: int, triage: Dict[str, Any]):
-    """Rewrite an item's stored triage JSON — used after a PARTIAL confirm so the proposals
-    that were held back (e.g. status->Done awaiting evidence) stay in the queue."""
-    with _conn() as c:
-        c.execute("UPDATE inbox SET triage=? WHERE id=?", (json.dumps(triage or {}), item_id))
-
-
-def inbox_pending_count() -> int:
-    with _conn() as c:
-        return c.execute("SELECT COUNT(*) FROM inbox WHERE status='pending'").fetchone()[0]
-
-
 # Heavy per-task fields the board list/cards never render — they surface only in
 # the task-detail modal, which re-fetches the full task via GET /api/tasks/{id}.
 # Dropping them from the (large, whole-board) payload roughly halves it on the
