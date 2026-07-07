@@ -60,6 +60,9 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `register_runner_session(...)`, `list_runner_sessions(...)`, `request_runner_snapshot(...)`,
   `request_runner_kill(...)`, `list_runner_control_requests(...)`, `claim_runner_control(...)`,
   `complete_runner_control(...)`
+- `create_work_session(...)`, `get_work_session(...)`, `list_work_sessions(...)`,
+  `update_work_session(...)` — bind code work to project, repo role, branch, worktree/clone path,
+  hygiene state, leases, and lifecycle before later claim/complete/merge gates enforce it.
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
 - `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
@@ -251,6 +254,22 @@ Protocol compatibility:
   remains private Helm merge provenance.
 - `register_agent` may include `protocol_json` / REST `protocol`; the response includes
   `protocol_compatibility`.
+
+Work Sessions:
+- Schema: `switchboard.work_session.v1`. A Work Session is the durable bridge between
+  `task_claims` and `runner_sessions`: it says which agent may mutate which repo role, branch,
+  and local workspace for a task.
+- REST: `GET /ixp/v1/work_sessions`, `POST /ixp/v1/work_sessions`,
+  `GET /ixp/v1/work_sessions/{work_session_id}`, and
+  `PATCH /ixp/v1/work_sessions/{work_session_id}`.
+- Fail-closed validation rejects unknown projects, unknown tasks, repo roles outside
+  `repo_topology.roles`, malformed JSON, invalid lifecycle states, and `worktree`/`clone`
+  sessions without their required paths.
+- `session_token` is accepted only as input convenience and is stored as `session_token_hash`;
+  audit export reports only whether a token hash exists.
+- `SESSION-1` adds the model/API contract. Later SESSION tasks bind this into `claim_task`,
+  `complete_claim`, merge gates, and managed worktree creation.
+- Full spec: [`WORK-SESSION-MODEL.md`](WORK-SESSION-MODEL.md).
 
 Runner kill rule:
 - Runner kill is outside `IXP-core`. Only Switchboard-managed sessions with a

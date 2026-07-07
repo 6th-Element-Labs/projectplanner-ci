@@ -133,6 +133,11 @@ ROLE_SCOPES = {
 }
 VALID_PRINCIPAL_KINDS = {"human", "user", "agent", "host", "system"}
 VALID_PRINCIPAL_SCOPES = sorted({s for scopes in ROLE_SCOPES.values() for s in scopes})
+WORK_SESSION_SCHEMA = "switchboard.work_session.v1"
+WORK_SESSION_STATUSES = {"proposed", "active", "blocked", "completed", "archived", "expired"}
+WORK_SESSION_STORAGE_MODES = {"worktree", "clone", "external"}
+WORK_SESSION_DIRTY_STATUSES = {"clean", "dirty", "unknown"}
+WORK_SESSION_REQUIRED_PATH_MODES = {"worktree", "clone"}
 
 
 def _registry_conn():
@@ -1285,6 +1290,48 @@ def init_db(project: str = DEFAULT_PROJECT):
                 ON runner_sessions(host_id, heartbeat_at);
             CREATE INDEX IF NOT EXISTS ix_runner_sessions_task
                 ON runner_sessions(task_id, status);
+            CREATE TABLE IF NOT EXISTS work_sessions (
+                work_session_id      TEXT PRIMARY KEY,
+                project_id           TEXT NOT NULL,
+                task_id              TEXT,
+                claim_id             TEXT,
+                agent_id             TEXT NOT NULL,
+                runtime              TEXT,
+                repo_role            TEXT NOT NULL,
+                repo                 TEXT,
+                default_branch       TEXT,
+                branch               TEXT,
+                upstream             TEXT,
+                base_sha             TEXT,
+                head_sha             TEXT,
+                worktree_path        TEXT,
+                clone_path           TEXT,
+                storage_mode         TEXT NOT NULL,
+                status               TEXT NOT NULL,
+                dirty_status         TEXT NOT NULL,
+                conflict_marker_count INTEGER NOT NULL DEFAULT 0,
+                hygiene_json         TEXT NOT NULL DEFAULT '{}',
+                file_leases_json     TEXT NOT NULL DEFAULT '[]',
+                resource_leases_json TEXT NOT NULL DEFAULT '[]',
+                env_json             TEXT NOT NULL DEFAULT '{}',
+                policy_profile       TEXT,
+                session_token_hash   TEXT,
+                principal_id         TEXT,
+                created_by           TEXT,
+                updated_by           TEXT,
+                created_at           REAL NOT NULL,
+                updated_at           REAL NOT NULL,
+                expires_at           REAL,
+                completed_at         REAL
+            );
+            CREATE INDEX IF NOT EXISTS ix_work_sessions_task
+                ON work_sessions(task_id, status, updated_at);
+            CREATE INDEX IF NOT EXISTS ix_work_sessions_agent
+                ON work_sessions(agent_id, status, updated_at);
+            CREATE INDEX IF NOT EXISTS ix_work_sessions_branch
+                ON work_sessions(repo_role, branch, status);
+            CREATE INDEX IF NOT EXISTS ix_work_sessions_path
+                ON work_sessions(worktree_path, clone_path);
             CREATE TABLE IF NOT EXISTS runner_control_requests (
                 request_id        TEXT PRIMARY KEY,
                 runner_session_id TEXT NOT NULL,
@@ -6083,6 +6130,329 @@ def _runner_session_row(row: sqlite3.Row, now: Optional[float] = None,
     return d
 
 
+def work_session_contract(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    topology = get_project_repo_topology(project)
+    roles = sorted((topology.get("roles") or {}).keys())
+    return {
+        "schema": WORK_SESSION_SCHEMA,
+        "project": project,
+        "purpose": (
+            "Bind agent code work to an explicit project, repo role, branch, workspace path, "
+            "hygiene state, and lifecycle before claim/complete/merge gates enforce it."
+        ),
+        "lifecycle_states": sorted(WORK_SESSION_STATUSES),
+        "storage_modes": sorted(WORK_SESSION_STORAGE_MODES),
+        "dirty_statuses": sorted(WORK_SESSION_DIRTY_STATUSES),
+        "repo_roles": roles,
+        "required_for_modes": {
+            "worktree": ["worktree_path"],
+            "clone": ["clone_path"],
+            "external": [],
+        },
+        "fail_closed_rules": [
+            "unknown project ids are rejected",
+            "task_id must exist when supplied",
+            "repo_role must exist in the project repo_topology",
+            "storage_mode, status, and dirty_status must be recognized values",
+            "worktree and clone sessions require their matching path",
+            "JSON fields must decode to their expected object/list shapes",
+            "session_token is never stored raw; only session_token_hash may persist",
+        ],
+        "audit_events": [
+            "work_session.created",
+            "work_session.updated",
+            "work_session.completed",
+            "work_session.expired",
+        ],
+    }
+
+
+def _work_session_json(value: Any, default: Any, expected: type, field: str) -> Tuple[Any, str]:
+    if value in (None, ""):
+        return copy.deepcopy(default), ""
+    if isinstance(value, expected):
+        return copy.deepcopy(value), ""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return copy.deepcopy(default), f"{field} must be valid JSON"
+        if isinstance(parsed, expected):
+            return parsed, ""
+    expected_name = "array" if expected is list else "object"
+    return copy.deepcopy(default), f"{field} must be a JSON {expected_name}"
+
+
+def _work_session_row(row: sqlite3.Row) -> Dict[str, Any]:
+    d = dict(row)
+    d["hygiene"] = _json_obj(d.pop("hygiene_json", "{}"), {})
+    d["file_leases"] = _json_obj(d.pop("file_leases_json", "[]"), [])
+    d["resource_leases"] = _json_obj(d.pop("resource_leases_json", "[]"), [])
+    d["env"] = _json_obj(d.pop("env_json", "{}"), {})
+    d["schema"] = WORK_SESSION_SCHEMA
+    d["session_token_hash_present"] = bool(d.pop("session_token_hash", None))
+    return d
+
+
+def _validate_work_session_payload(payload: Dict[str, Any], project: str,
+                                   partial: bool = False) -> Tuple[Dict[str, Any], List[str]]:
+    errors: List[str] = []
+    if not has_project(project):
+        return {}, [f"unknown project: {project}"]
+
+    topology = get_project_repo_topology(project)
+    roles = topology.get("roles") or {}
+    normalized: Dict[str, Any] = {}
+
+    def text(key: str, default: str = "") -> str:
+        if partial and key not in payload:
+            return ""
+        return str(payload.get(key, default) or "").strip()
+
+    repo_role = text("repo_role", "canonical")
+    if not partial or "repo_role" in payload:
+        if repo_role not in roles:
+            errors.append("repo_role must exist in repo_topology.roles")
+        normalized["repo_role"] = repo_role
+        role = roles.get(repo_role) or {}
+        normalized["repo"] = text("repo", role.get("repo") or "")
+        normalized["default_branch"] = text("default_branch", role.get("default_branch") or "")
+
+    for key in (
+        "work_session_id", "task_id", "claim_id", "agent_id", "runtime", "branch", "upstream",
+        "base_sha", "head_sha", "worktree_path", "clone_path", "policy_profile",
+        "principal_id",
+    ):
+        if not partial or key in payload:
+            normalized[key] = text(key)
+
+    if not partial or "agent_id" in payload:
+        if not normalized.get("agent_id"):
+            errors.append("agent_id required")
+
+    task_id = normalized.get("task_id") if (not partial or "task_id" in payload) else None
+    if task_id:
+        task = get_task(task_id, project=project)
+        if not task:
+            errors.append("task_id must exist in project")
+
+    claim_id = normalized.get("claim_id") if (not partial or "claim_id" in payload) else None
+    if claim_id:
+        with _conn(project) as c:
+            row = c.execute("SELECT task_id, agent_id FROM task_claims WHERE id=?",
+                            (claim_id,)).fetchone()
+        if not row:
+            errors.append("claim_id must exist in project")
+        else:
+            if task_id and row["task_id"] != task_id:
+                errors.append("claim_id must belong to task_id")
+            agent = normalized.get("agent_id")
+            if agent and row["agent_id"] != agent:
+                errors.append("claim_id must belong to agent_id")
+
+    if not partial or "storage_mode" in payload:
+        storage_mode = text("storage_mode", "worktree").lower()
+        if storage_mode not in WORK_SESSION_STORAGE_MODES:
+            errors.append("storage_mode must be one of: " + ", ".join(sorted(WORK_SESSION_STORAGE_MODES)))
+        normalized["storage_mode"] = storage_mode
+    else:
+        storage_mode = ""
+
+    if not partial or "status" in payload:
+        status = text("status", "active").lower()
+        if status not in WORK_SESSION_STATUSES:
+            errors.append("status must be one of: " + ", ".join(sorted(WORK_SESSION_STATUSES)))
+        normalized["status"] = status
+
+    if not partial or "dirty_status" in payload:
+        dirty_status = text("dirty_status", "unknown").lower()
+        if dirty_status not in WORK_SESSION_DIRTY_STATUSES:
+            errors.append("dirty_status must be one of: " + ", ".join(sorted(WORK_SESSION_DIRTY_STATUSES)))
+        normalized["dirty_status"] = dirty_status
+
+    mode_for_path = storage_mode or text("storage_mode")
+    if not partial or mode_for_path in WORK_SESSION_REQUIRED_PATH_MODES:
+        if mode_for_path == "worktree" and not (normalized.get("worktree_path") or text("worktree_path")):
+            errors.append("worktree_path required when storage_mode=worktree")
+        if mode_for_path == "clone" and not (normalized.get("clone_path") or text("clone_path")):
+            errors.append("clone_path required when storage_mode=clone")
+
+    if not partial or "conflict_marker_count" in payload:
+        raw_count = payload.get("conflict_marker_count", 0)
+        try:
+            count = int(raw_count or 0)
+            if count < 0:
+                raise ValueError
+            normalized["conflict_marker_count"] = count
+        except (TypeError, ValueError):
+            errors.append("conflict_marker_count must be a non-negative integer")
+
+    json_specs = [
+        ("hygiene", "hygiene_json", {}, dict),
+        ("file_leases", "file_leases_json", [], list),
+        ("resource_leases", "resource_leases_json", [], list),
+        ("env", "env_json", {}, dict),
+    ]
+    for public_key, stored_key, default, expected in json_specs:
+        if partial and public_key not in payload and stored_key not in payload:
+            continue
+        value = payload.get(public_key, payload.get(stored_key))
+        parsed, err = _work_session_json(value, default, expected, public_key)
+        if err:
+            errors.append(err)
+        normalized[stored_key] = json.dumps(parsed, sort_keys=True)
+
+    if not partial or "expires_at" in payload:
+        raw_expires = payload.get("expires_at")
+        if raw_expires in (None, ""):
+            normalized["expires_at"] = None
+        else:
+            try:
+                normalized["expires_at"] = float(raw_expires)
+            except (TypeError, ValueError):
+                errors.append("expires_at must be a unix timestamp")
+
+    token = str(payload.get("session_token") or "").strip()
+    token_hash = str(payload.get("session_token_hash") or "").strip()
+    if token:
+        token_hash = hash_token(token)
+    if token_hash:
+        normalized["session_token_hash"] = token_hash
+
+    return normalized, errors
+
+
+def create_work_session(payload: Dict[str, Any], actor: str = "system",
+                        principal_id: str = "", project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    data, errors = _validate_work_session_payload(payload or {}, project, partial=False)
+    if errors:
+        return {"error": "invalid_work_session", "errors": errors,
+                "contract": work_session_contract(project) if has_project(project) else None}
+    now = time.time()
+    work_session_id = data.get("work_session_id") or f"worksession-{uuid.uuid4().hex[:16]}"
+    data["work_session_id"] = work_session_id
+    data["project_id"] = project
+    data["principal_id"] = principal_id or data.get("principal_id") or ""
+    data["created_by"] = actor
+    data["updated_by"] = actor
+    data["created_at"] = now
+    data["updated_at"] = now
+    if data.get("status") == "completed":
+        data["completed_at"] = now
+    else:
+        data["completed_at"] = None
+    columns = [
+        "work_session_id", "project_id", "task_id", "claim_id", "agent_id", "runtime",
+        "repo_role", "repo", "default_branch", "branch", "upstream", "base_sha", "head_sha",
+        "worktree_path", "clone_path", "storage_mode", "status", "dirty_status",
+        "conflict_marker_count", "hygiene_json", "file_leases_json", "resource_leases_json",
+        "env_json", "policy_profile", "session_token_hash", "principal_id", "created_by",
+        "updated_by", "created_at", "updated_at", "expires_at", "completed_at",
+    ]
+    with _conn(project) as c:
+        existing = c.execute("SELECT 1 FROM work_sessions WHERE work_session_id=?",
+                             (work_session_id,)).fetchone()
+        if existing:
+            return {"error": "duplicate_work_session", "work_session_id": work_session_id}
+        c.execute(
+            f"INSERT INTO work_sessions({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+            [data.get(col) for col in columns],
+        )
+        event = {
+            "work_session_id": work_session_id,
+            "agent_id": data.get("agent_id"),
+            "repo_role": data.get("repo_role"),
+            "branch": data.get("branch"),
+            "storage_mode": data.get("storage_mode"),
+            "status": data.get("status"),
+        }
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (data.get("task_id") or None, actor, "work_session.created",
+                   json.dumps(event, sort_keys=True), now))
+        row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
+                        (work_session_id,)).fetchone()
+    return {"created": True, "work_session": _work_session_row(row)}
+
+
+def get_work_session(work_session_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    if not has_project(project):
+        return None
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
+                        ((work_session_id or "").strip(),)).fetchone()
+    return _work_session_row(row) if row else None
+
+
+def list_work_sessions(project: str = DEFAULT_PROJECT, task_id: str = "",
+                       agent_id: str = "", status: str = "",
+                       repo_role: str = "", include_expired: bool = True) -> List[Dict[str, Any]]:
+    if not has_project(project):
+        return []
+    where = ["1=1"]
+    params: List[Any] = []
+    if task_id:
+        where.append("task_id=?")
+        params.append(task_id.strip().upper())
+    if agent_id:
+        where.append("agent_id=?")
+        params.append(agent_id.strip())
+    if status:
+        where.append("status=?")
+        params.append(status.strip().lower())
+    if repo_role:
+        where.append("repo_role=?")
+        params.append(repo_role.strip())
+    if not include_expired:
+        now = time.time()
+        where.append("(expires_at IS NULL OR expires_at>?)")
+        params.append(now)
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT * FROM work_sessions WHERE " + " AND ".join(where) +
+            " ORDER BY updated_at DESC, work_session_id",
+            params,
+        ).fetchall()
+    return [_work_session_row(row) for row in rows]
+
+
+def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: str = "system",
+                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    work_session_id = (work_session_id or "").strip()
+    existing = get_work_session(work_session_id, project=project)
+    if not existing:
+        return {"error": "work_session_not_found", "work_session_id": work_session_id}
+    data, errors = _validate_work_session_payload(payload or {}, project, partial=True)
+    if errors:
+        return {"error": "invalid_work_session", "errors": errors,
+                "contract": work_session_contract(project)}
+    if not data:
+        return {"updated": False, "work_session": existing}
+    now = time.time()
+    data["updated_at"] = now
+    data["updated_by"] = actor
+    status = data.get("status")
+    if status == "completed" and not existing.get("completed_at"):
+        data["completed_at"] = now
+    sets = [f"{key}=?" for key in data]
+    vals = list(data.values()) + [work_session_id]
+    event_kind = "work_session.completed" if status == "completed" else "work_session.updated"
+    if status == "expired":
+        event_kind = "work_session.expired"
+    with _conn(project) as c:
+        c.execute(f"UPDATE work_sessions SET {', '.join(sets)} WHERE work_session_id=?", vals)
+        event = {
+            "work_session_id": work_session_id,
+            "updated_fields": sorted(data.keys()),
+            "status": status or existing.get("status"),
+        }
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (existing.get("task_id") or None, actor, event_kind,
+                   json.dumps(event, sort_keys=True), now))
+        row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
+                        (work_session_id,)).fetchone()
+    return {"updated": True, "work_session": _work_session_row(row)}
+
+
 def _runner_control_row(row: sqlite3.Row) -> Dict[str, Any]:
     d = dict(row)
     d["snapshot"] = _json_obj(d.pop("snapshot_json", "{}"), {})
@@ -8730,6 +9100,9 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         ).fetchall()]
         archived_tasks = _audit_json_rows(
             c, "archived_tasks", ("snapshot_json",), order_by="created_at, archive_id")
+        work_sessions = [_work_session_row(row) for row in c.execute(
+            "SELECT * FROM work_sessions ORDER BY updated_at, work_session_id"
+        ).fetchall()]
     bundle = {
         "schema": "switchboard.audit_export.v1",
         "project": project,
@@ -8751,6 +9124,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "spend_count": len(spend),
             "project_board_count": len(project_boards),
             "deliverable_count": len(deliverables),
+            "work_session_count": len(work_sessions),
         },
         "access": {
             "principals": _audit_redact(principals),
@@ -8767,6 +9141,7 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "resource_leases": resource_leases,
         "wake_intents": wake_intents,
         "runner_sessions": _audit_redact(runner_sessions),
+        "work_sessions": _audit_redact(work_sessions),
         "runner_control_requests": runner_controls,
         "external_side_effects": _audit_redact(side_effects),
         "external_ci_runs": _audit_redact(external_ci_runs),

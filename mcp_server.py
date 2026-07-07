@@ -322,6 +322,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "",
         "boards_missions": boards_missions,
         "repo_topology": repo_topology,
         "repo_role_guide": repo_role_guide,
+        "work_session_contract": store.work_session_contract(selected),
         "code_repo_gate": repo_topology.get("code_repo_gate"),
         "local_docs_policy": (
             "Do not assume repo-local docs such as docs/EPICS.md define this project. "
@@ -914,6 +915,60 @@ def register_runner_session(runner_session_json: str, ctx: Context,
         return _dumps({"error": "runner_session_json must be a JSON object string"})
     return _dumps(store.upsert_runner_session(
         record, principal_id=principal["id"], actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def create_work_session(work_session_json: str, ctx: Context,
+                        project: str = "maxwell") -> str:
+    """Create a first-class Work Session for code work.
+
+    The session binds agent/task work to project, repo_role, branch, worktree/clone path,
+    hygiene state, and lease/env evidence. Enforcement into claim_task and complete_claim
+    lands in follow-on SESSION tasks.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        payload = json.loads(work_session_json or "{}")
+    except json.JSONDecodeError:
+        return _dumps({"error": "work_session_json must be valid JSON"})
+    return _dumps(store.create_work_session(
+        payload, actor=auth.actor(principal), principal_id=principal.get("id") or "",
+        project=project))
+
+
+@mcp.tool()
+def get_work_session(work_session_id: str, project: str = "maxwell") -> str:
+    """Read one Work Session by id."""
+    session = store.get_work_session(work_session_id, project=project)
+    return _dumps(session or {"error": "work_session_not_found",
+                             "work_session_id": work_session_id})
+
+
+@mcp.tool()
+def list_work_sessions(project: str = "maxwell", task_id: str = "",
+                       agent_id: str = "", status: str = "",
+                       repo_role: str = "", include_expired: bool = True) -> str:
+    """List Work Sessions for a project, task, agent, repo role, or lifecycle status."""
+    return _dumps({
+        "project": project,
+        "contract": store.work_session_contract(project) if store.has_project(project) else None,
+        "work_sessions": store.list_work_sessions(
+            project=project, task_id=task_id, agent_id=agent_id, status=status,
+            repo_role=repo_role, include_expired=include_expired),
+    })
+
+
+@mcp.tool()
+def update_work_session(work_session_id: str, updates_json: str, ctx: Context,
+                        project: str = "maxwell") -> str:
+    """Update Work Session state, hygiene, leases, SHAs, branch, or lifecycle status."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        payload = json.loads(updates_json or "{}")
+    except json.JSONDecodeError:
+        return _dumps({"error": "updates_json must be valid JSON"})
+    return _dumps(store.update_work_session(
+        work_session_id, payload, actor=auth.actor(principal), project=project))
 
 
 @mcp.tool()

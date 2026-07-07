@@ -1621,6 +1621,59 @@ async def ixp_register_runner_session(request: Request, body: dict = Body(...)):
         record, principal_id=principal["id"], actor=auth.actor(principal), project=project)
 
 
+@app.get("/ixp/v1/work_sessions")
+async def ixp_work_sessions(project: str = Query(store.DEFAULT_PROJECT),
+                            task_id: str = "", agent_id: str = "", status: str = "",
+                            repo_role: str = "", include_expired: bool = True):
+    project = _proj(project)
+    return {
+        "project": project,
+        "contract": store.work_session_contract(project),
+        "work_sessions": store.list_work_sessions(
+            project=project, task_id=task_id, agent_id=agent_id, status=status,
+            repo_role=repo_role, include_expired=include_expired),
+    }
+
+
+@app.post("/ixp/v1/work_sessions")
+async def ixp_create_work_session(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "work-session")
+    payload = dict(body or {})
+    payload.pop("project", None)
+    result = store.create_work_session(
+        payload, actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result)
+    return result
+
+
+@app.get("/ixp/v1/work_sessions/{work_session_id}")
+async def ixp_get_work_session(work_session_id: str,
+                               project: str = Query(store.DEFAULT_PROJECT)):
+    session = store.get_work_session(work_session_id, project=_proj(project))
+    if not session:
+        raise HTTPException(404, "work_session_not_found")
+    return session
+
+
+@app.patch("/ixp/v1/work_sessions/{work_session_id}")
+async def ixp_update_work_session(work_session_id: str, request: Request,
+                                  body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "work-session")
+    payload = dict(body or {})
+    payload.pop("project", None)
+    result = store.update_work_session(
+        work_session_id, payload, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        status = 404 if result.get("error") == "work_session_not_found" else 400
+        raise HTTPException(status, result)
+    return result
+
+
 @app.post("/ixp/v1/heartbeat_runner_session")
 async def ixp_heartbeat_runner_session(request: Request, body: dict = Body(...)):
     project = _body_project(body)
