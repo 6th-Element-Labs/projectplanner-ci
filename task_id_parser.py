@@ -4,8 +4,12 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Mapping
 
-_CLOSES_RE = re.compile(r"\b(?:closes?|fixes?|resolves?)\s+([A-Z][A-Z0-9]+-\d+)\b", re.I)
-_TASKID_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b", re.I)
+# Task ids are <WORKSTREAM>-<number>, and a workstream may itself contain hyphens
+# (QA-L-2, OFFLINE-L-1 on the Helm North-Star boards). The first segment still needs
+# 2+ chars so unit tokens like S-52 / A-1 are not mistaken for task ids.
+_TASKID_CORE = r"[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)*-\d+"
+_CLOSES_RE = re.compile(r"\b(?:closes?|fixes?|resolves?)\s+(" + _TASKID_CORE + r")\b", re.I)
+_TASKID_RE = re.compile(r"\b(" + _TASKID_CORE + r")\b", re.I)
 
 
 def _dedupe_upper(ids: List[str]) -> List[str]:

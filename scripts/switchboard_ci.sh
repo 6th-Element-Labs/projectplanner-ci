@@ -85,6 +85,7 @@ run_test test_access_private_projects.py
 run_test test_publication_evidence.py
 run_test test_pre_tool_check.py
 run_test test_complete_claim_work_session_gate.py
+run_test test_task_id_parser.py
 run_test test_orphan_merge_discovery.py
 run_test test_reconcile_orphan_merges.py
 run_test test_repo_hierarchy_surface.py
