@@ -138,6 +138,7 @@ WORK_SESSION_STATUSES = {"proposed", "active", "blocked", "completed", "archived
 WORK_SESSION_STORAGE_MODES = {"worktree", "clone", "external"}
 WORK_SESSION_DIRTY_STATUSES = {"clean", "dirty", "unknown"}
 WORK_SESSION_REQUIRED_PATH_MODES = {"worktree", "clone"}
+WORK_SESSION_STRICT_PROFILES = {"code_strict"}
 
 
 def _registry_conn():
@@ -2737,6 +2738,9 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
                                principal_id: str = "", actor: str = "system",
                                ttl_seconds: int = 1800, idem_key: str = "",
                                override_identity_risk: bool = False,
+                               work_session_id: str = "", work_session: Any = None,
+                               session_policy_profile: str = "",
+                               require_work_session: bool = False,
                                mission_project: str = DEFAULT_PROJECT,
                                deliverable_id: str = "", board_id: str = "",
                                mission_id: str = "", milestone_id: str = "") -> Dict[str, Any]:
@@ -2756,6 +2760,10 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
                "board_id": (board_id or "").strip(),
                "mission_id": (mission_id or "").strip(),
                "milestone_id": milestone_id,
+               "work_session_id": work_session_id,
+               "work_session": work_session,
+               "session_policy_profile": session_policy_profile,
+               "require_work_session": bool(require_work_session),
                "mission_scope": True}
     with _conn(mission_project) as mission_c:
         hit = _idem_hit(mission_c, "claim_next", idem_key, actor, payload)
@@ -2795,9 +2803,11 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
         eligible: List[Tuple[Any, ...]] = []
         skipped = {"active_claim": 0, "status": 0, "lane": 0, "dependencies": 0,
                    "human_approval": 0, "capability_mismatch": 0, "risk": 0, "budget": 0,
-                   "identity_unknown": 0, "missing_task": 0, "unknown_project": 0}
+                   "identity_unknown": 0, "missing_task": 0, "unknown_project": 0,
+                   "work_session": 0}
         human_gates: Dict[str, Dict[str, Any]] = {}
         identity_risks: Dict[str, Dict[str, Any]] = {}
+        work_session_findings: Dict[str, Dict[str, Any]] = {}
 
         for link in links:
             task_project = (link.get("project_id") or "").strip()
@@ -2839,6 +2849,17 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
                     skipped["identity_unknown"] += 1
                     identity_risks[task_id] = identity_risk
                     continue
+                session_verdict = _validate_work_session_claim_binding_in(
+                    c, task, agent_id, project=task_project,
+                    work_session_id=work_session_id,
+                    work_session=work_session,
+                    policy_profile=session_policy_profile,
+                    require_work_session=require_work_session,
+                    now=now)
+                if not session_verdict.get("ok"):
+                    skipped["work_session"] += 1
+                    work_session_findings[f"{task_project}:{task_id}"] = session_verdict
+                    continue
                 required_caps = _task_required_capabilities(task)
                 if required_caps and not set(required_caps).issubset(cap_set):
                     skipped["capability_mismatch"] += 1
@@ -2866,6 +2887,7 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
             "skipped": skipped,
             "human_gates": human_gates,
             "identity_risks": identity_risks,
+            "work_session_findings": work_session_findings,
         }
         if not eligible:
             response = {
@@ -2911,6 +2933,23 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
                                "task_project": task_project}
             if selected_score.get("identity_override"):
                 dispatch_reason["identity_override"] = selected_score["identity_override"]
+            session_verdict = _validate_work_session_claim_binding_in(
+                c, task, agent_id, project=task_project,
+                work_session_id=work_session_id,
+                work_session=work_session,
+                policy_profile=session_policy_profile,
+                require_work_session=require_work_session,
+                now=now)
+            work_session_binding = _attach_work_session_claim_in(
+                c, session_verdict, claim_id, task_id, agent_id, actor,
+                principal_id=principal_id, project=task_project, now=now)
+            if work_session_binding.get("error"):
+                response = {"claimed": False, "reason": "work_session_bind_failed",
+                            "task_id": task_id, "task_project": task_project,
+                            "work_session": work_session_binding}
+                _idem_store(mission_c, "claim_next", idem_key, actor, payload, response)
+                return response
+            dispatch_reason["work_session"] = work_session_binding
             payload_event = {"claim_id": claim_id, "lease_id": lease_id,
                              "task_id": task_id, "task_project": task_project,
                              "agent_id": agent_id, "deliverable_id": resolved_deliverable_id,
@@ -2942,6 +2981,8 @@ def _claim_next_mission_scoped(agent_id: str, lanes: Any = None,
             "budget": selected_score["budget"],
             "dispatch_reason": dispatch_reason,
             "recommendation": _model_recommendation(task, selected_score),
+            "work_session_id": work_session_binding.get("work_session_id"),
+            "work_session": work_session_binding,
         }
         _idem_store(mission_c, "claim_next", idem_key, actor, payload, response)
         return response
@@ -6328,7 +6369,17 @@ def create_work_session(payload: Dict[str, Any], actor: str = "system",
     if errors:
         return {"error": "invalid_work_session", "errors": errors,
                 "contract": work_session_contract(project) if has_project(project) else None}
-    now = time.time()
+    with _conn(project) as c:
+        return _insert_work_session_in(c, data, actor=actor,
+                                       principal_id=principal_id, project=project)
+
+
+def _insert_work_session_in(c: sqlite3.Connection, data: Dict[str, Any],
+                            actor: str = "system", principal_id: str = "",
+                            project: str = DEFAULT_PROJECT,
+                            now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    data = dict(data or {})
     work_session_id = data.get("work_session_id") or f"worksession-{uuid.uuid4().hex[:16]}"
     data["work_session_id"] = work_session_id
     data["project_id"] = project
@@ -6349,28 +6400,27 @@ def create_work_session(payload: Dict[str, Any], actor: str = "system",
         "env_json", "policy_profile", "session_token_hash", "principal_id", "created_by",
         "updated_by", "created_at", "updated_at", "expires_at", "completed_at",
     ]
-    with _conn(project) as c:
-        existing = c.execute("SELECT 1 FROM work_sessions WHERE work_session_id=?",
-                             (work_session_id,)).fetchone()
-        if existing:
-            return {"error": "duplicate_work_session", "work_session_id": work_session_id}
-        c.execute(
-            f"INSERT INTO work_sessions({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
-            [data.get(col) for col in columns],
-        )
-        event = {
-            "work_session_id": work_session_id,
-            "agent_id": data.get("agent_id"),
-            "repo_role": data.get("repo_role"),
-            "branch": data.get("branch"),
-            "storage_mode": data.get("storage_mode"),
-            "status": data.get("status"),
-        }
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (data.get("task_id") or None, actor, "work_session.created",
-                   json.dumps(event, sort_keys=True), now))
-        row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
-                        (work_session_id,)).fetchone()
+    existing = c.execute("SELECT 1 FROM work_sessions WHERE work_session_id=?",
+                         (work_session_id,)).fetchone()
+    if existing:
+        return {"error": "duplicate_work_session", "work_session_id": work_session_id}
+    c.execute(
+        f"INSERT INTO work_sessions({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+        [data.get(col) for col in columns],
+    )
+    event = {
+        "work_session_id": work_session_id,
+        "agent_id": data.get("agent_id"),
+        "repo_role": data.get("repo_role"),
+        "branch": data.get("branch"),
+        "storage_mode": data.get("storage_mode"),
+        "status": data.get("status"),
+    }
+    c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+              (data.get("task_id") or None, actor, "work_session.created",
+               json.dumps(event, sort_keys=True), now))
+    row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
+                    (work_session_id,)).fetchone()
     return {"created": True, "work_session": _work_session_row(row)}
 
 
@@ -6451,6 +6501,282 @@ def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: st
         row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
                         (work_session_id,)).fetchone()
     return {"updated": True, "work_session": _work_session_row(row)}
+
+
+def _coerce_work_session_payload(value: Any) -> Tuple[Dict[str, Any], str]:
+    if value in (None, ""):
+        return {}, ""
+    if isinstance(value, dict):
+        return copy.deepcopy(value), ""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}, "work_session must be valid JSON"
+        if isinstance(parsed, dict):
+            return parsed, ""
+    return {}, "work_session must be a JSON object"
+
+
+def _task_work_session_profile(task: Dict[str, Any],
+                               requested_profile: str = "") -> str:
+    requested = (requested_profile or "").strip().lower()
+    if requested:
+        return requested
+    state = task.get("agent_state") or {}
+    for key in ("work_session", "session_policy", "dispatch"):
+        item = state.get(key) or {}
+        if isinstance(item, dict):
+            profile = str(item.get("policy_profile") or item.get("profile") or "").strip().lower()
+            if profile:
+                return profile
+    text = "\n".join(str(task.get(k) or "") for k in (
+        "description", "entry_criteria", "exit_criteria", "deliverable"))
+    match = re.search(r"(?:policy_profile|session_profile)\s*[:=]\s*([A-Za-z0-9_-]+)", text)
+    return (match.group(1).strip().lower() if match else "")
+
+
+def _work_session_required(task: Dict[str, Any], requested_profile: str = "",
+                           require_work_session: bool = False) -> Tuple[bool, str]:
+    profile = _task_work_session_profile(task, requested_profile)
+    return bool(require_work_session or profile in WORK_SESSION_STRICT_PROFILES), profile
+
+
+def _branch_matches_task(agent_id: str, task_id: str, branch: str) -> bool:
+    branch = (branch or "").strip()
+    task_id = (task_id or "").strip()
+    if not branch or not task_id:
+        return False
+    runtime = (agent_id or "").split("/", 1)[0].strip()
+    expected_prefix = f"{runtime}/{task_id}" if runtime else task_id
+    return branch.startswith(expected_prefix) or f"/{task_id}" in branch
+
+
+def _work_session_failure(reason: str, message: str, failure_class: str,
+                          severity: str = "high",
+                          details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "reason": reason,
+        "message": message,
+        "failure_class": failure_class,
+        "severity": severity,
+        **(details or {}),
+    }
+
+
+def _active_work_session_row_in(c: sqlite3.Connection, work_session_id: str = "",
+                                task_id: str = "", agent_id: str = "",
+                                now: Optional[float] = None) -> Optional[sqlite3.Row]:
+    now = time.time() if now is None else now
+    if work_session_id:
+        return c.execute(
+            "SELECT * FROM work_sessions WHERE work_session_id=?",
+            (work_session_id,),
+        ).fetchone()
+    return c.execute(
+        "SELECT * FROM work_sessions WHERE task_id=? AND agent_id=? "
+        "AND status IN ('active','proposed') AND (expires_at IS NULL OR expires_at>?) "
+        "ORDER BY updated_at DESC, created_at DESC, work_session_id LIMIT 1",
+        (task_id, agent_id, now),
+    ).fetchone()
+
+
+def _validate_work_session_claim_binding_in(
+        c: sqlite3.Connection, task: Dict[str, Any], agent_id: str,
+        project: str = DEFAULT_PROJECT, work_session_id: str = "",
+        work_session: Any = None, policy_profile: str = "",
+        require_work_session: bool = False, now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    required, profile = _work_session_required(task, policy_profile, require_work_session)
+    task_id = task.get("task_id") or ""
+    payload, payload_error = _coerce_work_session_payload(work_session)
+    if payload_error:
+        return _work_session_failure("malformed_work_session", payload_error,
+                                     "malformed_payload", details={"policy_profile": profile})
+    if payload:
+        payload = {
+            **payload,
+            "task_id": payload.get("task_id") or task_id,
+            "agent_id": payload.get("agent_id") or agent_id,
+            "policy_profile": payload.get("policy_profile") or profile,
+        }
+        data, errors = _validate_work_session_payload(payload, project, partial=False)
+        if errors:
+            return _work_session_failure(
+                "invalid_work_session",
+                "Work Session payload failed model validation.",
+                "invalid_input",
+                details={"errors": errors, "policy_profile": profile},
+            )
+        if data.get("work_session_id"):
+            existing = c.execute("SELECT 1 FROM work_sessions WHERE work_session_id=?",
+                                 (data["work_session_id"],)).fetchone()
+            if existing:
+                return _work_session_failure(
+                    "duplicate_work_session",
+                    "Work Session id already exists.",
+                    "invalid_input",
+                    details={"work_session_id": data["work_session_id"],
+                             "policy_profile": profile},
+                )
+        session = _work_session_row_from_data(data, project=project)
+        return _validate_work_session_claim_state(
+            session, task, agent_id, project, required=required, profile=profile,
+            source="payload", normalized_payload=data, now=now)
+
+    row = _active_work_session_row_in(c, work_session_id=work_session_id,
+                                      task_id=task_id, agent_id=agent_id, now=now)
+    if not row:
+        if required:
+            return _work_session_failure(
+                "work_session_required",
+                "A valid Work Session is required before claiming code-strict work.",
+                "missing_data",
+                details={"policy_profile": profile, "required": True},
+            )
+        return {"ok": True, "required": False, "policy_profile": profile,
+                "source": "not_required", "work_session": None}
+    session = _work_session_row(row)
+    return _validate_work_session_claim_state(
+        session, task, agent_id, project, required=required, profile=profile,
+        source="existing", normalized_payload=None, now=now)
+
+
+def _work_session_row_from_data(data: Dict[str, Any], project: str) -> Dict[str, Any]:
+    return {
+        "schema": WORK_SESSION_SCHEMA,
+        "work_session_id": data.get("work_session_id") or "",
+        "project_id": project,
+        "task_id": data.get("task_id") or "",
+        "claim_id": data.get("claim_id") or "",
+        "agent_id": data.get("agent_id") or "",
+        "runtime": data.get("runtime") or "",
+        "repo_role": data.get("repo_role") or "",
+        "repo": data.get("repo") or "",
+        "default_branch": data.get("default_branch") or "",
+        "branch": data.get("branch") or "",
+        "upstream": data.get("upstream") or "",
+        "base_sha": data.get("base_sha") or "",
+        "head_sha": data.get("head_sha") or "",
+        "worktree_path": data.get("worktree_path") or "",
+        "clone_path": data.get("clone_path") or "",
+        "storage_mode": data.get("storage_mode") or "",
+        "status": data.get("status") or "",
+        "dirty_status": data.get("dirty_status") or "",
+        "conflict_marker_count": data.get("conflict_marker_count") or 0,
+        "hygiene": _json_obj(data.get("hygiene_json") or "{}", {}),
+        "file_leases": _json_obj(data.get("file_leases_json") or "[]", []),
+        "resource_leases": _json_obj(data.get("resource_leases_json") or "[]", []),
+        "env": _json_obj(data.get("env_json") or "{}", {}),
+        "policy_profile": data.get("policy_profile") or "",
+        "expires_at": data.get("expires_at"),
+        "session_token_hash_present": bool(data.get("session_token_hash")),
+    }
+
+
+def _validate_work_session_claim_state(
+        session: Dict[str, Any], task: Dict[str, Any], agent_id: str,
+        project: str, required: bool, profile: str, source: str,
+        normalized_payload: Optional[Dict[str, Any]] = None,
+        now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    task_id = task.get("task_id") or ""
+    problems: List[Dict[str, Any]] = []
+    if session.get("project_id") != project:
+        problems.append({"reason": "wrong_project", "failure_class": "invalid_input",
+                         "message": "Work Session project_id does not match claim project."})
+    if session.get("task_id") and session.get("task_id") != task_id:
+        problems.append({"reason": "wrong_task", "failure_class": "invalid_input",
+                         "message": "Work Session task_id does not match claimed task."})
+    if session.get("agent_id") and session.get("agent_id") != agent_id:
+        problems.append({"reason": "wrong_agent", "failure_class": "unbound_identity",
+                         "message": "Work Session agent_id does not match claiming agent."})
+    if session.get("status") not in {"active", "proposed"}:
+        problems.append({"reason": "inactive_work_session", "failure_class": "failed_gate",
+                         "message": "Work Session is not active/proposed."})
+    expires_at = session.get("expires_at")
+    if expires_at is not None:
+        try:
+            if float(expires_at) <= now:
+                problems.append({"reason": "expired_work_session", "failure_class": "stale_branch",
+                                 "message": "Work Session is expired."})
+        except (TypeError, ValueError):
+            problems.append({"reason": "invalid_work_session_expiry",
+                             "failure_class": "invalid_input",
+                             "message": "Work Session expires_at is invalid."})
+    if session.get("dirty_status") == "dirty":
+        problems.append({"reason": "dirty_work_session", "failure_class": "failed_gate",
+                         "message": "Work Session reports a dirty workspace."})
+    if int(session.get("conflict_marker_count") or 0) > 0:
+        problems.append({"reason": "conflict_markers", "failure_class": "failed_gate",
+                         "message": "Work Session reports conflict markers."})
+    if required and not _branch_matches_task(agent_id, task_id, session.get("branch") or ""):
+        problems.append({"reason": "wrong_branch", "failure_class": "stale_branch",
+                         "message": "Work Session branch must be task-scoped."})
+    if required and not session.get("upstream"):
+        problems.append({"reason": "missing_upstream", "failure_class": "missing_data",
+                         "message": "Work Session upstream is required for code-strict claims."})
+    if required and not session.get("base_sha"):
+        problems.append({"reason": "missing_base_sha", "failure_class": "missing_data",
+                         "message": "Work Session base_sha is required for code-strict claims."})
+    if problems:
+        first = problems[0]
+        return _work_session_failure(
+            first["reason"], first["message"], first["failure_class"],
+            details={"problems": problems, "policy_profile": profile,
+                     "required": required, "work_session_id": session.get("work_session_id") or None},
+        )
+    return {
+        "ok": True,
+        "required": required,
+        "policy_profile": profile,
+        "source": source,
+        "work_session": session,
+        "normalized_payload": normalized_payload,
+    }
+
+
+def _attach_work_session_claim_in(c: sqlite3.Connection, verdict: Dict[str, Any],
+                                  claim_id: str, task_id: str, agent_id: str,
+                                  actor: str, principal_id: str = "",
+                                  project: str = DEFAULT_PROJECT,
+                                  now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    session = verdict.get("work_session")
+    if not session:
+        return {"work_session_id": None, "status": "not_required"}
+    if verdict.get("source") == "payload":
+        data = dict(verdict.get("normalized_payload") or {})
+        data["claim_id"] = claim_id
+        data["task_id"] = data.get("task_id") or task_id
+        data["agent_id"] = data.get("agent_id") or agent_id
+        data["status"] = "active"
+        created = _insert_work_session_in(
+            c, data, actor=actor, principal_id=principal_id, project=project, now=now)
+        if created.get("error"):
+            return {"error": created.get("error"), "work_session_id": data.get("work_session_id")}
+        session = created["work_session"]
+    else:
+        c.execute(
+            "UPDATE work_sessions SET claim_id=?, status='active', updated_by=?, updated_at=? "
+            "WHERE work_session_id=?",
+            (claim_id, actor, now, session["work_session_id"]),
+        )
+        row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
+                        (session["work_session_id"],)).fetchone()
+        session = _work_session_row(row)
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "work_session.updated",
+                   json.dumps({"work_session_id": session["work_session_id"],
+                               "claim_id": claim_id,
+                               "updated_fields": ["claim_id", "status"]},
+                              sort_keys=True), now))
+    return {"work_session_id": session.get("work_session_id"),
+            "status": "bound",
+            "source": verdict.get("source"),
+            "policy_profile": verdict.get("policy_profile"),
+            "required": verdict.get("required", False)}
 
 
 def _runner_control_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -7596,6 +7922,9 @@ def claim_task(task_id: str, agent_id: str,
                principal_id: str = "", actor: str = "system",
                ttl_seconds: int = 1800, idem_key: str = "",
                override_identity_risk: bool = False,
+               work_session_id: str = "", work_session: Any = None,
+               session_policy_profile: str = "",
+               require_work_session: bool = False,
                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Atomically claim one specific ready, unblocked task.
 
@@ -7606,7 +7935,11 @@ def claim_task(task_id: str, agent_id: str,
     task_id = (task_id or "").strip()
     payload = {"task_id": task_id, "agent_id": agent_id,
                "ttl_seconds": ttl_seconds,
-               "override_identity_risk": bool(override_identity_risk)}
+               "override_identity_risk": bool(override_identity_risk),
+               "work_session_id": work_session_id,
+               "work_session": work_session,
+               "session_policy_profile": session_policy_profile,
+               "require_work_session": bool(require_work_session)}
     with _conn(project) as c:
         hit = _idem_hit(c, "claim_task", idem_key, actor, payload)
         if hit is not None:
@@ -7659,6 +7992,29 @@ def claim_task(task_id: str, agent_id: str,
             _idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
 
+        session_verdict = _validate_work_session_claim_binding_in(
+            c, task, agent_id, project=project,
+            work_session_id=work_session_id,
+            work_session=work_session,
+            policy_profile=session_policy_profile,
+            require_work_session=require_work_session,
+            now=now)
+        if not session_verdict.get("ok"):
+            response = {"claimed": False,
+                        "reason": session_verdict.get("reason") or "invalid_work_session",
+                        "failure_class": session_verdict.get("failure_class"),
+                        "severity": session_verdict.get("severity"),
+                        "message": session_verdict.get("message"),
+                        "task_id": task_id,
+                        "work_session": session_verdict,
+                        "override_field": "work_session",
+                        "override_required": True}
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (task_id, actor, "task.claim_blocked_work_session",
+                       json.dumps({"agent_id": agent_id, **response}, sort_keys=True), now))
+            _idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
+
         claim_id = "taskclaim-" + uuid.uuid4().hex[:16]
         lease_id = "lease-" + uuid.uuid4().hex[:16]
         ttl = max(60, int(ttl_seconds or 1800))
@@ -7681,6 +8037,15 @@ def claim_task(task_id: str, agent_id: str,
                            "dependency_checked": True}
         if risk and override_identity_risk:
             dispatch_reason["identity_override"] = risk
+        work_session_binding = _attach_work_session_claim_in(
+            c, session_verdict, claim_id, task_id, agent_id, actor,
+            principal_id=principal_id, project=project, now=now)
+        if work_session_binding.get("error"):
+            response = {"claimed": False, "reason": "work_session_bind_failed",
+                        "task_id": task_id, "work_session": work_session_binding}
+            _idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
+        dispatch_reason["work_session"] = work_session_binding
         payload_event = {"claim_id": claim_id, "lease_id": lease_id,
                          "task_id": task_id, "agent_id": agent_id,
                          "dispatch_reason": dispatch_reason}
@@ -7696,6 +8061,8 @@ def claim_task(task_id: str, agent_id: str,
             "lease": {"lease_id": lease_id, "resource_type": "task",
                       "names": [task_id], "expires_at": expires_at},
             "dispatch_reason": dispatch_reason,
+            "work_session_id": work_session_binding.get("work_session_id"),
+            "work_session": work_session_binding,
         }
         _idem_store(c, "claim_task", idem_key, actor, payload, response)
         return response
@@ -7707,6 +8074,9 @@ def claim_next(agent_id: str, lanes: Any = None,
                principal_id: str = "", actor: str = "system",
                ttl_seconds: int = 1800, idem_key: str = "",
                override_identity_risk: bool = False,
+               work_session_id: str = "", work_session: Any = None,
+               session_policy_profile: str = "",
+               require_work_session: bool = False,
                project: str = DEFAULT_PROJECT,
                deliverable_id: str = "", board_id: str = "",
                mission_id: str = "", milestone_id: str = "") -> Dict[str, Any]:
@@ -7726,6 +8096,10 @@ def claim_next(agent_id: str, lanes: Any = None,
             principal_id=principal_id, actor=actor,
             ttl_seconds=ttl_seconds, idem_key=idem_key,
             override_identity_risk=override_identity_risk,
+            work_session_id=work_session_id,
+            work_session=work_session,
+            session_policy_profile=session_policy_profile,
+            require_work_session=require_work_session,
             mission_project=project,
             deliverable_id=deliverable_id, board_id=board_id,
             mission_id=mission_id, milestone_id=milestone_id)
@@ -7738,7 +8112,11 @@ def claim_next(agent_id: str, lanes: Any = None,
     payload = {"agent_id": agent_id, "lanes": sorted(lane_set),
                "capabilities": sorted(capabilities or []), "max_risk": max_risk,
                "max_budget_usd": max_budget_usd, "ttl_seconds": ttl_seconds,
-               "override_identity_risk": bool(override_identity_risk)}
+               "override_identity_risk": bool(override_identity_risk),
+               "work_session_id": work_session_id,
+               "work_session": work_session,
+               "session_policy_profile": session_policy_profile,
+               "require_work_session": bool(require_work_session)}
     with _conn(project) as c:
         hit = _idem_hit(c, "claim_next", idem_key, actor, payload)
         if hit is not None:
@@ -7755,9 +8133,10 @@ def claim_next(agent_id: str, lanes: Any = None,
         eligible = []
         skipped = {"active_claim": 0, "status": 0, "lane": 0, "dependencies": 0,
                    "human_approval": 0, "capability_mismatch": 0, "risk": 0, "budget": 0,
-                   "identity_unknown": 0}
+                   "identity_unknown": 0, "work_session": 0}
         identity_risks: Dict[str, Dict[str, Any]] = {}
         human_gates: Dict[str, Dict[str, Any]] = {}
+        work_session_findings: Dict[str, Dict[str, Any]] = {}
         for t in tasks:
             if t["task_id"] in active_claims:
                 skipped["active_claim"] += 1
@@ -7781,6 +8160,17 @@ def claim_next(agent_id: str, lanes: Any = None,
                 skipped["identity_unknown"] += 1
                 identity_risks[t["task_id"]] = identity_risk
                 continue
+            session_verdict = _validate_work_session_claim_binding_in(
+                c, t, agent_id, project=project,
+                work_session_id=work_session_id,
+                work_session=work_session,
+                policy_profile=session_policy_profile,
+                require_work_session=require_work_session,
+                now=now)
+            if not session_verdict.get("ok"):
+                skipped["work_session"] += 1
+                work_session_findings[t["task_id"]] = session_verdict
+                continue
             required_caps = _task_required_capabilities(t)
             if required_caps and not set(required_caps).issubset(cap_set):
                 skipped["capability_mismatch"] += 1
@@ -7803,7 +8193,8 @@ def claim_next(agent_id: str, lanes: Any = None,
                         "dispatch_reason": {"policy": "score.v1", "skipped": skipped,
                                             "candidate_count": 0,
                                             "human_gates": human_gates,
-                                            "identity_risks": identity_risks}}
+                                            "identity_risks": identity_risks,
+                                            "work_session_findings": work_session_findings}}
             _idem_store(c, "claim_next", idem_key, actor, payload, response)
             return response
         _, _, _, task, selected_score = sorted(
@@ -7834,6 +8225,22 @@ def claim_next(agent_id: str, lanes: Any = None,
                            "candidate_count": len(eligible)}
         if selected_score.get("identity_override"):
             dispatch_reason["identity_override"] = selected_score["identity_override"]
+        session_verdict = _validate_work_session_claim_binding_in(
+            c, task, agent_id, project=project,
+            work_session_id=work_session_id,
+            work_session=work_session,
+            policy_profile=session_policy_profile,
+            require_work_session=require_work_session,
+            now=now)
+        work_session_binding = _attach_work_session_claim_in(
+            c, session_verdict, claim_id, task["task_id"], agent_id, actor,
+            principal_id=principal_id, project=project, now=now)
+        if work_session_binding.get("error"):
+            response = {"claimed": False, "reason": "work_session_bind_failed",
+                        "task_id": task["task_id"], "work_session": work_session_binding}
+            _idem_store(c, "claim_next", idem_key, actor, payload, response)
+            return response
+        dispatch_reason["work_session"] = work_session_binding
         payload_event = {"claim_id": claim_id, "lease_id": lease_id,
                          "task_id": task["task_id"], "agent_id": agent_id,
                          "dispatch_reason": dispatch_reason}
@@ -7851,6 +8258,8 @@ def claim_next(agent_id: str, lanes: Any = None,
             "budget": selected_score["budget"],
             "dispatch_reason": dispatch_reason,
             "recommendation": _model_recommendation(task, selected_score),
+            "work_session_id": work_session_binding.get("work_session_id"),
+            "work_session": work_session_binding,
         }
         _idem_store(c, "claim_next", idem_key, actor, payload, response)
         return response

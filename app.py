@@ -2137,6 +2137,10 @@ async def txp_claim_next(request: Request, body: dict = Body(...)):
         ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
         idem_key=body.get("idem_key") or "",
         override_identity_risk=bool(body.get("override_identity_risk")),
+        work_session_id=body.get("work_session_id") or "",
+        work_session=body.get("work_session") or {},
+        session_policy_profile=body.get("session_policy_profile") or body.get("policy_profile") or "",
+        require_work_session=bool(body.get("require_work_session")),
         project=project,
         deliverable_id=body.get("deliverable_id") or "",
         board_id=body.get("board_id") or "",
@@ -2155,6 +2159,10 @@ async def txp_claim_task(request: Request, body: dict = Body(...)):
         ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
         idem_key=body.get("idem_key") or "",
         override_identity_risk=bool(body.get("override_identity_risk")),
+        work_session_id=body.get("work_session_id") or "",
+        work_session=body.get("work_session") or {},
+        session_policy_profile=body.get("session_policy_profile") or body.get("policy_profile") or "",
+        require_work_session=bool(body.get("require_work_session")),
         project=project)
 
 

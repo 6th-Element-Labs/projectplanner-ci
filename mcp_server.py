@@ -1378,6 +1378,9 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
                max_risk: str = "", max_budget_usd: float = 0.0,
                ttl_seconds: int = 1800, idem_key: str = "",
                override_identity_risk: bool = False,
+               work_session_id: str = "", work_session_json: str = "",
+               session_policy_profile: str = "",
+               require_work_session: bool = False,
                project: str = "maxwell", deliverable_id: str = "",
                board_id: str = "", mission_id: str = "",
                milestone_id: str = "") -> str:
@@ -1390,12 +1393,21 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
     principal = _require_write(ctx, project, ("write:ixp",))
     lane_list = [x.strip().upper() for x in lanes.replace("\n", ",").split(",") if x.strip()]
     cap_list = [x.strip() for x in capabilities.replace("\n", ",").split(",") if x.strip()]
+    work_session = {}
+    if work_session_json.strip():
+        try:
+            work_session = json.loads(work_session_json)
+        except json.JSONDecodeError:
+            return _dumps({"error": "work_session_json must be valid JSON"})
     return _dumps(store.claim_next(
         agent_id=agent_id, lanes=lane_list, capabilities=cap_list,
         max_risk=max_risk, max_budget_usd=max_budget_usd or None,
         principal_id=principal["id"], actor=auth.actor(principal),
         ttl_seconds=ttl_seconds, idem_key=idem_key,
         override_identity_risk=override_identity_risk,
+        work_session_id=work_session_id, work_session=work_session,
+        session_policy_profile=session_policy_profile,
+        require_work_session=require_work_session,
         project=project, deliverable_id=deliverable_id,
         board_id=board_id, mission_id=mission_id, milestone_id=milestone_id))
 
@@ -1404,6 +1416,9 @@ def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str =
 def claim_task(task_id: str, agent_id: str, ctx: Context,
                ttl_seconds: int = 1800, idem_key: str = "",
                override_identity_risk: bool = False,
+               work_session_id: str = "", work_session_json: str = "",
+               session_policy_profile: str = "",
+               require_work_session: bool = False,
                project: str = "maxwell") -> str:
     """Atomically claim one exact ready, unblocked task.
 
@@ -1411,11 +1426,20 @@ def claim_task(task_id: str, agent_id: str, ctx: Context,
     this never substitutes a different scheduler-preferred task.
     """
     principal = _require_write(ctx, project, ("write:ixp",))
+    work_session = {}
+    if work_session_json.strip():
+        try:
+            work_session = json.loads(work_session_json)
+        except json.JSONDecodeError:
+            return _dumps({"error": "work_session_json must be valid JSON"})
     return _dumps(store.claim_task(
         task_id=task_id, agent_id=agent_id,
         principal_id=principal["id"], actor=auth.actor(principal),
         ttl_seconds=ttl_seconds, idem_key=idem_key,
         override_identity_risk=override_identity_risk,
+        work_session_id=work_session_id, work_session=work_session,
+        session_policy_profile=session_policy_profile,
+        require_work_session=require_work_session,
         project=project))
 
 

@@ -132,9 +132,22 @@ Audit export includes `work_sessions` and `summary.work_session_count`.
 
 ## Follow-On Enforcement
 
-`SESSION-1` defines the model and surfaces. Follow-on tasks bind it into execution:
+`SESSION-1` defines the model and surfaces. `SESSION-2` starts binding it into execution:
 
-- `SESSION-2`: require a valid Work Session before `claim_task` / `claim_next` for code work.
+- `claim_task` and `claim_next` accept `work_session_id`, `work_session`, `work_session_json`,
+  `session_policy_profile`, and `require_work_session`.
+- When `require_work_session=true` or `session_policy_profile=code_strict`, a valid Work Session
+  is required before assignment.
+- Successful strict claims return `work_session_id` and include `dispatch_reason.work_session`.
+- Missing sessions fail with `failure_class=missing_data`.
+- Dirty workspaces and conflict markers fail with `failure_class=failed_gate`.
+- Wrong task branches and expired sessions fail with `failure_class=stale_branch`.
+- Wrong agent/session identity fails with `failure_class=unbound_identity`.
+- `claim_next` skips unsafe candidates and reports `dispatch_reason.skipped.work_session` plus
+  `dispatch_reason.work_session_findings`.
+
+Later tasks deepen enforcement:
+
 - `SESSION-3`: populate hygiene from repo preflight and conflict-marker scans.
 - `SESSION-4`: add `pre_tool_check` for file writes and shell commands.
 - `SESSION-5`: gate `complete_claim` on pushed clean branch/session proof.

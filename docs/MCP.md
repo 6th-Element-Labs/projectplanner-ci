@@ -269,6 +269,13 @@ Work Sessions:
   audit export reports only whether a token hash exists.
 - `SESSION-1` adds the model/API contract. Later SESSION tasks bind this into `claim_task`,
   `complete_claim`, merge gates, and managed worktree creation.
+- `SESSION-2` binds Work Sessions into `claim_task` / `claim_next` when
+  `require_work_session=true`, `session_policy_profile=code_strict`, or a task declares a strict
+  session profile. Successful strict claims return `work_session_id`; missing/unsafe sessions are
+  denied or skipped with typed failure classes.
+- Claim inputs: MCP accepts `work_session_id`, `work_session_json`,
+  `session_policy_profile`, and `require_work_session`; REST accepts `work_session_id`,
+  `work_session`, `session_policy_profile` / `policy_profile`, and `require_work_session`.
 - Full spec: [`WORK-SESSION-MODEL.md`](WORK-SESSION-MODEL.md).
 
 Runner kill rule:
