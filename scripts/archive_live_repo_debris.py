@@ -18,6 +18,7 @@ from typing import Dict, List
 
 
 SAFE_DEBRIS_PATTERNS = (
+    ".switchboard/",
     ".switchboard/*",
     ".switchboard/**",
     ".env.bak",
@@ -43,12 +44,12 @@ def _run_git(repo: Path, args: List[str]) -> subprocess.CompletedProcess:
 
 
 def git_untracked(repo: Path) -> List[str]:
-    result = _run_git(repo, ["status", "--porcelain=v1", "-uall"])
+    result = _run_git(repo, ["status", "--porcelain=v1", "-uall", "--ignored=matching"])
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git status failed")
     out: List[str] = []
     for line in result.stdout.splitlines():
-        if line.startswith("?? "):
+        if line.startswith("?? ") or line.startswith("!! "):
             out.append(line[3:])
     return sorted(out)
 

@@ -48,7 +48,18 @@ try:
     run(repo, "config", "user.email", "switchboard@example.test")
     run(repo, "config", "user.name", "Switchboard Test")
     write(repo / "tracked.txt", "tracked\n")
-    run(repo, "add", "tracked.txt")
+    write(repo / ".gitignore", "\n".join([
+        ".switchboard/",
+        "._*",
+        "**/._*",
+        "*.bak",
+        "*.bak.*",
+        "*.new",
+        "/app.js",
+        "/scripts/seed_helm_layers_northstar.py",
+        "",
+    ]))
+    run(repo, "add", "tracked.txt", ".gitignore")
     run(repo, "commit", "-m", "base")
 
     write(repo / ".env.bak-precutover-20260707T054852Z", "backup\n")
@@ -62,7 +73,7 @@ try:
 
     dry = archive_live_repo_debris.archive_debris(str(repo), str(archive_root), apply=False)
     ok(dry["matched_count"] == 6 and dry["moved_count"] == 0,
-       "dry-run identifies only known-safe debris")
+       "dry-run identifies known-safe untracked and ignored debris")
     ok("notes.txt" in dry["skipped"] and ".env" in dry["skipped"],
        "dry-run leaves unknown files and .env visible")
 
