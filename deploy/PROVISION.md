@@ -36,6 +36,15 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --d
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
 sudo apt-get update && sudo apt-get install -y caddy
 
+# Node.js 20 LTS — REQUIRED by the Switchboard PR CI gate, which runs
+# `node --check static/*.js`. The distro's Node 12 cannot parse ES2020 syntax
+# (optional chaining `?.`, nullish `??`) used in static/app.js, so the gate
+# fails every PR with "SyntaxError: Unexpected token '.'". Do NOT rely on the
+# Ubuntu `nodejs` package.
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs   # dpkg conflict? sudo apt-get remove -y libnode-dev libnode72 && sudo apt-get install -y nodejs
+node --version   # expect v20.x
+
 # App
 sudo git clone <projectplanner-remote> /opt/projectplanner
 cd /opt/projectplanner
