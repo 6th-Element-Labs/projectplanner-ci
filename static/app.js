@@ -346,6 +346,38 @@ const TeepPlan = {
             </div>
         </div>`;
     },
+    // NARRATE-4: CEO-voice narration block at the top of the task Details tab.
+    // Fresh -> plain-English callout; stale (fingerprint moved) -> the old text, muted,
+    // with an "Updating…" badge; absent -> a quiet one-liner so the surface is discoverable.
+    taskNarrationHtml(t) {
+        const state = (t && t.narration_state) || {};
+        const text = t && t.narration;
+        const raw = t && t.narration_raw;
+        if (text) {
+            return `<div class="bg-primary-lt rounded-3 p-3 mb-3">
+                <div class="d-flex gap-3">
+                    <i class="ti ti-message-chatbot text-primary fs-2 lh-1"></i>
+                    <div class="flex-fill">
+                        <div class="subheader text-primary mb-1">In plain English</div>
+                        <div class="markdown">${this.md(text)}</div>
+                    </div>
+                </div>
+            </div>`;
+        }
+        if (raw && state.stale) {
+            return `<div class="bg-yellow-lt rounded-3 p-3 mb-3">
+                <div class="d-flex gap-3">
+                    <i class="ti ti-refresh text-yellow fs-2 lh-1"></i>
+                    <div class="flex-fill">
+                        <div class="subheader text-yellow mb-1 d-flex align-items-center">In plain English
+                            <span class="badge bg-yellow-lt ms-2">Updating…</span></div>
+                        <div class="markdown text-secondary">${this.md(raw)}</div>
+                    </div>
+                </div>
+            </div>`;
+        }
+        return `<div class="text-secondary small mb-3"><i class="ti ti-message-chatbot me-1"></i>Plain-English summary will appear here once generated.</div>`;
+    },
     monitorControlHtml(t) {
         return `<div class="card mb-3" id="task-monitor-panel" data-task-id="${this.esc(t.task_id)}">
             <div class="card-header py-2">
@@ -1084,6 +1116,7 @@ const TeepPlan = {
                 <div class="tab-pane fade show active" id="m-details" role="tabpanel">
                     <div class="progress progress-sm mb-3"><div class="progress-bar bg-${sc}" style="width:${pct}%"></div></div>
                     <div class="text-secondary small mb-3 d-flex align-items-center"><span class="status-dot bg-${sc} me-2"></span>${this.esc(t.status || '—')} · ${pct}% complete</div>
+                    ${this.taskNarrationHtml(t)}
                     <div class="subheader mb-2">Economics</div>
                     ${this.tallyDetailHtml(tally)}
                     ${this.taskProjectContextHtml(t)}
@@ -3194,6 +3227,40 @@ const TeepPlan = {
         }
     },
 
+    // NARRATE-4: CEO-voice deliverable header — the 3-4 sentence plain-English summary that
+    // sits at the very top of the mission view, above the dependency map. Fresh -> callout;
+    // stale (linked-task fingerprint moved) -> old text muted with an "Updating…" badge.
+    // Absent -> nothing (the structured "Live product brief" below still covers it).
+    _missionCeoHeaderHtml(s) {
+        const state = s.ceo_narrative_state || {};
+        const text = s.ceo_narrative;
+        const raw = s.ceo_narrative_raw;
+        if (text) {
+            return `<div class="bg-primary-lt rounded-3 p-3 mb-4">
+                <div class="d-flex gap-3">
+                    <i class="ti ti-message-chatbot text-primary fs-1 lh-1"></i>
+                    <div class="flex-fill">
+                        <div class="subheader text-primary mb-1">In plain English</div>
+                        <div class="markdown">${this.md(text)}</div>
+                    </div>
+                </div>
+            </div>`;
+        }
+        if (raw && state.stale) {
+            return `<div class="bg-yellow-lt rounded-3 p-3 mb-4">
+                <div class="d-flex gap-3">
+                    <i class="ti ti-refresh text-yellow fs-1 lh-1"></i>
+                    <div class="flex-fill">
+                        <div class="subheader text-yellow mb-1 d-flex align-items-center">In plain English
+                            <span class="badge bg-yellow-lt ms-2">Updating…</span></div>
+                        <div class="markdown text-secondary">${this.md(raw)}</div>
+                    </div>
+                </div>
+            </div>`;
+        }
+        return '';
+    },
+
     _missionBriefHtml(s) {
         const brief = s.mission_brief || {};
         const state = s.narrative_state || {};
@@ -3605,7 +3672,7 @@ const TeepPlan = {
             `<div class="list-group-item"><span class="badge bg-primary-lt me-2">${this.esc(a.action || 'action')}</span>${this.esc(a.title || a.reason || '')}${a.task_id ? ` <span class="text-secondary small">· ${this.esc(a.project_id || '')} ${this.esc(a.task_id)}</span>` : ''}</div>`).join('')}</div></div>` : '';
         const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
             `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td>${this.esc(a.project_id || '')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
-        el.innerHTML = header + this._missionDependencyGraphHtml() + kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap + nextActions + blockerHtml +
+        el.innerHTML = header + this._missionCeoHeaderHtml(s) + this._missionDependencyGraphHtml() + kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap + nextActions + blockerHtml +
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +
