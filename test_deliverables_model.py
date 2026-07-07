@@ -265,6 +265,12 @@ try:
     store.mark_task_merged("RENDER-1", "deadbeef" * 5, pr_number=42,
                            project="qa-deliv-target")
 
+    proved = store.get_deliverable("helm-cpp-webgpu-renderer",
+                                   project="qa-deliv-home")
+    ok(proved["task_links"][0]["task"]["provenance"]["terminal"] is True and
+       proved["progress"]["done_with_proof_count"] == 1,
+       "merged linked tasks count as Done-with-proof mission progress")
+
     economics = store.deliverable_tally("helm-cpp-webgpu-renderer",
                                         project="qa-deliv-home")
     ok(economics.get("schema") == "switchboard.deliverable_tally.v1",

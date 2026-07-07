@@ -4171,25 +4171,26 @@ def _provenance_summary(git_state: Dict[str, Any]) -> Dict[str, Any]:
     if offline:
         return {
             "type": "offline_evidence",
+            "terminal": True,
             "label": "Offline evidence",
             "verifier": offline.get("verifier"),
             "reviewed_at": offline.get("reviewed_at"),
             "artifact_url": offline.get("artifact_url"),
             "evidence_hash": offline.get("evidence_hash"),
-            "terminal": True,
         }
     if git_state.get("merged_sha"):
         return {
             "type": "github_pr_merged" if git_state.get("pr_number") else "default_branch_commit",
+            "terminal": True,
             "label": "Merged code",
             "merged_sha": git_state.get("merged_sha"),
             "pr_number": git_state.get("pr_number"),
             "pr_url": git_state.get("pr_url"),
-            "terminal": True,
         }
     if git_state.get("pr_number") or git_state.get("pr_url"):
         return {
             "type": "github_pr_open",
+            "terminal": False,
             "label": "PR evidence",
             "pr_number": git_state.get("pr_number"),
             "pr_url": git_state.get("pr_url"),
@@ -4197,10 +4198,11 @@ def _provenance_summary(git_state: Dict[str, Any]) -> Dict[str, Any]:
     if git_state.get("head_sha"):
         return {
             "type": "branch_head",
+            "terminal": False,
             "label": "Branch evidence",
             "head_sha": git_state.get("head_sha"),
         }
-    return {"type": None, "label": "No provenance"}
+    return {"type": None, "terminal": False, "label": "No provenance"}
 
 
 def _load_git_state(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
