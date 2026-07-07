@@ -590,8 +590,19 @@ async def auth_logout(request: Request, body: dict = Body(default={})):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "taikun-pm", "tasks": len(store.list_tasks()),
-            "projects": store.project_ids()}
+    """Liveness probe — must stay cheap so monitors/Caddy never block the event loop."""
+    return {"status": "ok", "service": "taikun-pm"}
+
+
+@app.get("/health/deep")
+async def health_deep():
+    """Ops-only readiness: counts tasks/projects (can be slow; never wire to load balancers)."""
+    return {
+        "status": "ok",
+        "service": "taikun-pm",
+        "tasks": len(store.list_tasks()),
+        "projects": store.project_ids(),
+    }
 
 
 @app.get("/", include_in_schema=False)

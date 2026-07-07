@@ -75,7 +75,8 @@ remove `PM_BOOTSTRAP_ADMIN_PASSWORD` from `.env` and restart `projectplanner`.
 
 ## 5. Verify
 ```bash
-curl -s http://127.0.0.1:8110/health            # {"status":"ok",...}
+curl -s http://127.0.0.1:8110/health            # {"status":"ok","service":"taikun-pm"}  (cheap liveness)
+curl -s http://127.0.0.1:8110/health/deep      # ops readiness: task + project counts
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
@@ -83,6 +84,31 @@ systemctl list-timers projectplanner-ci-gate.timer
 systemctl is-active projectplanner-agent-host
 systemctl is-active actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
 ```
+
+## Site hung / 0-byte response (HARDEN-32)
+
+Symptom: `curl https://plan.taikunai.com/health` completes TLS then hangs (0 bytes) for
+20s+; local `curl -m5 http://127.0.0.1:8110/health` also hangs.
+
+**Likely cause:** single uvicorn worker blocked on sync SQLite (heavy `/api/board` or the old
+`/health` that called `list_tasks()`), or memory pressure on `t4g.micro` (swap thrash).
+
+**On the VM:**
+```bash
+cd /opt/projectplanner
+bash scripts/plan_uptime_recover.sh
+# or manually:
+curl -m5 -sS http://127.0.0.1:8110/health || sudo systemctl restart projectplanner projectplanner-mcp
+free -h && journalctl -u projectplanner -n 60 --no-pager
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl restart caddy
+```
+
+After deploy, `/health` stays cheap (no DB walk). Caddy uses short timeouts on `/health*` and
+active health checks on the main upstream so hung backends fail fast instead of holding clients
+for minutes. If restarts recur, bump the instance to `t4g.small` (2 GB) per HARDEN-40.
+
+**Acceptance:** `curl -m5 https://plan.taikunai.com/health` returns `200` in under 2s.
 
 ## Update live code
 ```bash

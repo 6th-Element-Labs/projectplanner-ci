@@ -3,11 +3,34 @@
 # /mcp* -> the MCP server (Streamable HTTP, :8111); everything else -> the web app (:8110).
 plan.taikunai.com {
     handle /mcp* {
-        reverse_proxy 127.0.0.1:8111
+        reverse_proxy 127.0.0.1:8111 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 120s
+            }
+        }
+    }
+    # Liveness must fail fast — a hung uvicorn must not hold clients for minutes.
+    handle /health* {
+        reverse_proxy 127.0.0.1:8110 {
+            transport http {
+                dial_timeout 2s
+                response_header_timeout 5s
+            }
+        }
     }
     handle {
         encode zstd gzip
-        reverse_proxy 127.0.0.1:8110
+        reverse_proxy 127.0.0.1:8110 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 15s
+            health_timeout 3s
+            fail_duration 30s
+        }
     }
 }
 
@@ -21,5 +44,10 @@ format.taikunai.com {
 
     @root path /
     rewrite @root /format.html
-    reverse_proxy 127.0.0.1:8110
+    reverse_proxy 127.0.0.1:8110 {
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 60s
+        }
+    }
 }

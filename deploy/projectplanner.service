@@ -13,6 +13,8 @@ Environment=PM_AUTH_MODE=required
 ExecStart=/opt/projectplanner/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8110
 Restart=always
 RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target
