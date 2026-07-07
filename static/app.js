@@ -3465,6 +3465,40 @@ const TeepPlan = {
         return html || '<div class="text-secondary small">No policy constraints recorded on this deliverable.</div>';
     },
 
+    // Hover text for a dependency-map node: the plain-English narration + who (and on which
+    // platform) is working it now, sourced from the already-loaded mission status.
+    _missionNodeTooltip(taskId) {
+        const s = this.missionStatus || {};
+        const id = String(taskId || '');
+        let narration = '';
+        let title = '';
+        let assignee = '';
+        for (const link of (s.linked_tasks || [])) {
+            const d = link.task_detail || {};
+            if (String(d.task_id) === id) {
+                narration = d.narration || d.narration_raw || '';  // raw = last prose while live-stale
+                if (!d.narration && d.narration_raw) narration += '\n(updating…)';
+                title = d.title || '';
+                assignee = d.assignee || '';
+                break;
+            }
+        }
+        const agents = (s.active_agents || []).filter((a) => String(a.task_id) === id);
+        const lines = [];
+        if (title) lines.push(`${id} — ${title}`);
+        if (narration) lines.push('', narration);
+        if (agents.length) {
+            const who = agents.map((a) => {
+                const plat = a.runtime ? ` · ${a.runtime}${a.model ? '/' + a.model : ''}` : '';
+                return `${a.agent_id}${plat}${a.stale ? ' (stale)' : ''}`;
+            }).join(', ');
+            lines.push('', `▶ Working now: ${who}`);
+        } else if (assignee) {
+            lines.push('', `Assigned: ${assignee}`);
+        }
+        return lines.join('\n').trim();
+    },
+
     _missionDependencyGraphHtml(graph) {
         const g = graph || this.missionGraph;
         if (!g || g.error) {
@@ -3494,7 +3528,8 @@ const TeepPlan = {
         const pill = (n, external) => {
             // External blockers render dashed/grey in the graph — keep the pill grey too.
             const cls = external ? 'bg-secondary-lt' : (pillColors[n.state] || 'bg-secondary-lt');
-            return `<a href="#" class="badge ${cls} me-1 mb-1 text-reset mission-dag-node" data-linked-task="${this.esc(n.id)}" data-linked-project="${this.esc(n.project_id || '')}">${this.esc(n.id)}</a>`;
+            const tip = this._missionNodeTooltip(n.id);
+            return `<a href="#" class="badge ${cls} me-1 mb-1 text-reset mission-dag-node" data-linked-task="${this.esc(n.id)}" data-linked-project="${this.esc(n.project_id || '')}"${tip ? ` title="${this.esc(tip)}"` : ''}>${this.esc(n.id)}</a>`;
         };
         const pills = (g.nodes || []).map((n) => pill(n, n.external)).join('');
         const contextPills = (g.context_nodes || []).map((n) => pill(n, false)).join('');
@@ -3556,14 +3591,27 @@ const TeepPlan = {
     _wireMissionGraphClicks(host) {
         if (!host || !(this.missionGraph?.nodes || []).length) return;
         const nodes = this.missionGraph.nodes;
+        const SVGNS = 'http://www.w3.org/2000/svg';
         host.querySelectorAll('.node').forEach((nodeEl) => {
             nodeEl.style.cursor = 'pointer';
+            const label = (nodeEl.textContent || '').toUpperCase();
+            const hit = nodes.find((n) => label.includes(String(n.id || '').toUpperCase()));
             nodeEl.addEventListener('click', (e) => {
                 e.preventDefault();
-                const label = (nodeEl.textContent || '').toUpperCase();
-                const hit = nodes.find((n) => label.includes(String(n.id || '').toUpperCase()));
                 if (hit) this.openLinkedTask(hit.id, hit.project_id);
             });
+            // Native SVG hover tooltip: narration + who's working it now.
+            if (hit) {
+                const tip = this._missionNodeTooltip(hit.id);
+                if (tip) {
+                    let t = nodeEl.querySelector('title');
+                    if (!t) {
+                        t = document.createElementNS(SVGNS, 'title');
+                        nodeEl.insertBefore(t, nodeEl.firstChild);
+                    }
+                    t.textContent = tip;
+                }
+            }
         });
     },
 

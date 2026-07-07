@@ -131,6 +131,11 @@ try:
        "mission page can show Done-with-proof")
     ok(body.get("narrative") == "Access rollout is active across boards.",
        "mission page can show live narrative")
+    td = (body.get("linked_tasks") or [{}])[0].get("task_detail") or {}
+    ok("narration" in td and "narration_raw" in td and "narration_stale" in td,
+       "linked task_detail carries narration fields for map-node hover tooltips")
+    ok(all("agent_id" in a for a in (body.get("active_agents") or [])),
+       "active_agents entries are shaped for hover tooltips (agent_id + runtime enrichment)")
 
     brief_res = client.post(
         f"/api/deliverables/{deliverable['id']}/mission_brief",
@@ -161,6 +166,7 @@ try:
         "_missionBriefHtml",
         "openLinkedTask",
         "_missionPolicyDrift",
+        "_missionNodeTooltip",
     ):
         ok(needle in app_js, f"app.js defines {needle}")
 

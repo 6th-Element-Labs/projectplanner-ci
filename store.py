@@ -3212,6 +3212,11 @@ def _enriched_mission_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
         "human_gate": _task_human_gate_state(task),
         "session_health": task.get("session_health"),
         "active_claims": claims,
+        # CEO-voice summary for map-node hover tooltips. narration is None while a live task
+        # is transiently stale; narration_raw keeps the last prose so the tooltip still shows.
+        "narration": task.get("narration"),
+        "narration_raw": task.get("narration_raw"),
+        "narration_stale": (task.get("narration_state") or {}).get("stale"),
     }
     return enriched
 
@@ -3457,6 +3462,18 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
                     "task_id": detail.get("task_id"),
                     "project_id": link.get("project_id"),
                 }
+    # Enrich each active agent with its advertised runtime/platform + model, so map-node
+    # hover tooltips can show WHO (and on which platform) is working the task.
+    if active_agents:
+        with _conn(project) as c:
+            for agent_id, info in active_agents.items():
+                prow = c.execute("SELECT * FROM agent_presence WHERE agent_id=?",
+                                 (agent_id,)).fetchone()
+                if prow:
+                    pres = _presence_row(prow)
+                    info["runtime"] = pres.get("runtime")
+                    info["model"] = pres.get("model")
+                    info["stale"] = pres.get("stale")
     pending_proposal = None
     with _conn(project) as c:
         row = c.execute(
