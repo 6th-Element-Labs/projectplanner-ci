@@ -184,7 +184,7 @@ class LocalStoreClient:
                 "workstream_id": "CONF",
                 "workstream_name": "Conformance",
                 "title": title,
-                "description": "requires capabilities: python",
+                "description": "policy_profile:no_repo\nrequires capabilities: python",
                 "depends_on": depends_on or [],
                 "risk_level": "Low",
             },

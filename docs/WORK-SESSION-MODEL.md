@@ -217,8 +217,10 @@ ack for warning overrides.
 
 - `claim_task` and `claim_next` accept `work_session_id`, `work_session`, `work_session_json`,
   `session_policy_profile`, and `require_work_session`.
-- When `require_work_session=true` or `session_policy_profile=code_strict`, a valid Work Session
-  is required before assignment.
+- Enforcement is controlled by named session policy profiles, exposed by `get_working_agreement`,
+  `get_project_contract`, and `work_session_contract.policy_profiles`.
+- When `require_work_session=true`, `session_policy_profile=code_strict`, or the task/project
+  default resolves to `code_strict`, a valid Work Session is required before assignment.
 - Successful strict claims return `work_session_id` and include `dispatch_reason.work_session`.
 - Missing sessions fail with `failure_class=missing_data`.
 - Dirty workspaces and conflict markers fail with `failure_class=failed_gate`.
@@ -251,3 +253,8 @@ Later tasks deepen enforcement:
 - `SESSION-8`: surface session health in Work Session rows, task detail, task lists, mission
   status, mission blockers, generated mission briefs, and the board truth UI so humans and
   coordinator agents trust typed health over stale prose.
+- `SESSION-9`: make session enforcement profile-driven. Built-in profiles are `code_strict`,
+  `docs_review`, `offline_evidence`, `ui_preview`, and `no_repo`. Profiles define whether a Work
+  Session is required, missing-session behavior for `pre_tool_check`, allowed storage modes,
+  deny-vs-warn hygiene, test/diff evidence requirements, and merge authority. Helm code-like tasks
+  default to `code_strict`; docs/review/offline work can opt into relaxed profiles explicitly.

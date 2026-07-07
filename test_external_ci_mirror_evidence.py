@@ -41,6 +41,7 @@ try:
         {
             "workstream_id": "CIQA",
             "title": "external CI evidence",
+            "description": "policy_profile:no_repo\nSynthetic external-CI evidence fixture.",
             "exit_criteria": "external_ci_passed required before merge",
         },
         actor="test",

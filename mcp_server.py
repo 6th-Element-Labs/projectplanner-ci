@@ -322,6 +322,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "",
         "boards_missions": boards_missions,
         "repo_topology": repo_topology,
         "repo_role_guide": repo_role_guide,
+        "session_policy_profiles": store.get_session_policy_profiles(selected),
         "work_session_contract": store.work_session_contract(selected),
         "code_repo_gate": repo_topology.get("code_repo_gate"),
         "local_docs_policy": (
