@@ -22,6 +22,25 @@ def _conn() -> sqlite3.Connection:
     return store._registry_conn()
 
 
+def _exec_write(sql: str, params: tuple = ()) -> None:
+    """Run one auth write with a one-shot retry on a transient sqlite
+    OperationalError (database locked/busy, or a momentarily read-only handle).
+    Each attempt opens a FRESH connection, so a wedged/stale connection can't fail
+    the login path — the exact class of failure that took auth down when the
+    registry connection stuck 'readonly'. Persistent errors still raise (not masked).
+    """
+    for attempt in range(2):
+        try:
+            with _conn() as c:
+                c.execute(sql, params)
+            return
+        except sqlite3.OperationalError:
+            if attempt == 0:
+                time.sleep(0.05)
+                continue
+            raise
+
+
 def init() -> None:
     """Ensure the base registry + the two auth-owned tables exist."""
     store.init_project_registry()  # creates users / project_role_grants / etc.
@@ -116,12 +135,11 @@ def create_user(email: str, display_name: str, password_hash: str,
 
 def set_password(user_id: str, password_hash: str) -> None:
     now = time.time()
-    with _conn() as c:
-        c.execute(
-            "INSERT INTO user_auth(user_id, password_hash, created_at, updated_at) VALUES (?,?,?,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash, updated_at=excluded.updated_at",
-            (user_id, password_hash, now, now),
-        )
+    _exec_write(
+        "INSERT INTO user_auth(user_id, password_hash, created_at, updated_at) VALUES (?,?,?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash, updated_at=excluded.updated_at",
+        (user_id, password_hash, now, now),
+    )
 
 
 def set_superadmin(user_id: str, value: bool) -> None:
@@ -136,11 +154,10 @@ def set_superadmin(user_id: str, value: bool) -> None:
 
 def record_login(user_id: str) -> None:
     now = time.time()
-    with _conn() as c:
-        c.execute(
-            "UPDATE user_auth SET last_login=?, login_count=login_count+1, updated_at=? WHERE user_id=?",
-            (now, now, user_id),
-        )
+    _exec_write(
+        "UPDATE user_auth SET last_login=?, login_count=login_count+1, updated_at=? WHERE user_id=?",
+        (now, now, user_id),
+    )
 
 
 # ---- sessions ---------------------------------------------------------------
@@ -148,12 +165,11 @@ def create_session(user_id: str, token: str, ttl_seconds: int,
                    *, ip: str = "", user_agent: str = "") -> Dict[str, Any]:
     now = time.time()
     exp = now + max(60, int(ttl_seconds))
-    with _conn() as c:
-        c.execute(
-            "INSERT INTO auth_sessions_v2(token_hash, user_id, created_at, expires_at, ip, user_agent) "
-            "VALUES (?,?,?,?,?,?)",
-            (token_hash(token), user_id, now, exp, ip, user_agent),
-        )
+    _exec_write(
+        "INSERT INTO auth_sessions_v2(token_hash, user_id, created_at, expires_at, ip, user_agent) "
+        "VALUES (?,?,?,?,?,?)",
+        (token_hash(token), user_id, now, exp, ip, user_agent),
+    )
     return {"expires_at": exp}
 
 

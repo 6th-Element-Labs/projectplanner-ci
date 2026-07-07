@@ -13,6 +13,7 @@ Run:
 import asyncio
 import hashlib
 import hmac
+import json
 import os
 import time
 from pathlib import Path
@@ -1073,13 +1074,21 @@ async def defer_deliverable_breakdown(request: Request, proposal_id: str,
 
 
 @app.get("/api/board")
-def board(project: str = Query(store.DEFAULT_PROJECT)):
+def board(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
     # Sync (def, not async) on purpose: FastAPI runs it in the threadpool, so the
     # board's SQLite I/O doesn't block the single worker's event loop — other
     # requests (incl. /health) stay responsive while a board builds (HARDEN-36).
     # lite: drop heavy per-task fields the board UI never renders (re-fetched by
     # the task-detail modal); the store also serves a short-TTL cached copy.
-    return store.board_payload(_proj(project), lite=True)
+    payload = store.board_payload(_proj(project), lite=True)
+    # HARDEN-37: ETag + short max-age so a tab refocus / reload that finds the
+    # board unchanged gets a bodyless 304 instead of re-downloading ~250KB.
+    body = json.dumps(payload, default=str, separators=(",", ":")).encode()
+    etag = 'W/"%s"' % hashlib.md5(body).hexdigest()  # noqa: S324 (cache tag, not security)
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=5"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 @app.get("/api/people")
