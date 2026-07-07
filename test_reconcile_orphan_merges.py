@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Reconcile orphan-merge sweep — merged PRs stamp tasks that bypassed the board workflow."""
+"""Reconcile <-> orphan_merge_discovery integration — merged PRs repair tasks
+that bypassed the board workflow, through the real store.reconcile() wiring.
+
+Module-level semantics (parsing, ambiguity, wrong-repo, active claims) are
+covered by test_orphan_merge_discovery.py; this proof pins the store side:
+token sourcing, checks surfacing, stamping, idempotence, and the no-repo /
+no-token boundaries.
+"""
 import os
 import shutil
 import sys
@@ -14,12 +21,12 @@ os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "dev-open"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import orphan_merge_discovery  # noqa: E402
 import store  # noqa: E402
 
 HOME = "qa-orphan-home"
 REPO = "example/qa-orphan-repo"
 SHA_A = "a" * 40
-SHA_B = "b" * 40
 passed = failed = 0
 
 
@@ -30,17 +37,25 @@ def ok(condition, message):
     failed += 0 if condition else 1
 
 
-def _fake_pr(number, title, branch, merge_sha, base_ref="main", default_branch="main"):
+def _merged_pr(number, task_id, merge_sha):
     return {
         "number": number,
-        "title": title,
-        "body": "",
         "html_url": f"https://github.com/{REPO}/pull/{number}",
+        "title": f"{task_id}: shipped without claim",
         "merged_at": "2026-07-07T00:00:00Z",
         "merge_commit_sha": merge_sha,
-        "head": {"ref": branch, "sha": "c" * 40},
-        "base": {"ref": base_ref, "repo": {"default_branch": default_branch}},
+        "base": {"ref": "main", "repo": {"default_branch": "main"}},
+        "head": {"ref": f"cursor/{task_id}-work", "sha": "c" * 40},
     }
+
+
+def _set_token():
+    os.environ["PM_GITHUB_TOKEN"] = "test-token"
+
+
+def _clear_tokens():
+    for name in ("PM_GITHUB_TOKEN", "GITHUB_TOKEN", "SWITCHBOARD_CI_GITHUB_TOKEN"):
+        os.environ.pop(name, None)
 
 
 try:
@@ -52,32 +67,28 @@ try:
 
     orphan = store.create_task({"workstream_id": "ORPH", "title": "merged behind the board"},
                                actor="test", project=HOME)
-    feature = store.create_task({"workstream_id": "ORPH", "title": "feature-branch merge only"},
-                                actor="test", project=HOME)
     cancelled = store.create_task({"workstream_id": "ORPH", "title": "cancelled work"},
                                   actor="test", project=HOME)
     store.update_task(cancelled["task_id"], {"status": "Cancelled"}, actor="test", project=HOME)
 
     fake_prs = [
-        _fake_pr(500, f"{orphan['task_id']}: shipped without claim",
-                 f"cursor/{orphan['task_id']}-work", SHA_A),
-        # merged into an integration branch, NOT the default branch — must not stamp
-        _fake_pr(501, f"{feature['task_id']}: integration merge",
-                 f"cursor/{feature['task_id']}-work", SHA_B, base_ref="integration"),
-        # references a task id that only exists on a sibling board — must be ignored
-        _fake_pr(502, "OTHERBOARD-9: sibling project work", "cursor/OTHERBOARD-9-x", "d" * 40),
-        # references a cancelled task — must be skipped
-        _fake_pr(503, f"{cancelled['task_id']}: too late", f"cursor/{cancelled['task_id']}-x",
-                 "e" * 40),
+        _merged_pr(500, orphan["task_id"], SHA_A),
+        _merged_pr(502, "OTHERBOARD-9", "d" * 40),  # sibling-board id: ignored
+        _merged_pr(503, cancelled["task_id"], "e" * 40),  # cancelled: skipped
     ]
-    store._github_merged_prs = lambda repo, token="", limit=30: fake_prs if repo == REPO else []
+
+    def _fake_fetch(repo, token="", lookback_days=30, now=None):
+        return (list(fake_prs) if repo == REPO else []), {"merged_pr_count": len(fake_prs)}
+
+    orphan_merge_discovery.fetch_recent_merged_prs = _fake_fetch
     store._github_pr = lambda repo, pr_number, token="": next(
         (p for p in fake_prs if p["number"] == pr_number), None)
 
-    os.environ["PM_RECONCILE_PR_SWEEP_LIMIT"] = "30"
+    _set_token()
     result = store.reconcile(project=HOME)
     checks = result.get("external_checks") or {}
-    ok(checks.get("github_merged_pr_sweep") == "swept_4", "sweep ran over the merged PR page")
+    ok(checks.get("orphan_merge_discovery") == "checked",
+       "discovery runs through reconcile when repo + token are configured")
 
     t = store.get_task(orphan["task_id"], project=HOME) or {}
     ok(t.get("status") == "Done", "orphan task stamped Done from merged PR")
@@ -85,43 +96,48 @@ try:
        "orphan task has terminal merge provenance")
     gs = t.get("git_state") or {}
     ok(gs.get("merged_sha") == SHA_A and gs.get("pr_number") == 500,
-       "orphan git_state carries merged_sha + pr_number from the sweep")
+       "orphan git_state carries merged_sha + pr_number from discovery")
     swept = [b for b in (result.get("backfilled") or [])
-             if b.get("source") == "orphan_merge_sweep"]
+             if b.get("source") == "orphan_merge_discovery"]
     ok([b["task_id"] for b in swept] == [orphan["task_id"]],
-       "backfilled reports exactly the orphan task from the sweep")
-    ok(any(f.get("code") == "orphan_merge_backfilled" for f in result.get("findings") or []),
-       "orphan_merge_backfilled finding emitted")
+       "backfilled reports exactly the orphan repair")
+    kinds = [a.get("kind") for a in (t.get("activity") or [])]
+    ok("git.orphan_merge_discovered" in kinds,
+       "repair leaves a git.orphan_merge_discovered activity trail")
 
-    ok((store.get_task(feature["task_id"], project=HOME) or {}).get("status") == "Not Started",
-       "non-default-branch merge does not stamp")
     ok((store.get_task(cancelled["task_id"], project=HOME) or {}).get("status") == "Cancelled",
        "cancelled task untouched")
 
     again = store.reconcile(project=HOME)
     swept_again = [b for b in (again.get("backfilled") or [])
-                   if b.get("source") == "orphan_merge_sweep"]
-    ok(not swept_again, "second reconcile run is idempotent (no re-backfill)")
+                   if b.get("source") == "orphan_merge_discovery"]
+    ok(not swept_again, "second reconcile run is idempotent (git_state no longer empty)")
 
-    os.environ["PM_RECONCILE_PR_SWEEP_LIMIT"] = "0"
-    disabled = store.reconcile(project=HOME)
-    ok((disabled.get("external_checks") or {}).get("github_merged_pr_sweep") == "disabled",
-       "PM_RECONCILE_PR_SWEEP_LIMIT=0 disables the sweep")
-    os.environ["PM_RECONCILE_PR_SWEEP_LIMIT"] = "30"
+    # Without any GitHub token the discovery must fail soft and touch nothing.
+    fresh = store.create_task({"workstream_id": "ORPH", "title": "second orphan"},
+                              actor="test", project=HOME)
+    fake_prs.append(_merged_pr(504, fresh["task_id"], "f" * 40))
+    _clear_tokens()
+    no_token = store.reconcile(project=HOME)
+    ok((no_token.get("external_checks") or {}).get("orphan_merge_discovery") == "skipped_no_token",
+       "missing token reports skipped_no_token instead of guessing")
+    ok(any(f.get("code") == "orphan_merge_discovery_skipped_no_token"
+           for f in no_token.get("findings") or []),
+       "missing token surfaces an actionable finding")
+    ok((store.get_task(fresh["task_id"], project=HOME) or {}).get("status") == "Not Started",
+       "no stamping happens without a token")
 
-    # No canonical repo configured at all — the sweep is never attempted.
-    # (get_project_github_repo returns the topology canonical repo by definition,
-    # so a configured-but-non-canonical repo cannot reach the sweep; the in-code
-    # role guard is defense-in-depth.)
+    # A project with no canonical repo never attempts discovery.
     AUX = "qa-orphan-aux"
     store.create_project("Orphan Aux", project_id=AUX, actor="test")
     store.init_db(AUX)
+    _set_token()
     aux = store.reconcile(project=AUX)
-    ok("github_merged_pr_sweep" not in (aux.get("external_checks") or {}),
-       "no canonical repo configured -> sweep not attempted")
+    ok((aux.get("external_checks") or {}).get("orphan_merge_discovery") == "skipped_no_repo",
+       "no canonical repo -> discovery skipped_no_repo")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
-print(f"\norphan merge sweep: {passed} passed, {failed} failed")
+print(f"\norphan merge discovery via reconcile: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
