@@ -48,6 +48,14 @@ def init() -> None:
                 revoked_at REAL
             );
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_v2_user ON auth_sessions_v2(user_id);
+            CREATE TABLE IF NOT EXISTS password_resets (
+                token_hash TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                used_at    REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
             """
         )
 
@@ -187,6 +195,40 @@ def revoke_user_sessions(user_id: str, keep_token: str = "") -> int:
             (time.time(), user_id, keep_hash),
         )
         return cur.rowcount
+
+
+# ---- password reset tokens (single-use, expiring) ---------------------------
+def create_reset_token(user_id: str, raw_token: str, ttl_seconds: int) -> float:
+    """Store the HASH of a reset token (never the token itself). Returns expiry."""
+    now = time.time()
+    exp = now + max(60, int(ttl_seconds))
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO password_resets(token_hash, user_id, created_at, expires_at) "
+            "VALUES (?,?,?,?)",
+            (token_hash(raw_token), user_id, now, exp),
+        )
+    return exp
+
+
+def consume_reset_token(raw_token: str) -> Optional[str]:
+    """Atomically spend a valid, unexpired, unused token; return its user_id or None."""
+    if not raw_token:
+        return None
+    th = token_hash(raw_token)
+    now = time.time()
+    with _conn() as c:
+        row = c.execute(
+            "SELECT user_id, expires_at, used_at FROM password_resets WHERE token_hash=?",
+            (th,),
+        ).fetchone()
+        if not row or row["used_at"] or float(row["expires_at"]) <= now:
+            return None
+        cur = c.execute(
+            "UPDATE password_resets SET used_at=? WHERE token_hash=? AND used_at IS NULL",
+            (now, th),
+        )
+        return row["user_id"] if cur.rowcount == 1 else None
 
 
 # ---- access resolution (deny-by-default) ------------------------------------

@@ -23,6 +23,15 @@ class ChangePasswordBody(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 
+class ForgotPasswordBody(BaseModel):
+    email: str
+
+
+class ResetPasswordBody(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=8)
+
+
 def public_user(account: Dict[str, Any], projects: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Shape a user account for the client — never leaks the password hash."""
     out = {

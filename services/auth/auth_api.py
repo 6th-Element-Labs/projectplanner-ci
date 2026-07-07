@@ -7,6 +7,8 @@ the JWT taikun_session cookie, not the monolith's per-project middleware.
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -20,6 +22,18 @@ router = APIRouter()
 def _is_secure(request: Request) -> bool:
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     return proto == "https"
+
+
+def _public_base_url(request: Request) -> str:
+    """The externally-visible origin, for building emailed links. Honors an explicit
+    PM_PUBLIC_BASE_URL, else reconstructs from the proxy's forwarded headers."""
+    explicit = (os.environ.get("PM_PUBLIC_BASE_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = (request.headers.get("x-forwarded-host")
+            or request.headers.get("host") or request.url.netloc)
+    return f"{proto}://{host}"
 
 
 def _client(request: Request) -> tuple:
@@ -82,6 +96,25 @@ async def change_password(request: Request, body: contracts.ChangePasswordBody):
     except service.AuthError as e:
         raise HTTPException(e.status, e.message)
     return {"user": user, "changed": True}
+
+
+@router.post("/api/auth/forgot-password")
+async def forgot_password(request: Request, body: contracts.ForgotPasswordBody):
+    """Email a single-use reset link. Always 200 with the same message so the
+    endpoint can't reveal whether an email is registered (anti-enumeration)."""
+    service.request_password_reset(body.email, _public_base_url(request))
+    return {"ok": True,
+            "message": "If an account exists for that email, a reset link is on its way."}
+
+
+@router.post("/api/auth/reset-password")
+async def reset_password(request: Request, body: contracts.ResetPasswordBody):
+    """Complete a reset: spend the token, set the new password, sign out everywhere."""
+    try:
+        service.reset_password(body.token, body.new_password)
+    except service.AuthError as e:
+        raise HTTPException(e.status, e.message)
+    return {"ok": True, "message": "Your password has been reset. You can now sign in."}
 
 # NOTE: /api/projects filtering (deny-by-default project list) is delivered via
 # /api/auth/session["user"]["projects"] today. Overriding the monolith's

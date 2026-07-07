@@ -640,6 +640,28 @@ async def account_page(request: Request):
     raise HTTPException(404, "account page not found")
 
 
+@app.get("/forgot-password", include_in_schema=False)
+async def forgot_password_page():
+    if not _GLOBAL_AUTH:
+        raise HTTPException(404, "not found")
+    page = _static / "forgot-password.html"
+    if page.exists():
+        return FileResponse(str(page))
+    raise HTTPException(404, "forgot-password page not found")
+
+
+@app.get("/reset-password", include_in_schema=False)
+async def reset_password_page():
+    """Landing page for the emailed reset link (?token=…). Public — the token in
+    the POST is what authorizes the reset."""
+    if not _GLOBAL_AUTH:
+        raise HTTPException(404, "not found")
+    page = _static / "reset-password.html"
+    if page.exists():
+        return FileResponse(str(page))
+    raise HTTPException(404, "reset-password page not found")
+
+
 @app.get("/api/projects")
 async def list_projects(request: Request):
     """The project switcher's source of truth — [{id, label, pretitle}] + the default.
