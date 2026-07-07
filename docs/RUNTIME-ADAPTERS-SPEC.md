@@ -52,10 +52,12 @@ remember it:
 5. Drain `inbox` and handle or ack pending signals.
 6. Call `get_delta` from the last cursor.
 7. Claim required resources before writes or task execution.
-8. Heartbeat and poll at every supported boundary.
-9. Release owned leases on normal completion.
-10. Report completion, abandon, and usage where supported.
-11. Advertise the runtime's actual control fidelity.
+8. Call `pre_tool_check` before side-effectful tools when the runtime has a hook, wrapper, or
+   managed runner boundary.
+9. Heartbeat and poll at every supported boundary.
+10. Release owned leases on normal completion.
+11. Report completion, abandon, and usage where supported.
+12. Advertise the runtime's actual control fidelity.
 
 The adapter may be a hook bundle, SDK middleware, wrapper script, local daemon, library, or
 MCP configuration. The packaging differs per runtime; the behavioral contract does not.
@@ -143,6 +145,23 @@ optionally report usage
 
 Boundaries include pre-tool hooks, post-tool hooks, SDK step boundaries, graph node
 boundaries, command wrappers, model-turn boundaries, or timed background polls.
+
+### 3.3.1 Pre-tool check
+
+Adapters with a tool boundary call `pre_tool_check` before file writes, git commands, PR
+creation, `complete_claim`, merge, server start/kill, or other external effects:
+
+```text
+pre_tool_check(project, task_id, agent_id, work_session_id, tool_name, tool_input, action?)
+→ decision: allow | warn | deny
+→ remediation[]
+```
+
+The server validates the active Work Session, task/agent binding, dirty/conflict state, branch
+shape, and file lease conflicts. Hook-capable runtimes must block locally on `deny`. Advisory
+runtimes must surface the warning/deny and mark reduced control fidelity if the human/model can
+still ignore it. Denied shared-token writes are audited as `principal.unbound_write`; denied
+unsafe sessions are audited as `work_session.unsafe_session`.
 
 ### 3.4 Exit sequence
 

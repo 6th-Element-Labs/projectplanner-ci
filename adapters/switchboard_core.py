@@ -13,8 +13,10 @@ Two entry points:
 evaluate_tool applies, in priority order:
   1. FR-14 interrupt-consume — an inbound stop/redirect signal addressed to me denies the
      pending tool (and is acked, consume-once).
-  2. Definition-of-Done — deny an agent setting a task to 'Done' (MCP update_task + Bash back-channel).
-  3. Lease conflict — deny editing a file another agent holds a lease on (+ heads-up to holder).
+  2. Server pre_tool_check — when PM_PRE_TOOL_CHECK/PM_WORK_SESSION_ID is set, ask Switchboard
+     to validate the active Work Session before side effects.
+  3. Definition-of-Done — deny an agent setting a task to 'Done' (MCP update_task + Bash back-channel).
+  4. Lease conflict — deny editing a file another agent holds a lease on (+ heads-up to holder).
 
 Fail-open: any board/network error returns allow — never brick a tool call. Config via args or
 env: PM_BASE, PM_PROJECT, PM_MCP_TOKEN, PM_AGENT_ID.
@@ -174,6 +176,42 @@ def _lease_holder(project, relpath, base, token):
     return None
 
 
+def _pre_tool_server_enabled(tool_input):
+    val = os.environ.get("PM_PRE_TOOL_CHECK", "").strip().lower()
+    if val in ("1", "true", "yes", "on", "server", "deny", "warn"):
+        return True
+    return bool(os.environ.get("PM_WORK_SESSION_ID") or (tool_input or {}).get("work_session_id"))
+
+
+def pre_tool_check(project, me, tool_name, tool_input, cwd=None, base=None, token=None,
+                   action="", control_mode=""):
+    """Ask Switchboard's server-side pre_tool_check before a side effect.
+
+    Returns None when the server check is not enabled or cannot be reached. Runtime adapters
+    keep fail-open behavior for transport failures, but honor explicit server deny/warn
+    verdicts when returned.
+    """
+    ti = tool_input or {}
+    if not _pre_tool_server_enabled(ti):
+        return None
+    body = {
+        "project": project,
+        "agent_id": me,
+        "tool_name": tool_name,
+        "tool_input": ti,
+        "action": action or ti.get("action") or "",
+        "task_id": ti.get("task_id") or os.environ.get("PM_TASK_ID", ""),
+        "work_session_id": ti.get("work_session_id") or os.environ.get("PM_WORK_SESSION_ID", ""),
+        "claim_id": ti.get("claim_id") or os.environ.get("PM_CLAIM_ID", ""),
+        "control_mode": control_mode or os.environ.get("PM_CONTROL_MODE", ""),
+        "cwd": cwd or os.getcwd(),
+    }
+    try:
+        return _http("POST", "/ixp/v1/pre_tool_check", body, base=base, token=token)
+    except Exception:
+        return None
+
+
 def evaluate_tool(project, me, tool_name, tool_input, cwd=None, base=None, token=None):
     """Return {"decision": "allow"|"deny", "reason": str} for one pending tool call.
     Runtime-agnostic: the adapter normalizes its hook payload into (tool_name, tool_input) and
@@ -187,6 +225,15 @@ def evaluate_tool(project, me, tool_name, tool_input, cwd=None, base=None, token
         return {"decision": "deny",
                 "reason": f"[{sig.upper()} from {frm}] {msg}  — interrupt consumed at the tool "
                           f"boundary (FR-14). Halt or redirect before any further tool use."}
+
+    server_verdict = pre_tool_check(project, me, tool_name, ti, cwd=cwd, base=base, token=token)
+    if server_verdict:
+        decision = server_verdict.get("decision") or "allow"
+        reason = server_verdict.get("reason") or ""
+        if decision == "deny":
+            return {"decision": "deny", "reason": reason, "server_pre_tool_check": server_verdict}
+        if decision == "warn" or reason:
+            return {"decision": "allow", "reason": reason, "server_pre_tool_check": server_verdict}
 
     # 2. Definition of Done — no agent-set Done through status flips or complete_claim.
     if tool_name.endswith("update_task") and _requests_done(ti):

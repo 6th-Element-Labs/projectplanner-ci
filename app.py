@@ -1826,6 +1826,18 @@ async def ixp_preflight_work_session(work_session_id: str, request: Request,
     return result
 
 
+@app.post("/ixp/v1/pre_tool_check")
+async def ixp_pre_tool_check(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "pre-tool")
+    payload = dict(body or {})
+    payload.pop("project", None)
+    return store.pre_tool_check(
+        payload, actor=auth.actor(principal), principal_id=principal["id"],
+        project=project)
+
+
 @app.post("/ixp/v1/heartbeat_runner_session")
 async def ixp_heartbeat_runner_session(request: Request, body: dict = Body(...)):
     project = _body_project(body)

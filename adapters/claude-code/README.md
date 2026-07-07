@@ -39,6 +39,9 @@ jq -s '.[0] * .[1]' .claude/settings.json adapters/claude-code/settings.json > /
 | `PM_BASE` | `https://plan.taikunai.com` | board base URL |
 | `PM_PROJECT` | `helm` | which board this agent works |
 | `PM_MCP_TOKEN` | — | bearer token (once `PM_AUTH_MODE=required`) |
+| `PM_PRE_TOOL_CHECK` | — | set `1` to call the server-side Work Session gate before side effects |
+| `PM_WORK_SESSION_ID` | — | active Work Session id for server-side pre-tool enforcement |
+| `PM_TASK_ID` / `PM_CLAIM_ID` | — | active task/claim context for pre-tool enforcement |
 
 ## Fidelity & limits (be honest — ADR-0004 / PRD §10)
 
@@ -52,6 +55,9 @@ jq -s '.[0] * .[1]' .claude/settings.json adapters/claude-code/settings.json > /
   `instructions` advisory) — there's no hook surface to enforce on. Publish that, don't pretend.
 - **Tier 3** (board-launched agents) installs this bundle + registers *before* handoff via
   `dispatch.py` — that wiring is the next slice.
+- When `PM_PRE_TOOL_CHECK=1` or `PM_WORK_SESSION_ID` is set, the shared core calls
+  `/ixp/v1/pre_tool_check` before local fallback rules. The hook blocks on server `deny`; if a
+  Claude deployment cannot honor hook denial, it must advertise advisory/reduced fidelity.
 
 ## Test locally
 

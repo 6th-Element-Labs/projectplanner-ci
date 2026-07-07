@@ -1000,6 +1000,39 @@ def preflight_work_session(work_session_id: str, ctx: Context, project: str = "m
 
 
 @mcp.tool()
+def pre_tool_check(ctx: Context, tool_name: str = "", tool_input_json: str = "",
+                   action: str = "", task_id: str = "", agent_id: str = "",
+                   work_session_id: str = "", claim_id: str = "",
+                   control_mode: str = "", project: str = "maxwell") -> str:
+    """Validate a pending side-effectful tool before an adapter executes it.
+
+    Returns allow/warn/deny plus remediation. Hook-capable adapters should deny locally on
+    `decision=deny`; advisory adapters should surface the reason and advertise reduced
+    control fidelity. Denied unsafe attempts are audited as unbound_write or unsafe_session.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        tool_input = json.loads(tool_input_json or "{}")
+    except json.JSONDecodeError:
+        return _dumps({"error": "tool_input_json must be valid JSON"})
+    return _dumps(store.pre_tool_check(
+        {
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "action": action,
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "work_session_id": work_session_id,
+            "claim_id": claim_id,
+            "control_mode": control_mode,
+        },
+        actor=auth.actor(principal),
+        principal_id=principal.get("id") or "",
+        project=project,
+    ))
+
+
+@mcp.tool()
 def request_runner_snapshot(runner_session_id: str, ctx: Context,
                             reason: str = "", project: str = "maxwell") -> str:
     """Request a host-side snapshot for a managed runner session."""

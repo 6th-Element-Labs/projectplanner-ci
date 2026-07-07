@@ -67,6 +67,11 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   edit/claim/complete/merge. Returns `pass`/`warn`/`deny` with typed failure classes including
   `dirty_worktree`, `conflict_markers`, `wrong_repo`, `wrong_branch`, `stale_base`, and
   `shared_worktree_collision`.
+- `pre_tool_check(...)` — adapter/runner pre-side-effect gate. Call before file writes, git/PR
+  commands, `complete_claim`, merge, server start/kill, or other external effects. It validates
+  the active Work Session and returns `allow`/`warn`/`deny` plus remediation. Denied shared-token
+  writes are audited as `principal.unbound_write`; denied unsafe sessions are audited as
+  `work_session.unsafe_session`.
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
 - `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
@@ -270,6 +275,10 @@ Work Sessions:
   `POST /ixp/v1/work_sessions/{work_session_id}/preflight` runs the same check for a Work Session
   path and writes the result into `hygiene.repo_preflight`, `dirty_status`, SHAs, upstream, and
   `conflict_marker_count`.
+- Tool boundary enforcement: `POST /ixp/v1/pre_tool_check` accepts `project`, `task_id`,
+  `agent_id`, `work_session_id`, `tool_name`, `tool_input`, and optional `action`/`claim_id`.
+  Hook-capable adapters must block when `decision=deny`; advisory adapters must surface the
+  remediation and advertise reduced control fidelity.
 - Fail-closed validation rejects unknown projects, unknown tasks, repo roles outside
   `repo_topology.roles`, malformed JSON, invalid lifecycle states, and `worktree`/`clone`
   sessions without their required paths.

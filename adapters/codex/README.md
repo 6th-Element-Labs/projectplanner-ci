@@ -10,6 +10,7 @@ the thin Codex-specific wiring. Authored as a scaffold by `claude-code` per deci
 |---|---|
 | Handshake (working_agreement → register → inbox) | ✅ in `switchboard_core.handshake()` |
 | Enforce: FR-14 interrupt-consume, naked Done deny, lease-conflict deny | ✅ in `switchboard_core.evaluate_tool()` (live-verified via the Claude adapter) |
+| Server Work Session pre-tool check | ✅ `switchboard_core.pre_tool_check()` when `PM_PRE_TOOL_CHECK=1` or `PM_WORK_SESSION_ID` is set |
 | Wire handshake to a Codex session/launcher | ✅ `codex_adapter.py session-start` prints first-turn context JSON, registers, and drains unacked inbox |
 | Wire `evaluate_tool` to a Codex pre-tool hook | ✅ `codex_adapter.py pre-tool` accepts pending tool JSON and prints allow/deny verdicts |
 | Claim ready scheduler work | ✅ `codex_adapter.py claim-next` and `session-start --claim-next` call `/txp/v1/claim_next` |
@@ -26,6 +27,8 @@ whether a given Codex runtime can invoke this shim before every tool call and ho
 1. **Session start:** surface the working agreement as first-turn context + `register_agent`.
 2. **Per tool call:** call `evaluate_tool(...)`; on `deny` block the tool and surface the reason
    so the model self-corrects/halts; on `allow` permit (a non-empty reason is a soft reminder).
+   Managed sessions should set `PM_PRE_TOOL_CHECK=1` plus `PM_WORK_SESSION_ID`, `PM_TASK_ID`, and
+   `PM_CLAIM_ID` so the server validates the active Work Session before side effects.
 3. **Advertise fidelity:** `handshake(..., control={...})` tells the board how strongly this
    runtime is governed (discover / pre-tool-deny / runner-kill).
 
@@ -50,7 +53,8 @@ Codex hook fidelity marked TBD/T1.
 ## Config
 `PM_BASE` (default `https://plan.taikunai.com`), `PM_PROJECT` (`switchboard`), `PM_MCP_TOKEN`,
 `PM_AGENT_ID` (use the IXP `<runtime>/<scope>` convention, e.g. `codex/ADAPTER-2`),
-`PM_AGENT_MODEL`, `PM_LANE`, and `PM_CODEX_PRETOOL_MODE`.
+`PM_AGENT_MODEL`, `PM_LANE`, `PM_CODEX_PRETOOL_MODE`, `PM_PRE_TOOL_CHECK`,
+`PM_WORK_SESSION_ID`, `PM_TASK_ID`, and `PM_CLAIM_ID`.
 
 > Note (agent_id drift, found live): the Claude adapter currently registers as `claude-code`
 > and Codex as `codex/current`; IXP §2 wants `<runtime>/<scope>`. Align both when convenient —
@@ -101,6 +105,15 @@ The output is neutral JSON:
   "reason": "Working agreement ...",
   "tool_name": "mcp__taikun_plan__update_task"
 }
+```
+
+To use the server-side Work Session gate, pass the active session values:
+
+```bash
+printf '%s\n' '{"toolCall":{"name":"Edit","arguments":{"file_path":"store.py"}}}' \
+  | PM_PROJECT=switchboard PM_AGENT_ID=codex/SESSION-4 PM_PRE_TOOL_CHECK=1 \
+    PM_WORK_SESSION_ID=worksession-... PM_TASK_ID=SESSION-4 \
+    python3 adapters/codex/codex_adapter.py pre-tool
 ```
 
 ## Scheduler lifecycle

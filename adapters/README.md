@@ -31,6 +31,16 @@ Badge language and public-package boundaries live in
 `IXP-core conformant` unless it publishes the fixture command, protocol/profile, verification
 date, and known deviations.
 
+## Pre-tool Work Session Gate
+
+Managed/hook-capable adapters should call the shared server-side `pre_tool_check` before file
+writes, git/PR commands, `complete_claim`, merge, server start/kill, or other external effects.
+Set `PM_PRE_TOOL_CHECK=1` and pass `PM_WORK_SESSION_ID`, `PM_TASK_ID`, and `PM_CLAIM_ID` when a
+runner has those values. The server returns `allow`/`warn`/`deny`; hook-capable runtimes must
+block on `deny`, while advisory runtimes must surface the remediation and advertise reduced
+control fidelity. Denied unsafe attempts are audited as `principal.unbound_write` or
+`work_session.unsafe_session`.
+
 ## Runtime Packs
 
 - `claude-code/` - Claude Code session start and pre-tool guard.

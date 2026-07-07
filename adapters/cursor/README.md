@@ -16,7 +16,9 @@ contract as every other runtime.
    for local vs Cloud Agent MCP setup.
 3. **Enforcement** — for a *managed* Cursor runner that can shell out before a tool, call the
    raw-loop guard (`adapters/openai-loop/openai_loop_adapter.guard_tool`) — identical core,
-   identical verdicts. Without that, Cursor is advisory only.
+   identical verdicts. Set `PM_PRE_TOOL_CHECK=1` and pass `PM_WORK_SESSION_ID`/`PM_TASK_ID` when
+   the runner has an active Work Session, so Switchboard validates side effects server-side.
+   Without a managed boundary that honors `deny`, Cursor is advisory only.
 
 ## Fidelity (honest — PRD §10)
 **Tier-1** (advisory via MCP `instructions` + the rule). **T2** only if a managed Cursor runner
