@@ -82,5 +82,6 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/TALLY-SPEC.md`](docs/TALLY-SPEC.md) | Tally / `+OXP` cost-to-outcome and KPI ledger: gateway-measured plus agent-reported spend |
 | [`docs/SWITCHBOARD-RENAME-MIGRATION.md`](docs/SWITCHBOARD-RENAME-MIGRATION.md) | Safe migration from `projectplanner` repo/ops identity to Switchboard product identity |
 | [`docs/decisions/0001-…`](docs/decisions/0001-multi-agent-coordination-primitives.md) | ADR: build order for the multi-agent coordination primitives |
+| [`docs/decisions/0005-store-module-decomposition.md`](docs/decisions/0005-store-module-decomposition.md) | ADR: strangler-split `store.py` (15.8k lines) into layered modules — see [target arch](docs/SWITCHBOARD-TARGET-ARCHITECTURE.md), [end-state](docs/SWITCHBOARD-STORE-ENDSTATE.md), [per-function map](docs/SWITCHBOARD-STORE-DECOMPOSITION.md) (workstream `ARCH`) |
 | [`docs/MCP.md`](docs/MCP.md) | MCP server design and tool reference |
 | [`docs/UNIVERSAL_WORKFLOW_UI.md`](docs/UNIVERSAL_WORKFLOW_UI.md) | Universal workflow UI spec |
