@@ -67,6 +67,12 @@ An adapter starts working only after its runtime process exists. The separate Ag
 is responsible for keeping runtimes warm or waking one when a message/claim needs attention;
 see [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md).
 
+When a runtime is launched by an Agent Host for code work, the preferred startup input is a
+Switchboard-managed Work Session created by `create_managed_work_session`. The adapter should use
+the returned branch, workspace path, session id, and session token as its execution boundary, then
+pass `work_session_id` into `claim_task`, `pre_tool_check`, `complete_claim`, and `merge_gate`.
+Adapters should not silently continue in a shared checkout if managed workspace creation fails.
+
 ---
 
 ## 3. Universal session lifecycle
@@ -293,6 +299,8 @@ Minimum helpers:
 - `claim_files(paths[], task_id?)`
 - `claim_port(port, task_id?)`
 - `claim_worktree(path, task_id?)`
+- `create_managed_work_session(task_id, storage_mode?, workspace_root?)`
+- `archive_work_session_workspace(work_session_id, remove_workspace?)`
 - `release_all()`
 - `with_claim(resource_type, names[], fn)`
 

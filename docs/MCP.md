@@ -63,6 +63,14 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `create_work_session(...)`, `get_work_session(...)`, `list_work_sessions(...)`,
   `update_work_session(...)` — bind code work to project, repo role, branch, worktree/clone path,
   hygiene state, leases, and lifecycle before later claim/complete/merge gates enforce it.
+- `create_managed_work_session(...)` — Agent Host / adapter path for isolated coding workspaces.
+  It creates a task-scoped `git worktree` or full clone from `repo_topology.roles.<role>`, allocates
+  branch/path/base/env namespace/session token, claims the workspace lease, runs repo preflight, and
+  persists the result as a normal Work Session. It fails closed for disallowed modes, unknown tasks,
+  wrong repo roles, existing/out-of-root paths, and git failures.
+- `archive_work_session_workspace(...)` — archive a managed Work Session and optionally remove the
+  owned workspace path after merge/review cleanup. Removal is allowed only for workspaces marked as
+  Switchboard-managed and inside their recorded `workspace_root`.
 - `repo_preflight(...)`, `preflight_work_session(...)` — inspect a local git worktree before
   edit/claim/complete/merge. Returns `pass`/`warn`/`deny` with typed failure classes including
   `dirty_worktree`, `conflict_markers`, `wrong_repo`, `wrong_branch`, `stale_base`, and
@@ -288,6 +296,9 @@ Work Sessions:
 - REST: `GET /ixp/v1/work_sessions`, `POST /ixp/v1/work_sessions`,
   `GET /ixp/v1/work_sessions/{work_session_id}`, and
   `PATCH /ixp/v1/work_sessions/{work_session_id}`.
+- Managed REST: `POST /ixp/v1/managed_work_sessions` creates a git-backed isolated workspace and
+  stores it as a Work Session; `POST /ixp/v1/work_sessions/{id}/archive_workspace` archives it and
+  can remove the owned workspace.
 - Repo hygiene: `POST /ixp/v1/repo_preflight` returns a side-effect-free git/worktree report.
   `POST /ixp/v1/work_sessions/{work_session_id}/preflight` runs the same check for a Work Session
   path and writes the result into `hygiene.repo_preflight`, `dirty_status`, SHAs, upstream, and
@@ -313,6 +324,10 @@ Work Sessions:
 - `SESSION-5` gates `complete_claim` for code-strict Work Sessions. Refused completion leaves the
   claim active, records `task.complete_blocked_work_session`, and returns a typed failure class so
   the agent can repair and retry instead of releasing a dirty/conflicted/stale task.
+- `SESSION-7` adds managed workspace creation. Agent Hosts can ask Switchboard to allocate the
+  branch/path/base/env namespace/session token, run `git worktree add` or `git clone`, claim the
+  workspace lease, preflight the result, and return a ready Work Session instead of relying on a
+  prompt to remember the git ritual.
 - Claim inputs: MCP accepts `work_session_id`, `work_session_json`,
   `session_policy_profile`, and `require_work_session`; REST accepts `work_session_id`,
   `work_session`, `session_policy_profile` / `policy_profile`, and `require_work_session`.

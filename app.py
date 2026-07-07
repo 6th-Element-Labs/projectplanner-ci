@@ -1799,6 +1799,20 @@ async def ixp_create_work_session(request: Request, body: dict = Body(...)):
     return result
 
 
+@app.post("/ixp/v1/managed_work_sessions")
+async def ixp_create_managed_work_session(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "managed-work-session")
+    payload = dict(body or {})
+    payload.pop("project", None)
+    result = store.create_managed_work_session(
+        payload, actor=auth.actor(principal), principal_id=principal["id"], project=project)
+    if result.get("error"):
+        raise HTTPException(400, result)
+    return result
+
+
 @app.get("/ixp/v1/work_sessions/{work_session_id}")
 async def ixp_get_work_session(work_session_id: str,
                                project: str = Query(store.DEFAULT_PROJECT)):
@@ -1818,6 +1832,25 @@ async def ixp_update_work_session(work_session_id: str, request: Request,
     payload.pop("project", None)
     result = store.update_work_session(
         work_session_id, payload, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        status = 404 if result.get("error") == "work_session_not_found" else 400
+        raise HTTPException(status, result)
+    return result
+
+
+@app.post("/ixp/v1/work_sessions/{work_session_id}/archive_workspace")
+async def ixp_archive_work_session_workspace(work_session_id: str, request: Request,
+                                             body: dict = Body(default={})):
+    body = body or {}
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "managed-work-session")
+    result = store.archive_work_session_workspace(
+        work_session_id,
+        remove_workspace=bool(body.get("remove_workspace", False)),
+        actor=auth.actor(principal),
+        project=project,
+    )
     if result.get("error"):
         status = 404 if result.get("error") == "work_session_not_found" else 400
         raise HTTPException(status, result)

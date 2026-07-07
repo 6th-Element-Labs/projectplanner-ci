@@ -59,7 +59,7 @@ Substrate (Plan VM)
 Agent Host Daemon(s)
   repo checkout + secrets + runtime launchers
        |
-       | start/status/kill
+       | create managed Work Session -> start/status/kill
        v
 Supervisor
        |
@@ -204,6 +204,27 @@ loop every N seconds:
   complete_wake(result)
   reap exited sessions and record runner events
 ```
+
+Before launching a coding runtime for a task, the host should prefer the managed Work Session
+path:
+
+```text
+create_managed_work_session(
+  project,
+  task_id,
+  agent_id,
+  source_path=host.repo_root,
+  workspace_root=host.workspace_root,
+  storage_mode=project_policy.default_workspace_mode || worktree,
+  policy_profile=code_strict
+)
+```
+
+The substrate allocates the task-scoped branch, workspace path, base ref, env/port namespace,
+one-time session token, and worktree lease; the host performs the returned launch inside that
+workspace. If the managed creation returns an error, the host must not fall back silently to the
+shared checkout. It should surface the failure as `failed_gate`, `wrong_repo`, `stale_branch`, or
+the supplied failure class.
 
 The host daemon may also proactively keep warm sessions:
 

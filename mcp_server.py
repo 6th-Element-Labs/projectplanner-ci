@@ -937,6 +937,28 @@ def create_work_session(work_session_json: str, ctx: Context,
 
 
 @mcp.tool()
+def create_managed_work_session(managed_session_json: str, ctx: Context,
+                                project: str = "maxwell") -> str:
+    """Create an isolated git worktree/clone and persist it as a Work Session.
+
+    The payload should include task_id, agent_id, source_path or repo_path, optional
+    workspace_root/workspace_path, storage_mode=worktree|clone, and policy_profile.
+    The tool allocates branch/path/base/env namespace/session token from repo topology,
+    runs git, preflights the workspace, claims a worktree lease, and returns a ready
+    Work Session. It fails closed for disallowed modes, existing paths, wrong repos,
+    and git/preflight failures.
+    """
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        payload = json.loads(managed_session_json or "{}")
+    except json.JSONDecodeError:
+        return _dumps({"error": "managed_session_json must be valid JSON"})
+    return _dumps(store.create_managed_work_session(
+        payload, actor=auth.actor(principal), principal_id=principal.get("id") or "",
+        project=project))
+
+
+@mcp.tool()
 def get_work_session(work_session_id: str, project: str = "maxwell") -> str:
     """Read one Work Session by id."""
     session = store.get_work_session(work_session_id, project=project)
@@ -969,6 +991,19 @@ def update_work_session(work_session_id: str, updates_json: str, ctx: Context,
         return _dumps({"error": "updates_json must be valid JSON"})
     return _dumps(store.update_work_session(
         work_session_id, payload, actor=auth.actor(principal), project=project))
+
+
+@mcp.tool()
+def archive_work_session_workspace(work_session_id: str, ctx: Context,
+                                   project: str = "maxwell",
+                                   remove_workspace: bool = False) -> str:
+    """Archive a managed Work Session and optionally remove its owned workspace path."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    return _dumps(store.archive_work_session_workspace(
+        work_session_id,
+        remove_workspace=remove_workspace,
+        actor=auth.actor(principal),
+        project=project))
 
 
 @mcp.tool()

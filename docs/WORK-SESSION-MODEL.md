@@ -69,9 +69,11 @@ Audit export includes `work_sessions` and `summary.work_session_count`.
 ## MCP Tools
 
 - `create_work_session(work_session_json, project)`
+- `create_managed_work_session(managed_session_json, project)`
 - `get_work_session(work_session_id, project)`
 - `list_work_sessions(project, task_id?, agent_id?, status?, repo_role?)`
 - `update_work_session(work_session_id, updates_json, project)`
+- `archive_work_session_workspace(work_session_id, remove_workspace?, project)`
 - `repo_preflight(worktree_path, project, task_id?, agent_id?, repo_role?, expected_branch?,
   expected_base_ref?)`
 - `preflight_work_session(work_session_id, project, expected_branch?, expected_base_ref?)`
@@ -80,8 +82,10 @@ Audit export includes `work_sessions` and `summary.work_session_count`.
 
 - `GET /ixp/v1/work_sessions?project=switchboard`
 - `POST /ixp/v1/work_sessions`
+- `POST /ixp/v1/managed_work_sessions`
 - `GET /ixp/v1/work_sessions/{work_session_id}?project=switchboard`
 - `PATCH /ixp/v1/work_sessions/{work_session_id}`
+- `POST /ixp/v1/work_sessions/{work_session_id}/archive_workspace`
 - `POST /ixp/v1/repo_preflight`
 - `POST /ixp/v1/work_sessions/{work_session_id}/preflight`
 
@@ -205,4 +209,9 @@ Later tasks deepen enforcement:
   contexts, external-CI evidence when required, and clean Work Session preflight before a merge can
   be requested. The gate returns structured pass/blocked findings and records `merge.gate`; it never
   marks `Done`, which remains reserved for GitHub webhook/reconcile provenance.
-- `SESSION-7`: create managed worktrees/clones from repo topology.
+- `SESSION-7`: create managed worktrees/clones from repo topology. Done here:
+  `create_managed_work_session` allocates task-scoped branch/path/base/env namespace/session token
+  from project repo topology, creates a real git worktree or clone, claims the workspace lease,
+  stores clean `repo_preflight` hygiene, and returns a normal Work Session for strict claim binding.
+  `archive_work_session_workspace` archives managed sessions and can remove owned workspace paths
+  after merge cleanup.

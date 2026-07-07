@@ -5,6 +5,7 @@ import hashlib
 import copy
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -134,6 +135,7 @@ ROLE_SCOPES = {
 VALID_PRINCIPAL_KINDS = {"human", "user", "agent", "host", "system"}
 VALID_PRINCIPAL_SCOPES = sorted({s for scopes in ROLE_SCOPES.values() for s in scopes})
 WORK_SESSION_SCHEMA = "switchboard.work_session.v1"
+MANAGED_WORK_SESSION_SCHEMA = "switchboard.managed_work_session.v1"
 WORK_SESSION_STATUSES = {"proposed", "active", "blocked", "completed", "archived", "expired"}
 WORK_SESSION_STORAGE_MODES = {"worktree", "clone", "external"}
 WORK_SESSION_DIRTY_STATUSES = {"clean", "dirty", "unknown"}
@@ -6622,12 +6624,19 @@ def work_session_contract(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "clone": ["clone_path"],
             "external": [],
         },
+        "managed_workspace": {
+            "schema": MANAGED_WORK_SESSION_SCHEMA,
+            "storage_modes": ["worktree", "clone"],
+            "default_workspace_root": _managed_workspace_root(project, {}),
+            "archive_tool": "archive_work_session_workspace",
+        },
         "fail_closed_rules": [
             "unknown project ids are rejected",
             "task_id must exist when supplied",
             "repo_role must exist in the project repo_topology",
             "storage_mode, status, and dirty_status must be recognized values",
             "worktree and clone sessions require their matching path",
+            "managed workspace paths must stay inside workspace_root",
             "JSON fields must decode to their expected object/list shapes",
             "session_token is never stored raw; only session_token_hash may persist",
         ],
@@ -6636,6 +6645,8 @@ def work_session_contract(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "work_session.updated",
             "work_session.completed",
             "work_session.expired",
+            "work_session.managed_created",
+            "work_session.workspace_archived",
         ],
     }
 
@@ -6933,6 +6944,449 @@ def update_work_session(work_session_id: str, payload: Dict[str, Any], actor: st
         row = c.execute("SELECT * FROM work_sessions WHERE work_session_id=?",
                         (work_session_id,)).fetchone()
     return {"updated": True, "work_session": _work_session_row(row)}
+
+
+def _managed_workspace_error(code: str, message: str, failure_class: str = "failed_gate",
+                             **details: Any) -> Dict[str, Any]:
+    return {
+        "schema": MANAGED_WORK_SESSION_SCHEMA,
+        "created": False,
+        "error": code,
+        "message": message,
+        "failure_class": failure_class,
+        **details,
+    }
+
+
+def _managed_workspace_git(repo_path: str, args: List[str],
+                           timeout_seconds: int = 60) -> Dict[str, Any]:
+    return _repo_git(repo_path, args, timeout_seconds=timeout_seconds)
+
+
+def _managed_workspace_slug(value: str, fallback: str = "work") -> str:
+    slug = normalize_project_id(value or "")
+    return (slug or fallback)[:48].strip("-_") or fallback
+
+
+def _managed_workspace_branch(task: Dict[str, Any], agent_id: str,
+                              requested: str = "") -> str:
+    branch = (requested or "").strip()
+    if branch:
+        return branch
+    runtime = (agent_id or "agent").split("/", 1)[0].strip() or "agent"
+    task_id = task.get("task_id") or "TASK"
+    slug = _managed_workspace_slug(task.get("title") or task_id)
+    return f"{runtime}/{task_id}-{slug}"
+
+
+def _managed_workspace_root(project: str, payload: Dict[str, Any]) -> str:
+    configured = str(payload.get("workspace_root") or "").strip()
+    if configured:
+        return configured
+    suffix = _project_env_suffix(project)
+    return (
+        os.environ.get(f"PM_WORKSPACE_ROOT_{suffix}") if suffix else ""
+    ) or os.environ.get("PM_WORKSPACE_ROOT") or "/var/lib/projectplanner/workspaces"
+
+
+def _managed_workspace_source_path(project: str, payload: Dict[str, Any]) -> str:
+    configured = str(payload.get("source_path") or payload.get("repo_path") or "").strip()
+    if configured:
+        return configured
+    suffix = _project_env_suffix(project)
+    return (
+        os.environ.get(f"PM_REPO_PATH_{suffix}") if suffix else ""
+    ) or os.environ.get("PM_REPO_PATH") or os.path.dirname(__file__)
+
+
+def _managed_workspace_path(root: str, project: str, task_id: str, branch: str,
+                            requested: str = "") -> Tuple[str, str]:
+    root_abs = os.path.abspath(os.path.expanduser(root))
+    if requested:
+        path_abs = os.path.abspath(os.path.expanduser(requested))
+    else:
+        safe_branch = branch.replace("/", "__")
+        path_abs = os.path.join(root_abs, project, task_id.lower(), safe_branch)
+    try:
+        common = os.path.commonpath([root_abs, path_abs])
+    except ValueError:
+        common = ""
+    if common != root_abs:
+        return path_abs, "workspace_path must be inside workspace_root"
+    return path_abs, ""
+
+
+def _managed_role(project: str, repo_role: str) -> Tuple[Dict[str, Any], str]:
+    topology = get_project_repo_topology(project)
+    role = (topology.get("roles") or {}).get(repo_role) or {}
+    if not role:
+        return {}, "repo_role must exist in repo_topology.roles"
+    if repo_role == "canonical" and not (topology.get("code_repo_gate") or {}).get("passed"):
+        return role, "canonical repo is not configured"
+    if not (role.get("repo") or "").strip():
+        return role, f"repo_topology.roles.{repo_role}.repo is not configured"
+    return role, ""
+
+
+def _managed_verify_source_repo(source_path: str, project: str,
+                                repo_role: str) -> Tuple[Dict[str, Any], str]:
+    source_path = os.path.abspath(os.path.expanduser(source_path))
+    inside = _repo_git(source_path, ["rev-parse", "--is-inside-work-tree"])
+    if not inside.get("ok") or inside.get("stdout") != "true":
+        return {}, "source_path is not a git worktree"
+    top = _repo_git(source_path, ["rev-parse", "--show-toplevel"])
+    repo_path = os.path.abspath(top.get("stdout") or source_path)
+    remote = _repo_git(repo_path, ["remote", "get-url", "origin"])
+    remote_url = remote.get("stdout") if remote.get("ok") else ""
+    expected_repo = (((get_project_repo_topology(project).get("roles") or {})
+                      .get(repo_role) or {}).get("repo") or "").strip()
+    actual_slug = _repo_remote_slug(remote_url)
+    expected_slug = _repo_remote_slug(expected_repo)
+    if actual_slug and expected_slug and actual_slug.lower() != expected_slug.lower():
+        return {
+            "repo_path": repo_path,
+            "remote": {"url": remote_url, "repo": actual_slug},
+            "expected_repo": expected_repo,
+        }, "source_path origin does not match project repo topology"
+    return {
+        "repo_path": repo_path,
+        "remote": {"url": remote_url, "repo": actual_slug},
+        "expected_repo": expected_repo,
+    }, ""
+
+
+def _managed_prepare_worktree(source_path: str, workspace_path: str, branch: str,
+                              base_ref: str, fetch: bool) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    steps: List[Dict[str, Any]] = []
+    if fetch and base_ref.startswith("origin/"):
+        fetched = _managed_workspace_git(source_path, ["fetch", "origin", base_ref.split("/", 1)[1]])
+        steps.append({"cmd": "git fetch", "ok": fetched.get("ok"), "stderr": fetched.get("stderr")})
+        if not fetched.get("ok"):
+            return fetched, steps
+    base = _managed_workspace_git(source_path, ["rev-parse", f"{base_ref}^{{commit}}"])
+    steps.append({"cmd": "git rev-parse base", "ok": base.get("ok"), "stderr": base.get("stderr")})
+    if not base.get("ok"):
+        return base, steps
+    existing_branch = _managed_workspace_git(
+        source_path, ["rev-parse", "--verify", f"refs/heads/{branch}"])
+    if existing_branch.get("ok"):
+        return {"ok": False, "stderr": "branch already exists", "code": "branch_exists"}, steps
+    added = _managed_workspace_git(
+        source_path, ["worktree", "add", "-b", branch, workspace_path, base_ref],
+        timeout_seconds=120,
+    )
+    steps.append({"cmd": "git worktree add", "ok": added.get("ok"), "stderr": added.get("stderr")})
+    if not added.get("ok"):
+        return added, steps
+    if base_ref.startswith("origin/"):
+        upstream = _managed_workspace_git(
+            workspace_path, ["branch", "--set-upstream-to", base_ref, branch])
+        steps.append({"cmd": "git branch --set-upstream-to", "ok": upstream.get("ok"),
+                      "stderr": upstream.get("stderr")})
+    return {"ok": True, "base_sha": base.get("stdout")}, steps
+
+
+def _managed_prepare_clone(source_path: str, workspace_path: str, branch: str,
+                           base_ref: str, fetch: bool,
+                           role_repo: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    steps: List[Dict[str, Any]] = []
+    clone_source = source_path or (f"https://github.com/{role_repo}.git" if role_repo else "")
+    if not clone_source:
+        return {"ok": False, "stderr": "clone source unavailable"}, steps
+    parent = os.path.dirname(workspace_path)
+    os.makedirs(parent, exist_ok=True)
+    cloned = subprocess.run(
+        ["git", "clone", clone_source, workspace_path],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=180,
+        check=False,
+    )
+    clone_result = {"ok": cloned.returncode == 0, "stdout": (cloned.stdout or "").strip(),
+                    "stderr": (cloned.stderr or "").strip(), "returncode": cloned.returncode}
+    steps.append({"cmd": "git clone", "ok": clone_result.get("ok"),
+                  "stderr": clone_result.get("stderr")})
+    if not clone_result.get("ok"):
+        return clone_result, steps
+    if fetch and base_ref.startswith("origin/"):
+        fetched = _managed_workspace_git(workspace_path, ["fetch", "origin", base_ref.split("/", 1)[1]])
+        steps.append({"cmd": "git fetch", "ok": fetched.get("ok"), "stderr": fetched.get("stderr")})
+        if not fetched.get("ok"):
+            return fetched, steps
+    base = _managed_workspace_git(workspace_path, ["rev-parse", f"{base_ref}^{{commit}}"])
+    steps.append({"cmd": "git rev-parse base", "ok": base.get("ok"), "stderr": base.get("stderr")})
+    if not base.get("ok"):
+        return base, steps
+    checked = _managed_workspace_git(workspace_path, ["checkout", "-b", branch, base_ref])
+    steps.append({"cmd": "git checkout -b", "ok": checked.get("ok"), "stderr": checked.get("stderr")})
+    if not checked.get("ok"):
+        return checked, steps
+    if base_ref.startswith("origin/"):
+        upstream = _managed_workspace_git(
+            workspace_path, ["branch", "--set-upstream-to", base_ref, branch])
+        steps.append({"cmd": "git branch --set-upstream-to", "ok": upstream.get("ok"),
+                      "stderr": upstream.get("stderr")})
+    return {"ok": True, "base_sha": base.get("stdout")}, steps
+
+
+def create_managed_work_session(payload: Dict[str, Any], actor: str = "system",
+                                principal_id: str = "",
+                                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Create a git-backed isolated workspace and persist it as a Work Session."""
+    payload = dict(payload or {})
+    if not has_project(project):
+        return _managed_workspace_error("unknown_project", f"Unknown project: {project}",
+                                        "invalid_input")
+    task_id = str(payload.get("task_id") or "").strip().upper()
+    agent_id = str(payload.get("agent_id") or "").strip()
+    if not task_id:
+        return _managed_workspace_error("task_id_required", "task_id is required.",
+                                        "missing_data")
+    if not agent_id:
+        return _managed_workspace_error("agent_id_required", "agent_id is required.",
+                                        "missing_data")
+    task = get_task(task_id, project=project)
+    if not task:
+        return _managed_workspace_error("task_not_found", "task_id must exist in project.",
+                                        "invalid_input", task_id=task_id)
+    repo_role = str(payload.get("repo_role") or "canonical").strip()
+    role, role_error = _managed_role(project, repo_role)
+    if role_error:
+        return _managed_workspace_error("repo_role_unavailable", role_error,
+                                        "missing_data", repo_role=repo_role)
+    storage_mode = str(payload.get("storage_mode") or role.get("workspace_mode")
+                       or payload.get("default_mode") or "worktree").strip().lower()
+    if storage_mode not in {"worktree", "clone"}:
+        return _managed_workspace_error(
+            "managed_storage_mode_not_allowed",
+            "Managed workspace creation supports storage_mode=worktree or clone.",
+            "invalid_input",
+            storage_mode=storage_mode,
+        )
+    source_path = _managed_workspace_source_path(project, payload)
+    source_info, source_error = _managed_verify_source_repo(source_path, project, repo_role)
+    if source_error:
+        return _managed_workspace_error("source_repo_invalid", source_error,
+                                        "wrong_repo", source_path=source_path,
+                                        source=source_info)
+    source_path = source_info.get("repo_path") or os.path.abspath(source_path)
+    branch = _managed_workspace_branch(task, agent_id, str(payload.get("branch") or ""))
+    workspace_root = _managed_workspace_root(project, payload)
+    requested_path = str(payload.get("workspace_path") or payload.get("worktree_path")
+                         or payload.get("clone_path") or "").strip()
+    workspace_path, path_error = _managed_workspace_path(
+        workspace_root, project, task_id, branch, requested_path)
+    if path_error:
+        return _managed_workspace_error("workspace_path_invalid", path_error,
+                                        "invalid_input", workspace_path=workspace_path,
+                                        workspace_root=os.path.abspath(workspace_root))
+    if os.path.exists(workspace_path):
+        return _managed_workspace_error("workspace_path_exists",
+                                        "Managed workspace path already exists.",
+                                        "failed_gate",
+                                        workspace_path=workspace_path)
+    conflicts = check_resources("worktree", [workspace_path], project=project)
+    if conflicts:
+        return _managed_workspace_error("workspace_path_leased",
+                                        "Managed workspace path is already leased.",
+                                        "failed_gate",
+                                        workspace_path=workspace_path,
+                                        conflicts=conflicts)
+    default_branch = str(role.get("default_branch") or "master").strip() or "master"
+    base_ref = str(payload.get("base_ref") or f"origin/{default_branch}").strip()
+    fetch = _merge_gate_bool(payload.get("fetch"), default=True)
+    os.makedirs(os.path.dirname(workspace_path), exist_ok=True)
+    if storage_mode == "worktree":
+        prepared, steps = _managed_prepare_worktree(
+            source_path, workspace_path, branch, base_ref, bool(fetch))
+    else:
+        prepared, steps = _managed_prepare_clone(
+            source_path, workspace_path, branch, base_ref, bool(fetch), role.get("repo") or "")
+    if not prepared.get("ok"):
+        if os.path.exists(workspace_path):
+            shutil.rmtree(workspace_path, ignore_errors=True)
+        code = prepared.get("code") or "workspace_create_failed"
+        return _managed_workspace_error(
+            code,
+            "Git workspace creation failed.",
+            "failed_gate",
+            git_error=prepared,
+            git_steps=steps,
+        )
+    ttl_seconds = int(payload.get("ttl_seconds") or payload.get("ttl_s") or 7200)
+    session_token = "wst-" + uuid.uuid4().hex
+    env = dict(payload.get("env") or {})
+    env.update({
+        "managed_workspace": True,
+        "workspace_root": os.path.abspath(workspace_root),
+        "workspace_namespace": _managed_workspace_slug(f"{project}-{task_id}"),
+        "port_namespace": 10000 + (int(hashlib.sha1(f"{project}:{task_id}".encode()).hexdigest()[:4], 16) % 50000),
+        "source_path": source_path,
+        "base_ref": base_ref,
+        "git_steps": steps,
+    })
+    lease = claim_resources(
+        agent_id=agent_id,
+        resource_type="worktree",
+        names=[workspace_path],
+        task_id=task_id,
+        ttl_seconds=ttl_seconds,
+        principal_id=principal_id,
+        actor=actor,
+        idem_key=str(payload.get("idem_key") or f"managed-workspace:{project}:{task_id}:{agent_id}:{workspace_path}"),
+        project=project,
+    )
+    if lease.get("conflict") or lease.get("error"):
+        if storage_mode == "worktree":
+            _managed_workspace_git(source_path, ["worktree", "remove", "--force", workspace_path])
+        else:
+            shutil.rmtree(workspace_path, ignore_errors=True)
+        return _managed_workspace_error("workspace_lease_failed",
+                                        "Could not claim managed workspace lease.",
+                                        "failed_gate", lease=lease)
+    preflight = repo_preflight(
+        workspace_path,
+        project=project,
+        task_id=task_id,
+        agent_id=agent_id,
+        repo_role=repo_role,
+        expected_branch=branch,
+        expected_base_ref=base_ref,
+    )
+    session_payload = {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "runtime": payload.get("runtime") or agent_id.split("/", 1)[0],
+        "repo_role": repo_role,
+        "branch": branch,
+        "upstream": preflight.get("upstream") or base_ref,
+        "base_sha": preflight.get("base_sha") or prepared.get("base_sha") or "",
+        "head_sha": preflight.get("head_sha") or prepared.get("base_sha") or "",
+        "worktree_path": workspace_path if storage_mode == "worktree" else "",
+        "clone_path": workspace_path if storage_mode == "clone" else "",
+        "storage_mode": storage_mode,
+        "status": "active",
+        "dirty_status": "dirty" if preflight.get("dirty") else "clean",
+        "conflict_marker_count": int(preflight.get("conflict_marker_count") or 0),
+        "hygiene": {"repo_preflight": preflight, "managed": {"schema": MANAGED_WORK_SESSION_SCHEMA}},
+        "resource_leases": [lease],
+        "env": env,
+        "policy_profile": payload.get("policy_profile") or "code_strict",
+        "expires_at": time.time() + max(1, ttl_seconds),
+        "session_token": session_token,
+    }
+    created = create_work_session(
+        session_payload, actor=actor, principal_id=principal_id, project=project)
+    if created.get("error"):
+        release_resource_lease(lease.get("lease_id") or "", actor=actor, project=project)
+        if storage_mode == "worktree":
+            _managed_workspace_git(source_path, ["worktree", "remove", "--force", workspace_path])
+        else:
+            shutil.rmtree(workspace_path, ignore_errors=True)
+        return _managed_workspace_error("work_session_create_failed",
+                                        "Managed workspace was created but Work Session persist failed.",
+                                        "failed_gate", result=created)
+    append_activity(
+        "work_session.managed_created",
+        actor,
+        {
+            "schema": MANAGED_WORK_SESSION_SCHEMA,
+            "work_session_id": created["work_session"]["work_session_id"],
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "storage_mode": storage_mode,
+            "workspace_path": workspace_path,
+            "branch": branch,
+            "base_ref": base_ref,
+            "lease_id": lease.get("lease_id"),
+        },
+        task_id=task_id,
+        project=project,
+    )
+    return {
+        "schema": MANAGED_WORK_SESSION_SCHEMA,
+        "created": True,
+        "managed": True,
+        "project": project,
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "storage_mode": storage_mode,
+        "branch": branch,
+        "workspace_path": workspace_path,
+        "base_ref": base_ref,
+        "lease": lease,
+        "session_token": session_token,
+        "work_session": created["work_session"],
+    }
+
+
+def archive_work_session_workspace(work_session_id: str, remove_workspace: bool = False,
+                                   actor: str = "system",
+                                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    session = get_work_session(work_session_id, project=project)
+    if not session:
+        return {"error": "work_session_not_found", "work_session_id": work_session_id}
+    env = session.get("env") or {}
+    workspace_root = os.path.abspath(os.path.expanduser(str(env.get("workspace_root") or "")))
+    workspace_path = os.path.abspath(os.path.expanduser(
+        session.get("worktree_path") or session.get("clone_path") or ""))
+    if remove_workspace:
+        if not env.get("managed_workspace"):
+            return {"error": "not_managed_workspace", "work_session_id": work_session_id}
+        if not workspace_root or not workspace_path:
+            return {"error": "managed_workspace_path_missing",
+                    "work_session_id": work_session_id}
+        try:
+            common = os.path.commonpath([workspace_root, workspace_path])
+        except ValueError:
+            common = ""
+        if common != workspace_root:
+            return {"error": "workspace_path_outside_root",
+                    "work_session_id": work_session_id,
+                    "workspace_path": workspace_path,
+                    "workspace_root": workspace_root}
+        if os.path.exists(workspace_path):
+            if session.get("storage_mode") == "worktree":
+                source_path = str(env.get("source_path") or "").strip()
+                removed = _managed_workspace_git(
+                    source_path or workspace_path,
+                    ["worktree", "remove", "--force", workspace_path],
+                    timeout_seconds=120,
+                )
+                if not removed.get("ok") and os.path.exists(workspace_path):
+                    return {"error": "workspace_remove_failed",
+                            "work_session_id": work_session_id,
+                            "git_error": removed}
+            else:
+                shutil.rmtree(workspace_path, ignore_errors=True)
+    updated = update_work_session(
+        work_session_id,
+        {"status": "archived", "hygiene": {**(session.get("hygiene") or {}),
+                                           "archived_workspace": {
+                                               "removed_workspace": bool(remove_workspace),
+                                               "workspace_path": workspace_path,
+                                           }}},
+        actor=actor,
+        project=project,
+    )
+    append_activity(
+        "work_session.workspace_archived",
+        actor,
+        {
+            "work_session_id": work_session_id,
+            "remove_workspace": bool(remove_workspace),
+            "removed_workspace": bool(remove_workspace and not os.path.exists(workspace_path)),
+            "workspace_path": workspace_path,
+        },
+        task_id=session.get("task_id") or None,
+        project=project,
+    )
+    return {
+        "archived": updated.get("updated") is True,
+        "removed_workspace": bool(remove_workspace and not os.path.exists(workspace_path)),
+        "work_session": updated.get("work_session"),
+    }
 
 
 def _repo_preflight_finding(code: str, message: str, failure_class: str,
