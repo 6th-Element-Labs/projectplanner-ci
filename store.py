@@ -7401,7 +7401,8 @@ def _validate_work_session_claim_state(
         session: Dict[str, Any], task: Dict[str, Any], agent_id: str,
         project: str, required: bool, profile: str, source: str,
         normalized_payload: Optional[Dict[str, Any]] = None,
-        now: Optional[float] = None) -> Dict[str, Any]:
+        now: Optional[float] = None,
+        allow_dirty: bool = False) -> Dict[str, Any]:
     now = time.time() if now is None else now
     task_id = task.get("task_id") or ""
     problems: List[Dict[str, Any]] = []
@@ -7427,7 +7428,7 @@ def _validate_work_session_claim_state(
             problems.append({"reason": "invalid_work_session_expiry",
                              "failure_class": "invalid_input",
                              "message": "Work Session expires_at is invalid."})
-    if session.get("dirty_status") == "dirty":
+    if session.get("dirty_status") == "dirty" and not allow_dirty:
         problems.append({"reason": "dirty_work_session", "failure_class": "failed_gate",
                          "message": "Work Session reports a dirty workspace."})
     if int(session.get("conflict_marker_count") or 0) > 0:
@@ -8572,6 +8573,199 @@ def _preserve_provider_pr_evidence(current: Dict[str, Any],
     return updates
 
 
+def _evidence_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "ok", "pass", "passed", "clean"}
+
+
+def _evidence_sequence(value: Any) -> List[Any]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _completion_evidence_has_tests(evidence: Dict[str, Any],
+                                   session: Dict[str, Any]) -> bool:
+    keys = ("tests", "test_commands", "verification_commands", "checks")
+    if any(_evidence_sequence(evidence.get(key)) for key in keys):
+        return True
+    for key in ("verification", "verification_note", "test_results"):
+        if str(evidence.get(key) or "").strip():
+            return True
+    hygiene = session.get("hygiene") or {}
+    if any(_evidence_sequence(hygiene.get(key)) for key in keys):
+        return True
+    return bool(str(hygiene.get("verification") or "").strip())
+
+
+def _completion_evidence_has_diff_check(evidence: Dict[str, Any],
+                                        session: Dict[str, Any]) -> bool:
+    for key in ("git_diff_check", "diff_check", "diff_check_clean"):
+        if key in evidence and _evidence_truthy(evidence.get(key)):
+            return True
+    for item in _evidence_sequence(evidence.get("checks")):
+        text = json.dumps(item, sort_keys=True) if isinstance(item, dict) else str(item)
+        if "git diff --check" in text and not any(word in text.lower() for word in ("fail", "failed")):
+            return True
+    for item in _evidence_sequence(evidence.get("verification_commands")):
+        if "git diff --check" in str(item):
+            return True
+    hygiene = session.get("hygiene") or {}
+    for key in ("git_diff_check", "diff_check", "diff_check_clean"):
+        if key in hygiene and _evidence_truthy(hygiene.get(key)):
+            return True
+    return False
+
+
+def _completion_has_push_or_review_evidence(evidence: Dict[str, Any]) -> bool:
+    if evidence.get("pr_url") or evidence.get("pr_number"):
+        return True
+    if evidence.get("pushed_at") or evidence.get("remote_ref"):
+        return True
+    offline = evidence.get("offline_evidence")
+    return bool(offline if isinstance(offline, dict) else str(offline or "").strip())
+
+
+def _work_session_stale_lease_problems(session: Dict[str, Any],
+                                       now: float) -> List[Dict[str, Any]]:
+    problems: List[Dict[str, Any]] = []
+    for field in ("file_leases", "resource_leases"):
+        for lease in session.get(field) or []:
+            if not isinstance(lease, dict):
+                continue
+            if lease.get("released_at") or str(lease.get("status") or "").lower() in {"released", "completed"}:
+                continue
+            expires_at = lease.get("expires_at")
+            if expires_at in (None, ""):
+                continue
+            try:
+                expired = float(expires_at) <= now
+            except (TypeError, ValueError):
+                expired = True
+            if expired:
+                problems.append({
+                    "reason": "stale_work_session_lease",
+                    "failure_class": "stale_branch",
+                    "message": f"Work Session has an expired unreleased {field[:-1]}.",
+                    "lease": lease,
+                })
+    return problems
+
+
+def _complete_claim_work_session_gate_in(
+        c: sqlite3.Connection, claim: sqlite3.Row, task: Dict[str, Any],
+        evidence_obj: Dict[str, Any], project: str, now: float) -> Dict[str, Any]:
+    row = c.execute(
+        "SELECT * FROM work_sessions WHERE claim_id=? "
+        "ORDER BY updated_at DESC, created_at DESC, work_session_id LIMIT 1",
+        (claim["id"],),
+    ).fetchone()
+    if not row:
+        row = _active_work_session_row_in(
+            c, task_id=claim["task_id"], agent_id=claim["agent_id"], now=now)
+    session = _work_session_row(row) if row else None
+    requested_profile = (
+        evidence_obj.get("session_policy_profile")
+        or evidence_obj.get("policy_profile")
+        or (session or {}).get("policy_profile")
+        or evidence_obj.get("completion_profile")
+        or ""
+    )
+    required, profile = _work_session_required(task, str(requested_profile or ""))
+    if session and (session.get("policy_profile") or "").strip().lower() in WORK_SESSION_STRICT_PROFILES:
+        required = True
+        profile = (session.get("policy_profile") or profile or "").strip().lower()
+    completion_profile = str(evidence_obj.get("completion_profile") or "").strip().lower()
+    if completion_profile in {"offline", "offline_evidence", "non_code_offline"} and not required:
+        if not (evidence_obj.get("offline_evidence") or evidence_obj.get("artifact_url") or evidence_obj.get("verification")):
+            return _work_session_failure(
+                "missing_offline_evidence",
+                "Offline completion profile requires explicit evidence before claim completion.",
+                "missing_data",
+                details={"required": False, "policy_profile": completion_profile},
+            )
+        return {"ok": True, "required": False, "policy_profile": completion_profile,
+                "source": "offline_profile", "work_session": None}
+    if not required:
+        return {"ok": True, "required": False, "policy_profile": profile,
+                "source": "not_required", "work_session": session}
+    if not session:
+        return _work_session_failure(
+            "work_session_required",
+            "A bound Work Session is required before completing code-strict work.",
+            "missing_data",
+            details={"required": True, "policy_profile": profile},
+        )
+
+    allow_dirty = _evidence_truthy(evidence_obj.get("allow_dirty"))
+    if allow_dirty and not str(evidence_obj.get("allow_dirty_reason") or "").strip():
+        return _work_session_failure(
+            "missing_dirty_allowance_reason",
+            "Dirty completion requires allow_dirty_reason evidence.",
+            "missing_data",
+            details={"required": True, "policy_profile": profile,
+                     "work_session_id": session.get("work_session_id")},
+        )
+    state = _validate_work_session_claim_state(
+        session, task, claim["agent_id"], project, required=True, profile=profile,
+        source="complete_claim", normalized_payload=None, now=now,
+        allow_dirty=allow_dirty)
+    if not state.get("ok"):
+        return state
+
+    problems: List[Dict[str, Any]] = []
+    evidence_branch = str(evidence_obj.get("branch") or "").strip()
+    evidence_head = str(evidence_obj.get("head_sha") or "").strip()
+    session_branch = str(session.get("branch") or "").strip()
+    session_head = str(session.get("head_sha") or "").strip()
+    if not evidence_branch:
+        problems.append({"reason": "missing_completion_branch", "failure_class": "missing_data",
+                         "message": "Completion evidence must include branch."})
+    elif session_branch and evidence_branch != session_branch:
+        problems.append({"reason": "stale_branch", "failure_class": "stale_branch",
+                         "message": "Completion branch does not match the bound Work Session.",
+                         "evidence_branch": evidence_branch, "work_session_branch": session_branch})
+    if not evidence_head:
+        problems.append({"reason": "missing_completion_head_sha", "failure_class": "missing_data",
+                         "message": "Completion evidence must include head_sha."})
+    elif not session_head:
+        problems.append({"reason": "missing_work_session_head_sha", "failure_class": "missing_data",
+                         "message": "Bound Work Session must record head_sha before completion."})
+    elif evidence_head != session_head:
+        problems.append({"reason": "stale_head_sha", "failure_class": "stale_branch",
+                         "message": "Completion head_sha does not match the bound Work Session.",
+                         "evidence_head_sha": evidence_head, "work_session_head_sha": session_head})
+    if not _completion_has_push_or_review_evidence(evidence_obj):
+        problems.append({"reason": "missing_push_or_review_evidence",
+                         "failure_class": "missing_data",
+                         "message": "Completion evidence must include PR, pushed branch, or offline evidence."})
+    if not _completion_evidence_has_tests(evidence_obj, session):
+        problems.append({"reason": "missing_test_evidence", "failure_class": "missing_data",
+                         "message": "Completion evidence must record relevant tests or verification."})
+    if not _completion_evidence_has_diff_check(evidence_obj, session):
+        problems.append({"reason": "missing_diff_check", "failure_class": "missing_data",
+                         "message": "Completion evidence must record git diff --check as clean."})
+    problems.extend(_work_session_stale_lease_problems(session, now))
+    if problems:
+        first = problems[0]
+        return _work_session_failure(
+            first["reason"], first["message"], first["failure_class"],
+            details={"problems": problems, "required": True,
+                     "policy_profile": profile,
+                     "work_session_id": session.get("work_session_id")},
+        )
+    return {"ok": True, "required": True, "policy_profile": profile,
+            "source": "complete_claim", "work_session": session,
+            "allow_dirty": allow_dirty}
+
+
 def _task_tally_snapshot(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
     outcomes = [_outcome_row(r) for r in c.execute(
         "SELECT * FROM outcomes WHERE task_id=?", (task_id,)).fetchall()]
@@ -9018,6 +9212,25 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
         if row["status"] != "active":
             return {"error": "claim is not active", "claim_id": claim_id,
                     "status": row["status"]}
+        task_row = c.execute("SELECT * FROM tasks WHERE task_id=?", (row["task_id"],)).fetchone()
+        task_for_gate = _task_row(task_row) if task_row else {"task_id": row["task_id"]}
+        work_session_gate = _complete_claim_work_session_gate_in(
+            c, row, task_for_gate, evidence_obj, project, now)
+        if not work_session_gate.get("ok"):
+            response = {"completed": False,
+                        "reason": work_session_gate.get("reason") or "work_session_completion_gate_failed",
+                        "failure_class": work_session_gate.get("failure_class"),
+                        "severity": work_session_gate.get("severity"),
+                        "message": work_session_gate.get("message"),
+                        "claim_id": claim_id,
+                        "task_id": row["task_id"],
+                        "work_session_gate": work_session_gate,
+                        "override_field": "completion_evidence",
+                        "override_required": True}
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"], actor, "task.complete_blocked_work_session",
+                       json.dumps({"evidence": evidence_obj, **response}, sort_keys=True), now))
+            return response
         c.execute("UPDATE task_claims SET status='completed', completed_at=? WHERE id=?",
                   (now, claim_id))
         c.execute("UPDATE resource_leases SET released_at=? WHERE resource_type='task' "
@@ -9058,6 +9271,20 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
             next_status = "Done"
         elif stored_status in ("Cancelled", "Canceled"):
             next_status = stored_status
+        gated_work_session = work_session_gate.get("work_session") or {}
+        if work_session_gate.get("required") and gated_work_session.get("work_session_id"):
+            c.execute(
+                "UPDATE work_sessions SET status='completed', completed_at=?, updated_by=?, updated_at=? "
+                "WHERE work_session_id=?",
+                (now, actor, now, gated_work_session["work_session_id"]),
+            )
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"], actor, "work_session.completed",
+                       json.dumps({"work_session_id": gated_work_session["work_session_id"],
+                                   "claim_id": claim_id,
+                                   "source": "complete_claim",
+                                   "policy_profile": work_session_gate.get("policy_profile")},
+                                  sort_keys=True), now))
         if done_gate:
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (row["task_id"], actor, "task.done_blocked",
@@ -9097,10 +9324,18 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
                                        if publication_gate.get("required") else None,
                                    ) if gate
                                ],
+                               "work_session_gate": {
+                                   key: value for key, value in work_session_gate.items()
+                                   if key != "work_session"
+                               },
                                "terminal_status_preserved": terminal_status_preserved},
                               sort_keys=True), now))
     response = {"completed": True, "claim_id": claim_id, "task_id": row["task_id"],
-                "status": next_status, "git_state": git_state}
+                "status": next_status, "git_state": git_state,
+                "work_session_gate": {
+                    key: value for key, value in work_session_gate.items()
+                    if key != "work_session"
+                }}
     if external_ci_gate.get("required"):
         response["review_gate"] = external_ci_gate.get("gate")
         response["external_ci"] = external_ci_gate

@@ -196,6 +196,9 @@ Later tasks deepen enforcement:
   `preflight_work_session` stores `hygiene.repo_preflight`, updates `dirty_status`, branch,
   upstream, `base_sha`, `head_sha`, and `conflict_marker_count`.
 - `SESSION-4`: add `pre_tool_check` for file writes and shell commands.
-- `SESSION-5`: gate `complete_claim` on pushed clean branch/session proof.
+- `SESSION-5`: gate `complete_claim` on pushed clean branch/session proof. Done here:
+  code-strict completion requires matching branch/head SHA, PR/push/offline proof, recorded tests,
+  and clean `git diff --check`; dirty completion needs explicit allowance evidence, conflict
+  markers block, and refused completion leaves the claim active with a visible failure class.
 - `SESSION-6`: gate merge on session/branch/provenance consistency.
 - `SESSION-7`: create managed worktrees/clones from repo topology.

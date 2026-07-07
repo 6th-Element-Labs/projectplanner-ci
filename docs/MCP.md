@@ -140,6 +140,10 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 
 Agent completion rule:
 - `complete_claim(evidence)` moves the task to `In Review` and records branch/SHA/PR evidence.
+- For `code_strict` Work Sessions, `complete_claim` fails closed until evidence proves the bound
+  branch/head SHA, PR or pushed/offline proof, recorded tests, and clean `git diff --check`.
+  Dirty completion requires explicit `allow_dirty=true` plus `allow_dirty_reason`; conflict
+  markers are never accepted.
 - `Done` is reserved for GitHub/default-branch provenance: merged/rebased into the intended branch
   with `merged_sha` or equivalent recorded by webhook/reconcile.
 - If an agent passes `final_status="Done"`, Switchboard records the attempt, releases the claim,
@@ -293,6 +297,9 @@ Work Sessions:
 - `SESSION-3` adds repo/worktree preflight for adapters and hosts. Agents should run it before
   editing, before strict claims, before `complete_claim`, and before merge. `deny` means stop and
   repair; `warn` means proceed only when the warning is policy-acceptable and recorded.
+- `SESSION-5` gates `complete_claim` for code-strict Work Sessions. Refused completion leaves the
+  claim active, records `task.complete_blocked_work_session`, and returns a typed failure class so
+  the agent can repair and retry instead of releasing a dirty/conflicted/stale task.
 - Claim inputs: MCP accepts `work_session_id`, `work_session_json`,
   `session_policy_profile`, and `require_work_session`; REST accepts `work_session_id`,
   `work_session`, `session_policy_profile` / `policy_profile`, and `require_work_session`.
