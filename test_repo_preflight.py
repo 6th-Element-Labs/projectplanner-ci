@@ -72,6 +72,14 @@ try:
        clean["base_distance"]["behind"] == 0,
        "clean report records branch, upstream, and base distance")
 
+    commit(repo, "static/separators.css", "/* ======= */\nhr { border: 0; }\n",
+           "separator lines are not conflicts")
+    separators = store.repo_preflight(
+        str(repo), project=P, task_id="PREFLIGHT-1", agent_id=AGENT,
+        expected_branch="codex/PREFLIGHT-1-clean")
+    ok(separators["verdict"] == "pass" and separators["conflict_marker_count"] == 0,
+       "standalone separator lines are not conflict markers")
+
     (repo / "scratch.txt").write_text("dirty\n", encoding="utf-8")
     dirty = store.repo_preflight(
         str(repo), project=P, task_id="PREFLIGHT-1", agent_id=AGENT,

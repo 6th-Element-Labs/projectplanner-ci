@@ -6667,7 +6667,7 @@ def _repo_scan_conflict_markers(repo_path: str, max_files: int = 4000,
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
             stripped = line.strip()
-            if stripped.startswith(("<<<<<<<", "=======", ">>>>>>>")):
+            if stripped.startswith(("<<<<<<<", ">>>>>>>")):
                 markers.append({"path": rel, "line": lineno, "marker": stripped[:16]})
                 break
     return markers
