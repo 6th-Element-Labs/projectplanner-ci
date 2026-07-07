@@ -138,11 +138,134 @@ WORK_SESSION_SCHEMA = "switchboard.work_session.v1"
 MANAGED_WORK_SESSION_SCHEMA = "switchboard.managed_work_session.v1"
 WORK_SESSION_HEALTH_SCHEMA = "switchboard.session_health.v1"
 TASK_SESSION_HEALTH_SCHEMA = "switchboard.task_session_health.v1"
+SESSION_POLICY_PROFILE_SCHEMA = "switchboard.session_policy_profiles.v1"
 WORK_SESSION_STATUSES = {"proposed", "active", "blocked", "completed", "archived", "expired"}
 WORK_SESSION_STORAGE_MODES = {"worktree", "clone", "external"}
 WORK_SESSION_DIRTY_STATUSES = {"clean", "dirty", "unknown"}
 WORK_SESSION_REQUIRED_PATH_MODES = {"worktree", "clone"}
-WORK_SESSION_STRICT_PROFILES = {"code_strict"}
+SESSION_POLICY_PROFILE_ALIASES = {
+    "strict": "code_strict",
+    "code": "code_strict",
+    "docs": "docs_review",
+    "documentation": "docs_review",
+    "offline": "offline_evidence",
+    "non_code_offline": "offline_evidence",
+    "preview": "ui_preview",
+    "none": "no_repo",
+    "no-repo": "no_repo",
+}
+BUILTIN_SESSION_POLICY_PROFILES = {
+    "code_strict": {
+        "profile": "code_strict",
+        "label": "Code strict",
+        "description": "For code/repo work that can move product truth. Requires a bound clean Work Session and canonical merge provenance.",
+        "work_session_required": True,
+        "pre_tool_missing_session": "deny",
+        "allowed_storage_modes": ["worktree", "clone"],
+        "preferred_storage_mode": "worktree",
+        "prefer_full_clone": False,
+        "deny_hygiene": [
+            "dirty_work_session",
+            "conflict_markers",
+            "wrong_branch",
+            "missing_upstream",
+            "missing_base_sha",
+        ],
+        "warn_hygiene": [],
+        "requires_branch_task_scope": True,
+        "requires_upstream": True,
+        "requires_base_sha": True,
+        "requires_tests": True,
+        "requires_diff_check": True,
+        "merge_requires_work_session": True,
+        "merge_authority": "canonical_repo_only",
+        "completion_evidence": ["branch", "head_sha", "pr_url_or_remote_ref", "tests", "git_diff_check"],
+    },
+    "docs_review": {
+        "profile": "docs_review",
+        "label": "Docs review",
+        "description": "For docs, planning, and review work where a Work Session is useful but not mandatory.",
+        "work_session_required": False,
+        "pre_tool_missing_session": "warn",
+        "allowed_storage_modes": ["external", "worktree", "clone"],
+        "preferred_storage_mode": "external",
+        "prefer_full_clone": False,
+        "deny_hygiene": ["conflict_markers"],
+        "warn_hygiene": ["dirty_work_session", "missing_upstream", "missing_base_sha"],
+        "requires_branch_task_scope": False,
+        "requires_upstream": False,
+        "requires_base_sha": False,
+        "requires_tests": False,
+        "requires_diff_check": False,
+        "merge_requires_work_session": False,
+        "merge_authority": "canonical_repo_only_when_code_changes",
+        "completion_evidence": ["artifact_or_review_note"],
+    },
+    "offline_evidence": {
+        "profile": "offline_evidence",
+        "label": "Offline evidence",
+        "description": "For non-PR/offline deliverables that need explicit verifier evidence instead of repo merge provenance.",
+        "work_session_required": False,
+        "pre_tool_missing_session": "allow",
+        "allowed_storage_modes": ["external"],
+        "preferred_storage_mode": "external",
+        "prefer_full_clone": False,
+        "deny_hygiene": [],
+        "warn_hygiene": [],
+        "requires_branch_task_scope": False,
+        "requires_upstream": False,
+        "requires_base_sha": False,
+        "requires_tests": False,
+        "requires_diff_check": False,
+        "merge_requires_work_session": False,
+        "merge_authority": "offline_verifier",
+        "completion_evidence": ["offline_evidence", "artifact_url_or_verification"],
+    },
+    "ui_preview": {
+        "profile": "ui_preview",
+        "label": "UI preview",
+        "description": "For preview/runtime work where ports and visible state matter; Work Session is preferred and unsafe sessions warn loudly.",
+        "work_session_required": False,
+        "pre_tool_missing_session": "warn",
+        "allowed_storage_modes": ["worktree", "clone", "external"],
+        "preferred_storage_mode": "worktree",
+        "prefer_full_clone": False,
+        "deny_hygiene": ["conflict_markers"],
+        "warn_hygiene": ["dirty_work_session", "missing_upstream", "missing_base_sha"],
+        "requires_branch_task_scope": False,
+        "requires_upstream": False,
+        "requires_base_sha": False,
+        "requires_tests": True,
+        "requires_diff_check": False,
+        "merge_requires_work_session": False,
+        "merge_authority": "canonical_repo_only_when_code_changes",
+        "completion_evidence": ["preview_url_or_screenshot", "tests_or_smoke"],
+    },
+    "no_repo": {
+        "profile": "no_repo",
+        "label": "No repo",
+        "description": "For pure coordination/read-only/admin work with no repository side effects.",
+        "work_session_required": False,
+        "pre_tool_missing_session": "allow",
+        "allowed_storage_modes": ["external"],
+        "preferred_storage_mode": "external",
+        "prefer_full_clone": False,
+        "deny_hygiene": [],
+        "warn_hygiene": [],
+        "requires_branch_task_scope": False,
+        "requires_upstream": False,
+        "requires_base_sha": False,
+        "requires_tests": False,
+        "requires_diff_check": False,
+        "merge_requires_work_session": False,
+        "merge_authority": "none",
+        "completion_evidence": ["activity_or_comment"],
+    },
+}
+WORK_SESSION_STRICT_PROFILES = {
+    name for name, profile in BUILTIN_SESSION_POLICY_PROFILES.items()
+    if profile.get("work_session_required")
+}
 REPO_PREFLIGHT_SCHEMA = "switchboard.repo_preflight.v1"
 PRE_TOOL_CHECK_SCHEMA = "switchboard.pre_tool_check.v1"
 MERGE_GATE_SCHEMA = "switchboard.merge_gate.v1"
@@ -5366,6 +5489,19 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             "failed_gate",
             details={"external_ci": external_ci}))
 
+    profile = _task_work_session_profile(
+        task,
+        str(merged_payload.get("session_policy_profile") or merged_payload.get("policy_profile") or ""),
+        project=project,
+    )
+    profile_rules = _session_policy_profile_rules(profile, project=project)
+    if not profile_rules:
+        findings.append(_merge_gate_finding(
+            "unknown_policy_profile",
+            f"Unknown session policy profile: {profile or '<empty>'}.",
+            "invalid_input",
+            details={"known_profiles": sorted((get_session_policy_profiles(project).get("profiles") or {}).keys())}))
+
     session = None
     if work_session_id:
         session = get_work_session(work_session_id, project=project)
@@ -5382,8 +5518,14 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 (claim_id,),
             ).fetchone()
             session = _work_session_row(row) if row else None
-    require_session = _merge_gate_bool(merged_payload.get("require_work_session"), default=False)
+    require_session = (
+        _merge_gate_bool(merged_payload.get("require_work_session"), default=False)
+        or bool(profile_rules.get("merge_requires_work_session"))
+    )
     if session:
+        session_profile = _normalize_session_policy_profile(
+            session.get("policy_profile") or profile or "")
+        session_rules = _session_policy_profile_rules(session_profile, project=project) or profile_rules
         if session.get("repo_role") != "canonical":
             findings.append(_merge_gate_finding(
                 "wrong_work_session_repo_role",
@@ -5391,13 +5533,15 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "failed_gate",
                 details={"work_session_id": session.get("work_session_id"),
                          "repo_role": session.get("repo_role")}))
-        if session.get("dirty_status") == "dirty":
+        if session.get("dirty_status") == "dirty" and "dirty_work_session" in set(
+                session_rules.get("deny_hygiene") or []):
             findings.append(_merge_gate_finding(
                 "dirty_work_session",
                 "Work Session is dirty; run repo preflight and commit or clean changes before merge.",
                 "failed_gate",
                 details={"work_session_id": session.get("work_session_id")}))
-        if int(session.get("conflict_marker_count") or 0) > 0:
+        if int(session.get("conflict_marker_count") or 0) > 0 and "conflict_markers" in set(
+                session_rules.get("deny_hygiene") or []):
             findings.append(_merge_gate_finding(
                 "conflict_markers",
                 "Work Session reports conflict markers.",
@@ -5420,8 +5564,9 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
     elif require_session:
         findings.append(_merge_gate_finding(
             "work_session_required",
-            "Merge gate requires a Work Session for code merge intent.",
-            "missing_data"))
+            f"Policy profile {profile} requires a Work Session for merge intent.",
+            "missing_data",
+            details={"policy_profile": profile}))
 
     blocking = [f for f in findings if f.get("blocking")]
     ok = not blocking
@@ -5437,6 +5582,9 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "repo": repo,
         "repo_role": role_info,
         "target_branch": target_branch,
+        "policy_profile": profile,
+        "policy": profile_rules,
+        "work_session_required": require_session,
         "ok": ok,
         "status": "passed" if ok else "blocked",
         "findings": findings,
@@ -6824,6 +6972,7 @@ def _runner_session_row(row: sqlite3.Row, now: Optional[float] = None,
 def work_session_contract(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     topology = get_project_repo_topology(project)
     roles = sorted((topology.get("roles") or {}).keys())
+    policy_profiles = get_session_policy_profiles(project)
     return {
         "schema": WORK_SESSION_SCHEMA,
         "project": project,
@@ -6835,6 +6984,7 @@ def work_session_contract(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "storage_modes": sorted(WORK_SESSION_STORAGE_MODES),
         "dirty_statuses": sorted(WORK_SESSION_DIRTY_STATUSES),
         "repo_roles": roles,
+        "policy_profiles": policy_profiles,
         "required_for_modes": {
             "worktree": ["worktree_path"],
             "clone": ["clone_path"],
@@ -8285,6 +8435,21 @@ def _pre_tool_decision(decision: str, reason: str, failure_class: str = "",
     }
 
 
+def _pre_tool_requested_profile(payload: Dict[str, Any], classification: Dict[str, Any],
+                                session: Optional[Dict[str, Any]] = None) -> str:
+    requested = str(payload.get("session_policy_profile") or payload.get("policy_profile") or "").strip()
+    if requested:
+        return requested
+    if session and session.get("policy_profile"):
+        return str(session.get("policy_profile") or "")
+    if classification.get("action") in {
+        "git_command", "pr_create", "pr_or_merge", "complete_claim", "merge",
+        "server_start", "server_kill", "runtime_control",
+    }:
+        return "code_strict"
+    return ""
+
+
 def _record_pre_tool_activity(task_id: str, actor: str, kind: str,
                               payload: Dict[str, Any],
                               project: str = DEFAULT_PROJECT) -> None:
@@ -8382,6 +8547,26 @@ def pre_tool_check(payload: Dict[str, Any], actor: str = "system",
             "deny", "task_id does not exist in this project.", "invalid_input", "high",
             ["Refresh the board and use a task from the selected project."],
             **base, ok=False)
+    profile = _task_work_session_profile(
+        task,
+        _pre_tool_requested_profile(payload, classification),
+        project=project,
+    )
+    rules = _session_policy_profile_rules(profile, project=project)
+    base["policy_profile"] = profile
+    base["policy_action"] = rules.get("pre_tool_missing_session") if rules else None
+    if not rules:
+        verdict = _unknown_session_policy_profile(profile, project)
+        return _pre_tool_decision(
+            "deny",
+            verdict.get("message") or "Unknown session policy profile.",
+            verdict.get("failure_class") or "invalid_input",
+            verdict.get("severity") or "high",
+            ["Use one of the project's session_policy_profiles.known_profiles."],
+            **base,
+            known_profiles=verdict.get("known_profiles") or [],
+            ok=False,
+        )
 
     now = time.time()
     with _conn(project) as c:
@@ -8389,17 +8574,37 @@ def pre_tool_check(payload: Dict[str, Any], actor: str = "system",
             c, work_session_id=work_session_id, task_id=task_id, agent_id=agent_id,
             now=now)
         if not row:
+            action = str(rules.get("pre_tool_missing_session") or "deny").strip().lower()
+            strict_missing = bool(rules.get("work_session_required")) or action == "deny"
             event = {
                 **base,
-                "reason": "work_session_required",
+                "reason": "work_session_required" if strict_missing else "work_session_missing_allowed_by_policy",
                 "failure_class": "missing_data",
                 "binding": write_binding_activity_payload(binding),
+                "policy": rules,
             }
-            _record_pre_tool_activity(task_id, actor_name, "work_session.unsafe_session",
+            _record_pre_tool_activity(task_id, actor_name,
+                                      "work_session.unsafe_session" if strict_missing else
+                                      "work_session.policy_warning",
                                       event, project=project)
+            if not strict_missing:
+                return _pre_tool_decision(
+                    "warn" if action == "warn" else "allow",
+                    f"Policy profile {profile} allows this side effect without a bound Work Session.",
+                    "missing_data" if action == "warn" else "",
+                    "medium" if action == "warn" else "",
+                    [
+                        "Bind a Work Session for stronger provenance when this touches code.",
+                        "Use code_strict for repo/code changes.",
+                    ] if action == "warn" else [],
+                    **base,
+                    binding=write_binding_activity_payload(binding),
+                    activity_kind="work_session.policy_warning",
+                    ok=True,
+                )
             return _pre_tool_decision(
                 "deny",
-                "A valid active Work Session is required before this tool side effect.",
+                f"Policy profile {profile} requires a valid active Work Session before this tool side effect.",
                 "missing_data",
                 "high",
                 [
@@ -8412,11 +8617,23 @@ def pre_tool_check(payload: Dict[str, Any], actor: str = "system",
                 ok=False,
             )
         session = _work_session_row(row)
-        profile = str(payload.get("session_policy_profile") or payload.get("policy_profile")
-                      or session.get("policy_profile") or "").strip().lower()
-        verdict = _validate_work_session_claim_state(
-            session, task, agent_id, project, required=True, profile=profile or "code_strict",
-            source="pre_tool_check", normalized_payload=None, now=now)
+        profile = _task_work_session_profile(
+            task,
+            _pre_tool_requested_profile(payload, classification, session),
+            project=project,
+        )
+        rules = _session_policy_profile_rules(profile, project=project)
+        if not rules:
+            verdict = _unknown_session_policy_profile(profile, project)
+            rules = {}
+        else:
+            verdict = _validate_work_session_claim_state(
+                session, task, agent_id, project,
+                required=bool(rules.get("work_session_required")),
+                profile=profile,
+                source="pre_tool_check", normalized_payload=None, now=now)
+        base["policy_profile"] = profile
+        base["policy_action"] = rules.get("pre_tool_missing_session") if rules else None
         base["work_session_id"] = session.get("work_session_id")
         if claim_id and session.get("claim_id") and claim_id != session.get("claim_id"):
             verdict = _work_session_failure(
@@ -8427,7 +8644,7 @@ def pre_tool_check(payload: Dict[str, Any], actor: str = "system",
                                         "failure_class": "invalid_input",
                                         "message": "claim_id mismatch"}],
                          "work_session_id": session.get("work_session_id"),
-                         "policy_profile": profile or "code_strict"},
+                         "policy_profile": profile},
             )
         if not verdict.get("ok"):
             event = {
@@ -8509,27 +8726,45 @@ def _coerce_work_session_payload(value: Any) -> Tuple[Dict[str, Any], str]:
 
 
 def _task_work_session_profile(task: Dict[str, Any],
-                               requested_profile: str = "") -> str:
+                               requested_profile: str = "",
+                               project: str = DEFAULT_PROJECT) -> str:
     requested = (requested_profile or "").strip().lower()
     if requested:
-        return requested
+        return _normalize_session_policy_profile(requested)
     state = task.get("agent_state") or {}
     for key in ("work_session", "session_policy", "dispatch"):
         item = state.get(key) or {}
         if isinstance(item, dict):
             profile = str(item.get("policy_profile") or item.get("profile") or "").strip().lower()
             if profile:
-                return profile
-    text = "\n".join(str(task.get(k) or "") for k in (
-        "description", "entry_criteria", "exit_criteria", "deliverable"))
+                return _normalize_session_policy_profile(profile)
+    text = _session_profile_text(task)
     match = re.search(r"(?:policy_profile|session_profile)\s*[:=]\s*([A-Za-z0-9_-]+)", text)
-    return (match.group(1).strip().lower() if match else "")
+    if match:
+        return _normalize_session_policy_profile(match.group(1))
+    defaults = _project_session_policy_defaults(project)
+    if _task_looks_like_code_work(task):
+        return defaults.get("code_task_default_profile") or "code_strict"
+    return defaults.get("default_profile") or "docs_review"
 
 
 def _work_session_required(task: Dict[str, Any], requested_profile: str = "",
-                           require_work_session: bool = False) -> Tuple[bool, str]:
-    profile = _task_work_session_profile(task, requested_profile)
-    return bool(require_work_session or profile in WORK_SESSION_STRICT_PROFILES), profile
+                           require_work_session: bool = False,
+                           project: str = DEFAULT_PROJECT) -> Tuple[bool, str]:
+    profile = _task_work_session_profile(task, requested_profile, project=project)
+    rules = _session_policy_profile_rules(profile, project=project)
+    required = bool(require_work_session or rules.get("work_session_required"))
+    return required, profile
+
+
+def _unknown_session_policy_profile(profile: str, project: str) -> Dict[str, Any]:
+    known = sorted((get_session_policy_profiles(project).get("profiles") or {}).keys())
+    return _work_session_failure(
+        "unknown_policy_profile",
+        f"Unknown session policy profile: {profile or '<empty>'}.",
+        "invalid_input",
+        details={"policy_profile": profile or "", "known_profiles": known},
+    )
 
 
 def _branch_matches_task(agent_id: str, task_id: str, branch: str) -> bool:
@@ -8578,7 +8813,11 @@ def _validate_work_session_claim_binding_in(
         work_session: Any = None, policy_profile: str = "",
         require_work_session: bool = False, now: Optional[float] = None) -> Dict[str, Any]:
     now = time.time() if now is None else now
-    required, profile = _work_session_required(task, policy_profile, require_work_session)
+    required, profile = _work_session_required(task, policy_profile, require_work_session,
+                                               project=project)
+    rules = _session_policy_profile_rules(profile, project=project)
+    if not rules:
+        return _unknown_session_policy_profile(profile, project)
     task_id = task.get("task_id") or ""
     payload, payload_error = _coerce_work_session_payload(work_session)
     if payload_error:
@@ -8598,6 +8837,16 @@ def _validate_work_session_claim_binding_in(
                 "Work Session payload failed model validation.",
                 "invalid_input",
                 details={"errors": errors, "policy_profile": profile},
+            )
+        storage_mode = data.get("storage_mode") or ""
+        allowed_modes = set(rules.get("allowed_storage_modes") or [])
+        if allowed_modes and storage_mode not in allowed_modes:
+            return _work_session_failure(
+                "storage_mode_not_allowed",
+                f"Policy profile {profile} does not allow storage_mode={storage_mode}.",
+                "invalid_input",
+                details={"policy_profile": profile, "storage_mode": storage_mode,
+                         "allowed_storage_modes": sorted(allowed_modes)},
             )
         if data.get("work_session_id"):
             existing = c.execute("SELECT 1 FROM work_sessions WHERE work_session_id=?",
@@ -8673,44 +8922,56 @@ def _validate_work_session_claim_state(
         allow_dirty: bool = False) -> Dict[str, Any]:
     now = time.time() if now is None else now
     task_id = task.get("task_id") or ""
+    rules = _session_policy_profile_rules(profile, project=project)
+    if not rules:
+        return _unknown_session_policy_profile(profile, project)
     problems: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+
+    def add_problem(reason: str, failure_class: str, message: str) -> None:
+        item = {"reason": reason, "failure_class": failure_class, "message": message}
+        if reason in set(rules.get("warn_hygiene") or []):
+            warnings.append(item)
+        else:
+            problems.append(item)
+
     if session.get("project_id") != project:
-        problems.append({"reason": "wrong_project", "failure_class": "invalid_input",
-                         "message": "Work Session project_id does not match claim project."})
+        add_problem("wrong_project", "invalid_input",
+                    "Work Session project_id does not match claim project.")
     if session.get("task_id") and session.get("task_id") != task_id:
-        problems.append({"reason": "wrong_task", "failure_class": "invalid_input",
-                         "message": "Work Session task_id does not match claimed task."})
+        add_problem("wrong_task", "invalid_input",
+                    "Work Session task_id does not match claimed task.")
     if session.get("agent_id") and session.get("agent_id") != agent_id:
-        problems.append({"reason": "wrong_agent", "failure_class": "unbound_identity",
-                         "message": "Work Session agent_id does not match claiming agent."})
+        add_problem("wrong_agent", "unbound_identity",
+                    "Work Session agent_id does not match claiming agent.")
     if session.get("status") not in {"active", "proposed"}:
-        problems.append({"reason": "inactive_work_session", "failure_class": "failed_gate",
-                         "message": "Work Session is not active/proposed."})
+        add_problem("inactive_work_session", "failed_gate",
+                    "Work Session is not active/proposed.")
     expires_at = session.get("expires_at")
     if expires_at is not None:
         try:
             if float(expires_at) <= now:
-                problems.append({"reason": "expired_work_session", "failure_class": "stale_branch",
-                                 "message": "Work Session is expired."})
+                add_problem("expired_work_session", "stale_branch",
+                            "Work Session is expired.")
         except (TypeError, ValueError):
-            problems.append({"reason": "invalid_work_session_expiry",
-                             "failure_class": "invalid_input",
-                             "message": "Work Session expires_at is invalid."})
+            add_problem("invalid_work_session_expiry", "invalid_input",
+                        "Work Session expires_at is invalid.")
     if session.get("dirty_status") == "dirty" and not allow_dirty:
-        problems.append({"reason": "dirty_work_session", "failure_class": "failed_gate",
-                         "message": "Work Session reports a dirty workspace."})
+        add_problem("dirty_work_session", "failed_gate",
+                    "Work Session reports a dirty workspace.")
     if int(session.get("conflict_marker_count") or 0) > 0:
-        problems.append({"reason": "conflict_markers", "failure_class": "failed_gate",
-                         "message": "Work Session reports conflict markers."})
-    if required and not _branch_matches_task(agent_id, task_id, session.get("branch") or ""):
-        problems.append({"reason": "wrong_branch", "failure_class": "stale_branch",
-                         "message": "Work Session branch must be task-scoped."})
-    if required and not session.get("upstream"):
-        problems.append({"reason": "missing_upstream", "failure_class": "missing_data",
-                         "message": "Work Session upstream is required for code-strict claims."})
-    if required and not session.get("base_sha"):
-        problems.append({"reason": "missing_base_sha", "failure_class": "missing_data",
-                         "message": "Work Session base_sha is required for code-strict claims."})
+        add_problem("conflict_markers", "failed_gate",
+                    "Work Session reports conflict markers.")
+    if rules.get("requires_branch_task_scope") and not _branch_matches_task(
+            agent_id, task_id, session.get("branch") or ""):
+        add_problem("wrong_branch", "stale_branch",
+                    "Work Session branch must be task-scoped.")
+    if rules.get("requires_upstream") and not session.get("upstream"):
+        add_problem("missing_upstream", "missing_data",
+                    "Work Session upstream is required for this profile.")
+    if rules.get("requires_base_sha") and not session.get("base_sha"):
+        add_problem("missing_base_sha", "missing_data",
+                    "Work Session base_sha is required for this profile.")
     if problems:
         first = problems[0]
         return _work_session_failure(
@@ -8722,6 +8983,8 @@ def _validate_work_session_claim_state(
         "ok": True,
         "required": required,
         "policy_profile": profile,
+        "policy": rules,
+        "warnings": warnings,
         "source": source,
         "work_session": session,
         "normalized_payload": normalized_payload,
@@ -8736,7 +8999,10 @@ def _attach_work_session_claim_in(c: sqlite3.Connection, verdict: Dict[str, Any]
     now = time.time() if now is None else now
     session = verdict.get("work_session")
     if not session:
-        return {"work_session_id": None, "status": "not_required"}
+        return {"work_session_id": None, "status": "not_required",
+                "source": verdict.get("source"),
+                "policy_profile": verdict.get("policy_profile"),
+                "required": verdict.get("required", False)}
     if verdict.get("source") == "payload":
         data = dict(verdict.get("normalized_payload") or {})
         data["claim_id"] = claim_id
@@ -9946,12 +10212,19 @@ def _complete_claim_work_session_gate_in(
         or evidence_obj.get("completion_profile")
         or ""
     )
-    required, profile = _work_session_required(task, str(requested_profile or ""))
-    if session and (session.get("policy_profile") or "").strip().lower() in WORK_SESSION_STRICT_PROFILES:
+    required, profile = _work_session_required(task, str(requested_profile or ""),
+                                               project=project)
+    rules = _session_policy_profile_rules(profile, project=project)
+    if not rules:
+        return _unknown_session_policy_profile(profile, project)
+    if session and _session_policy_profile_rules(
+            session.get("policy_profile") or profile, project=project).get("work_session_required"):
         required = True
-        profile = (session.get("policy_profile") or profile or "").strip().lower()
-    completion_profile = str(evidence_obj.get("completion_profile") or "").strip().lower()
-    if completion_profile in {"offline", "offline_evidence", "non_code_offline"} and not required:
+        profile = _normalize_session_policy_profile(session.get("policy_profile") or profile)
+        rules = _session_policy_profile_rules(profile, project=project)
+    completion_profile = _normalize_session_policy_profile(
+        str(evidence_obj.get("completion_profile") or ""))
+    if completion_profile == "offline_evidence" and not required:
         if not (evidence_obj.get("offline_evidence") or evidence_obj.get("artifact_url") or evidence_obj.get("verification")):
             return _work_session_failure(
                 "missing_offline_evidence",
@@ -9982,7 +10255,7 @@ def _complete_claim_work_session_gate_in(
                      "work_session_id": session.get("work_session_id")},
         )
     state = _validate_work_session_claim_state(
-        session, task, claim["agent_id"], project, required=True, profile=profile,
+        session, task, claim["agent_id"], project, required=required, profile=profile,
         source="complete_claim", normalized_payload=None, now=now,
         allow_dirty=allow_dirty)
     if not state.get("ok"):
@@ -9993,14 +10266,14 @@ def _complete_claim_work_session_gate_in(
     evidence_head = str(evidence_obj.get("head_sha") or "").strip()
     session_branch = str(session.get("branch") or "").strip()
     session_head = str(session.get("head_sha") or "").strip()
-    if not evidence_branch:
+    if rules.get("merge_authority") != "offline_verifier" and not evidence_branch:
         problems.append({"reason": "missing_completion_branch", "failure_class": "missing_data",
                          "message": "Completion evidence must include branch."})
     elif session_branch and evidence_branch != session_branch:
         problems.append({"reason": "stale_branch", "failure_class": "stale_branch",
                          "message": "Completion branch does not match the bound Work Session.",
                          "evidence_branch": evidence_branch, "work_session_branch": session_branch})
-    if not evidence_head:
+    if rules.get("merge_authority") != "offline_verifier" and not evidence_head:
         problems.append({"reason": "missing_completion_head_sha", "failure_class": "missing_data",
                          "message": "Completion evidence must include head_sha."})
     elif not session_head:
@@ -10010,14 +10283,14 @@ def _complete_claim_work_session_gate_in(
         problems.append({"reason": "stale_head_sha", "failure_class": "stale_branch",
                          "message": "Completion head_sha does not match the bound Work Session.",
                          "evidence_head_sha": evidence_head, "work_session_head_sha": session_head})
-    if not _completion_has_push_or_review_evidence(evidence_obj):
+    if rules.get("merge_authority") != "none" and not _completion_has_push_or_review_evidence(evidence_obj):
         problems.append({"reason": "missing_push_or_review_evidence",
                          "failure_class": "missing_data",
                          "message": "Completion evidence must include PR, pushed branch, or offline evidence."})
-    if not _completion_evidence_has_tests(evidence_obj, session):
+    if rules.get("requires_tests") and not _completion_evidence_has_tests(evidence_obj, session):
         problems.append({"reason": "missing_test_evidence", "failure_class": "missing_data",
                          "message": "Completion evidence must record relevant tests or verification."})
-    if not _completion_evidence_has_diff_check(evidence_obj, session):
+    if rules.get("requires_diff_check") and not _completion_evidence_has_diff_check(evidence_obj, session):
         problems.append({"reason": "missing_diff_check", "failure_class": "missing_data",
                          "message": "Completion evidence must record git diff --check as clean."})
     problems.extend(_work_session_stale_lease_problems(session, now))
@@ -10025,11 +10298,12 @@ def _complete_claim_work_session_gate_in(
         first = problems[0]
         return _work_session_failure(
             first["reason"], first["message"], first["failure_class"],
-            details={"problems": problems, "required": True,
+            details={"problems": problems, "required": required,
                      "policy_profile": profile,
                      "work_session_id": session.get("work_session_id")},
         )
-    return {"ok": True, "required": True, "policy_profile": profile,
+    return {"ok": True, "required": required, "policy_profile": profile,
+            "policy": rules,
             "source": "complete_claim", "work_session": session,
             "allow_dirty": allow_dirty}
 
@@ -13374,6 +13648,109 @@ def _coerce_str_list(value) -> List[str]:
     return [x.strip() for x in re.split(r"[\n,]+", text) if x.strip()]
 
 
+def _normalize_session_policy_profile(profile: str) -> str:
+    clean = re.sub(r"[^a-z0-9_-]+", "_", (profile or "").strip().lower()).strip("_")
+    return SESSION_POLICY_PROFILE_ALIASES.get(clean, clean)
+
+
+def _session_profile_text(task: Dict[str, Any]) -> str:
+    return "\n".join(str(task.get(k) or "") for k in (
+        "title", "description", "entry_criteria", "exit_criteria", "deliverable"))
+
+
+def _task_looks_like_code_work(task: Dict[str, Any]) -> bool:
+    text = _session_profile_text(task).lower()
+    if re.search(r"(?:policy_profile|session_profile)\s*[:=]", text):
+        return False
+    if re.search(r"\b(non[- ]code|offline evidence|docs[- ]only|review[- ]only)\b", text):
+        return False
+    code_terms = (
+        "code", "repo", "branch", "worktree", "clone", "git ", "github", "pr ",
+        "pull request", "merge", "rebase", "commit", "ci", "tests", "test suite",
+        "deploy", "server", "api", "mcp", "rest", "ui", "runtime", "adapter",
+    )
+    return any(term in text for term in code_terms)
+
+
+def _project_session_policy_defaults(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    builtins = {
+        "helm": {
+            "default_profile": "docs_review",
+            "code_task_default_profile": "code_strict",
+            "notes": ["Helm code tasks default to code_strict; docs/review tasks may opt into docs_review or offline_evidence."],
+        },
+        "switchboard": {
+            "default_profile": "docs_review",
+            "code_task_default_profile": "docs_review",
+            "notes": ["Switchboard exposes code_strict for code/control-plane tasks; tasks can opt in explicitly while legacy board fixtures remain docs_review by default."],
+        },
+    }
+    default = copy.deepcopy(builtins.get(project) or {
+        "default_profile": "docs_review",
+        "code_task_default_profile": "docs_review",
+        "notes": ["Projects can opt code-like tasks into code_strict by setting code_task_default_profile or a task-level policy_profile."],
+    })
+    raw = get_meta("session_policy_profiles", {}, project=project) or {}
+    if isinstance(raw, dict):
+        for key in ("default_profile", "code_task_default_profile"):
+            if raw.get(key):
+                default[key] = _normalize_session_policy_profile(str(raw.get(key) or ""))
+    default["default_profile"] = _normalize_session_policy_profile(default.get("default_profile") or "docs_review")
+    default["code_task_default_profile"] = _normalize_session_policy_profile(
+        default.get("code_task_default_profile") or "code_strict")
+    return default
+
+
+def get_session_policy_profiles(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Named Work Session enforcement profiles for a project.
+
+    These profiles are intentionally policy data, not hidden prompt convention. Adapters and
+    humans can read the same contract before claiming, writing, completing, or merging work.
+    """
+    profiles = copy.deepcopy(BUILTIN_SESSION_POLICY_PROFILES)
+    raw = get_meta("session_policy_profiles", {}, project=project) or {}
+    if isinstance(raw, dict) and isinstance(raw.get("profiles"), dict):
+        for name, data in raw.get("profiles", {}).items():
+            normalized = _normalize_session_policy_profile(str(name))
+            if not normalized or not isinstance(data, dict):
+                continue
+            base = copy.deepcopy(profiles.get(normalized) or {"profile": normalized})
+            for key, value in data.items():
+                if key in {"allowed_storage_modes", "deny_hygiene", "warn_hygiene", "completion_evidence"}:
+                    base[key] = _coerce_str_list(value)
+                else:
+                    base[key] = value
+            base["profile"] = normalized
+            profiles[normalized] = base
+
+    defaults = _project_session_policy_defaults(project)
+    known = sorted(profiles)
+    if defaults.get("default_profile") not in profiles:
+        defaults["default_profile"] = "docs_review"
+    if defaults.get("code_task_default_profile") not in profiles:
+        defaults["code_task_default_profile"] = "code_strict"
+    return {
+        "schema": SESSION_POLICY_PROFILE_SCHEMA,
+        "project": project,
+        "defaults": defaults,
+        "profiles": profiles,
+        "known_profiles": known,
+        "task_override_fields": [
+            "agent_state.session_policy.profile",
+            "agent_state.work_session.policy_profile",
+            "policy_profile:<name> in task text",
+            "session_profile:<name> in task text",
+            "claim/pre_tool/complete evidence session_policy_profile",
+        ],
+    }
+
+
+def _session_policy_profile_rules(profile: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    profiles = get_session_policy_profiles(project).get("profiles") or {}
+    normalized = _normalize_session_policy_profile(profile)
+    return copy.deepcopy(profiles.get(normalized) or {})
+
+
 def _repo_role_template(role: str) -> Dict[str, Any]:
     authority = {
         "canonical": ["done", "merge_provenance", "code_truth"],
@@ -13747,6 +14124,7 @@ def get_project_context(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         ],
         "repo_topology": topology,
         "repo_role_guide": repo_topology_role_guide(project),
+        "session_policy_profiles": get_session_policy_profiles(project),
         "boards_missions": boards,
         "code_repo_gate": topology.get("code_repo_gate"),
     }
@@ -13783,6 +14161,7 @@ def _enrich_task_project_context(task: Dict[str, Any], project: str = DEFAULT_PR
         "hierarchy_breadcrumb": _task_hierarchy_breadcrumb(task, project, links=links),
         "repo_topology": ctx.get("repo_topology"),
         "repo_role_guide": ctx.get("repo_role_guide"),
+        "session_policy_profiles": ctx.get("session_policy_profiles"),
         "boards_missions": ctx.get("boards_missions"),
         "deliverable_links": links,
         "code_repo_gate": ctx.get("code_repo_gate"),
@@ -13901,6 +14280,8 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "project_owner": access.get("owner_user_id") or access.get("org_id") or "",
         "repo_topology": repo_topology,
         "repo_role_guide": repo_topology_role_guide(project),
+        "session_policy_profiles": get_session_policy_profiles(project),
+        "work_session_contract": work_session_contract(project),
         "code_repo_gate": repo_topology.get("code_repo_gate"),
         "protocol": protocol_envelope(),
         "canonical_main_sha": get_meta("canonical_main_sha", None, project=project),

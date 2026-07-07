@@ -77,9 +77,9 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   `shared_worktree_collision`.
 - `pre_tool_check(...)` — adapter/runner pre-side-effect gate. Call before file writes, git/PR
   commands, `complete_claim`, merge, server start/kill, or other external effects. It validates
-  the active Work Session and returns `allow`/`warn`/`deny` plus remediation. Denied shared-token
-  writes are audited as `principal.unbound_write`; denied unsafe sessions are audited as
-  `work_session.unsafe_session`.
+  the active Work Session and selected session policy profile, then returns `allow`/`warn`/`deny`
+  plus remediation. Denied shared-token writes are audited as `principal.unbound_write`; denied
+  unsafe sessions are audited as `work_session.unsafe_session`.
 - `merge_gate(task_id, project, agent_id?, claim_id?, work_session_id?, pr_url?, pr_number?,
   repo?, target_branch?, branch?, head_sha?, required_status_contexts?,
   status_contexts_json?, github_pr_json?, require_work_session?)` — safe-merge readiness gate.
@@ -161,6 +161,9 @@ Agent completion rule:
   branch/head SHA, PR or pushed/offline proof, recorded tests, and clean `git diff --check`.
   Dirty completion requires explicit `allow_dirty=true` plus `allow_dirty_reason`; conflict
   markers are never accepted.
+- Session policy profiles are exposed in `get_working_agreement`, `get_project_contract`, and
+  `work_session_contract.policy_profiles`. Built-ins are `code_strict`, `docs_review`,
+  `offline_evidence`, `ui_preview`, and `no_repo`.
 - `Done` is reserved for GitHub/default-branch provenance: merged/rebased into the intended branch
   with `merged_sha` or equivalent recorded by webhook/reconcile.
 - If an agent passes `final_status="Done"`, Switchboard records the attempt, releases the claim,
@@ -321,10 +324,10 @@ Work Sessions:
   audit export reports only whether a token hash exists.
 - `SESSION-1` adds the model/API contract. Later SESSION tasks bind this into `claim_task`,
   `complete_claim`, merge gates, and managed worktree creation.
-- `SESSION-2` binds Work Sessions into `claim_task` / `claim_next` when
-  `require_work_session=true`, `session_policy_profile=code_strict`, or a task declares a strict
-  session profile. Successful strict claims return `work_session_id`; missing/unsafe sessions are
-  denied or skipped with typed failure classes.
+- `SESSION-2` binds Work Sessions into `claim_task` / `claim_next` when the selected profile
+  requires it, `require_work_session=true`, or a task declares a strict session profile. Successful
+  strict claims return `work_session_id`; missing/unsafe sessions are denied or skipped with typed
+  failure classes.
 - `SESSION-3` adds repo/worktree preflight for adapters and hosts. Agents should run it before
   editing, before strict claims, before `complete_claim`, and before merge. `deny` means stop and
   repair; `warn` means proceed only when the warning is policy-acceptable and recorded.
@@ -339,6 +342,9 @@ Work Sessions:
   are typed blockers on task and mission read models (`kind=unsafe_session`) with recommended
   repairs. Generated mission briefs and stale-narrative checks include `session_health` in the
   durable source fingerprint, so live truth wins over old chat claims.
+- `SESSION-9` makes Work Session enforcement profile-driven. Project defaults and task overrides
+  choose between `code_strict`, `docs_review`, `offline_evidence`, `ui_preview`, and `no_repo`.
+  Helm code-like tasks default to `code_strict`; relaxed profiles must be explicit and visible.
 - Claim inputs: MCP accepts `work_session_id`, `work_session_json`,
   `session_policy_profile`, and `require_work_session`; REST accepts `work_session_id`,
   `work_session`, `session_policy_profile` / `policy_profile`, and `require_work_session`.

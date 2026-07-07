@@ -203,8 +203,11 @@ try:
                                   if f["code"] == "stale_file_lease"],
        "expired file lease identity is preserved in reconcile detail")
 
-    pr_task = store.create_task({"workstream_id": "QA", "title": "PR unavailable"},
-                                actor="seed", project=P)
+    pr_task = store.create_task({
+        "workstream_id": "QA",
+        "title": "PR unavailable",
+        "description": "policy_profile:no_repo\nSynthetic reconcile fixture; not a code-work claim.",
+    }, actor="seed", project=P)
     pr_claim = store.claim_task(
         pr_task["task_id"],
         "codex/qa9-pr",

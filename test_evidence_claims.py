@@ -128,7 +128,11 @@ try:
     )
 
     squash_merged = store.create_task(
-        {"workstream_id": "BUG", "title": "squash-merged claim head disappeared"},
+        {
+            "workstream_id": "BUG",
+            "title": "squash-merged claim head disappeared",
+            "description": "policy_profile:no_repo\nSynthetic reconcile fixture for historical PR evidence.",
+        },
         actor="test",
         project=P,
     )
