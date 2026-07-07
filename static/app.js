@@ -127,6 +127,7 @@ const TeepPlan = {
 
     async init() {
         try { await this.applyProject(); } catch (e) { /* switcher is best-effort */ }
+        if (this._noProjects) { this.renderNoProjects(); return; }
         try {
             const res = await fetch('api/board');
             if (!res.ok) throw new Error(`HTTP ${res.status} loading the board`);
@@ -175,9 +176,18 @@ const TeepPlan = {
 
     // ---- multi-project: populate the switcher, drive the header -----------
     async applyProject() {
-        const cur = window.PM_PROJECT || 'maxwell';
+        let cur = window.PM_PROJECT || 'maxwell';
         let list = [{ id: 'maxwell', label: 'Project Maxwell', pretitle: '' }];
         try { list = (await (await fetch('api/projects')).json()).projects || list; } catch (e) { /* offline */ }
+        // Global auth: the list is filtered to the projects this user can access.
+        // Fall back to the first accessible one if the stored project isn't in it;
+        // if there are none, flag an empty workspace so init() shows a message.
+        this._noProjects = list.length === 0;
+        if (list.length && !list.some((p) => p.id === cur)) {
+            cur = list[0].id;
+            window.PM_PROJECT = cur;
+            try { localStorage.setItem('pm_project', cur); } catch (e) {}
+        }
         const sel = document.getElementById('project-switcher');
         if (sel) {
             sel.innerHTML = list.map((p) =>
@@ -200,6 +210,26 @@ const TeepPlan = {
             const pt = document.querySelector('.page-pretitle'); if (pt && meta.pretitle) pt.textContent = meta.pretitle;
             document.title = `${meta.label} | Taikun Atlas`;
         }
+    },
+
+    // Global auth: a signed-in user with no project grants sees a friendly empty
+    // workspace instead of a failed board load.
+    renderNoProjects() {
+        const host = document.querySelector('.page-body .container-xl') || document.body;
+        host.innerHTML = `<div class="empty py-6">
+            <div class="empty-icon"><i class="ti ti-folder-off"></i></div>
+            <p class="empty-title">No projects yet</p>
+            <p class="empty-subtitle text-secondary">Your account doesn't have access to any projects yet.
+            Ask an owner to grant you access, then refresh.</p>
+            <div class="empty-action"><a href="/login" class="btn" id="np-signout"><i class="ti ti-logout me-1"></i>Sign out</a></div>
+        </div>`;
+        const btn = document.getElementById('np-signout');
+        if (btn) btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            fetch('/api/auth/logout', { method: 'POST' }).finally(() => { window.location.href = '/login'; });
+        });
+        const ds = document.getElementById('data-status');
+        if (ds) { ds.className = 'badge bg-secondary-lt'; ds.textContent = 'no access'; }
     },
 
     // Board/overview columns come from the phases actually present: Maxwell's 5 lifecycle phases,

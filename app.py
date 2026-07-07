@@ -49,6 +49,19 @@ import store  # noqa: E402
 
 app = FastAPI(title="Taikun PM", version="0.1.0")
 
+# Service #1 (global auth) — strangler-migrated behind a flag. Mounted BEFORE the
+# monolith's per-project auth routes so, when on, it overrides /api/auth/login,
+# /api/auth/logout and /api/projects (register + session are new). Off by default
+# so prod is untouched until we flip PM_GLOBAL_AUTH.
+_GLOBAL_AUTH = os.environ.get("PM_GLOBAL_AUTH", "").strip().lower() in ("1", "true", "on", "yes")
+if _GLOBAL_AUTH:
+    from services.auth import store as _auth_store
+    from services.auth import service as _auth_service
+    from services.auth import session as _auth_session
+    from services.auth.auth_api import router as _global_auth_router
+    _auth_store.init()
+    app.include_router(_global_auth_router)
+
 store.init_project_registry()
 store.init_db()
 _seeded = store.seed_if_empty()
@@ -213,6 +226,79 @@ def _auth_exempt_path(path: str) -> bool:
     )
 
 
+def _write_required_scopes(path: str) -> tuple:
+    if (path == "/api/projects" or
+            (path.startswith("/api/projects/") and path.endswith("/repo_topology")) or
+            path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))):
+        return ("write:system",)
+    return ("write:tasks",)
+
+
+def _global_user_scopes(user: dict, project: str) -> list:
+    """A global user's effective scopes on a project — superadmin gets admin."""
+    if user.get("is_superadmin"):
+        return list(ADMIN_SCOPES)
+    scopes: set = set()
+    for grant in store.principal_project_roles(project, user["id"]):
+        scopes.update(grant.get("scopes") or [])
+    return sorted(scopes)
+
+
+def _global_principal(user: dict, scopes: list) -> dict:
+    return {
+        "id": user["id"], "kind": "user",
+        "display_name": user.get("display_name") or user.get("email") or user["id"],
+        "email": user.get("email"), "scopes": scopes, "effective_scopes": scopes,
+        "is_superadmin": bool(user.get("is_superadmin")),
+    }
+
+
+async def _global_auth_gate(request: Request, call_next, started_at: float, path: str, method: str):
+    """PM_GLOBAL_AUTH gate. Bearer tokens (agents) keep the monolith's per-project
+    token auth untouched; browser users authenticate via the taikun_session JWT and
+    are checked against their project grants (deny-by-default)."""
+    is_read = method in {"GET", "HEAD"}
+    is_write = method in {"POST", "PATCH", "DELETE"}
+    protocol = path.startswith(("/ixp/", "/txp/", "/tally/"))
+    gated = (is_read and _protected_read_path(path) and not protocol) or (is_write and not protocol)
+    if not gated:
+        return _attach_server_timing(await call_next(request), started_at)
+
+    # Agents / API tokens — unchanged per-project bearer-token authentication.
+    if auth.bearer_from_request(request):
+        project = _request_project(request, path)
+        if not store.has_project(project):
+            return _attach_server_timing(
+                JSONResponse({"detail": f"unknown project: {project}"}, status_code=400), started_at)
+        required = ("read",) if is_read else _write_required_scopes(path)
+        try:
+            request.state.principal = auth.authenticate_request(request, project, required, dev_actor="agent")
+        except PermissionError as e:
+            status = 403 if "forbidden" in str(e) else 401
+            return _attach_server_timing(JSONResponse({"detail": str(e)}, status_code=status), started_at)
+        return _attach_server_timing(await call_next(request), started_at)
+
+    # Browser users — global taikun_session JWT.
+    user = _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, ""))
+    if not user:
+        return _attach_server_timing(JSONResponse({"detail": "not authenticated"}, status_code=401), started_at)
+    # "list my projects" — any authenticated user; the route filters to their grants.
+    if path == "/api/projects" and is_read:
+        request.state.principal = _global_principal(user, list(ADMIN_SCOPES))
+        return _attach_server_timing(await call_next(request), started_at)
+    project = _request_project(request, path)
+    if not store.has_project(project):
+        return _attach_server_timing(
+            JSONResponse({"detail": f"unknown project: {project}"}, status_code=400), started_at)
+    scopes = _global_user_scopes(user, project)
+    required = ("read",) if is_read else _write_required_scopes(path)
+    if "admin" not in scopes and not set(required).issubset(set(scopes)):
+        return _attach_server_timing(
+            JSONResponse({"detail": "forbidden: no access to this project"}, status_code=403), started_at)
+    request.state.principal = _global_principal(user, scopes)
+    return _attach_server_timing(await call_next(request), started_at)
+
+
 @app.middleware("http")
 async def _auth_boundary(request: Request, call_next):
     """Gate Switchboard data reads and state-changing writes when auth is required.
@@ -226,6 +312,9 @@ async def _auth_boundary(request: Request, call_next):
     method = request.method.upper()
     if _auth_exempt_path(path):
         return _attach_server_timing(await call_next(request), started_at)
+
+    if _GLOBAL_AUTH:
+        return await _global_auth_gate(request, call_next, started_at, path, method)
 
     if method in {"GET", "HEAD"} and auth.auth_mode() == auth.REQUIRED and _protected_read_path(path):
         project = _request_project(request, path)
@@ -502,6 +591,13 @@ async def health():
 @app.get("/", include_in_schema=False)
 async def root(request: Request):
     index = _static / "index.html"
+    if _GLOBAL_AUTH:
+        # Global auth: a valid taikun_session JWT reaches the app; otherwise the
+        # global login page (email + password, no project).
+        from services.auth import service as _auth_service, session as _auth_session
+        if _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, "")):
+            return FileResponse(str(index))
+        return FileResponse(str(_static / "login-global.html"))
     login = _static / "login.html"
     if auth.auth_mode() == auth.REQUIRED:
         project = request.query_params.get("project") or _project_from_session_cookie(request) or store.DEFAULT_PROJECT
@@ -515,15 +611,34 @@ async def root(request: Request):
 
 @app.get("/login", include_in_schema=False)
 async def login_page():
-    login = _static / "login.html"
+    login = _static / ("login-global.html" if _GLOBAL_AUTH else "login.html")
     if login.exists():
         return FileResponse(str(login))
     raise HTTPException(404, "login page not found")
 
 
+@app.get("/signup", include_in_schema=False)
+async def signup_page():
+    if not _GLOBAL_AUTH:
+        raise HTTPException(404, "not found")
+    page = _static / "signup.html"
+    if page.exists():
+        return FileResponse(str(page))
+    raise HTTPException(404, "signup page not found")
+
+
 @app.get("/api/projects")
-async def list_projects():
-    """The project switcher's source of truth — [{id, label, pretitle}] + the default."""
+async def list_projects(request: Request):
+    """The project switcher's source of truth — [{id, label, pretitle}] + the default.
+
+    Under global auth the list is filtered to the caller's accessible projects
+    (superadmin sees all); otherwise it's the full top-level set.
+    """
+    if _GLOBAL_AUTH:
+        user = _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, ""))
+        if not user:
+            raise HTTPException(401, "not authenticated")
+        return {"projects": user.get("projects", []), "default": ""}
     return {"projects": store.projects(), "default": store.DEFAULT_PROJECT}
 
 

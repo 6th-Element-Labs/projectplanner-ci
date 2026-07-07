@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Create account · Taikun</title>
+    <link rel="icon" href="taikun-favicon.png" type="image/png"/>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
+    <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
+    <style>
+      body{background:#f6f7f9}
+      .auth-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
+      .auth-panel{width:100%;max-width:420px}
+      .auth-mark{width:42px;height:42px;color:var(--tblr-primary)}
+    </style>
+</head>
+<body>
+<main class="auth-wrap">
+    <section class="card auth-panel">
+        <div class="card-body">
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <img src="taikun-favicon.png" alt="" class="auth-mark"/>
+                <div>
+                    <h1 class="h2 mb-0">Taikun</h1>
+                    <div class="text-secondary small">Create your account</div>
+                </div>
+            </div>
+            <div id="auth-error" class="alert alert-danger d-none"></div>
+            <form id="signup-form" class="vstack gap-3">
+                <div>
+                    <label class="form-label" for="display_name">Name</label>
+                    <input id="display_name" class="form-control" autocomplete="name" autofocus/>
+                </div>
+                <div>
+                    <label class="form-label" for="email">Email</label>
+                    <input id="email" type="email" class="form-control" autocomplete="username" required/>
+                </div>
+                <div>
+                    <label class="form-label" for="password">Password</label>
+                    <input id="password" type="password" class="form-control" autocomplete="new-password" required/>
+                    <div class="form-hint">At least 8 characters.</div>
+                </div>
+                <button class="btn btn-primary w-100" type="submit">
+                    <i class="ti ti-user-plus me-1"></i>Create account
+                </button>
+            </form>
+            <div class="text-center text-secondary mt-4">
+                Already have an account? <a href="/login">Sign in</a>
+            </div>
+        </div>
+    </section>
+</main>
+<script>
+(function () {
+    const err = document.getElementById('auth-error');
+    function showError(message) {
+        err.textContent = message || 'Could not create your account';
+        err.classList.remove('d-none');
+    }
+    document.getElementById('signup-form').addEventListener('submit', async function (event) {
+        event.preventDefault();
+        err.classList.add('d-none');
+        const password = document.getElementById('password').value;
+        if (password.length < 8) { showError('Password must be at least 8 characters.'); return; }
+        const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                email: document.getElementById('email').value.trim(),
+                display_name: document.getElementById('display_name').value.trim(),
+                password: password
+            })
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            showError(data.detail || 'Could not create your account');
+            return;
+        }
+        window.location.href = '/';
+    });
+})();
+</script>
+</body>
+</html>
