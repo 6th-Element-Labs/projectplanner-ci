@@ -21,7 +21,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-import review_preflight
+# This script lives in scripts/, so Python's script-dir sys.path entry does not
+# cover repo-root modules; without this the systemd ci-gate unit dies on import.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import review_preflight  # noqa: E402
 
 
 DEFAULT_REPO = "6th-Element-Labs/projectplanner"
