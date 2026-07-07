@@ -87,6 +87,11 @@ def main(argv=None):
                     help="ack unacked inbox messages as adapter receipt only")
     ap.add_argument("--idle-seconds", type=float, default=0.0,
                     help="keep the process alive briefly for supervisor readiness checks")
+    ap.add_argument("--auto-work-session",
+                    default=os.environ.get("PM_AUTO_WORK_SESSION", "") not in ("", "0", "false", "False"),
+                    action="store_true",
+                    help="auto-provision a managed Work Session + run executed tests for "
+                         "code_strict tasks (SESSION-11). Default from $PM_AUTO_WORK_SESSION.")
     a = ap.parse_args(argv)
 
     me = os.environ.get("PM_AGENT_ID") or sb.agent_id()
@@ -102,7 +107,8 @@ def main(argv=None):
         return 2
 
     res = sb.run_session(PROJECT, me, a.runtime, work_fn,
-                         lanes=a.lanes or None, max_tasks=a.max_tasks)
+                         lanes=a.lanes or None, max_tasks=a.max_tasks,
+                         auto_work_session=bool(a.auto_work_session))
     print(json.dumps({"agent_id": me, "result": res}), flush=True)
     if a.idle_seconds > 0:
         time.sleep(a.idle_seconds)

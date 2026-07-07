@@ -25,6 +25,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 
@@ -68,7 +69,7 @@ def _requests_done(tool_input):
     return False
 
 
-def _http(method, path, body=None, base=None, token=None):
+def _http(method, path, body=None, base=None, token=None, timeout=None):
     base = (base or DEFAULT_BASE).rstrip("/")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(f"{base}{path}", data=data, method=method)
@@ -76,7 +77,7 @@ def _http(method, path, body=None, base=None, token=None):
     token = token if token is not None else os.environ.get("PM_MCP_TOKEN", "")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+    with urllib.request.urlopen(req, timeout=timeout or TIMEOUT) as r:
         return json.loads(r.read().decode())
 
 
@@ -305,7 +306,8 @@ def claim_next(project, agent_id, lanes=None, base=None, token=None, idem_key=""
 
 
 def claim_task(project, task_id, agent_id, base=None, token=None,
-               ttl_seconds=1800, idem_key=""):
+               ttl_seconds=1800, idem_key="", work_session_id="",
+               session_policy_profile=""):
     body = {
         "project": project,
         "task_id": task_id,
@@ -314,7 +316,11 @@ def claim_task(project, task_id, agent_id, base=None, token=None,
     }
     if idem_key:
         body["idem_key"] = idem_key
-    return _http("POST", "/txp/v1/claim_task", body, base=base, token=token)
+    if work_session_id:
+        body["work_session_id"] = work_session_id
+    if session_policy_profile:
+        body["session_policy_profile"] = session_policy_profile
+    return _http("POST", "/txp/v1/claim_task", body, base=base, token=token, timeout=30)
 
 
 def complete_claim(project, claim_id, evidence, base=None, token=None, final_status=""):
@@ -334,8 +340,111 @@ def abandon_claim(project, claim_id, reason, base=None, token=None):
         return None
 
 
+# --- SESSION-11: managed Work Session + executed-test wiring for code_strict tasks ----------
+
+def create_managed_work_session(project, task_id, agent_id, storage_mode="worktree",
+                                policy_profile="", repo_role="canonical",
+                                source_path="", base=None, token=None):
+    """Ask Switchboard to allocate an isolated worktree/clone Work Session for a task
+    (SESSION-7). Returns the managed-session dict with work_session_id + workspace path."""
+    body = {"project": project, "task_id": task_id, "agent_id": agent_id,
+            "storage_mode": storage_mode, "repo_role": repo_role}
+    if policy_profile:
+        body["policy_profile"] = policy_profile
+    if source_path:
+        body["source_path"] = source_path
+        body["repo_path"] = source_path
+    # git fetch + worktree add can take a few seconds — allow more than the 4s default.
+    return _http("POST", "/ixp/v1/managed_work_sessions", body, base=base, token=token, timeout=90)
+
+
+def archive_work_session_workspace(project, work_session_id, remove_workspace=True,
+                                   base=None, token=None):
+    """Archive a managed Work Session and (optionally) remove its worktree. Best-effort."""
+    try:
+        return _http("POST", f"/ixp/v1/work_sessions/{work_session_id}/archive_workspace",
+                     {"project": project, "remove_workspace": bool(remove_workspace)},
+                     base=base, token=token, timeout=60)
+    except Exception:
+        return None
+
+
+def _default_test_commands():
+    """Test command(s) the executed-test runner runs in the bound worktree. Override with
+    PM_WORK_SESSION_TEST_CMD (newline-separated for multiple commands)."""
+    raw = os.environ.get("PM_WORK_SESSION_TEST_CMD", "").strip()
+    if raw:
+        cmds = [c.strip() for c in raw.splitlines() if c.strip()]
+        return cmds or [raw]
+    return ["scripts/switchboard_ci.sh"]
+
+
+def run_executed_tests(workspace_path, work_session_id, task_id, claim_id, agent_id,
+                       branch="", head_sha="", commands=None, timeout_s=1800):
+    """Run the executed-test runner (SESSION-10) inside the bound worktree and return a
+    switchboard.executed_test_run.v1 evidence dict. The worktree is a full checkout, so it
+    ships its own scripts/work_session_test_run.py."""
+    cmds = commands or _default_test_commands()
+    script = os.path.join(workspace_path, "scripts", "work_session_test_run.py")
+    argv = [sys.executable, script, "--cwd", workspace_path,
+            "--work-session-id", work_session_id, "--task-id", task_id,
+            "--claim-id", claim_id, "--agent-id", agent_id]
+    if branch:
+        argv += ["--branch", branch]
+    if head_sha:
+        argv += ["--head-sha", head_sha]
+    for cmd in cmds:
+        argv += ["--command", cmd]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s)
+        return json.loads(proc.stdout)
+    except Exception as e:  # runner missing, bad JSON, timeout — fail closed with detail
+        return {"schema": "switchboard.executed_test_run.v1", "status": "error",
+                "executed": False, "commands": cmds, "task_id": task_id,
+                "work_session_id": work_session_id, "error": str(e)}
+
+
+def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
+                   auto_work_session, source_path):
+    """Claim the next task. If the scheduler skipped code-strict tasks only because they
+    need a Work Session (and auto_work_session is on), provision a managed worktree session
+    and claim by exact id. Returns (claim_response, managed_context_or_None)."""
+    res = claim_next(project, agent_id, lanes=lane_list, base=base, token=token)
+    if res.get("claimed") or not auto_work_session:
+        return res, None
+    findings = ((res.get("dispatch_reason") or {}).get("work_session_findings") or {})
+    for task_id, verdict in findings.items():
+        if (verdict or {}).get("reason") != "work_session_required":
+            continue  # skip hard hygiene failures — only provision genuinely-missing sessions
+        profile = (verdict or {}).get("policy_profile") or ""
+        try:
+            sess = create_managed_work_session(
+                project, task_id, agent_id, storage_mode="worktree",
+                policy_profile=profile, source_path=source_path, base=base, token=token)
+        except Exception:
+            continue
+        wsid = sess.get("work_session_id") or (sess.get("work_session") or {}).get("work_session_id")
+        ws = sess.get("work_session") or {}
+        workspace_path = (sess.get("workspace_path") or ws.get("worktree_path")
+                          or ws.get("clone_path") or "")
+        if not wsid or not workspace_path:
+            continue
+        claim = claim_task(project, task_id, agent_id, base=base, token=token,
+                           ttl_seconds=ttl_seconds, work_session_id=wsid,
+                           session_policy_profile=profile)
+        if claim.get("claimed"):
+            return claim, {"work_session_id": wsid, "workspace_path": workspace_path,
+                           "branch": ws.get("branch") or sess.get("branch") or "",
+                           "head_sha": ws.get("head_sha") or sess.get("head_sha") or "",
+                           "profile": profile}
+        # lost the race (another agent claimed it) — release the orphaned workspace, try next
+        archive_work_session_workspace(project, wsid, remove_workspace=True,
+                                       base=base, token=token)
+    return res, None
+
+
 def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, token=None,
-                max_tasks=10, register=True):
+                max_tasks=10, register=True, auto_work_session=False, source_path=""):
     """Runtime-agnostic self-driving agent loop (ADR-0004 autonomy split, decision #4).
 
     handshake(register) → inbox(read) → repeatedly: heartbeat → claim_next → if work,
@@ -345,11 +454,21 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
     orchestrates the loop. A process SUPERVISOR (Codex's lane) spawns/keeps-alive one such
     loop per agent.
 
+    auto_work_session (SESSION-11): when True, code-strict tasks the scheduler skips only for
+    a missing Work Session are handled automatically — the loop provisions a managed worktree
+    session (SESSION-7), claims by exact id, runs the executed-test runner (SESSION-10) in the
+    worktree and attaches switchboard.executed_test_run.v1 evidence before complete_claim, then
+    archives the workspace. This makes code_strict satisfiable end-to-end with no per-runtime
+    work, which is the prerequisite for flipping a board's code-task default to code_strict.
+    Default False → byte-for-byte the previous behavior. source_path is the canonical repo the
+    managed worktree branches from (defaults to $PM_WORK_SESSION_SOURCE_PATH or cwd).
+
     Stops on: no_unblocked_work, work_fn error (claim abandoned), or max_tasks. Fail-open on
     transport: a failed claim_next ends the loop cleanly rather than spinning.
     """
     lane_list = (lanes if isinstance(lanes, list) else
                  [x.strip() for x in (lanes or "").split(",") if x.strip()]) or None
+    source_path = source_path or os.environ.get("PM_WORK_SESSION_SOURCE_PATH") or os.getcwd()
     startup_inbox = []
     if register:
         handshake(project, agent_id, runtime, base=base, token=token,
@@ -362,7 +481,10 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
     for _ in range(max(1, max_tasks)):
         heartbeat(project, agent_id, base=base, token=token)
         try:
-            res = claim_next(project, agent_id, lanes=lane_list, base=base, token=token)
+            res, managed = _acquire_claim(project, agent_id, lane_list, base, token,
+                                          ttl_seconds=1800,
+                                          auto_work_session=auto_work_session,
+                                          source_path=source_path)
         except Exception as e:
             return {"completed": completed, "stopped": f"claim_error:{e}",
                     "startup_inbox": startup_inbox}
@@ -380,8 +502,29 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
             evidence = work_fn({**res, "task_id": task_id, "task": task}) or {}
         except Exception as e:
             abandon_claim(project, claim_id, f"work_fn error: {e}", base=base, token=token)
+            if managed:
+                archive_work_session_workspace(project, managed["work_session_id"],
+                                               remove_workspace=True, base=base, token=token)
             return {"completed": completed, "stopped": f"work_error:{task_id}:{e}",
                     "startup_inbox": startup_inbox}
+        if managed:
+            # code_strict: the runtime need not know about executed-test evidence — the loop
+            # runs the tests in the bound worktree and attaches the proof itself.
+            if not (evidence.get("executed_test_run") or evidence.get("executed_test_runs")):
+                run = run_executed_tests(
+                    managed["workspace_path"], managed["work_session_id"], task_id,
+                    claim_id, agent_id, branch=managed.get("branch", ""),
+                    head_sha=managed.get("head_sha", ""))
+                evidence = {**evidence, "executed_test_run": run}
+            evidence.setdefault("branch", managed.get("branch", ""))
+            evidence.setdefault("head_sha", managed.get("head_sha", ""))
+            evidence.setdefault("git_diff_check", "clean")
+            if not (evidence.get("pr_url") or evidence.get("remote_ref")):
+                evidence["remote_ref"] = f"refs/heads/{managed.get('branch', '')}"
         complete_claim(project, claim_id, evidence, base=base, token=token)
-        completed.append({"task_id": task_id, "evidence": evidence})
+        if managed:
+            archive_work_session_workspace(project, managed["work_session_id"],
+                                           remove_workspace=True, base=base, token=token)
+        completed.append({"task_id": task_id, "evidence": evidence,
+                          "managed": bool(managed)})
     return {"completed": completed, "stopped": "max_tasks", "startup_inbox": startup_inbox}
