@@ -69,13 +69,16 @@ def narrate_pending():
     trigger (status transitions via pending_narrations, not any-activity). The fingerprint
     guard means idle cycles make zero LLM calls. See docs/CEO-NARRATOR-CONTRACT.md."""
     import narrate as narrate_mod
-    total = 0
+    total = deliverables = 0
     for project_id in store.project_ids():
         store.init_db(project_id)
         results = narrate_mod.run_pending(project=project_id)
-        print(f"  [{project_id}] narrated {len(results)} task(s)")
+        # NARRATE-3: re-narrate deliverable headers whose brief fingerprint moved this cycle.
+        deliv = narrate_mod.run_deliverables(project=project_id)
+        print(f"  [{project_id}] narrated {len(results)} task(s), {len(deliv)} deliverable(s)")
         total += len(results)
-    print(f"narrate_pending: {total} total")
+        deliverables += len(deliv)
+    print(f"narrate_pending: {total} task(s), {deliverables} deliverable(s)")
     return total
 
 

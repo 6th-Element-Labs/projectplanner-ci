@@ -99,6 +99,46 @@ try:
     ok(got3.get("narration") is None and got3.get("narration_raw") == "outdated prose",
        "stale prose hidden from `narration`, preserved in `narration_raw`")
 
+    # --- NARRATE-3: deliverable CEO-voice header ---
+    board = store.create_project_board(
+        {"id": "nar-mission", "title": "Narrator Mission", "kind": "mission", "status": "active",
+         "end_state": "Deliverables show CEO narration."},
+        actor="test", project=PROJECT)
+    deliv = store.create_deliverable(
+        {"id": "nar-deliverable", "board_id": board["id"], "title": "CEO narrator",
+         "status": "in_progress", "end_state": "Every deliverable shows a CEO header.",
+         "why_it_matters": "Keeps the CEO up to speed at a glance."},
+        actor="test", project=PROJECT)
+    dtask = store.create_task(
+        {"workstream_id": "DLV", "title": "Wire the header", "status": "Not Started"},
+        actor="test", project=PROJECT)
+    store.link_task_to_deliverable(deliv["id"], PROJECT, dtask["task_id"],
+                                   actor="test", project=PROJECT)
+
+    dllm = Counter()
+    dres = narrate.run_deliverables(project=PROJECT, _llm_fn=dllm)
+    ok(dllm.calls == 1 and any(r["deliverable_id"] == "nar-deliverable" for r in dres),
+       "run_deliverables narrates the deliverable header (1 LLM call)")
+    ms = store.get_mission_status(project=PROJECT, deliverable_id="nar-deliverable")
+    ok((ms.get("ceo_narrative") or "").startswith("CEO narration #1"),
+       "mission_status exposes the CEO narrative header")
+    ok((ms.get("ceo_narrative_state") or {}).get("stale") is False, "fresh header is not stale")
+
+    # idle re-run: fingerprint unchanged -> zero LLM calls (the cost guarantee)
+    narrate.run_deliverables(project=PROJECT, _llm_fn=dllm)
+    ok(dllm.calls == 1, "idle deliverable re-run makes zero LLM calls")
+
+    # a linked-task transition moves the fingerprint -> header regenerates and old text is stale
+    store.update_task(dtask["task_id"], {"status": "Blocked"}, actor="test", project=PROJECT)
+    ms_stale = store.get_mission_status(project=PROJECT, deliverable_id="nar-deliverable")
+    ok((ms_stale.get("ceo_narrative_state") or {}).get("stale") is True,
+       "header flagged stale after a linked-task transition")
+    dres2 = narrate.run_deliverables(project=PROJECT, _llm_fn=dllm)
+    ok(dllm.calls == 2 and len(dres2) == 1, "changed fingerprint triggers one header regeneration")
+    ms_fresh = store.get_mission_status(project=PROJECT, deliverable_id="nar-deliverable")
+    ok((ms_fresh.get("ceo_narrative") or "").startswith("CEO narration #2"),
+       "header updated after regeneration and no longer stale")
+
 finally:
     import shutil
     shutil.rmtree(_TMP, ignore_errors=True)

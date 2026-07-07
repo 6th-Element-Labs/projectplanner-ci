@@ -3383,6 +3383,25 @@ def _attach_mission_brief_fields(mission_status: Dict[str, Any],
         mission_status, metadata=metadata, stored_brief=stored_brief)
     mission_status["brief_generated_at"] = metadata.get("brief_generated_at")
     mission_status["narrative_source"] = metadata.get("narrative_source")
+    # NARRATE-3: CEO-voice header, rewritten from the structured brief. Stale when the current
+    # mission fingerprint no longer matches the one it was written from (same discipline as the
+    # generated brief). See docs/CEO-NARRATOR-CONTRACT.md.
+    ceo_text = metadata.get("ceo_narrative")
+    if ceo_text:
+        current_fp = mission_narrative.brief_source_fingerprint(mission_status)
+        stored_fp = metadata.get("ceo_narrative_fingerprint")
+        ceo_stale = bool(stored_fp) and stored_fp != current_fp
+        mission_status["ceo_narrative_state"] = {
+            "stale": ceo_stale,
+            "source_fingerprint": current_fp,
+            "stored_fingerprint": stored_fp,
+            "message": ("CEO narration is regenerating; trust mission_status and provenance."
+                        if ceo_stale else None),
+        }
+        mission_status["ceo_narrative"] = None if ceo_stale else ceo_text
+        if ceo_stale:
+            mission_status["ceo_narrative_raw"] = ceo_text
+        mission_status["ceo_narrative_generated_at"] = metadata.get("ceo_narrative_generated_at")
     return mission_status
 
 
@@ -3439,6 +3458,34 @@ def generate_mission_brief(project: str = DEFAULT_PROJECT, deliverable_id: str =
     result["mission_status"] = get_mission_status(
         project=project, deliverable_id=deliverable_id)
     return result
+
+
+def set_deliverable_narration(deliverable_id: str, narration: str, source_fingerprint: str = "",
+                              model: str = "", actor: str = "narrator",
+                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """NARRATE-3: persist the CEO-voice header for a deliverable in its metadata. Stored under
+    ceo_narrative* keys, kept separate from the structured `generated_brief`/`narrative` so the
+    two never clobber each other."""
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
+                        (deliverable_id,)).fetchone()
+        if not row:
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        metadata = _json_payload(row["metadata_json"])
+        metadata["ceo_narrative"] = narration
+        metadata["ceo_narrative_fingerprint"] = source_fingerprint
+        metadata["ceo_narrative_generated_at"] = now
+        metadata["ceo_narrative_model"] = model
+        metadata["ceo_narrative_by"] = actor
+        c.execute("UPDATE deliverables SET metadata_json=?, updated_at=? WHERE id=?",
+                  (json.dumps(metadata, sort_keys=True), now, deliverable_id))
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.ceo_narrated",
+                   json.dumps({"deliverable_id": deliverable_id,
+                               "source_fingerprint": source_fingerprint}, sort_keys=True), now))
+    return {"deliverable_id": deliverable_id, "ceo_narrative": narration,
+            "source_fingerprint": source_fingerprint, "generated_at": now}
 
 
 def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id: str = "",

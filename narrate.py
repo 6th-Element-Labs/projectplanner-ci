@@ -49,13 +49,21 @@ _SYSTEM = (
     "No jargon, no headers, no bullet points, no task IDs. Output ONLY the paragraph."
 )
 
+_DELIVERABLE_SYSTEM = (
+    "You are a marketing manager briefing a CEO on one deliverable. In 3-4 plain-English "
+    "sentences answer, in order: what this deliverable is; how far along we are; what has been "
+    "done so far; what is still to do; and what it gives us once shipped. Base it ONLY on the "
+    "structured brief below — do not invent progress. No jargon, no headers, no bullet points. "
+    "Output ONLY the paragraph."
+)
 
-def _llm(context: str) -> str:
+
+def _llm(context: str, system: str = _SYSTEM) -> str:
     r = httpx.post(
         f"{BASE}/chat/completions",
         headers={"Authorization": f"Bearer {KEY}"},
         json={"model": NARRATE_MODEL,
-              "messages": [{"role": "system", "content": _SYSTEM},
+              "messages": [{"role": "system", "content": system},
                            {"role": "user", "content": context}],
               "max_tokens": MAX_TOKENS},
         timeout=30,
@@ -155,6 +163,61 @@ def run_pending(project: str = store.DEFAULT_PROJECT, max_tasks: int = MAX_TASKS
             continue  # leave the marker so a later cycle retries
         store.clear_pending_narration(task_id, project=project)
         processed += 1
+    return results
+
+
+# --- NARRATE-3: deliverable CEO-voice header (rewrites the structured brief) ---
+
+def narrate_deliverable(project: str, deliverable_id: str, force: bool = False,
+                        _llm_fn=None) -> Optional[dict]:
+    """Rewrite a deliverable's structured mission brief into a 3-4 sentence CEO header.
+
+    Grounds the LLM on mission_narrative.build_mission_brief (no raw-data invention) and keys
+    freshness off brief_source_fingerprint, so a burst of linked-task changes collapses into one
+    regeneration and an unchanged deliverable makes zero API calls. Returns None when skipped."""
+    import mission_narrative
+
+    status = store.get_mission_status(project=project, deliverable_id=deliverable_id)
+    if status.get("error"):
+        return None
+    fingerprint = mission_narrative.brief_source_fingerprint(status)
+
+    deliverable = store.get_deliverable(deliverable_id, project=project) or {}
+    metadata = deliverable.get("metadata") or {}
+    if not force and metadata.get("ceo_narrative_fingerprint") == fingerprint \
+            and metadata.get("ceo_narrative"):
+        return None  # $0 idle-run guard: nothing material changed
+
+    activity = store._deliverable_activity(project, deliverable_id)
+    brief = mission_narrative.build_mission_brief(status, recent_activity=activity)
+    context = (brief.get("summary_markdown") or "")
+    honesty = brief.get("honesty_note")
+    if honesty:
+        context = f"{context}\n\n{honesty}"
+
+    llm = _llm_fn or (lambda ctx: _llm(ctx, _DELIVERABLE_SYSTEM))
+    narration = llm(context)
+    store.set_deliverable_narration(deliverable_id, narration, source_fingerprint=fingerprint,
+                                    model=NARRATE_MODEL, project=project)
+    return {"deliverable_id": deliverable_id, "narration": narration,
+            "source_fingerprint": fingerprint}
+
+
+def run_deliverables(project: str = store.DEFAULT_PROJECT, max_deliverables: int = MAX_TASKS,
+                     _llm_fn=None) -> list:
+    """Re-narrate every deliverable in the project whose brief fingerprint has moved. Each call
+    self-skips when unchanged, so this is safe to run every drain cycle. Errors are logged."""
+    results = []
+    for deliverable in store.list_deliverables(project=project)[:max_deliverables]:
+        did = deliverable.get("id")
+        if not did:
+            continue
+        try:
+            r = narrate_deliverable(project, did, _llm_fn=_llm_fn)
+            if r:
+                results.append(r)
+        except Exception as e:
+            print(f"narrate deliverable {did}: {e}", flush=True)
     return results
 
 
