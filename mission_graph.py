@@ -184,19 +184,20 @@ def _emit_node_line(node: Dict[str, Any], indent: str) -> str:
 
 def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
                              edges: List[Dict[str, Any]]) -> str:
-    """Render a clean, layered top-down dependency flowchart.
+    """Render a clean, layered left-to-right dependency flowchart.
 
-    Nodes are ranked by dependency depth (prerequisites on top, dependents below)
-    and placed by Mermaid/dagre with no per-workstream wrapper boxes. An earlier
-    version wrapped each workstream in a `subgraph` cluster to "organize" the DAG,
-    but that forced dagre to keep every workstream contiguous and route the many
-    cross-workstream edges around the cluster walls — a hairball of crossing
-    arrows. The workstream is already spelled out in every task-id prefix
+    Nodes are ranked by dependency depth (prerequisites on the left, dependents to
+    the right) and placed by Mermaid/dagre with no per-workstream wrapper boxes. An
+    earlier version wrapped each workstream in a `subgraph` cluster to "organize"
+    the DAG, but that forced dagre to keep every workstream contiguous and route
+    the many cross-workstream edges around the cluster walls — a hairball of
+    crossing arrows. The workstream is already spelled out in every task-id prefix
     (CHART-1, ENGINE-2, WINDOWS-1), so the boxes added visual noise, not signal.
-    Direction is TB so the graph reads as a plain flowchart; flip to LR here if a
-    horizontal (scroll-right) layout is ever preferred.
+    Direction is LR: for these wide dependency graphs (dozens of tasks, shallow
+    depth) top-down blows out to a multi-thousand-pixel-wide unreadable strip,
+    whereas left-to-right stays legible and scrolls sideways like the board.
     """
-    lines = ["flowchart TB"]
+    lines = ["flowchart LR"]
 
     for node in nodes:
         lines.append(_emit_node_line(node, "  "))
