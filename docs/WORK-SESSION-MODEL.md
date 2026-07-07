@@ -200,5 +200,9 @@ Later tasks deepen enforcement:
   code-strict completion requires matching branch/head SHA, PR/push/offline proof, recorded tests,
   and clean `git diff --check`; dirty completion needs explicit allowance evidence, conflict
   markers block, and refused completion leaves the claim active with a visible failure class.
-- `SESSION-6`: gate merge on session/branch/provenance consistency.
+- `SESSION-6`: gate merge on session/branch/provenance consistency. Done here:
+  `merge_gate` verifies canonical repo role, PR mergeability, target branch, required CI/status
+  contexts, external-CI evidence when required, and clean Work Session preflight before a merge can
+  be requested. The gate returns structured pass/blocked findings and records `merge.gate`; it never
+  marks `Done`, which remains reserved for GitHub webhook/reconcile provenance.
 - `SESSION-7`: create managed worktrees/clones from repo topology.

@@ -1208,6 +1208,48 @@ def list_publication_evidence(project: str = "maxwell", task_id: str = "",
 
 
 @mcp.tool()
+def merge_gate(task_id: str, ctx: Context, project: str = "maxwell",
+               agent_id: str = "", claim_id: str = "", work_session_id: str = "",
+               pr_url: str = "", pr_number: int = 0, repo: str = "",
+               target_branch: str = "", branch: str = "", head_sha: str = "",
+               required_status_contexts: str = "", status_contexts_json: str = "{}",
+               github_pr_json: str = "{}", require_work_session: bool = False) -> str:
+    """Evaluate safe-merge readiness before an agent runs or requests PR merge.
+
+    This records a merge.gate activity event and returns pass/blocked findings. It does
+    not merge and cannot mark Done; GitHub webhook/reconcile provenance remains the Done
+    authority."""
+    principal = _require_write(ctx, project, ("write:ixp",))
+    try:
+        status_contexts = json.loads(status_contexts_json or "{}")
+    except Exception:
+        return _dumps({"error": "status_contexts_json must be a JSON object or array string"})
+    try:
+        github_pr = json.loads(github_pr_json or "{}")
+    except Exception:
+        return _dumps({"error": "github_pr_json must be a JSON object string"})
+    payload = {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "claim_id": claim_id,
+        "work_session_id": work_session_id,
+        "pr_url": pr_url,
+        "pr_number": pr_number or None,
+        "repo": repo,
+        "target_branch": target_branch,
+        "branch": branch,
+        "head_sha": head_sha,
+        "required_status_contexts": required_status_contexts,
+        "status_contexts": status_contexts,
+        "github_pr": github_pr,
+        "require_work_session": bool(require_work_session),
+    }
+    return _dumps(store.merge_gate(
+        payload, actor=auth.actor(principal), principal_id=principal["id"],
+        project=project))
+
+
+@mcp.tool()
 def record_publication_evidence(ctx: Context, source_sha: str, public_ref: str,
                                 project: str = "maxwell", source_project: str = "",
                                 source_repo: str = "", public_repo: str = "",

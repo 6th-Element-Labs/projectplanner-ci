@@ -57,7 +57,8 @@ remember it:
 9. Heartbeat and poll at every supported boundary.
 10. Release owned leases on normal completion.
 11. Report completion, abandon, and usage where supported.
-12. Advertise the runtime's actual control fidelity.
+12. Call `merge_gate` before any authorized merge or merge request.
+13. Advertise the runtime's actual control fidelity.
 
 The adapter may be a hook bundle, SDK middleware, wrapper script, local daemon, library, or
 MCP configuration. The packaging differs per runtime; the behavioral contract does not.
@@ -180,6 +181,37 @@ For `code_strict` sessions, Switchboard refuses `complete_claim` when the Work S
 without an explicit allowance, has conflict markers, has a mismatched branch/head SHA, lacks
 PR/push/offline proof, or does not record tests and `git diff --check`. A refusal keeps the claim
 active and returns a typed `work_session_gate` failure for repair-and-retry.
+
+### 3.4.1 Pre-merge sequence
+
+Adapters that can merge or request merges must call `merge_gate` after `complete_claim` has moved
+the task to `In Review` and before running `gh pr merge`, merge-queue enqueue, or an equivalent
+merge command:
+
+```text
+merge_gate(
+  project,
+  task_id,
+  agent_id,
+  claim_id,
+  work_session_id,
+  pr_url or pr_number,
+  repo,
+  target_branch,
+  branch,
+  head_sha,
+  status_contexts_json,
+  require_work_session=true
+)
+→ status: passed | blocked
+→ findings[]
+```
+
+Hook-capable adapters must deny merge commands when the gate returns `blocked`. Advisory adapters
+must surface the blocking findings and avoid claiming the merge is safe. A passing gate means the
+canonical PR is ready to merge; it does not mark the task `Done`. `Done` remains controlled only by
+GitHub webhook/reconcile evidence that the intended default branch contains the merge provenance.
+Public CI/mirror repos can satisfy required status evidence but cannot pass as the code merge repo.
 
 On crash or forced kill, TTL expiry is the fallback cleanup path. Runner-aware adapters
 should emit a final "killed" or "crashed" status from the supervisor process when possible.

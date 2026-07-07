@@ -72,6 +72,15 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   the active Work Session and returns `allow`/`warn`/`deny` plus remediation. Denied shared-token
   writes are audited as `principal.unbound_write`; denied unsafe sessions are audited as
   `work_session.unsafe_session`.
+- `merge_gate(task_id, project, agent_id?, claim_id?, work_session_id?, pr_url?, pr_number?,
+  repo?, target_branch?, branch?, head_sha?, required_status_contexts?,
+  status_contexts_json?, github_pr_json?, require_work_session?)` — safe-merge readiness gate.
+  It verifies the canonical repo role, intended target branch, PR mergeability, required CI/status
+  contexts, optional external-CI mirror evidence, and clean Work Session preflight before an agent
+  runs or requests a merge. It records a `merge.gate` activity event and returns structured
+  `passed`/`blocked` findings. It does not merge and cannot mark `Done`; GitHub webhook/reconcile
+  merge provenance remains the Done authority. Public CI repos are evidence-only and fail this gate
+  if used as the code merge repo.
 - `claim_resource(...)`, `release_resource(...)`, `send_agent_message(...)`, `ack_message(...)`
 - `list_pending_acks(project, agent_id?)`, `list_monitors(project, status?, kind?)`,
   `sweep_monitors(project)`, `resolve_monitor(...)`, `cancel_monitor(...)`
@@ -159,6 +168,10 @@ Safe merge rule:
   explicitly allow it.
 - Before merging, fetch origin, rebase/merge the task branch onto the intended target branch,
   resolve conflicts intentionally, rerun relevant tests, verify a clean committed branch, and push.
+- For code work, call `merge_gate(...)` with the task, claim/Work Session, PR, branch, head SHA,
+  target branch, and CI/status evidence. A `blocked` result means stop, repair the finding, and
+  rerun the gate. A `passed` result is permission to merge/request merge, not permission to set
+  `Done`.
 - Merge through GitHub or the configured merge queue only when checks/review are green.
 - After merge, fetch the target branch, verify the content landed, record `merged_sha`, and rely on
   webhook/reconcile/backfill to mark `Done`.

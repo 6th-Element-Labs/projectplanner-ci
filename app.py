@@ -2042,6 +2042,22 @@ async def ixp_poll_external_ci_mirror(request: Request, body: dict = Body(...)):
     return result
 
 
+@app.post("/ixp/v1/merge_gate")
+async def ixp_merge_gate(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",),
+                           dev_actor=body.get("agent_id") or "agent")
+    result = store.merge_gate(
+        body,
+        actor=auth.actor(principal),
+        principal_id=principal["id"],
+        project=project,
+    )
+    if result.get("status") == "blocked":
+        return result
+    return result
+
+
 @app.post("/ixp/v1/claim_external_effect")
 async def ixp_claim_external_effect(request: Request, body: dict = Body(...)):
     project = _body_project(body)
