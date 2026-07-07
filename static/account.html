@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Account · Taikun</title>
+    <link rel="icon" href="taikun-favicon.png" type="image/png"/>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" rel="stylesheet"/>
+    <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
+    <style>
+      body{background:#f6f7f9}
+      .auth-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
+      .auth-panel{width:100%;max-width:460px}
+      .auth-mark{width:42px;height:42px;color:var(--tblr-primary)}
+    </style>
+</head>
+<body>
+<main class="auth-wrap">
+    <section class="card auth-panel">
+        <div class="card-body">
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <img src="taikun-favicon.png" alt="" class="auth-mark"/>
+                <div>
+                    <h1 class="h2 mb-0">Account</h1>
+                    <div class="text-secondary small">Signed in as <span id="acct-email">…</span></div>
+                </div>
+            </div>
+
+            <div id="ok-msg" class="alert alert-success d-none"></div>
+            <div id="err-msg" class="alert alert-danger d-none"></div>
+
+            <h2 class="h4 mt-2">Change password</h2>
+            <form id="pw-form" class="vstack gap-3">
+                <div>
+                    <label class="form-label" for="current_password">Current password</label>
+                    <input id="current_password" type="password" class="form-control" autocomplete="current-password" required/>
+                </div>
+                <div>
+                    <label class="form-label" for="new_password">New password</label>
+                    <input id="new_password" type="password" class="form-control" autocomplete="new-password" minlength="8" required/>
+                    <div class="form-hint">At least 8 characters.</div>
+                </div>
+                <div>
+                    <label class="form-label" for="confirm_password">Confirm new password</label>
+                    <input id="confirm_password" type="password" class="form-control" autocomplete="new-password" minlength="8" required/>
+                </div>
+                <button id="pw-submit" class="btn btn-primary w-100" type="submit">
+                    <i class="ti ti-key me-1"></i>Update password
+                </button>
+            </form>
+
+            <div class="d-flex justify-content-between align-items-center mt-4">
+                <a href="/"><i class="ti ti-arrow-left me-1"></i>Back to workspace</a>
+                <button id="logout-btn" class="btn btn-link text-secondary p-0">Sign out</button>
+            </div>
+        </div>
+    </section>
+</main>
+<script>
+(function () {
+    const ok = document.getElementById('ok-msg');
+    const err = document.getElementById('err-msg');
+    function show(el, msg) { el.textContent = msg; el.classList.remove('d-none'); }
+    function hide(el) { el.classList.add('d-none'); }
+
+    // Gate: must be signed in. Populate the email, else bounce to login.
+    fetch('/api/auth/session').then(async (res) => {
+        if (!res.ok) { window.location.href = '/login?return_to=/account'; return; }
+        const data = await res.json().catch(() => ({}));
+        const email = data && data.user && data.user.email;
+        document.getElementById('acct-email').textContent = email || 'your account';
+    }).catch(() => { window.location.href = '/login?return_to=/account'; });
+
+    document.getElementById('pw-form').addEventListener('submit', async function (event) {
+        event.preventDefault();
+        hide(ok); hide(err);
+        const current = document.getElementById('current_password').value;
+        const next = document.getElementById('new_password').value;
+        const confirm = document.getElementById('confirm_password').value;
+        if (next.length < 8) { show(err, 'New password must be at least 8 characters.'); return; }
+        if (next !== confirm) { show(err, 'New password and confirmation do not match.'); return; }
+        if (next === current) { show(err, 'New password must be different from the current one.'); return; }
+
+        const btn = document.getElementById('pw-submit');
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/auth/change-password', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ current_password: current, new_password: next })
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                show(err, data.detail || 'Could not update password.');
+                return;
+            }
+            document.getElementById('pw-form').reset();
+            show(ok, 'Password updated. Other devices have been signed out.');
+        } catch (e) {
+            show(err, 'Network error — please try again.');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    document.getElementById('logout-btn').addEventListener('click', async function () {
+        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+        window.location.href = '/login';
+    });
+})();
+</script>
+</body>
+</html>

@@ -173,6 +173,22 @@ def revoke_session(token: str) -> bool:
         return cur.rowcount > 0
 
 
+def revoke_user_sessions(user_id: str, keep_token: str = "") -> int:
+    """Revoke every live session for a user, optionally sparing keep_token's own.
+
+    Used on password change so other devices are signed out while the caller
+    stays logged in. Returns the number of sessions revoked.
+    """
+    keep_hash = token_hash(keep_token) if keep_token else ""
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE auth_sessions_v2 SET revoked_at=? "
+            "WHERE user_id=? AND revoked_at IS NULL AND token_hash != ?",
+            (time.time(), user_id, keep_hash),
+        )
+        return cur.rowcount
+
+
 # ---- access resolution (deny-by-default) ------------------------------------
 def accessible_project_ids(user_id: str, is_superadmin: bool) -> List[str]:
     """Which projects this user may see. Superadmin → all; else grants + owned + org."""

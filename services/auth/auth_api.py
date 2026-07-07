@@ -72,6 +72,17 @@ async def logout(request: Request):
     resp.delete_cookie(session.COOKIE_NAME, path="/")
     return resp
 
+
+@router.post("/api/auth/change-password")
+async def change_password(request: Request, body: contracts.ChangePasswordBody):
+    """Self-service password change for the signed-in user (Account settings)."""
+    token = request.cookies.get(session.COOKIE_NAME, "")
+    try:
+        user = service.change_password(token, body.current_password, body.new_password)
+    except service.AuthError as e:
+        raise HTTPException(e.status, e.message)
+    return {"user": user, "changed": True}
+
 # NOTE: /api/projects filtering (deny-by-default project list) is delivered via
 # /api/auth/session["user"]["projects"] today. Overriding the monolith's
 # /api/projects route also requires teaching its HTTP auth middleware about the

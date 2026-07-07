@@ -87,6 +87,15 @@
                             <button id="btn-new-task" class="btn btn-primary btn-sm"><i class="ti ti-plus me-1"></i>New task</button>
                             <a id="dl-xlsx" href="api/export.xlsx" class="btn btn-outline-primary btn-sm"><i class="ti ti-file-spreadsheet me-1"></i>Excel</a>
                             <a id="dl-xml" href="api/export.xml" class="btn btn-outline-primary btn-sm"><i class="ti ti-brand-windows me-1"></i>MS Project</a>
+                            <div class="dropdown" id="user-menu" style="display:none">
+                                <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Account menu">
+                                    <i class="ti ti-user"></i><span id="user-menu-email" class="ms-1 d-none d-sm-inline"></span>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="/account"><i class="ti ti-key me-2"></i>Account &amp; password</a></li>
+                                    <li><a class="dropdown-item" href="#" id="user-menu-signout"><i class="ti ti-logout me-2"></i>Sign out</a></li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -427,6 +436,24 @@
           var top = document.querySelector('.nav-tabs [data-bs-toggle="tab"][href="' + h + '"]');
           if (top && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(top).show();
         })();
+      })();
+    </script>
+    <script>
+      // Reveal the account menu only under global auth (a live taikun_session).
+      (function () {
+        var out = document.getElementById('user-menu-signout');
+        if (out) out.addEventListener('click', function (e) {
+          e.preventDefault();
+          fetch('/api/auth/logout', { method: 'POST' }).finally(function () { window.location.href = '/login'; });
+        });
+        fetch('/api/auth/session').then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (data) {
+            if (!data || !data.user) return;
+            var menu = document.getElementById('user-menu');
+            if (menu) menu.style.display = '';
+            var email = document.getElementById('user-menu-email');
+            if (email && data.user.email) email.textContent = data.user.email;
+          }).catch(function () {});
       })();
     </script>
 </body>

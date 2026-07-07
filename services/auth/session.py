@@ -68,6 +68,12 @@ def revoke(token: str) -> bool:
     return auth_store.revoke_session(sid) if sid else False
 
 
+def sid_of(token: str) -> Optional[str]:
+    """The server-side session id (sid) inside a token, or None if unparseable."""
+    payload, _ = jwt_util.decode(token or "", _secret())
+    return (payload or {}).get("sid")
+
+
 def cookie_kwargs(expires_at: float, secure: bool) -> Dict[str, Any]:
     return {
         "key": COOKIE_NAME,

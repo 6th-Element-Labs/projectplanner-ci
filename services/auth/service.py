@@ -76,6 +76,28 @@ def logout(token: str) -> bool:
     return session.revoke(token or "")
 
 
+def change_password(token: str, current_password: str, new_password: str) -> Dict[str, Any]:
+    """Self-service password change for the signed-in user.
+
+    Requires the current password (so a stolen session can't silently reset it),
+    enforces a minimum length, refuses a no-op, then rotates the hash and signs
+    out every OTHER session (the caller stays logged in).
+    """
+    auth_store.init()
+    account = session.verify(token or "")  # raw account incl. password_hash, or None
+    if not account:
+        raise AuthError("not_authenticated", "You are not signed in.", 401)
+    if not account.get("password_hash") or not pw.verify_password(current_password or "", account["password_hash"]):
+        raise AuthError("invalid_current_password", "Your current password is incorrect.", 403)
+    if len(new_password or "") < 8:
+        raise AuthError("weak_password", "New password must be at least 8 characters.", 422)
+    if pw.verify_password(new_password, account["password_hash"]):
+        raise AuthError("password_unchanged", "New password must be different from the current one.", 422)
+    auth_store.set_password(account["id"], pw.password_hash(new_password))
+    auth_store.revoke_user_sessions(account["id"], keep_token=session.sid_of(token) or "")
+    return contracts.public_user(account, _accessible_projects(account))
+
+
 def can_access_project(token: str, project_id: str) -> bool:
     account = session.verify(token or "")
     if not account:

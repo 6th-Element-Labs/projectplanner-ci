@@ -627,6 +627,19 @@ async def signup_page():
     raise HTTPException(404, "signup page not found")
 
 
+@app.get("/account", include_in_schema=False)
+async def account_page(request: Request):
+    """Account settings (self-service password change). Global-auth only; the
+    page itself re-checks the session via /api/auth/session and redirects to
+    /login if the cookie is missing."""
+    if not _GLOBAL_AUTH:
+        raise HTTPException(404, "not found")
+    page = _static / "account.html"
+    if page.exists():
+        return FileResponse(str(page))
+    raise HTTPException(404, "account page not found")
+
+
 @app.get("/api/projects")
 async def list_projects(request: Request):
     """The project switcher's source of truth — [{id, label, pretitle}] + the default.
