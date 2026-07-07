@@ -176,6 +176,43 @@ try:
                  fleet_branch_prefixes=["wip/"], mode="enforce")
     ok(not r["ok"] and r["fleet"], "custom fleet branch prefix is honored")
 
+    # 12. per-repo mode resolution (primary enforce, others warn) --------------
+    PRIMARY = "example/primary-repo"
+    for _k in ("SWITCHBOARD_CI_CLAIM_GATE_MODE", "SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT",
+               "SWITCHBOARD_CI_CLAIM_GATE_MODES"):
+        os.environ.pop(_k, None)
+    os.environ["SWITCHBOARD_CI_CLAIM_GATE_MODE"] = "enforce"
+    ok(pr_provenance_gate.resolve_mode(PRIMARY, PRIMARY) == "enforce",
+       "primary repo uses the configured enforce mode")
+    ok(pr_provenance_gate.resolve_mode("other/repo", PRIMARY) == "warn",
+       "a non-primary canonical repo defaults to warn")
+    os.environ["SWITCHBOARD_CI_CLAIM_GATE_MODES"] = "Other/Repo=enforce"
+    ok(pr_provenance_gate.resolve_mode("other/repo", PRIMARY) == "enforce",
+       "per-repo override (case-insensitive) wins over the default")
+    os.environ["SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT"] = "off"
+    ok(pr_provenance_gate.resolve_mode("third/repo", PRIMARY) == "off",
+       "SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT tunes non-primary repos")
+    for _k in ("SWITCHBOARD_CI_CLAIM_GATE_MODE", "SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT",
+               "SWITCHBOARD_CI_CLAIM_GATE_MODES"):
+        os.environ.pop(_k, None)
+
+    # 13. registry-driven repo discovery (auto-covers new projects) -----------
+    store.create_project("Prov Sibling", project_id="qa-prov-sib", actor="test")
+    store.init_db("qa-prov-sib")
+    store.set_project_repo_topology(project="qa-prov-sib", canonical_repo=REPO)  # shares REPO
+    store.create_project("Prov Other", project_id="qa-prov-other", actor="test")
+    store.init_db("qa-prov-other")
+    store.set_project_repo_topology(project="qa-prov-other", canonical_repo="example/other-repo")
+    store.create_project("Prov NoRepo", project_id="qa-prov-norepo", actor="test")
+    store.init_db("qa-prov-norepo")
+    repos = store.list_canonical_repos()
+    ok(REPO in repos and set(repos[REPO]) >= {HOME, "qa-prov-sib"},
+       "shared canonical repo maps to all its projects, listed once")
+    ok(repos.get("example/other-repo") == ["qa-prov-other"],
+       "a distinct project's canonical repo is discovered")
+    ok(all("qa-prov-norepo" not in v for v in repos.values()),
+       "a project with no canonical repo is excluded")
+
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

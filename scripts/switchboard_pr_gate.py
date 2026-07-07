@@ -195,11 +195,11 @@ def list_pr_files(repo: str, number: int, *, token: str) -> List[str]:
 
 
 def run_claim_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str,
-                          context: str) -> Optional[Dict[str, Any]]:
+                          context: str, mode: str) -> Optional[Dict[str, Any]]:
     """SESSION-12 provenance gate: post a second, independent commit status that
     checks whether a fleet PR is backed by a claimed task / Work Session. Reads the
-    production board (this process' store), never the PR worktree."""
-    mode = pr_provenance_gate.gate_mode()
+    production board (this process' store), never the PR worktree. mode is resolved
+    per-repo by the caller (primary repo uses gate_mode(); others default to warn)."""
     if mode == "off":
         return None
     number = int(pr["number"])
@@ -207,12 +207,44 @@ def run_claim_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str,
     pr_url = pr.get("html_url", f"https://github.com/{repo}/pull/{number}")
     changed_paths = list_pr_files(repo, number, token=token)
     verdict = pr_provenance_gate.evaluate_pr_provenance(
-        pr, repo=repo, changed_paths=changed_paths)
+        pr, repo=repo, mode=mode, changed_paths=changed_paths)
     post_status(repo, sha, verdict["state"], context=context,
                 description=verdict["context_description"], target_url=pr_url, token=token)
-    return {"pr": number, "sha": sha, "context": context, "state": verdict["state"],
-            "reason": verdict.get("reason"), "would_block": verdict.get("would_block"),
-            "mode": mode}
+    return {"repo": repo, "pr": number, "sha": sha, "context": context,
+            "state": verdict["state"], "reason": verdict.get("reason"),
+            "would_block": verdict.get("would_block"), "mode": mode}
+
+
+def _claim_gate_targets(args: argparse.Namespace, primary_repo: str, token: str):
+    """Yield (repo, pr, mode) to claim-gate. For an explicit --pr set, only the named
+    PRs on the primary repo. Otherwise every project's canonical repo (registry-driven),
+    so a new project is covered automatically the moment it sets a canonical repo."""
+    skip_drafts = os.environ.get("SWITCHBOARD_CI_SKIP_DRAFTS", "1") != "0"
+    if args.pr:
+        mode = pr_provenance_gate.resolve_mode(primary_repo, primary_repo)
+        for number in args.pr:
+            yield primary_repo, get_pr(primary_repo, number, token=token), mode
+        return
+    repos = store.list_canonical_repos()  # {repo: [project_ids]}
+    ordered = [primary_repo] + [r for r in sorted(repos) if r != primary_repo]
+    seen = set()
+    for repo in ordered:
+        if not repo or repo in seen:
+            continue
+        seen.add(repo)
+        mode = pr_provenance_gate.resolve_mode(repo, primary_repo)
+        if mode == "off":
+            continue
+        try:
+            prs = list_open_prs(repo, token=token)
+        except GateError as exc:
+            print(json.dumps({"repo": repo, "context": "claim", "state": "error",
+                              "error": str(exc)}, sort_keys=True))
+            continue
+        for pr in prs:
+            if pr.get("draft") and skip_drafts:
+                continue
+            yield repo, pr, mode
 
 
 def _origin_url(source_repo: Path, repo: str) -> str:
@@ -392,7 +424,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=os.environ.get("SWITCHBOARD_CI_CLAIM_STATUS_CONTEXT",
                                                DEFAULT_CLAIM_CONTEXT),
                         help="Commit-status context for the SESSION-12 provenance/claim gate. "
-                             "Mode via SWITCHBOARD_CI_CLAIM_GATE_MODE=off|warn|enforce (default warn).")
+                             "Primary-repo mode via SWITCHBOARD_CI_CLAIM_GATE_MODE (default warn); "
+                             "other canonical repos via SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT "
+                             "(default warn) or per-repo SWITCHBOARD_CI_CLAIM_GATE_MODES.")
+    parser.add_argument("--no-claim-gate", action="store_true",
+                        default=os.environ.get("SWITCHBOARD_CI_NO_CLAIM_GATE", "").lower()
+                        in ("1", "true", "yes"),
+                        help="Skip the registry-wide provenance/claim gate pass.")
     parser.add_argument("--workdir", default=os.environ.get("SWITCHBOARD_CI_WORKDIR",
                                                             DEFAULT_WORKDIR))
     parser.add_argument("--source-repo", default=os.environ.get("SWITCHBOARD_CI_SOURCE_REPO",
@@ -418,20 +456,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     root = Path(args.workdir)
     source_repo = Path(args.source_repo)
     results = []
+
+    # Pass 1 — SESSION-12 provenance/claim gate across EVERY project's canonical repo
+    # (registry-driven). Board-only, no code execution, so it is safe for any repo and a
+    # new project is covered the moment it configures a canonical repo. Independent of the
+    # test gate: a failure here never aborts pass 2.
+    if not args.no_claim_gate:
+        for repo, pr, mode in _claim_gate_targets(args, args.repo, token):
+            try:
+                claim_result = run_claim_gate_for_pr(
+                    pr, repo=repo, token=token, context=args.claim_context, mode=mode)
+                if claim_result:
+                    print(json.dumps(claim_result, sort_keys=True))
+                    results.append(claim_result)
+            except Exception as exc:  # pragma: no cover - defensive
+                print(json.dumps({"repo": repo, "pr": pr.get("number"),
+                                  "context": args.claim_context, "state": "error",
+                                  "error": str(exc)}, sort_keys=True))
+
+    # Pass 2 — VM test gate. This runs the projectplanner test suite in a worktree, so it
+    # only applies to the primary (projectplanner) repo; other repos run their own CI.
     for pr in _select_prs(args, args.repo, token):
         if pr.get("draft") and os.environ.get("SWITCHBOARD_CI_SKIP_DRAFTS", "1") != "0":
             continue
-        # SESSION-12 provenance gate — independent status; a failure here (or an
-        # unexpected error) must never abort the code test gate below.
-        try:
-            claim_result = run_claim_gate_for_pr(pr, repo=args.repo, token=token,
-                                                 context=args.claim_context)
-            if claim_result:
-                print(json.dumps(claim_result, sort_keys=True))
-                results.append(claim_result)
-        except Exception as exc:  # pragma: no cover - defensive
-            print(json.dumps({"pr": pr.get("number"), "context": args.claim_context,
-                              "state": "error", "error": str(exc)}, sort_keys=True))
         result = run_gate_for_pr(pr, repo=args.repo, token=token, context=args.context,
                                  work_root=root, source_repo=source_repo,
                                  timeout_s=args.timeout_s,

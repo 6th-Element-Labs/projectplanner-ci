@@ -12681,6 +12681,27 @@ def get_project_github_repo(project: str = DEFAULT_PROJECT) -> str:
     return ((topology.get("roles") or {}).get("canonical") or {}).get("repo", "").strip()
 
 
+def list_canonical_repos(projects: Optional[List[str]] = None) -> Dict[str, List[str]]:
+    """Map each configured canonical repo -> the project ids that claim it as code truth.
+
+    Registry-driven so anything that fans out per repo (the PR provenance/claim gate,
+    future per-repo automation) automatically covers a new project the moment it sets a
+    canonical repo via set_project_repo_topology — no per-repo allowlist to keep in sync.
+    A shared repo (e.g. StevenRidder/Helm backs several Helm boards) appears once, mapping
+    to all of its projects.
+    """
+    out: Dict[str, List[str]] = {}
+    for pid in (projects if projects is not None else project_ids()):
+        try:
+            repo = get_project_github_repo(pid)
+        except Exception:
+            repo = ""
+        repo = (repo or "").strip()
+        if repo:
+            out.setdefault(repo, []).append(pid)
+    return out
+
+
 def get_project_repo_role(repo: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Classify one GitHub repo against a project's repo_topology roles."""
     repo_norm = _normalize_repo_slug(repo)
