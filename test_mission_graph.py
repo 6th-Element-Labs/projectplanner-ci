@@ -36,7 +36,7 @@ def ok(condition, message):
     failed += 0 if condition else 1
 
 
-def _link(task_id, title, status="Not Started", depends_on=None, terminal=False):
+def _link(task_id, title, status="Not Started", depends_on=None, terminal=False, role=None):
     detail = {
         "task_id": task_id,
         "title": title,
@@ -44,7 +44,10 @@ def _link(task_id, title, status="Not Started", depends_on=None, terminal=False)
         "depends_on": depends_on or [],
         "provenance": {"terminal": terminal} if terminal else {},
     }
-    return {"task_id": task_id, "project_id": HOME, "task_detail": detail}
+    link = {"task_id": task_id, "project_id": HOME, "task_detail": detail}
+    if role:
+        link["role"] = role
+    return link
 
 
 client = TestClient(app)
@@ -90,6 +93,28 @@ try:
     ok("progressNode" in prog.get("mermaid", "") and "doneUnprovenNode" in prog.get("mermaid", ""),
        "mermaid emits in_progress + done_unproven classes")
 
+    # ---- unit: context roles stay off the flow map ---------------------------
+    ctx = mission_graph.build_dependency_graph([
+        _link("FLOW-1", "exec entry", status="In Progress"),
+        _link("FLOW-2", "exec next", depends_on=["FLOW-1", "BASE-1", "OUT-1"]),
+        _link("BASE-1", "shipped groundwork", status="Done", terminal=True, role="foundation"),
+        _link("BASE-2", "unrelated groundwork", status="Done", terminal=True,
+              depends_on=["OLD-1"], role="foundation"),
+        _link("FROZEN-1", "parked track", role="parked"),
+    ], deliverable_id="ctx", project_id=HOME)
+    ctx_ids = {n["id"] for n in ctx["nodes"]}
+    ok(ctx_ids == {"FLOW-1", "FLOW-2", "BASE-1", "OUT-1"},
+       "flow map keeps executable tasks, promotes depended-on context, drops the rest")
+    ok(all(cid not in ctx.get("mermaid", "") for cid in ("BASE-2", "FROZEN-1", "OLD-1")),
+       "unreferenced foundation/parked links and their upstream deps stay off the mermaid")
+    promoted = next(n for n in ctx["nodes"] if n["id"] == "BASE-1")
+    ok(not promoted.get("external") and promoted.get("state") == "done",
+       "promoted context task renders as a real linked node with its state")
+    ok([c["id"] for c in ctx.get("context_nodes") or []] == ["BASE-2", "FROZEN-1"],
+       "context_nodes lists the excluded foundation/parked links")
+    ok(ctx.get("stats", {}).get("context_task_count") == 2,
+       "stats count excluded context links")
+
     # ---- integration: REST + store ------------------------------------------
     store.init_project_registry()
     store.create_project("Graph Home", project_id=HOME, actor="test")
@@ -128,6 +153,15 @@ try:
     stored = store.get_deliverable_dependency_graph(project=HOME, deliverable_id=deliverable["id"])
     ok(stored.get("stats", {}).get("external_node_count", 0) >= 1,
        "store graph stats count external blockers")
+
+    # Mixed-case ids: linking normalizes to uppercase, so the task lookup must
+    # resolve case-insensitively (CONTRACT-5b regression).
+    cased = store.get_task(base["task_id"].lower(), project=HOME)
+    ok(bool(cased) and cased.get("task_id") == base["task_id"],
+       "get_task resolves case-insensitively to the canonical id")
+    relink = store.link_task_to_deliverable(
+        deliverable["id"], HOME, base["task_id"].lower(), actor="test", project=HOME)
+    ok(not relink.get("error"), "linking with mismatched id casing succeeds")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

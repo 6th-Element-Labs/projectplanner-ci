@@ -6,6 +6,14 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 GRAPH_SCHEMA = "switchboard.deliverable_dependency_graph.v1"
 
+# Link roles that mark a task as background context rather than executable flow.
+# 'foundation' = already-shipped groundwork the mission builds on; 'parked' =
+# frozen tracks kept on the deliverable for the record. Both stay linked (and
+# listed on the mission page), but they don't belong in the dependency FLOW map:
+# rendering them inflated the DAG into disconnected islands of Done/frozen work
+# whose own upstream deps dragged in stub tasks from other deliverables' stories.
+CONTEXT_LINK_ROLES = {"foundation", "parked"}
+
 _STATE_CLASS = {
     "done": "doneNode",
     "done_unproven": "doneUnprovenNode",
@@ -75,17 +83,28 @@ def build_dependency_graph(
     project_id: str = "",
     task_lookup: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Build nodes/edges/mermaid from deliverable-linked tasks and depends_on."""
+    """Build nodes/edges/mermaid from deliverable-linked tasks and depends_on.
+
+    The graph is the EXECUTION flow: links whose role is in CONTEXT_LINK_ROLES
+    (foundation groundwork, parked/frozen tracks) are kept off the map and
+    returned separately as `context_nodes`. A context task is promoted into the
+    graph only when a flow task actually depends_on it — then it is part of the
+    path and renders with its real state. Context tasks' own upstream deps are
+    never traversed; that history belongs to their home deliverable's story.
+    """
     internal: Dict[str, Dict[str, Any]] = {}
     for link in linked_tasks or []:
         detail = link.get("task_detail") or {}
         tid = (link.get("task_id") or detail.get("task_id") or "").strip().upper()
         if not tid:
             continue
+        role = (link.get("role") or "").strip().lower()
         internal[tid] = {
             "link": link,
             "detail": detail,
             "project_id": link.get("project_id") or project_id,
+            "context": role in CONTEXT_LINK_ROLES,
+            "role": role,
         }
 
     nodes: Dict[str, Dict[str, Any]] = {}
@@ -120,6 +139,8 @@ def build_dependency_graph(
         return node
 
     for tid, item in internal.items():
+        if item["context"]:
+            continue
         detail = item["detail"]
         _ensure_node(tid, item["project_id"], external=False, detail=detail)
         depends_on = list(detail.get("depends_on") or [])
@@ -130,12 +151,19 @@ def build_dependency_graph(
             dep_id = (dep or "").strip().upper()
             if not dep_id:
                 continue
-            external = dep_id not in internal
+            linked_dep = internal.get(dep_id)
+            external = linked_dep is None
             dep_project = item["project_id"]
-            if external and task_lookup:
-                hit = task_lookup(dep_project, dep_id) or {}
-                dep_project = hit.get("_project_id") or dep_project
-            _ensure_node(dep_id, dep_project, external=external)
+            if linked_dep is not None:
+                # Linked task (flow or promoted context) — solid edge, real state.
+                dep_project = linked_dep["project_id"]
+                _ensure_node(dep_id, dep_project, external=False,
+                             detail=linked_dep["detail"])
+            else:
+                if task_lookup:
+                    hit = task_lookup(dep_project, dep_id) or {}
+                    dep_project = hit.get("_project_id") or dep_project
+                _ensure_node(dep_id, dep_project, external=True)
             key = (dep_id, tid)
             if key in seen_edges:
                 continue
@@ -147,6 +175,19 @@ def build_dependency_graph(
                 "external": external,
             })
 
+    context_nodes = [
+        {
+            "id": tid,
+            "title": item["detail"].get("title") or tid,
+            "status": item["detail"].get("status"),
+            "state": node_execution_state(item["detail"]) if item["detail"] else "todo",
+            "project_id": item["project_id"],
+            "role": item["role"],
+        }
+        for tid, item in sorted(internal.items())
+        if item["context"] and tid not in nodes
+    ]
+
     node_list = sorted(nodes.values(), key=lambda n: n["id"])
     mermaid = render_mermaid_flowchart(node_list, edges)
     return {
@@ -155,10 +196,12 @@ def build_dependency_graph(
         "deliverable_id": deliverable_id,
         "nodes": node_list,
         "edges": edges,
+        "context_nodes": context_nodes,
         "mermaid": mermaid,
         "stats": {
             "node_count": len(node_list),
             "edge_count": len(edges),
+            "context_task_count": len(context_nodes),
             "external_node_count": sum(1 for n in node_list if n.get("external")),
             "done_count": sum(1 for n in node_list if n.get("state") == "done"),
             "done_unproven_count": sum(1 for n in node_list if n.get("state") == "done_unproven"),

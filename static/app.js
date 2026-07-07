@@ -3137,8 +3137,14 @@ const TeepPlan = {
     _setMissionDeliverableInUrl(id) {
         try {
             const u = new URL(window.location.href);
-            if (id) u.searchParams.set('deliverable', id);
-            else u.searchParams.delete('deliverable');
+            if (id) {
+                u.searchParams.set('deliverable', id);
+                // Deliverables are project-scoped; a copied link must carry the
+                // project or it resolves against the visitor's last-used project.
+                if (window.PM_PROJECT) u.searchParams.set('project', window.PM_PROJECT);
+            } else {
+                u.searchParams.delete('deliverable');
+            }
             window.history.replaceState({}, '', u.toString());
         } catch (e) { /* ignore */ }
     },
@@ -3377,21 +3383,23 @@ const TeepPlan = {
             ['external', 'External blocker', '#f8f9fa', '#adb5bd'],
         ].map(([key, label, fill, stroke]) =>
             `<span class="badge me-2 mb-1" style="background:${fill};color:#333;border:1px solid ${stroke}">${this.esc(label)}</span>`).join('');
-        const pills = (g.nodes || []).map((n) => {
-            const colors = {
-                done: 'bg-green-lt',
-                done_unproven: 'bg-teal-lt',
-                in_progress: 'bg-blue-lt',
-                in_review: 'bg-yellow-lt',
-                blocked: 'bg-red-lt',
-                todo: 'bg-secondary-lt',
-                external: 'bg-secondary-lt',
-                missing: 'bg-secondary-lt',
-            };
+        const pillColors = {
+            done: 'bg-green-lt',
+            done_unproven: 'bg-teal-lt',
+            in_progress: 'bg-blue-lt',
+            in_review: 'bg-yellow-lt',
+            blocked: 'bg-red-lt',
+            todo: 'bg-secondary-lt',
+            external: 'bg-secondary-lt',
+            missing: 'bg-secondary-lt',
+        };
+        const pill = (n, external) => {
             // External blockers render dashed/grey in the graph — keep the pill grey too.
-            const cls = n.external ? 'bg-secondary-lt' : (colors[n.state] || 'bg-secondary-lt');
+            const cls = external ? 'bg-secondary-lt' : (pillColors[n.state] || 'bg-secondary-lt');
             return `<a href="#" class="badge ${cls} me-1 mb-1 text-reset mission-dag-node" data-linked-task="${this.esc(n.id)}" data-linked-project="${this.esc(n.project_id || '')}">${this.esc(n.id)}</a>`;
-        }).join('');
+        };
+        const pills = (g.nodes || []).map((n) => pill(n, n.external)).join('');
+        const contextPills = (g.context_nodes || []).map((n) => pill(n, false)).join('');
         return `<div class="card mb-4" id="mission-dag-panel"><div class="card-header">
             <h3 class="card-title"><i class="ti ti-git-fork me-2"></i>Dependency map</h3>
             <div class="card-actions text-secondary small">${[
@@ -3402,12 +3410,15 @@ const TeepPlan = {
                 [stats.blocked_count, 'blocked'],
                 [stats.todo_count, 'not started'],
                 [stats.external_node_count, 'external'],
+                [stats.context_task_count, 'context'],
             ].filter(([n]) => n).map(([n, l]) => `${n} ${l}`).join(' · ') || 'no tasks'}</div>
         </div><div class="card-body">
             <div class="mb-2">${legend}</div>
             <div id="mission-dag-graph" class="mission-dag-graph overflow-auto mb-3"></div>
             <div class="small text-secondary mb-1">Tasks in this deliverable</div>
             <div class="d-flex flex-wrap">${pills || '<span class="text-secondary small">No linked tasks</span>'}</div>
+            ${contextPills ? `<div class="small text-secondary mb-1 mt-2">Foundation &amp; parked — linked for context, not in the flow map</div>
+            <div class="d-flex flex-wrap">${contextPills}</div>` : ''}
         </div></div>`;
     },
 

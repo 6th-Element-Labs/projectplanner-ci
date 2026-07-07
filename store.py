@@ -4094,7 +4094,16 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
     with _conn(project) as c:
         r = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if not r:
-            return None
+            # Task ids are user-visible codes whose stored casing can be mixed
+            # (CONTRACT-5b), while mission/deliverable callers normalize ids to
+            # uppercase. Resolve case-insensitively, then re-read under the
+            # canonical id so every sub-query (activity, git_state, claims, ...)
+            # matches the stored casing.
+            row = c.execute("SELECT task_id FROM tasks WHERE task_id=? COLLATE NOCASE",
+                            (task_id,)).fetchone()
+            if not row or row["task_id"] == task_id:
+                return None
+            return get_task(row["task_id"], project=project)
         t = _task_row(r)
         t["activity"] = [dict(a) | {"payload": _json_payload(a["payload"])}
                          for a in c.execute(
