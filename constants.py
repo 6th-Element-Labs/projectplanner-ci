@@ -145,9 +145,15 @@ SESSION_POLICY_PROFILE_ALIASES = {
     "documentation": "docs_review",
     "offline": "offline_evidence",
     "non_code_offline": "offline_evidence",
-    "preview": "ui_preview",
-    "none": "no_repo",
-    "no-repo": "no_repo",
+    # ADR-0006 collapsed the enforcement profiles to the three with distinct behaviour
+    # (code_strict / docs_review default / offline_evidence). The old ui_preview and
+    # no_repo profiles carried no enforcement beyond the default, so their aliases now
+    # resolve to the docs_review default.
+    "preview": "docs_review",
+    "ui_preview": "docs_review",
+    "none": "docs_review",
+    "no-repo": "docs_review",
+    "no_repo": "docs_review",
 }
 BUILTIN_SESSION_POLICY_PROFILES = {
     "code_strict": {
@@ -219,49 +225,12 @@ BUILTIN_SESSION_POLICY_PROFILES = {
         "merge_authority": "offline_verifier",
         "completion_evidence": ["offline_evidence", "artifact_url_or_verification"],
     },
-    "ui_preview": {
-        "profile": "ui_preview",
-        "label": "UI preview",
-        "description": "For preview/runtime work where ports and visible state matter; Work Session is preferred and unsafe sessions warn loudly.",
-        "work_session_required": False,
-        "pre_tool_missing_session": "warn",
-        "allowed_storage_modes": ["worktree", "clone", "external"],
-        "preferred_storage_mode": "worktree",
-        "prefer_full_clone": False,
-        "deny_hygiene": ["conflict_markers"],
-        "warn_hygiene": ["dirty_work_session", "missing_upstream", "missing_base_sha"],
-        "requires_branch_task_scope": False,
-        "requires_upstream": False,
-        "requires_base_sha": False,
-        "requires_tests": True,
-        "requires_executed_tests": True,
-        "requires_diff_check": False,
-        "merge_requires_work_session": False,
-        "merge_authority": "canonical_repo_only_when_code_changes",
-        "completion_evidence": ["preview_url_or_screenshot", "tests_or_smoke"],
-    },
-    "no_repo": {
-        "profile": "no_repo",
-        "label": "No repo",
-        "description": "For pure coordination/read-only/admin work with no repository side effects.",
-        "work_session_required": False,
-        "pre_tool_missing_session": "allow",
-        "allowed_storage_modes": ["external"],
-        "preferred_storage_mode": "external",
-        "prefer_full_clone": False,
-        "deny_hygiene": [],
-        "warn_hygiene": [],
-        "requires_branch_task_scope": False,
-        "requires_upstream": False,
-        "requires_base_sha": False,
-        "requires_tests": False,
-        "requires_executed_tests": False,
-        "requires_diff_check": False,
-        "merge_requires_work_session": False,
-        "merge_authority": "none",
-        "completion_evidence": ["activity_or_comment"],
-    },
 }
+# ADR-0006: collapsed from five to the three profiles with genuinely distinct behaviour —
+# code_strict (enforced Work Session + tests), docs_review (the non-enforcing default), and
+# offline_evidence (non-PR work that needs explicit verifier evidence at completion). The
+# retired ui_preview / no_repo profiles added no enforcement beyond the default; their names
+# alias to docs_review (see SESSION_POLICY_PROFILE_ALIASES) so existing task tags still resolve.
 WORK_SESSION_STRICT_PROFILES = {
     name for name, profile in BUILTIN_SESSION_POLICY_PROFILES.items()
     if profile.get("work_session_required")
