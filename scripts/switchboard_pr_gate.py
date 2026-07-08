@@ -39,6 +39,10 @@ MIN_PYTHON_VERSION = (3, 10)
 # Board project whose repo_topology decides where CI runs: a configured public_ci
 # sandbox (free GitHub-hosted runners) vs. the legacy local venv on this box.
 SWITCHBOARD_CI_PROJECT = (os.environ.get("SWITCHBOARD_CI_PROJECT") or "switchboard").strip() or "switchboard"
+# external_ci_mirror failure_class values that mean the suite actually RAN and was red
+# (a genuine gate failure). Every other failure_class is an infra/dispatch problem where
+# the mirror produced no test verdict -> fall back to the local suite instead of hard-failing.
+_EXTERNAL_CI_TEST_FAILURE_CLASSES = {"test", "test_failed", "tests_failed"}
 
 
 class GateError(RuntimeError):
@@ -380,8 +384,13 @@ def _sandbox_ci_role(project: str) -> Dict[str, Any]:
 
 
 def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: str,
-                                  number: int, token: str, timeout_s: int) -> None:
+                                  number: int, token: str, timeout_s: int):
     """Verify the PR's merge commit via the first-class ``external_ci_mirror`` runner.
+
+    Returns ("success", result) when the mirror ran the suite green, or
+    ("unavailable", result) when the mirror could not produce a verdict (dispatch/sync/
+    poll error) — the caller then falls back to the local suite. Raises GateError only on
+    a genuine test failure (the suite ran and was red).
 
     Pushes the exact merge SHA to the project's ``public_ci`` sandbox, dispatches the
     workflow, polls to a terminal status, and records an ``external_ci_run`` with a
@@ -408,14 +417,21 @@ def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: st
     with log_path.open("w", encoding="utf-8") as log:
         log.write(f"external_ci_mirror source_sha={merge_sha} workflow={workflow}\n")
         log.write(json.dumps(result, indent=2, default=str)[:4000] + "\n")
-    if result.get("error"):
-        raise GateError(
-            f"external CI mirror error [{result.get('failure_class') or 'error'}]: {result.get('error')}")
     status = (result.get("status") or "").strip().lower()
-    if status != "success":
+    fclass = (result.get("failure_class") or "").strip().lower()
+    if status == "success":
+        return "success", result
+    if fclass in _EXTERNAL_CI_TEST_FAILURE_CLASSES:
+        # The mirror actually ran the suite and it was red — a genuine gate failure.
         raise GateError(
             f"external CI mirror not green (status={status}, conclusion={result.get('conclusion')}, "
-            f"class={result.get('failure_class')}) — {result.get('run_url') or ''}")
+            f"class={fclass}) — {result.get('run_url') or ''}")
+    # Anything else (mirror sync / workflow dispatch / poll error, or a bare error with no
+    # test verdict) means the mirror could not produce a result — infra, not a test failure.
+    # Return 'unavailable' so the caller falls back to the local suite: a gate that cannot
+    # verify is worse than one that runs on the box (ADR-0006 — evidence-only external CI is
+    # not the sole source of truth).
+    return "unavailable", result
 
 
 def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
@@ -447,13 +463,23 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
             raise GateError("Switchboard review preflight failed: " +
                             "; ".join(f.get("code", "unknown") for f in preflight.get("findings", [])))
         ci_role = _sandbox_ci_role(SWITCHBOARD_CI_PROJECT)
+        ran_external = False
         if ci_role:
             # Topology declares a public_ci sandbox: verify on the first-class
             # external_ci_mirror runner (free GitHub-hosted runners), keeping heavy CI
             # off this box. Provenance preflight above is unchanged. See docs/CI-STRATEGY.md.
-            _verify_on_external_ci_mirror(run_dir, log_path, project=SWITCHBOARD_CI_PROJECT,
-                                          number=number, token=token, timeout_s=timeout_s)
-        else:
+            outcome, _ext = _verify_on_external_ci_mirror(
+                run_dir, log_path, project=SWITCHBOARD_CI_PROJECT,
+                number=number, token=token, timeout_s=timeout_s)
+            ran_external = outcome == "success"
+            if outcome != "success":
+                # Mirror could not produce a verdict (e.g. workflow dispatch/sync error).
+                # Do not hard-fail the whole gate on an evidence-only mirror outage — fall
+                # back to the local suite so PRs still get real verification.
+                with log_path.open("a", encoding="utf-8") as log:
+                    log.write("\nexternal CI mirror unavailable "
+                              f"(class={_ext.get('failure_class')}); falling back to local suite.\n")
+        if not ran_external:
             python_runtime = select_ci_python(source_repo, explicit=python_executable)
             run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
                                  preflight=preflight, python_runtime=python_runtime)
