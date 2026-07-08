@@ -221,5 +221,46 @@ ok(any(f["task_id"] == helm_task["task_id"] and f["code"] == "orphan_merge_wrong
        for f in findings),
    "wrong repo role is reported explicitly")
 
+# BUG-27 regression (moved here from reconcile hydration, ADR-0006): an agent that
+# merges to canonical main while the task is still In Progress must be stamped Done —
+# but only for a default-branch merge whose PR names the task.
+ip = store.create_task({"workstream_id": "ENC", "title": "merged while In Progress"},
+                       actor="test", project=P)
+foreign = store.create_task({"workstream_id": "ENC", "title": "PR names another task"},
+                            actor="test", project=P)
+for tk in (ip, foreign):
+    with store._conn(P) as c:
+        c.execute("UPDATE tasks SET status='In Progress' WHERE task_id=?", (tk["task_id"],))
+
+
+def _run_discover(prs, tasks_):
+    gstates = {t["task_id"]: {} for t in tasks_}
+    return orphan_merge_discovery.discover_orphan_merges(
+        [store.get_task(t["task_id"], project=P) for t in tasks_], gstates,
+        project=P, repo="6th-Element-Labs/projectplanner", token="test-token",
+        fetch_merged_prs_fn=lambda *a, **k: (list(prs), {"merged_pr_count": len(prs)}),
+        mark_merged_fn=lambda *a, **k: store.mark_task_merged(*a, **k),
+        append_activity_fn=store.append_activity)
+
+
+_run_discover([_merged_pr(701, ip["task_id"])], [ip])
+ok(store.get_task(ip["task_id"], project=P)["status"] == "Done",
+   "In Progress task with a default-branch merged PR naming it is stamped Done (BUG-27)")
+
+_run_discover([_merged_pr(702, "SOMEOTHER-9")], [foreign])
+ok(store.get_task(foreign["task_id"], project=P)["status"] == "In Progress",
+   "a merged PR that names a different task does not stamp this task (BUG-27 negative)")
+
+# Non-default-branch merges never enter the sweep (fetch filters them out).
+def _req_nondefault(url, token=""):
+    pr = _merged_pr(703, "ENC-77")
+    pr["base"] = {"ref": "integration", "repo": {"default_branch": "master"}}
+    return [pr]
+
+
+nd_prs, _ = orphan_merge_discovery.fetch_recent_merged_prs(
+    "6th-Element-Labs/projectplanner", token="t", now=NOW, request_fn=_req_nondefault)
+ok(nd_prs == [], "fetch_recent_merged_prs excludes merges to a non-default branch (BUG-27 negative)")
+
 print(f"\norphan_merge_discovery: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

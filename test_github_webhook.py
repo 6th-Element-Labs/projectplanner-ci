@@ -373,56 +373,9 @@ try:
        store.get_task(shadow_task["task_id"], project="shadow")["status"] == "In Review",
        "same-repo explicit project updates only the selected board")
 
-    cross_repo_task = store.create_task(
-        {"workstream_id": "CONVERT", "title": "dynamic cross-repo PR evidence"},
-        actor="seed", project="vulkan")
-    store.update_task(cross_repo_task["task_id"], {"status": "In Review"},
-                      actor="seed", project="vulkan")
-    store.add_comment(
-        cross_repo_task["task_id"], "seed",
-        f"Ready in https://github.com/StevenRidder/Helm/pull/238. "
-        f"Branch `codex/{cross_repo_task['task_id']}-helm`, head `abcdef1`.",
-        project="vulkan")
-    original_github_pr = store._github_pr
-    seen_cross_repo = []
-
-    def fake_cross_repo_pr(repo, pr_number, token=""):
-        seen_cross_repo.append({"repo": repo, "pr_number": int(pr_number)})
-        if repo == "StevenRidder/OpenCPN" and int(pr_number) == 38:
-            return {
-                "merged_at": "2026-06-29T05:52:17Z",
-                "merge_commit_sha": "dynamicmerge",
-                "html_url": f"https://github.com/{repo}/pull/{pr_number}",
-                "base": {"ref": "vulkan/render-core-poc", "repo": {"default_branch": "master"}},
-                "head": {"ref": f"codex/{dynamic_task['task_id']}-slice", "sha": "dynamichead"},
-            }
-        if repo == "StevenRidder/Helm" and int(pr_number) == 238:
-            return {
-                "merged_at": None,
-                "merge_commit_sha": "",
-                "html_url": f"https://github.com/{repo}/pull/{pr_number}",
-                "base": {"ref": "main", "repo": {"default_branch": "main"}},
-                "head": {"ref": f"codex/{cross_repo_task['task_id']}-helm", "sha": "abcdef1"},
-            }
-        return None
-
-    store._github_pr = fake_cross_repo_pr
-    try:
-        cross_repo_report = store.reconcile(project="vulkan")
-    finally:
-        store._github_pr = original_github_pr
-    cross_repo_after = store.get_task(cross_repo_task["task_id"], project="vulkan")
-    ok({"repo": "StevenRidder/Helm", "pr_number": 238} in seen_cross_repo,
-       "reconcile fetches an explicit cross-repo PR URL from its URL repo")
-    ok("StevenRidder/Helm" in cross_repo_report["external_checks"].get("github_pr_repos", []),
-       "reconcile reports every GitHub repo checked for PR state")
-    ok(cross_repo_after["git_state"]["pr_number"] == 238 and
-       cross_repo_after["git_state"]["pr_url"] == "https://github.com/StevenRidder/Helm/pull/238",
-       "reconcile hydrates explicit cross-repo PR evidence")
-    ok(not any(f["task_id"] == cross_repo_task["task_id"] and
-               f["code"] == "pr_state_unavailable"
-               for f in cross_repo_report["findings"]),
-       "explicit cross-repo PR evidence is not reported as unavailable")
+    # Cross-repo PR-evidence hydration from activity comments retired (ADR-0006): the
+    # merged sweep + open-PR backstop match by the PR's task-id on the project's own
+    # canonical repo; activity-scraped cross-repo evidence is no longer recovered.
 
     missing_sha_task = store.create_task({"workstream_id": "HARDEN", "title": "missing sha"},
                                          actor="seed", project=P)
@@ -466,15 +419,9 @@ try:
        not done_after.get("pr_number") and done_after.get("branch") == "master",
        "PR opened webhook cannot overwrite Done task provenance")
 
-    activity_task = store.create_task({"workstream_id": "HARDEN", "title": "activity PR evidence"},
-                                      actor="seed", project=P)
-    store.update_task(activity_task["task_id"], {"status": "In Review"},
-                      actor="seed", project=P)
-    store.add_comment(
-        activity_task["task_id"], "seed",
-        f"Ready in PR #47: https://github.com/6th-Element-Labs/projectplanner/pull/47. "
-        f"Branch `codex/{activity_task['task_id']}-activity`, head `activityhead`.",
-        project=P)
+    # (activity-only PR-evidence hydration retired in ADR-0006 — a task whose PR lives
+    # only in a comment, with nothing recorded in git_state, is now recovered by the
+    # merged orphan sweep matching the PR's task-id, covered in test_orphan_merge_discovery.)
 
     reconcile_task = store.create_task({"workstream_id": "HARDEN", "title": "reconcile PR merge"},
                                        actor="seed", project=P)
@@ -510,15 +457,6 @@ try:
 
     def fake_github_pr(repo, pr_number, token=""):
         seen["token"] = token
-        if int(pr_number) == 47:
-            return {
-                "merged_at": "2026-06-29T05:52:17Z",
-                "merge_commit_sha": "activitymerge",
-                "html_url": f"https://github.com/{repo}/pull/{pr_number}",
-                "base": {"ref": "master", "repo": {"default_branch": "master"}},
-                "head": {"ref": f"codex/{activity_task['task_id']}-activity",
-                         "sha": "activityhead"},
-            }
         if int(pr_number) == 49:
             return {
                 "merged_at": "2026-06-29T07:30:04Z",
@@ -547,16 +485,11 @@ try:
             else:
                 os.environ[key] = value
     reconciled = store.get_task(reconcile_task["task_id"], project=P)
-    activity_reconciled = store.get_task(activity_task["task_id"], project=P)
     stale_claim_reconciled = store.get_task(stale_claim_task["task_id"], project=P)
     ok(report["external_checks"]["github_repo"] == "6th-Element-Labs/projectplanner",
        "reconcile uses project-scoped GitHub repo config")
     ok(seen.get("token") == "ci-status-token",
        "reconcile accepts SWITCHBOARD_CI_GITHUB_TOKEN for PR checks")
-    ok(activity_reconciled["status"] == "Done" and
-       activity_reconciled["git_state"]["pr_number"] == 47 and
-       activity_reconciled["git_state"]["merged_sha"] == "activitymerge",
-       "reconcile hydrates PR evidence from task activity before merge backfill")
     ok(any(b["task_id"] == reconcile_task["task_id"] for b in report["backfilled"]),
        "reconcile reports PR-merge backfill")
     ok(reconciled["status"] == "Done" and
@@ -568,125 +501,15 @@ try:
        stale_claim_reconciled["git_state"]["head_sha"] == latest_head,
        "reconcile stamps merged PR from pr_url-only stale claim evidence")
 
-    store.init_db("helm")
-    store.set_project_github_repo("StevenRidder/Helm", project="helm")
-    helm_legacy_done = store.create_task(
-        {"workstream_id": "OFFLINE", "title": "legacy Done with PR activity"},
-        actor="seed", project="helm")
-    with store._conn("helm") as c:
-        c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?",
-                  (0, helm_legacy_done["task_id"]))
-        c.execute(
-            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-            (helm_legacy_done["task_id"], "legacy", "comment",
-             '{"text":"Merged PR: https://github.com/StevenRidder/Helm/pull/777 branch `codex/OFFLINE-99-legacy` head `1111111`"}',
-             0),
-        )
-    store.update_canonical_main_sha("f" * 40, actor="test", project="helm")
-    original_github_pr = store._github_pr
-    seen_helm = {}
+    # Legacy Done-without-provenance auto-heal from activity comments retired (ADR-0006):
+    # a Done task lacking merge provenance is now surfaced (done_without_merged_sha finding),
+    # not silently back-stamped from a scraped comment. Done is owned by merge provenance.
 
-    def fake_helm_pr(repo, pr_number, token=""):
-        seen_helm["repo"] = repo
-        seen_helm["pr_number"] = int(pr_number)
-        return {
-            "merged_at": "2026-06-30T01:23:45Z",
-            "merge_commit_sha": "helmmerge",
-            "html_url": f"https://github.com/{repo}/pull/{pr_number}",
-            "base": {"ref": "main", "repo": {"default_branch": "main"}},
-            "head": {"ref": "codex/OFFLINE-99-legacy", "sha": "2222222"},
-        }
-
-    store._github_pr = fake_helm_pr
-    try:
-        helm_report = store.reconcile(project="helm")
-    finally:
-        store._github_pr = original_github_pr
-    helm_reconciled = store.get_task(helm_legacy_done["task_id"], project="helm")
-    ok(helm_report["external_checks"]["git_reachability"] == "skipped_repo_mismatch",
-       "Helm reconcile skips local git reachability from the projectplanner checkout")
-    ok(seen_helm == {"repo": "StevenRidder/Helm", "pr_number": 777},
-       "Helm reconcile uses the project GitHub repo when hydrating legacy Done PR evidence")
-    ok(helm_reconciled["status"] == "Done" and
-       helm_reconciled["git_state"]["pr_number"] == 777 and
-       helm_reconciled["git_state"]["merged_sha"] == "helmmerge",
-       "reconcile stamps merged_sha for a legacy Done Helm task from PR activity")
-    ok(any(b["task_id"] == helm_legacy_done["task_id"] and
-           b["merged_sha"] == "helmmerge" for b in helm_report["backfilled"]),
-       "legacy Done Helm PR backfill is reported")
-    ok(not any(f["task_id"] == helm_legacy_done["task_id"] and
-               f["code"] == "done_without_merged_sha" for f in helm_report["findings"]),
-       "legacy Done Helm PR task is not left as Done without provenance")
-
-    # BUG-27 / regression of HARDEN-15: an agent that merges its PR to canonical main but never
-    # runs complete_claim leaves the task In Progress. Reconcile (running from the projectplanner
-    # checkout, so local git reachability is skipped) must still auto-stamp Done from GitHub PR
-    # provenance — but ONLY when the merged PR is on the default branch AND names the task.
-    ip_promote = store.create_task(
-        {"workstream_id": "ENC", "title": "layer toggles merged while still In Progress"},
-        actor="seed", project="helm")
-    ip_feature = store.create_task(
-        {"workstream_id": "ENC", "title": "merged into a non-default branch only"},
-        actor="seed", project="helm")
-    ip_foreign = store.create_task(
-        {"workstream_id": "ENC", "title": "activity cites another task's merged PR"},
-        actor="seed", project="helm")
-    ip_promote_id = ip_promote["task_id"]
-    ip_feature_id = ip_feature["task_id"]
-    ip_foreign_id = ip_foreign["task_id"]
-    with store._conn("helm") as c:
-        for tid, pr_no in ((ip_promote_id, 812), (ip_feature_id, 813), (ip_foreign_id, 814)):
-            c.execute("UPDATE tasks SET status='In Progress', updated_at=? WHERE task_id=?",
-                      (0, tid))
-            c.execute(
-                "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                (tid, "cursor/agent", "comment",
-                 '{"text":"Merged PR #%d to main"}' % pr_no, 0),
-            )
-
-    def fake_inprogress_pr(repo, pr_number, token=""):
-        n = int(pr_number)
-        if n == 812:  # merged to default branch, head ref names the task -> promote
-            head_ref = "cursor/%s-layer-toggles" % ip_promote_id
-            base = {"ref": "main", "repo": {"default_branch": "main"}}
-        elif n == 813:  # merged to a NON-default branch -> must not promote
-            head_ref = "cursor/%s-x" % ip_feature_id
-            base = {"ref": "integration", "repo": {"default_branch": "main"}}
-        else:  # 814: merged to default branch but PR names a DIFFERENT task -> must not promote
-            head_ref = "cursor/SOMEOTHER-9-unrelated"
-            base = {"ref": "main", "repo": {"default_branch": "main"}}
-        return {
-            "merged_at": "2026-07-07T00:00:00Z",
-            "merge_commit_sha": "ipmerge%d" % n,
-            "html_url": "https://github.com/%s/pull/%d" % (repo, n),
-            "base": base,
-            "head": {"ref": head_ref, "sha": "abc%d" % n},
-        }
-
-    store._github_pr = fake_inprogress_pr
-    try:
-        ip_report = store.reconcile(project="helm")
-    finally:
-        store._github_pr = original_github_pr
-    ip_promoted = store.get_task(ip_promote_id, project="helm")
-    ip_feature_r = store.get_task(ip_feature_id, project="helm")
-    ip_foreign_r = store.get_task(ip_foreign_id, project="helm")
-    ok(ip_promoted["status"] == "Done" and
-       ip_promoted["git_state"]["pr_number"] == 812 and
-       ip_promoted["git_state"]["merged_sha"] == "ipmerge812",
-       "reconcile auto-stamps an In Progress task whose PR merged to canonical main (BUG-27)")
-    ok(any(b["task_id"] == ip_promote_id and b["merged_sha"] == "ipmerge812"
-           for b in ip_report["backfilled"]),
-       "In Progress PR-merge backfill is reported")
-    ok(not any(f["task_id"] == ip_promote_id and f["code"] == "progress_without_pushed_head"
-               for f in ip_report["findings"]),
-       "auto-stamped In Progress task is not also flagged progress_without_pushed_head")
-    ok(ip_feature_r["status"] == "In Progress" and
-       not ip_feature_r["git_state"].get("merged_sha"),
-       "reconcile does NOT promote an In Progress task whose PR merged off the default branch")
-    ok(ip_foreign_r["status"] == "In Progress" and
-       not ip_foreign_r["git_state"].get("merged_sha"),
-       "reconcile does NOT promote an In Progress task from a PR that names a different task")
+    # BUG-27 (In Progress task whose PR merged to canonical main -> auto-stamp Done, but
+    # NOT for off-default-branch or foreign-PR merges) previously rode on activity-scraped
+    # hydration + the _external PR check. It now lives in the merged orphan sweep, which
+    # only stamps default-branch merges whose PR names the task. Coverage moved to
+    # test_orphan_merge_discovery.py (In-Progress stamp + off-branch + foreign-PR negatives).
 
     print("\n%d passed, %d failed" % (passed, failed))
     raise SystemExit(1 if failed else 0)

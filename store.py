@@ -3128,6 +3128,13 @@ def _upsert_git_state(c: sqlite3.Connection, task_id: str,
     pushed_at = merged.get("pushed_at")
     pr_number = merged.get("pr_number")
     pr_url = merged.get("pr_url")
+    # Derive pr_number from a recorded pr_url at write time (ADR-0006): every write path
+    # then persists pr_number alongside pr_url, so reconcile can read it directly instead
+    # of scraping evidence at check time (retires the PR-evidence hydration path).
+    if not pr_number and pr_url:
+        _pr_match = GITHUB_PR_URL_RE.search(str(pr_url))
+        if _pr_match:
+            pr_number = int(_pr_match.group(2))
     merged_sha = merged.get("merged_sha")
     merged_at = merged.get("merged_at")
     in_main = 1 if merged.get("in_main_content") else 0
@@ -13628,83 +13635,6 @@ def _activity_text(payload: Any) -> str:
     return str(payload)
 
 
-def _infer_pr_evidence_from_activity(c: sqlite3.Connection, task_id: str,
-                                     repo: str) -> Dict[str, Any]:
-    repo_l = repo.lower()
-    rows = c.execute(
-        "SELECT kind, payload FROM activity WHERE task_id=? ORDER BY id DESC LIMIT 80",
-        (task_id,),
-    ).fetchall()
-    for row in rows:
-        text = _activity_text(_json_payload(row["payload"]))
-        if not text:
-            continue
-        for match in GITHUB_PR_URL_RE.finditer(text):
-            pr_repo = match.group(1)
-            branch_match = BRANCH_EVIDENCE_RE.search(text)
-            head_match = HEAD_EVIDENCE_RE.search(text)
-            return {
-                "pr_number": int(match.group(2)),
-                "pr_url": match.group(0),
-                "repo": pr_repo,
-                "branch": branch_match.group(1) if branch_match else "",
-                "head_sha": head_match.group(1) if head_match else "",
-                "source": (
-                    "activity_pr_evidence"
-                    if pr_repo.lower() == repo_l else "activity_cross_repo_pr_evidence"
-                ),
-            }
-        for match in GITHUB_PR_SHORTHAND_RE.finditer(text):
-            if not repo:
-                continue
-            branch_match = BRANCH_EVIDENCE_RE.search(text)
-            head_match = HEAD_EVIDENCE_RE.search(text)
-            pr_number = int(match.group(1))
-            return {
-                "pr_number": pr_number,
-                "pr_url": f"https://github.com/{repo}/pull/{pr_number}",
-                "repo": repo,
-                "branch": branch_match.group(1) if branch_match else "",
-                "head_sha": head_match.group(1) if head_match else "",
-                "source": "activity_pr_number_evidence",
-            }
-    return {}
-
-
-def _infer_pr_evidence_from_git_state(git_state: Dict[str, Any],
-                                      repo: str) -> Dict[str, Any]:
-    pr_url = (git_state.get("pr_url") or "").strip()
-    if not pr_url:
-        return {}
-    match = GITHUB_PR_URL_RE.search(pr_url)
-    if not match:
-        return {}
-    pr_repo = match.group(1)
-    return {
-        "pr_number": int(match.group(2)),
-        "pr_url": match.group(0),
-        "repo": pr_repo,
-        "branch": git_state.get("branch") or "",
-        "head_sha": git_state.get("head_sha") or "",
-        "source": (
-            "git_state_pr_url"
-            if not repo or pr_repo.lower() == repo.lower() else "git_state_cross_repo_pr_url"
-        ),
-    }
-
-
-def _merge_pr_evidence(git_state: Dict[str, Any],
-                       inferred: Dict[str, Any]) -> Dict[str, Any]:
-    if not inferred:
-        return {}
-    evidence: Dict[str, Any] = {"source": inferred.get("source")}
-    for field in ("pr_number", "pr_url", "repo", "branch", "head_sha"):
-        value = inferred.get(field)
-        if value and not git_state.get(field):
-            evidence[field] = value
-    return evidence if any(k != "source" for k in evidence) else {}
-
-
 def _pr_references_task(pr: Dict[str, Any], task_id: str) -> bool:
     """True when a merged PR explicitly names the task in its branch ref or title.
 
@@ -14107,34 +14037,10 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             git_state = _load_git_state(c, task["task_id"])
             tasks.append(task)
             status = task.get("status")
-            needs_pr_hydration = (
-                repo and
-                not git_state.get("pr_number") and
-                (
-                    status in ("In Review", "In Progress") or
-                    (status == "Done" and not _has_done_provenance(git_state))
-                )
-            )
-            if needs_pr_hydration:
-                inferred = (
-                    _infer_pr_evidence_from_git_state(git_state, repo)
-                    or _infer_pr_evidence_from_activity(c, task["task_id"], repo)
-                )
-                evidence = _merge_pr_evidence(git_state, inferred)
-                if evidence:
-                    git_state = _upsert_git_state(c, task["task_id"], {
-                        "pr_number": evidence.get("pr_number"),
-                        "pr_url": evidence.get("pr_url"),
-                        "branch": evidence.get("branch") or None,
-                        "head_sha": evidence.get("head_sha") or None,
-                        "pushed_at": now if evidence.get("head_sha") else None,
-                        "evidence": evidence,
-                    })
-                    c.execute(
-                        "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                        (task["task_id"], "reconcile", "git.pr_evidence_hydrated",
-                         json.dumps(evidence, sort_keys=True), now),
-                    )
+            # PR-evidence hydration retired (ADR-0006): pr_number is now derived from a
+            # recorded pr_url at write time (_upsert_git_state), and the sweep/open-PR
+            # backstop recover dropped-webhook tasks by matching the PR's task-id — so
+            # there is nothing to scrape from activity here.
             git_states[task["task_id"]] = git_state
             if (status == "Done" and not _has_done_provenance(git_state)
                     and not (repo and git_state.get("pr_number"))):
@@ -14147,7 +14053,7 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                                  "detail": "Task is In Review but lacks branch/PR evidence."})
             if (status == "In Progress" and not git_state.get("head_sha")
                     and not git_state.get("pr_number")):
-                # A hydrated pr_number means this task has PR evidence pending merge-provenance
+                # A recorded pr_number means this task has PR evidence pending merge-provenance
                 # evaluation below (open PR, or a merge about to be auto-stamped) — the PR checks
                 # own its provenance state, so don't also flag it as "no pushed head".
                 findings.append({"severity": "low", "task_id": task["task_id"],
