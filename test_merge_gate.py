@@ -267,6 +267,25 @@ try:
        after_merge["provenance"]["type"] == "github_pr_merged",
        "merged_sha/default-branch provenance still controls Done")
 
+    # ADR-0006: merge_gate and the SESSION-12 claim gate share one definition of
+    # "backed" (store.pr_backed_by_process). A backed task carries the signal; a task
+    # with no claim / Work Session / In-Review-or-Done state is blocked as task_not_backed.
+    ok(passed_gate.get("backed") is True and passed_gate.get("backing_signal"),
+       "merge_gate reports the shared backing signal for a backed task")
+    unbacked = task("no board backing at all")
+    unbacked_branch = f"codex/{unbacked['task_id']}-x"
+    unbacked_gate = store.merge_gate({
+        "task_id": unbacked["task_id"], "repo": REPO,
+        "pr_url": f"https://github.com/{REPO}/pull/62", "pr_number": 62,
+        "branch": unbacked_branch, "head_sha": "a" * 40,
+        "github_pr": {"merged": False, "mergeable": True, "draft": False,
+                      "base": {"ref": "master", "repo": {"default_branch": "master"}},
+                      "head": {"ref": unbacked_branch, "sha": "a" * 40}},
+    }, actor="test", project=P)
+    ok(unbacked_gate.get("backed") is False and not unbacked_gate.get("ok") and
+       any(f["code"] == "task_not_backed" for f in unbacked_gate["findings"]),
+       "merge_gate blocks a task with no board backing (shared pr_backed_by_process)")
+
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

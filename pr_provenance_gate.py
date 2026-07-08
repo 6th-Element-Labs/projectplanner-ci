@@ -28,9 +28,8 @@ import task_id_parser
 SCHEMA = "switchboard.pr_provenance_gate.v1"
 
 DEFAULT_FLEET_BRANCH_PREFIXES = ("cursor/", "codex/", "claude/", "agent/", "devin/")
-# Board states / signals that prove a change went through the workflow.
-_COVERED_STATUSES = {"In Review", "Done"}
-_ACTIVE_SESSION_STATUSES = {"proposed", "active", "completed"}
+# The "is this task backed by process" signals live in store.pr_backed_by_process
+# (ADR-0006), the one definition shared with merge_gate.
 _DOCS_SUFFIXES = (".md", ".mdc", ".rst", ".txt")
 _DOCS_DIRS = ("docs/", "plan-docs/", ".cursor/")
 _MODES = {"off", "warn", "enforce"}
@@ -132,25 +131,16 @@ def _resolve_task(task_id: str, projects: Sequence[str]) -> Optional[Dict[str, A
 
 
 def _coverage(entry: Dict[str, Any]) -> Dict[str, Any]:
-    """Is this referenced task backed by board process right now?"""
-    task = entry["task"]
-    project = entry["project"]
-    task_id = entry["task_id"]
-    status = task.get("status") or ""
-    if status in _COVERED_STATUSES:
-        return {"covered": True, "signal": "status", "detail": status}
-    if task.get("active_claims"):
-        return {"covered": True, "signal": "active_claim"}
-    git_state = task.get("git_state") or {}
-    if git_state.get("merged_sha") or git_state.get("pr_number"):
-        return {"covered": True, "signal": "git_provenance"}
-    try:
-        sessions = store.list_work_sessions(project, task_id=task_id, include_expired=False)
-    except Exception:
-        sessions = []
-    if any((s.get("status") or "") in _ACTIVE_SESSION_STATUSES for s in sessions):
-        return {"covered": True, "signal": "work_session"}
-    return {"covered": False, "signal": None}
+    """Is this referenced task backed by board process right now?
+
+    Delegates to the single canonical definition (store.pr_backed_by_process, ADR-0006)
+    shared with merge_gate, so both gates agree on what 'backed' means. Thin adapter
+    mapping {backed,signal} -> the claim gate's {covered,signal} shape.
+    """
+    result = store.pr_backed_by_process(entry["task"], entry["project"])
+    return {"covered": bool(result.get("backed")),
+            "signal": result.get("signal"),
+            "detail": result.get("detail")}
 
 
 def _enforced_profile(entry: Dict[str, Any]) -> bool:

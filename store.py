@@ -4593,12 +4593,26 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 details={"executed_test_gate": executed_test_gate,
                          "policy_profile": profile}))
 
+    # Shared "is this task backed by board process" check (ADR-0006) — the same
+    # definition the SESSION-12 claim gate enforces at the CI chokepoint. merge_gate
+    # layers its stricter work-session hygiene above; this guards the base case (a task
+    # with no claim, Work Session, In-Review/Done state, or provenance must not merge).
+    backing = pr_backed_by_process(task, project=project)
+    if task.get("status") and not backing.get("backed"):
+        findings.append(_merge_gate_finding(
+            "task_not_backed",
+            "Task has no board backing: no active claim, Work Session, or In-Review/Done state.",
+            "missing_data",
+            details={"backing": backing}))
+
     blocking = [f for f in findings if f.get("blocking")]
     ok = not blocking
     result = {
         "schema": MERGE_GATE_SCHEMA,
         "project": project,
         "task_id": task_id,
+        "backed": bool(backing.get("backed")),
+        "backing_signal": backing.get("signal"),
         "claim_id": claim_id or None,
         "agent_id": agent_id or None,
         "work_session_id": (session or {}).get("work_session_id") or work_session_id or None,
@@ -6465,6 +6479,38 @@ def list_work_sessions(project: str = DEFAULT_PROJECT, task_id: str = "",
             params,
         ).fetchall()
     return [_work_session_row(row) for row in rows]
+
+
+PR_BACKED_STATUSES = frozenset({"In Review", "Done"})
+PR_ACTIVE_SESSION_STATUSES = frozenset({"proposed", "active", "completed"})
+
+
+def pr_backed_by_process(task: Dict[str, Any], project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """The one definition of 'is this task backed by board process' (ADR-0006).
+
+    Answers the single question both gates ask — the SESSION-12 claim gate (enforced at
+    the CI chokepoint) and merge_gate (cooperative, the agent asks). A task is backed if
+    it is already In Review/Done, holds an active claim, carries git provenance, or has an
+    active Work Session. Returns {backed, signal}. Each gate layers its own stricter
+    requirements (merge_gate: canonical session hygiene + tests) on top of this base.
+    """
+    task = task or {}
+    status = task.get("status") or ""
+    if status in PR_BACKED_STATUSES:
+        return {"backed": True, "signal": "status", "detail": status}
+    if task.get("active_claims"):
+        return {"backed": True, "signal": "active_claim"}
+    git_state = task.get("git_state") or {}
+    if git_state.get("merged_sha") or git_state.get("pr_number"):
+        return {"backed": True, "signal": "git_provenance"}
+    task_id = task.get("task_id") or ""
+    try:
+        sessions = list_work_sessions(project, task_id=task_id, include_expired=False)
+    except Exception:
+        sessions = []
+    if any((s.get("status") or "") in PR_ACTIVE_SESSION_STATUSES for s in sessions):
+        return {"backed": True, "signal": "work_session"}
+    return {"backed": False, "signal": None}
 
 
 def get_work_session_health(work_session_id: str,
