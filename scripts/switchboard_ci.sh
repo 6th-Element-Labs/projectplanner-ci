@@ -69,6 +69,7 @@ run_test test_external_ci_mirror_model.py
 run_test test_external_ci_mirror_runner.py
 run_test test_external_artifact_roots.py
 run_test test_frontend_project_state.py
+run_test test_asset_versioning.py
 run_test test_github_webhook.py
 run_test test_ci_gate_policy.py
 run_test test_langgraph_adapter.py

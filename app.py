@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -28,7 +29,7 @@ if _env.exists():
             os.environ.setdefault(k.strip(), v.strip())
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 import agent  # noqa: E402
@@ -194,10 +195,51 @@ def _attach_server_timing(response: Response, started_at: float) -> Response:
     # HTML documents (app shell + login/signup/reset pages) must always revalidate
     # so a deploy's new ?v= asset references reach browsers without a manual
     # hard-refresh — the exact trap that locked users out after the auth cutover.
-    # Versioned assets (app.js?v=, *.css?v=) stay long-cacheable.
+    # Versioned assets (…?v=<hash>) stay immutable + long-cached (_VersionedStaticFiles).
     if response.headers.get("content-type", "").startswith("text/html"):
         response.headers.setdefault("Cache-Control", "no-cache")
     return response
+
+
+# --- Content-hashed static asset versions ------------------------------------
+# The app shell (index.html) and the auth pages load app.js / taikun-*.css with a
+# ?v=<n> query whose sole job is cache-busting. That number was bumped by hand and
+# kept getting forgotten — three PRs changed app.js without a bump, so returning
+# browsers ran week-stale JS and the deliverable map "never loaded" until #199 bumped
+# it reactively. We derive ?v= from each asset's content hash at serve time instead:
+# edit the file and its URL changes on the next request, with no human step. The HTML
+# shell is served no-cache (see _attach_server_timing) so fresh hashes always reach the
+# browser; the hashed assets are served immutable + long-cached (_VersionedStaticFiles).
+_LOCAL_ASSET_RE = re.compile(
+    rb'((?:src|href)=")(?!https?://|//|/)([^"?]+\.(?:js|css))(?:\?[^"]*)?(")'
+)
+_ASSET_VERSION_CACHE: dict = {}
+
+
+def _asset_version(path: Path) -> str:
+    """Short content hash of a static asset, memoized on (mtime_ns, size) so a
+    changed file re-hashes on the next request without a restart; '0' if missing."""
+    try:
+        st = path.stat()
+    except OSError:
+        return "0"
+    sig = (st.st_mtime_ns, st.st_size)
+    cached = _ASSET_VERSION_CACHE.get(path)
+    if cached and cached[0] == sig:
+        return cached[1]
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:10]
+    _ASSET_VERSION_CACHE[path] = (sig, digest)
+    return digest
+
+
+def _shell_response(path: Path) -> Response:
+    """Serve an HTML shell with every local .js/.css reference's ?v= rewritten to
+    that asset's content hash. CDN/absolute ("/…") URLs are left untouched."""
+    def _sub(m: "re.Match") -> bytes:
+        asset = m.group(2)
+        version = _asset_version(_static / asset.decode()).encode()
+        return m.group(1) + asset + b"?v=" + version + m.group(3)
+    return HTMLResponse(_LOCAL_ASSET_RE.sub(_sub, path.read_bytes()))
 
 
 def _request_project(request: Request, path: str) -> str:
@@ -622,8 +664,8 @@ async def root(request: Request):
         # global login page (email + password, no project).
         from services.auth import service as _auth_service, session as _auth_session
         if _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, "")):
-            return FileResponse(str(index))
-        return FileResponse(str(_static / "login-global.html"))
+            return _shell_response(index)
+        return _shell_response(_static / "login-global.html")
     login = _static / "login.html"
     if auth.auth_mode() == auth.REQUIRED:
         project = request.query_params.get("project") or _project_from_session_cookie(request) or store.DEFAULT_PROJECT
@@ -631,15 +673,15 @@ async def root(request: Request):
             auth.authenticate_request(request, _proj(project), ("read",), dev_actor="web")
         except PermissionError:
             if login.exists():
-                return FileResponse(str(login))
-    return FileResponse(str(index))
+                return _shell_response(login)
+    return _shell_response(index)
 
 
 @app.get("/login", include_in_schema=False)
 async def login_page():
     login = _static / ("login-global.html" if _GLOBAL_AUTH else "login.html")
     if login.exists():
-        return FileResponse(str(login))
+        return _shell_response(login)
     raise HTTPException(404, "login page not found")
 
 
@@ -649,7 +691,7 @@ async def signup_page():
         raise HTTPException(404, "not found")
     page = _static / "signup.html"
     if page.exists():
-        return FileResponse(str(page))
+        return _shell_response(page)
     raise HTTPException(404, "signup page not found")
 
 
@@ -662,7 +704,7 @@ async def account_page(request: Request):
         raise HTTPException(404, "not found")
     page = _static / "account.html"
     if page.exists():
-        return FileResponse(str(page))
+        return _shell_response(page)
     raise HTTPException(404, "account page not found")
 
 
@@ -672,7 +714,7 @@ async def forgot_password_page():
         raise HTTPException(404, "not found")
     page = _static / "forgot-password.html"
     if page.exists():
-        return FileResponse(str(page))
+        return _shell_response(page)
     raise HTTPException(404, "forgot-password page not found")
 
 
@@ -684,7 +726,7 @@ async def reset_password_page():
         raise HTTPException(404, "not found")
     page = _static / "reset-password.html"
     if page.exists():
-        return FileResponse(str(page))
+        return _shell_response(page)
     raise HTTPException(404, "reset-password page not found")
 
 
@@ -1751,7 +1793,7 @@ async def coordination_page():
     /api/coordination, which is gated by the normal read auth."""
     page = _static / "coordination.html"
     if page.exists():
-        return FileResponse(str(page))
+        return _shell_response(page)
     raise HTTPException(404, "coordination page not found")
 
 
@@ -2924,10 +2966,24 @@ async def github_webhook(request: Request, project: str = ""):
     return JSONResponse(result)
 
 
+class _VersionedStaticFiles(StaticFiles):
+    """StaticFiles that marks content-versioned assets (…?v=<hash>) immutable and
+    long-cached: safe because a changed asset gets a new hash, hence a new URL, so a
+    stale copy can never be served under a live URL. Requests without a ?v= keep
+    StaticFiles' default etag/last-modified validators."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        params = scope.get("query_string", b"").split(b"&")
+        if any(p == b"v" or p.startswith(b"v=") for p in params):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 # Static board UI last, so /api/* and /health win. html=True serves index.html at /.
 _static = Path(__file__).parent / "static"
 if _static.exists():
-    app.mount("/", StaticFiles(directory=str(_static), html=True), name="static")
+    app.mount("/", _VersionedStaticFiles(directory=str(_static), html=True), name="static")
 
 
 if __name__ == "__main__":
