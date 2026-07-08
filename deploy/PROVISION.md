@@ -45,6 +45,15 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs   # dpkg conflict? sudo apt-get remove -y libnode-dev libnode72 && sudo apt-get install -y nodejs
 node --version   # expect v20.x
 
+# GitHub CLI (gh) — REQUIRED by the off-box CI mirror (external_ci_mirror, Route A),
+# which uses `gh workflow run` / `gh run list --branch` / `gh api` to dispatch + poll
+# the public CI sandbox. Ubuntu's apt `gh` is 2.4.0 and LACKS `gh run list --branch`;
+# install a modern build AND match the box arch (this t4g.micro is ARM64/aarch64).
+GH_VER=2.63.2; GH_ARCH=arm64   # use amd64 on an x86 box
+curl -fsSL -o /tmp/gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_${GH_ARCH}.tar.gz"
+sudo tar -xzf /tmp/gh.tgz -C /usr/local/bin --strip-components=2 "gh_${GH_VER}_linux_${GH_ARCH}/bin/gh"
+sudo ln -sf /usr/local/bin/gh /usr/bin/gh && gh --version   # expect >= 2.6
+
 # App
 sudo git clone <projectplanner-remote> /opt/projectplanner
 cd /opt/projectplanner
@@ -94,7 +103,10 @@ systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
 systemctl list-timers projectplanner-ci-gate.timer
 systemctl is-active projectplanner-agent-host
-systemctl is-active actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
+gh --version                                    # off-box CI mirror needs gh >= 2.6 (see step 6)
+# The self-hosted Actions runner is DECOMMISSIONED (CI runs off-box now, see step 6);
+# it should be inactive/disabled — a running one is a redundant idle drain:
+systemctl is-active actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service  # expect: inactive
 ```
 
 ## Site hung / 0-byte response (HARDEN-32)
@@ -174,18 +186,41 @@ cd /opt/projectplanner && sudo -u ubuntu .venv/bin/python jobs.py narrate_pendin
 
 ## VM-backed GitHub PR gate
 
-Switchboard's canonical PR gate is a VM-backed GitHub commit status named
-`Switchboard CI / VM gate`. GitHub Actions is intentionally disabled while the hosted workflow
-records `startup_failure` before creating jobs. The Plan VM still has a self-hosted runner
-installed at `/opt/actions-runner-projectplanner` for future experiments:
+Switchboard's canonical PR gate posts a GitHub commit status named `Switchboard CI / VM gate`.
+GitHub-hosted Actions on the *private* canonical repo record `startup_failure` before creating
+jobs, and would spend the org's private minutes anyway, so **CI runs off-box on a public sandbox**
+— Route A of [`docs/CI-STRATEGY.md`](../docs/CI-STRATEGY.md). When `repo_topology.roles.public_ci`
+is configured, the gate calls `external_ci_mirror` to push the exact merge SHA to the public
+sandbox, dispatch the workflow on free GitHub-hosted runners, poll, and record an `external_ci_run`;
+it falls back to the local `switchboard_ci.sh` venv suite only when `public_ci` is unset or the
+mirror cannot dispatch. Either way the box runs no heavy test execution.
+
+Provision the off-box path once (after step 3 installed `gh`):
 
 ```bash
-sudo systemctl status actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
-cd /opt/actions-runner-projectplanner && sudo ./svc.sh status
+# 1. Let git authenticate github.com HTTPS via gh + the CI token, so external_ci_mirror can
+#    `git push` to the public sandbox. Run as the ci-gate user (ubuntu):
+export GH_TOKEN=$(grep -E '^(SWITCHBOARD_CI_GITHUB_TOKEN|PM_GITHUB_TOKEN)=' /opt/projectplanner/.env | head -1 | cut -d= -f2-)
+gh auth setup-git   # sets credential.https://github.com.helper = !gh auth git-credential
+
+# 2. Declare the repo roles so the gate routes to the sandbox (MCP set_project_repo_topology or
+#    POST /api/projects/switchboard/repo_topology):
+#    canonical_repo=6th-Element-Labs/projectplanner  (the ONLY Done / code-truth authority)
+#    public_ci_repo=6th-Element-Labs/projectplanner-ci  (verification-only, public)
+#    public_ci_required_status_contexts=projectplanner-ci/full-suite
 ```
 
-If GitHub Actions is re-enabled later, prove it with one green PR and one green `master` push run
-before making it a merge gate again.
+`.github/workflows/backend-tests.yml` on the canonical repo is **dispatch-only** (no `on:push`,
+which would self-cancel under `cancel-in-progress`) and declares `source_sha`/`status_context`
+inputs — both required by `external_ci_mirror`.
+
+The on-box **self-hosted Actions runner is decommissioned** — CI runs on GitHub-hosted runners in
+the sandbox, Actions are disabled on the canonical repo, so nothing dispatches to it and leaving it
+running is a redundant idle drain. Keep it off; do NOT re-enable:
+
+```bash
+sudo systemctl disable --now actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
+```
 
 ## PR gate timer
 
@@ -195,10 +230,12 @@ The Plan VM keeps PR checks visible with `projectplanner-ci-gate.timer`. It runs
 /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py ci_gate_prs
 ```
 
-The job checks out open non-draft PRs into `/var/lib/projectplanner/ci-gate`, runs
-`scripts/switchboard_ci.sh` in strict mode, and posts a commit status named
-`Switchboard CI / VM gate` to each PR head SHA. It needs a token with commit-status write access in
-`PM_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN`.
+The job checks out open non-draft PRs into `/var/lib/projectplanner/ci-gate`, runs the provenance
+preflight, then verifies the suite **off-box via `external_ci_mirror`** (the public sandbox) when
+`public_ci` is configured — falling back to `scripts/switchboard_ci.sh` in a local venv otherwise —
+and posts a commit status named `Switchboard CI / VM gate` to each PR head SHA. It needs a token
+with commit-status write **and push access to the public sandbox** in `PM_GITHUB_TOKEN`,
+`GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN` (the gate exports it as `GH_TOKEN` for `gh`).
 
 The gate must create its test venv with Python 3.10+ because strict CI installs `mcp>=1.9`.
 `projectplanner-ci-gate.service` pins `SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python`;
