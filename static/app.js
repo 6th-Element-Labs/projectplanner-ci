@@ -732,13 +732,39 @@ const TeepPlan = {
     },
 
     // ---- board -----------------------------------------------------------
+    // Column axis is adaptive: group by lifecycle phase only when every phase is a
+    // canonical stage (Maxwell stays great); otherwise group by workflow status so
+    // plans with ad-hoc/mixed phase labels (Helm's Wave/P0/P1 soup) get a clean,
+    // consistent kanban instead of a dozen stray columns.
+    _boardGrouping() {
+        const canon = ['Kickoff', 'Bootstrap', 'Build', 'Cutover', 'Operate'];
+        const present = new Set();
+        (this.tasks || []).forEach((t) => { if (t.phase) present.add(t.phase); });
+        if (present.size && [...present].every((p) => canon.indexOf(p) >= 0)) return 'phase';
+        return 'status';
+    },
+
+    _boardColumns(mode) {
+        if (mode === 'phase') return this.PHASES;
+        // Status kanban: canonical order, only columns that have tasks, unknowns last.
+        const order = ['Not Started', 'In Progress', 'In Review', 'Blocked', 'Done'];
+        const present = new Set((this.tasks || []).map((t) => t.status).filter(Boolean));
+        const cols = order.filter((s) => present.has(s));
+        [...present].forEach((s) => { if (order.indexOf(s) < 0) cols.push(s); });
+        return cols.length ? cols : order;
+    },
+
     renderBoard() {
         const tasks = this.filtered();
         const board = document.getElementById('board');
-        board.innerHTML = this.PHASES.map((phase) => {
-            const col = tasks.filter((t) => t.phase === phase);
+        if (!board) return;
+        const mode = this._boardGrouping();
+        const cols = this._boardColumns(mode);
+        const colorMap = mode === 'phase' ? this.PHASE_COLOR : this.STATUS_COLOR;
+        board.innerHTML = cols.map((colName) => {
+            const col = tasks.filter((t) => (mode === 'phase' ? t.phase : t.status) === colName);
             const days = col.reduce((s, t) => s + (t.effort_days || 0), 0);
-            const color = this.PHASE_COLOR[phase] || 'secondary';
+            const color = colorMap[colName] || 'secondary';
             const cards = col.length
                 ? col.map((t) => this.taskCard(t)).join('')
                 : `<div class="text-secondary text-center py-4 small">—</div>`;
@@ -746,7 +772,7 @@ const TeepPlan = {
                 <div class="tk-board-col">
                     <div class="d-flex align-items-center mb-3 px-1">
                         <span class="status-dot bg-${color} me-2"></span>
-                        <span class="h3 m-0">${this.esc(phase)}</span>
+                        <span class="h3 m-0">${this.esc(colName)}</span>
                         <span class="badge bg-secondary-lt ms-2">${col.length}</span>
                         <span class="ms-auto text-secondary small">${Math.round(days)}d</span>
                     </div>
@@ -1051,14 +1077,17 @@ const TeepPlan = {
     // tag — we dynamic-import() and registerLayoutLoaders() it once, and fall
     // back to dagre if the import fails.
     ELK_SRC: 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0/dist/mermaid-layout-elk.esm.min.mjs',
-    _ensureScript(src) {
+    _ensureScript(src, timeoutMs = 15000) {
         this._scriptPromises = this._scriptPromises || {};
         if (this._scriptPromises[src]) return this._scriptPromises[src];
         this._scriptPromises[src] = new Promise((resolve, reject) => {
             const s = document.createElement('script');
             s.src = src; s.async = true;
-            s.onload = () => resolve();
-            s.onerror = () => { delete this._scriptPromises[src]; reject(new Error('failed to load ' + src)); };
+            // A stalled CDN response used to hang the awaiting render forever (no timeout);
+            // reject so callers can fall back / show a message instead of spinning.
+            const timer = setTimeout(() => { delete this._scriptPromises[src]; reject(new Error('timeout loading ' + src)); }, timeoutMs);
+            s.onload = () => { clearTimeout(timer); resolve(); };
+            s.onerror = () => { clearTimeout(timer); delete this._scriptPromises[src]; reject(new Error('failed to load ' + src)); };
             document.head.appendChild(s);
         });
         return this._scriptPromises[src];
@@ -1100,14 +1129,14 @@ const TeepPlan = {
     async _renderPlanActive() {
         const hub = document.getElementById('tab-plan-hub');
         const active = hub && hub.querySelector('.tk-subnav .nav-link.active');
-        const href = active ? active.getAttribute('href') : '#tab-board';
-        if (href === '#tab-epics') { this.renderEpics(); return; }
+        const href = active ? active.getAttribute('href') : '#tab-epics';
+        if (href === '#tab-board') { this.renderBoard(); return; }
         if (href === '#tab-plan') { this.renderTables(); return; }
         if (href === '#tab-gantt') {
             try { await this._ensureScript(this.APEXCHARTS_SRC); } catch (e) { /* renderGantt guards on window.ApexCharts */ }
             this.renderGantt(); return;
         }
-        this.renderBoard();
+        this.renderEpics();
     },
 
     setupGantt() {
@@ -3446,6 +3475,9 @@ const TeepPlan = {
         const el = document.getElementById('mission-page');
         const picker = document.getElementById('mission-deliverable-picker');
         if (!el) return;
+        // Warm the Mermaid bundle in parallel with the data fetch so the dependency
+        // map isn't waiting on a cold ~1MB CDN download after the data is already in.
+        this._ensureScript(this.MERMAID_SRC).catch(() => {});
         el.innerHTML = '<div class="text-secondary small">Loading mission…</div>';
         try { await this.loadDeliverables(); }
         catch (e) {
@@ -3689,19 +3721,27 @@ const TeepPlan = {
         const host = document.getElementById('mission-dag-graph');
         const g = this.missionGraph;
         if (!host || !g?.mermaid) return;
+        // Show progress immediately — the CDN library loads + layout can take a beat,
+        // and a blank host read as "never loads".
+        host.innerHTML = '<div class="text-secondary small py-4 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Rendering dependency map…</div>';
         try { await this._ensureScript(this.MERMAID_SRC); } catch (e) { /* fall through to the unavailable message */ }
         if (!window.mermaid) {
-            host.innerHTML = '<div class="text-secondary small">Mermaid renderer unavailable.</div>';
+            host.innerHTML = '<div class="text-secondary small">Dependency map renderer is unavailable right now — reload to retry.</div>';
             return;
         }
         try {
             if (!window.__missionMermaidInit) {
                 let layout = 'dagre';
                 try {
-                    const elk = await import(this.ELK_SRC);
+                    // Race the ESM import against a timeout so a slow/stalled CDN falls back
+                    // to the built-in dagre layout instead of hanging the whole render.
+                    const elk = await Promise.race([
+                        import(this.ELK_SRC),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error('elk import timeout')), 8000)),
+                    ]);
                     window.mermaid.registerLayoutLoaders(elk.default || elk);
                     layout = 'elk';
-                } catch (e) { /* ELK unavailable — dagre still renders fine */ }
+                } catch (e) { /* ELK unavailable/slow — dagre still renders fine */ }
                 window.mermaid.initialize({
                     startOnLoad: false,
                     securityLevel: 'strict',
