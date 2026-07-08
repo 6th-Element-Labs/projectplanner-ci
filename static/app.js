@@ -163,10 +163,12 @@ const TeepPlan = {
         this._wireLazyTabs();
         this.loadSignals();
         this.initInbox();
-        this.initPulse();   // Pulse lives in the default Overview tab now, so load it on boot
+        this.renderTallyPulse();   // Pulse (tally strip + digest) lives in the default Overview tab now
+        this.initPulse();
         this._missionDeliverableFromUrl();
-        await this._maybeDefaultToDeliverableTab();
+        await this._preloadDeliverableDefault();
         await this.initHeaderDeliverableSwitcher();
+        this._renderActiveTop();   // deep-linked URLs land on a rendered tab, not a blank one
         const ds = document.getElementById('data-status');
         if (ds) { ds.className = 'badge bg-green-lt'; ds.textContent = `${this.tasks.length} tasks`; }
     },
@@ -1073,12 +1075,39 @@ const TeepPlan = {
             'tab-plan': 'renderTables',
             'tab-decisions': 'renderTables',
             'tab-risks': 'renderTables',
-            'tab-pulse': 'renderTallyPulse',
         };
         Object.entries(paneRender).forEach(([pane, fn]) => {
             document.querySelectorAll(`a[href="#${pane}"]`).forEach((tab) =>
                 tab.addEventListener('shown.bs.tab', () => this[fn]()));
         });
+    },
+
+    // A hash deep-link (resolved by the inline script during page parse) can leave a
+    // non-default top tab active before init() wired the lazy renderers, so render
+    // whatever top tab ended up active. #tab-exec is already rendered on boot;
+    // #tab-mission is driven by _missionDeliverableFromUrl.
+    _renderActiveTop() {
+        const active = document.querySelector('.nav-tabs .nav-link.active');
+        const href = active ? active.getAttribute('href') : '#tab-exec';
+        if (href === '#tab-plan-hub') this._renderPlanActive();
+        else if (href === '#tab-inbox-hub') { this.initInbox(); this.renderTables(); }
+        else if (href === '#tab-ask') this.initAsk();
+    },
+
+    // Render whichever Plan sub-view is active — called when the Plan hub top tab opens,
+    // since the nested sub-pane's own shown.bs.tab (which _wireLazyTabs/setupGantt hook)
+    // does not fire on hub reveal. Defaults to Board.
+    async _renderPlanActive() {
+        const hub = document.getElementById('tab-plan-hub');
+        const active = hub && hub.querySelector('.tk-subnav .nav-link.active');
+        const href = active ? active.getAttribute('href') : '#tab-board';
+        if (href === '#tab-epics') { this.renderEpics(); return; }
+        if (href === '#tab-plan') { this.renderTables(); return; }
+        if (href === '#tab-gantt') {
+            try { await this._ensureScript(this.APEXCHARTS_SRC); } catch (e) { /* renderGantt guards on window.ApexCharts */ }
+            this.renderGantt(); return;
+        }
+        this.renderBoard();
     },
 
     setupGantt() {
@@ -3287,19 +3316,15 @@ const TeepPlan = {
         } catch (e) { /* ignore */ }
     },
 
-    async _maybeDefaultToDeliverableTab() {
+    async _preloadDeliverableDefault() {
+        // Overview is the landing tab. We still pre-load deliverables and a default
+        // selection so the header switcher and #tab-mission deep links resolve — but we
+        // no longer auto-switch the active tab to the Deliverable board on boot.
         try {
             const u = new URL(window.location.href);
-            if (u.hash && u.hash !== '#tab-mission') return;
-            if (u.searchParams.get('deliverable') || u.searchParams.get('mission')) return;
+            if (u.hash === '#tab-mission' || u.searchParams.get('deliverable') || u.searchParams.get('mission')) return;
             await this.loadDeliverables();
-            if (!this.deliverables.length) return;
-            if (!this.selectedDeliverableId) this.selectedDeliverableId = this.deliverables[0].id;
-            const tab = document.querySelector('a[href="#tab-mission"]');
-            if (tab && window.bootstrap) {
-                window.bootstrap.Tab.getOrCreateInstance(tab).show();
-                await this.refreshMissionPage();
-            }
+            if (this.deliverables.length && !this.selectedDeliverableId) this.selectedDeliverableId = this.deliverables[0].id;
         } catch (e) { /* ignore */ }
     },
 
@@ -3979,15 +4004,16 @@ const TeepPlan = {
         if (tasksTab) tasksTab.addEventListener('shown.bs.tab', () => this.loadSignals());
         const digestGen = document.getElementById('digest-gen');
         if (digestGen) digestGen.addEventListener('click', () => this.genDigest());
-        // Pulse folded into Overview; Plan/Inbox are hubs. A nested sub-pane doesn't fire
-        // shown.bs.tab when its parent hub is revealed, so lazy-load each hub's data on the
-        // TOP tab too. The sub-pill listeners (below + in setupGantt) still fire on switch.
+        // Pulse folded into Overview; Plan/Inbox are hubs. HARDEN-39's lazy render keys on
+        // each sub-pane's own shown.bs.tab, which does NOT fire when the parent hub is
+        // revealed — so opening a hub must render whatever sub-view is currently active.
+        // (Sub-pill switches still fire the per-pane listeners in _wireLazyTabs/setupGantt.)
         const overviewTop = document.getElementById('toptab-overview');
-        if (overviewTop) overviewTop.addEventListener('shown.bs.tab', () => this.initPulse());
+        if (overviewTop) overviewTop.addEventListener('shown.bs.tab', () => { this.renderTallyPulse(); this.initPulse(); });
         const planTop = document.getElementById('toptab-plan');
-        if (planTop) planTop.addEventListener('shown.bs.tab', () => { if (this.isGanttVisible()) this.renderGantt(); });
+        if (planTop) planTop.addEventListener('shown.bs.tab', () => this._renderPlanActive());
         const inboxTopTab = document.getElementById('toptab-inbox');
-        if (inboxTopTab) inboxTopTab.addEventListener('shown.bs.tab', () => this.initInbox());
+        if (inboxTopTab) inboxTopTab.addEventListener('shown.bs.tab', () => { this.initInbox(); this.renderTables(); });
         const inboxTab = document.querySelector('a[href="#tab-inbox"]');
         if (inboxTab) inboxTab.addEventListener('shown.bs.tab', () => this.initInbox());
         const inboxRefresh = document.getElementById('inbox-refresh');
