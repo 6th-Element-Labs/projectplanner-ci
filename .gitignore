@@ -21,3 +21,6 @@ rag_cache.json
 # build_plan_artifacts.py writes these sample exports to the repo root
 teep-project-plan.xlsx
 teep-project-plan.xml
+
+# macOS filesystem cruft
+.DS_Store
