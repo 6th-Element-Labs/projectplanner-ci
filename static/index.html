@@ -56,6 +56,21 @@
         color:var(--tblr-secondary);font-weight:600;white-space:nowrap;display:flex;align-items:center;gap:.25rem}
       .tk-switch>select{border:0;background:transparent;box-shadow:none !important;padding:.2rem 1.3rem .2rem .15rem;
         height:auto;min-width:7rem;max-width:16rem;font-weight:600;color:var(--tblr-body-color)}
+      /* 11 tabs → 5. Board / List / Timeline / Milestones (and Action Queue / Decisions /
+         Risks) collapse into a single hub each, switched by this segmented sub-nav. */
+      .tk-subnav{display:flex;gap:.25rem;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+        -webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:.15rem;border-bottom:0}
+      .tk-subnav::-webkit-scrollbar{display:none}
+      .tk-subnav .nav-link{white-space:nowrap;font-size:.8125rem;padding:.35rem .8rem;border-radius:.5rem;
+        color:var(--tblr-secondary);border:0}
+      .tk-subnav .nav-link:hover{background:var(--tblr-bg-surface-secondary,#f6f7f9);color:var(--tblr-body-color)}
+      .tk-subnav .nav-link.active{background:var(--tblr-primary);color:#fff}
+      /* Mobile: 5 top tabs scroll sideways instead of stacking into a tall wall. */
+      @media (max-width:640px){
+        .nav-tabs{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+        .nav-tabs::-webkit-scrollbar{display:none}
+        .nav-tabs .nav-link{white-space:nowrap;padding-left:.6rem;padding-right:.6rem}
+      }
     </style>
 </head>
 <body class="layout-fluid">
@@ -158,69 +173,148 @@
                         </div>
                     </div>
 
-                    <!-- Tabs -->
+                    <!-- Tabs: 5 destinations grouped by intent (was 11 flat peers).
+                         Plan + Inbox are hubs whose sub-views switch via a segmented
+                         sub-nav inside the pane; Overview folds in the Pulse digest. -->
                     <ul class="nav nav-tabs" role="tablist">
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link active" data-bs-toggle="tab" href="#tab-exec" role="tab"><i class="ti ti-presentation me-1"></i>Exec Summary</a>
+                            <a class="nav-link active" id="toptab-overview" data-bs-toggle="tab" href="#tab-exec" role="tab"><i class="ti ti-layout-dashboard me-1"></i>Overview</a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-epics" role="tab"><i class="ti ti-list-check me-1"></i>Tasks</a>
+                            <a class="nav-link" id="toptab-plan" data-bs-toggle="tab" href="#tab-plan-hub" role="tab"><i class="ti ti-layout-kanban me-1"></i>Plan</a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-board" role="tab"><i class="ti ti-layout-kanban me-1"></i>Board</a>
+                            <a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><i class="ti ti-inbox me-1"></i>Inbox</a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-gantt" role="tab"><i class="ti ti-timeline-event me-1"></i>Gantt</a>
+                            <a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><i class="ti ti-sparkles me-1"></i>Ask</a>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-plan" role="tab"><i class="ti ti-flag me-1"></i>Milestones</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-decisions" role="tab"><i class="ti ti-help-circle me-1"></i>Open Decisions</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-risks" role="tab"><i class="ti ti-alert-triangle me-1"></i>Risks</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-pulse" role="tab"><i class="ti ti-activity-heartbeat me-1"></i>Pulse</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-ask" role="tab"><i class="ti ti-sparkles me-1"></i>Ask Taikun</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-checklist me-1"></i>Action Queue</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" data-bs-toggle="tab" href="#tab-mission" role="tab"><i class="ti ti-target-arrow me-1"></i>Deliverable</a>
+                            <a class="nav-link" id="toptab-mission" data-bs-toggle="tab" href="#tab-mission" role="tab"><i class="ti ti-target-arrow me-1"></i>Deliverable</a>
                         </li>
                     </ul>
 
                     <div class="tab-content">
-                        <!-- Board -->
-                        <div class="tab-pane" id="tab-board" role="tabpanel">
-                            <div class="mt-1" id="board"></div>
-                        </div>
-                        <!-- Epics (collapsible workstream → phase → tasks) -->
-                        <div class="tab-pane" id="tab-epics" role="tabpanel">
-                            <div class="mt-3" id="epics-content"></div>
-                        </div>
-                        <!-- Deliverable board (strategic map + mission cockpit) -->
-                        <div class="tab-pane" id="tab-mission" role="tabpanel">
+                        <!-- OVERVIEW — shareable exec summary + the weekly Pulse digest (folded in from its own tab) -->
+                        <div class="tab-pane active show" id="tab-exec" role="tabpanel">
+                            <div class="mt-2" id="exec-content"></div>
+                            <div id="tally-pulse"></div>
                             <div class="card mt-3">
                                 <div class="card-header">
-                                    <h3 class="card-title"><i class="ti ti-target-arrow me-2"></i>Deliverable board</h3>
-                                    <div class="card-actions btn-list align-items-center">
-                                        <select id="mission-deliverable-picker" class="form-select form-select-sm" style="min-width:14rem" aria-label="Select deliverable"></select>
-                                        <button id="mission-generate-brief" class="btn btn-sm btn-primary" type="button"><i class="ti ti-sparkles me-1"></i>Generate brief</button>
-                                        <button id="mission-refresh" class="btn btn-sm btn-outline-secondary" type="button"><i class="ti ti-refresh me-1"></i>Refresh</button>
+                                    <h3 class="card-title"><i class="ti ti-activity-heartbeat me-2"></i>Pulse — weekly digest</h3>
+                                    <div class="card-actions">
+                                        <button id="digest-gen" class="btn btn-primary btn-sm"><i class="ti ti-sparkles me-1"></i>Generate digest</button>
                                     </div>
                                 </div>
-                                <div class="card-body" id="mission-page">
-                                    <div class="text-secondary small">Loading mission…</div>
+                                <div class="card-body">
+                                    <div id="digest-latest" class="text-secondary">No digest yet — click <strong>Generate digest</strong> for a chief-of-staff brief: what changed, what's slipping, and what to pick up next.</div>
+                                </div>
+                            </div>
+                            <div id="digest-history" class="mt-2"></div>
+                        </div>
+
+                        <!-- PLAN — one dataset, four views. Board / List / Timeline / Milestones
+                             switch via the segmented sub-nav instead of four separate top tabs. -->
+                        <div class="tab-pane" id="tab-plan-hub" role="tabpanel">
+                            <ul class="nav nav-pills tk-subnav mt-3 mb-1" role="tablist">
+                                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#tab-board" role="tab"><i class="ti ti-layout-kanban me-1"></i>Board</a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-epics" role="tab"><i class="ti ti-list-check me-1"></i>List</a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-gantt" role="tab"><i class="ti ti-timeline-event me-1"></i>Timeline</a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-plan" role="tab"><i class="ti ti-flag me-1"></i>Milestones</a></li>
+                            </ul>
+                            <div class="tab-content">
+                                <!-- Board -->
+                                <div class="tab-pane active show" id="tab-board" role="tabpanel">
+                                    <div class="mt-1" id="board"></div>
+                                </div>
+                                <!-- List (collapsible workstream → phase → tasks) -->
+                                <div class="tab-pane" id="tab-epics" role="tabpanel">
+                                    <div class="mt-3" id="epics-content"></div>
+                                </div>
+                                <!-- Timeline (Gantt) -->
+                                <div class="tab-pane" id="tab-gantt" role="tabpanel">
+                                    <div class="card mt-2">
+                                        <div class="card-header d-flex flex-wrap gap-2 align-items-center">
+                                            <h3 class="card-title m-0">Schedule (Gantt)</h3>
+                                            <div class="btn-group btn-group-sm" role="group" aria-label="Gantt grouping">
+                                                <input type="radio" class="btn-check" name="gantt-mode" id="gm-task" value="task" autocomplete="off" checked/>
+                                                <label class="btn" for="gm-task">By task</label>
+                                                <input type="radio" class="btn-check" name="gantt-mode" id="gm-ws" value="workstream" autocomplete="off"/>
+                                                <label class="btn" for="gm-ws">By workstream</label>
+                                            </div>
+                                            <div class="ms-auto d-flex flex-wrap gap-1">
+                                                <span class="badge bg-azure-lt">Kickoff</span>
+                                                <span class="badge bg-purple-lt">Bootstrap</span>
+                                                <span class="badge bg-blue-lt">Build</span>
+                                                <span class="badge bg-orange-lt">Cutover</span>
+                                                <span class="badge bg-green-lt">Operate</span>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="text-secondary small mb-2" id="gantt-note"></div>
+                                            <div id="gantt"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Milestones & critical path -->
+                                <div class="tab-pane" id="tab-plan" role="tabpanel">
+                                    <div class="card mt-2"><div class="card-header"><h3 class="card-title">Milestones</h3></div>
+                                        <div id="milestones-table"></div>
+                                    </div>
+                                    <div class="card mt-3"><div class="card-header"><h3 class="card-title">Critical path</h3></div>
+                                        <div id="path-table"></div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                        <!-- Ask Taikun (plan-wide agent: RAG + propose-to-confirm) -->
+
+                        <!-- INBOX — everything awaiting a human decision: proposed changes,
+                             open decisions and risks, together instead of three separate tabs. -->
+                        <div class="tab-pane" id="tab-inbox-hub" role="tabpanel">
+                            <ul class="nav nav-pills tk-subnav mt-3 mb-1" role="tablist">
+                                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-checklist me-1"></i>Action Queue</a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-decisions" role="tab"><i class="ti ti-help-circle me-1"></i>Decisions</a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-risks" role="tab"><i class="ti ti-alert-triangle me-1"></i>Risks</a></li>
+                            </ul>
+                            <div class="tab-content">
+                                <!-- Action Queue (Live Inbox: email-triaged updates awaiting review) -->
+                                <div class="tab-pane active show" id="tab-inbox" role="tabpanel">
+                                    <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
+                                        <div>
+                                            <h3 class="m-0"><i class="ti ti-checklist me-2"></i>Action Queue</h3>
+                                            <div class="text-secondary small">Every proposed change — from uploads, pasted notes and email — lands here to review, edit, confirm or dismiss in bulk.</div>
+                                        </div>
+                                        <div class="ms-auto btn-list">
+                                            <button id="inbox-sim" class="btn btn-sm"><i class="ti ti-mail-forward me-1"></i>Simulate email</button>
+                                            <button id="inbox-refresh" class="btn btn-sm"><i class="ti ti-refresh me-1"></i>Refresh</button>
+                                        </div>
+                                    </div>
+                                    <div id="inbox-sim-box" class="collapse mb-3">
+                                        <div class="card"><div class="card-body">
+                                            <input id="inbox-sim-subject" class="form-control form-control-sm mb-1" placeholder="Subject"/>
+                                            <textarea id="inbox-sim-text" class="form-control form-control-sm" rows="4" placeholder="Paste a fake inbound email to test the Live Inbox pipeline (no mailbox needed)…"></textarea>
+                                            <button id="inbox-sim-go" class="btn btn-primary btn-sm mt-2"><i class="ti ti-mail-forward me-1"></i>Triage as inbound email</button>
+                                            <span id="inbox-sim-flash" class="small text-secondary ms-1"></span>
+                                        </div></div>
+                                    </div>
+                                    <div id="inbox-content"><span class="spinner-border spinner-border-sm me-2"></span>Loading queue…</div>
+                                </div>
+                                <!-- Decisions -->
+                                <div class="tab-pane" id="tab-decisions" role="tabpanel">
+                                    <div class="card mt-2"><div class="card-header"><h3 class="card-title">Open decisions — close in the kickoff working session</h3></div>
+                                        <div id="decisions-table"></div>
+                                    </div>
+                                </div>
+                                <!-- Risks -->
+                                <div class="tab-pane" id="tab-risks" role="tabpanel">
+                                    <div class="card mt-2"><div class="card-header"><h3 class="card-title">Consolidated risk register</h3></div>
+                                        <div id="risks-table"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ASK Taikun (plan-wide agent: RAG + propose-to-confirm) -->
                         <div class="tab-pane" id="tab-ask" role="tabpanel">
                             <div class="card mt-3">
                                 <div class="card-header">
@@ -263,92 +357,21 @@
                                 </div>
                             </div>
                         </div>
-                        <!-- Pulse (weekly chief-of-staff digest) -->
-                        <div class="tab-pane" id="tab-pulse" role="tabpanel">
-                            <div id="tally-pulse"></div>
+
+                        <!-- DELIVERABLE board (strategic map + mission cockpit) -->
+                        <div class="tab-pane" id="tab-mission" role="tabpanel">
                             <div class="card mt-3">
                                 <div class="card-header">
-                                    <h3 class="card-title"><i class="ti ti-activity-heartbeat me-2"></i>Pulse — weekly digest</h3>
-                                    <div class="card-actions">
-                                        <button id="digest-gen" class="btn btn-primary btn-sm"><i class="ti ti-sparkles me-1"></i>Generate digest</button>
+                                    <h3 class="card-title"><i class="ti ti-target-arrow me-2"></i>Deliverable board</h3>
+                                    <div class="card-actions btn-list align-items-center">
+                                        <select id="mission-deliverable-picker" class="form-select form-select-sm" style="min-width:14rem" aria-label="Select deliverable"></select>
+                                        <button id="mission-generate-brief" class="btn btn-sm btn-primary" type="button"><i class="ti ti-sparkles me-1"></i>Generate brief</button>
+                                        <button id="mission-refresh" class="btn btn-sm btn-outline-secondary" type="button"><i class="ti ti-refresh me-1"></i>Refresh</button>
                                     </div>
                                 </div>
-                                <div class="card-body">
-                                    <div id="digest-latest" class="text-secondary">No digest yet — click <strong>Generate digest</strong> for a chief-of-staff brief: what changed, what's slipping, and what to pick up next.</div>
+                                <div class="card-body" id="mission-page">
+                                    <div class="text-secondary small">Loading mission…</div>
                                 </div>
-                            </div>
-                            <div id="digest-history" class="mt-2"></div>
-                        </div>
-                        <!-- Inbox (Live Inbox: email-triaged updates awaiting review) -->
-                        <div class="tab-pane" id="tab-inbox" role="tabpanel">
-                            <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
-                                <div>
-                                    <h3 class="m-0"><i class="ti ti-checklist me-2"></i>Action Queue</h3>
-                                    <div class="text-secondary small">Every proposed change — from uploads, pasted notes and email — lands here to review, edit, confirm or dismiss in bulk.</div>
-                                </div>
-                                <div class="ms-auto btn-list">
-                                    <button id="inbox-sim" class="btn btn-sm"><i class="ti ti-mail-forward me-1"></i>Simulate email</button>
-                                    <button id="inbox-refresh" class="btn btn-sm"><i class="ti ti-refresh me-1"></i>Refresh</button>
-                                </div>
-                            </div>
-                            <div id="inbox-sim-box" class="collapse mb-3">
-                                <div class="card"><div class="card-body">
-                                    <input id="inbox-sim-subject" class="form-control form-control-sm mb-1" placeholder="Subject"/>
-                                    <textarea id="inbox-sim-text" class="form-control form-control-sm" rows="4" placeholder="Paste a fake inbound email to test the Live Inbox pipeline (no mailbox needed)…"></textarea>
-                                    <button id="inbox-sim-go" class="btn btn-primary btn-sm mt-2"><i class="ti ti-mail-forward me-1"></i>Triage as inbound email</button>
-                                    <span id="inbox-sim-flash" class="small text-secondary ms-1"></span>
-                                </div></div>
-                            </div>
-                            <div id="inbox-content"><span class="spinner-border spinner-border-sm me-2"></span>Loading queue…</div>
-                        </div>
-                        <!-- Exec Summary (shareable) -->
-                        <div class="tab-pane active show" id="tab-exec" role="tabpanel">
-                            <div class="mt-2" id="exec-content"></div>
-                        </div>
-                        <!-- Gantt -->
-                        <div class="tab-pane" id="tab-gantt" role="tabpanel">
-                            <div class="card mt-2">
-                                <div class="card-header d-flex flex-wrap gap-2 align-items-center">
-                                    <h3 class="card-title m-0">Schedule (Gantt)</h3>
-                                    <div class="btn-group btn-group-sm" role="group" aria-label="Gantt grouping">
-                                        <input type="radio" class="btn-check" name="gantt-mode" id="gm-task" value="task" autocomplete="off" checked/>
-                                        <label class="btn" for="gm-task">By task</label>
-                                        <input type="radio" class="btn-check" name="gantt-mode" id="gm-ws" value="workstream" autocomplete="off"/>
-                                        <label class="btn" for="gm-ws">By workstream</label>
-                                    </div>
-                                    <div class="ms-auto d-flex flex-wrap gap-1">
-                                        <span class="badge bg-azure-lt">Kickoff</span>
-                                        <span class="badge bg-purple-lt">Bootstrap</span>
-                                        <span class="badge bg-blue-lt">Build</span>
-                                        <span class="badge bg-orange-lt">Cutover</span>
-                                        <span class="badge bg-green-lt">Operate</span>
-                                    </div>
-                                </div>
-                                <div class="card-body">
-                                    <div class="text-secondary small mb-2" id="gantt-note"></div>
-                                    <div id="gantt"></div>
-                                </div>
-                            </div>
-                        </div>
-                        <!-- Milestones & critical path -->
-                        <div class="tab-pane" id="tab-plan" role="tabpanel">
-                            <div class="card mt-2"><div class="card-header"><h3 class="card-title">Milestones</h3></div>
-                                <div id="milestones-table"></div>
-                            </div>
-                            <div class="card mt-3"><div class="card-header"><h3 class="card-title">Critical path</h3></div>
-                                <div id="path-table"></div>
-                            </div>
-                        </div>
-                        <!-- Risks -->
-                        <div class="tab-pane" id="tab-risks" role="tabpanel">
-                            <div class="card mt-2"><div class="card-header"><h3 class="card-title">Consolidated risk register</h3></div>
-                                <div id="risks-table"></div>
-                            </div>
-                        </div>
-                        <!-- Decisions -->
-                        <div class="tab-pane" id="tab-decisions" role="tabpanel">
-                            <div class="card mt-2"><div class="card-header"><h3 class="card-title">Open decisions — close in the kickoff working session</h3></div>
-                                <div id="decisions-table"></div>
                             </div>
                         </div>
                     </div>
@@ -436,42 +459,38 @@
     <script src="app.js?v=39"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script>
-      // Keep the sidebar nav highlight in sync with the active tab (sidebar + top tabs share tab targets).
+      // Tab routing, nesting-aware. The nav is now 2 levels: 5 top tabs (.nav-tabs),
+      // and — inside the Plan / Inbox hubs — a segmented sub-nav (.tk-subnav). Both are
+      // real Bootstrap .nav groups, so they drive themselves. This only handles the
+      // OTHER links: in-content "open the board" / "review in the Action Queue" anchors,
+      // which sit outside any .nav and so need routing — and now must also open the
+      // parent hub before showing the nested sub-pane.
       (function () {
-        function sync(target) {
-          document.querySelectorAll('.navbar-vertical [data-bs-toggle="tab"]').forEach(function (a) {
-            var on = a.getAttribute('href') === target;
-            a.classList.toggle('active', on);
-            var li = a.closest('.nav-item'); if (li) li.classList.toggle('active', on);
-          });
+        function ctrlFor(href) {
+          // the real tab control lives inside a .nav; in-content links do not.
+          return document.querySelector('.nav [data-bs-toggle="tab"][href="' + href + '"]');
         }
-        document.addEventListener('shown.bs.tab', function (e) {
-          var t = e.target.getAttribute('href') || (e.target.dataset && e.target.dataset.bsTarget);
-          if (t) sync(t);
-        });
-        // Tab links outside the top .nav-tabs (sidebar nav, in-content "open the board"
-        // / "review in Ask Taikun" links) can't be driven by Bootstrap's Tab data-api
-        // (it needs a .nav/.list-group parent). Route them to the matching TOP tab.
+        function showTab(href) {
+          if (!href || !window.bootstrap) return;
+          var pane = document.querySelector(href);
+          if (!pane) return;
+          var parentPane = pane.parentElement ? pane.parentElement.closest('.tab-pane') : null;
+          if (parentPane && parentPane.id) showTab('#' + parentPane.id); // open the ancestor hub first
+          var ctrl = ctrlFor(href);
+          if (ctrl) window.bootstrap.Tab.getOrCreateInstance(ctrl).show();
+        }
+        window.TAIKUN_showTab = showTab;
         document.addEventListener('click', function (e) {
           var a = e.target.closest('[data-bs-toggle="tab"]');
-          if (!a || a.closest('.nav-tabs')) return; // the top tabs drive themselves
+          if (!a || a.closest('.nav')) return; // nav controls (top + sub) drive themselves
           e.preventDefault();
-          var href = a.getAttribute('href');
-          var top = document.querySelector('.nav-tabs [data-bs-toggle="tab"][href="' + href + '"]');
-          if (top && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(top).show();
+          showTab(a.getAttribute('href'));
         });
-        var active = document.querySelector('.nav-tabs .nav-link.active');
-        if (active) sync(active.getAttribute('href'));
-        // Deep-link: honor a #tab-<name> hash on load so a shared or refreshed URL
-        // (e.g. ?project=vulkan#tab-board) opens that tab. #tab-mission has its own
-        // richer handler in app.js (it also resolves the selected deliverable), so
-        // leave that one alone here.
-        (function () {
-          var h = (location.hash || '').trim();
-          if (!/^#tab-[a-z0-9-]+$/i.test(h) || h === '#tab-mission') return;
-          var top = document.querySelector('.nav-tabs [data-bs-toggle="tab"][href="' + h + '"]');
-          if (top && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(top).show();
-        })();
+        // Deep-link: honor a #tab-<name> hash on load (e.g. ?project=vulkan#tab-board),
+        // resolving through the hub for nested sub-panes. #tab-mission has its own richer
+        // handler in app.js (it also resolves the selected deliverable), so skip it here.
+        var h = (location.hash || '').trim();
+        if (/^#tab-[a-z0-9-]+$/i.test(h) && h !== '#tab-mission') showTab(h);
       })();
     </script>
     <script>

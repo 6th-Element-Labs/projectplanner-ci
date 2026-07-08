@@ -163,6 +163,7 @@ const TeepPlan = {
         this._wireLazyTabs();
         this.loadSignals();
         this.initInbox();
+        this.initPulse();   // Pulse lives in the default Overview tab now, so load it on boot
         this._missionDeliverableFromUrl();
         await this._maybeDefaultToDeliverableTab();
         await this.initHeaderDeliverableSwitcher();
@@ -1030,8 +1031,11 @@ const TeepPlan = {
 
     // ---- Gantt (ApexCharts rangeBar) ------------------------------------
     isGanttVisible() {
+        // Timeline is now a nested sub-pane of the Plan hub — it can keep its `active`
+        // class while the Plan hub itself is hidden. offsetParent is null for anything
+        // not actually laid out, so it also gates on the hub being the open top tab.
         const p = document.getElementById('tab-gantt');
-        return !!p && p.classList.contains('active');
+        return !!p && p.classList.contains('active') && p.offsetParent !== null;
     },
 
     // HARDEN-38: lazily inject a <script> once and resolve when loaded, so the
@@ -2521,7 +2525,9 @@ const TeepPlan = {
     },
 
     _renderInboxBadge(n) {
-        const tab = document.querySelector('a[href="#tab-inbox"]');
+        // Show the pending count on the top-level Inbox tab (the hub), not the
+        // Action Queue sub-pill, so it's visible without opening the hub.
+        const tab = document.getElementById('toptab-inbox') || document.querySelector('a[href="#tab-inbox"]');
         if (!tab) return;
         let b = tab.querySelector('.badge');
         if (n > 0) {
@@ -3219,7 +3225,7 @@ const TeepPlan = {
                             <div class="empty-icon"><i class="ti ti-activity-heartbeat"></i></div>
                             <p class="empty-title">No digest yet</p>
                             <p class="empty-subtitle text-secondary">Generate a chief-of-staff brief: what changed, what's slipping, and what to pick up next.</p>
-                            <div class="empty-action"><a href="#tab-pulse" data-bs-toggle="tab" class="btn btn-primary"><i class="ti ti-sparkles me-1"></i>Generate digest</a></div>
+                            <div class="empty-action"><a href="#" class="btn btn-primary" onclick="event.preventDefault(); var b=document.getElementById('digest-gen'); if (b) b.click();"><i class="ti ti-sparkles me-1"></i>Generate digest</a></div>
                         </div>
                     </div>
                 </div>
@@ -3954,8 +3960,15 @@ const TeepPlan = {
         if (tasksTab) tasksTab.addEventListener('shown.bs.tab', () => this.loadSignals());
         const digestGen = document.getElementById('digest-gen');
         if (digestGen) digestGen.addEventListener('click', () => this.genDigest());
-        const pulseTab = document.querySelector('a[href="#tab-pulse"]');
-        if (pulseTab) pulseTab.addEventListener('shown.bs.tab', () => this.initPulse());
+        // Pulse folded into Overview; Plan/Inbox are hubs. A nested sub-pane doesn't fire
+        // shown.bs.tab when its parent hub is revealed, so lazy-load each hub's data on the
+        // TOP tab too. The sub-pill listeners (below + in setupGantt) still fire on switch.
+        const overviewTop = document.getElementById('toptab-overview');
+        if (overviewTop) overviewTop.addEventListener('shown.bs.tab', () => this.initPulse());
+        const planTop = document.getElementById('toptab-plan');
+        if (planTop) planTop.addEventListener('shown.bs.tab', () => { if (this.isGanttVisible()) this.renderGantt(); });
+        const inboxTopTab = document.getElementById('toptab-inbox');
+        if (inboxTopTab) inboxTopTab.addEventListener('shown.bs.tab', () => this.initInbox());
         const inboxTab = document.querySelector('a[href="#tab-inbox"]');
         if (inboxTab) inboxTab.addEventListener('shown.bs.tab', () => this.initInbox());
         const inboxRefresh = document.getElementById('inbox-refresh');
