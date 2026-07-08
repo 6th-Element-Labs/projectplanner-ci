@@ -41,25 +41,28 @@ try:
         public_ci_repo="6th-Element-Labs/public-ci",
         public_repo="6th-Element-Labs/projectplanner-public",
     )
+    # ADR-0006 retired the automated default-branch backfill: a push to the default
+    # branch advances canonical main + notifies leaseholders, but no longer stamps
+    # tasks Done. The orphan sweep owns Done for merged PRs (every main commit is one).
     ready = store.create_task({"workstream_id": "TEST", "title": "ready direct"}, actor="seed", project=P)
     store.update_task(ready["task_id"], {"status": "In Review"}, actor="seed", project=P)
-    not_ready = store.create_task({"workstream_id": "TEST", "title": "not ready direct"},
-                                  actor="seed", project=P)
-    result = store.backfill_default_branch_commits([
-        {"id": "abc123", "message": f"fix({ready['task_id']}): direct default proof"},
-        {"id": "def456", "message": f"fix({not_ready['task_id']}): should skip"},
-    ], branch="master", actor="github-webhook", project=P)
-    ok(ready["task_id"] in result["direct_backfilled_tasks"],
-       "push webhook backfills eligible In Review task")
-    ok(any(s["task_id"] == not_ready["task_id"] and s["reason"] == "status_not_in_review"
-           for s in result["direct_backfill_skipped"]),
-       "push webhook reports skipped non-review task")
-    ready_after = store.get_task(ready["task_id"], project=P)
-    not_ready_after = store.get_task(not_ready["task_id"], project=P)
-    ok(ready_after["status"] == "Done" and ready_after["git_state"]["merged_sha"] == "abc123",
-       "backfilled task is Done with commit provenance")
-    ok(not_ready_after["status"] == "Not Started",
-       "non-review task is not promoted by default-branch push")
+    push_result = github_sync.handle_push({
+        "ref": "refs/heads/master",
+        "after": "abc123",
+        "repository": {
+            "full_name": "6th-Element-Labs/projectplanner",
+            "name": "projectplanner",
+            "default_branch": "master",
+        },
+        "commits": [{"id": "abc123", "message": f"fix({ready['task_id']}): direct default proof"}],
+    }, P)
+    ok(push_result["action"] == "push_processed"
+       and "direct_backfilled_tasks" not in push_result,
+       "default-branch push no longer backfills tasks (ADR-0006)")
+    ok(store.get_meta("canonical_main_sha", project=P) == "abc123",
+       "default-branch push still advances canonical main SHA")
+    ok(store.get_task(ready["task_id"], project=P)["status"] == "In Review",
+       "In Review task is NOT auto-promoted by a default-branch push; the orphan sweep owns Done")
 
     pr_task = store.create_task({"workstream_id": "HARDEN", "title": "PR lifecycle"},
                                 actor="seed", project=P)

@@ -10321,11 +10321,12 @@ def mark_task_default_branch_commit(task_id: str, commit_sha: str,
                                     branch: str = "master", subject: str = "",
                                     actor: str = "default-branch-backfill",
                                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """Bootstrap-only provenance repair for direct default-branch commits.
+    """Manual/bootstrap provenance repair for a task already on the default branch.
 
-    Normal flow remains complete_claim -> In Review -> PR merge webhook -> Done. This is a
-    system/reconcile escape hatch for pre-flow dogfood commits that are already on the default
-    branch and mention a task id in their commit subject.
+    ADR-0006 retired the *automated* default-branch backfill path (the push-webhook
+    and reconcile no longer call this); every default-branch commit is a merged PR the
+    orphan sweep stamps. This low-level primitive remains as a manual escape hatch for
+    pre-flow/bootstrap commits, with no automated caller. It only marks In Review tasks Done.
     """
     if not commit_sha:
         return {"error": "commit_sha required", "task_id": task_id}
@@ -10442,38 +10443,6 @@ def mark_task_offline_done(task_id: str, evidence: Any = None,
                    json.dumps(offline_payload, sort_keys=True), now))
     return {"task_id": task_id, "status": "Done", "git_state": git_state,
             "provenance": _provenance_summary(git_state)}
-
-
-def backfill_default_branch_commits(commits: List[Dict[str, Any]],
-                                    branch: str = "master",
-                                    actor: str = "github-webhook",
-                                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """Stamp In Review tasks referenced by commits that already reached the default branch."""
-    direct_backfilled: List[str] = []
-    direct_backfill_skipped: List[Dict[str, str]] = []
-    seen = set()
-    for commit in commits or []:
-        message = commit.get("message") or commit.get("subject") or ""
-        sha = commit.get("id") or commit.get("sha") or commit.get("commit_sha") or ""
-        if not sha:
-            continue
-        for task_id in dict.fromkeys(TASK_ID_RE.findall(message)):
-            key = (task_id, sha)
-            if key in seen:
-                continue
-            seen.add(key)
-            res = mark_task_default_branch_commit(
-                task_id, sha, branch=branch, subject=message,
-                actor=actor, project=project)
-            if res.get("status") == "Done":
-                direct_backfilled.append(task_id)
-            elif res.get("skipped") or res.get("reason") or res.get("error"):
-                direct_backfill_skipped.append({
-                    "task_id": task_id,
-                    "reason": res.get("reason") or res.get("error") or "skipped",
-                })
-    return {"direct_backfilled_tasks": list(dict.fromkeys(direct_backfilled)),
-            "direct_backfill_skipped": direct_backfill_skipped}
 
 
 def report_usage(source: str, confidence: str, task_id: Optional[str] = None,
@@ -13928,6 +13897,12 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
     findings.extend(orphan_findings)
     backfilled.extend(orphan_backfilled)
     checks.update(orphan_checks)
+
+    open_findings, open_advanced, open_checks = _open_pr_backstop_findings(
+        tasks, git_states, project=project, repo=repo, token=token)
+    findings.extend(open_findings)
+    backfilled.extend(open_advanced)
+    checks.update(open_checks)
     return findings, checks, backfilled
 
 
@@ -13966,6 +13941,49 @@ def _orphan_merge_discovery_findings(
         active_claims=active_claims,
         role_checker=lambda repo_slug: get_project_repo_role(repo_slug, project=project),
         mark_merged_fn=_mark_merged,
+        append_activity_fn=append_activity,
+        now=now,
+    )
+
+
+def _open_pr_backstop_findings(
+    tasks: List[Dict[str, Any]],
+    git_states: Dict[str, Dict[str, Any]],
+    *,
+    project: str,
+    repo: str,
+    token: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    """BUG-28: advance pre-review tasks whose open-PR webhook was dropped. The
+    open-PR twin of the merged orphan sweep; together they form reconcile's
+    task-id-matched PR-discovery backstop (ADR-0006)."""
+    import orphan_merge_discovery
+
+    lookback_days = int(os.environ.get("PM_ORPHAN_MERGE_LOOKBACK_DAYS", "30") or "30")
+    now = time.time()
+    with _conn(project) as c:
+        active_claims = {
+            row["task_id"]: dict(row)
+            for row in c.execute(
+                "SELECT id, task_id, agent_id FROM task_claims "
+                "WHERE status='active' AND expires_at>?",
+                (now,),
+            ).fetchall()
+        }
+
+    def _mark_pr_opened(task_id: str, pr_number: int, **kwargs: Any) -> Dict[str, Any]:
+        return mark_task_pr_opened(task_id, pr_number, **kwargs)
+
+    return orphan_merge_discovery.discover_open_prs(
+        tasks,
+        git_states,
+        project=project,
+        repo=repo or "",
+        token=token,
+        lookback_days=lookback_days,
+        active_claims=active_claims,
+        role_checker=lambda repo_slug: get_project_repo_role(repo_slug, project=project),
+        mark_pr_opened_fn=_mark_pr_opened,
         append_activity_fn=append_activity,
         now=now,
     )

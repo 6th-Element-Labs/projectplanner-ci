@@ -168,12 +168,11 @@ def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             )
             notified.append(holder)
 
-    direct_backfill = store.backfill_default_branch_commits(
-        commits, default, "github-webhook", project
-    )
+    # Default-branch backfill retired (ADR-0006): every default-branch commit is a
+    # merged PR that reconcile's orphan sweep already stamps; direct-to-main pushes
+    # are policy-forbidden. Push only advances canonical main + notifies leaseholders.
     return {"action": "push_processed", "repo": repo, "sha": head_sha,
-            "changed_files": len(changed_files), "notified_agents": notified,
-            **direct_backfill}
+            "changed_files": len(changed_files), "notified_agents": notified}
 
 
 def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:

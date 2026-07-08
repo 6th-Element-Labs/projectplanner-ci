@@ -5,8 +5,6 @@ workflow engine. Each job is a plain function; the timer invokes this module.
   python jobs.py weekly_digest    # generate the digest + deliver via notify (Slack+Email)
   python jobs.py sweep_monitors   # evaluate Switchboard durable coordination monitors
   python jobs.py reconcile_alerts # run reconcile and send deduped drift alerts
-  python jobs.py backfill_default_branch_provenance
-                                   # bootstrap direct-default commit provenance
   python jobs.py background_job <job_name>
                                    # run a checkpointed background job (RECON-10)
 
@@ -14,7 +12,6 @@ Loads /opt/projectplanner/.env via the systemd EnvironmentFile (same as the web 
 """
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,8 +28,6 @@ if _env.exists():
 import digest  # noqa: E402
 import notify  # noqa: E402
 import store  # noqa: E402
-
-TASK_ID_RE = re.compile(r"\b([A-Z]+-\d+)\b")
 
 
 def weekly_digest():
@@ -149,64 +144,6 @@ def reconcile_alerts():
             "deduped": deduped, "results": results}
 
 
-def _default_branch_commits(ref: str, limit: int):
-    cmd = ["git", "log", f"--max-count={int(limit)}", "--format=%H%x00%s", ref]
-    out = subprocess.check_output(cmd, cwd=Path(__file__).parent, text=True)
-    commits = []
-    for line in out.splitlines():
-        if "\x00" not in line:
-            continue
-        sha, subject = line.split("\x00", 1)
-        commits.append({"sha": sha.strip(), "subject": subject.strip()})
-    return commits
-
-
-def backfill_default_branch_provenance(project_id: str = "", ref: str = "",
-                                       limit: int = 0, dry_run: bool = False,
-                                       commits=None):
-    """Stamp provenance for legacy direct-to-default commits that mention task ids.
-
-    This is a bootstrap repair path for dogfood history before PR-only flow was enforced.
-    It only marks existing In Review tasks Done; all other statuses are skipped.
-    """
-    project_id = project_id or os.environ.get("PM_BACKFILL_PROJECT", "switchboard")
-    ref = ref or os.environ.get("PM_BACKFILL_REF", "HEAD")
-    limit = int(limit or os.environ.get("PM_BACKFILL_LIMIT", "200"))
-    store.init_db(project_id)
-    store.seed_if_empty(project_id)
-    if os.environ.get("PM_BACKFILL_DRY_RUN", "").lower() in ("1", "true", "yes"):
-        dry_run = True
-    commits = commits if commits is not None else _default_branch_commits(ref, limit)
-    seen = set()
-    results = []
-    for commit in commits:
-        sha = commit.get("sha") or commit.get("commit_sha") or ""
-        subject = commit.get("subject") or commit.get("message") or ""
-        for task_id in TASK_ID_RE.findall(subject):
-            key = (task_id, sha)
-            if key in seen:
-                continue
-            seen.add(key)
-            if not store.get_task(task_id, project=project_id):
-                continue
-            if dry_run:
-                results.append({"task_id": task_id, "commit_sha": sha,
-                                "subject": subject, "dry_run": True})
-            else:
-                results.append(store.mark_task_default_branch_commit(
-                    task_id, sha, branch=ref, subject=subject,
-                    actor="default-branch-backfill", project=project_id))
-    applied = len([r for r in results if r.get("status") == "Done"])
-    skipped = len([r for r in results if r.get("skipped")])
-    print(f"backfill_default_branch_provenance[{project_id}@{ref}]: "
-          f"candidates={len(results)} applied={applied} skipped={skipped} dry_run={dry_run}")
-    for r in results:
-        print(f"  {r}")
-    return {"project": project_id, "ref": ref, "candidates": len(results),
-            "applied": applied, "skipped": skipped, "dry_run": dry_run,
-            "results": results}
-
-
 def ci_gate_prs():
     """Run the VM-backed Switchboard PR CI gate once.
 
@@ -235,7 +172,6 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "summarize_pending": summarize_pending, "narrate_pending": narrate_pending,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
-        "backfill_default_branch_provenance": backfill_default_branch_provenance,
         "ci_gate_prs": ci_gate_prs,
         "background_job": background_job}
 

@@ -1,7 +1,18 @@
-"""Orphan merged-PR discovery for reconcile (RECON-11).
+"""PR-based provenance discovery for reconcile.
 
-Finds tasks with empty git_state whose work already merged on the canonical repo
-without ever receiving webhook or complete_claim provenance.
+Two backstops that recover tasks whose GitHub webhook was dropped (transient DB
+lock, missing hook, or an agent that merged without recording evidence), by
+matching PRs to tasks on the task-id in the branch/title/closing refs:
+
+- merged-PR orphan sweep (RECON-11): tasks with empty git_state whose work
+  already merged on the canonical repo -> stamped Done.
+- open-PR backstop (BUG-28): pre-review tasks with empty git_state that have an
+  open canonical PR whose `pr_opened` event was dropped -> advanced to In Review.
+
+Together they are the two halves of reconcile's PR-discovery backstop. They match
+tasks by the task-id in the PR directly (no scraping), which lets ADR-0006 retire
+the older evidence-scraping recovery paths: the default-branch backfill is retired
+alongside this change; the PR-evidence hydration path is retired in a follow-up.
 """
 from __future__ import annotations
 
@@ -15,9 +26,12 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 import task_id_parser
 
 SCHEMA = "switchboard.orphan_merge_discovery.v1"
+OPEN_PR_SCHEMA = "switchboard.open_pr_backstop.v1"
 DEFAULT_LOOKBACK_DAYS = 30
 ELIGIBLE_STATUSES = frozenset({"Not Started", "In Progress", "In Review"})
 SKIP_STATUSES = frozenset({"Done", "Cancelled", "Canceled"})
+# Open PRs advance pre-review tasks only; In Review/Done already have evidence.
+OPEN_PR_ELIGIBLE_STATUSES = frozenset({"Not Started", "In Progress"})
 
 
 def _empty_git_state(state: Mapping[str, Any]) -> bool:
@@ -364,3 +378,167 @@ def discover_orphan_merges(
             task["status"] = "Done"
 
     return findings, backfilled, checks
+
+
+# --- open-PR backstop (BUG-28) -------------------------------------------------
+
+def fetch_recent_open_prs(
+    repo: str,
+    *,
+    token: str = "",
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    now: Optional[float] = None,
+    per_page: int = 100,
+    max_pages: int = 5,
+    request_fn: Optional[Callable[[str, str], Any]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """List open PRs on the canonical repo updated within the lookback window."""
+    now = time.time() if now is None else float(now)
+    since_ts = now - max(1, int(lookback_days)) * 86400
+    request_fn = request_fn or _github_request
+    open_prs: List[Dict[str, Any]] = []
+    meta: Dict[str, Any] = {
+        "repo": repo, "lookback_days": int(lookback_days),
+        "since_ts": since_ts, "pages_fetched": 0, "prs_scanned": 0,
+    }
+    for page in range(1, max_pages + 1):
+        url = (
+            f"https://api.github.com/repos/{repo}/pulls"
+            f"?state=open&sort=updated&direction=desc&per_page={int(per_page)}&page={page}"
+        )
+        try:
+            payload = request_fn(url, token)
+        except urllib.error.HTTPError as exc:
+            meta["error"] = f"http_{exc.code}"
+            meta["auth_required"] = exc.code in (401, 403)
+            raise
+        except Exception as exc:
+            meta["error"] = str(exc)
+            raise
+        if not isinstance(payload, list):
+            meta["error"] = "unexpected_payload"
+            break
+        meta["pages_fetched"] = page
+        if not payload:
+            break
+        stop = False
+        for pr in payload:
+            meta["prs_scanned"] += 1
+            if pr.get("draft"):
+                continue
+            updated_at = pr.get("updated_at") or pr.get("created_at")
+            try:
+                updated_ts = _parse_github_ts(updated_at) if updated_at else now
+            except Exception:
+                updated_ts = now
+            if updated_ts < since_ts:
+                stop = True
+                continue
+            if (pr.get("head") or {}).get("sha"):
+                open_prs.append(dict(pr))
+        if stop or len(payload) < per_page:
+            break
+    meta["open_pr_count"] = len(open_prs)
+    return open_prs, meta
+
+
+def discover_open_prs(
+    tasks: Sequence[Mapping[str, Any]],
+    git_states: Mapping[str, Mapping[str, Any]],
+    *,
+    project: str,
+    repo: str,
+    token: str = "",
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    active_claims: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    role_checker: Optional[Callable[[str], Mapping[str, Any]]] = None,
+    fetch_open_prs_fn: Optional[Callable[..., Tuple[List[Dict[str, Any]], Dict[str, Any]]]] = None,
+    mark_pr_opened_fn: Optional[Callable[..., Dict[str, Any]]] = None,
+    append_activity_fn: Optional[Callable[..., None]] = None,
+    now: Optional[float] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    """Advance pre-review tasks with empty git_state that have an open canonical PR
+    whose `pr_opened` webhook was dropped (BUG-28). Mirrors discover_orphan_merges
+    for the open-PR half the merged sweep cannot cover."""
+    now = time.time() if now is None else float(now)
+    findings: List[Dict[str, Any]] = []
+    advanced: List[Dict[str, Any]] = []
+    checks: Dict[str, Any] = {"open_pr_backstop": "not_configured", "schema": OPEN_PR_SCHEMA}
+    active_claims = active_claims or {}
+    role_checker = role_checker or (lambda _repo: {"canonical": True, "role": "canonical"})
+    fetch_open_prs_fn = fetch_open_prs_fn or fetch_recent_open_prs
+
+    repo = (repo or "").strip()
+    if not repo:
+        checks["open_pr_backstop"] = "skipped_no_repo"
+        return findings, advanced, checks
+    if not role_checker(repo).get("canonical"):
+        checks["open_pr_backstop"] = "skipped_non_canonical_repo"
+        return findings, advanced, checks
+    if not token:
+        checks["open_pr_backstop"] = "skipped_no_token"
+        return findings, advanced, checks
+
+    try:
+        open_prs, fetch_meta = fetch_open_prs_fn(
+            repo, token=token, lookback_days=lookback_days, now=now)
+    except urllib.error.HTTPError as exc:
+        checks["open_pr_backstop"] = "failed"
+        checks["fetch_error"] = f"http_{exc.code}"
+        return findings, advanced, checks
+    except Exception as exc:
+        checks["open_pr_backstop"] = "failed"
+        checks["fetch_error"] = str(exc)
+        return findings, advanced, checks
+
+    checks.update(fetch_meta)
+    checks["open_pr_backstop"] = "checked"
+    index = build_task_pr_index(open_prs, repo)
+
+    for task in tasks:
+        task_id = str(task.get("task_id") or "")
+        status = task.get("status") or ""
+        if not task_id or status not in OPEN_PR_ELIGIBLE_STATUSES:
+            continue
+        if not _empty_git_state(dict(git_states.get(task_id) or {})):
+            continue
+        eligible = [c for c in (index.get(task_id.upper()) or [])
+                    if role_checker(str(c.get("repo") or repo)).get("canonical")]
+        if not eligible:
+            continue
+        if len(eligible) > 1:
+            findings.append({
+                "severity": "medium", "task_id": task_id,
+                "code": "open_pr_backstop_ambiguous",
+                "detail": f"Multiple canonical open PRs mention {task_id}; not auto-advancing.",
+                "candidates": eligible, "failure_class": "missing_data"})
+            continue
+        pr = eligible[0]
+        if not mark_pr_opened_fn:
+            continue
+        result = mark_pr_opened_fn(
+            task_id, int(pr.get("pr_number") or 0),
+            pr_url=pr.get("pr_url") or "", branch=pr.get("head_branch") or "",
+            head_sha=pr.get("head_sha") or "",
+            actor="reconcile/open_pr_backstop", project=project)
+        if result.get("error") or result.get("skipped"):
+            continue
+        if result.get("idempotent"):
+            continue
+        if append_activity_fn:
+            append_activity_fn(
+                "git.open_pr_backstop_advanced", "reconcile/open_pr_backstop",
+                {"task_id": task_id, "source": "open_pr_backstop",
+                 "pr_number": pr.get("pr_number"), "pr_url": pr.get("pr_url"),
+                 "head_branch": pr.get("head_branch"), "head_sha": pr.get("head_sha"),
+                 "task_ids_found": pr.get("task_ids") or [task_id],
+                 "active_claim_id": (active_claims.get(task_id) or {}).get("id")},
+                task_id=task_id, project=project)
+        advanced.append({"task_id": task_id, "source": "open_pr_backstop",
+                         "pr_number": pr.get("pr_number"), "status": "In Review"})
+        if result.get("git_state") and isinstance(git_states, dict):
+            git_states[task_id] = result["git_state"]
+        if isinstance(task, dict):
+            task["status"] = "In Review"
+
+    return findings, advanced, checks
