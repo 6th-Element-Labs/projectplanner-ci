@@ -233,6 +233,20 @@ try:
        merge_with_session["work_session_required"] is True,
        "merge_gate passes when code_strict Work Session and CI evidence are present")
 
+    # ADR-0006 cut #3: collapsed to the three profiles with distinct behaviour.
+    known = set((store.get_session_policy_profiles("switchboard").get("profiles") or {}).keys())
+    ok(known == {"code_strict", "docs_review", "offline_evidence"},
+       "exactly three enforcement profiles remain (code_strict / docs_review / offline_evidence)")
+    ok(store._normalize_session_policy_profile("ui_preview") == "docs_review" and
+       store._normalize_session_policy_profile("preview") == "docs_review",
+       "retired ui_preview alias resolves to the docs_review default")
+    ok(store._normalize_session_policy_profile("no_repo") == "docs_review" and
+       store._normalize_session_policy_profile("none") == "docs_review",
+       "retired no_repo alias resolves to the docs_review default")
+    ok(store._session_policy_profile_rules("offline_evidence", project="switchboard")
+       .get("merge_authority") == "offline_verifier",
+       "offline_evidence survives with its distinct non-PR completion semantics")
+
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
