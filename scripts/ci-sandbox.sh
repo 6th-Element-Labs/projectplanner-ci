@@ -12,11 +12,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# Sandbox lives under a PERSONAL account (StevenRidder), not the 6th-Element-Labs
-# org: org-owned repos — even public ones — cannot run GitHub Actions here, so
-# Actions run only on this personal public sandbox (mirrors StevenRidder/helm-ci).
-# The canonical repo stays the private org repo.
-CI_REPO="${CI_REPO:-StevenRidder/projectplanner-ci}"
+# Public CI sandbox for this project, under the same org as the canonical repo.
+# Public repos get free/unlimited GitHub Actions minutes, so CI runs here and
+# never spends the org's private-repo Actions budget. Canonical stays the private
+# org repo (`CANONICAL_REPO`), which remains the only code-truth / Done authority.
+CI_REPO="${CI_REPO:-6th-Element-Labs/projectplanner-ci}"
 CI_REMOTE="${CI_REMOTE:-ci}"
 CI_REMOTE_URL="${CI_REMOTE_URL:-https://github.com/${CI_REPO}.git}"
 CANONICAL_REPO="${CANONICAL_REPO:-6th-Element-Labs/projectplanner}"

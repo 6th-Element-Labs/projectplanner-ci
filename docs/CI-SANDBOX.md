@@ -1,19 +1,18 @@
 # CI sandbox (`projectplanner-ci`)
 
 projectplanner keeps its canonical source on the **private**
-`6th-Element-Labs/projectplanner`. The **`6th-Element-Labs` org cannot run GitHub
-Actions at all** — jobs are rejected *"account is locked due to a billing
-issue,"* and this applies to public org repos too (verified). That is why the
-heavy test suite has run on the production VM — building a fresh venv and running
-the full suite per PR, the single biggest CPU load on a 1 GiB box. The **CI
-sandbox** moves that test run to a public repo under a **personal account**
-(`StevenRidder`, whose Actions are not locked — same pattern as `helm-ci`), where
-GitHub-hosted Actions minutes are **free and unlimited**.
+`6th-Element-Labs/projectplanner`. Private-repo GitHub Actions draw down the org's
+monthly included minutes; **public repos get free, unlimited minutes**. So — the
+same pattern as Helm — CI runs in a **public sandbox repo in the same org**
+(`6th-Element-Labs/projectplanner-ci`) so it never spends the private budget, and
+so the heavy per-PR test run moves off the production VM (where building a venv +
+running the full suite per PR was the single biggest CPU load on a 1 GiB box).
+Verified: the org runs Actions on this public repo for free.
 
 | Repo | Visibility | Role |
 |---|---|---|
 | `6th-Element-Labs/projectplanner` | private | Canonical source, PRs, Switchboard merge webhook, provenance gate |
-| `StevenRidder/projectplanner-ci` | **public** | CI sandbox — push branches here; the full suite runs for free |
+| `6th-Element-Labs/projectplanner-ci` | **public** | CI sandbox — push branches here; the full suite runs for free |
 
 The sandbox receives the **full actual tree** at the exact SHA under test — it is
 deliberately *not* scrubbed, so CI exercises the same code that will land on the
@@ -23,8 +22,8 @@ secrets scan before the first push and after any change that adds config.
 
 ## What runs on the sandbox
 
-One workflow, [`backend-tests.yml`](ci-sandbox/backend-tests.yml), which mirrors
-the on-box VM gate exactly:
+One workflow, [`backend-tests.yml`](../.github/workflows/backend-tests.yml), which
+mirrors the on-box VM gate exactly:
 
 1. `actions/checkout`
 2. Python 3.12 + Node 20 (both preinstalled on `ubuntu-latest`)
@@ -58,7 +57,7 @@ These steps are outward-facing / hard to reverse — do them deliberately:
 
 ```bash
 # 1. Create the public sandbox repo (owner token; cloud-agent tokens often can't)
-gh repo create StevenRidder/projectplanner-ci --public \
+gh repo create 6th-Element-Labs/projectplanner-ci --public \
   --description "Public CI sandbox for projectplanner - full tree, all workflows"
 
 # 2. Disable Actions on the PRIVATE canonical repo so the workflow file, once it
