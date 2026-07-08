@@ -1043,6 +1043,12 @@ const TeepPlan = {
     // initial page load until their tab is actually opened.
     APEXCHARTS_SRC: '/vendor/apexcharts/apexcharts.min.js',
     MERMAID_SRC: 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js',
+    // ELK is the Mermaid layout engine that gives the dependency map orthogonal
+    // routing + far tidier packing of disconnected chains than dagre. It ships
+    // ESM-only (no UMD build), so it can't go through _ensureScript's <script>
+    // tag — we dynamic-import() and registerLayoutLoaders() it once, and fall
+    // back to dagre if the import fails.
+    ELK_SRC: 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0/dist/mermaid-layout-elk.esm.min.mjs',
     _ensureScript(src) {
         this._scriptPromises = this._scriptPromises || {};
         if (this._scriptPromises[src]) return this._scriptPromises[src];
@@ -3665,12 +3671,19 @@ const TeepPlan = {
         }
         try {
             if (!window.__missionMermaidInit) {
+                let layout = 'dagre';
+                try {
+                    const elk = await import(this.ELK_SRC);
+                    window.mermaid.registerLayoutLoaders(elk.default || elk);
+                    layout = 'elk';
+                } catch (e) { /* ELK unavailable — dagre still renders fine */ }
                 window.mermaid.initialize({
                     startOnLoad: false,
                     securityLevel: 'strict',
                     theme: 'neutral',
+                    layout,
                     flowchart: {
-                        useMaxWidth: false, htmlLabels: true, curve: 'basis',
+                        useMaxWidth: false, htmlLabels: true, curve: 'linear',
                         nodeSpacing: 45, rankSpacing: 70, padding: 14,
                         subGraphTitleMargin: { top: 6, bottom: 10 },
                     },
@@ -3694,8 +3707,14 @@ const TeepPlan = {
         const SVGNS = 'http://www.w3.org/2000/svg';
         host.querySelectorAll('.node').forEach((nodeEl) => {
             nodeEl.style.cursor = 'pointer';
+            // The id is emitted in its own <b> on the label's first line, so match
+            // it exactly — a substring match sent FORGE-11 clicks to FORGE-1.
+            const boldId = (nodeEl.querySelector('b')?.textContent || '').trim().toUpperCase();
             const label = (nodeEl.textContent || '').toUpperCase();
-            const hit = nodes.find((n) => label.includes(String(n.id || '').toUpperCase()));
+            const hit = nodes.find((n) => {
+                const nid = String(n.id || '').toUpperCase();
+                return boldId ? nid === boldId : label.includes(nid);
+            });
             nodeEl.addEventListener('click', (e) => {
                 e.preventDefault();
                 if (hit) this.openLinkedTask(hit.id, hit.project_id);

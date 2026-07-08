@@ -67,8 +67,21 @@ try:
     ok(len(graph.get("edges") or []) == 3, "depends_on edges materialized")
     ok("DELIV-2" in graph.get("mermaid", "") and "flowchart LR" in graph.get("mermaid", ""),
        "mermaid flowchart LR emitted")
-    ok("subgraph" not in graph.get("mermaid", ""),
-       "no per-workstream subgraph clusters (clean layered DAG)")
+    ok('subgraph ws_DELIV["DELIV"]' in graph.get("mermaid", ""),
+       "multi-task workstream is boxed into a subgraph")
+    ok("EXTERNAL-1" in graph.get("mermaid", "")
+       and "subgraph ws_EXTERNAL" not in graph.get("mermaid", ""),
+       "external/singleton workstream stays loose (no one-node box)")
+    ok("<b>DELIV-2</b>" in graph.get("mermaid", ""),
+       "node label puts the id in bold on its own line")
+    ok(mission_graph._clean_title("FORGE-2", "FORGE-2: 20-symbol catalog") == "20-symbol catalog",
+       "duplicated '<id>:' prefix stripped from title")
+    ok(mission_graph._node_label("QA-2", "QA-2: QA-2: parity", "in_progress")
+       == "<b>QA-2</b><br/>parity",
+       "repeated id prefix collapsed; status word not baked into label text")
+    ok(mission_graph._workstream("HELMWEBGPU-6") == "HELMWEBGPU"
+       and mission_graph._workstream("QA-L-2") == "QA-L",
+       "workstream prefix parsed from task id")
     ok(mission_graph.node_execution_state({"status": "Done", "provenance": {"terminal": True}}) == "done",
        "terminal Done maps to done")
     ok(mission_graph.node_execution_state({"status": "In Review"}) == "in_review",

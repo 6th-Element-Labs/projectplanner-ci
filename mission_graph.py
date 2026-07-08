@@ -1,6 +1,7 @@
 """Deliverable dependency graph — strategic layer over linked tasks (depends_on + proof)."""
 from __future__ import annotations
 
+import html
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -56,24 +57,50 @@ def node_execution_state(detail: Dict[str, Any]) -> str:
     return "todo"
 
 
+def _workstream(task_id: str) -> str:
+    """The workstream prefix of a task id: everything before the trailing -N.
+
+    CHART-1 -> CHART, HELMWEBGPU-6 -> HELMWEBGPU, QA-L-2 -> QA-L. Ids without a
+    numeric tail are their own group (they end up as loose singletons)."""
+    m = re.match(r"^(.*?)-\d+[A-Za-z]?$", (task_id or "").strip())
+    return m.group(1) if m else (task_id or "").strip()
+
+
+def _clean_title(task_id: str, title: str) -> str:
+    """Drop a leading '<ID>:' prefix from the title, however many times it repeats.
+
+    Many titles are stored with the id baked in ('FORGE-2: 20-symbol catalog').
+    The label already shows the id on its own line, so the old code emitting
+    '{id}: {title}' produced 'FORGE-2: FORGE-2: 20-symbol catalog'. Strip it."""
+    t = (title or "").strip()
+    tid = (task_id or "").strip()
+    if not tid:
+        return t
+    low = tid.lower()
+    while t.lower().startswith(low):
+        rest = t[len(tid):].lstrip()
+        if rest.startswith(":"):
+            t = rest[1:].lstrip()
+        else:
+            break
+    return t
+
+
 def _node_label(task_id: str, title: str, state: str, external: bool = False) -> str:
-    short = (title or task_id or "").strip()
-    if len(short) > 42:
-        short = short[:39] + "..."
-    suffix = {
-        "done": " Done",
-        "done_unproven": " Done",
-        "in_progress": " In Progress",
-        "in_review": " In Review",
-        "blocked": " Blocked",
-        "missing": " missing",
-    }.get(state, "")
-    if external:
-        suffix = " external"
-    body = f"{task_id}"
-    if short and short.lower() != task_id.lower():
-        body = f"{task_id}: {short}"
-    return f"{body}{suffix}"
+    """A compact two-line node label: bold id on line 1, short title on line 2.
+
+    Status is carried by node color + the legend, so it is intentionally not
+    repeated in the text. Rendered with Mermaid htmlLabels; the title is HTML-
+    escaped so it can never break the flowchart or inject markup (the <b>/<br/>
+    we add survive DOMPurify even under securityLevel:'strict')."""
+    tid = (task_id or "").strip()
+    t = _clean_title(tid, title)
+    if len(t) > 34:
+        t = t[:33].rstrip() + "…"
+    head = f"<b>{html.escape(tid, quote=True)}</b>"
+    if not t or t.lower() == tid.lower():
+        return head
+    return f"{head}<br/>{html.escape(t, quote=True)}"
 
 
 def build_dependency_graph(
@@ -229,21 +256,47 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
                              edges: List[Dict[str, Any]]) -> str:
     """Render a clean, layered left-to-right dependency flowchart.
 
-    Nodes are ranked by dependency depth (prerequisites on the left, dependents to
-    the right) and placed by Mermaid/dagre with no per-workstream wrapper boxes. An
-    earlier version wrapped each workstream in a `subgraph` cluster to "organize"
-    the DAG, but that forced dagre to keep every workstream contiguous and route
-    the many cross-workstream edges around the cluster walls — a hairball of
-    crossing arrows. The workstream is already spelled out in every task-id prefix
-    (CHART-1, ENGINE-2, WINDOWS-1), so the boxes added visual noise, not signal.
-    Direction is LR: for these wide dependency graphs (dozens of tasks, shallow
-    depth) top-down blows out to a multi-thousand-pixel-wide unreadable strip,
-    whereas left-to-right stays legible and scrolls sideways like the board.
+    Prerequisites sit left, dependents right; ELK (with a dagre fallback in the
+    client) places and routes the nodes. Internal tasks are wrapped in a
+    `subgraph` box per workstream — but ONLY for workstreams with 2+ members.
+    An earlier version boxed EVERY workstream, so a graph with nine one-task
+    workstreams rendered as nine one-node boxes: pure noise, and the crossing
+    cross-workstream edges around every cluster wall made a hairball. Boxing only
+    the multi-task workstreams (and leaving singletons + external stubs loose)
+    keeps the scannable phase-box grouping without that penalty. Direction is LR:
+    these graphs are wide and shallow, so LR stays legible and scrolls sideways
+    like the board, where top-down blows out into an unreadable strip.
     """
     lines = ["flowchart LR"]
 
+    # Group internal nodes by workstream prefix; box only the 2+ member groups.
+    internal = [n for n in nodes if not n.get("external")]
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    group_order: List[str] = []
+    for node in internal:
+        ws = _workstream(node.get("id") or "")
+        if ws not in groups:
+            groups[ws] = []
+            group_order.append(ws)
+        groups[ws].append(node)
+
+    boxed_ids: Set[str] = set()
+    for ws in group_order:
+        members = groups[ws]
+        if len(members) < 2:
+            continue
+        safe_ws = re.sub(r"[^a-zA-Z0-9_]", "_", ws) or "WS"
+        lines.append(f'  subgraph ws_{safe_ws}["{ws}"]')
+        lines.append("    direction LR")
+        for node in members:
+            lines.append(_emit_node_line(node, "    "))
+            boxed_ids.add(node.get("id"))
+        lines.append("  end")
+
+    # Loose nodes: singleton-workstream tasks and external stubs, stable order.
     for node in nodes:
-        lines.append(_emit_node_line(node, "  "))
+        if node.get("id") not in boxed_ids:
+            lines.append(_emit_node_line(node, "  "))
 
     for edge in edges:
         src = _mermaid_id(edge.get("from") or "")
