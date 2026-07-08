@@ -11,6 +11,17 @@ name: backend-tests
 on:
   push:
   workflow_dispatch:
+    # external_ci_mirror always passes these as workflow inputs; declare them
+    # (optional, traceability only) so `gh workflow run` dispatch is accepted.
+    inputs:
+      source_sha:
+        description: "Canonical source SHA under verification"
+        required: false
+        type: string
+      status_context:
+        description: "Required status context reported back to the canonical repo"
+        required: false
+        type: string
 
 concurrency:
   group: backend-tests-${{ github.ref }}
