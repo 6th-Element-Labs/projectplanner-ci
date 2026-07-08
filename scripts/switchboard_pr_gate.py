@@ -25,6 +25,7 @@ from typing import Any, Dict, Iterable, List, Optional
 # cover repo-root modules; without this the systemd ci-gate unit dies on import.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import external_ci_mirror  # noqa: E402
 import pr_provenance_gate  # noqa: E402
 import review_preflight  # noqa: E402
 import store  # noqa: E402
@@ -378,60 +379,43 @@ def _sandbox_ci_role(project: str) -> Dict[str, Any]:
     return {}
 
 
-def run_sandbox_gate(worktree: Path, log_path: Path, *, ci_repo: str, number: int,
-                     token: str, timeout_s: int) -> None:
-    """Verify the PR's merge commit on the public CI sandbox instead of a local venv.
+def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: str,
+                                  number: int, token: str, timeout_s: int) -> None:
+    """Verify the PR's merge commit via the first-class ``external_ci_mirror`` runner.
 
-    Push the exact merge SHA to <ci_repo> as a throwaway branch; its `on: push`
-    workflow runs the suite on free GitHub-hosted runners. Poll until the run(s) for
-    that SHA finish, then delete the branch. Heavy test execution never touches this
-    box. Fails closed: no green run within the timeout raises GateError.
-    See docs/CI-STRATEGY.md."""
+    Pushes the exact merge SHA to the project's ``public_ci`` sandbox, dispatches the
+    workflow, polls to a terminal status, and records an ``external_ci_run`` with a
+    structured ``failure_class`` (mirror_sync/workflow_trigger/poll/test) + run_url
+    evidence. Repos and status context are resolved from ``repo_topology``. Heavy CI
+    never runs on this box. Fails closed. See docs/CI-STRATEGY.md and
+    docs/EXTERNAL-CI-MIRROR-SPEC.md."""
     if not token:
-        raise GateError("A GitHub token is required to drive the public CI sandbox.")
-    test_sha = subprocess.check_output(
+        raise GateError("A GitHub token is required to drive the external CI mirror.")
+    # external_ci_mirror shells out to `gh`, which authenticates from GH_TOKEN.
+    os.environ["GH_TOKEN"] = token
+    merge_sha = subprocess.check_output(
         ["git", "-C", str(worktree), "rev-parse", "HEAD"], text=True).strip()
-    branch = f"gate/pr-{int(number)}-{test_sha[:12]}"
-    push_url = f"https://x-access-token:{token}@github.com/{ci_repo}.git"
-    actions_url = f"https://github.com/{ci_repo}/actions?query=branch%3A{branch}"
-    poll_s = int(os.environ.get("SWITCHBOARD_CI_POLL_SECONDS", "15"))
-    deadline = time.time() + timeout_s
+    workflow = (os.environ.get("SWITCHBOARD_CI_WORKFLOW") or "backend-tests.yml").strip()
+    request = {
+        "source_project": project,
+        "source_sha": merge_sha,
+        "source_branch": f"pr-{int(number)}",
+        "workflow": workflow,
+        "request": {"timeout_seconds": timeout_s},
+    }
+    result = external_ci_mirror.request_external_ci_mirror_run(
+        request, str(worktree), actor="switchboard-ci/vm-gate", project=project)
     with log_path.open("w", encoding="utf-8") as log:
-        log.write(f"Switchboard CI sandbox gate at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
-        log.write(f"sandbox={ci_repo} branch={branch} sha={test_sha}\n\n")
-        log.flush()
-        try:
-            _run(["git", "-C", str(worktree), "push", "--force", push_url,
-                  f"HEAD:refs/heads/{branch}"], stdout=log, timeout=180)
-            seen = False
-            while True:
-                if time.time() > deadline:
-                    raise GateError(
-                        f"sandbox CI timed out after {timeout_s}s "
-                        f"({'no run appeared' if not seen else 'run unfinished'}) — {actions_url}")
-                data = _github_request(
-                    "GET", f"repos/{ci_repo}/actions/runs?branch={branch}&per_page=30",
-                    token=token)
-                runs = [r for r in (data.get("workflow_runs") or [])
-                        if r.get("head_sha") == test_sha
-                        and r.get("event") in ("push", "workflow_dispatch")]
-                if runs and all(r.get("status") == "completed" for r in runs):
-                    seen = True
-                    bad = [r for r in runs
-                           if r.get("conclusion") not in ("success", "skipped")]
-                    for r in runs:
-                        log.write(f"  {r.get('name')}: {r.get('conclusion')} ({r.get('html_url')})\n")
-                    log.flush()
-                    if bad:
-                        raise GateError(f"sandbox CI failed ({len(bad)} run(s)) — {actions_url}")
-                    return
-                seen = seen or bool(runs)
-                log.write("  waiting for sandbox CI...\n")
-                log.flush()
-                time.sleep(poll_s)
-        finally:
-            _run(["git", "-C", str(worktree), "push", push_url, "--delete", branch],
-                 stdout=log, check=False, timeout=60)
+        log.write(f"external_ci_mirror source_sha={merge_sha} workflow={workflow}\n")
+        log.write(json.dumps(result, indent=2, default=str)[:4000] + "\n")
+    if result.get("error"):
+        raise GateError(
+            f"external CI mirror error [{result.get('failure_class') or 'error'}]: {result.get('error')}")
+    status = (result.get("status") or "").strip().lower()
+    if status != "success":
+        raise GateError(
+            f"external CI mirror not green (status={status}, conclusion={result.get('conclusion')}, "
+            f"class={result.get('failure_class')}) — {result.get('run_url') or ''}")
 
 
 def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
@@ -464,11 +448,11 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
                             "; ".join(f.get("code", "unknown") for f in preflight.get("findings", [])))
         ci_role = _sandbox_ci_role(SWITCHBOARD_CI_PROJECT)
         if ci_role:
-            # Topology declares a public_ci sandbox: verify the suite there (free
-            # GitHub-hosted runners), keeping heavy CI off this box. Provenance
-            # preflight above is unchanged. See docs/CI-STRATEGY.md.
-            run_sandbox_gate(run_dir, log_path, ci_repo=ci_role["repo"],
-                             number=number, token=token, timeout_s=timeout_s)
+            # Topology declares a public_ci sandbox: verify on the first-class
+            # external_ci_mirror runner (free GitHub-hosted runners), keeping heavy CI
+            # off this box. Provenance preflight above is unchanged. See docs/CI-STRATEGY.md.
+            _verify_on_external_ci_mirror(run_dir, log_path, project=SWITCHBOARD_CI_PROJECT,
+                                          number=number, token=token, timeout_s=timeout_s)
         else:
             python_runtime = select_ci_python(source_repo, explicit=python_executable)
             run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
