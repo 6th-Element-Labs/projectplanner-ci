@@ -412,8 +412,15 @@ def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: st
         "workflow": workflow,
         "request": {"timeout_seconds": timeout_s},
     }
-    result = external_ci_mirror.request_external_ci_mirror_run(
-        request, str(worktree), actor="switchboard-ci/vm-gate", project=project)
+    try:
+        result = external_ci_mirror.request_external_ci_mirror_run(
+            request, str(worktree), actor="switchboard-ci/vm-gate", project=project)
+    except Exception as exc:
+        # The mirror machinery itself failed (e.g. transient "database is locked" on the
+        # contended box, or a gh/network error) — it produced no test verdict. Treat exactly
+        # like a returned infra error: unavailable, so the caller falls back to the local
+        # suite instead of hard-reding the PR. External-CI plumbing must never fail the gate.
+        result = {"error": str(exc), "failure_class": "mirror_exception"}
     with log_path.open("w", encoding="utf-8") as log:
         log.write(f"external_ci_mirror source_sha={merge_sha} workflow={workflow}\n")
         log.write(json.dumps(result, indent=2, default=str)[:4000] + "\n")

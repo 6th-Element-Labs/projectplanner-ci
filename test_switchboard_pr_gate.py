@@ -220,6 +220,15 @@ try:
         ok(outcome == "unavailable",
            "external CI dispatch error -> unavailable (falls back to local, not a gate failure)")
 
+        def _raise_db_lock(*a, **k):
+            raise Exception("database is locked")
+
+        gate.external_ci_mirror.request_external_ci_mirror_run = _raise_db_lock
+        outcome, res = gate._verify_on_external_ci_mirror(
+            wt, lp, project="switchboard", number=4, token="t", timeout_s=5)
+        ok(outcome == "unavailable" and res.get("failure_class") == "mirror_exception",
+           "external CI mirror RAISING (e.g. 'database is locked') -> unavailable, not a gate failure")
+
         gate.external_ci_mirror.request_external_ci_mirror_run = lambda *a, **k: {
             "status": "failure", "failure_class": "test", "run_url": "https://x/runs/1"}
         try:
@@ -232,4 +241,4 @@ finally:
     gate.external_ci_mirror.request_external_ci_mirror_run = _orig_ecm
     gate.subprocess.check_output = _orig_co
 
-print("\n21 passed, 0 failed")
+print("\n22 passed, 0 failed")
