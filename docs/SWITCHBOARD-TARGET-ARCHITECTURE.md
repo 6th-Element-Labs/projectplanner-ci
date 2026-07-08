@@ -1,6 +1,11 @@
 # Switchboard — target module architecture (post-`store.py` decomposition)
 
-- **Status:** Target (approved plan; not yet built)
+> **Superseded by [ADR-0006](decisions/0006-control-plane-done-enough.md)** (2026-07-08): only
+> the Layer-0 foundation below was built (and stands); the remaining fine-grained split is
+> retired. `store.py` stays cohesive on purpose, under a growth moratorium. This map remains a
+> reference for the seams if a future split is ever re-justified.
+
+- **Status:** Superseded (foundation shipped; remainder retired — see ADR-0006)
 - **Date:** 2026-07-07
 - **Companion to:** [ADR-0005](decisions/0005-store-module-decomposition.md) (the decision) ·
   [`SWITCHBOARD-STORE-ENDSTATE.md`](SWITCHBOARD-STORE-ENDSTATE.md) (the finished tree + guardrails) ·

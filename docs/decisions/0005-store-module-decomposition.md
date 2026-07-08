@@ -1,6 +1,13 @@
 # ADR-0005 — Decompose `store.py`: strangler-split the god module into layered stores
 
-- **Status:** Proposed
+> **Superseded in part by [ADR-0006](0006-control-plane-done-enough.md)** (2026-07-08): the
+> foundation shipped (ARCH-1…5 — `constants`, `db/` package, `db/connection`, 7 leaf stores;
+> store.py 15,817 → 14,382) and **stands**. The remaining 37-module plan (ARCH-6…17) is
+> **retired** — the real dependency graph invalidated the ordering twice (ARCH-5's `_conn`
+> cycle, ARCH-6's 21-function wall), and decomposing the fleet's hottest file mid-flight is
+> maximum conflict surface. The per-function map below remains a valid reference for the seams.
+
+- **Status:** Superseded in part (foundation delivered; remainder retired — see ADR-0006)
 - **Date:** 2026-07-07
 - **Author:** Switchboard architecture session (Claude Code / Opus), at the operator's request
 - **Relates to:** [`SWITCHBOARD-TARGET-ARCHITECTURE.md`](../SWITCHBOARD-TARGET-ARCHITECTURE.md)
