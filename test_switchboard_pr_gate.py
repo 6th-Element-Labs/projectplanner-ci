@@ -196,4 +196,40 @@ finally:
     gate.post_status = _orig_post
     gate._ensure_cache_repo = _orig_cache
 
-print("\n18 passed, 0 failed")
+# External CI mirror classification (ADR-0006 gate resilience): a genuine test failure
+# fails the gate, but a dispatch/sync outage returns 'unavailable' so the caller falls back
+# to the local suite instead of hard-reding every PR (the fleet-wide 422 breakage).
+_orig_ecm = gate.external_ci_mirror.request_external_ci_mirror_run
+_orig_co = gate.subprocess.check_output
+try:
+    gate.subprocess.check_output = lambda *a, **k: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+    with tempfile.TemporaryDirectory(prefix="switchboard-ext-ci-") as tmp:
+        wt = Path(tmp)
+        lp = wt / "ext.log"
+
+        gate.external_ci_mirror.request_external_ci_mirror_run = lambda *a, **k: {"status": "success"}
+        outcome, _ = gate._verify_on_external_ci_mirror(
+            wt, lp, project="switchboard", number=1, token="t", timeout_s=5)
+        ok(outcome == "success", "green external CI mirror -> success")
+
+        gate.external_ci_mirror.request_external_ci_mirror_run = lambda *a, **k: {
+            "error": "HTTP 422: Unexpected inputs provided",
+            "failure_class": "workflow_trigger_failed"}
+        outcome, _ = gate._verify_on_external_ci_mirror(
+            wt, lp, project="switchboard", number=2, token="t", timeout_s=5)
+        ok(outcome == "unavailable",
+           "external CI dispatch error -> unavailable (falls back to local, not a gate failure)")
+
+        gate.external_ci_mirror.request_external_ci_mirror_run = lambda *a, **k: {
+            "status": "failure", "failure_class": "test", "run_url": "https://x/runs/1"}
+        try:
+            gate._verify_on_external_ci_mirror(
+                wt, lp, project="switchboard", number=3, token="t", timeout_s=5)
+            ok(False, "genuine external CI test failure should raise")
+        except gate.GateError:
+            ok(True, "genuine external CI test failure (class=test) still fails the gate")
+finally:
+    gate.external_ci_mirror.request_external_ci_mirror_run = _orig_ecm
+    gate.subprocess.check_output = _orig_co
+
+print("\n21 passed, 0 failed")
