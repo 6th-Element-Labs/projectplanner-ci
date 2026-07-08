@@ -1,0 +1,54 @@
+# Full Switchboard suite. Runs for free on the PUBLIC projectplanner-ci sandbox
+# (unlimited GitHub-hosted Actions minutes). On the private canonical repo this
+# file is inert because Actions are disabled there; the canonical merge gate
+# instead consumes the projectplanner-ci/full-suite commit status that
+# scripts/ci-sandbox.sh stamps after this suite passes. See docs/CI-SANDBOX.md.
+#
+# Mirrors exactly what the on-box VM gate did: hermetic venv, install
+# requirements.txt, run scripts/switchboard_ci.sh with STRICT + REQUIRE_NODE.
+name: backend-tests
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history: reconcile git-reachability tests need real ancestry
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run Switchboard CI suite
+        env:
+          SWITCHBOARD_CI_STRICT: "1"
+          SWITCHBOARD_CI_REQUIRE_NODE: "1"
+        run: |
+          # Strip GitHub's auto-set GITHUB_REPOSITORY: store.py falls back to it for a
+          # project's canonical repo, which on this CI repo is the *sandbox* slug and makes
+          # reconcile git-reachability tests see a repo mismatch. The VM gate runs with it
+          # unset, so match that hermetic environment. (GitHub reserves the GITHUB_ prefix,
+          # so `env:` can't blank it — it must be unset in the shell.)
+          unset GITHUB_REPOSITORY
+          bash scripts/switchboard_ci.sh

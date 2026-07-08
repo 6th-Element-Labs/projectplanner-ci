@@ -26,8 +26,12 @@ provision = Path("deploy/PROVISION.md").read_text(encoding="utf-8")
 web_unit = Path("deploy/projectplanner.service").read_text(encoding="utf-8")
 mcp_unit = Path("deploy/projectplanner-mcp.service").read_text(encoding="utf-8")
 
-ok(not workflow_files,
-   "GitHub Actions workflows are absent while Actions startup fails before jobs")
+backend_tests = actions_dir / "backend-tests.yml"
+_bt = backend_tests.read_text(encoding="utf-8") if backend_tests.exists() else ""
+ok(backend_tests.exists()
+   and "workflow_dispatch" in _bt
+   and "scripts/switchboard_ci.sh" in _bt,
+   "backend-tests workflow runs the full suite on the public projectplanner-ci sandbox")
 ok("DEFAULT_CONTEXT = \"Switchboard CI / VM gate\"" in pr_gate,
    "VM gate posts a stable PR-visible commit status context")
 ok("projectplanner-ci-gate.timer" in provision and "scripts/switchboard_ci.sh" in provision,
