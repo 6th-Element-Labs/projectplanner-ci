@@ -35,6 +35,9 @@ DEFAULT_CONTEXT = "Switchboard CI / VM gate"
 DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"
 DEFAULT_WORKDIR = "/var/lib/projectplanner/ci-gate"
 MIN_PYTHON_VERSION = (3, 10)
+# Board project whose repo_topology decides where CI runs: a configured public_ci
+# sandbox (free GitHub-hosted runners) vs. the legacy local venv on this box.
+SWITCHBOARD_CI_PROJECT = (os.environ.get("SWITCHBOARD_CI_PROJECT") or "switchboard").strip() or "switchboard"
 
 
 class GateError(RuntimeError):
@@ -362,6 +365,75 @@ def run_switchboard_gate(worktree: Path, log_path: Path, *, timeout_s: int,
              timeout=timeout_s)
 
 
+def _sandbox_ci_role(project: str) -> Dict[str, Any]:
+    """Return the project's configured public_ci role (verification sandbox), or {}
+    when none is set — in which case the gate falls back to the local venv suite."""
+    try:
+        topology = store.get_project_repo_topology(project=project)
+    except Exception:
+        return {}
+    role = (topology.get("roles") or {}).get("public_ci") or {}
+    if role.get("configured") and (role.get("repo") or "").strip():
+        return role
+    return {}
+
+
+def run_sandbox_gate(worktree: Path, log_path: Path, *, ci_repo: str, number: int,
+                     token: str, timeout_s: int) -> None:
+    """Verify the PR's merge commit on the public CI sandbox instead of a local venv.
+
+    Push the exact merge SHA to <ci_repo> as a throwaway branch; its `on: push`
+    workflow runs the suite on free GitHub-hosted runners. Poll until the run(s) for
+    that SHA finish, then delete the branch. Heavy test execution never touches this
+    box. Fails closed: no green run within the timeout raises GateError.
+    See docs/CI-STRATEGY.md."""
+    if not token:
+        raise GateError("A GitHub token is required to drive the public CI sandbox.")
+    test_sha = subprocess.check_output(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"], text=True).strip()
+    branch = f"gate/pr-{int(number)}-{test_sha[:12]}"
+    push_url = f"https://x-access-token:{token}@github.com/{ci_repo}.git"
+    actions_url = f"https://github.com/{ci_repo}/actions?query=branch%3A{branch}"
+    poll_s = int(os.environ.get("SWITCHBOARD_CI_POLL_SECONDS", "15"))
+    deadline = time.time() + timeout_s
+    with log_path.open("w", encoding="utf-8") as log:
+        log.write(f"Switchboard CI sandbox gate at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
+        log.write(f"sandbox={ci_repo} branch={branch} sha={test_sha}\n\n")
+        log.flush()
+        try:
+            _run(["git", "-C", str(worktree), "push", "--force", push_url,
+                  f"HEAD:refs/heads/{branch}"], stdout=log, timeout=180)
+            seen = False
+            while True:
+                if time.time() > deadline:
+                    raise GateError(
+                        f"sandbox CI timed out after {timeout_s}s "
+                        f"({'no run appeared' if not seen else 'run unfinished'}) — {actions_url}")
+                data = _github_request(
+                    "GET", f"repos/{ci_repo}/actions/runs?branch={branch}&per_page=30",
+                    token=token)
+                runs = [r for r in (data.get("workflow_runs") or [])
+                        if r.get("head_sha") == test_sha
+                        and r.get("event") in ("push", "workflow_dispatch")]
+                if runs and all(r.get("status") == "completed" for r in runs):
+                    seen = True
+                    bad = [r for r in runs
+                           if r.get("conclusion") not in ("success", "skipped")]
+                    for r in runs:
+                        log.write(f"  {r.get('name')}: {r.get('conclusion')} ({r.get('html_url')})\n")
+                    log.flush()
+                    if bad:
+                        raise GateError(f"sandbox CI failed ({len(bad)} run(s)) — {actions_url}")
+                    return
+                seen = seen or bool(runs)
+                log.write("  waiting for sandbox CI...\n")
+                log.flush()
+                time.sleep(poll_s)
+        finally:
+            _run(["git", "-C", str(worktree), "push", push_url, "--delete", branch],
+                 stdout=log, check=False, timeout=60)
+
+
 def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
                     work_root: Path, source_repo: Path, timeout_s: int,
                     python_executable: str = "",
@@ -385,14 +457,22 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
         # unit, and stops gating every other PR until the bad PR is closed.
         cache = _ensure_cache_repo(work_root, source_repo, repo)
         run_dir = _prepare_worktree(cache, work_root, pr, run_tag)
-        python_runtime = select_ci_python(source_repo, explicit=python_executable)
         preflight = _pr_preflight(run_dir, pr, repo=repo)
         if preflight.get("status") != "pass":
             _write_preflight_log(log_path, run_dir, preflight)
             raise GateError("Switchboard review preflight failed: " +
                             "; ".join(f.get("code", "unknown") for f in preflight.get("findings", [])))
-        run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
-                             preflight=preflight, python_runtime=python_runtime)
+        ci_role = _sandbox_ci_role(SWITCHBOARD_CI_PROJECT)
+        if ci_role:
+            # Topology declares a public_ci sandbox: verify the suite there (free
+            # GitHub-hosted runners), keeping heavy CI off this box. Provenance
+            # preflight above is unchanged. See docs/CI-STRATEGY.md.
+            run_sandbox_gate(run_dir, log_path, ci_repo=ci_role["repo"],
+                             number=number, token=token, timeout_s=timeout_s)
+        else:
+            python_runtime = select_ci_python(source_repo, explicit=python_executable)
+            run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
+                                 preflight=preflight, python_runtime=python_runtime)
         post_status(repo, sha, "success", context=context,
                     description="Switchboard VM gate passed", target_url=pr_url,
                     token=token)
