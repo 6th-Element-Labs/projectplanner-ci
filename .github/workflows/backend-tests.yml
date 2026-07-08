@@ -9,7 +9,8 @@
 name: backend-tests
 
 on:
-  push:
+  # external_ci_mirror dispatches explicitly; no on:push (it collides with the
+  # dispatch run under cancel-in-progress concurrency and cancels a good run).
   workflow_dispatch:
     # external_ci_mirror always passes these as workflow inputs; declare them
     # (optional, traceability only) so `gh workflow run` dispatch is accepted.
