@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Coordination · Switchboard</title>
+<style>
+  :root{
+    --bg:#0d0f16; --panel:#151823; --panel-2:#1b1f2c; --line:#272c3b;
+    --ink:#e8ebf2; --muted:#8b93a7; --faint:#5b6273;
+    --accent:#5b8cff; --good:#2fbf71; --warn:#e0a63c; --bad:#e5484d; --decide:#a878ff;
+    --chip:#222739;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  header{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,#0d0f16 70%,rgba(13,15,22,.85));
+    border-bottom:1px solid var(--line);padding:14px 20px}
+  .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px}
+  h1 .dot{color:var(--decide)}
+  .sub{color:var(--muted);font-size:12px}
+  select,button{background:var(--panel-2);color:var(--ink);border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer}
+  button:hover,select:hover{border-color:#3a415c}
+  .stat{display:flex;gap:6px;align-items:baseline;background:var(--chip);border:1px solid var(--line);
+    border-radius:999px;padding:4px 12px;font-size:12px;color:var(--muted)}
+  .stat b{color:var(--ink);font-size:14px}
+  .wrap{max-width:960px;margin:0 auto;padding:18px 20px 80px}
+  .presence{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 20px}
+  .agent{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);
+    border-radius:999px;padding:5px 12px 5px 8px;font-size:12px}
+  .swatch{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 0 3px rgba(255,255,255,.04)}
+  .pulse{animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  .feed{position:relative;padding-left:26px}
+  .feed:before{content:"";position:absolute;left:8px;top:6px;bottom:6px;width:2px;
+    background:linear-gradient(180deg,transparent,var(--line) 8%,var(--line) 92%,transparent)}
+  .item{position:relative;margin:0 0 16px}
+  .item:before{content:"";position:absolute;left:-22px;top:6px;width:12px;height:12px;border-radius:50%;
+    background:var(--bg);border:2px solid var(--faint)}
+  .item.msg:before{border-color:var(--accent)}
+  .item.decide:before{border-color:var(--decide);background:var(--decide)}
+  .meta{font-size:11.5px;color:var(--faint);margin-bottom:5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .who{color:var(--muted);font-weight:600}
+  .arrow{color:var(--faint)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 14px}
+  .item.msg .card{border-left:3px solid var(--accent)}
+  .item.decide .card{border-left:3px solid var(--decide);background:var(--panel-2)}
+  .msgtext{white-space:pre-wrap;word-break:break-word}
+  .badge{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+    padding:2px 7px;border-radius:6px;border:1px solid transparent}
+  .b-ack{color:var(--good);border-color:rgba(47,191,113,.35);background:rgba(47,191,113,.1)}
+  .b-wait{color:var(--warn);border-color:rgba(224,166,60,.35);background:rgba(224,166,60,.1)}
+  .b-signal{color:var(--accent);border-color:rgba(91,140,255,.35);background:rgba(91,140,255,.1)}
+  .b-accepted{color:var(--good);border-color:rgba(47,191,113,.35);background:rgba(47,191,113,.1)}
+  .b-superseded{color:var(--faint);border-color:var(--line);background:transparent;text-decoration:line-through}
+  .b-proposed{color:var(--warn);border-color:rgba(224,166,60,.35);background:rgba(224,166,60,.1)}
+  .dtitle{font-weight:650;font-size:14.5px;margin:2px 0 6px}
+  .kv{margin:6px 0 0;font-size:13px}
+  .kv .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px}
+  .kv .v{white-space:pre-wrap;word-break:break-word}
+  .supx{font-size:11.5px;color:var(--muted);margin-top:7px;padding-top:7px;border-top:1px dashed var(--line)}
+  .tag{font-size:11px;color:var(--muted);background:var(--chip);border:1px solid var(--line);
+    border-radius:6px;padding:1px 7px}
+  details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-top:6px;outline:none}
+  details[open] summary{color:var(--ink)}
+  .empty,.err{text-align:center;color:var(--muted);padding:60px 20px}
+  .err b{color:var(--bad)}
+  .grp{color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.6px;
+    margin:20px 0 12px;padding-left:26px}
+  .live-dot{width:8px;height:8px;border-radius:50%;background:var(--good);display:inline-block;margin-right:6px}
+  .foot{color:var(--faint);font-size:11.5px;text-align:center;margin-top:28px}
+</style>
+</head>
+<body>
+<header>
+  <div class="row" style="justify-content:space-between">
+    <div>
+      <h1><span class="dot">◆</span> Agent Coordination <span class="sub" id="proj-label"></span></h1>
+      <div class="sub">the agent-to-agent war room — presence, the message bus, and the decision log</div>
+    </div>
+    <div class="row">
+      <select id="project" title="Board"></select>
+      <select id="sort" title="Order">
+        <option value="asc">Oldest first</option>
+        <option value="desc">Newest first</option>
+      </select>
+      <button id="live" title="Auto-refresh every 15s">▷ Live</button>
+      <button id="refresh" title="Reload now">↻</button>
+    </div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <span class="stat"><b id="s-agents">–</b> present</span>
+    <span class="stat"><b id="s-msgs">–</b> messages</span>
+    <span class="stat"><b id="s-dec">–</b> decisions</span>
+    <span class="sub" id="updated"></span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="presence" id="presence"></div>
+  <div id="content"><div class="empty">Loading coordination record…</div></div>
+  <div class="foot">Read-only projection of the live coordination record · reachable by URL, unlinked from the board</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const qp = new URLSearchParams(location.search);
+let PROJECT = qp.get('project') || 'switchboard';
+let SORT = 'asc';
+let liveTimer = null;
+
+const PALETTE = ['#5b8cff','#a878ff','#2fbf71','#e0a63c','#e5484d','#38c6d9','#f06fb0','#9aa7ff','#7fd18b'];
+function colorFor(name){
+  let h=0; for(const ch of (name||'')) h=(h*31+ch.charCodeAt(0))>>>0;
+  return PALETTE[h % PALETTE.length];
+}
+function esc(s){return (s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function fmt(ts){
+  if(!ts) return '';
+  const d = new Date(ts*1000), now = Date.now()/1000, diff = now-ts;
+  let rel;
+  if(diff<60) rel='just now';
+  else if(diff<3600) rel=Math.floor(diff/60)+'m ago';
+  else if(diff<86400) rel=Math.floor(diff/3600)+'h ago';
+  else rel=Math.floor(diff/86400)+'d ago';
+  return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})+' · '+rel;
+}
+function chip(agent){
+  const c = colorFor(agent);
+  return `<span class="swatch" style="background:${c}"></span><span class="mono">${esc(agent)}</span>`;
+}
+
+async function load(){
+  const c = $('#content');
+  try{
+    const r = await fetch(`/api/coordination?project=${encodeURIComponent(PROJECT)}`, {credentials:'same-origin'});
+    if(r.status===401){ c.innerHTML = `<div class="err"><b>Not signed in.</b><br>Open the <a href="/">board</a>, sign in, then reload this page.</div>`; return; }
+    if(r.status===400){ c.innerHTML = `<div class="err"><b>Unknown board “${esc(PROJECT)}”.</b></div>`; return; }
+    if(!r.ok){ c.innerHTML = `<div class="err"><b>Error ${r.status}</b> loading coordination record.</div>`; return; }
+    render(await r.json());
+  }catch(e){
+    c.innerHTML = `<div class="err"><b>Network error.</b><br>${esc(e.message||e)}</div>`;
+  }
+}
+
+function render(data){
+  $('#proj-label').textContent = '· ' + (data.project||PROJECT);
+  const agents = data.agents||[], messages = data.messages||[], decisions = data.decisions||[];
+  $('#s-agents').textContent = agents.length;
+  $('#s-msgs').textContent = messages.length;
+  $('#s-dec').textContent = decisions.length;
+  $('#updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+
+  // presence
+  $('#presence').innerHTML = agents.length
+    ? agents.map(a=>{
+        const id = a.agent_id||a.id||a.name||'agent';
+        const rt = a.runtime||a.platform||a.control_fidelity||'';
+        return `<span class="agent"><span class="swatch pulse" style="background:${colorFor(id)}"></span>
+          <span class="mono">${esc(id)}</span>${rt?`<span class="tag">${esc(rt)}</span>`:''}</span>`;
+      }).join('')
+    : `<span class="sub">No agents currently present — this is the recorded coordination log.</span>`;
+
+  // supersede map: decision id -> id of the decision that superseded it
+  const supBy = {};
+  decisions.forEach(d=>{ if(d.supersedes) supBy[d.supersedes]=d.id; });
+
+  // merge into one timeline
+  const items = [];
+  messages.forEach(m=> items.push({ts:m.sent_at||0, kind:'msg', m}));
+  decisions.forEach(d=> items.push({ts:d.created_at||0, kind:'decide', d}));
+  items.sort((a,b)=> SORT==='asc' ? a.ts-b.ts : b.ts-a.ts);
+
+  if(!items.length){ $('#content').innerHTML = `<div class="empty">No messages or decisions recorded on this board yet.</div>`; return; }
+
+  const html = ['<div class="feed">'];
+  for(const it of items){
+    if(it.kind==='msg'){
+      const m=it.m;
+      const ack = m.requires_ack
+        ? (m.acked_at ? `<span class="badge b-ack">acked ✓</span>` : `<span class="badge b-wait">awaiting ack ⏳</span>`)
+        : '';
+      const sig = m.signal ? `<span class="badge b-signal">${esc(m.signal)}</span>` : '';
+      const task = m.task_id ? `<span class="tag">${esc(m.task_id)}</span>` : '';
+      html.push(`<div class="item msg">
+        <div class="meta"><span class="who">${chip(m.from_agent)}</span><span class="arrow">→</span>
+          <span class="who">${chip(m.to_agent)}</span>${task}${sig}${ack}
+          <span style="margin-left:auto">${esc(fmt(m.sent_at))} · #${m.id}</span></div>
+        <div class="card"><div class="msgtext">${esc(m.message)}</div>
+          ${m.ack_response?`<div class="supx"><b>ack:</b> ${esc(m.ack_response)}</div>`:''}</div>
+      </div>`);
+    } else {
+      const d=it.d;
+      const st = (d.status||'accepted').toLowerCase();
+      const supd = supBy[d.id];
+      const task = d.task_id ? `<span class="tag">${esc(d.task_id)}</span>` : '';
+      html.push(`<div class="item decide">
+        <div class="meta"><span class="who">${chip(d.author)}</span>
+          <span class="badge b-${esc(st)}">${esc(st)}</span>${task}
+          <span style="margin-left:auto">${esc(fmt(d.created_at))} · decision #${d.id}</span></div>
+        <div class="card">
+          <div class="dtitle">${esc(d.title)}</div>
+          <div class="kv"><div class="k">Decision</div><div class="v">${esc(d.decision)}</div></div>
+          <details><summary>rationale &amp; context</summary>
+            <div class="kv"><div class="k">Rationale</div><div class="v">${esc(d.rationale)}</div></div>
+            <div class="kv"><div class="k">Context</div><div class="v">${esc(d.context)}</div></div>
+          </details>
+          ${d.supersedes?`<div class="supx">↩ supersedes decision #${d.supersedes}</div>`:''}
+          ${supd?`<div class="supx">⤴ superseded by decision #${supd}</div>`:''}
+        </div>
+      </div>`);
+    }
+  }
+  html.push('</div>');
+  $('#content').innerHTML = html.join('');
+}
+
+// project switcher
+async function loadProjects(){
+  try{
+    const r = await fetch('/api/projects',{credentials:'same-origin'});
+    if(!r.ok) throw 0;
+    const j = await r.json();
+    const list = (j.projects||j||[]).map(p=>p.id||p);
+    const sel = $('#project'); sel.innerHTML='';
+    (list.length?list:[PROJECT]).forEach(id=>{
+      const o=document.createElement('option'); o.value=id; o.textContent=id;
+      if(id===PROJECT) o.selected=true; sel.appendChild(o);
+    });
+  }catch(_){
+    const sel=$('#project'); sel.innerHTML=`<option>${PROJECT}</option>`;
+  }
+}
+
+$('#project').addEventListener('change', e=>{ PROJECT=e.target.value;
+  history.replaceState(null,'',`?project=${encodeURIComponent(PROJECT)}`); load(); });
+$('#sort').addEventListener('change', e=>{ SORT=e.target.value; load(); });
+$('#refresh').addEventListener('click', load);
+$('#live').addEventListener('click', e=>{
+  if(liveTimer){ clearInterval(liveTimer); liveTimer=null; e.target.textContent='▷ Live'; e.target.style.color=''; }
+  else { liveTimer=setInterval(load,15000); e.target.innerHTML='<span class="live-dot"></span>Live'; e.target.style.color='var(--good)'; load(); }
+});
+
+loadProjects();
+load();
+</script>
+</body>
+</html>

@@ -1744,6 +1744,30 @@ async def ixp_agents(project: str = Query(store.DEFAULT_PROJECT), lane: str = ""
     return {"agents": store.list_active_agents(lane=lane, project=_proj(project))}
 
 
+@app.get("/coordination", include_in_schema=False)
+async def coordination_page():
+    """Standalone, read-only Agent Coordination view (the agent-to-agent war room).
+    Unlinked from the board nav on purpose; reachable by URL. Data comes from
+    /api/coordination, which is gated by the normal read auth."""
+    page = _static / "coordination.html"
+    if page.exists():
+        return FileResponse(str(page))
+    raise HTTPException(404, "coordination page not found")
+
+
+@app.get("/api/coordination")
+async def api_coordination(project: str = Query(store.DEFAULT_PROJECT), limit: int = 300):
+    """Read-only rollup for the Agent Coordination page: presence, the full directed
+    message bus, and the decision log — one project's live coordination record."""
+    proj = _proj(project)
+    return {
+        "project": proj,
+        "agents": store.list_active_agents(project=proj),
+        "messages": store.list_agent_messages(project=proj, limit=limit),
+        "decisions": store.list_decisions(project=proj),
+    }
+
+
 @app.post("/ixp/v1/register_host")
 async def ixp_register_host(request: Request, body: dict = Body(...)):
     project = _body_project(body)

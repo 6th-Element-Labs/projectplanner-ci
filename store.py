@@ -11615,6 +11615,28 @@ def list_unacked_messages(to_agent: str, project: str = DEFAULT_PROJECT) -> List
     return [dict(r) for r in rows]
 
 
+def list_agent_messages(project: str = DEFAULT_PROJECT, *, limit: int = 300,
+                        task_id: str = "", agent: str = "") -> List[Dict[str, Any]]:
+    """Full directed-message history for a board (the agent-to-agent bus), oldest-first.
+
+    Read-only projection over agent_messages for the coordination view: unlike
+    list_unacked_messages (one recipient's open mailbox) this returns the whole
+    conversation so an operator can replay who told whom what, and whether it was
+    acked. Optionally scope to one task_id or one agent (as sender or recipient)."""
+    q = "SELECT * FROM agent_messages WHERE 1=1"
+    p: List[Any] = []
+    if task_id:
+        q += " AND task_id=?"; p.append(task_id)
+    if agent:
+        q += " AND (from_agent=? OR to_agent=?)"; p.extend([agent, agent])
+    q += " ORDER BY sent_at ASC, id ASC"
+    if limit and limit > 0:
+        q += " LIMIT ?"; p.append(int(limit))
+    with _conn(project) as c:
+        rows = c.execute(q, p).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_message_status(message_id: int, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     """Sender polls this to see whether a message has been acked."""
     now = time.time()
