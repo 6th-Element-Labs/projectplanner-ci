@@ -75,6 +75,20 @@ def init() -> None:
                 used_at    REAL
             );
             CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+            CREATE TABLE IF NOT EXISTS auth_login_events (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts         REAL NOT NULL,
+                action     TEXT NOT NULL,
+                outcome    TEXT NOT NULL,
+                email      TEXT,
+                user_id    TEXT,
+                ip         TEXT,
+                user_agent TEXT,
+                reason     TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_auth_login_events_ip ON auth_login_events(action, ip, ts);
+            CREATE INDEX IF NOT EXISTS idx_auth_login_events_email ON auth_login_events(action, email, ts);
+            CREATE INDEX IF NOT EXISTS idx_auth_login_events_ts ON auth_login_events(ts);
             """
         )
 
@@ -275,3 +289,53 @@ def accessible_project_ids(user_id: str, is_superadmin: bool) -> List[str]:
             allow.add(r["project_id"])
     # preserve store.project_ids() ordering / allowlist
     return [pid for pid in all_ids if pid in allow]
+
+
+# ---- login / reset audit trail + brute-force throttle (HARDEN-45) ------------
+def record_auth_event(action: str, outcome: str, *, email: Optional[str] = None,
+                      user_id: Optional[str] = None, ip: str = "",
+                      user_agent: str = "", reason: str = "") -> None:
+    """Append one login/reset attempt to the audit trail.
+
+    action  : 'login' | 'reset_request' | 'reset_consume'
+    outcome : 'success' | 'failure' | 'request' | 'throttled'
+    Best-effort by design — callers must not let an audit-write hiccup break the
+    auth path, so it goes through the same one-shot-retry writer the rest of the
+    store uses.
+    """
+    _exec_write(
+        "INSERT INTO auth_login_events(ts, action, outcome, email, user_id, ip, user_agent, reason) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (time.time(), action, outcome, (email or None), (user_id or None),
+         ip or "", user_agent or "", reason or ""),
+    )
+
+
+def recent_auth_events(action: str, *, ip: Optional[str] = None,
+                       email: Optional[str] = None, since_ts: float = 0.0,
+                       limit: int = 500) -> List[Dict[str, Any]]:
+    """Attempt rows for one action since since_ts, newest first.
+
+    Pass ip= or email= to restrict to a single throttle scope; pass neither to
+    read the whole trail (used by audit/tests).
+    """
+    clauses = ["action=?", "ts>=?"]
+    params: List[Any] = [action, float(since_ts)]
+    if ip is not None:
+        clauses.append("ip=?")
+        params.append(ip)
+    if email is not None:
+        clauses.append("email=?")
+        params.append(email)
+    params.append(int(limit))
+    sql = ("SELECT ts, outcome, email, user_id, ip, reason FROM auth_login_events WHERE "
+           + " AND ".join(clauses) + " ORDER BY ts DESC LIMIT ?")
+    with _conn() as c:
+        return [dict(r) for r in c.execute(sql, tuple(params)).fetchall()]
+
+
+def prune_auth_events(before_ts: float) -> int:
+    """Delete audit rows older than before_ts. Returns the number removed."""
+    with _conn() as c:
+        cur = c.execute("DELETE FROM auth_login_events WHERE ts < ?", (float(before_ts),))
+        return cur.rowcount
