@@ -131,16 +131,19 @@ const TeepPlan = {
         try {
             // HARDEN-38: fire board/people/tally concurrently — they're independent
             // once the project is known, so the critical path isn't 3 serial round-trips.
+            // HARDEN-35: project_context is no longer bundled in /api/board; fetch it
+            // in parallel from its own (browser-cached) endpoint.
             const boardReq = fetch('api/board');
             const peopleReq = fetch('api/people').then((r) => r.json()).then((d) => d.people || []).catch(() => []);
             const tallyReq = fetch(`tally/v1/project?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`)
                 .then((r) => r.json()).catch(() => null);
+            const ctxReq = this.fetchProjectContext();
             const res = await boardReq;
             if (!res.ok) throw new Error(`HTTP ${res.status} loading the board`);
             this.plan = await res.json();
-            this.projectContext = this.plan.project_context || null;
             this.people = await peopleReq;
             this.tally = await tallyReq;
+            this.projectContext = await ctxReq;
         } catch (err) {
             this.showError(err.message);
             return;
@@ -171,6 +174,19 @@ const TeepPlan = {
         this._renderActiveTop();   // deep-linked URLs land on a rendered tab, not a blank one
         const ds = document.getElementById('data-status');
         if (ds) { ds.className = 'badge bg-green-lt'; ds.textContent = `${this.tasks.length} tasks`; }
+    },
+
+    // HARDEN-35: project_context (repo roles, hierarchy, policy profiles) is a
+    // near-static ~9KB blob the board + task list never render — only the
+    // task-detail "Project context" card falls back to it (task detail carries
+    // its own per-task project_context from get_task). It's fetched from its own
+    // endpoint, which sets ETag + max-age so refocus/reload reuse the cache.
+    async fetchProjectContext() {
+        const proj = window.PM_PROJECT || 'maxwell';
+        try {
+            const r = await fetch(`api/projects/${encodeURIComponent(proj)}/context`);
+            return r.ok ? await r.json() : null;
+        } catch (e) { return null; }
     },
 
     flatten() {
@@ -3043,7 +3059,7 @@ const TeepPlan = {
     async _reloadBoardData() {
         try {
             this.plan = await (await fetch('api/board')).json();
-            this.projectContext = this.plan.project_context || null;
+            this.projectContext = await this.fetchProjectContext();
             this.flatten();
             this.renderBoard();
             this.renderTasks();
