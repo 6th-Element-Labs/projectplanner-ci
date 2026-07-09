@@ -1558,9 +1558,14 @@ async def poll_inbox_now():
 
 
 @app.get("/api/signals")
-async def plan_signals(project: str = Query(store.DEFAULT_PROJECT)):
+def plan_signals(project: str = Query(store.DEFAULT_PROJECT)):
     """Derived plan health: overdue / due-soon / blocked / ready / critical-slip /
-    past-due decisions + each owner's next-best 1-2 tasks."""
+    past-due decisions + each owner's next-best 1-2 tasks.
+
+    Sync (def, not async) on purpose: compute_plan_signals walks the full enriched
+    task list synchronously, so FastAPI runs it in the threadpool where its SQLite
+    I/O can't block the single worker's event loop — other requests (incl. /health)
+    stay responsive (HARDEN-36). The store also serves a short-TTL cached copy."""
     return signals.compute_plan_signals(project=_proj(project))
 
 
