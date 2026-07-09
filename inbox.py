@@ -104,7 +104,7 @@ def _dispatch_dev(targets, applied):
             continue
         dr = dispatch_mod.dispatch(tid, actor="Maxwell (email)")
         out.append({"task_id": tid, "dispatched": dr.get("dispatched"),
-                    "job_id": dr.get("job_id"), "error": dr.get("error") or dr.get("reason")})
+                    "wake_id": dr.get("wake_id"), "error": dr.get("error") or dr.get("reason")})
     return out
 
 
@@ -114,7 +114,7 @@ def _dispatch_note(dispatched):
     parts = []
     if ok:
         parts.append("Dispatched to Claude Code: " + ", ".join(
-            f"{d['task_id']} (job {d.get('job_id')})" for d in ok)
+            f"{d['task_id']} (wake {d.get('wake_id')})" for d in ok)
             + " — a PR link will post to each task when it's done.")
     parts += [f"Could not dispatch {d['task_id']}: {d.get('error') or 'unknown'}." for d in fail]
     return ("\n\n" + "\n".join(parts)) if parts else ""

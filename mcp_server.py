@@ -3070,15 +3070,15 @@ def notify(subject: str, text: str, ctx: Context) -> str:
 
 
 @mcp.tool()
-def dispatch_to_claude_code(task_id: str, ctx: Context) -> str:
-    """Push a task to Claude Code to CONTINUE DEVELOPMENT (the autonomous-dev bridge). Builds a
-    dev brief (the task's exit criteria + plan-RAG context) and fires a Claude Code cloud session
-    that opens a PR on a `claude/<task>` branch — never main — and is watchable in the desktop/
-    mobile apps. Returns {dispatched, session_url, ...}. Records the session link on the task.
-    No-op with a clear reason until the routine is configured on the plan host."""
-    principal = _require_write(ctx)
+def dispatch_to_claude_code(task_id: str, ctx: Context, project: str = "maxwell") -> str:
+    """Queue a task for autonomous development via the fleet. Enqueues a lane-scoped claim_next
+    wake intent that a work-capable Agent Host claims and runs in an isolated worktree, opening a
+    PR on a `claude/<task>` branch — never main. Returns {dispatched, wake_id, work_hosts_online, …}.
+    If no work-capable host is online for the task's project/lane, the wake queues until one is
+    (deploy/switchboard-agent-host-work.service.example). project selects the board."""
+    principal = _require_write(ctx, project)
     import dispatch as dispatch_mod
-    return _dumps(dispatch_mod.dispatch(task_id, actor=auth.actor(principal)))
+    return _dumps(dispatch_mod.dispatch(task_id, actor=auth.actor(principal), project=project))
 
 
 @mcp.tool()
