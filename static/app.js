@@ -42,7 +42,7 @@ const TeepPlan = {
     selectedDeliverableId: '',
     missionGraph: null,
     _missionDagRenderId: 0,
-    _missionPollMs: 10000,   // live cockpit poll interval (ms)
+    _missionPollMs: 5000,   // live cockpit poll interval (ms) — snappy now the graph is ~0.2s
     _missionLiveTimer: null,
     _missionSig: null,
     wsMeta: {},         // workstream_id -> {name, lead_org}
@@ -3382,7 +3382,9 @@ const TeepPlan = {
     async loadMissionStatus(deliverableId) {
         const id = (deliverableId || '').trim();
         if (!id) { this.missionStatus = null; return null; }
-        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_status`);
+        // no-store: the live poll must see the current server state every tick, never a
+        // cached response — otherwise node colours only change on a hard refresh.
+        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_status`, { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
         this.missionStatus = data;
@@ -3392,7 +3394,7 @@ const TeepPlan = {
     async loadDependencyGraph(deliverableId) {
         const id = (deliverableId || '').trim();
         if (!id) { this.missionGraph = null; return null; }
-        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/dependency_graph`);
+        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/dependency_graph`, { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
         this.missionGraph = data;
@@ -3721,9 +3723,12 @@ const TeepPlan = {
         const host = document.getElementById('mission-dag-graph');
         const g = this.missionGraph;
         if (!host || !g?.mermaid) return;
-        // Show progress immediately — the CDN library loads + layout can take a beat,
-        // and a blank host read as "never loads".
-        host.innerHTML = '<div class="text-secondary small py-4 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Rendering dependency map…</div>';
+        // First render shows a spinner (a blank host reads as "never loads"). Live
+        // re-renders keep the CURRENT graph on screen until the new SVG is ready, then
+        // swap atomically — so a 5s live recolour updates in place with no blank flash.
+        if (!host.querySelector('svg')) {
+            host.innerHTML = '<div class="text-secondary small py-4 text-center"><span class="spinner-border spinner-border-sm me-2"></span>Rendering dependency map…</div>';
+        }
         try { await this._ensureScript(this.MERMAID_SRC); } catch (e) { /* fall through to the unavailable message */ }
         if (!window.mermaid) {
             host.innerHTML = '<div class="text-secondary small">Dependency map renderer is unavailable right now — reload to retry.</div>';
@@ -3935,6 +3940,9 @@ const TeepPlan = {
         const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
             `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td>${this.esc(a.project_id || '')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
         const activeRows = (s.active_work || []).map((w) => `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this._missionBadge(w.status, this.STATUS_COLOR)}</td><td>${this.sessionHealthPill(w.session_health)}</td><td>${this.esc(w.assignee || '—')}</td><td class="small">${this.esc((w.active_claims || []).map((c) => c.agent_id).join(', ') || '—')}</td></tr>`).join('') || '<tr><td colspan="6" class="text-secondary">No active linked work</td></tr>';
+        // Keep the currently-rendered graph so a live re-render can show it until the new
+        // SVG is ready (no blank/flash while colours update in place).
+        const _prevGraphSvg = el.querySelector('#mission-dag-graph svg');
         el.innerHTML = header + this._missionCeoHeaderHtml(s) + this._missionDependencyGraphHtml() + kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap + nextActions + blockerHtml +
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
@@ -3945,6 +3953,8 @@ const TeepPlan = {
         if (s.pending_proposal) {
             el.insertAdjacentHTML('beforeend', `<div class="alert alert-azure mt-3">Pending breakdown proposal awaiting approval.</div>`);
         }
+        const _gh = el.querySelector('#mission-dag-graph');
+        if (_prevGraphSvg && _gh && !_gh.querySelector('svg')) _gh.appendChild(_prevGraphSvg);
         this._renderMissionMermaid();
         // Re-baseline the live signature so the poller only re-renders on the NEXT
         // real change, and stamp the freshly-rendered "updated" time.

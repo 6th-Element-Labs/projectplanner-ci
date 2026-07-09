@@ -307,11 +307,11 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
             lines.append(f"  {src} --> {dst}")
     lines.extend([
         "",
-        "  classDef doneNode fill:#d4edda,stroke:#28a745,color:#155724",
-        "  classDef doneUnprovenNode fill:#d1f0e8,stroke:#20c997,color:#0f5132",
-        "  classDef progressNode fill:#cfe2ff,stroke:#0d6efd,color:#084298",
-        "  classDef reviewNode fill:#fff3cd,stroke:#ffc107,color:#856404",
-        "  classDef blockedNode fill:#f8d7da,stroke:#dc3545,color:#842029",
+        "  classDef doneNode fill:#a3d9b7,stroke:#1e7e34,color:#0b3d1c",
+        "  classDef doneUnprovenNode fill:#a6e3d0,stroke:#12b886,color:#0b3d2e",
+        "  classDef progressNode fill:#8fb8fd,stroke:#0b5ed7,color:#062b63",
+        "  classDef reviewNode fill:#ffe083,stroke:#e0a800,color:#6b4e00",
+        "  classDef blockedNode fill:#f5a3a9,stroke:#c82333,color:#5c161c",
         "  classDef todoNode fill:#e9ecef,stroke:#6c757d,color:#495057",
         "  classDef externalNode fill:#f8f9fa,stroke:#adb5bd,color:#6c757d,stroke-dasharray: 4 2",
     ])
