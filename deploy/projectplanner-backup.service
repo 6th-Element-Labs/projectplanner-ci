@@ -1,0 +1,28 @@
+# /etc/systemd/system/projectplanner-backup.service
+# One-shot service: consistent SQLite snapshots of /var/lib/projectplanner
+# shipped off-box to S3 (HARDEN-43). Triggered daily by projectplanner-backup.timer.
+# Config + put-only AWS credentials live in /etc/projectplanner-backup.env —
+# deliberately NOT /opt/projectplanner/.env, so the backup credentials never
+# enter the app's environment. See docs/BACKUP-RESTORE-RUNBOOK.md.
+[Unit]
+Description=ProjectPlanner off-box SQLite backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/etc/projectplanner-backup.env
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/scripts/backup_databases.py
+StandardOutput=journal
+StandardError=journal
+# Keep a backup run from starving the web app on the 1 GB box (HARDEN-32).
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUQuota=50%
+MemoryHigh=192M
+MemoryMax=256M
+TimeoutStartSec=30min

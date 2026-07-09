@@ -1,0 +1,17 @@
+# /etc/systemd/system/projectplanner-backup.timer
+# Daily off-box SQLite backup (HARDEN-43). 07:19 UTC is a quiet window for
+# this box; RandomizedDelaySec avoids colliding with the :15-minute batch timers.
+# To enable:
+#   sudo cp projectplanner-backup.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now projectplanner-backup.timer
+[Unit]
+Description=ProjectPlanner daily off-box SQLite backup
+
+[Timer]
+OnCalendar=*-*-* 07:19:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
