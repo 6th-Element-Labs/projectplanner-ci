@@ -1809,7 +1809,7 @@ async def coordination_page():
 
 
 @app.get("/api/coordination")
-async def api_coordination(project: str = Query(store.DEFAULT_PROJECT), limit: int = 300):
+async def api_coordination(project: str = Query(store.DEFAULT_PROJECT), limit: int = 500):
     """Read-only rollup for the Agent Coordination page: presence, the full directed
     message bus, and the decision log — one project's live coordination record."""
     proj = _proj(project)

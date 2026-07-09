@@ -11749,23 +11749,29 @@ def list_unacked_messages(to_agent: str, project: str = DEFAULT_PROJECT) -> List
     return [dict(r) for r in rows]
 
 
-def list_agent_messages(project: str = DEFAULT_PROJECT, *, limit: int = 300,
+def list_agent_messages(project: str = DEFAULT_PROJECT, *, limit: int = 500,
                         task_id: str = "", agent: str = "") -> List[Dict[str, Any]]:
-    """Full directed-message history for a board (the agent-to-agent bus), oldest-first.
+    """Directed-message history for a board (the agent-to-agent bus), oldest-first.
 
     Read-only projection over agent_messages for the coordination view: unlike
     list_unacked_messages (one recipient's open mailbox) this returns the whole
     conversation so an operator can replay who told whom what, and whether it was
-    acked. Optionally scope to one task_id or one agent (as sender or recipient)."""
-    q = "SELECT * FROM agent_messages WHERE 1=1"
+    acked. Optionally scope to one task_id or one agent (as sender or recipient).
+
+    When the bus exceeds `limit`, this returns the most RECENT `limit` messages (not
+    the oldest) — a current-coordination view must not silently hide the newest
+    traffic — then presents them oldest-first for chronological reading."""
+    inner = "SELECT * FROM agent_messages WHERE 1=1"
     p: List[Any] = []
     if task_id:
-        q += " AND task_id=?"; p.append(task_id)
+        inner += " AND task_id=?"; p.append(task_id)
     if agent:
-        q += " AND (from_agent=? OR to_agent=?)"; p.extend([agent, agent])
-    q += " ORDER BY sent_at ASC, id ASC"
+        inner += " AND (from_agent=? OR to_agent=?)"; p.extend([agent, agent])
+    inner += " ORDER BY sent_at DESC, id DESC"
     if limit and limit > 0:
-        q += " LIMIT ?"; p.append(int(limit))
+        inner += " LIMIT ?"; p.append(int(limit))
+    # Take the newest window (inner, DESC) then re-sort ascending for display.
+    q = f"SELECT * FROM ({inner}) ORDER BY sent_at ASC, id ASC"
     with _conn(project) as c:
         rows = c.execute(q, p).fetchall()
     return [dict(r) for r in rows]
