@@ -1300,35 +1300,26 @@ async def comment(request: Request, task_id: str, body: dict = Body(...), projec
 
 
 @app.get("/api/dispatch/status")
-async def dispatch_status():
-    """Is Claude Code dispatch wired (PM_CC_ROUTINE_URL + token set)?"""
-    return dispatch.status()
+async def dispatch_status(project: str = Query(store.DEFAULT_PROJECT)):
+    """Is dispatch wired, and is a work-capable agent host online for this project?"""
+    return await asyncio.to_thread(dispatch.status, _proj(project))
 
 
 @app.post("/api/tasks/{task_id}/dispatch")
 async def dispatch_task(task_id: str, body: dict = Body(default={})):
-    """Push this task to the Claude Code runner (→ claude/ branch + PR). The human-triggered (A) entry."""
-    res = await asyncio.to_thread(dispatch.dispatch, task_id, (body or {}).get("actor", "user"))
+    """Queue a lane-scoped work-session wake for this task (→ a work-capable agent host claims it
+    and opens a PR on a claude/ branch — never main). The human-triggered entry."""
+    project = _body_project(body)
+    res = await asyncio.to_thread(dispatch.dispatch, task_id, (body or {}).get("actor", "user"), project)
     if res.get("error") == "task not found":
         raise HTTPException(404, "task not found")
     return res
 
 
-@app.get("/api/dispatch/job/{job_id}")
-async def dispatch_job(job_id: str):
-    """Status of a dispatched runner job (running|pushed|no_changes|…) + PR url + log tail."""
-    return await asyncio.to_thread(dispatch.job_status, job_id)
-
-
 @app.get("/api/tasks/{task_id}/dispatch/latest")
-async def task_dispatch_latest(task_id: str):
-    """The latest Claude Code dev run for a task: status + PR url + full run log (for the UI panel)."""
-    d = store.latest_dispatch(task_id)
-    if not d:
-        return {"job_id": None}
-    js = await asyncio.to_thread(dispatch.job_status, d["job_id"])
-    return {"job_id": d["job_id"], "created_at": d.get("created_at"),
-            **(js if isinstance(js, dict) else {})}
+async def task_dispatch_latest(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    """The current dispatch state for a task (none|queued|claiming|running|pr) for the Dev-tab panel."""
+    return await asyncio.to_thread(dispatch.latest, task_id, _proj(project))
 
 
 @app.post("/api/tasks/{task_id}/chat")

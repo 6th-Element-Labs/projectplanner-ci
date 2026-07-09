@@ -1350,7 +1350,7 @@ const TeepPlan = {
                     </div>
                 </div>
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
-                    <p class="text-secondary">Dispatch hands this task to a Claude Code agent in an isolated worktree. It drafts the change, opens a PR, and reports back here — it never merges or writes to your systems on its own.</p>
+                    <p class="text-secondary">Dispatch queues this task for the agent fleet: a work-capable agent host claims it, works it in an isolated worktree, and opens a PR on a <code>claude/</code> branch — it never merges or writes to your systems on its own. If no work host is online yet, it stays queued until one is.</p>
                     ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
                     ${this.controlTruthHtml(t)}
                     ${this.monitorControlHtml(t)}
@@ -1540,17 +1540,18 @@ const TeepPlan = {
 
     async dispatchTask(id) {
         const flash = (msg, cls) => { const el = document.getElementById('edit-flash-dev'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
-        if (!window.confirm(`Dispatch ${id} to the Claude Code runner? It builds the change on a claude/ branch and posts a PR link to this task — it never touches main.`)) return;
-        flash('Dispatching to Claude Code…');
+        const proj = window.PM_PROJECT || 'maxwell';
+        if (!window.confirm(`Dispatch ${id} to the fleet? A work-capable agent host claims it, works it on a claude/ branch, and posts a PR link here — it never touches main.`)) return;
+        flash('Queuing a work session…');
         let data;
         try {
-            const res = await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const res = await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: proj }) });
             data = await res.json();
         } catch (e) { return flash('Dispatch failed: ' + e.message, 'danger'); }
-        if (data.disabled) return flash(data.reason || 'Runner not configured', 'warning');
-        if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || 'unknown'), 'danger');
-        flash(`Dispatched (job ${data.job_id}) — Claude Code is building it now.`, 'green');
-        this._loadDispatch(id);   // render the live panel (status -> Open PR); it self-refreshes
+        if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || data.detail || 'unknown'), 'danger');
+        if (!data.work_hosts_online) flash(`Queued (wake ${data.wake_id}) — no work host is online yet, so it waits until one is.`, 'warning');
+        else flash(`Queued (wake ${data.wake_id}) — a work host will claim it and open a PR.`, 'green');
+        this._loadDispatch(id);   // render the live panel (queued → running → Open PR); it self-refreshes
     },
 
     async revokeClaim(taskId) {
@@ -1738,35 +1739,35 @@ const TeepPlan = {
         const el = document.getElementById('dispatch-panel');
         if (!el) return;
         this._dispatchPollId = id;
+        const proj = window.PM_PROJECT || 'maxwell';
         let d;
-        try { d = await (await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch/latest`)).json(); } catch (e) { return; }
-        if (!d || !d.job_id) { el.innerHTML = ''; return; }
-        const st = d.status || 'running';
-        const M = { running: ['Building…', 'azure'], pushed: ['PR ready', 'green'], no_changes: ['No changes', 'yellow'], push_failed: ['Push failed', 'red'], failed_branch: ['Failed', 'red'], no_repo: ['Failed', 'red'] };
+        try { d = await (await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch/latest?project=${encodeURIComponent(proj)}`)).json(); } catch (e) { return; }
+        const st = d && d.status;
+        if (!st || st === 'none') { el.innerHTML = ''; return; }
+        const M = {
+            queued: ['Queued for the fleet', 'yellow'],
+            claiming: ['Claimed — starting…', 'azure'],
+            running: ['Working…', 'azure'],
+            pr: ['PR ready', 'green'],
+        };
         const [label, color] = M[st] || [st, 'secondary'];
+        const active = st === 'queued' || st === 'claiming' || st === 'running';
         const pr = d.pr_url ? `<a href="${this.esc(d.pr_url)}" target="_blank" class="btn btn-success btn-sm"><i class="ti ti-git-pull-request me-1"></i>Open PR ↗</a>` : '';
+        const who = d.agent_id ? ` <span class="text-secondary small">${this.esc(d.agent_id)}</span>` : '';
         el.innerHTML = `
             <div class="card"><div class="card-body py-2">
                 <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <i class="ti ti-robot text-azure"></i><strong>Claude Code dev run</strong>
+                    <i class="ti ti-robot text-azure"></i><strong>Fleet dispatch</strong>${who}
                     <span class="badge bg-${color}-lt">${this.esc(label)}</span>
-                    ${st === 'running' ? '<span class="spinner-border spinner-border-sm text-azure"></span>' : ''}
+                    ${st === 'running' || st === 'claiming' ? '<span class="spinner-border spinner-border-sm text-azure"></span>' : ''}
                     <span class="ms-auto"></span>${pr}
-                    <button class="btn btn-sm btn-outline-secondary" id="dispatch-log-btn"><i class="ti ti-file-text me-1"></i>View run log</button>
                 </div>
-                ${st === 'pushed' ? '<div class="small text-secondary mt-1">Next: open the PR, review the diff, and merge it on GitHub (or comment back here).</div>' : ''}
-                ${st === 'running' ? '<div class="small text-secondary mt-1">Building now — the Open PR button appears here when it finishes.</div>' : ''}
-                ${st === 'no_changes' ? '<div class="small text-secondary mt-1">The run produced no code changes — open the log to see why.</div>' : ''}
-                <div id="dispatch-log" class="mt-2" style="display:none"></div>
+                ${st === 'queued' ? '<div class="small text-secondary mt-1">Queued — a work-capable agent host will claim it. If nothing picks it up, no work host is online for this lane yet.</div>' : ''}
+                ${st === 'claiming' ? '<div class="small text-secondary mt-1">A host claimed the wake and is starting the session.</div>' : ''}
+                ${st === 'running' ? '<div class="small text-secondary mt-1">Working now — the Open PR button appears here when it opens a PR.</div>' : ''}
+                ${st === 'pr' ? '<div class="small text-secondary mt-1">Next: open the PR, review the diff, and merge it on GitHub (or comment back here).</div>' : ''}
             </div></div>`;
-        const lb = document.getElementById('dispatch-log-btn');
-        if (lb) lb.addEventListener('click', () => {
-            const box = document.getElementById('dispatch-log');
-            if (!box) return;
-            if (box.style.display === 'none') { box.style.display = 'block'; box.innerHTML = `<pre class="bg-dark text-light p-2 rounded small" style="max-height:260px;overflow:auto;white-space:pre-wrap">${this.esc(d.log_tail || '(no log captured yet)')}</pre>`; }
-            else { box.style.display = 'none'; }
-        });
-        if (st === 'running') setTimeout(() => { if (this._dispatchPollId === id) this._loadDispatch(id); }, 7000);
+        if (active) setTimeout(() => { if (this._dispatchPollId === id) this._loadDispatch(id); }, 7000);
     },
 
     _linkify(s) {
