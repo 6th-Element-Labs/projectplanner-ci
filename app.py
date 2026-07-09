@@ -775,8 +775,19 @@ async def project_repo_topology(project: str):
 
 
 @app.get("/api/projects/{project}/context")
-async def project_context(project: str):
-    return store.get_project_context(project=_proj(project))
+def project_context(request: Request, project: str):
+    # HARDEN-35: project_context (repo roles, hierarchy, policy profiles) is a
+    # near-static ~9KB blob that used to ride on every /api/board load. It lives
+    # here now so the board payload stays slim; ETag + a short max-age let a tab
+    # refocus / reload reuse the browser-cached copy (bodyless 304). Sync def so
+    # its SQLite I/O runs in the threadpool, like /api/board (HARDEN-36).
+    payload = store.get_project_context(project=_proj(project))
+    body = json.dumps(payload, default=str, separators=(",", ":")).encode()
+    etag = 'W/"%s"' % hashlib.md5(body).hexdigest()  # noqa: S324 (cache tag, not security)
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=60"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 @app.post("/api/projects/{project}/repo_topology")

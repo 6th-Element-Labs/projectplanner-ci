@@ -14421,7 +14421,11 @@ def activity_since(ts: float) -> List[Dict[str, Any]]:
 # Dropping them from the (large, whole-board) payload roughly halves it on the
 # wire with zero UI change. Kept: description (board search matches it) and
 # provenance (the card's Done-proof badge reads it).
-_BOARD_LITE_DROP = ("session_health", "external_ci", "publication", "exit_criteria", "agent_state")
+# HARDEN-35: fields the board + task-list tabs never render — the task-detail
+# modal re-fetches them via GET /api/tasks/{id} (get_task). `description` is
+# deliberately NOT dropped: the board's text search still matches against it.
+_BOARD_LITE_DROP = ("session_health", "external_ci", "publication",
+                    "entry_criteria", "exit_criteria", "deliverable", "agent_state")
 
 # Short-TTL in-memory cache for the hot lite board (HARDEN-36). Keyed by the
 # project's latest task mutation, so any write invalidates it immediately and a
@@ -14451,7 +14455,10 @@ def _build_board_payload(project: str, lite: bool) -> Dict[str, Any]:
         ws = by_ws.setdefault(t["_wsId"], {"workstream_id": t["_wsId"], "name": t["_wsName"], "tasks": []})
         ws["tasks"].append(t)
     payload["workstreams"] = list(by_ws.values())
-    payload["project_context"] = get_project_context(project)
+    # HARDEN-35: project_context (repo roles, hierarchy, policy profiles) used to
+    # ride on every board load — a near-static ~9KB blob the board never renders.
+    # It now has its own endpoint (GET /api/projects/{id}/context) that the UI
+    # fetches once and the browser caches; keep it out of the board payload.
     return payload
 
 
