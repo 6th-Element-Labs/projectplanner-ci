@@ -88,7 +88,7 @@ jobs:
             echo "<details><summary>probe.json</summary>"
             echo
             echo '```json'
-            cat probe.json
+            cat probe.json 2>/dev/null || echo '{"error":"probe produced no output — infra failure, see the run log"}'
             echo '```'
             echo "</details>"
             echo

@@ -110,30 +110,27 @@ class _Conn:
         if headers:
             hdrs.update(headers)
         last_err = ""
+        elapsed = 0.0
         for attempt in range(2):
-            if self._conn is None:
-                try:
-                    self._connect()
-                except (OSError, ssl.SSLError) as e:
-                    last_err = f"{type(e).__name__}: {e}"
-                    self.close()
-                    time.sleep(0.4)
-                    continue
             start = time.monotonic()
             try:
+                if self._conn is None:
+                    self._connect()
                 self._conn.request(method, path, body=body, headers=hdrs)
                 resp = self._conn.getresponse()
                 data = resp.read()  # must fully read to reuse the connection
                 elapsed = time.monotonic() - start
                 return _Timed(200 <= resp.status < 300, resp.status, elapsed,
-                              set_cookie=resp.getheader("Set-Cookie", "") or "",
-                              body=data)
+                              set_cookie=_all_set_cookies(resp), body=data)
             except (http.client.HTTPException, OSError, ssl.SSLError, TimeoutError) as e:
+                elapsed = time.monotonic() - start
                 last_err = f"{type(e).__name__}: {e}"
                 self.close()          # force a fresh socket on retry
                 if attempt == 0:
                     time.sleep(0.4)
-        return _Timed(False, None, self.timeout, error=last_err or "request failed")
+        # Report the real elapsed of the last attempt, not a fabricated timeout —
+        # a failure must never inject a made-up latency into the p95/max stats.
+        return _Timed(False, None, elapsed, error=last_err or "request failed")
 
     def close(self) -> None:
         if self._conn is not None:
@@ -154,48 +151,66 @@ def probe_health(base_url: str, *, samples: int, timeout: float,
     conn = _Conn(base_url, timeout)
     path = "/health"
     failures: List[str] = []
+    n = max(1, samples)
 
     warm = conn.request("GET", path)            # handshake here = liveness signal
     if not (warm.ok and warm.status == 200):
         failures.append(warm.error or f"HTTP {warm.status}")
 
-    latencies: List[float] = []
-    for _ in range(max(1, samples)):
+    # Only successful responses feed the latency stats — a failed request's timing
+    # is not a real measurement and would poison p95/max (the failure is already
+    # counted as a hard failure below).
+    ok_latencies: List[float] = []
+    for _ in range(n):
         r = conn.request("GET", path)
-        latencies.append(r.seconds)
-        if not (r.ok and r.status == 200):
+        if r.ok and r.status == 200:
+            ok_latencies.append(r.seconds)
+        else:
             failures.append(r.error or f"HTTP {r.status}")
     conn.close()
 
-    p95 = percentile(latencies, 95)
+    p95 = percentile(ok_latencies, 95) if ok_latencies else None
     reasons: List[str] = []
     if failures:
         reasons.append(f"{len(failures)} /health request(s) failed: {failures[0]}")
-    if p95 > budget_s:
+    if p95 is not None and p95 > budget_s:
         reasons.append(f"/health p95 {p95:.3f}s over {budget_s:.1f}s budget")
     return {
         "check": "health",
         "ok": not reasons,
         "url": base_url.rstrip("/") + path,
-        "samples": len(latencies),
-        "p95_s": round(p95, 3),
-        "max_s": round(max(latencies), 3),
-        "min_s": round(min(latencies), 3),
+        "samples": n,
+        "ok_samples": len(ok_latencies),
+        "p95_s": round(p95, 3) if p95 is not None else None,
+        "max_s": round(max(ok_latencies), 3) if ok_latencies else None,
+        "min_s": round(min(ok_latencies), 3) if ok_latencies else None,
         "failures": failures,
         "reasons": reasons,
     }
 
 
+def _all_set_cookies(resp: http.client.HTTPResponse) -> str:
+    """Every Set-Cookie response header, newline-joined. http.client's getheader()
+    comma-folds repeated headers, which corrupts cookies whose values/attributes
+    contain commas (e.g. Expires dates); get_all() keeps them separate."""
+    return "\n".join(resp.msg.get_all("Set-Cookie") or [])
+
+
 def _cookie_value(set_cookie_header: str, name: str) -> str:
-    if not set_cookie_header:
-        return ""
-    jar = SimpleCookie()
-    try:
-        jar.load(set_cookie_header)
-    except Exception:
-        return ""
-    morsel = jar.get(name)
-    return morsel.value if morsel else ""
+    """Extract one cookie's value, parsing each Set-Cookie line independently so a
+    multi-cookie response can't hide the session morsel behind another cookie."""
+    for line in (set_cookie_header or "").split("\n"):
+        if not line:
+            continue
+        jar = SimpleCookie()
+        try:
+            jar.load(line)
+        except Exception:
+            continue
+        morsel = jar.get(name)
+        if morsel:
+            return morsel.value
+    return ""
 
 
 def probe_login(base_url: str, email: str, password: str, *, timeout: float,
@@ -215,22 +230,27 @@ def probe_login(base_url: str, email: str, password: str, *, timeout: float,
     login = conn.request("POST", "/api/auth/login",
                          headers={"Content-Type": "application/json"}, body=payload)
     login_s = login.seconds
-    if not (login.ok and login.status == 200):
+    login_ok = login.ok and login.status == 200
+    if not login_ok:
         reasons.append(f"login {login.error or 'HTTP ' + str(login.status)}")
 
     token = _cookie_value(login.set_cookie, SESSION_COOKIE)
-    if login.ok and not token:
+    if login_ok and not token:
         reasons.append(f"login set no {SESSION_COOKIE} cookie")
 
     session_s = 0.0
+    session_ok = False
     authenticated = False
     if token:
         sess = conn.request("GET", "/api/auth/session",
                             headers={"Cookie": f"{SESSION_COOKIE}={token}"})
         session_s = sess.seconds
-        if sess.ok and sess.status == 200:
+        session_ok = sess.ok and sess.status == 200
+        if session_ok:
             try:
-                authenticated = bool(json.loads(sess.body or b"{}").get("authenticated"))
+                # Strict identity check: only a real JSON `true` counts as authed —
+                # a truthy string/number must not pass the core auth assertion.
+                authenticated = json.loads(sess.body or b"{}").get("authenticated") is True
             except Exception:
                 authenticated = False
             if not authenticated:
@@ -239,9 +259,11 @@ def probe_login(base_url: str, email: str, password: str, *, timeout: float,
             reasons.append(f"session {sess.error or 'HTTP ' + str(sess.status)}")
     conn.close()
 
-    if login_s > budget_s:
+    # Only hold a leg to the latency budget if it actually succeeded — otherwise a
+    # failed leg (already reported) would double-count as a bogus latency reason.
+    if login_ok and login_s > budget_s:
         reasons.append(f"login {login_s:.3f}s over {budget_s:.1f}s budget")
-    if session_s > budget_s:
+    if session_ok and session_s > budget_s:
         reasons.append(f"session {session_s:.3f}s over {budget_s:.1f}s budget")
 
     return {
@@ -298,8 +320,9 @@ def _human(verdict: Dict[str, Any]) -> str:
             continue
         tag = "PASS" if c["ok"] else "FAIL"
         if c["check"] == "health":
-            lines.append(f"  [{tag}] health: p95={c['p95_s']}s max={c['max_s']}s "
-                         f"({c['samples']} samples)")
+            p95 = c["p95_s"] if c["p95_s"] is not None else "n/a"
+            lines.append(f"  [{tag}] health: p95={p95}s max={c['max_s']}s "
+                         f"({c['ok_samples']}/{c['samples']} ok)")
         elif c["check"] == "login":
             lines.append(f"  [{tag}] login: roundtrip={c['roundtrip_s']}s "
                          f"authenticated={c.get('authenticated')}")
