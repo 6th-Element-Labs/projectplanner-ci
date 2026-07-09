@@ -1,0 +1,124 @@
+# HARDEN-44 — external OFF-BOX uptime + latency alerting for plan.taikunai.com.
+#
+# This must run somewhere that survives the box dying, so it lives on the PUBLIC
+# projectplanner-ci sandbox (free, unlimited GitHub-hosted Actions) and fires on a
+# schedule from GitHub's own infra — not on the 1 GB prod VM. On the private
+# canonical repo this file is inert (Actions are disabled there); it is the sandbox
+# copy on the default branch whose `schedule` actually runs. See docs/UPTIME-MONITORING.md.
+#
+# Alerting is GitHub-native (no external secrets): a failure opens/refreshes a
+# labelled issue AND fails the run, so GitHub emails watchers and pushes to the
+# GitHub mobile app. Recovery auto-closes the issue.
+name: uptime-probe
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes (GitHub may delay under load)
+  workflow_dispatch:
+    inputs:
+      simulate_outage:
+        description: "Force a probe failure to drill the alert path (acceptance test)"
+        type: boolean
+        default: false
+
+# One probe at a time; never cancel an in-flight real probe for a newer run.
+concurrency:
+  group: uptime-probe
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PROBE_BASE_URL: ${{ vars.PROBE_BASE_URL || 'https://plan.taikunai.com' }}
+      PROBE_EMAIL: ${{ vars.PROBE_EMAIL }}
+      PROBE_PASSWORD: ${{ secrets.PROBE_PASSWORD }}
+      PROBE_LATENCY_BUDGET_S: ${{ vars.PROBE_LATENCY_BUDGET_S || '2.0' }}
+      PROBE_HEALTH_SAMPLES: "5"
+      # workflow_dispatch with simulate_outage=true forces a failure; empty otherwise.
+      PROBE_SIMULATE_OUTAGE: ${{ (github.event_name == 'workflow_dispatch' && inputs.simulate_outage) && '1' || '' }}
+      ISSUE_LABEL: uptime-outage
+      ALERT_ASSIGNEE: ${{ vars.UPTIME_ALERT_ASSIGNEE || 'StevenRidder' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run probe
+        id: probe
+        run: |
+          set +e
+          python scripts/uptime_probe.py | tee probe.json
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "probe exit code: $rc"
+
+      - name: Publish step summary
+        if: always()
+        run: |
+          {
+            echo "### Uptime probe — ${PROBE_BASE_URL}"
+            echo '```json'
+            cat probe.json 2>/dev/null || echo '{"error":"probe produced no output"}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or refresh outage issue (alert)
+        if: steps.probe.outputs.rc != '0'
+        run: |
+          gh label create "$ISSUE_LABEL" --color B60205 \
+            --description "plan.taikunai.com uptime probe" 2>/dev/null || true
+          reasons=$(python -c "import json;print(chr(10).join('- '+r for r in json.load(open('probe.json')).get('reasons',[])))" 2>/dev/null || echo "- probe produced no parseable output")
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            echo "🔴 **plan.taikunai.com uptime probe FAILED** ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            echo
+            echo "Failing checks:"
+            echo "$reasons"
+            echo
+            echo "<details><summary>probe.json</summary>"
+            echo
+            echo '```json'
+            cat probe.json 2>/dev/null || echo '{"error":"probe produced no output — infra failure, see the run log"}'
+            echo '```'
+            echo "</details>"
+            echo
+            echo "Run: $run_url"
+            echo "cc @${ALERT_ASSIGNEE}"
+          } > issue_body.md
+          existing=$(gh issue list --label "$ISSUE_LABEL" --state open --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue_body.md
+            echo "refreshed existing outage issue #$existing"
+          else
+            gh issue create --title "🔴 plan.taikunai.com uptime probe failing" \
+              --label "$ISSUE_LABEL" --assignee "$ALERT_ASSIGNEE" --body-file issue_body.md \
+            || gh issue create --title "🔴 plan.taikunai.com uptime probe failing" \
+              --label "$ISSUE_LABEL" --body-file issue_body.md
+            echo "opened new outage issue"
+          fi
+
+      - name: Resolve outage issue on recovery
+        if: steps.probe.outputs.rc == '0'
+        run: |
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          for n in $(gh issue list --label "$ISSUE_LABEL" --state open --json number -q '.[].number'); do
+            gh issue comment "$n" --body "✅ Recovered — probe green ($(date -u +%Y-%m-%dT%H:%M:%SZ)). Run: $run_url"
+            gh issue close "$n"
+            echo "closed recovered outage issue #$n"
+          done
+
+      - name: Fail the run so GitHub pages
+        if: steps.probe.outputs.rc != '0'
+        run: |
+          echo "::error::plan.taikunai.com uptime probe failed — see the uptime-outage issue"
+          exit 1
