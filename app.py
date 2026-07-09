@@ -1397,42 +1397,45 @@ async def clear_plan_chat(session: str = "plan", project: str = Query(store.DEFA
     return {"cleared": session}
 
 
-def _queue_triage(res, source, subject):
+def _queue_triage(res, source, subject, project=None):
     """Persist a triage result into the Action Queue (Inbox) as a pending item so its proposed
     changes survive reload and are bulk-confirmable in one place — not just ephemeral chat cards.
-    Only queues when there's something to act on. Mutates + returns `res` with inbox_id."""
+    Only queues when there's something to act on. Mutates + returns `res` with inbox_id.
+    The item lands on `project`'s inbox (same board the artifact was ingested on)."""
+    project = project or store.DEFAULT_PROJECT
     try:
         if res and ((res.get("proposals")) or (res.get("new_tasks"))):
             triage = {"proposals": res.get("proposals", []), "new_tasks": res.get("new_tasks", []),
                       "sources": res.get("sources", []), "summary": res.get("summary", "")}
             res["inbox_id"] = store.add_inbox_item(
                 source, source + "-" + os.urandom(6).hex(), "", subject or source,
-                res.get("summary", ""), triage)
+                res.get("summary", ""), triage, project=project)
     except Exception:
         pass  # queueing is best-effort; the chat cards still work
     return res
 
 
 @app.post("/api/intake")
-async def intake_artifact(body: dict = Body(...)):
-    """Ingest an artifact (transcript/email/document) into RAG + triage it against the plan.
-    Returns {summary, proposals, new_tasks, sources, ingested_chunks, inbox_id} — propose-to-confirm."""
+async def intake_artifact(body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
+    """Ingest an artifact (transcript/email/document) into `project`'s RAG corpus + triage it
+    against that board. Returns {summary, proposals, new_tasks, sources, ingested_chunks, inbox_id}."""
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text required")
     try:
         res = await asyncio.to_thread(
-            intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text)
-        return _queue_triage(res, body.get("kind") or "note", body.get("title") or "")
+            intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text,
+            project=project)
+        return _queue_triage(res, body.get("kind") or "note", body.get("title") or "", project)
     except Exception as e:
         raise HTTPException(502, f"intake error: {e}")
 
 
 @app.post("/api/intake/upload")
 async def intake_upload(file: UploadFile = File(...), kind: str = Form("document"),
-                        title: str = Form("")):
+                        title: str = Form(""), project: str = Query(store.DEFAULT_PROJECT)):
     """Drop a file — audio/video, pdf, docx, or text — extract or TRANSCRIBE it, then
-    ingest into the corpus + triage. Media is transcribed via OpenAI (Whisper) through the
+    ingest into `project`'s corpus + triage. Media is transcribed via OpenAI (Whisper) through the
     gateway; everything else uses attachments.extract. Same response shape as /api/intake."""
     data = await file.read()
     if not data:
@@ -1452,51 +1455,54 @@ async def intake_upload(file: UploadFile = File(...), kind: str = Form("document
     if not text or not text.strip():
         raise HTTPException(422, f"could not get text from {fn} (unsupported type or empty)")
     try:
-        res = await asyncio.to_thread(intake.ingest_and_triage, kind or "document", label, text)
+        res = await asyncio.to_thread(intake.ingest_and_triage, kind or "document", label, text,
+                                      project=project)
     except Exception as e:
         raise HTTPException(502, f"intake error: {e}")
     res["transcribed"] = media
     res["chars"] = len(text)
-    return _queue_triage(res, "transcript" if media else "upload", label)
+    return _queue_triage(res, "transcript" if media else "upload", label, project)
 
 
 # ---- Live Inbox (Phase 5.5) -------------------------------------------------
 @app.get("/api/inbox")
-async def get_inbox(status: str = None):
-    return {"items": store.list_inbox(status), "pending": store.inbox_pending_count()}
+async def get_inbox(status: str = None, project: str = Query(store.DEFAULT_PROJECT)):
+    return {"items": store.list_inbox(status, project=project),
+            "pending": store.inbox_pending_count(project=project)}
 
 
 @app.post("/api/inbox/{item_id}/confirm")
-async def confirm_inbox(item_id: int, body: dict = Body(default={})):
+async def confirm_inbox(item_id: int, body: dict = Body(default={}),
+                        project: str = Query(store.DEFAULT_PROJECT)):
     """Apply the given proposals/new_tasks (default: all of the item's). `keep_proposals` /
     `keep_new_tasks` are held back and the item STAYS pending with just those (used to bulk-
     confirm the safe changes while holding status->Done items that still need evidence).
     Edited proposals are honored — the client sends the modified field values to apply."""
-    item = store.get_inbox_item(item_id)
+    item = store.get_inbox_item(item_id, project=project)
     if not item:
         raise HTTPException(404, "no such inbox item")
     tri = item.get("triage") or {}
     applied = inbox_mod.apply(body.get("proposals", tri.get("proposals", [])),
-                              body.get("new_tasks", tri.get("new_tasks", [])))
+                              body.get("new_tasks", tri.get("new_tasks", [])), project=project)
     keep_p = body.get("keep_proposals") or []
     keep_n = body.get("keep_new_tasks") or []
     tri["applied"] = applied
     if keep_p or keep_n:
         tri["proposals"], tri["new_tasks"] = keep_p, keep_n
-        store.update_inbox_triage(item_id, tri)          # stays pending with the held items
+        store.update_inbox_triage(item_id, tri, project=project)   # stays pending with the held items
     else:
-        store.update_inbox_triage(item_id, tri)
-        store.set_inbox_status(item_id, "confirmed")
+        store.update_inbox_triage(item_id, tri, project=project)
+        store.set_inbox_status(item_id, "confirmed", project=project)
     return {"applied": applied, "remaining": len(keep_p) + len(keep_n)}
 
 
 @app.post("/api/inbox/confirm_all")
-async def confirm_all_inbox(body: dict = Body(default={})):
+async def confirm_all_inbox(body: dict = Body(default={}), project: str = Query(store.DEFAULT_PROJECT)):
     """Bulk-confirm pending queue items. safe_only=True applies everything EXCEPT status->Done
     proposals (which need acceptance evidence), holding those back so the item stays pending."""
     safe_only = bool(body.get("safe_only"))
     ids = body.get("ids")
-    items = store.list_inbox("pending", limit=500)
+    items = store.list_inbox("pending", limit=500, project=project)
     if ids:
         idset = set(ids)
         items = [it for it in items if it["id"] in idset]
@@ -1512,7 +1518,7 @@ async def confirm_all_inbox(body: dict = Body(default={})):
             apply_p, keep_p = props, []
         if not (apply_p or nts):
             continue
-        applied = inbox_mod.apply(apply_p, nts)
+        applied = inbox_mod.apply(apply_p, nts, project=project)
         tri["applied"] = applied
         tot["items"] += 1
         tot["updated"] += len(applied.get("updated", []))
@@ -1520,34 +1526,36 @@ async def confirm_all_inbox(body: dict = Body(default={})):
         tot["held"] += len(keep_p)
         if keep_p:
             tri["proposals"], tri["new_tasks"] = keep_p, []
-            store.update_inbox_triage(it["id"], tri)
+            store.update_inbox_triage(it["id"], tri, project=project)
         else:
-            store.update_inbox_triage(it["id"], tri)
-            store.set_inbox_status(it["id"], "confirmed")
+            store.update_inbox_triage(it["id"], tri, project=project)
+            store.set_inbox_status(it["id"], "confirmed", project=project)
     return tot
 
 
 @app.post("/api/inbox/{item_id}/dismiss")
-async def dismiss_inbox(item_id: int):
-    if not store.get_inbox_item(item_id):
+async def dismiss_inbox(item_id: int, project: str = Query(store.DEFAULT_PROJECT)):
+    if not store.get_inbox_item(item_id, project=project):
         raise HTTPException(404, "no such inbox item")
-    store.set_inbox_status(item_id, "dismissed")
+    store.set_inbox_status(item_id, "dismissed", project=project)
     return {"dismissed": item_id}
 
 
 @app.post("/api/inbox/simulate")
-async def simulate_inbox(body: dict = Body(...)):
-    """Inject a fake inbound email to exercise the Live Inbox pipeline without a mailbox."""
+async def simulate_inbox(body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
+    """Inject a fake inbound email to exercise the Live Inbox pipeline without a mailbox. Routes
+    to `project` (query param, or a `project` field in the body for explicit cross-board testing)."""
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "text required")
+    project = body.get("project") or project
     sender = body.get("sender") or "tester@taikunai.com"
     headers = {"from": sender, "to": body.get("to") or "", "cc": body.get("cc") or "",
                "date": body.get("date") or "", "message_id": body.get("message_id") or ""}
     try:
         item = await asyncio.to_thread(
             inbox_mod.process, "email-sim", "sim-" + os.urandom(6).hex(),
-            sender, body.get("subject") or "(simulated)", text, headers)
+            sender, body.get("subject") or "(simulated)", text, headers, project)
     except Exception as e:
         raise HTTPException(502, f"inbox error: {e}")
     return item or {"deduped": True}

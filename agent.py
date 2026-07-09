@@ -331,7 +331,7 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
             except Exception:
                 args = {}
             if name == "doc_search":
-                hits = rag.search(args.get("query", ""), top_k=5)
+                hits = rag.search(args.get("query", ""), top_k=5, project=project)
                 sources += [h["file"] for h in hits]
                 content = "\n\n".join(f"[{h['file']}] {h['text']}" for h in hits) or "no matches"
             elif name == "search_tasks":
@@ -493,8 +493,10 @@ def _system_triage(applied_mode=False, headers=None):
     )
 
 
-def triage(kind, title, text, applied_mode=False, headers=None):
+def triage(kind, title, text, applied_mode=False, headers=None, project="maxwell"):
     """Triage an inbound artifact against the plan. Returns {answer(summary), proposals, new_tasks,
-    recipients, sources}. headers={from,to,cc,date} lets the agent reply-all / route to named people."""
+    recipients, sources}. headers={from,to,cc,date} lets the agent reply-all / route to named people.
+    project scopes the grounding tools (doc_search / search_tasks / get_task) to that board."""
     artifact = f"INBOUND {kind.upper()}" + (f" — {title}" if title else "") + ":\n\n" + (text or "")
-    return run(None, artifact, system=_system_triage(applied_mode, headers), max_iters=TRIAGE_ITERS)
+    return run(None, artifact, system=_system_triage(applied_mode, headers), max_iters=TRIAGE_ITERS,
+               project=project)
