@@ -2,6 +2,7 @@
 
 **Status:** Draft · **Workstream (proposed):** `BRIDGE` · **Owner:** Switchboard Operator · **Task:** DOGFOOD-13
 **Provenance:** Recovered and completed from a strategy session on 2026-07-08→09 that stalled mid-write when the connection dropped. This document carries that session's thesis forward and adds the per-platform technical implementation scope the discussion had reached but not yet written.
+**Implementation plan:** the detailed engineering scope (shared substrate, per-platform work items, effort, acceptance, milestones) lives in [BRIDGE-IMPLEMENTATION-PLAN.md](BRIDGE-IMPLEMENTATION-PLAN.md) (BRIDGE-1).
 
 ---
 
