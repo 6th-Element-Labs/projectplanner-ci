@@ -316,10 +316,22 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
         "  classDef externalNode fill:#f8f9fa,stroke:#adb5bd,color:#6c757d,stroke-dasharray: 4 2",
     ])
     by_class: Dict[str, List[str]] = {}
+    dashed: List[str] = []
     for node in nodes:
-        cls = "externalNode" if node.get("external") else _STATE_CLASS.get(node.get("state") or "todo", "todoNode")
-        by_class.setdefault(cls, []).append(node.get("mermaid_id") or _mermaid_id(node.get("id") or ""))
+        mid = node.get("mermaid_id") or _mermaid_id(node.get("id") or "")
+        state = node.get("state") or "todo"
+        cls = _STATE_CLASS.get(state, "todoNode")
+        # An external dependency keeps its REAL state colour — a merged/Done dep is green,
+        # not grey (the old code forced every external node to the neutral externalNode
+        # class, so a done HARDEN-* dep read as "not done"). The external cue is the dashed
+        # border + dotted edge instead. Only an unresolved external dep (state "missing")
+        # keeps the neutral external style.
+        if node.get("external") and cls != "externalNode":
+            dashed.append(mid)
+        by_class.setdefault(cls, []).append(mid)
     for cls, ids in sorted(by_class.items()):
         if ids:
             lines.append(f"  class {','.join(ids)} {cls}")
+    for mid in dashed:
+        lines.append(f"  style {mid} stroke-dasharray: 4 2")
     return "\n".join(lines)

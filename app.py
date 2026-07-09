@@ -837,7 +837,9 @@ async def get_project_board(project: str, board_id: str):
 
 
 @app.get("/api/deliverables")
-async def list_deliverables(project: str = Query(store.DEFAULT_PROJECT), board_id: str = ""):
+def list_deliverables(project: str = Query(store.DEFAULT_PROJECT), board_id: str = ""):
+    # def (not async): run the SQLite/deliverable work in the threadpool so a slow
+    # deliverable read can't block the single worker's event loop (same as /api/board).
     project = _proj(project)
     return {"project": project, "board_id": board_id or None,
             "deliverables": store.list_deliverables(project=project, board_id=board_id)}
@@ -855,7 +857,8 @@ async def create_deliverable(request: Request, body: dict = Body(...),
 
 
 @app.get("/api/deliverables/{deliverable_id}")
-async def get_deliverable(deliverable_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+def get_deliverable(deliverable_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    # def (not async): threadpool the deliverable read so it can't block the event loop.
     project = _proj(project)
     result = store.get_deliverable(deliverable_id, project=project)
     if not result:
@@ -913,8 +916,8 @@ async def unlink_task_from_deliverable(request: Request, deliverable_id: str,
 
 
 @app.get("/api/mission_status")
-async def mission_status_query(project: str = Query(...), deliverable_id: str = "",
-                               board_id: str = "", mission_id: str = ""):
+def mission_status_query(project: str = Query(...), deliverable_id: str = "",
+                         board_id: str = "", mission_id: str = ""):
     project = _proj(project)
     result = store.get_mission_status(
         project=project, deliverable_id=deliverable_id,
@@ -926,7 +929,7 @@ async def mission_status_query(project: str = Query(...), deliverable_id: str = 
 
 
 @app.get("/api/deliverables/{deliverable_id}/mission_status")
-async def deliverable_mission_status(deliverable_id: str, project: str = Query(...)):
+def deliverable_mission_status(deliverable_id: str, project: str = Query(...)):
     project = _proj(project)
     result = store.get_mission_status(project=project, deliverable_id=deliverable_id)
     if result.get("error"):
@@ -936,7 +939,8 @@ async def deliverable_mission_status(deliverable_id: str, project: str = Query(.
 
 
 @app.get("/api/deliverables/{deliverable_id}/dependency_graph")
-async def deliverable_dependency_graph(deliverable_id: str, project: str = Query(...)):
+def deliverable_dependency_graph(deliverable_id: str, project: str = Query(...)):
+    # def (not async): threadpool the graph build so it can't block the event loop.
     project = _proj(project)
     result = store.get_deliverable_dependency_graph(project=project, deliverable_id=deliverable_id)
     if result.get("error"):

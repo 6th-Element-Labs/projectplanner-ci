@@ -1109,7 +1109,8 @@ def get_deliverable(deliverable_id: str, project: str = DEFAULT_PROJECT,
     return deliverable
 
 
-def list_deliverables(project: str = DEFAULT_PROJECT, board_id: str = "") -> List[Dict[str, Any]]:
+def list_deliverables(project: str = DEFAULT_PROJECT, board_id: str = "",
+                      include_task_snapshots: bool = True) -> List[Dict[str, Any]]:
     if not has_project(project):
         return []
     board_id = (board_id or "").strip()
@@ -1123,7 +1124,9 @@ def list_deliverables(project: str = DEFAULT_PROJECT, board_id: str = "") -> Lis
             ).fetchall()
         else:
             rows = c.execute("SELECT id FROM deliverables ORDER BY updated_at DESC, id").fetchall()
-    return [d for d in (get_deliverable(r["id"], project=project) for r in rows) if d]
+    return [d for d in (get_deliverable(r["id"], project=project,
+                                        include_task_snapshots=include_task_snapshots)
+                        for r in rows) if d]
 
 
 def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
@@ -1688,13 +1691,15 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
 
 
 def _resolve_mission_deliverable(project: str, deliverable_id: str = "",
-                               board_id: str = "", mission_id: str = "") -> Dict[str, Any]:
+                               board_id: str = "", mission_id: str = "",
+                               include_task_snapshots: bool = True) -> Dict[str, Any]:
     if not has_project(project):
         return {"error": f"unknown project: {project}"}
     deliverable_id = (deliverable_id or "").strip()
     board_id = (board_id or mission_id or "").strip()
     if deliverable_id:
-        deliverable = get_deliverable(deliverable_id, project=project)
+        deliverable = get_deliverable(deliverable_id, project=project,
+                                      include_task_snapshots=include_task_snapshots)
         if not deliverable:
             return {"error": "unknown deliverable", "deliverable_id": deliverable_id,
                     "project_id": project}
@@ -1703,7 +1708,8 @@ def _resolve_mission_deliverable(project: str, deliverable_id: str = "",
         board = get_project_board(board_id, project=project)
         if not board:
             return {"error": "unknown board", "board_id": board_id, "project_id": project}
-        deliverables = list_deliverables(project=project, board_id=board_id)
+        deliverables = list_deliverables(project=project, board_id=board_id,
+                                         include_task_snapshots=include_task_snapshots)
         if not deliverables:
             return {"error": "no deliverable for board", "board_id": board_id,
                     "project_id": project, "board": board}
@@ -2377,28 +2383,76 @@ def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
 
 def get_deliverable_dependency_graph(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
                                      board_id: str = "", mission_id: str = "") -> Dict[str, Any]:
-    """Return task-level depends_on graph for a deliverable (strategic map layer)."""
+    """Return task-level depends_on graph for a deliverable (strategic map layer).
+
+    The map only needs title/status/depends_on/workstream/provenance per task. It used to
+    resolve the deliverable WITH full task snapshots and call the heavy get_task ~once per
+    node/edge (session_health/external_ci/publication gates and all) — helm-vulkan (144
+    links) took ~23s AND, because the endpoint ran on the event loop, froze every other
+    request (boards, /health) for that whole time. We now resolve without snapshots and
+    serve every lookup from a lazy per-project index (raw row + git provenance), which
+    produces byte-identical graphs in ~0.2s.
+    """
     import mission_graph
 
     scope = _resolve_mission_deliverable(project, deliverable_id=deliverable_id,
-                                          board_id=board_id, mission_id=mission_id)
+                                          board_id=board_id, mission_id=mission_id,
+                                          include_task_snapshots=False)
     if scope.get("error"):
         return scope
     deliverable = scope["deliverable"]
     deliverable_id = deliverable.get("id") or deliverable_id
-    linked_tasks = [_enriched_mission_task_link(link)
-                    for link in (deliverable.get("task_links") or [])]
+
+    _indexes: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    def _project_index(proj: str) -> Dict[str, Dict[str, Any]]:
+        if proj not in _indexes:
+            index: Dict[str, Dict[str, Any]] = {}
+            if has_project(proj):
+                with _conn(proj) as c:
+                    for r in c.execute("SELECT * FROM tasks").fetchall():
+                        t = _task_row(r)
+                        t["provenance"] = _provenance_summary(_load_git_state(c, t["task_id"]))
+                        index[(t.get("task_id") or "").strip().upper()] = t
+            _indexes[proj] = index
+        return _indexes[proj]
+
+    def _light_detail(proj: str, task_id: str) -> Optional[Dict[str, Any]]:
+        hit = _project_index(proj).get((task_id or "").strip().upper())
+        if not hit:
+            return None
+        return {
+            "task_id": hit.get("task_id"),
+            "title": hit.get("title"),
+            "status": hit.get("status"),
+            "workstream": hit.get("_wsId"),
+            "_wsId": hit.get("_wsId"),
+            "depends_on": hit.get("depends_on") or [],
+            "provenance": hit.get("provenance"),
+        }
+
+    linked_tasks = []
+    for link in (deliverable.get("task_links") or []):
+        task_project = link.get("project_id") or project
+        enriched = dict(link)
+        if not has_project(task_project):
+            enriched["task_detail"] = {"error": "unknown project", "project_id": task_project}
+        else:
+            detail = _light_detail(task_project, link.get("task_id"))
+            enriched["task_detail"] = detail or {
+                "error": "unknown task", "project_id": task_project,
+                "task_id": link.get("task_id"),
+            }
+        linked_tasks.append(enriched)
 
     def _lookup(task_project: str, task_id: str, fallback: bool = False) -> Optional[Dict[str, Any]]:
         proj = project if fallback else (task_project or project)
-        task = get_task(task_id, project=proj)
-        if not task and fallback and proj != project:
-            task = get_task(task_id, project=project)
-        if not task:
+        detail = _light_detail(proj, task_id)
+        if not detail:
             return None
-        out = dict(task)
-        out["_project_id"] = proj
-        return out
+        detail = dict(detail)
+        detail["_project_id"] = proj
+        return detail
 
     return mission_graph.build_dependency_graph(
         linked_tasks,
