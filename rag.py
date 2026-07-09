@@ -22,9 +22,9 @@ KEY = os.environ.get("PM_LLM_KEY") or os.environ.get("LLM_GATEWAY_MASTER_KEY", "
 EMBED_MODEL = os.environ.get("PM_LLM_EMBED_MODEL", "taikun-embed")
 PACK_VERSION = 1  # bump when the contextual-packing format changes -> re-embed the corpus
 
-_index = None  # static plan-docs: list of {text, file, embedding}
-_dyn = None    # dynamic ingested artifacts (emails/transcripts/docs), from the rag_docs table
-_dyn_ver = -1  # rag_docs max id we last loaded — cheap freshness check across processes
+_index = None  # static plan-docs (Maxwell plan): list of {text, file, embedding}
+_dyn = {}      # project -> dynamic ingested artifacts (emails/transcripts/docs) from that project's rag_docs
+_dyn_ver = {}  # project -> rag_docs max id we last loaded — cheap per-project freshness check across processes
 
 
 def _chunks(text, size=1100, overlap=120):
@@ -127,54 +127,67 @@ def _cos(a, b):
     return s / (na * nb) if na and nb else 0.0
 
 
-def _load_dyn():
-    """Refresh the dynamic corpus from rag_docs only when it changed (cheap MAX(id) check),
-    so the web and MCP processes both see newly-ingested artifacts without a restart."""
+def _load_dyn(project=None):
+    """Refresh ONE project's dynamic corpus from its rag_docs table, only when it changed
+    (cheap per-project MAX(id) check), so the web and MCP processes both see newly-ingested
+    artifacts without a restart. Each project's corpus lives in its own DB file, so the
+    dynamic sets are segmented — a transcript ingested on project X never leaks into Y."""
+    project = project or store.DEFAULT_PROJECT
     global _dyn, _dyn_ver
-    ver = store.rag_docs_max_id()
-    if _dyn is None or ver != _dyn_ver:
-        _dyn = [{"file": r["label"], "text": r["text"], "embedding": r["embedding"]}
-                for r in store.all_rag_chunks()]
-        _dyn_ver = ver
-    return _dyn
+    ver = store.rag_docs_max_id(project)
+    if project not in _dyn or ver != _dyn_ver.get(project):
+        _dyn[project] = [{"file": r["label"], "text": r["text"], "embedding": r["embedding"]}
+                         for r in store.all_rag_chunks(project)]
+        _dyn_ver[project] = ver
+    return _dyn[project]
 
 
-def add_document(source_kind, label, text):
-    """Ingest an artifact (email / transcript / document) into the persistent corpus.
-    Chunks + embeds + stores; searchable immediately (next search reloads the dynamic set)."""
+def add_document(source_kind, label, text, project=None):
+    """Ingest an artifact (email / transcript / document) into ONE project's persistent corpus.
+    Chunks + embeds + stores; searchable immediately (next search reloads that project's set)."""
+    project = project or store.DEFAULT_PROJECT
     chunks = _chunks(text or "")
     if not chunks:
         return 0
     embs = _embed([_pack(label, ch) for ch in chunks])   # embed packed, store raw
     for ch, e in zip(chunks, embs):
-        store.add_rag_chunk(source_kind, label, ch, e)
+        store.add_rag_chunk(source_kind, label, ch, e, project=project)
     return len(chunks)
 
 
-def reembed_dynamic():
-    """Re-embed every dynamic rag_docs row with the CURRENT packing (run once after a
-    packing change). Static plan-docs re-embed on the next build_index via the bumped sig."""
-    rows = store.all_rag_rows()  # [{id, label, text}]
+def reembed_dynamic(project=None):
+    """Re-embed every dynamic rag_docs row for ONE project with the CURRENT packing (run once
+    after a packing change). Static plan-docs re-embed on the next build_index via the bumped sig."""
+    project = project or store.DEFAULT_PROJECT
+    rows = store.all_rag_rows(project)  # [{id, label, text}]
     n = 0
     for i in range(0, len(rows), 64):
         batch = rows[i:i + 64]
         for r, e in zip(batch, _embed([_pack(r["label"], r["text"]) for r in batch])):
-            store.update_rag_embedding(r["id"], e)
+            store.update_rag_embedding(r["id"], e, project=project)
             n += 1
     global _dyn, _dyn_ver
-    _dyn, _dyn_ver = None, -1
+    _dyn.pop(project, None)
+    _dyn_ver.pop(project, None)
     try:
-        store.set_meta("rag_pack_version", str(PACK_VERSION))
+        store.set_meta("rag_pack_version", str(PACK_VERSION), project=project)
     except Exception:
         pass
     return n
 
 
-def search(query, top_k=5):
+def search(query, top_k=5, project=None):
+    """Search ONE project's corpus. The static plan-docs index is Maxwell's plan (plan-docs/*.md),
+    so it is mixed in ONLY for the default project; every other project searches just its own
+    dynamic corpus (uploaded transcripts / emails / docs) — segmented, invisible across projects."""
+    project = project or store.DEFAULT_PROJECT
     global _index
-    if _index is None:
-        build_index()
-    pool = list(_index or []) + _load_dyn()
+    static = []
+    if project == store.DEFAULT_PROJECT:
+        if _index is None:
+            build_index()
+        static = list(_index or [])
+    pool = static + _load_dyn(project)
     if not pool:
         return []
     qe = _embed([_pack_query(query)])[0]
