@@ -14495,16 +14495,21 @@ def ttl_read_cache(namespace: str, ident: str, stamp: Any,
 
 
 def project_task_stamp(project: str) -> Any:
-    """Cheap cache stamp for a project: its latest task mutation (MAX(updated_at)).
+    """Cheap cache stamp for a project: (row count, latest task mutation).
 
-    Any create/edit/claim/complete on a task bumps tasks.updated_at, so this is a
-    one-query fingerprint that invalidates task-derived caches (board, signals) the
-    instant the board changes. Missing/unopenable projects stamp as 0.
+    Any create/edit/claim/complete on a task bumps tasks.updated_at, so MAX(updated_at)
+    catches inserts and edits — but NOT a deletion: removing a non-newest task leaves
+    the max untouched, so a MAX-only stamp would keep serving the deleted card from
+    the board/signals caches for up to the TTL (HARDEN-41). Folding in COUNT(*) makes
+    the stamp move on deletes too, so a removed task drops out the instant it's gone.
+    Missing/unopenable projects stamp as 0.
     """
     if not has_project(project):
         return 0
     with _conn(project) as c:
-        return c.execute("SELECT MAX(updated_at) FROM tasks").fetchone()[0] or 0
+        count, latest = c.execute(
+            "SELECT COUNT(*), COALESCE(MAX(updated_at), 0) FROM tasks").fetchone()
+        return (count, latest or 0)
 
 
 def _mission_cache_stamp(project: str, deliverable: Dict[str, Any]) -> str:
