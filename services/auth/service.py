@@ -13,6 +13,7 @@ import notify  # monolith: SMTP/Slack sender (dry-runs if SMTP unset)
 import store
 
 from . import contracts
+from . import rate_limit
 from . import session
 from . import store as auth_store
 
@@ -20,12 +21,18 @@ _RESET_TTL_SECONDS = 3600  # a reset link is valid for one hour, single use
 
 
 class AuthError(Exception):
-    """Auth failure carrying an HTTP status + machine code."""
-    def __init__(self, code: str, message: str, status: int = 400):
+    """Auth failure carrying an HTTP status + machine code.
+
+    retry_after (seconds) is set on throttled (429) responses so the API layer
+    can surface a standard Retry-After header.
+    """
+    def __init__(self, code: str, message: str, status: int = 400,
+                 *, retry_after: Optional[int] = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status = status
+        self.retry_after = retry_after
 
 
 def _accessible_projects(account: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -56,14 +63,35 @@ def register(email: str, display_name: str, password: str,
 def login(email: str, password: str, *, remember_me: bool = False,
           ip: str = "", user_agent: str = "") -> Tuple[Dict[str, Any], str, float]:
     auth_store.init()
-    account = auth_store.get_user_by_email(email)
+    email_norm = (email or "").strip().lower()
+    # Throttle BEFORE the account lookup + password check, so a lockout leaks
+    # neither account existence nor password-verification timing.
+    wait = rate_limit.check("login", ip=ip, email=email_norm)
+    if wait is not None:
+        rate_limit.record("login", "throttled", ip=ip, email=email_norm,
+                          user_agent=user_agent, reason="locked")
+        raise AuthError("rate_limited",
+                        "Too many sign-in attempts. Please wait and try again.",
+                        429, retry_after=wait)
+    account = auth_store.get_user_by_email(email_norm)
     if not account or not account.get("password_hash") or account.get("status") != "active":
+        rate_limit.record("login", "failure", ip=ip, email=email_norm,
+                          user_id=(account or {}).get("id"),
+                          user_agent=user_agent, reason="invalid_credentials")
         raise AuthError("invalid_credentials", "Invalid email or password.", 401)
     if account.get("disabled_at"):
+        rate_limit.record("login", "failure", ip=ip, email=email_norm,
+                          user_id=account.get("id"), user_agent=user_agent,
+                          reason="account_disabled")
         raise AuthError("account_disabled", "This account is disabled.", 403)
     if not pw.verify_password(password or "", account["password_hash"]):
+        rate_limit.record("login", "failure", ip=ip, email=email_norm,
+                          user_id=account.get("id"), user_agent=user_agent,
+                          reason="invalid_credentials")
         raise AuthError("invalid_credentials", "Invalid email or password.", 401)
     auth_store.record_login(account["id"])
+    rate_limit.record("login", "success", ip=ip, email=email_norm,
+                      user_id=account["id"], user_agent=user_agent)
     token, exp = session.issue(account, remember_me=remember_me, ip=ip, user_agent=user_agent)
     return contracts.public_user(account, _accessible_projects(account)), token, exp
 
@@ -115,15 +143,32 @@ def _send_reset_email(to_email: str, reset_url: str) -> None:
     )
 
 
-def request_password_reset(email: str, base_url: str) -> None:
+def request_password_reset(email: str, base_url: str,
+                           *, ip: str = "", user_agent: str = "") -> None:
     """Email a single-use reset link IF the account exists.
 
     Always returns without signalling whether the email matched an account, so the
     endpoint can't be used to enumerate registered users. Send failures are swallowed
     for the same reason.
+
+    Throttled per-IP and per-email to stop reset-email flooding / enumeration
+    sweeps. A 429 leaks nothing new: the limit is driven purely by attempt counts
+    the caller controls, independent of whether the address is registered.
     """
     auth_store.init()
-    account = auth_store.get_user_by_email(email or "")
+    email_norm = (email or "").strip().lower()
+    wait = rate_limit.check("reset_request", ip=ip, email=email_norm)
+    if wait is not None:
+        rate_limit.record("reset_request", "throttled", ip=ip, email=email_norm,
+                          user_agent=user_agent, reason="locked")
+        raise AuthError("rate_limited",
+                        "Too many reset requests. Please wait and try again.",
+                        429, retry_after=wait)
+    account = auth_store.get_user_by_email(email_norm)
+    # Record the attempt whether or not the address matches an account, so the rate
+    # limit can't be sidestepped by cycling through unknown emails.
+    rate_limit.record("reset_request", "request", ip=ip, email=email_norm,
+                      user_id=(account or {}).get("id"), user_agent=user_agent)
     if not account or account.get("disabled_at"):
         return
     raw = secrets.token_urlsafe(32)
@@ -135,16 +180,31 @@ def request_password_reset(email: str, base_url: str) -> None:
         pass
 
 
-def reset_password(token: str, new_password: str) -> None:
-    """Spend a reset token and set the new password, signing out every session."""
+def reset_password(token: str, new_password: str,
+                   *, ip: str = "", user_agent: str = "") -> None:
+    """Spend a reset token and set the new password, signing out every session.
+
+    Per-IP throttled so the single-use token can't be brute-forced at speed.
+    """
     auth_store.init()
+    wait = rate_limit.check("reset_consume", ip=ip)
+    if wait is not None:
+        rate_limit.record("reset_consume", "throttled", ip=ip,
+                          user_agent=user_agent, reason="locked")
+        raise AuthError("rate_limited",
+                        "Too many attempts. Please wait and try again.",
+                        429, retry_after=wait)
     if len(new_password or "") < 8:
         raise AuthError("weak_password", "Password must be at least 8 characters.", 422)
     user_id = auth_store.consume_reset_token(token or "")
     if not user_id:
+        rate_limit.record("reset_consume", "failure", ip=ip,
+                          user_agent=user_agent, reason="invalid_token")
         raise AuthError("invalid_token", "This reset link is invalid or has expired.", 400)
     auth_store.set_password(user_id, pw.password_hash(new_password))
     auth_store.revoke_user_sessions(user_id)  # a reset signs out everywhere
+    rate_limit.record("reset_consume", "success", ip=ip, user_id=user_id,
+                      user_agent=user_agent)
 
 
 def can_access_project(token: str, project_id: str) -> bool:

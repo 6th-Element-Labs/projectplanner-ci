@@ -47,13 +47,20 @@ def _with_cookie(payload: dict, request: Request, token: str, expires_at: float)
     return resp
 
 
+def _http_error(e: "service.AuthError") -> HTTPException:
+    """Map an AuthError to an HTTPException, adding Retry-After on 429 throttles."""
+    retry_after = getattr(e, "retry_after", None)
+    headers = {"Retry-After": str(retry_after)} if retry_after is not None else None
+    return HTTPException(e.status, e.message, headers=headers)
+
+
 @router.post("/api/auth/register")
 async def register(request: Request, body: contracts.RegisterBody):
     ip, ua = _client(request)
     try:
         user, token, exp = service.register(body.email, body.display_name, body.password, ip=ip, user_agent=ua)
     except service.AuthError as e:
-        raise HTTPException(e.status, e.message)
+        raise _http_error(e)
     return _with_cookie({"user": user}, request, token, exp)
 
 
@@ -65,7 +72,7 @@ async def login(request: Request, body: contracts.LoginBody):
         user, token, exp = service.login(
             b.email, b.password, remember_me=b.remember_me, ip=ip, user_agent=ua)
     except service.AuthError as e:
-        raise HTTPException(e.status, e.message)
+        raise _http_error(e)
     return _with_cookie({"user": user}, request, token, exp)
 
 
@@ -94,15 +101,20 @@ async def change_password(request: Request, body: contracts.ChangePasswordBody):
     try:
         user = service.change_password(token, body.current_password, body.new_password)
     except service.AuthError as e:
-        raise HTTPException(e.status, e.message)
+        raise _http_error(e)
     return {"user": user, "changed": True}
 
 
 @router.post("/api/auth/forgot-password")
 async def forgot_password(request: Request, body: contracts.ForgotPasswordBody):
     """Email a single-use reset link. Always 200 with the same message so the
-    endpoint can't reveal whether an email is registered (anti-enumeration)."""
-    service.request_password_reset(body.email, _public_base_url(request))
+    endpoint can't reveal whether an email is registered (anti-enumeration).
+    Throttled per-IP/per-email (429) to stop reset-email flooding."""
+    ip, ua = _client(request)
+    try:
+        service.request_password_reset(body.email, _public_base_url(request), ip=ip, user_agent=ua)
+    except service.AuthError as e:
+        raise _http_error(e)
     return {"ok": True,
             "message": "If an account exists for that email, a reset link is on its way."}
 
@@ -110,10 +122,11 @@ async def forgot_password(request: Request, body: contracts.ForgotPasswordBody):
 @router.post("/api/auth/reset-password")
 async def reset_password(request: Request, body: contracts.ResetPasswordBody):
     """Complete a reset: spend the token, set the new password, sign out everywhere."""
+    ip, ua = _client(request)
     try:
-        service.reset_password(body.token, body.new_password)
+        service.reset_password(body.token, body.new_password, ip=ip, user_agent=ua)
     except service.AuthError as e:
-        raise HTTPException(e.status, e.message)
+        raise _http_error(e)
     return {"ok": True, "message": "Your password has been reset. You can now sign in."}
 
 # NOTE: /api/projects filtering (deny-by-default project list) is delivered via
