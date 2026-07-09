@@ -11,7 +11,7 @@ import subprocess
 import time
 import urllib.request
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import evidence_claims
 
@@ -2265,7 +2265,30 @@ def _mission_next_actions(deliverable: Dict[str, Any],
 
 def get_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
                        board_id: str = "", mission_id: str = "") -> Dict[str, Any]:
-    """Return a mission cockpit rollup: end state, milestones, proof, blockers, next actions."""
+    """Return a mission cockpit rollup: end state, milestones, proof, blockers, next actions.
+
+    HARDEN-36: the live cockpit polls this on a timer and each build re-fetches every
+    linked task via get_task (the enrichment fan-out). We resolve the deliverable once
+    WITHOUT per-task snapshots (cheap — just the links) to key a short-TTL cache; a hit
+    skips the whole fan-out. The stamp folds in every involved project's task state, so
+    any linked-task change (even cross-project) invalidates immediately.
+    """
+    light = _resolve_mission_deliverable(project, deliverable_id=deliverable_id,
+                                         board_id=board_id, mission_id=mission_id,
+                                         include_task_snapshots=False)
+    if light.get("error"):
+        return light
+    deliverable = light["deliverable"]
+    stamp = _mission_cache_stamp(project, deliverable)
+    ident = f"{project}\x00{deliverable.get('id')}"
+    return ttl_read_cache(
+        "mission_status", ident, stamp,
+        lambda: _build_mission_status(project, deliverable_id=deliverable_id,
+                                      board_id=board_id, mission_id=mission_id))
+
+
+def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = "",
+                          board_id: str = "", mission_id: str = "") -> Dict[str, Any]:
     scope = _resolve_mission_deliverable(project, deliverable_id=deliverable_id,
                                           board_id=board_id, mission_id=mission_id)
     if scope.get("error"):
@@ -2393,8 +2416,6 @@ def get_deliverable_dependency_graph(project: str = DEFAULT_PROJECT, deliverable
     serve every lookup from a lazy per-project index (raw row + git provenance), which
     produces byte-identical graphs in ~0.2s.
     """
-    import mission_graph
-
     scope = _resolve_mission_deliverable(project, deliverable_id=deliverable_id,
                                           board_id=board_id, mission_id=mission_id,
                                           include_task_snapshots=False)
@@ -2402,6 +2423,19 @@ def get_deliverable_dependency_graph(project: str = DEFAULT_PROJECT, deliverable
         return scope
     deliverable = scope["deliverable"]
     deliverable_id = deliverable.get("id") or deliverable_id
+    # HARDEN-36: the mission map polls this on a timer; cache the built graph keyed
+    # by every involved project's task state (the resolve above is already the cheap,
+    # snapshot-free one, so a hit skips only the index build + graph walk).
+    stamp = _mission_cache_stamp(project, deliverable)
+    ident = f"{project}\x00{deliverable_id}"
+    return ttl_read_cache(
+        "dep_graph", ident, stamp,
+        lambda: _build_deliverable_dependency_graph(project, deliverable, deliverable_id))
+
+
+def _build_deliverable_dependency_graph(project: str, deliverable: Dict[str, Any],
+                                        deliverable_id: str) -> Dict[str, Any]:
+    import mission_graph
 
     _indexes: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
@@ -14423,11 +14457,69 @@ def activity_since(ts: float) -> List[Dict[str, Any]]:
 # provenance (the card's Done-proof badge reads it).
 _BOARD_LITE_DROP = ("session_health", "external_ci", "publication", "exit_criteria", "agent_state")
 
-# Short-TTL in-memory cache for the hot lite board (HARDEN-36). Keyed by the
-# project's latest task mutation, so any write invalidates it immediately and a
-# burst of loads (tab refocus, several viewers) rebuilds at most once per TTL.
-_BOARD_CACHE: Dict[str, Dict[str, Any]] = {}
-_BOARD_CACHE_TTL = 3.0
+# Short-TTL in-memory read cache for the hot polled dashboard reads — the lite
+# board, plan signals, and the mission cockpit's status/dependency-graph views
+# (HARDEN-36, extending #159's board-only cache). These are the endpoints a live
+# dashboard hammers on a timer; every one runs SQLite in the request thread, so a
+# burst of viewers used to rebuild the same payload N times. Each entry is keyed
+# by a content STAMP (usually the involved project(s) MAX(updated_at)): any write
+# bumps the stamp and invalidates immediately, while the TTL bounds staleness for
+# the few signals a stamp can't see (claim expiry, presence heartbeats,
+# rarely-changing board meta) to at most _READ_CACHE_TTL. The builder runs OUTSIDE
+# any lock — under the GIL a concurrent miss may rebuild twice (benign, last write
+# wins), the same trade #159 made, so a slow build never serializes other readers.
+_READ_CACHE: Dict[str, Dict[str, Any]] = {}
+_READ_CACHE_TTL = 3.0
+
+
+def ttl_read_cache(namespace: str, ident: str, stamp: Any,
+                   builder: Callable[[], Any], ttl: float = _READ_CACHE_TTL) -> Any:
+    """Serve `builder()` from a short-TTL cache keyed by (namespace, ident, stamp).
+
+    A changed stamp (or an expired TTL) forces a rebuild; otherwise the cached
+    payload is returned. This is the single hot-read cache mechanism — see
+    _READ_CACHE for the invalidation/staleness contract.
+    """
+    key = f"{namespace}\x00{ident}"
+    now = time.time()
+    hit = _READ_CACHE.get(key)
+    if hit is not None and hit["stamp"] == stamp and (now - hit["at"]) < ttl:
+        return hit["payload"]
+    payload = builder()
+    _READ_CACHE[key] = {"stamp": stamp, "at": now, "payload": payload}
+    return payload
+
+
+def project_task_stamp(project: str) -> Any:
+    """Cheap cache stamp for a project: its latest task mutation (MAX(updated_at)).
+
+    Any create/edit/claim/complete on a task bumps tasks.updated_at, so this is a
+    one-query fingerprint that invalidates task-derived caches (board, signals) the
+    instant the board changes. Missing/unopenable projects stamp as 0.
+    """
+    if not has_project(project):
+        return 0
+    with _conn(project) as c:
+        return c.execute("SELECT MAX(updated_at) FROM tasks").fetchone()[0] or 0
+
+
+def _mission_cache_stamp(project: str, deliverable: Dict[str, Any]) -> str:
+    """Composite stamp for a deliverable's mission views (status/dependency graph).
+
+    These views fan out across every project a linked task lives in, so the stamp
+    folds in each involved project's task_stamp plus the deliverable row's own
+    updated_at (links, milestones, status, narrative). A change to any linked task
+    — even in another project — bumps the stamp and invalidates the cache.
+    """
+    involved = {project}
+    for link in (deliverable.get("task_links") or []):
+        proj = link.get("project_id")
+        if proj:
+            involved.add(proj)
+    parts = [f"d:{deliverable.get('id')}:{deliverable.get('updated_at') or ''}"]
+    for proj in sorted(involved):
+        parts.append(f"{proj}:{project_task_stamp(proj)}")
+    return "|".join(parts)
 
 
 def _build_board_payload(project: str, lite: bool) -> Dict[str, Any]:
@@ -14459,14 +14551,8 @@ def board_payload(project: str = DEFAULT_PROJECT, lite: bool = False) -> Dict[st
     if not lite:
         return _build_board_payload(project, lite=False)
     try:
-        with _conn(project) as c:
-            latest = c.execute("SELECT MAX(updated_at) FROM tasks").fetchone()[0] or 0
+        stamp = project_task_stamp(project)
     except Exception:
         return _build_board_payload(project, lite=True)
-    now = time.time()
-    cached = _BOARD_CACHE.get(project)
-    if cached and cached["key"] == latest and (now - cached["at"]) < _BOARD_CACHE_TTL:
-        return cached["payload"]
-    payload = _build_board_payload(project, lite=True)
-    _BOARD_CACHE[project] = {"key": latest, "at": now, "payload": payload}
-    return payload
+    return ttl_read_cache("board", project, stamp,
+                          lambda: _build_board_payload(project, lite=True))

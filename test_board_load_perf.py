@@ -80,7 +80,7 @@ try:
     ok(r304.status_code == 304 and len(r304.content) == 0, "matching If-None-Match -> 304, empty body")
 
     # 4) gross-regression timing bound (generous — not a microbenchmark)
-    store._BOARD_CACHE.clear()
+    store._READ_CACHE.clear()  # HARDEN-36: board cache generalized into the shared read cache
     t0 = time.time()
     store.board_payload(HOME, lite=True)
     build_ms = (time.time() - t0) * 1000
