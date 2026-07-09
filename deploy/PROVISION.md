@@ -89,6 +89,20 @@ sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 # can't starve the web app on this small box. Persists across reboot; idempotent.
 sudo bash deploy/apply-resource-guards.sh
 ```
+
+### Off-box backups (HARDEN-43)
+Prod SQLite lives only on this box's disk. Set up daily off-box snapshots + a
+tested restore path — full details in [`docs/BACKUP-RESTORE-RUNBOOK.md`](../docs/BACKUP-RESTORE-RUNBOOK.md).
+```bash
+# One-time, from an operator machine with admin AWS creds (creates a versioned
+# private bucket + a put-only IAM user, and prints the /etc/projectplanner-backup.env block):
+CREATE_ACCESS_KEY=1 scripts/provision_backup_s3.sh
+# On the box: install that env block (mode 600), then enable the daily timer:
+sudo cp deploy/projectplanner-backup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now projectplanner-backup.timer
+sudo systemctl start projectplanner-backup.service   # prove it once now, don't wait for 07:19
+```
 Caddy fetches the TLS cert automatically once DNS resolves. Visit https://plan.taikunai.com/.
 The app will present the login screen in required mode. On first startup, the bootstrap admin
 is created only if no password-backed admin exists for the project. After confirming login,
@@ -102,6 +116,7 @@ curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_M
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
 systemctl list-timers projectplanner-ci-gate.timer
+systemctl list-timers projectplanner-backup.timer     # HARDEN-43: daily off-box snapshot
 systemctl is-active projectplanner-agent-host
 gh --version                                    # off-box CI mirror needs gh >= 2.6 (see step 6)
 # The self-hosted Actions runner is DECOMMISSIONED (CI runs off-box now, see step 6);
