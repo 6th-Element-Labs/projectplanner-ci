@@ -49,6 +49,19 @@ def _people_of(t, people):
 
 
 def compute_plan_signals(due_soon_days: int = 7, project: str = "maxwell") -> dict:
+    """Cached wrapper (HARDEN-36): GET /api/signals is polled by the live dashboard,
+    and the underlying compute walks the FULL enriched task list. Serve it from the
+    shared short-TTL read cache keyed by the project's latest task mutation, so a
+    burst of polls (Tasks-tab refocus, several viewers, a board reload) rebuilds at
+    most once per TTL and any task write invalidates immediately. Meta-only inputs
+    (critical_path / decisions / people) refresh within the TTL bound."""
+    return store.ttl_read_cache(
+        "plan_signals", f"{project}\x00{due_soon_days}",
+        store.project_task_stamp(project),
+        lambda: _compute_plan_signals(due_soon_days=due_soon_days, project=project))
+
+
+def _compute_plan_signals(due_soon_days: int = 7, project: str = "maxwell") -> dict:
     tasks = store.list_tasks(project=project)
     by_id = {t["task_id"]: t for t in tasks}
     today = datetime.date.today()
