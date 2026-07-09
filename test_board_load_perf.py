@@ -114,6 +114,22 @@ try:
     store.board_payload(HOME, lite=True)
     cached_ms = (time.time() - t0) * 1000
     ok(cached_ms < 50, f"cached board read {cached_ms:.1f}ms (< 50ms)")
+
+    # 5) deletion invalidates the board read-cache within the TTL window — a
+    #    removed card can't linger. The victim is the oldest task (min updated_at),
+    #    so a MAX(updated_at)-only stamp would miss the delete and serve a stale
+    #    board; project_task_stamp folds in COUNT(*) to catch it (HARDEN-41).
+    store._READ_CACHE.clear()  # HARDEN-36: board rides the shared read cache
+    warmed = store.board_payload(HOME, lite=True)  # warms the cache
+    n_before = sum(len(ws["tasks"]) for ws in warmed["workstreams"])
+    victim = min(board_rows, key=lambda t: t.get("updated_at") or 0)["task_id"]
+    ok(store.delete_task(victim, project=HOME), f"deleted oldest task {victim}")
+    after = store.board_payload(HOME, lite=True)  # same TTL window, must rebuild
+    n_after = sum(len(ws["tasks"]) for ws in after["workstreams"])
+    ok(n_after == n_before - 1,
+       f"deleted task drops off board immediately ({n_before} -> {n_after})")
+    ok(all(t["task_id"] != victim for ws in after["workstreams"] for t in ws["tasks"]),
+       "deleted task absent from cached board payload (no stale card)")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
