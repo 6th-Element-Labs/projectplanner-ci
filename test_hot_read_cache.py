@@ -220,7 +220,20 @@ try:
     finally:
         restore()
 
-    # === 4) CACHE CORRECTNESS: a cached hit equals a fresh build =================
+    # === 4) SHARED-OBJECT CONTRACT: a consumer that trims a COPY (as agent.py's
+    # plan_signals tool does) must not shrink the shared cached lists ============
+    store._READ_CACHE.clear()
+    first = signals.compute_plan_signals(project=HOME)
+    overdue_len = len(first["overdue"])
+    ok(overdue_len >= 1, "signals has an overdue task to guard against truncation")
+    consumer = dict(signals.compute_plan_signals(project=HOME))   # agent.py's copy-first pattern
+    for k in ("overdue", "due_soon", "blocked", "ready", "critical_slip"):
+        consumer[k] = consumer[k][:0]
+    again = signals.compute_plan_signals(project=HOME)
+    ok(len(again["overdue"]) == overdue_len,
+       "trimming a copy of cached signals does not corrupt the shared cached lists")
+
+    # === 5) CACHE CORRECTNESS: a cached hit equals a fresh build =================
     store._READ_CACHE.clear()
     fresh = store.get_mission_status(project=HOME, deliverable_id=DID)
     cached = store.get_mission_status(project=HOME, deliverable_id=DID)

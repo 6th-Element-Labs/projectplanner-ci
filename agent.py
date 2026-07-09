@@ -340,7 +340,9 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
                 t = store.get_task(args.get("task_id", ""), project=project)
                 content = json.dumps(_task_brief(t, full=True)) if t else "no such task"
             elif name == "plan_signals":
-                sig = signals.compute_plan_signals(project=project)
+                # compute_plan_signals is now cached (HARDEN-36) — copy before trimming
+                # so this tool's 15-item cap can't truncate the shared cached lists.
+                sig = dict(signals.compute_plan_signals(project=project))
                 for k in ("overdue", "due_soon", "blocked", "ready", "critical_slip"):
                     sig[k] = sig[k][:15]
                 content = json.dumps(sig)
