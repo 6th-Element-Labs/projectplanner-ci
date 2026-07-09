@@ -88,9 +88,11 @@ def _dispatch_enabled():
     return (os.environ.get("PM_INBOX_DISPATCH", "1").strip().lower() not in ("0", "false", "no"))
 
 
-def _dispatch_dev(targets, applied):
+def _dispatch_dev(targets, applied, project=None):
     """Fire the dev-agent dispatches the email asked for. 'NEW' -> the task(s) just created.
-    Each runs the Claude Code runner (code change -> branch -> PR; never main)."""
+    Each runs the Claude Code runner (code change -> branch -> PR; never main). Tasks resolve
+    on `project`'s board, so a routed email dispatches against the right project."""
+    project = project or store.DEFAULT_PROJECT
     if not (_dispatch_enabled() and targets):
         return []
     created = list((applied or {}).get("created") or [])
@@ -100,9 +102,9 @@ def _dispatch_dev(targets, applied):
     import dispatch as dispatch_mod
     out = []
     for tid in dict.fromkeys(resolved):  # dedupe, keep order
-        if not store.get_task(tid):
+        if not store.get_task(tid, project=project):
             continue
-        dr = dispatch_mod.dispatch(tid, actor="Maxwell (email)")
+        dr = dispatch_mod.dispatch(tid, actor="Maxwell (email)", project=project)
         out.append({"task_id": tid, "dispatched": dr.get("dispatched"),
                     "wake_id": dr.get("wake_id"), "error": dr.get("error") or dr.get("reason")})
     return out
@@ -155,23 +157,26 @@ def _compose_review_reply(summary, proposals, new_tasks):
     return "\n".join(lines)
 
 
-def process(source, external_id, sender, subject, text, headers=None):
+def process(source, external_id, sender, subject, text, headers=None, project=None):
     """Dedupe -> ingest+triage -> (autonomous) apply + reply-all, else queue. Returns the item.
-    headers={from,to,cc,date,message_id} drives recipient routing + threading."""
-    if store.inbox_exists(source, external_id):
+    headers={from,to,cc,date,message_id} drives recipient routing + threading. `project` scopes
+    the whole pipeline — dedupe, corpus ingest, triage grounding, applied changes, and the inbox
+    row all land on that project's board (the poller resolves it from sender/recipient routing)."""
+    project = project or store.DEFAULT_PROJECT
+    if store.inbox_exists(source, external_id, project=project):
         return None
     headers = headers or {}
     headers.setdefault("from", sender)
     _learn_contacts(headers.get("from") or sender, headers.get("to"), headers.get("cc"))
     result = intake.ingest_and_triage("email", subject or source, text,
-                                      applied_mode=_autonomous(), headers=headers)
+                                      applied_mode=_autonomous(), headers=headers, project=project)
     triage = {"proposals": result.get("proposals", []), "new_tasks": result.get("new_tasks", []),
               "sources": result.get("sources", [])}
     applied, reply_res, status, to, cc, dispatched = {}, None, "pending", [], [], []
     if _autonomous():
-        applied = apply(triage["proposals"], triage["new_tasks"])
+        applied = apply(triage["proposals"], triage["new_tasks"], project=project)
         status = "applied"
-        dispatched = _dispatch_dev(result.get("dispatch_targets"), applied)
+        dispatched = _dispatch_dev(result.get("dispatch_targets"), applied, project=project)
         to, cc = _recipients(sender, headers, result.get("recipients"))
         if to:
             try:
@@ -200,23 +205,25 @@ def process(source, external_id, sender, subject, text, headers=None):
     triage["reply"] = reply_res
     triage["recipients"] = {"to": to, "cc": cc}
     triage["dispatched_dev"] = dispatched
-    item_id = store.add_inbox_item(source, external_id, sender, subject, result.get("summary"), triage)
-    store.set_inbox_status(item_id, status)
-    return store.get_inbox_item(item_id)
+    item_id = store.add_inbox_item(source, external_id, sender, subject, result.get("summary"),
+                                   triage, project=project)
+    store.set_inbox_status(item_id, status, project=project)
+    return store.get_inbox_item(item_id, project=project)
 
 
-def apply(proposals, new_tasks):
-    """Apply a set of proposals + new tasks. Audited as 'Maxwell (email)'."""
+def apply(proposals, new_tasks, project=None):
+    """Apply a set of proposals + new tasks on `project`'s board. Audited as 'Maxwell (email)'."""
+    project = project or store.DEFAULT_PROJECT
     out = {"updated": [], "created": [], "failed": []}
     for p in (proposals or []):
         tid = p.get("task_id")
         fields = {k: v for k, v in p.items() if k not in ("task_id", "rationale")}
-        if tid and fields and store.update_task(tid, fields, actor="Maxwell (email)"):
+        if tid and fields and store.update_task(tid, fields, actor="Maxwell (email)", project=project):
             out["updated"].append(tid)
         elif tid:
             out["failed"].append(tid)
     for nt in (new_tasks or []):
         body = {k: v for k, v in nt.items() if k != "rationale"}
-        t = store.create_task(body, actor="Maxwell (email)")
+        t = store.create_task(body, actor="Maxwell (email)", project=project)
         (out["created"] if t else out["failed"]).append((t or nt).get("task_id") or nt.get("workstream_id"))
     return out

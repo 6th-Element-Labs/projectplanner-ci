@@ -58,8 +58,8 @@ mcp = FastMCP(
         "For lane ownership, deliverables, dependencies, and file-boundary hints, use "
         "get_project_contract/project_contract rather than assuming repo-local docs are universal. "
         "Use search_tasks/get_task to read, board_summary for the at-a-glance board, get_plan_signals "
-        "for health, and create_task/update_task/add_comment to change a plan. ask_plan also takes "
-        "project; doc_search remains Maxwell-only.\n\n"
+        "for health, and create_task/update_task/add_comment to change a plan. ask_plan and "
+        "doc_search also take project — each board has its own segmented corpus.\n\n"
         "SESSION-START HANDSHAKE: (0) call prepare_agent_session(...) if you were assigned a task, "
         "lane, or project and follow its selected project; (1) call get_working_agreement(project) "
         "and follow its rules for the whole session; (2) register_agent; (3) drain your inbox. "
@@ -708,10 +708,12 @@ def control_plane_probe(project: str = "maxwell", lane: str = "",
 
 
 @mcp.tool()
-def doc_search(query: str) -> str:
-    """Search the plan docs (PRD, architecture, integrations, security, the full plan).
-    Returns cited snippets: [{file, text}]."""
-    hits = rag.search(query, top_k=5)
+def doc_search(query: str, project: str = "maxwell") -> str:
+    """Search a project's corpus and return cited snippets: [{file, text}]. The static plan docs
+    (PRD, architecture, integrations, security, the full plan) are Maxwell's, so the default
+    project searches those plus its ingested artifacts; every other project searches only its own
+    ingested transcripts/emails/documents. project selects the board."""
+    hits = rag.search(query, top_k=5, project=project)
     return _dumps([{"file": h["file"], "text": h["text"]} for h in hits]) if hits else "no matches"
 
 
@@ -3082,12 +3084,13 @@ def dispatch_to_claude_code(task_id: str, ctx: Context, project: str = "maxwell"
 
 
 @mcp.tool()
-def ingest_and_triage(kind: str, title: str, text: str, ctx: Context) -> str:
-    """Ingest an artifact (email / transcript / document / note) into the RAG corpus AND triage it
-    against the plan. Returns {summary, proposals, new_tasks, sources} — proposals are NOT applied
-    (use update_task / create_task to apply). kind: email|transcript|document|note."""
-    _require_write(ctx)
-    return _dumps(intake_mod.ingest_and_triage(kind, title, text))
+def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: str = "maxwell") -> str:
+    """Ingest an artifact (email / transcript / document / note) into `project`'s RAG corpus AND
+    triage it against that board. Returns {summary, proposals, new_tasks, sources} — proposals are
+    NOT applied (use update_task / create_task to apply). kind: email|transcript|document|note.
+    project selects the board — the corpus is segmented per project."""
+    _require_write(ctx, project)
+    return _dumps(intake_mod.ingest_and_triage(kind, title, text, project=project))
 
 
 if __name__ == "__main__":

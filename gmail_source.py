@@ -1,16 +1,27 @@
 """Gmail-poll source for the Live Inbox (Phase 5.5 — see docs/AGENT_ROADMAP.md).
 
 Reads plan@taikunai.com via IMAP (app password — the same simple model as the Phase-4
-SMTP sender, no OAuth), allow-lists senders, and feeds each new message to inbox.process.
+SMTP sender, no OAuth), routes each message to a PROJECT, and feeds it to inbox.process.
 DISABLED (no-op) until PM_IMAP_* is set, so it ships safe before the mailbox exists. Run by
 the projectplanner-inbox timer (jobs.py poll_inbox).
 
+One mailbox, many boards (UI-13): a message is routed to a project by, in order,
+  1. plus-addressing — plan+<project>@taikunai.com on any recipient (zero-config, same mailbox);
+  2. the sender-domain map PM_INBOX_ROUTES (e.g. 'totalenergy.com=maxwell, acme.com=helm');
+  3. otherwise the global PM_INBOX_ALLOWLIST gate -> the default project (today's behavior, unchanged).
+A routing match (1 or 2) also ACCEPTS the message; unmatched senders still pass through the
+allowlist so nothing that arrives today stops arriving. Each project's inbox/corpus is isolated
+in its own DB file, so a routed message lands only on that board.
+
 Config (.env, all optional):
   PM_IMAP_HOST(=imap.gmail.com)  PM_IMAP_USER  PM_IMAP_PASSWORD(app password)
-  PM_INBOX_ALLOWLIST   comma list; a message is accepted if its From contains any entry
-                       (empty = accept all — tighten in prod).
+  PM_INBOX_ALLOWLIST   comma list; an UNMAPPED message is accepted if its From contains any
+                       entry (empty = accept all — tighten in prod). Routing (below) bypasses it.
+  PM_INBOX_ROUTES      comma list of 'domain=project' (e.g. 'totalenergy.com=maxwell'); a sender
+                       whose domain matches (or is a subdomain of) an entry routes to that project.
 """
 import email
+import email.utils
 import html
 import imaplib
 import logging
@@ -20,6 +31,7 @@ from email.header import decode_header
 
 import attachments
 import inbox
+import store
 
 log = logging.getLogger("gmail_source")
 
@@ -30,6 +42,69 @@ def _allow(sender):
         return True
     s = (sender or "").lower()
     return any(a.strip().lower() in s for a in al.split(",") if a.strip())
+
+
+def _routes_map():
+    """Parse PM_INBOX_ROUTES='domain=project, domain2=project2' -> {domain: project} (domains
+    lowercased, leading @ stripped). Malformed entries are skipped."""
+    out = {}
+    for part in (os.environ.get("PM_INBOX_ROUTES") or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        dom, proj = part.split("=", 1)
+        dom, proj = dom.strip().lstrip("@").lower(), proj.strip()
+        if dom and proj:
+            out[dom] = proj
+    return out
+
+
+def _plus_project(recipients, valid):
+    """A recipient of the form plan+<project>@taikunai.com routes to <project> (if it's a real
+    project). recipients is a raw header string of To/Cc/Delivered-To addresses."""
+    for _n, addr in email.utils.getaddresses([recipients or ""]):
+        local = (addr or "").split("@", 1)[0]
+        if "+" in local:
+            tag = local.split("+", 1)[1].strip().lower()
+            if tag in valid:
+                return tag
+    return None
+
+
+def _domain_project(sender, valid):
+    """Map the sender's From-domain to a project via PM_INBOX_ROUTES. Matches an exact domain
+    or any subdomain of a listed domain. Returns None (no route) if unmapped or the mapped
+    project doesn't exist — a bad map entry is a loud warning, never a silent misroute."""
+    addr = email.utils.parseaddr(sender or "")[1].lower()
+    dom = addr.split("@", 1)[1] if "@" in addr else ""
+    if not dom:
+        return None
+    routes = _routes_map()
+    proj = routes.get(dom)
+    if not proj:
+        for rdom, rproj in routes.items():
+            if dom == rdom or dom.endswith("." + rdom):
+                proj = rproj
+                break
+    if not proj:
+        return None
+    if proj not in valid:
+        log.warning("inbox routing: PM_INBOX_ROUTES maps %s -> unknown project %r; ignoring", dom, proj)
+        return None
+    return proj
+
+
+def _route(sender, recipients):
+    """Resolve (accept, project) for one inbound message. A plus-address or sender-domain route
+    wins and accepts the message; otherwise fall back to the global allowlist -> default project."""
+    valid = set(store.project_ids())
+    proj = _plus_project(recipients, valid)
+    if proj:
+        return True, proj
+    proj = _domain_project(sender, valid)
+    if proj:
+        return True, proj
+    return _allow(sender), store.DEFAULT_PROJECT
 
 
 def _decode(s):
@@ -106,18 +181,29 @@ def poll(max_msgs=20):
             sender = _decode(msg.get("From"))
             if self_addr and self_addr in (sender or "").lower():
                 continue   # never process our own outbound — no self-reply loops
-            if not _allow(sender):
+            to, cc = _decode(msg.get("To")), _decode(msg.get("Cc"))
+            # Route by recipient plus-address / sender-domain map; Delivered-To / X-Original-To
+            # carry the +tag that Gmail keeps when plan+<project>@ is delivered to plan@. Join the
+            # header groups with commas so email.utils.getaddresses parses them as one address list.
+            recipients = ", ".join(p for p in [
+                to, cc,
+                ", ".join(msg.get_all("Delivered-To") or []),
+                ", ".join(msg.get_all("X-Original-To") or []),
+            ] if p)
+            accept, project = _route(sender, recipients)
+            if not accept:
                 continue
             subject = _decode(msg.get("Subject"))
             mid = msg.get("Message-ID") or f"{subject}:{msg.get('Date')}"
             headers = {
                 "from": sender,
-                "to": _decode(msg.get("To")),
-                "cc": _decode(msg.get("Cc")),
+                "to": to,
+                "cc": cc,
                 "date": _decode(msg.get("Date")),
                 "message_id": msg.get("Message-ID"),
             }
-            if inbox.process("email", mid, sender, subject, _message_text(msg), headers=headers):
+            if inbox.process("email", mid, sender, subject, _message_text(msg),
+                             headers=headers, project=project):
                 queued += 1
         return {"polled": len(ids), "queued": queued, "disabled": False}
     finally:

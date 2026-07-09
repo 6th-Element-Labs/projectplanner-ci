@@ -11,11 +11,14 @@ import logging
 import agent
 import rag
 import scrub
+import store
 
 log = logging.getLogger("intake")
 
 
-def ingest_and_triage(kind, title, text, ingest=True, applied_mode=False, headers=None):
+def ingest_and_triage(kind, title, text, ingest=True, applied_mode=False, headers=None,
+                      project=None):
+    project = project or store.DEFAULT_PROJECT
     kind = (kind or "note").strip()
     title = (title or "").strip()
     label = (f"{kind}: {title}" if title else kind)
@@ -26,8 +29,8 @@ def ingest_and_triage(kind, title, text, ingest=True, applied_mode=False, header
     text, redacted = scrub.redact(text or "")
     if redacted:
         log.warning("intake: redacted %d secret value(s) from %s before ingest/triage", redacted, label)
-    chunks = rag.add_document(kind, label, text) if (ingest and text.strip()) else 0
-    result = agent.triage(kind, title, text, applied_mode=applied_mode, headers=headers)
+    chunks = rag.add_document(kind, label, text, project=project) if (ingest and text.strip()) else 0
+    result = agent.triage(kind, title, text, applied_mode=applied_mode, headers=headers, project=project)
     return {
         "summary": result.get("answer"),
         "proposals": result.get("proposals", []),
