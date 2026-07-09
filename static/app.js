@@ -3687,15 +3687,16 @@ const TeepPlan = {
         }
         const stats = g.stats || {};
         const legend = [
-            ['done', 'Done ✓ proof', '#d4edda', '#28a745'],
-            ['done_unproven', 'Done (no proof)', '#d1f0e8', '#20c997'],
-            ['in_progress', 'In progress', '#cfe2ff', '#0d6efd'],
-            ['in_review', 'In review', '#fff3cd', '#ffc107'],
-            ['blocked', 'Blocked', '#f8d7da', '#dc3545'],
+            ['done', 'Done ✓ proof', '#a3d9b7', '#1e7e34'],
+            ['done_unproven', 'Done (no proof)', '#a6e3d0', '#12b886'],
+            ['in_progress', 'In progress', '#8fb8fd', '#0b5ed7'],
+            ['in_review', 'In review', '#ffe083', '#e0a800'],
+            ['blocked', 'Blocked', '#f5a3a9', '#c82333'],
             ['todo', 'Not started', '#e9ecef', '#6c757d'],
-            ['external', 'External blocker', '#f8f9fa', '#adb5bd'],
+            ['external', 'External dep', '#f8f9fa', '#adb5bd'],
         ].map(([key, label, fill, stroke]) =>
-            `<span class="badge me-2 mb-1" style="background:${fill};color:#333;border:1px solid ${stroke}">${this.esc(label)}</span>`).join('');
+            `<span class="badge me-2 mb-1" style="background:${fill};color:#333;border:1px solid ${stroke}">${this.esc(label)}</span>`).join('') +
+            `<span class="badge me-2 mb-1" style="background:#fff;color:#842029;border:3px solid #842029;font-weight:600" title="Unfinished tasks that other work depends on — what's holding the flow up">Blocker</span>`;
         const pillColors = {
             done: 'bg-green-lt',
             done_unproven: 'bg-teal-lt',

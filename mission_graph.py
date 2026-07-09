@@ -215,6 +215,20 @@ def build_dependency_graph(
         if item["context"] and tid not in nodes
     ]
 
+    # Flag the tasks holding the flow back so the map can call them out (thick dark
+    # border). A blocker is a task that is itself Blocked, OR an unfinished task that
+    # something else depends on / is flagged as blocking the deliverable — downstream
+    # work is waiting on it. Done tasks never block.
+    depended_upon = {e["from"] for e in edges}
+    _DONE_STATES = {"done", "done_unproven"}
+    for tid, node in nodes.items():
+        blocks_deliverable = bool((internal.get(tid, {}).get("link") or {}).get("blocks_deliverable"))
+        node["blocker"] = (
+            node.get("state") == "blocked"
+            or (node.get("state") not in _DONE_STATES
+                and (tid in depended_upon or blocks_deliverable))
+        )
+
     node_list = sorted(nodes.values(), key=lambda n: n["id"])
     mermaid = render_mermaid_flowchart(node_list, edges)
     return {
@@ -235,6 +249,7 @@ def build_dependency_graph(
             "in_progress_count": sum(1 for n in node_list if n.get("state") == "in_progress"),
             "in_review_count": sum(1 for n in node_list if n.get("state") == "in_review"),
             "blocked_count": sum(1 for n in node_list if n.get("state") == "blocked"),
+            "blocker_count": sum(1 for n in node_list if n.get("blocker")),
             "todo_count": sum(1 for n in node_list if n.get("state") == "todo"),
         },
     }
@@ -316,7 +331,7 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
         "  classDef externalNode fill:#f8f9fa,stroke:#adb5bd,color:#6c757d,stroke-dasharray: 4 2",
     ])
     by_class: Dict[str, List[str]] = {}
-    dashed: List[str] = []
+    node_styles: Dict[str, List[str]] = {}   # mid -> extra style props, merged into one line
     for node in nodes:
         mid = node.get("mermaid_id") or _mermaid_id(node.get("id") or "")
         state = node.get("state") or "todo"
@@ -327,11 +342,15 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
         # border + dotted edge instead. Only an unresolved external dep (state "missing")
         # keeps the neutral external style.
         if node.get("external") and cls != "externalNode":
-            dashed.append(mid)
+            node_styles.setdefault(mid, []).append("stroke-dasharray: 4 2")
+        # Blockers get a thick dark border on top of their state fill so the tasks holding
+        # up the flow jump out at a glance.
+        if node.get("blocker"):
+            node_styles.setdefault(mid, []).extend(["stroke:#842029", "stroke-width:4px"])
         by_class.setdefault(cls, []).append(mid)
     for cls, ids in sorted(by_class.items()):
         if ids:
             lines.append(f"  class {','.join(ids)} {cls}")
-    for mid in dashed:
-        lines.append(f"  style {mid} stroke-dasharray: 4 2")
+    for mid, props in node_styles.items():
+        lines.append(f"  style {mid} {','.join(props)}")
     return "\n".join(lines)
