@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""HARDEN-41 — board load performance budget.
+"""HARDEN-41 / HARDEN-35 — board load performance budget.
 
 Guards the board's hot path against regressing to the whole-board N+1 + fat
 payload that jammed the box: the board must use the slim, batched loader (no
 per-task session_health/external_ci/publication enrichment), stay under a
-wire-size budget, and support conditional (ETag/304) reloads.
+wire-size budget, support conditional (ETag/304) reloads, and — per HARDEN-35 —
+keep the ~9KB project_context blob and detail-only prose out of the payload,
+landing >=50% smaller than the pre-slim baseline.
 """
+import json
 import os
 import shutil
 import sys
@@ -72,6 +75,28 @@ try:
     body = r.json()
     ts = [t for ws in body["workstreams"] for t in ws["tasks"]]
     ok(len(ts) == N and "rollups" in body, "board payload structurally intact")
+
+    # HARDEN-35: project_context (a fixed ~9KB blob) rides on its own endpoint
+    # now, not the board; and detail-only prose stays out of the board rows.
+    ok("project_context" not in body,
+       "/api/board no longer bundles project_context (split to /context)")
+    detail_only = ("deliverable", "entry_criteria", "exit_criteria")
+    ok(not any(k in t for t in ts for k in detail_only),
+       "board task rows omit deliverable/entry_criteria/exit_criteria (task-detail only)")
+    ok(all("description" in t for t in ts),
+       "board rows keep description (the board text search matches against it)")
+    ctx = client.get("/api/projects/{}/context".format(HOME))
+    ok(ctx.status_code == 200 and (ctx.json().get("repo_role_guide") is not None),
+       "/api/projects/{id}/context serves the project_context the board used to bundle")
+
+    # HARDEN-35 acceptance: the slim board is >=50% smaller than the pre-slim
+    # baseline (full per-task enrichment + the bundled project_context blob).
+    fat_tasks = store.list_tasks(project=HOME)
+    fat_payload = {"workstreams": [{"tasks": fat_tasks}],
+                   "project_context": store.get_project_context(HOME)}
+    fat_size = len(json.dumps(fat_payload, default=str, separators=(",", ":")).encode())
+    ok(size <= fat_size * 0.5,
+       f"/api/board {size // 1024}KB is <=50% of the {fat_size // 1024}KB pre-slim baseline")
 
     # 3) conditional reload: ETag -> 304 with no body
     etag = r.headers.get("etag")

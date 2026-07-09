@@ -149,14 +149,18 @@ try:
 
     client = TestClient(app)
     board = client.get(f"/api/board?project={P}").json()
-    ok(board.get("project_context", {}).get("repo_role_guide") is not None,
-       "REST board payload includes project_context")
+    # HARDEN-35: the board payload no longer bundles the ~9KB project_context
+    # blob — the UI fetches it from the dedicated /context endpoint below.
+    ok("project_context" not in board,
+       "REST board payload no longer bundles project_context (HARDEN-35)")
     rest_task = client.get(f"/api/tasks/{task['task_id']}?project={P}").json()
     ok(rest_task.get("project_context", {}).get("hierarchy_breadcrumb"),
-       "REST task detail includes project_context")
+       "REST task detail still includes project_context")
     rest_ctx = client.get(f"/api/projects/{P}/context").json()
     ok(rest_ctx.get("repo_topology", {}).get("valid") is True,
        "REST project context exposes repo_topology")
+    ok(rest_ctx.get("repo_role_guide") is not None,
+       "REST project context carries the repo_role_guide the board used to bundle")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
