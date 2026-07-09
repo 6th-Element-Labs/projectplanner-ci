@@ -57,5 +57,52 @@ latest = dispatch.latest(TID, project="switchboard")
 ok(latest.get("status") == "queued", f"latest(): status queued (got {latest.get('status')})")
 ok(latest.get("wake_id") == res.get("wake_id"), "latest(): surfaces the same wake_id")
 
+# 6. work_hosts_online reflects a REAL registered host. allow_work is advertised
+#    per-runtime under runtimes[].policy (the shape register_host persists) — a
+#    detector that only reads a top-level allow_work would always report 0 online
+#    and the UI would falsely say "no work host is online" even with one running.
+ok(dispatch.status(project="switchboard").get("work_hosts_online") == 0,
+   "work_hosts_online = 0 before any host registers")
+msg_only = store.register_host(
+    {"host_id": "host/msg-only", "hostname": "msg-only",
+     "runtimes": [{"runtime": "claude-code", "policy": {"allow_work": False, "mode": "message_only"},
+                   "lanes": [], "capabilities": ["python"]}],
+     "limits": {"max_sessions": 1}, "heartbeat_ttl_s": 60},
+    project="switchboard")
+ok(not msg_only.get("error"), "registered a message-only host")
+ok(dispatch.status(project="switchboard").get("work_hosts_online") == 0,
+   "message-only host is NOT counted as work-capable")
+work_host = store.register_host(
+    {"host_id": "host/worker", "hostname": "worker",
+     "runtimes": [{"runtime": "claude-code", "policy": {"allow_work": True, "mode": "lane_scoped"},
+                   "lanes": [], "capabilities": ["python", "github"]}],
+     "limits": {"max_sessions": 2}, "heartbeat_ttl_s": 60},
+    project="switchboard")
+ok(not work_host.get("error"), "registered a work-capable host")
+ok(dispatch._host_is_work_capable(work_host) is True,
+   "_host_is_work_capable() reads runtimes[].policy.allow_work")
+ok(dispatch.status(project="switchboard").get("work_hosts_online") == 1,
+   "work_hosts_online = 1 once a work-capable host is online (not a false 0)")
+# and the dispatch note no longer warns about a missing host
+res2 = dispatch.dispatch(TID, actor="tester", project="switchboard")
+ok(res2.get("work_hosts_online") == 1, "dispatch() reports the online work host")
+
+# 7. latest() returns the NEWEST wake, not the oldest. Two distinct wakes for one
+#    task: list_wake_intents returns them oldest-first, so a created_at (absent on
+#    wake rows) sort key would wrongly pin latest() to the first/oldest.
+store.request_wake(selector={"runtime": "claude-code", "lane": "HARDEN"},
+                   reason="older", source="test", policy={"mode": "claim_next"},
+                   task_id=TID, actor="test", project="switchboard",
+                   idem_key="dispatch-test-old")
+store.request_wake(selector={"runtime": "claude-code", "lane": "HARDEN"},
+                   reason="newer", source="test", policy={"mode": "claim_next"},
+                   task_id=TID, actor="test", project="switchboard",
+                   idem_key="dispatch-test-new")
+multi = [w for w in store.list_wake_intents(project="switchboard") if w.get("task_id") == TID]
+ok(len(multi) >= 2, f"task has multiple distinct wakes ({len(multi)})")
+newest_id = max(multi, key=lambda w: w.get("requested_at") or 0).get("wake_id")
+ok(dispatch.latest(TID, project="switchboard").get("wake_id") == newest_id,
+   "latest() surfaces the newest wake (requested_at), not the oldest")
+
 print(f"\nDispatch wake: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

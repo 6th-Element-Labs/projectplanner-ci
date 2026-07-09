@@ -25,6 +25,13 @@ def _host_is_work_capable(host):
         return False
     if host.get("stale"):
         return False
+    # allow_work is advertised per-runtime under runtimes[].policy — that's the shape
+    # register_host actually persists (it keeps runtimes_json but drops the top-level
+    # inventory.policy). This is the real signal; the top-level checks below are a
+    # defensive fallback for other shapes.
+    for rt in host.get("runtimes") or []:
+        if isinstance(rt, dict) and (rt.get("policy") or {}).get("allow_work"):
+            return True
     for src in (host, host.get("policy") or {}, host.get("inventory") or {}):
         if isinstance(src, dict) and src.get("allow_work"):
             return True
@@ -84,7 +91,9 @@ def latest(task_id, project=store.DEFAULT_PROJECT):
                  if w.get("task_id") == task_id]
     except Exception:
         wakes = []
-    wake = max(wakes, key=lambda w: w.get("created_at") or 0, default=None)
+    # wake rows timestamp with `requested_at` (there is no `created_at`), and
+    # list_wake_intents returns them oldest-first — so pick the newest explicitly.
+    wake = max(wakes, key=lambda w: w.get("requested_at") or 0, default=None)
     try:
         sessions = store.list_runner_sessions(task_id=task_id, project=project)
     except Exception:
