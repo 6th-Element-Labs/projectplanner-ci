@@ -516,6 +516,166 @@ const TeepPlan = {
             </div>
         </div>`;
     },
+    // UI-3: Work-session health strip (board + mission header). Answers "is the fleet
+    // safe right now?" at a glance — active sessions, dirty worktrees, blocked merge
+    // gates, held file leases — from the same read models SESSION-8 exposed.
+    sessionStripHtml(sessions, leases) {
+        sessions = sessions || [];
+        leases = leases || [];
+        const dirty = sessions.filter((s) => (s.dirty_status || '').toLowerCase() === 'dirty').length;
+        const blocked = sessions.filter((s) => (s.health || {}).status === 'unsafe').length;
+        const warn = sessions.filter((s) => (s.health || {}).status === 'warning').length;
+        const leaseFiles = leases.reduce((n, l) => n + ((l.names || []).length || 0), 0);
+        if (!sessions.length && !leaseFiles) {
+            return `<span class="text-secondary small"><i class="ti ti-folder-off me-1"></i>No active work sessions</span>`;
+        }
+        const pills = [];
+        const sColor = sessions.length ? 'green' : 'secondary';
+        pills.push(`<span class="badge bg-${sColor}-lt"><span class="status-dot bg-${sColor} me-1"></span>${sessions.length} session${sessions.length === 1 ? '' : 's'} active</span>`);
+        if (dirty) pills.push(`<span class="badge bg-yellow-lt"><i class="ti ti-alert-triangle me-1"></i>${dirty} dirty worktree${dirty === 1 ? '' : 's'}</span>`);
+        if (blocked) pills.push(`<span class="badge bg-red-lt"><i class="ti ti-shield-x me-1"></i>merge gate: ${blocked} blocked</span>`);
+        else if (warn) pills.push(`<span class="badge bg-yellow-lt"><i class="ti ti-alert-triangle me-1"></i>${warn} warning</span>`);
+        if (leaseFiles) pills.push(`<span class="badge bg-secondary-lt"><i class="ti ti-lock me-1"></i>leases: ${leaseFiles} file${leaseFiles === 1 ? '' : 's'} held</span>`);
+        return pills.join(' ');
+    },
+    async _loadSessionHealthStrip(targetId) {
+        const el = document.getElementById(targetId);
+        if (!el) return;
+        // Throttle rapid re-renders (renderBoard fires on every filter change).
+        const now = Date.now();
+        this._stripLoadedAt = this._stripLoadedAt || {};
+        if (el.dataset.loaded && (now - (this._stripLoadedAt[targetId] || 0)) < 4000) return;
+        this._stripLoadedAt[targetId] = now;
+        try {
+            const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
+            const [sw, ls] = await Promise.all([
+                fetch(`/ixp/v1/work_sessions?${p}&include_expired=false`).then((r) => r.json()),
+                fetch(`/ixp/v1/leases?${p}`).then((r) => r.json()),
+            ]);
+            el.innerHTML = `<div class="d-flex flex-wrap align-items-center gap-2">${this.sessionStripHtml(sw.work_sessions, ls.leases)}</div>`;
+            el.dataset.loaded = '1';
+        } catch (e) {
+            el.innerHTML = `<span class="text-secondary small">Session health unavailable</span>`;
+        }
+    },
+    // UI-3: per-task Work Sessions panel (Dev tab) — who holds which worktree, on what
+    // branch, clean or dirty. Sits beside the runner panel.
+    workSessionsPanelHtml(t) {
+        return `<div class="card mb-3" id="work-sessions-panel" data-task-id="${this.esc(t.task_id)}">
+            <div class="card-header py-2">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="ti ti-git-branch text-azure"></i>
+                    <span class="fw-semibold">Work sessions</span>
+                    <span id="work-sessions-count" class="badge bg-secondary-lt">loading</span>
+                </div>
+            </div>
+            <div id="work-sessions-body" class="card-body py-3">
+                <div class="text-secondary small">Loading work sessions…</div>
+            </div>
+        </div>`;
+    },
+    async _loadWorkSessions(taskId) {
+        const body = document.getElementById('work-sessions-body');
+        const count = document.getElementById('work-sessions-count');
+        if (!body) return;
+        let data;
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}&include_expired=true`;
+            data = await (await fetch(`/ixp/v1/work_sessions?${q}`)).json();
+        } catch (e) {
+            body.innerHTML = `<div class="text-danger small">Work sessions unavailable: ${this.esc(e.message)}</div>`;
+            if (count) { count.className = 'badge bg-red-lt'; count.textContent = 'error'; }
+            return;
+        }
+        const sessions = data.work_sessions || [];
+        if (count) {
+            count.className = sessions.length ? 'badge bg-azure-lt' : 'badge bg-secondary-lt';
+            count.textContent = `${sessions.length}`;
+        }
+        if (!sessions.length) {
+            body.innerHTML = `<div class="text-secondary small">No Work Session is bound to this task yet.</div>`;
+            return;
+        }
+        body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
+            <thead><tr><th>Agent</th><th>Branch</th><th>Workspace</th><th>State</th></tr></thead>
+            <tbody>${sessions.map((s) => this._workSessionRow(s)).join('')}</tbody>
+        </table></div>`;
+    },
+    _workSessionRow(s) {
+        const health = s.health || {};
+        const dirty = (s.dirty_status || 'unknown').toLowerCase();
+        const dirtyColor = dirty === 'clean' ? 'green' : (dirty === 'dirty' ? 'yellow' : 'secondary');
+        const life = (s.status || '').toLowerCase();
+        const lifeChip = (life && life !== 'active' && life !== 'proposed')
+            ? `<span class="badge bg-${life === 'completed' ? 'green' : 'red'}-lt ms-1">${this.esc(life)}</span>` : '';
+        const path = s.worktree_path || s.clone_path || (health.workspace || {}).path || '';
+        const branch = s.branch || (health.workspace || {}).branch || '';
+        const chips = `<span class="badge bg-${dirtyColor}-lt">${this.esc(dirty)}</span>${lifeChip} ${this.sessionHealthPill(health)}`;
+        return `<tr>
+            <td><div class="text-truncate" style="max-width:150px" title="${this.esc(s.agent_id || '')}">${this.esc(s.agent_id || '—')}</div><div class="font-monospace text-secondary" style="font-size:11px">${this.esc(s.repo_role || '')}</div></td>
+            <td class="font-monospace small text-truncate" style="max-width:160px" title="${this.esc(branch)}">${this.esc(branch || '—')}</td>
+            <td class="font-monospace small text-truncate" style="max-width:200px" title="${this.esc(path)}">${this.esc(path || '—')}</td>
+            <td>${chips}</td>
+        </tr>`;
+    },
+    // UI-3: merge-gate verdict in plain words with a Re-check button. Semantic colors
+    // (green/amber/red) are the point of this surface. Re-check POSTs merge_gate, which
+    // records an audited merge.gate event — so it is operator-triggered, not auto-run.
+    mergeGatePanelHtml(t) {
+        return `<div class="card mb-3" id="merge-gate-panel" data-task-id="${this.esc(t.task_id)}">
+            <div class="card-header py-2">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="ti ti-git-merge text-azure"></i>
+                    <span class="fw-semibold">Merge gate</span>
+                    <span id="merge-gate-verdict" class="badge bg-secondary-lt">not checked</span>
+                    <button id="merge-gate-recheck" class="btn btn-sm btn-outline-secondary ms-auto"><i class="ti ti-refresh me-1"></i>Re-check</button>
+                </div>
+            </div>
+            <div id="merge-gate-body" class="card-body py-3">
+                <div class="text-secondary small">Re-check evaluates whether this branch can merge under code_strict.</div>
+            </div>
+        </div>`;
+    },
+    _initMergeGate(taskId) {
+        const btn = document.getElementById('merge-gate-recheck');
+        if (btn) btn.addEventListener('click', () => this._loadMergeGate(taskId));
+    },
+    async _loadMergeGate(taskId) {
+        const body = document.getElementById('merge-gate-body');
+        const verdict = document.getElementById('merge-gate-verdict');
+        if (!body) return;
+        body.innerHTML = `<div class="text-secondary small">Checking merge gate…</div>`;
+        if (verdict) { verdict.className = 'badge bg-secondary-lt'; verdict.textContent = 'checking…'; }
+        let data;
+        try {
+            const res = await fetch('/ixp/v1/merge_gate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell', task_id: taskId }),
+            });
+            data = await res.json();
+            if (!res.ok && !data.status) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+        } catch (e) {
+            body.innerHTML = `<div class="text-danger small">Merge gate check failed: ${this.esc(e.message)}</div>`;
+            if (verdict) { verdict.className = 'badge bg-red-lt'; verdict.textContent = 'error'; }
+            return;
+        }
+        const ok = data.ok || data.status === 'pass';
+        if (verdict) {
+            verdict.className = `badge bg-${ok ? 'green' : 'red'}-lt`;
+            verdict.textContent = ok ? 'ready' : 'blocked';
+        }
+        const findings = data.findings || [];
+        const blocking = findings.filter((f) => f.blocking);
+        const warnings = findings.filter((f) => !f.blocking);
+        if (ok && !findings.length) {
+            body.innerHTML = `<div class="text-green"><i class="ti ti-circle-check me-1"></i>No blockers — this branch satisfies the merge gate.</div>`;
+            return;
+        }
+        const render = (list, color) => list.map((f) =>
+            `<div class="mb-2"><span class="badge bg-${color}-lt me-1">${this.esc(f.code || f.failure_class || 'finding')}</span>${this.esc(f.message || '')}${f.repair ? `<div class="small text-secondary ms-2">${this.esc(f.repair)}</div>` : ''}</div>`).join('');
+        body.innerHTML = `${blocking.length ? `<div class="fw-semibold text-red mb-2">Blocked</div>${render(blocking, 'red')}` : ''}${warnings.length ? `<div class="fw-semibold text-orange mb-2 ${blocking.length ? 'mt-2' : ''}">Warnings</div>${render(warnings, 'yellow')}` : ''}`;
+    },
     runnerControlHtml(t) {
         return `<div class="card mb-3" id="runner-control-panel" data-task-id="${this.esc(t.task_id)}">
             <div class="card-header py-2">
@@ -784,6 +944,7 @@ const TeepPlan = {
                     <div>${cards}</div>
                 </div>`;
         }).join('');
+        this._loadSessionHealthStrip('session-health-strip');
     },
 
     taskCard(t) {
@@ -1358,6 +1519,8 @@ const TeepPlan = {
                     <p class="text-secondary">Dispatch queues this task for the agent fleet: a work-capable agent host claims it, works it in an isolated worktree, and opens a PR on a <code>claude/</code> branch — it never merges or writes to your systems on its own. If no work host is online yet, it stays queued until one is.</p>
                     ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
                     ${this.controlTruthHtml(t)}
+                    ${this.workSessionsPanelHtml(t)}
+                    ${this.mergeGatePanelHtml(t)}
                     ${this.monitorControlHtml(t)}
                     ${this.runnerControlHtml(t)}
                     ${this.claimControlHtml(t)}
@@ -1381,6 +1544,8 @@ const TeepPlan = {
             </div>`;
         this._renderActivity(t);
         this._loadTaskMonitors(t.task_id);
+        this._loadWorkSessions(t.task_id);
+        this._initMergeGate(t.task_id);
         this._loadRunnerSessions(t.task_id);
         this._loadDispatch(t.task_id);
         document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
@@ -3898,7 +4063,8 @@ const TeepPlan = {
         <div class="text-end">
             <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
             <div id="mission-live-stamp" class="text-secondary small mt-1"></div>
-        </div></div>`;
+        </div></div>
+        <div id="mission-session-health-strip" class="d-flex flex-wrap align-items-center gap-2 mb-4"></div>`;
         const kpi = `<div class="row row-cards mb-4">${[
             ['Done with proof', prog.done_with_proof_count || 0, 'ti-circle-check', 'green'],
             ['In review', prog.in_review_count || 0, 'ti-eye-check', 'azure'],
@@ -3966,6 +4132,7 @@ const TeepPlan = {
         // real change, and stamp the freshly-rendered "updated" time.
         this._missionSig = this._missionSignature();
         this._missionLiveStamp(true);
+        this._loadSessionHealthStrip('mission-session-health-strip');
     },
 
     async openLinkedTask(taskId, projectId) {
