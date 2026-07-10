@@ -62,6 +62,10 @@ python3 -m venv .venv
 sudo mkdir -p /var/lib/projectplanner/runner /var/lib/projectplanner/repo-hygiene-archive
 sudo chown -R ubuntu:ubuntu /var/lib/projectplanner
 cp .env.example .env   # set OPENAI_API_KEY + LLM_GATEWAY_MASTER_KEY (==PM_LLM_KEY)
+# UI-12: for real cost in the Economics panels, set PM_TALLY_INGEST_TOKEN to a
+# switchboard token with write:ixp (PM_MCP_TOKEN works). The gateway's LiteLLM
+# success callback (deploy/gateway/tally_callback.py) posts each call's spend to
+# /tally/v1/spend/ingest. Without the token the ledger stays empty.
 # The production units also force PM_AUTH_MODE=required; keep it explicit here for audits.
 printf '\nPM_AUTH_MODE=required\n' >> .env
 # First human admin bootstrap. Remove the password line after first successful startup/login.

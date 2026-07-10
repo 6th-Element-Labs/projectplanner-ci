@@ -31,6 +31,10 @@ model_list:
 
 litellm_settings:
   drop_params: true
+  # UI-12: post every completion's provider-actual usage to the tally ledger
+  # (tally_callback.py lives beside this config; loaded relative to it).
+  # Needs PM_TALLY_INGEST_TOKEN (write:ixp) + optional PM_TALLY_INGEST_URL in .env.
+  callbacks: ["tally_callback.tally_logger"]
 
 general_settings:
   master_key: os.environ/LLM_GATEWAY_MASTER_KEY

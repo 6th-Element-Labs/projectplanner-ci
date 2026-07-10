@@ -10852,22 +10852,31 @@ def _spend_for_task(c: sqlite3.Connection, task_id: str,
 
 
 def _spend_summary(rows: List[sqlite3.Row]) -> Dict[str, Any]:
-    spend = {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}}
+    spend = {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}, "by_model": {}}
     seen = set()
     for row in rows:
         if row["id"] in seen:
             continue
         seen.add(row["id"])
+        cost = float(row["cost_usd"] or 0.0)
+        tokens = int(row["total_tokens"] or 0)
         source = row["source"]
         bucket = spend["by_source"].setdefault(source, {"cost_usd": 0.0, "total_tokens": 0,
                                                         "confidence": row["confidence"]})
-        bucket["cost_usd"] += float(row["cost_usd"] or 0.0)
-        bucket["total_tokens"] += int(row["total_tokens"] or 0)
-        spend["cost_usd"] += float(row["cost_usd"] or 0.0)
-        spend["total_tokens"] += int(row["total_tokens"] or 0)
+        bucket["cost_usd"] += cost
+        bucket["total_tokens"] += tokens
+        # UI-12: per-model breakdown drives the model-mix line in the Economics panels.
+        model = row["model"] or "unknown"
+        mbucket = spend["by_model"].setdefault(model, {"cost_usd": 0.0, "total_tokens": 0})
+        mbucket["cost_usd"] += cost
+        mbucket["total_tokens"] += tokens
+        spend["cost_usd"] += cost
+        spend["total_tokens"] += tokens
     spend["cost_usd"] = round(spend["cost_usd"], 6)
     for bucket in spend["by_source"].values():
         bucket["cost_usd"] = round(bucket["cost_usd"], 6)
+    for mbucket in spend["by_model"].values():
+        mbucket["cost_usd"] = round(mbucket["cost_usd"], 6)
     return spend
 
 
@@ -10988,6 +10997,12 @@ def _merge_spend_totals(target: Dict[str, Any], spend: Dict[str, Any]) -> None:
         dst["total_tokens"] = int(dst.get("total_tokens") or 0) + int(bucket.get("total_tokens") or 0)
         if bucket.get("confidence"):
             dst["confidence"] = bucket["confidence"]
+    by_model = target.setdefault("by_model", {})
+    for model, bucket in (spend.get("by_model") or {}).items():
+        dst = by_model.setdefault(model, {"cost_usd": 0.0, "total_tokens": 0})
+        dst["cost_usd"] = round(float(dst.get("cost_usd") or 0.0) +
+                                float(bucket.get("cost_usd") or 0.0), 6)
+        dst["total_tokens"] = int(dst.get("total_tokens") or 0) + int(bucket.get("total_tokens") or 0)
 
 
 def project_tally(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
