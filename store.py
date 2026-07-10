@@ -977,7 +977,21 @@ def add_deliverable_milestone(deliverable_id: str, data: Dict[str, Any],
                   (None, actor, "deliverable.milestone_upsert",
                    json.dumps({"deliverable_id": deliverable_id, "milestone_id": mid,
                                "title": title}, sort_keys=True), now))
+        _touch_deliverable(c, deliverable_id, now)
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
+
+
+def _touch_deliverable(c: sqlite3.Connection, deliverable_id: str, ts: float) -> None:
+    """Bump the deliverable row's updated_at.
+
+    mission_status / dependency-graph caches are stamped on deliverables.updated_at
+    (see _mission_cache_stamp), but link/milestone rows live in child tables whose
+    edits don't touch the parent. Without this bump a freshly-linked or -unlinked
+    task, or a new milestone, only appears after the cache TTL — so the editable
+    mission page would look like it dropped the change. Call this on every
+    link/unlink/milestone mutation so the operator sees edits immediately.
+    """
+    c.execute("UPDATE deliverables SET updated_at=? WHERE id=?", (ts, deliverable_id))
 
 
 def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: str,
@@ -1053,6 +1067,7 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
                                "project_id": task_project,
                                "task_id": task_id, "milestone_id": mid},
                               sort_keys=True), now))
+        _touch_deliverable(c, deliverable_id, now)
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 
@@ -1320,6 +1335,7 @@ def unlink_task_from_deliverable(deliverable_id: str, task_project: str, task_id
                   (None, actor, "deliverable.task_unlinked",
                    json.dumps({"deliverable_id": deliverable_id, "project_id": task_project,
                                "task_id": task_id}, sort_keys=True), now))
+        _touch_deliverable(c, deliverable_id, now)
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 

@@ -65,6 +65,10 @@ const TeepPlan = {
         not_started: 'secondary', in_progress: 'blue', blocked: 'red',
         in_review: 'azure', done: 'green', skipped: 'secondary',
     },
+    // UI-1: authoring vocab — kept in sync with store.py (DELIVERABLE_MILESTONE_STATUSES
+    // and link_task_to_deliverable's role auto-classifier).
+    MILESTONE_STATUSES: ['not_started', 'in_progress', 'blocked', 'in_review', 'done', 'skipped'],
+    DELIVERABLE_LINK_ROLES: ['contributes', 'implementation', 'acceptance', 'foundation', 'parked'],
     WS_COLOR: {
         SEN: 'azure', FMP: 'blue', SCADA: 'cyan', IFS: 'teal', SSO: 'indigo', BEDROCK: 'purple',
         GW: 'pink', REG: 'lime', AGENT: 'orange', REPORT: 'yellow', DATA: 'green', CUTOVER: 'red'
@@ -3661,6 +3665,7 @@ const TeepPlan = {
             await Promise.all([
                 this.loadMissionStatus(this.selectedDeliverableId),
                 this.loadDependencyGraph(this.selectedDeliverableId),
+                this.loadBreakdownProposals(this.selectedDeliverableId),
             ]);
             this._setMissionDeliverableInUrl(this.selectedDeliverableId);
             this.renderMissionPage();
@@ -3817,10 +3822,19 @@ const TeepPlan = {
         return lines.join('\n').trim();
     },
 
+    // UI-1: operator controls that hang off the dependency-map card header.
+    _missionAuthorButtons() {
+        return `<div class="btn-list">
+            <button class="btn btn-sm btn-primary" type="button" data-dl-action="link"><i class="ti ti-link me-1"></i>Link task</button>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-dl-action="milestone"><i class="ti ti-flag me-1"></i>Milestone</button>
+        </div>`;
+    },
+
     _missionDependencyGraphHtml(graph) {
         const g = graph || this.missionGraph;
         if (!g || g.error) {
-            return '<div class="card mb-4"><div class="card-body text-secondary small">No dependency graph yet — link tasks with depends_on to populate the strategic map.</div></div>';
+            return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-git-fork me-2"></i>Dependency map</h3><div class="card-actions">${this._missionAuthorButtons()}</div></div>
+                <div class="card-body text-secondary small">No dependency graph yet — <a href="#" data-dl-action="link">link a task</a> to start the strategic map.</div></div>`;
         }
         const stats = g.stats || {};
         const legend = [
@@ -3854,7 +3868,8 @@ const TeepPlan = {
         const contextPills = (g.context_nodes || []).map((n) => pill(n, false)).join('');
         return `<div class="card mb-4" id="mission-dag-panel"><div class="card-header">
             <h3 class="card-title"><i class="ti ti-git-fork me-2"></i>Dependency map</h3>
-            <div class="card-actions text-secondary small">${[
+            ${this._missionAuthorButtons()}
+            <div class="card-actions text-secondary small ms-auto">${[
                 [stats.done_count, 'done'],
                 [stats.done_unproven_count, 'done · no proof'],
                 [stats.in_progress_count, 'in progress'],
@@ -3942,7 +3957,7 @@ const TeepPlan = {
             });
             nodeEl.addEventListener('click', (e) => {
                 e.preventDefault();
-                if (hit) this.openLinkedTask(hit.id, hit.project_id);
+                if (hit) this.openNodeModal(hit.id, hit.project_id);   // UI-1: node actions
             });
             // Native SVG hover tooltip: narration + who's working it now.
             if (hit) {
@@ -4101,8 +4116,10 @@ const TeepPlan = {
         const _prevDetail = el.querySelector('#mission-detail');
         const detailOpen = _prevDetail ? _prevDetail.open : !!this._missionDetailOpen;
         this._missionDetailOpen = detailOpen;
-        // Lead with the story: headline → plain-English → what's blocked → the map → next action.
-        const essentials = header + this._missionCeoHeaderHtml(s) + blockerHtml + this._missionDependencyGraphHtml() + nextActions;
+        // Lead with the story: headline → plain-English → what's blocked → the map →
+        // breakdown/outcomes review → next action.
+        const essentials = header + this._missionCeoHeaderHtml(s) + blockerHtml
+            + this._missionDependencyGraphHtml() + this._missionBreakdownHtml() + nextActions;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
         const detail = kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap +
@@ -4117,9 +4134,6 @@ const TeepPlan = {
                 <summary class="text-secondary py-2"><i class="ti ti-chevron-right mission-detail-chev me-1"></i>Full detail — KPIs, brief, milestones, work, agents, linked tasks</summary>
                 <div class="pt-3">${detail}</div>
             </details>`;
-        if (s.pending_proposal) {
-            el.insertAdjacentHTML('beforeend', `<div class="text-secondary small mt-3"><i class="ti ti-info-circle me-1"></i>Pending breakdown proposal awaiting approval.</div>`);
-        }
         const _gh = el.querySelector('#mission-dag-graph');
         if (_prevGraphSvg && _gh && !_gh.querySelector('svg')) _gh.appendChild(_prevGraphSvg);
         this._renderMissionMermaid();
@@ -4134,6 +4148,347 @@ const TeepPlan = {
         const id = (taskId || '').trim().toUpperCase();
         if (!id) return;
         await this.openTask(id, pid);
+    },
+
+    // ---- UI-1: author the deliverable graph -----------------------------
+    // The mission page is no longer read-only: an operator can link/unlink tasks,
+    // author milestones, act on breakdown proposals, and record outcomes — all
+    // against REST endpoints that already back the MCP tools (no new substrate).
+
+    async loadBreakdownProposals(deliverableId) {
+        const id = (deliverableId || '').trim();
+        if (!id) { this.missionProposals = []; return []; }
+        try {
+            const res = await fetch(`api/deliverables/breakdown_proposals?deliverable_id=${encodeURIComponent(id)}`, { cache: 'no-store' });
+            const data = await res.json();
+            this.missionProposals = (res.ok && Array.isArray(data.proposals)) ? data.proposals : [];
+        } catch (e) { this.missionProposals = []; }
+        return this.missionProposals;
+    },
+
+    _missionBreakdownHtml() {
+        const all = this.missionProposals || [];
+        const pending = all.filter((p) => ['proposed', 'deferred'].includes(String(p.status || '').toLowerCase()));
+        const rows = pending.map((p) => {
+            const pid = p.id || p.proposal_id || '';
+            const payload = p.payload || {};
+            const ms = Array.isArray(payload.milestones) ? payload.milestones : [];
+            const taskCount = ms.reduce((n, m) => n + ((m.tasks || []).length), 0);
+            const summary = p.summary || payload.notes || p.notes || p.outcome || 'Breakdown proposal';
+            const statusBadge = this._missionBadge(p.status, { proposed: 'yellow', deferred: 'secondary', approved: 'green', rejected: 'red' });
+            return `<div class="list-group-item"><div class="d-flex flex-wrap align-items-start gap-2">
+                <div class="flex-fill">
+                    <div class="d-flex align-items-center gap-2 mb-1">${statusBadge}<span class="fw-semibold">${this.esc(summary)}</span></div>
+                    <div class="text-secondary small">${ms.length} milestone${ms.length === 1 ? '' : 's'} · ${taskCount} task${taskCount === 1 ? '' : 's'} · <span class="text-muted">${this.esc(pid)}</span></div>
+                </div>
+                <div class="btn-list">
+                    <button class="btn btn-sm btn-success" type="button" data-dl-action="approve" data-proposal="${this.esc(pid)}"><i class="ti ti-check me-1"></i>Approve</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" data-dl-action="defer" data-proposal="${this.esc(pid)}">Defer</button>
+                    <button class="btn btn-sm btn-outline-danger" type="button" data-dl-action="reject" data-proposal="${this.esc(pid)}">Reject</button>
+                </div></div></div>`;
+        }).join('');
+        const body = pending.length
+            ? `<div class="list-group list-group-flush">${rows}</div>`
+            : '<div class="card-body text-secondary small">No pending breakdown proposals. Use <strong>Record outcome</strong> to draft milestones from a plain-English outcome.</div>';
+        return `<div class="card mb-4" id="mission-breakdown-card"><div class="card-header">
+            <h3 class="card-title"><i class="ti ti-list-check me-2"></i>Breakdown &amp; outcomes${pending.length ? ` <span class="badge bg-yellow-lt ms-2">${pending.length} pending</span>` : ''}</h3>
+            <div class="card-actions"><button class="btn btn-sm btn-primary" type="button" data-dl-action="outcome"><i class="ti ti-flag-check me-1"></i>Record outcome</button></div>
+        </div>${body}</div>`;
+    },
+
+    _missionAction(action, ds) {
+        ds = ds || {};
+        switch (action) {
+            case 'link': return this.openLinkModal();
+            case 'milestone': return this.openMilestoneModal();
+            case 'outcome': return this.openOutcomeModal();
+            case 'approve': return this.approveProposal(ds.proposal);
+            case 'reject': return this.rejectProposal(ds.proposal);
+            case 'defer': return this.deferProposal(ds.proposal);
+        }
+    },
+
+    // ---- small modal + fetch helpers ----
+    _dlShow(id) { window.bootstrap.Modal.getOrCreateInstance(document.getElementById(id)).show(); },
+    _dlHide(id) { const m = document.getElementById(id); const inst = m && window.bootstrap.Modal.getInstance(m); if (inst) inst.hide(); },
+    _dlFlash(id, msg, cls) { const el = document.getElementById(id); if (el) { el.textContent = msg || ''; el.className = `small ${cls || 'text-secondary'} me-auto`; } },
+    _dlHttpErr(res, data) {
+        if (res.status === 403) return 'You don’t have permission for this action.';
+        return (data && (data.detail || data.error)) || `Failed (HTTP ${res.status})`;
+    },
+    async _dlSend(url, method, body) {
+        const opt = { method };
+        if (body !== undefined) { opt.headers = { 'Content-Type': 'application/json' }; opt.body = JSON.stringify(body); }
+        const res = await fetch(url, opt);
+        let data = {};
+        try { data = await res.json(); } catch (e) { /* empty body */ }
+        if (!res.ok) throw new Error(this._dlHttpErr(res, data));
+        return data;
+    },
+    _missionMilestoneOptions(selected, includeNone) {
+        const ms = (this.missionStatus && this.missionStatus.milestones) || [];
+        const none = includeNone === false ? '' : `<option value=""${!selected ? ' selected' : ''}>— no milestone —</option>`;
+        return none + ms.map((m) => `<option value="${this.esc(m.id)}"${m.id === selected ? ' selected' : ''}>${this.esc(m.title || m.id)}</option>`).join('');
+    },
+    _roleOptions(selected) {
+        return this.DELIVERABLE_LINK_ROLES.map((r) => `<option value="${r}"${r === selected ? ' selected' : ''}>${r}</option>`).join('');
+    },
+    _milestoneStatusOptions(selected) {
+        const sel = selected || 'not_started';
+        return this.MILESTONE_STATUSES.map((s) => `<option value="${s}"${s === sel ? ' selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('');
+    },
+    async _dlProjectsThen(cb) {
+        if (!this._dlProjects) {
+            try {
+                const res = await fetch('api/projects');
+                const data = await res.json();
+                this._dlProjects = (res.ok && Array.isArray(data.projects)) ? data.projects : [];
+            } catch (e) { this._dlProjects = []; }
+        }
+        if (!this._dlProjects.length) this._dlProjects = [{ id: window.PM_PROJECT || 'maxwell', label: window.PM_PROJECT || 'maxwell' }];
+        cb(this._dlProjects);
+    },
+
+    // ---- breakdown proposal actions ----
+    async _proposalAction(url, method, body) {
+        try {
+            await this._dlSend(url, method, body);
+            await this.refreshMissionPage();
+        } catch (e) {
+            alert(`Could not update proposal: ${e.message}`);
+        }
+    },
+    approveProposal(pid) {
+        if (!pid) return;
+        if (!confirm('Approve this breakdown proposal? It will create and link the proposed tasks.')) return;
+        return this._proposalAction(`api/deliverables/breakdown_proposals/${encodeURIComponent(pid)}/approve`, 'POST');
+    },
+    rejectProposal(pid) {
+        if (!pid) return;
+        const reason = prompt('Reason for rejecting this proposal? (optional)');
+        if (reason === null) return;
+        return this._proposalAction(`api/deliverables/breakdown_proposals/${encodeURIComponent(pid)}/reject`, 'POST', { reason });
+    },
+    deferProposal(pid) {
+        if (!pid) return;
+        const reason = prompt('Reason for deferring this proposal? (optional)');
+        if (reason === null) return;
+        return this._proposalAction(`api/deliverables/breakdown_proposals/${encodeURIComponent(pid)}/defer`, 'POST', { reason });
+    },
+
+    // ---- link a task ----
+    openLinkModal(prefill) {
+        prefill = prefill || {};
+        this._dlProjectsThen((projects) => {
+            const curProj = prefill.task_project || window.PM_PROJECT || 'maxwell';
+            const projOpts = projects.map((p) => `<option value="${this.esc(p.id)}"${p.id === curProj ? ' selected' : ''}>${this.esc(p.label || p.id)}</option>`).join('');
+            const body = document.getElementById('dl-link-body');
+            body.innerHTML = `
+                <div class="mb-3"><label class="form-label">Task board</label>
+                    <select id="dl-link-project" class="form-select">${projOpts}</select></div>
+                <div class="mb-2"><label class="form-label">Find a task</label>
+                    <input id="dl-link-search" class="form-control" placeholder="Search by id or title…" autocomplete="off">
+                    <div id="dl-link-results" class="list-group mt-1" style="max-height:12rem;overflow:auto"></div></div>
+                <div class="mb-3"><label class="form-label">Task id</label>
+                    <input id="dl-link-task" class="form-control text-uppercase" placeholder="e.g. ACCESS-14" value="${this.esc(prefill.task_id || '')}" autocomplete="off"></div>
+                <div class="row g-2 mb-2">
+                    <div class="col-md-6"><label class="form-label">Milestone</label><select id="dl-link-milestone" class="form-select">${this._missionMilestoneOptions(prefill.milestone_id)}</select></div>
+                    <div class="col-md-6"><label class="form-label">Role</label><select id="dl-link-role" class="form-select">${this._roleOptions(prefill.role || 'contributes')}</select></div>
+                </div>
+                <label class="form-check"><input class="form-check-input" type="checkbox" id="dl-link-blocks"${prefill.blocks_deliverable ? ' checked' : ''}>
+                    <span class="form-check-label">This task blocks the deliverable</span></label>`;
+            this._dlFlash('dl-link-flash', '', 'text-secondary');
+            const search = document.getElementById('dl-link-search');
+            search.oninput = () => this._dlRunTaskSearch();
+            document.getElementById('dl-link-project').onchange = () => { document.getElementById('dl-link-results').innerHTML = ''; if (search.value.trim()) this._dlRunTaskSearch(); };
+            this._dlShow('dl-link-modal');
+        });
+    },
+    async _dlRunTaskSearch() {
+        const proj = document.getElementById('dl-link-project').value;
+        const q = (document.getElementById('dl-link-search').value || '').trim().toLowerCase();
+        const results = document.getElementById('dl-link-results');
+        if (!results) return;
+        this._dlTaskCache = this._dlTaskCache || {};
+        let tasks = this._dlTaskCache[proj];
+        if (!tasks) {
+            results.innerHTML = '<div class="list-group-item text-secondary small">Loading tasks…</div>';
+            try {
+                // Explicit project= so the fetch wrapper doesn't override it with PM_PROJECT —
+                // this searches ANY board, not just the current one.
+                const res = await fetch(`api/tasks?project=${encodeURIComponent(proj)}`, { cache: 'no-store' });
+                const data = await res.json();
+                tasks = (res.ok && Array.isArray(data.tasks)) ? data.tasks : [];
+            } catch (e) { tasks = []; }
+            this._dlTaskCache[proj] = tasks;
+        }
+        if (!q) { results.innerHTML = ''; return; }
+        const hits = tasks.filter((t) => {
+            const id = String(t.task_id || '').toLowerCase();
+            const title = String(t.title || '').toLowerCase();
+            return id.includes(q) || title.includes(q);
+        }).slice(0, 20);
+        results.innerHTML = hits.length ? hits.map((t) => `<a href="#" class="list-group-item list-group-item-action py-1" data-dl-pick="${this.esc(t.task_id)}">
+            <span class="fw-semibold">${this.esc(t.task_id)}</span> <span class="text-secondary small">${this.esc(t.title || '')}</span></a>`).join('')
+            : '<div class="list-group-item text-secondary small">No matching tasks</div>';
+        results.querySelectorAll('[data-dl-pick]').forEach((a) => a.addEventListener('click', (e) => {
+            e.preventDefault();
+            const pick = a.getAttribute('data-dl-pick');
+            document.getElementById('dl-link-task').value = pick;
+            document.getElementById('dl-link-search').value = pick;
+            results.innerHTML = '';
+        }));
+    },
+    async submitLinkTask() {
+        const id = (this.selectedDeliverableId || '').trim();
+        const taskId = (document.getElementById('dl-link-task').value || '').trim().toUpperCase();
+        const taskProject = document.getElementById('dl-link-project').value;
+        if (!id || !taskId) { this._dlFlash('dl-link-flash', 'Pick a task to link.', 'text-danger'); return; }
+        const body = {
+            task_project: taskProject,
+            task_id: taskId,
+            milestone_id: document.getElementById('dl-link-milestone').value || '',
+            role: document.getElementById('dl-link-role').value || '',
+            blocks_deliverable: document.getElementById('dl-link-blocks').checked,
+        };
+        const btn = document.getElementById('dl-link-save'); if (btn) btn.disabled = true;
+        this._dlFlash('dl-link-flash', 'Linking…', 'text-secondary');
+        try {
+            await this._dlSend(`api/deliverables/${encodeURIComponent(id)}/task_links`, 'POST', body);
+            this._dlHide('dl-link-modal');
+            await this.refreshMissionPage();
+        } catch (e) { this._dlFlash('dl-link-flash', e.message, 'text-danger'); }
+        finally { if (btn) btn.disabled = false; }
+    },
+
+    // ---- add a milestone ----
+    openMilestoneModal() {
+        const body = document.getElementById('dl-milestone-body');
+        body.innerHTML = `
+            <div class="mb-3"><label class="form-label">Title</label><input id="dl-ms-title" class="form-control" placeholder="e.g. Ship login shell" autocomplete="off"></div>
+            <div class="row g-2 mb-3">
+                <div class="col-md-7"><label class="form-label">Status</label><select id="dl-ms-status" class="form-select">${this._milestoneStatusOptions('not_started')}</select></div>
+                <div class="col-md-5"><label class="form-label">Sort order</label><input id="dl-ms-sort" type="number" class="form-control" placeholder="auto"></div>
+            </div>
+            <div class="mb-2"><label class="form-label">Acceptance criteria</label>
+                <textarea id="dl-ms-accept" class="form-control" rows="3" placeholder="One criterion per line"></textarea>
+                <div class="form-hint">One acceptance criterion per line.</div></div>`;
+        this._dlFlash('dl-milestone-flash', '', 'text-secondary');
+        this._dlShow('dl-milestone-modal');
+        setTimeout(() => document.getElementById('dl-ms-title')?.focus(), 200);
+    },
+    async submitMilestone() {
+        const id = (this.selectedDeliverableId || '').trim();
+        const title = (document.getElementById('dl-ms-title').value || '').trim();
+        if (!id || !title) { this._dlFlash('dl-milestone-flash', 'Enter a milestone title.', 'text-danger'); return; }
+        const accept = (document.getElementById('dl-ms-accept').value || '').split('\n').map((s) => s.trim()).filter(Boolean);
+        const sortRaw = (document.getElementById('dl-ms-sort').value || '').trim();
+        const body = { title, status: document.getElementById('dl-ms-status').value, acceptance_criteria: accept };
+        if (sortRaw !== '') body.sort_order = Number(sortRaw);
+        const btn = document.getElementById('dl-milestone-save'); if (btn) btn.disabled = true;
+        this._dlFlash('dl-milestone-flash', 'Saving…', 'text-secondary');
+        try {
+            await this._dlSend(`api/deliverables/${encodeURIComponent(id)}/milestones`, 'POST', body);
+            this._dlHide('dl-milestone-modal');
+            await this.refreshMissionPage();
+        } catch (e) { this._dlFlash('dl-milestone-flash', e.message, 'text-danger'); }
+        finally { if (btn) btn.disabled = false; }
+    },
+
+    // ---- record an outcome (drafts a breakdown proposal) ----
+    openOutcomeModal() {
+        const body = document.getElementById('dl-outcome-body');
+        body.innerHTML = `
+            <div class="mb-3"><label class="form-label">Outcome</label>
+                <textarea id="dl-outcome-text" class="form-control" rows="3" placeholder="Plain-English outcome to record for this deliverable"></textarea></div>
+            <div class="mb-3"><label class="form-label">Target projects</label>
+                <input id="dl-outcome-projects" class="form-control" value="${this.esc(window.PM_PROJECT || '')}" placeholder="comma-separated board ids">
+                <div class="form-hint">Boards where breakdown tasks would land.</div></div>
+            <div class="mb-2"><label class="form-label">Acceptance criteria</label>
+                <textarea id="dl-outcome-accept" class="form-control" rows="2" placeholder="One criterion per line"></textarea></div>
+            <label class="form-check"><input class="form-check-input" type="checkbox" id="dl-outcome-llm">
+                <span class="form-check-label">Use the LLM to draft a milestone breakdown</span></label>`;
+        this._dlFlash('dl-outcome-flash', '', 'text-secondary');
+        this._dlShow('dl-outcome-modal');
+        setTimeout(() => document.getElementById('dl-outcome-text')?.focus(), 200);
+    },
+    async submitOutcome() {
+        const id = (this.selectedDeliverableId || '').trim();
+        const outcome = (document.getElementById('dl-outcome-text').value || '').trim();
+        if (!id || !outcome) { this._dlFlash('dl-outcome-flash', 'Enter an outcome.', 'text-danger'); return; }
+        const projects = (document.getElementById('dl-outcome-projects').value || '').split(',').map((s) => s.trim()).filter(Boolean);
+        const accept = (document.getElementById('dl-outcome-accept').value || '').split('\n').map((s) => s.trim()).filter(Boolean);
+        const body = { outcome, use_llm: document.getElementById('dl-outcome-llm').checked };
+        if (projects.length) body.target_projects = projects;
+        if (accept.length) body.acceptance_criteria = accept;
+        const btn = document.getElementById('dl-outcome-save'); if (btn) btn.disabled = true;
+        this._dlFlash('dl-outcome-flash', 'Recording…', 'text-secondary');
+        try {
+            await this._dlSend(`api/deliverables/${encodeURIComponent(id)}/outcome`, 'POST', body);
+            this._dlHide('dl-outcome-modal');
+            await this.refreshMissionPage();
+        } catch (e) { this._dlFlash('dl-outcome-flash', e.message, 'text-danger'); }
+        finally { if (btn) btn.disabled = false; }
+    },
+
+    // ---- node actions: set milestone/role, unlink, open task ----
+    openNodeModal(taskId, projectId) {
+        const id = String(taskId || '').trim();
+        if (!id) return;
+        const link = ((this.missionStatus || {}).linked_tasks || []).find((l) => String(l.task_id) === id) || {};
+        const taskProject = link.project_id || projectId || window.PM_PROJECT;
+        this._dlNode = { task_id: id, task_project: taskProject };
+        const body = document.getElementById('dl-node-body');
+        body.innerHTML = `
+            <div class="mb-3"><div class="text-secondary small">${this.esc(taskProject)}</div>
+                <div class="h4 mb-0">${this.esc(id)}</div></div>
+            <div class="row g-2 mb-2">
+                <div class="col-md-6"><label class="form-label">Milestone</label><select id="dl-node-milestone" class="form-select">${this._missionMilestoneOptions(link.milestone_id)}</select></div>
+                <div class="col-md-6"><label class="form-label">Role</label><select id="dl-node-role" class="form-select">${this._roleOptions(link.role || 'contributes')}</select></div>
+            </div>
+            <label class="form-check mb-3"><input class="form-check-input" type="checkbox" id="dl-node-blocks"${link.blocks_deliverable ? ' checked' : ''}>
+                <span class="form-check-label">This task blocks the deliverable</span></label>
+            <a href="#" class="small" id="dl-node-open"><i class="ti ti-external-link me-1"></i>Open task detail</a>`;
+        this._dlFlash('dl-node-flash', '', 'text-secondary');
+        document.getElementById('dl-node-open')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            this._dlHide('dl-node-modal');
+            this.openLinkedTask(id, taskProject);
+        });
+        this._dlShow('dl-node-modal');
+    },
+    async submitNodeLink() {
+        const n = this._dlNode || {};
+        const delId = (this.selectedDeliverableId || '').trim();
+        if (!delId || !n.task_id) return;
+        const body = {
+            task_project: n.task_project, task_id: n.task_id,
+            milestone_id: document.getElementById('dl-node-milestone').value || '',
+            role: document.getElementById('dl-node-role').value || '',
+            blocks_deliverable: document.getElementById('dl-node-blocks').checked,
+        };
+        const btn = document.getElementById('dl-node-save'); if (btn) btn.disabled = true;
+        this._dlFlash('dl-node-flash', 'Saving…', 'text-secondary');
+        try {
+            await this._dlSend(`api/deliverables/${encodeURIComponent(delId)}/task_links`, 'POST', body);
+            this._dlHide('dl-node-modal');
+            await this.refreshMissionPage();
+        } catch (e) { this._dlFlash('dl-node-flash', e.message, 'text-danger'); }
+        finally { if (btn) btn.disabled = false; }
+    },
+    async unlinkNode() {
+        const n = this._dlNode || {};
+        const delId = (this.selectedDeliverableId || '').trim();
+        if (!delId || !n.task_id) return;
+        if (!confirm(`Unlink ${n.task_id} from this deliverable?`)) return;
+        const btn = document.getElementById('dl-node-unlink'); if (btn) btn.disabled = true;
+        this._dlFlash('dl-node-flash', 'Unlinking…', 'text-secondary');
+        try {
+            await this._dlSend(`api/deliverables/${encodeURIComponent(delId)}/task_links?task_project=${encodeURIComponent(n.task_project)}&task_id=${encodeURIComponent(n.task_id)}`, 'DELETE');
+            this._dlHide('dl-node-modal');
+            await this.refreshMissionPage();
+        } catch (e) { this._dlFlash('dl-node-flash', e.message, 'text-danger'); }
+        finally { if (btn) btn.disabled = false; }
     },
 
     // ---- events ----------------------------------------------------------
@@ -4280,12 +4635,33 @@ const TeepPlan = {
         if (missionPage && !this._missionWired) {
             this._missionWired = true;
             missionPage.addEventListener('click', (e) => {
+                // UI-1 authoring controls come first so a node pill (which is also a
+                // data-linked-task) opens the node-action modal, not the task modal.
+                const act = e.target.closest('[data-dl-action]');
+                if (act && missionPage.contains(act)) {
+                    e.preventDefault();
+                    this._missionAction(act.getAttribute('data-dl-action'), { proposal: act.getAttribute('data-proposal') });
+                    return;
+                }
+                const node = e.target.closest('.mission-dag-node');
+                if (node && missionPage.contains(node)) {
+                    e.preventDefault();
+                    this.openNodeModal(node.getAttribute('data-linked-task'), node.getAttribute('data-linked-project'));
+                    return;
+                }
                 const a = e.target.closest('[data-linked-task]');
                 if (!a || !missionPage.contains(a)) return;
                 e.preventDefault();
                 this.openLinkedTask(a.getAttribute('data-linked-task'), a.getAttribute('data-linked-project'));
             });
         }
+        // UI-1: authoring modal save/unlink buttons (static shells in index.html).
+        const wireBtn = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener('click', () => fn.call(this)); };
+        wireBtn('dl-link-save', this.submitLinkTask);
+        wireBtn('dl-milestone-save', this.submitMilestone);
+        wireBtn('dl-outcome-save', this.submitOutcome);
+        wireBtn('dl-node-save', this.submitNodeLink);
+        wireBtn('dl-node-unlink', this.unlinkNode);
         // Live cockpit: poll while the Deliverable tab is showing and the browser
         // tab is visible; stop when the user leaves either.
         if (!this._missionLiveWired) {
