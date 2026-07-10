@@ -196,10 +196,13 @@ def _system(task, project="maxwell"):
     )
 
 
-def _chat(messages, tool_choice="auto"):
+def _chat(messages, tool_choice="auto", meta=None):
     # No temperature: gpt-5.x only supports the default (1). Add back only for models that allow it.
     # tool_choice="none" forces a tool-free turn (used to flush a final summary when out of steps).
     body = {"model": CHAT_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": tool_choice}
+    if meta:
+        # UI-12: attribute this gateway call's spend (source=agent, + task/project when scoped).
+        body["metadata"] = meta
     r = httpx.post(f"{BASE}/chat/completions", headers={"Authorization": f"Bearer {KEY}"}, json=body, timeout=120)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]
@@ -304,6 +307,10 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
             msgs.append({"role": h["role"], "content": h["content"]})
     msgs.append({"role": "user", "content": message})
 
+    chat_meta = {"source": "agent", "project": project}
+    if task and task.get("task_id"):
+        chat_meta["task_id"] = task["task_id"]
+
     sources, proposals, new_tasks, last = [], [], [], None
     recipients = None
     dispatch_targets = []
@@ -318,7 +325,7 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
                          "search_tasks/get_task/plan_signals) again. Make any remaining propose_* "
                          "(and set_recipients/dispatch_to_dev) calls the message clearly implies, "
                          "then write your final summary."})
-        m = _chat(msgs)
+        m = _chat(msgs, meta=chat_meta)
         last = m
         tcs = m.get("tool_calls")
         if not tcs:
@@ -420,7 +427,7 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
     # the old "(reached step limit)" dead-end that surfaced as "No task changes detected".
     answer = ""
     try:
-        answer = (_chat(msgs, tool_choice="none").get("content") or "").strip()
+        answer = (_chat(msgs, tool_choice="none", meta=chat_meta).get("content") or "").strip()
     except Exception:
         pass
     if not answer:

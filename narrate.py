@@ -58,14 +58,19 @@ _DELIVERABLE_SYSTEM = (
 )
 
 
-def _llm(context: str, system: str = _SYSTEM) -> str:
+def _llm(context: str, system: str = _SYSTEM, meta: Optional[dict] = None) -> str:
+    body = {"model": NARRATE_MODEL,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": context}],
+            "max_tokens": MAX_TOKENS}
+    if meta:
+        # UI-12: attribution rides on LiteLLM metadata so the gateway callback can
+        # roll this call's provider-actual spend onto the right task/deliverable.
+        body["metadata"] = meta
     r = httpx.post(
         f"{BASE}/chat/completions",
         headers={"Authorization": f"Bearer {KEY}"},
-        json={"model": NARRATE_MODEL,
-              "messages": [{"role": "system", "content": system},
-                           {"role": "user", "content": context}],
-              "max_tokens": MAX_TOKENS},
+        json=body,
         timeout=30,
     )
     r.raise_for_status()
@@ -153,7 +158,8 @@ def narrate_task(task_id: str, project: str = store.DEFAULT_PROJECT,
 
     context = _task_context(t)
 
-    llm = _llm_fn or _llm
+    llm = _llm_fn or (lambda ctx: _llm(
+        ctx, meta={"source": "narrator", "task_id": task_id, "project": project}))
     narration = llm(context)
     store.set_task_narration(task_id, narration, last_cursor,
                              source_fingerprint=fingerprint, model=NARRATE_MODEL,
@@ -222,7 +228,8 @@ def narrate_deliverable(project: str, deliverable_id: str, force: bool = False,
     if honesty:
         context = f"{context}\n\n{honesty}"
 
-    llm = _llm_fn or (lambda ctx: _llm(ctx, _DELIVERABLE_SYSTEM))
+    llm = _llm_fn or (lambda ctx: _llm(
+        ctx, _DELIVERABLE_SYSTEM, meta={"source": "narrator", "project": project}))
     narration = llm(context)
     store.set_deliverable_narration(deliverable_id, narration, source_fingerprint=fingerprint,
                                     model=NARRATE_MODEL, project=project)

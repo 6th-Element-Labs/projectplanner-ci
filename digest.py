@@ -58,7 +58,9 @@ def _brief(sig, deltas, since_ts):
     )
     user = f"SIGNALS:\n{json.dumps(sig_trim)}\n\nCHANGES SINCE {since}:\n{json.dumps(deltas)}"
     body = {"model": CHAT_MODEL, "messages": [{"role": "system", "content": system},
-                                              {"role": "user", "content": user}]}
+                                              {"role": "user", "content": user}],
+            # UI-12: gateway callback attributes this call's spend to the digest job.
+            "metadata": {"source": "digest"}}
     r = httpx.post(f"{BASE}/chat/completions", headers={"Authorization": f"Bearer {KEY}"}, json=body, timeout=120)
     r.raise_for_status()
     return r.json()["choices"][0]["message"].get("content") or ""
