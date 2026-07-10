@@ -1,9 +1,9 @@
 # ADR-0006 — Done enough: freeze the control plane, one provenance model, a subtraction rule, a kill list
 
-- **Status:** Proposed — **accepted the moment the operator declares "done enough."** That is
-  deliberate: the stop condition must be imposed from outside (see Context); this ADR is the
-  written form of that imposition.
-- **Date:** 2026-07-08
+- **Status:** Accepted — H1 cuts shipped (CONSOL-1…4, PRs #177/#178/#183/#189); as-built
+  divergences recorded here (CONSOL-5, 2026-07-11). Operator may declare *done enough* once
+  this amendment is merged.
+- **Date:** 2026-07-08 (amended 2026-07-11)
 - **Author:** consolidation session (Claude Code / Opus), synthesizing several independent
   analysis threads that all converged on the same conclusion — this document exists so no
   thread has to re-derive it again.
@@ -59,8 +59,8 @@ self-declares Done. (Unchanged from ADR-0003; restated here as the root invarian
 | Layer | The one mechanism | What it absorbs / retires |
 |---|---|---|
 | **Realtime** | GitHub webhook: `pr_opened` → In Review; `pr_merged` → Done — with retry-on-transient-lock (HARDEN-42, shipped) | — |
-| **Backstop** (reconcile) | Exactly **two** recovery paths: **(a)** open-PR backstop — discovers open PRs whose `pr_opened` was dropped and advances their tasks (BUG-28, *to build; the one sanctioned addition, paired with two deletions below*); **(b)** merged-PR **orphan sweep** (RECON-11) — scans recent canonical merges and stamps any referenced task | Retires reconcile's **PR-evidence hydration** and **default-branch backfill** paths (the sweep is a superset for all merged flows — verified; it is *not* a superset for open PRs, hence (a)) |
-| **Prevention** | One **PR-coverage function** — "is this PR backed by an active claim / Work Session / In-Review-or-Done state" — called two ways: cooperatively (`merge_gate`, the agent asks) and enforced (claim gate at the SESSION-12 CI chokepoint) | Retires the two separate implementations of the same coverage question |
+| **Backstop** (reconcile) | Exactly **two** recovery paths: **(a)** open-PR backstop — discovers open PRs whose `pr_opened` was dropped and advances their tasks (BUG-28, shipped CONSOL-1 / PR #177); **(b)** merged-PR **orphan sweep** (RECON-11) — scans recent canonical merges and stamps any referenced task | Retired reconcile's **PR-evidence hydration** and **default-branch backfill** paths (CONSOL-1 / #177, CONSOL-2 / #178; see as-built divergences below) |
+| **Prevention** | One shared **"is this task backed?"** definition (`store.pr_backed_by_process`) — called from `merge_gate` (readiness/work-session hygiene + backed check) and the claim gate (traceability enforcement at the SESSION-12 CI chokepoint) | Retired duplicate "backed?" logic; the two gates remain distinct call sites with different surrounding checks (CONSOL-3 / PR #183; see as-built divergences below) |
 
 Supporting ledgers (activity log, git_state) are storage, not mechanisms; they stay. Everything
 not in this table is either parked or deleted (Decision 3).
@@ -77,18 +77,55 @@ if the policy is actually violated.
 
 ## Decision 3 — The kill list
 
-| Mechanism | Verdict | Action |
-|---|---|---|
-| reconcile: PR-evidence hydration | redundant (merged flows) | **Retire into orphan sweep** |
-| reconcile: default-branch backfill | redundant (merged commits are merged PRs) | **Retire into orphan sweep** |
-| open-PR gap | the one real hole (BUG-28, hit live on PR #164) | **Build the open-PR backstop** — net −1 with the two retirements above |
-| `merge_gate` + claim gate | two implementations of one question | **One coverage function, two call sites** |
-| RECON-9 coordination receipts | unproven vs. activity log + reconcile | **Parked**: zero further investment; delete after the Helm sprint unless real usage defends it |
-| RECON-8 event replay | speculative | **Parked**, same terms |
-| RECON-10 DBOS evaluation | the "7th mechanism" instinct with a framework attached | **Decision recorded: NO adoption.** The evaluation is complete and the answer is no. |
-| Session policy profiles (5 × ~20 fields) | config theater — reality is "code needs a clean branch + tests; everything else doesn't" | **Collapse to 2**: `code_strict` + default |
-| HARDEN epic | 27 commits hardening scaffolding | **Frozen.** Only HARDEN-32 (the box) survives as an open item — it is infrastructure, not mechanism. HARDEN-40's public CI sandbox helps here by moving CI load off the box. |
-| ARCH-6…17 (37-module decomposition) | invalidated by the dependency graph; maximum conflict surface on the fleet's hottest file | **Retired.** ARCH-1…5 outcomes stand (db/ package + 7 leaf stores; store.py 15,817 → 14,382). **Moratorium (policy) on net-new store.py growth.** Optional future extraction limited to the two genuinely clean leaf clusters (`side_effects`, `runner`) — only if store.py pain recurs in practice. |
+| Mechanism | Verdict | Action | Status (as-built) |
+|---|---|---|---|
+| reconcile: PR-evidence hydration | redundant (merged flows) | **Retire into orphan sweep** | **Done** — CONSOL-2 / PR #178. `pr_number` now derived once at write time in `_upsert_git_state`; no reconcile scrape path. |
+| reconcile: default-branch backfill | redundant (merged commits are merged PRs) | **Retire into orphan sweep** | **Done** — CONSOL-1 / PR #177. Push-handler and reconcile callers removed. |
+| open-PR gap | the one real hole (BUG-28, hit live on PR #164) | **Build the open-PR backstop** — net −1 with the two retirements above | **Done** — CONSOL-1 / PR #177. |
+| `merge_gate` + claim gate | two implementations of one question | **One shared "backed?" definition, two call sites** | **Done** — CONSOL-3 / PR #183. `pr_backed_by_process` is the single source of truth for "backed"; gates are not one merged function. |
+| RECON-9 coordination receipts | unproven vs. activity log + reconcile | **Parked**: zero further investment; delete after the Helm sprint unless real usage defends it | **Parked** — no further investment. |
+| RECON-8 event replay | speculative | **Parked**, same terms | **Parked** — no further investment. |
+| RECON-10 DBOS evaluation | the "7th mechanism" instinct with a framework attached | **Decision recorded: NO adoption.** The evaluation is complete and the answer is no. | **Done** — decision recorded. |
+| Session policy profiles (5 × ~20 fields) | config theater — reality is "code needs a clean branch + tests; everything else doesn't" | **Collapse to 2**: `code_strict` + default | **Done with divergence** — CONSOL-4 / PR #189 collapsed to **3**: `code_strict`, `docs_review` (default), `offline_evidence`. `ui_preview` and `no_repo` retired with aliases → `docs_review`. |
+| HARDEN epic | 27 commits hardening scaffolding | **Frozen.** Only HARDEN-32 (the box) survives as an open item — it is infrastructure, not mechanism. HARDEN-40's public CI sandbox helps here by moving CI load off the box. | **Frozen** — HARDEN-32 remains open infrastructure work. |
+| ARCH-6…17 (37-module decomposition) | invalidated by the dependency graph; maximum conflict surface on the fleet's hottest file | **Retired.** ARCH-1…5 outcomes stand (db/ package + 7 leaf stores; store.py 15,817 → 14,382). **Moratorium (policy) on net-new store.py growth.** Optional future extraction limited to the two genuinely clean leaf clusters (`side_effects`, `runner`) — only if store.py pain recurs in practice. | **Done** — ARCH-6…17 retired on board; moratorium is policy. |
+| `mark_task_default_branch_commit` | automated backfill path retired | **Delete automated callers** | **Done with divergence** — automated callers removed (CONSOL-1); the low-level primitive kept as a **dormant manual/bootstrap escape hatch** with no automated caller. |
+
+## As-built divergences (CONSOL-5)
+
+The H1 code cuts (CONSOL-1…4) matched the ADR's intent but diverged in four places worth
+recording so the plan-of-record stops lying:
+
+1. **Write-time `pr_number` derivation, not a full hydration retirement story.** CONSOL-2
+   removed reconcile's PR-evidence hydration scrape, but kept deriving `pr_number` from `pr_url`
+   once at write time in `_upsert_git_state`. The kill-list wording implied a cleaner
+   retirement; the as-built model is "no reconcile scrape, derive at write."
+
+2. **Gates share only the "backed?" sub-question.** CONSOL-3 unified `store.pr_backed_by_process`
+   as the single definition of whether a task is backed. `merge_gate` still adds
+   readiness/work-session hygiene checks; the claim gate still enforces traceability at the CI
+   chokepoint. They are not one merged gate — they share one sub-definition.
+
+3. **Policy profiles collapsed 5→3, not 5→2.** CONSOL-4 found `offline_evidence` is
+   load-bearing for non-PR verifier completion. `ui_preview` and `no_repo` were the genuine
+   theater; they were retired with aliases to `docs_review`.
+
+4. **`mark_task_default_branch_commit` kept as a dormant primitive.** CONSOL-1 removed all
+   automated default-branch backfill callers, but left this manual/bootstrap repair function in
+   `store.py` with no automated caller — a deliberate escape hatch for pre-flow commits.
+
+### Activation-audit outcome — CI gate resilience
+
+During cut #3 (#189), the VM gate's external-CI-mirror path was found to hard-fail every PR
+when the mirror could not dispatch (HTTP 422 input mismatch) or when mirror machinery raised
+(e.g. transient `database is locked` on the contended box). External CI is evidence-only and
+must not be the sole source of truth.
+
+**Fix shipped:** PRs #196 and #197. Any external-CI failure that produces **no test verdict**
+(returned error dict *or* raised exception) now returns `unavailable` and **falls back to the
+local suite** (`run_switchboard_gate`). Only a genuine test failure (`failure_class=test`, suite
+ran and was red) still hard-fails the gate. This is an activation-audit win: a built-but-dark
+mirror path that was failing the fleet is now resilient.
 
 ## Decision 4 — The counterweight: fleet default is product
 
@@ -100,7 +137,9 @@ The horizons, so this document is also the master plan of record:
 
 1. **H1 — Stabilize (this ADR):** freeze → this model → execute the kill list → BUG-28
    backstop → resolve HARDEN-32. Exit: the operator declares *done enough*, and a legitimate
-   PR merges with zero manual re-trigger ceremony.
+   PR merges with zero manual re-trigger ceremony. **Code cuts complete (CONSOL-1…4); this
+   amendment closes the paper record (CONSOL-5). HARDEN-32 remains the open infrastructure
+   item.**
 2. **H2 — Prove on Helm:** the whole fleet ships chartplotter work through the frozen tooling
    for a sprint. Real usage — not planning — is the judge of every surviving gate; whatever
    isn't earning its keep dies under the subtraction rule.
