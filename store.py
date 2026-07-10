@@ -13202,6 +13202,56 @@ def set_project_github_repo(repo: str, project: str = DEFAULT_PROJECT) -> Dict[s
             "repo_topology": get_project_repo_topology(project=project)}
 
 
+def github_webhook_deliveries(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Local webhook-delivery evidence for a project's board (UI-15 Verify button).
+
+    Any activity row written by the 'github-webhook' actor proves GitHub actually
+    reached this board through the pinned ?project= payload URL, so the association
+    panel 'flips green on first delivery' without needing GitHub API credentials —
+    the same board-internal signal reconcile trusts over remote scraping.
+    """
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n, MAX(created_at) AS last FROM activity WHERE actor=?",
+            ("github-webhook",),
+        ).fetchone()
+        count = int(row["n"] or 0) if row else 0
+        last_at = float(row["last"]) if row and row["last"] else None
+        last_kind = None
+        if count:
+            latest = c.execute(
+                "SELECT kind FROM activity WHERE actor=? ORDER BY id DESC LIMIT 1",
+                ("github-webhook",),
+            ).fetchone()
+            last_kind = latest["kind"] if latest else None
+    return {"delivered": count > 0, "delivery_count": count,
+            "last_delivery_at": last_at, "last_delivery_event": last_kind}
+
+
+def github_repo_reachable(repo: str) -> Optional[bool]:
+    """Best-effort reachability probe for a repo (UI-15 Verify button, explicit only).
+
+    True = the repo exists and we can see it; False = a definitive not-found/forbidden;
+    None = the probe itself was inconclusive (offline, rate-limited, timeout). Uses the
+    same optional token as reconcile so private canonical repos resolve when creds exist.
+    """
+    if not repo or "/" not in repo:
+        return None
+    req = urllib.request.Request(f"https://api.github.com/repos/{repo}")
+    req.add_header("Accept", "application/vnd.github+json")
+    token = _github_token()
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return (getattr(r, "status", None) or r.getcode()) == 200
+    except Exception as exc:  # HTTPError carries .code; other errors are inconclusive
+        code = getattr(exc, "code", 0) or 0
+        if code in (401, 403, 404):
+            return False
+        return None
+
+
 def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: str = "",
                               public_ci_repo: str = "", public_repo: str = "",
                               release_repo: str = "", topology_type: str = "",
