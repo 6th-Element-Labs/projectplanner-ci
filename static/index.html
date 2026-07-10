@@ -71,6 +71,38 @@
         .nav-tabs::-webkit-scrollbar{display:none}
         .nav-tabs .nav-link{white-space:nowrap;padding-left:.6rem;padding-right:.6rem}
       }
+      /* ⌘K command palette — one keyboard surface for jump / filter / act / switch. */
+      #cmdk-backdrop{position:fixed;inset:0;z-index:1090;background:rgba(20,22,28,.45);
+        display:none;align-items:flex-start;justify-content:center;padding-top:11vh}
+      #cmdk-backdrop.show{display:flex}
+      .cmdk-box{width:min(580px,92vw);background:var(--tblr-bg-surface,#fff);border:1px solid var(--tblr-border-color);
+        border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.32);overflow:hidden;max-height:72vh;display:flex;flex-direction:column}
+      .cmdk-input{border:0 !important;border-bottom:1px solid var(--tblr-border-color) !important;border-radius:0;
+        font-size:1.05rem;padding:.85rem 1rem;box-shadow:none !important}
+      .cmdk-list{overflow-y:auto;padding:.3rem 0}
+      .cmdk-group{font-size:.67rem;text-transform:uppercase;letter-spacing:.05em;color:var(--tblr-secondary);padding:.5rem .9rem .15rem}
+      .cmdk-item{display:flex;align-items:center;gap:.6rem;padding:.5rem .9rem;cursor:pointer;font-size:.9rem;color:var(--tblr-body-color)}
+      .cmdk-item>i{font-size:1.05rem;color:var(--tblr-secondary);width:1.2rem;text-align:center;flex:0 0 auto}
+      .cmdk-item .cmdk-meta{margin-left:auto;color:var(--tblr-secondary);font-size:.75rem}
+      .cmdk-item.active{background:var(--tblr-primary);color:#fff}
+      .cmdk-item.active>i,.cmdk-item.active .cmdk-meta{color:#fff}
+      .cmdk-empty{padding:1rem .9rem;color:var(--tblr-secondary);font-size:.85rem}
+      .cmdk-hint{border-top:1px solid var(--tblr-border-color);padding:.4rem .9rem;font-size:.72rem;
+        color:var(--tblr-secondary);display:flex;gap:1rem}
+      .cmdk-hint kbd{background:var(--tblr-bg-surface-secondary,#f6f7f9);border:1px solid var(--tblr-border-color);
+        border-radius:4px;padding:0 .3rem;font-size:.72rem;color:var(--tblr-secondary)}
+      /* Active-filter chips (the persistent filter strip now collapses behind "Filters"). */
+      .tk-filter-chip{font-size:.72rem;padding:.15rem .2rem .15rem .55rem;border-radius:20px;
+        background:var(--tblr-primary-lt);color:var(--tblr-primary);border:0;display:inline-flex;align-items:center;gap:.15rem;cursor:pointer}
+      .tk-filter-chip:hover{filter:brightness(.96)}
+      .tk-filter-chip .ti{font-size:.85rem}
+      /* Deliverable page: essentials up top, the long tail of detail folds into a
+         native disclosure so the map + blockers + next action lead instead of ~15 cards. */
+      #mission-detail>summary{cursor:pointer;list-style:none;font-weight:500}
+      #mission-detail>summary::-webkit-details-marker{display:none}
+      #mission-detail>summary:hover{color:var(--tblr-body-color)}
+      .mission-detail-chev{transition:transform .15s ease;display:inline-block}
+      #mission-detail[open]>summary .mission-detail-chev{transform:rotate(90deg)}
     </style>
 </head>
 <body class="layout-fluid">
@@ -145,20 +177,29 @@
                         </div>
                     </div>
 
-                    <!-- Universal filter toolbar — one filter that applies across every tab. -->
-                    <div class="card mb-3">
-                        <div class="card-body py-2">
+                    <!-- Search + collapsible filters. The 7 always-on controls are gone: search
+                         stays visible, the rest hide behind "Filters", and whatever is set
+                         shows as removable chips. ⌘K opens the command palette (jump/filter/act). -->
+                    <div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
+                        <div class="input-icon flex-fill" style="min-width:180px;max-width:440px">
+                            <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                            <input id="f-search" type="text" class="form-control" placeholder="Search…   or press ⌘K" autocomplete="off"/>
+                        </div>
+                        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#filter-adv" aria-expanded="false">
+                            <i class="ti ti-filter me-1"></i>Filters<span id="filter-count" class="badge bg-primary ms-2 d-none"></span>
+                        </button>
+                        <button id="cmdk-open" class="btn btn-outline-secondary" type="button" title="Command palette (⌘K)" aria-label="Command palette">
+                            <i class="ti ti-command"></i>
+                        </button>
+                        <div id="filter-chips" class="d-flex align-items-center gap-1 flex-wrap"></div>
+                    </div>
+                    <div class="collapse mb-3" id="filter-adv">
+                        <div class="card"><div class="card-body py-2">
                             <div class="row g-2 align-items-center">
-                                <div class="col-12 col-md">
-                                    <div class="input-icon">
-                                        <span class="input-icon-addon"><i class="ti ti-search"></i></span>
-                                        <input id="f-search" type="text" class="form-control" placeholder="Search tasks…" autocomplete="off"/>
-                                    </div>
-                                </div>
-                                <div class="col-6 col-md-2"><select id="f-ws" class="form-select"></select></div>
-                                <div class="col-6 col-md-2"><select id="f-owner" class="form-select"></select></div>
-                                <div class="col-6 col-md-2"><select id="f-assignee" class="form-select"></select></div>
-                                <div class="col-6 col-md-2"><select id="f-risk" class="form-select"></select></div>
+                                <div class="col-6 col-md-3"><select id="f-ws" class="form-select"></select></div>
+                                <div class="col-6 col-md-3"><select id="f-owner" class="form-select"></select></div>
+                                <div class="col-6 col-md-3"><select id="f-assignee" class="form-select"></select></div>
+                                <div class="col-6 col-md-3"><select id="f-risk" class="form-select"></select></div>
                                 <div class="col-6 col-md-auto">
                                     <label class="form-check form-switch m-0">
                                         <input id="f-blocking" class="form-check-input" type="checkbox"/>
@@ -172,7 +213,7 @@
                                     </label>
                                 </div>
                             </div>
-                        </div>
+                        </div></div>
                     </div>
 
                     <!-- Tabs: 5 destinations grouped by intent (was 11 flat peers).
@@ -454,6 +495,15 @@
     <!-- Shared assignee picklist -->
     <datalist id="people-list"></datalist>
 
+    <!-- ⌘K command palette -->
+    <div id="cmdk-backdrop" role="dialog" aria-modal="true" aria-label="Command palette">
+        <div class="cmdk-box">
+            <input id="cmdk-input" class="form-control cmdk-input" placeholder="Type a command, filter, or where to go…" autocomplete="off" spellcheck="false"/>
+            <div id="cmdk-list" class="cmdk-list"></div>
+            <div class="cmdk-hint"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> run</span><span><kbd>esc</kbd> close</span></div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <!-- HARDEN-38: Mermaid (~1MB) + ApexCharts (~500KB) are now lazy-loaded by app.js
          only when the Mission / Gantt tab opens — off the initial critical path. -->
@@ -493,6 +543,114 @@
         // handler in app.js (it also resolves the selected deliverable), so skip it here.
         var h = (location.hash || '').trim();
         if (/^#tab-[a-z0-9-]+$/i.test(h) && h !== '#tab-mission') showTab(h);
+      })();
+    </script>
+    <script>
+      // ⌘K command palette + active-filter chips. Reads the live DOM (tabs, filter selects,
+      // project/deliverable switchers) and drives the existing controls, so it stays in sync
+      // with whatever app.js renders and needs no coupling to app internals.
+      (function () {
+        var backdrop = document.getElementById('cmdk-backdrop');
+        var input = document.getElementById('cmdk-input');
+        var list = document.getElementById('cmdk-list');
+        if (!backdrop || !input || !list) return;
+        var items = [], active = 0;
+
+        function esc(s) { return (s || '').replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+        function fire(el) { if (!el) return; var ev = (el.tagName === 'INPUT' && el.type !== 'checkbox') ? 'input' : 'change'; el.dispatchEvent(new Event(ev, { bubbles: true })); }
+        function setFilter(id, v) { var el = document.getElementById(id); if (!el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; fire(el); renderChips(); }
+        function jump(href) { if (window.TAIKUN_showTab) window.TAIKUN_showTab(href); }
+        function txt(a) { return (a.textContent || '').trim(); }
+        function iconOf(a) { var i = a.querySelector('i'); return i ? i.className : 'ti ti-arrow-right'; }
+        function clickId(id) { var b = document.getElementById(id); if (b) b.click(); }
+        function go(id) { var a = document.getElementById(id); if (a) { if (a.href) window.location.href = a.href; else a.click(); } }
+        function clearAll() {
+          ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk'].forEach(function (id) { var e = document.getElementById(id); if (e && e.value) { e.value = ''; fire(e); } });
+          var b = document.getElementById('f-blocking'); if (b && b.checked) { b.checked = false; fire(b); }
+          renderChips();
+        }
+
+        function commands() {
+          var cmds = [];
+          document.querySelectorAll('.nav-tabs [data-bs-toggle="tab"]').forEach(function (a) {
+            cmds.push({ group: 'Jump to', icon: iconOf(a), label: txt(a), run: function () { jump(a.getAttribute('href')); } });
+          });
+          document.querySelectorAll('.tk-subnav [data-bs-toggle="tab"]').forEach(function (a) {
+            var hub = a.closest('.tab-pane'); var pfx = hub && hub.id === 'tab-plan-hub' ? 'Plan → ' : (hub && hub.id === 'tab-inbox-hub' ? 'Inbox → ' : '');
+            cmds.push({ group: 'Jump to', icon: iconOf(a), label: pfx + txt(a), run: function () { jump(a.getAttribute('href')); } });
+          });
+          [['f-ws', 'Workstream'], ['f-owner', 'Org'], ['f-assignee', 'Owner'], ['f-risk', 'Risk']].forEach(function (p) {
+            var sel = document.getElementById(p[0]); if (!sel) return;
+            Array.prototype.forEach.call(sel.options, function (o) { if (!o.value) return; cmds.push({ group: 'Filter', icon: 'ti ti-filter', label: p[1] + ': ' + o.textContent.trim(), run: function () { setFilter(p[0], o.value); } }); });
+          });
+          cmds.push({ group: 'Filter', icon: 'ti ti-alert-triangle', label: 'Toggle blocking only', run: function () { var e = document.getElementById('f-blocking'); setFilter('f-blocking', !(e && e.checked)); } });
+          cmds.push({ group: 'Filter', icon: 'ti ti-eye', label: 'Toggle hide done', run: function () { var e = document.getElementById('f-hidedone'); setFilter('f-hidedone', !(e && e.checked)); } });
+          cmds.push({ group: 'Filter', icon: 'ti ti-filter-off', label: 'Clear all filters', run: clearAll });
+          cmds.push({ group: 'Do', icon: 'ti ti-plus', label: 'New task', run: function () { clickId('btn-new-task'); } });
+          cmds.push({ group: 'Do', icon: 'ti ti-folder-plus', label: 'New project', run: function () { clickId('btn-new-project'); } });
+          cmds.push({ group: 'Do', icon: 'ti ti-file-spreadsheet', label: 'Export to Excel', run: function () { go('dl-xlsx'); } });
+          cmds.push({ group: 'Do', icon: 'ti ti-brand-windows', label: 'Export to MS Project', run: function () { go('dl-xml'); } });
+          cmds.push({ group: 'Do', icon: 'ti ti-sparkles', label: 'Ask Taikun', run: function () { jump('#tab-ask'); setTimeout(function () { var i = document.getElementById('ask-input'); if (i) i.focus(); }, 60); } });
+          var ps = document.getElementById('project-switcher');
+          if (ps) Array.prototype.forEach.call(ps.options, function (o) { if (o.selected) return; cmds.push({ group: 'Switch project', icon: 'ti ti-folders', label: o.textContent.trim(), run: function () { ps.value = o.value; fire(ps); } }); });
+          var ds = document.getElementById('header-deliverable-switcher');
+          if (ds) Array.prototype.forEach.call(ds.options, function (o) { if (!o.value || o.selected) return; cmds.push({ group: 'Open deliverable', icon: 'ti ti-target-arrow', label: o.textContent.trim(), run: function () { ds.value = o.value; fire(ds); jump('#tab-mission'); } }); });
+          return cmds;
+        }
+
+        function render() {
+          var q = (input.value || '').trim().toLowerCase();
+          var toks = q ? q.split(/\s+/) : [];
+          var vis = commands().filter(function (c) { var hay = (c.group + ' ' + c.label).toLowerCase(); return toks.every(function (t) { return hay.indexOf(t) >= 0; }); });
+          items = vis; if (active >= vis.length) active = 0;
+          if (!vis.length) { list.innerHTML = '<div class="cmdk-empty">No matches.</div>'; return; }
+          var html = '', lastGroup = null;
+          vis.forEach(function (c, i) {
+            if (c.group !== lastGroup) { html += '<div class="cmdk-group">' + esc(c.group) + '</div>'; lastGroup = c.group; }
+            html += '<div class="cmdk-item' + (i === active ? ' active' : '') + '" data-i="' + i + '"><i class="' + c.icon + '"></i><span>' + esc(c.label) + '</span></div>';
+          });
+          list.innerHTML = html;
+          var el = list.querySelector('.cmdk-item.active'); if (el) el.scrollIntoView({ block: 'nearest' });
+        }
+        function openP() { backdrop.classList.add('show'); input.value = ''; active = 0; render(); setTimeout(function () { input.focus(); }, 20); }
+        function closeP() { backdrop.classList.remove('show'); }
+        function runP(i) { var c = items[i]; if (!c) return; closeP(); c.run(); }
+
+        document.addEventListener('keydown', function (e) {
+          if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); backdrop.classList.contains('show') ? closeP() : openP(); return; }
+          if (!backdrop.classList.contains('show')) return;
+          if (e.key === 'Escape') { e.preventDefault(); closeP(); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); render(); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); render(); }
+          else if (e.key === 'Enter') { e.preventDefault(); runP(active); }
+        });
+        input.addEventListener('input', function () { active = 0; render(); });
+        list.addEventListener('click', function (e) { var it = e.target.closest('.cmdk-item'); if (it) runP(parseInt(it.getAttribute('data-i'), 10)); });
+        list.addEventListener('mousemove', function (e) { var it = e.target.closest('.cmdk-item'); if (it) { var i = parseInt(it.getAttribute('data-i'), 10); if (i !== active) { active = i; render(); } } });
+        backdrop.addEventListener('click', function (e) { if (e.target === backdrop) closeP(); });
+        var ob = document.getElementById('cmdk-open'); if (ob) ob.addEventListener('click', openP);
+
+        // ---- Active-filter chips (the collapsed filter strip) ----
+        function selLabel(id) { var s = document.getElementById(id); if (!s || !s.value) return ''; var o = s.options[s.selectedIndex]; return o ? o.textContent.trim() : ''; }
+        function renderChips() {
+          var host = document.getElementById('filter-chips'), badge = document.getElementById('filter-count');
+          if (!host) return;
+          var chips = [];
+          var q = (document.getElementById('f-search') || {}).value; if (q && q.trim()) chips.push(['“' + q.trim() + '”', function () { setFilter('f-search', ''); }]);
+          ['f-ws', 'f-owner', 'f-assignee', 'f-risk'].forEach(function (id) { var l = selLabel(id); if (l) chips.push([l, function () { setFilter(id, ''); }]); });
+          if ((document.getElementById('f-blocking') || {}).checked) chips.push(['Blocking only', function () { setFilter('f-blocking', false); }]);
+          if ((document.getElementById('f-hidedone') || {}).checked) chips.push(['Hide done', function () { setFilter('f-hidedone', false); }]);
+          host.innerHTML = '';
+          chips.forEach(function (c) { var b = document.createElement('button'); b.type = 'button'; b.className = 'tk-filter-chip'; b.innerHTML = esc(c[0]) + ' <i class="ti ti-x"></i>'; b.addEventListener('click', c[1]); host.appendChild(b); });
+          if (badge) { if (chips.length) { badge.textContent = chips.length; badge.classList.remove('d-none'); } else badge.classList.add('d-none'); }
+        }
+        window.TAIKUN_renderChips = renderChips;
+        ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking', 'f-hidedone'].forEach(function (id) {
+          var el = document.getElementById(id); if (el) { el.addEventListener('change', renderChips); el.addEventListener('input', renderChips); }
+        });
+        renderChips();
+        // the filter selects are populated by app.js after the board loads — reflect that.
+        var n = 0; var t = setInterval(function () { renderChips(); if (++n > 12) clearInterval(t); }, 500);
       })();
     </script>
     <script>

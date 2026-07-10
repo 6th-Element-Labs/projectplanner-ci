@@ -447,26 +447,15 @@ const TeepPlan = {
         const text = t && t.narration;
         const raw = t && t.narration_raw;
         if (text) {
-            return `<div class="bg-primary-lt rounded-3 p-3 mb-3">
-                <div class="d-flex gap-3">
-                    <i class="ti ti-message-chatbot text-primary fs-2 lh-1"></i>
-                    <div class="flex-fill">
-                        <div class="subheader text-primary mb-1">In plain English</div>
-                        <div class="markdown">${this.md(text)}</div>
-                    </div>
-                </div>
+            return `<div class="mb-3">
+                <div class="subheader text-secondary mb-1"><i class="ti ti-message-chatbot me-1"></i>In plain English</div>
+                <div class="markdown">${this.md(text)}</div>
             </div>`;
         }
         if (raw && state.stale) {
-            return `<div class="bg-yellow-lt rounded-3 p-3 mb-3">
-                <div class="d-flex gap-3">
-                    <i class="ti ti-refresh text-yellow fs-2 lh-1"></i>
-                    <div class="flex-fill">
-                        <div class="subheader text-yellow mb-1 d-flex align-items-center">In plain English
-                            <span class="badge bg-yellow-lt ms-2">Updating…</span></div>
-                        <div class="markdown text-secondary">${this.md(raw)}</div>
-                    </div>
-                </div>
+            return `<div class="mb-3">
+                <div class="subheader text-secondary mb-1"><i class="ti ti-refresh me-1"></i>In plain English · updating…</div>
+                <div class="markdown text-secondary">${this.md(raw)}</div>
             </div>`;
         }
         return `<div class="text-secondary small mb-3"><i class="ti ti-message-chatbot me-1"></i>Plain-English summary will appear here once generated.</div>`;
@@ -2894,13 +2883,11 @@ const TeepPlan = {
             </div>${tableWrap(evRows)}` : '';
         const ntSection = nts.length ? `<div class="d-flex align-items-center gap-2 mb-2"><span class="status-dot bg-azure"></span>
                 <span class="subheader text-uppercase fw-bold text-secondary">New task proposed</span></div>${tableWrap(nts.map((t, i) => ntRow(t, i)).join(''))}` : '';
-        const heroSummary = it.summary ? `<div class="bg-primary-lt rounded-3 p-3 mb-4"><div class="d-flex gap-3">
-                <span class="avatar bg-primary text-white rounded-3 flex-shrink-0"><i class="ti ti-robot fs-2"></i></span>
-                <div class="flex-fill"><div class="subheader text-primary mb-1">Maxwell · agent summary</div>
-                    <div class="markdown small">${this.md(it.summary)}</div></div></div></div>` : '';
-        const safety = `<div class="bg-azure-lt rounded-3 p-3 d-flex gap-3">
-                <span class="avatar avatar-sm bg-azure-lt text-azure rounded-3 flex-shrink-0"><i class="ti ti-info-circle"></i></span>
-                <div class="small text-secondary">Nothing is applied until you confirm. <strong class="text-body">→ Done</strong> closes are held until you confirm them with evidence.</div></div>`;
+        const heroSummary = it.summary ? `<div class="mb-4">
+                <div class="subheader text-secondary mb-1"><i class="ti ti-robot me-1"></i>Maxwell · agent summary</div>
+                <div class="markdown small">${this.md(it.summary)}</div></div>` : '';
+        const safety = `<div class="small text-secondary d-flex gap-2 mb-1"><i class="ti ti-info-circle mt-1"></i>
+                <div>Nothing is applied until you confirm. <strong class="text-body">→ Done</strong> closes are held until you confirm them with evidence.</div></div>`;
 
         // read-only "past" view — what was applied when this item was confirmed/dismissed
         const appliedBanner = dismissed
@@ -3110,6 +3097,7 @@ const TeepPlan = {
             ])
         );
     },
+
 
     // ---- exec summary (A-exec: "My work" + Inbox + Pulse) ---------------
     // Is this task mine? (owned-by / assigned-to Steve Ridder / SR)
@@ -3445,26 +3433,15 @@ const TeepPlan = {
         const text = s.ceo_narrative;
         const raw = s.ceo_narrative_raw;
         if (text) {
-            return `<div class="bg-primary-lt rounded-3 p-3 mb-4">
-                <div class="d-flex gap-3">
-                    <i class="ti ti-message-chatbot text-primary fs-1 lh-1"></i>
-                    <div class="flex-fill">
-                        <div class="subheader text-primary mb-1">In plain English</div>
-                        <div class="markdown">${this.md(text)}</div>
-                    </div>
-                </div>
+            return `<div class="mb-4">
+                <div class="subheader text-secondary mb-1"><i class="ti ti-message-chatbot me-1"></i>In plain English</div>
+                <div class="markdown">${this.md(text)}</div>
             </div>`;
         }
         if (raw && state.stale) {
-            return `<div class="bg-yellow-lt rounded-3 p-3 mb-4">
-                <div class="d-flex gap-3">
-                    <i class="ti ti-refresh text-yellow fs-1 lh-1"></i>
-                    <div class="flex-fill">
-                        <div class="subheader text-yellow mb-1 d-flex align-items-center">In plain English
-                            <span class="badge bg-yellow-lt ms-2">Updating…</span></div>
-                        <div class="markdown text-secondary">${this.md(raw)}</div>
-                    </div>
-                </div>
+            return `<div class="mb-4">
+                <div class="subheader text-secondary mb-1"><i class="ti ti-refresh me-1"></i>In plain English · updating…</div>
+                <div class="markdown text-secondary">${this.md(raw)}</div>
             </div>`;
         }
         return '';
@@ -3475,15 +3452,14 @@ const TeepPlan = {
         const state = s.narrative_state || {};
         let html = '';
         if (state.stale) {
-            html += `<div class="alert alert-warning mb-3"><div class="fw-semibold">Brief may be stale</div>
-                <div class="small">${this.esc(state.message || '')}${state.flags?.length ? ' Flags: ' + this.esc(state.flags.join(', ')) : ''}</div></div>`;
+            html += `<div class="mb-3 small text-warning"><i class="ti ti-alert-triangle me-1"></i><span class="fw-semibold">Brief may be stale.</span> <span class="text-secondary">${this.esc(state.message || '')}${state.flags?.length ? ' Flags: ' + this.esc(state.flags.join(', ')) : ''}</span></div>`;
         }
         const text = brief.summary_markdown || s.narrative;
         if (!text) return html;
         const citeCount = (brief.citations || []).length;
         html += `<div class="card mb-4"><div class="card-body">
             <div class="d-flex align-items-center mb-2"><div class="subheader mb-0">Live product brief</div>
-            <span class="badge bg-blue-lt ms-2">${this.esc(s.narrative_source || 'generated')}</span>
+            <span class="text-secondary small ms-2">· ${this.esc(s.narrative_source || 'generated')}</span>
             ${citeCount ? `<span class="text-secondary small ms-auto">${citeCount} citations</span>` : ''}</div>
             <p class="mb-2 small text-secondary">${this.esc(brief.honesty_note || '')}</p>
             <div class="mb-0" style="white-space:pre-wrap">${this.esc(text)}</div></div></div>`;
@@ -3961,15 +3937,27 @@ const TeepPlan = {
         // Keep the currently-rendered graph so a live re-render can show it until the new
         // SVG is ready (no blank/flash while colours update in place).
         const _prevGraphSvg = el.querySelector('#mission-dag-graph svg');
-        el.innerHTML = header + this._missionCeoHeaderHtml(s) + this._missionDependencyGraphHtml() + kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap + nextActions + blockerHtml +
+        const _prevDetail = el.querySelector('#mission-detail');
+        const detailOpen = _prevDetail ? _prevDetail.open : !!this._missionDetailOpen;
+        this._missionDetailOpen = detailOpen;
+        // Lead with the story: headline → plain-English → what's blocked → the map → next action.
+        const essentials = header + this._missionCeoHeaderHtml(s) + blockerHtml + this._missionDependencyGraphHtml() + nextActions;
+        // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
+        // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
+        const detail = kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap +
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +
             `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Linked tasks across projects</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Project</th><th>Task</th><th>Title</th><th>Status</th><th>Milestone</th><th>Role</th></tr></thead><tbody>${linkedRows}</tbody></table></div></div>` +
             `<div class="row g-3"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Architecture / policy</h3></div><div class="card-body">${this._missionPolicyDrift(s)}</div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Recent changes</h3></div><div class="card-body">${this._missionRecentChanges(s.linked_tasks)}</div></div></div></div>`;
+        el.innerHTML = essentials +
+            `<details id="mission-detail" class="mb-4"${detailOpen ? ' open' : ''}>
+                <summary class="text-secondary py-2"><i class="ti ti-chevron-right mission-detail-chev me-1"></i>Full detail — KPIs, brief, milestones, work, agents, linked tasks</summary>
+                <div class="pt-3">${detail}</div>
+            </details>`;
         if (s.pending_proposal) {
-            el.insertAdjacentHTML('beforeend', `<div class="alert alert-azure mt-3">Pending breakdown proposal awaiting approval.</div>`);
+            el.insertAdjacentHTML('beforeend', `<div class="text-secondary small mt-3"><i class="ti ti-info-circle me-1"></i>Pending breakdown proposal awaiting approval.</div>`);
         }
         const _gh = el.querySelector('#mission-dag-graph');
         if (_prevGraphSvg && _gh && !_gh.querySelector('svg')) _gh.appendChild(_prevGraphSvg);
