@@ -483,6 +483,33 @@ const TeepPlan = {
         if (cpo != null) bits.push(`<span title="Cost per verified outcome">${this.money(cpo)}/outcome</span>`);
         return bits.join(' · ');
     },
+    // UI-12: a spend figure's provenance — provider-actual (gateway callback),
+    // agent-reported (self-reported), or unattributed (landed without confidence).
+    spendSourceBadge(source, bucket) {
+        const conf = (bucket && bucket.confidence) || '';
+        let label = 'unattributed';
+        let color = 'secondary';
+        if (conf === 'provider_actual' || source === 'gateway') { label = 'provider-actual'; color = 'green'; }
+        else if (conf) { label = 'agent-reported'; color = 'azure'; }
+        const cost = this.money((bucket && bucket.cost_usd) || 0);
+        return `<span class="badge bg-${color}-lt me-1" title="${this.esc(source)} · ${this.esc(conf || 'no confidence')}">${label} ${cost}</span>`;
+    },
+    spendBadgesHtml(spend) {
+        const bySource = (spend && spend.by_source) || {};
+        const entries = Object.entries(bySource);
+        if (!entries.length) return '';
+        return `<div class="mt-2">${entries
+            .sort((a, b) => ((b[1].cost_usd || 0) - (a[1].cost_usd || 0)))
+            .map(([source, bucket]) => this.spendSourceBadge(source, bucket)).join('')}</div>`;
+    },
+    modelMixHtml(spend) {
+        const byModel = (spend && spend.by_model) || {};
+        const entries = Object.entries(byModel).sort((a, b) => ((b[1].cost_usd || 0) - (a[1].cost_usd || 0)));
+        if (!entries.length) return '';
+        const mix = entries.map(([model, b]) =>
+            `${this.esc(model)} ${this.money(b.cost_usd || 0)} · ${this.compact(b.total_tokens || 0)} tok`).join(' &nbsp;·&nbsp; ');
+        return `<div class="small text-secondary mt-1"><i class="ti ti-cpu me-1"></i>${mix}</div>`;
+    },
     tallyDetailHtml(tally) {
         if (!tally) return `<div class="text-secondary small mb-3">No spend or outcomes recorded.</div>`;
         const spend = tally.spend || {};
@@ -501,7 +528,7 @@ const TeepPlan = {
             ${metric('Verified', this.compact(outcomes.verified || 0), `${this.compact(outcomes.proposed || 0)} proposed`, 'target-arrow')}
             ${metric('Cost / outcome', this.money(unit.cost_per_verified_outcome), 'verified only', 'receipt-2')}
             ${metric('KPI movement', this.compact(tally.verified_kpi_contribution || 0), `${kpis.length} linked KPI${kpis.length === 1 ? '' : 's'}`, 'chart-arrows-vertical')}
-        </div>${kpiLine}`;
+        </div>${this.spendBadgesHtml(spend)}${this.modelMixHtml(spend)}${kpiLine}`;
     },
     sessionHealthPill(health) {
         const h = health || {};
@@ -3722,6 +3749,7 @@ const TeepPlan = {
                 ${metric('In-review spend', this.money((inReview.spend || {}).cost_usd || 0), 'unproven / in-flight work', 'eye-check')}
                 ${metric('Cost / outcome', this.money(unit.cost_per_verified_outcome), 'verified only', 'receipt-2')}
             </div>
+            ${this.spendBadgesHtml(spend)}${this.modelMixHtml(spend)}
             <div class="row g-3">
                 <div class="col-lg-6"><div class="subheader mb-2">By milestone</div><div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
                     <thead><tr><th>Milestone</th><th class="text-end">Total</th><th class="text-end">Proven</th><th class="text-end">In review</th><th class="text-end">Verified</th></tr></thead>
