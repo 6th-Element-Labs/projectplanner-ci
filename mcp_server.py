@@ -2798,17 +2798,29 @@ def apply_cleanup(ctx: Context, project: str = "maxwell", candidate_ids: str = "
     ))
 
 
+def _scoped_token_auth_project(project: str) -> str:
+    binding = (project or "maxwell").strip()
+    if store.is_global_project_binding(binding):
+        return "switchboard"
+    return binding
+
+
 @mcp.tool()
 def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "agent",
                         display_name: str = "", scopes: str = "", role: str = "",
                         principal_id: str = "") -> str:
     """Create one project-scoped bearer token for REST/MCP callers.
 
-    Requires write:system on the target project. `role` is a preset such as viewer,
+    Requires write:system on the target project. Pass project='*' for a global agent token that
+    can read/write every current and future board. `role` is a preset such as viewer,
     contributor, operator, or admin; `scopes` can also be a comma/newline list. The raw token is
     returned once and is never stored, so capture it immediately.
     """
-    principal = _require_write(ctx, project, ("write:system",))
+    binding = (project or "maxwell").strip()
+    auth_project = _scoped_token_auth_project(binding)
+    if not store.is_global_project_binding(binding) and not store.has_project(binding):
+        return _dumps({"error": f"unknown project: {binding}"})
+    principal = _require_write(ctx, auth_project, ("write:system",))
     resolved = store.resolve_principal_scopes(scopes, role=role)
     if resolved.get("error"):
         return _dumps(resolved)
@@ -2822,19 +2834,19 @@ def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "age
         token=raw_token,
         scopes=resolved["scopes"],
         principal_id=principal_id or None,
-        project=project,
+        project=binding,
     )
     if created.get("error"):
         return _dumps(created)
-    public = store.public_principal_record(created, project=project)
+    public = store.public_principal_record(created, project=auth_project)
     store.append_activity(
         "access.token_created",
         auth.actor(principal),
         {"principal": public, "role": resolved.get("role"), "token_returned_once": True},
         task_id=None,
-        project=project,
+        project=auth_project,
     )
-    return _dumps({"project": project, "principal": public, "token": raw_token,
+    return _dumps({"project": binding, "principal": public, "token": raw_token,
                    "token_returned_once": True})
 
 
