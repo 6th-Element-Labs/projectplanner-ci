@@ -161,6 +161,7 @@
             <div class="bar-row">
               <span style="font-weight:700;font-size:16px">Operator UI surface</span>
               <span class="new" style="display:inline-flex"><span class="sel"><span class="n">1</span>&nbsp;Status: In progress</span></span>
+              <span class="new" style="display:inline-flex"><span class="btn sm"><span class="n">4</span>&nbsp;Archive…</span></span>
               <span class="pill"><span class="dot" style="background:var(--ok)"></span>Live</span>
               <span style="margin-left:auto" class="sel">Deliverable: Operator UI surface</span>
             </div>
@@ -183,6 +184,7 @@
           <li><span class="n">1</span><span><b>Status control</b> on the header walks the real lifecycle (proposed → approved → in progress → blocked → in review → done → archived). Marking <b>done/archived</b> asks to confirm; today that's an MCP-only upsert.</span></li>
           <li><span class="n">2</span><span><b>Status badges in the picker</b> — every deliverable shows its state instead of a bare title.</span></li>
           <li><span class="n">3</span><span><b>History filter</b> — Done / Archived views, so finished work is browsable instead of buried.</span></li>
+          <li><span class="n">4</span><span><b>Archive button</b> — a first-class action with a typed confirm, not just a dropdown state. Archiving drops the deliverable from Active into the Archived filter; reversible by setting status back; audited.</span></li>
         </ul>
       </section>
 

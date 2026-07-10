@@ -17,8 +17,9 @@
 ## UI-11 · Deliverable completion & history — *mission page*
 
 - **Status control** on the mission header: dropdown walking `proposed → approved → in_progress → blocked → in_review → done → archived`. Confirm step for `done`/`archived`. Backend: `create_deliverable` upsert (status is already validated server-side).
+- **Archive button (operator-requested):** an explicit first-class `Archive…` action beside the status control — not just a dropdown entry. Typed/confirm step; archiving drops the deliverable out of the Active filter into Archived; reversible by setting status back; audited. Same `create_deliverable` upsert with `status=archived`.
 - **Picker upgrade:** status badge per deliverable + filter chips `Active / In review / Done / Archived` (data already in `list_deliverables`; the picker just ignores it today).
-- Acceptance: mark a deliverable Done from the web; find it again under the Done filter.
+- Acceptance: mark a deliverable Done from the web; archive it via the explicit button + confirm; find it again under the Done/Archived filters.
 
 ## UI-1 · Author the deliverable graph — *mission page*
 
