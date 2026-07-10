@@ -1,0 +1,640 @@
+<title>Operator UI v1 — Wireframes</title>
+<style>
+  :root{
+    --paper:#F6F8FA; --ink:#18222C; --muted:#5D6B78; --faint:#8A97A3;
+    --line:#DCE3EA; --chrome:#EDF1F5; --chrome-2:#E2E8EE; --white:#FFFFFF;
+    --red:#C2255C; --red-soft:#FCE9F1; --red-line:#E58FB2;
+    --ok:#2F9E63; --ok-soft:#E3F3EA; --warn:#B7791F; --warn-soft:#FBF0DC; --bad:#C03434; --bad-soft:#F9E4E4;
+    --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,'Helvetica Neue',sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);margin:0;font-size:15px;line-height:1.55}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 96px}
+  a{color:inherit}
+
+  /* ---------- page header ---------- */
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--red);font-weight:600}
+  h1{font-size:34px;line-height:1.15;margin:10px 0 10px;letter-spacing:-.02em;text-wrap:balance}
+  .lede{color:var(--muted);max-width:64ch;margin:0 0 22px}
+  .legend{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;border:1px solid var(--line);background:var(--white);border-radius:10px;padding:12px 16px;font-size:13px;color:var(--muted)}
+  .legend .sw{display:inline-block;width:26px;height:16px;border-radius:4px;vertical-align:-3px;margin-right:7px}
+  .sw-old{background:var(--chrome);border:1px solid var(--line)}
+  .sw-new{background:var(--red-soft);border:1.5px dashed var(--red)}
+  .dep-row{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+  .dep{font-family:var(--mono);font-size:12px;background:var(--white);border:1px solid var(--line);border-radius:999px;padding:4px 12px;color:var(--muted)}
+  .dep b{color:var(--ink);font-weight:600}
+  .dep.done{border-color:#BFE3CE;background:var(--ok-soft);color:#1E6B43}
+
+  /* ---------- layout: rail + main ---------- */
+  .cols{display:grid;grid-template-columns:216px 1fr;gap:44px;margin-top:44px}
+  nav.rail{position:sticky;top:24px;align-self:start;font-size:13px}
+  nav.rail .grp{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px}
+  nav.rail .grp:first-child{margin-top:0}
+  nav.rail a{display:block;color:var(--muted);text-decoration:none;padding:4px 10px;border-left:2px solid var(--line);line-height:1.35}
+  nav.rail a:hover,nav.rail a:focus-visible{color:var(--ink);border-left-color:var(--red);outline:none}
+  nav.rail a .tid{font-family:var(--mono);font-size:11px;color:var(--faint);margin-right:6px}
+  @media (max-width:900px){.cols{display:block}nav.rail{position:static;display:none}}
+
+  /* ---------- sections ---------- */
+  section{margin:0 0 78px;scroll-margin-top:24px}
+  .sec-eyebrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .tid-chip{font-family:var(--mono);font-size:12px;font-weight:600;background:var(--ink);color:#fff;border-radius:6px;padding:3px 9px}
+  .area{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+  .dep-mini{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--white);border:1px solid var(--line);border-radius:999px;padding:2px 10px}
+  h2{font-size:23px;margin:10px 0 6px;letter-spacing:-.01em;text-wrap:balance}
+  .what{color:var(--muted);max-width:66ch;margin:0 0 18px}
+
+  /* ---------- wireframe frame ---------- */
+  .wf-scroll{overflow-x:auto;border-radius:14px}
+  .wf{min-width:760px;background:var(--white);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 2px rgba(24,34,44,.05),0 12px 32px -18px rgba(24,34,44,.14);overflow:hidden}
+  .wf + .wf-label, .wf-scroll + .wf-label{margin-top:8px}
+  .wf-label{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin:8px 2px 0}
+  .wf-bar{display:flex;align-items:center;gap:8px;background:var(--chrome);border-bottom:1px solid var(--line);padding:9px 14px}
+  .wf-bar .dots{display:flex;gap:5px}
+  .wf-bar .dots i{width:9px;height:9px;border-radius:50%;background:var(--chrome-2);border:1px solid var(--line)}
+  .wf-bar .addr{font-family:var(--mono);font-size:11px;color:var(--faint);background:var(--white);border:1px solid var(--line);border-radius:6px;padding:2px 10px;margin-left:8px}
+  .wf-body{padding:18px}
+  .stack-gap{display:grid;gap:22px}
+
+  /* wireframe primitives — grayscale = existing product chrome */
+  .bar-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .brand{width:26px;height:26px;border-radius:7px;background:var(--chrome-2);border:1px solid var(--line);flex:0 0 auto}
+  .ghost{height:12px;border-radius:6px;background:var(--chrome)}
+  .fld,.sel{display:inline-flex;align-items:center;gap:8px;background:var(--white);border:1px solid var(--line);border-radius:8px;padding:6px 11px;font-size:12.5px;color:var(--muted)}
+  .sel::after{content:"▾";font-size:10px;color:var(--faint)}
+  .btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--white);border-radius:8px;padding:6px 12px;font-size:12.5px;color:var(--ink);font-weight:500;white-space:nowrap}
+  .btn.pri{background:#2C3947;border-color:#2C3947;color:#fff}
+  .btn.sm{padding:3px 9px;font-size:11.5px}
+  .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 10px;font-size:11.5px;background:var(--chrome);color:var(--muted);border:1px solid var(--line)}
+  .pill .dot,.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);display:inline-block;flex:0 0 auto}
+  .card{border:1px solid var(--line);border-radius:10px;background:var(--white)}
+  .card-h{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-weight:600;font-size:13px;flex-wrap:wrap}
+  .card-b{padding:13px 14px}
+  .tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  .tbl th{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);text-align:left;font-weight:600;padding:7px 10px;border-bottom:1px solid var(--line)}
+  .tbl td{padding:8px 10px;border-bottom:1px solid var(--chrome);color:var(--muted);vertical-align:middle}
+  .tbl tr:last-child td{border-bottom:0}
+  .tbl .mono,.mono{font-family:var(--mono);font-size:11.5px}
+  .num{font-variant-numeric:tabular-nums}
+  .node{display:inline-flex;align-items:center;gap:7px;background:var(--chrome);border:1px solid var(--line);border-radius:8px;padding:5px 11px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .edge{color:var(--faint);font-size:13px;padding:0 2px}
+  .toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)}
+  .toggle .tk{width:26px;height:15px;border-radius:999px;background:var(--chrome-2);border:1px solid var(--line);position:relative}
+  .toggle .tk::after{content:"";position:absolute;left:2px;top:1.5px;width:10px;height:10px;border-radius:50%;background:#fff;border:1px solid var(--line)}
+  .toggle.on .tk{background:#3D4C5C}.toggle.on .tk::after{left:auto;right:2px}
+  .radio{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink)}
+  .radio i{width:13px;height:13px;border-radius:50%;border:1.5px solid var(--faint);display:inline-block}
+  .radio.on i{border-color:#2C3947;box-shadow:inset 0 0 0 3.5px #2C3947}
+
+  /* semantic state (allowed inside NEW components) */
+  .st{border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+  .st-ok{background:var(--ok-soft);color:#1E6B43}
+  .st-warn{background:var(--warn-soft);color:#8A5A13}
+  .st-bad{background:var(--bad-soft);color:#98302A}
+  .st-mut{background:var(--chrome);color:var(--muted)}
+
+  /* redline: NEW elements */
+  .new{position:relative;outline:1.5px dashed var(--red);outline-offset:3px;border-radius:8px}
+  .n{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;border-radius:50%;background:var(--red);color:#fff;font-family:var(--mono);font-size:10.5px;font-weight:700;flex:0 0 auto}
+  .redlines{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:7px;font-size:13.5px;color:var(--muted)}
+  .redlines li{display:flex;gap:10px;align-items:baseline}
+  .redlines .n{transform:translateY(2px)}
+  .redlines b{color:var(--ink);font-weight:600}
+  .foot-chip{display:inline-flex;gap:7px;align-items:center;font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--white);border:1px solid var(--line);border-radius:999px;padding:3px 11px;margin-top:12px}
+
+  .callout{background:var(--red-soft);border:1px solid var(--red-line);border-radius:10px;padding:10px 14px;font-size:13px;color:#7A2144}
+  .divider{border:0;border-top:1px solid var(--line);margin:64px 0}
+  code{font-family:var(--mono);font-size:.92em;background:var(--chrome);border-radius:5px;padding:1px 5px}
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">Switchboard · deliverable switchboard-operator-ui · 14 linked tasks</div>
+  <h1>Operator UI v1 — what's changing on screen</h1>
+  <p class="lede">Wireframes for every scoped UI task, drawn in the app's real chrome (top bar, mission page, task modal, settings). Everything gray already exists today; everything <b style="color:var(--red)">redlined in pink</b> is new. UI-10 (governance) already shipped and isn't wireframed; UI-6 was an archived duplicate.</p>
+
+  <div class="legend">
+    <span><span class="sw sw-old"></span>Existing UI (today)</span>
+    <span><span class="sw sw-new"></span>New element <span class="n" style="margin-left:4px">1</span>&nbsp;numbered redline, explained under each frame</span>
+    <span style="font-family:var(--mono);font-size:11.5px">screens are wireframes — final styling follows taikun-tabler.css</span>
+  </div>
+
+  <div class="dep-row">
+    <span class="dep"><b>UI-12</b> → unlocks → <b>UI-2</b> (real $ before KPI panels)</span>
+    <span class="dep"><b>UI-3</b> → unlocks → <b>UI-8</b> (cockpit pattern)</span>
+    <span class="dep"><b>UI-13</b> → unlocks → <b>UI-14</b> (routing before settings)</span>
+    <span class="dep done"><b>ACCESS-14</b> ✓ → <b>UI-5</b></span>
+  </div>
+
+  <div class="cols">
+    <nav class="rail" aria-label="Sections">
+      <div class="grp">Mission page</div>
+      <a href="#ui11"><span class="tid">UI-11</span>Complete &amp; browse deliverables</a>
+      <a href="#ui1"><span class="tid">UI-1</span>Author the graph</a>
+      <a href="#ui2"><span class="tid">UI-2</span>KPIs &amp; outcomes</a>
+      <div class="grp">Task &amp; fleet</div>
+      <a href="#ui3"><span class="tid">UI-3</span>Work-session health</a>
+      <a href="#ui7"><span class="tid">UI-7</span>Message an agent</a>
+      <a href="#ui12"><span class="tid">UI-12</span>Real cost</a>
+      <a href="#ui8"><span class="tid">UI-8</span>Fleet control</a>
+      <div class="grp">Settings &amp; admin</div>
+      <a href="#ui4"><span class="tid">UI-4</span>API keys</a>
+      <a href="#ui5"><span class="tid">UI-5</span>Members &amp; access</a>
+      <a href="#ui9"><span class="tid">UI-9</span>Repo &amp; provenance</a>
+      <a href="#ui14"><span class="tid">UI-13/14</span>Communications</a>
+      <div class="grp">Onboarding</div>
+      <a href="#ui15"><span class="tid">UI-15</span>New project + repo</a>
+    </nav>
+
+    <main>
+
+      <!-- ================= UI-11 ================= -->
+      <section id="ui11">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-11</span><span class="area">Mission page</span></div>
+        <h2>Mark a deliverable done — and find the ones you finished</h2>
+        <p class="what">Today the mission header only <i>shows</i> status, and finished deliverables sit indistinguishable in the picker. This adds the lifecycle control and a history view.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">plan.taikunai.com · Mission tab</span></div>
+          <div class="wf-body stack-gap">
+            <div class="bar-row">
+              <span style="font-weight:700;font-size:16px">Operator UI surface</span>
+              <span class="new" style="display:inline-flex"><span class="sel"><span class="n">1</span>&nbsp;Status: In progress</span></span>
+              <span class="pill"><span class="dot" style="background:var(--ok)"></span>Live</span>
+              <span style="margin-left:auto" class="sel">Deliverable: Operator UI surface</span>
+            </div>
+            <div class="card new">
+              <div class="card-h"><span class="n">2</span> Deliverable picker — with status &amp; history</div>
+              <div class="card-b">
+                <div class="bar-row" style="margin-bottom:10px">
+                  <span class="btn sm pri">Active 6</span><span class="btn sm">In review 1</span><span class="btn sm"><span class="n">3</span>&nbsp;Done 3</span><span class="btn sm">Archived 2</span>
+                </div>
+                <table class="tbl">
+                  <tr><td>Operator UI surface</td><td><span class="st st-mut">in progress</span></td><td class="num">14 tasks · 7%</td></tr>
+                  <tr><td>Deliverables platform (strategic DAG)</td><td><span class="st st-ok">done</span></td><td class="num">11 tasks · 100%</td></tr>
+                  <tr><td>Harden the box</td><td><span class="st st-warn">in review</span></td><td class="num">9 tasks · 89%</td></tr>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Status control</b> on the header walks the real lifecycle (proposed → approved → in progress → blocked → in review → done → archived). Marking <b>done/archived</b> asks to confirm; today that's an MCP-only upsert.</span></li>
+          <li><span class="n">2</span><span><b>Status badges in the picker</b> — every deliverable shows its state instead of a bare title.</span></li>
+          <li><span class="n">3</span><span><b>History filter</b> — Done / Archived views, so finished work is browsable instead of buried.</span></li>
+        </ul>
+      </section>
+
+      <!-- ================= UI-1 ================= -->
+      <section id="ui1">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-1</span><span class="area">Mission page</span></div>
+        <h2>Wire the map from the page it's drawn on</h2>
+        <p class="what">The dependency map you use is read-only — linking tasks, milestones, and breakdown decisions all live in MCP. This makes the mission page an editable planning surface.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Mission tab · dependency map</span></div>
+          <div class="wf-body stack-gap">
+            <div class="card">
+              <div class="card-h">Dependency map
+                <span style="margin-left:auto;display:flex;gap:8px">
+                  <span class="new"><span class="btn sm"><span class="n">1</span>&nbsp;+ Link task</span></span>
+                  <span class="new"><span class="btn sm"><span class="n">2</span>&nbsp;+ Milestone</span></span>
+                </span>
+              </div>
+              <div class="card-b">
+                <div class="bar-row" style="gap:6px;margin-bottom:12px">
+                  <span class="node">UI-12</span><span class="edge">→</span><span class="node">UI-2</span>
+                  <span class="edge" style="padding:0 10px"></span>
+                  <span class="node">UI-3</span><span class="edge">→</span><span class="node">UI-8</span>
+                  <span class="edge" style="padding:0 10px"></span>
+                  <span class="node" style="outline:1.5px dashed var(--red);outline-offset:2px">UI-13</span>
+                </div>
+                <div class="card new" style="max-width:330px">
+                  <div class="card-b" style="display:grid;gap:8px">
+                    <div style="font-weight:600;font-size:12.5px"><span class="n">3</span> UI-13 — node actions</div>
+                    <span class="sel">Milestone: Operator UI v1</span>
+                    <span class="sel">Role: contributes</span>
+                    <div class="bar-row"><span class="btn sm">Unlink</span><span class="btn sm">Open task</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="card new">
+              <div class="card-h"><span class="n">4</span> Breakdown proposal — pending review <span class="st st-warn">proposed</span></div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><td class="mono">+5 tasks</td><td>Split "Fleet control UI" into hosts / wake / runner panels</td><td>proposed by codex/coordinator · 2h ago</td></tr>
+                </table>
+                <div class="bar-row" style="margin-top:10px"><span class="btn sm pri">Approve</span><span class="btn sm">Defer</span><span class="btn sm">Reject</span></div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Link task</b> — search any board's task, pick milestone + role, it joins the map (<code>link_task_to_deliverable</code>).</span></li>
+          <li><span class="n">2</span><span><b>Milestones</b> created/edited inline with acceptance criteria.</span></li>
+          <li><span class="n">3</span><span><b>Node actions</b> on click: re-assign milestone, change role, unlink — the map stops being look-but-don't-touch.</span></li>
+          <li><span class="n">4</span><span><b>Breakdown review queue</b> — agent-proposed task splits get Approve / Defer / Reject right on the mission page, plus a <b>Record outcome</b> action on the header.</span></li>
+        </ul>
+      </section>
+
+      <!-- ================= UI-2 ================= -->
+      <section id="ui2">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-2</span><span class="area">Mission page</span><span class="dep-mini">depends on UI-12</span></div>
+        <h2>Did it move the needle? KPIs and a verification queue</h2>
+        <p class="what">The whole value layer — define a KPI, record an outcome, verify it, link it — has zero web surface. It lands beside the mission economics.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Mission tab · KPIs &amp; outcomes</span></div>
+          <div class="wf-body stack-gap">
+            <div class="bar-row">
+              <div class="card" style="flex:1;min-width:150px"><div class="card-b"><div class="area">Spend</div><div style="font-weight:700;font-size:19px" class="num">$212.40</div></div></div>
+              <div class="card new" style="flex:1;min-width:170px"><div class="card-b"><div class="area"><span class="n">1</span> KPI · cycle time</div><div style="font-weight:700;font-size:19px" class="num">2.4 d <span class="st st-ok">▼ 18%</span></div></div></div>
+              <div class="card new" style="flex:1;min-width:170px"><div class="card-b"><div class="area"><span class="n">1</span> KPI · issues shipped</div><div style="font-weight:700;font-size:19px" class="num">31 / cycle</div></div></div>
+              <div class="card new" style="flex:1;min-width:120px;border-style:dashed"><div class="card-b" style="text-align:center;color:var(--muted)">+ New KPI</div></div>
+            </div>
+            <div class="card new">
+              <div class="card-h"><span class="n">2</span> Outcomes to verify <span class="st st-warn">3 waiting</span></div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><td class="mono">UI-10</td><td>Governance surfaces shipped (decisions log + audit export)</td><td><span class="sel">→ KPI: audit readiness</span></td><td><span class="btn sm pri">Verify</span> <span class="btn sm">Reject</span></td></tr>
+                  <tr><td class="mono">NARRATE-6</td><td>Enriched narration lifted hover coverage to 100%</td><td><span class="sel">→ KPI: operator clarity</span></td><td><span class="btn sm pri">Verify</span> <span class="btn sm">Reject</span></td></tr>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>KPI tiles</b> — define, edit, and watch movement (<code>create_kpi</code>, <code>update_kpi_value</code>, <code>get_kpi_tally</code>). Real dollars in these tiles arrive with UI-12 — that's the dependency.</span></li>
+          <li><span class="n">2</span><span><b>Verification queue</b> — recorded outcomes wait for a human Verify/Reject, and link to a KPI. "Verified only" is what the cost-per-outcome math already expects.</span></li>
+        </ul>
+      </section>
+
+      <hr class="divider" />
+
+      <!-- ================= UI-3 ================= -->
+      <section id="ui3">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-3</span><span class="area">Board · Mission · Task</span><span class="dep-mini">realizes SESSION-8 · unlocks UI-8</span></div>
+        <h2>See the worktrees: session health and the merge gate</h2>
+        <p class="what">code_strict is on board-wide, but operators are blind to it — who holds live worktrees, what's dirty, why a merge is blocked. Highest-priority gap.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Board header strip</span></div>
+          <div class="wf-body">
+            <div class="bar-row new" style="padding:8px 10px">
+              <span class="n">1</span>
+              <span class="pill"><span class="dot" style="background:var(--ok)"></span>4 sessions active</span>
+              <span class="st st-warn">1 dirty worktree</span>
+              <span class="st st-bad">merge gate: 1 blocked</span>
+              <span class="pill">leases: 6 files held</span>
+            </div>
+          </div>
+        </div></div>
+        <div class="wf-label">↓ same data, drilled into one task</div>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Task UI-13 · Dev tab</span></div>
+          <div class="wf-body stack-gap">
+            <div class="card new">
+              <div class="card-h"><span class="n">2</span> Work sessions</div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><th>agent</th><th>branch</th><th>workspace</th><th>state</th></tr>
+                  <tr><td class="mono">claude/UI-13</td><td class="mono">claude/UI-13-intake</td><td class="mono">…/workspaces/ui-13/</td><td><span class="st st-ok">clean · tests ✓</span></td></tr>
+                  <tr><td class="mono">codex/UI-13-corpus</td><td class="mono">codex/UI-13-rag</td><td class="mono">…/workspaces/ui-13b/</td><td><span class="st st-warn">dirty · 3 files</span></td></tr>
+                </table>
+              </div>
+            </div>
+            <div class="card new">
+              <div class="card-h"><span class="n">3</span> Merge gate <span class="st st-bad">blocked</span><span style="margin-left:auto" class="btn sm">Re-check</span></div>
+              <div class="card-b" style="font-size:12.5px;color:var(--muted)">
+                Executed test run missing for head <code>c8bd0df</code> — code_strict requires a passing run with output hash before this branch can merge.
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Health strip</b> on board + mission: live session count, dirty/unsafe flags, blocked merge gates, held leases — one glance answers "is the fleet safe right now?"</span></li>
+          <li><span class="n">2</span><span><b>Per-task sessions panel</b> (<code>list_work_sessions</code> + health) — who holds which worktree, on what branch, clean or not.</span></li>
+          <li><span class="n">3</span><span><b>Merge-gate verdict in plain words</b> — the exact reason a merge is refused, with a re-check button.</span></li>
+        </ul>
+      </section>
+
+      <!-- ================= UI-7 ================= -->
+      <section id="ui7">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-7</span><span class="area">Task &amp; top bar</span></div>
+        <h2>Nudge a live agent — and see who acknowledged</h2>
+        <p class="what">Directed messages, acks, and deadlines exist in the substrate; the web has no way to send or read them.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Task UI-13 · header + ack inbox</span></div>
+          <div class="wf-body stack-gap">
+            <div class="bar-row">
+              <span class="pill"><span class="dot" style="background:var(--ok)"></span>codex/UI-13 · claude-code/opus</span>
+              <span class="new"><span class="btn sm"><span class="n">1</span>&nbsp;Message</span></span>
+              <span style="margin-left:auto" class="new"><span class="btn sm"><span class="n">3</span>&nbsp;🔔 2 unacked</span></span>
+            </div>
+            <div class="card new" style="max-width:430px">
+              <div class="card-h"><span class="n">2</span> Message codex/UI-13</div>
+              <div class="card-b" style="display:grid;gap:9px">
+                <div class="fld" style="width:100%;min-height:48px;align-items:flex-start">Hold the rag_store migration until UI-13 lands — branch off master@e845709 instead.</div>
+                <div class="bar-row">
+                  <span class="toggle on"><span class="tk"></span>Requires ack</span>
+                  <span class="sel">Deadline: 2 h</span>
+                  <span style="margin-left:auto" class="btn sm pri">Send</span>
+                </div>
+              </div>
+            </div>
+            <div class="card new">
+              <div class="card-h">Ack inbox</div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><td class="mono">→ codex/UI-13</td><td>"Hold the rag_store migration…"</td><td><span class="st st-warn">unacked · 1h 12m left</span></td></tr>
+                  <tr><td class="mono">→ cursor/RECON-8</td><td>"Rebase before merging"</td><td><span class="st st-ok">acked · "will do"</span></td></tr>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Message button</b> on any live-agent chip (task view or active-agents list).</span></li>
+          <li><span class="n">2</span><span><b>Compose</b> with require-ack + deadline — the existing monitor machinery escalates if ignored.</span></li>
+          <li><span class="n">3</span><span><b>Ack inbox</b> in the top bar: everything awaiting acknowledgment, who acked, what they said.</span></li>
+        </ul>
+      </section>
+
+      <!-- ================= UI-12 ================= -->
+      <section id="ui12">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-12</span><span class="area">Task &amp; mission economics</span><span class="dep-mini">unlocks UI-2 · Bridge prereq P-1</span></div>
+        <h2>Economics panels that show real money</h2>
+        <p class="what">The panels exist but render ~zero, because nothing feeds the ledger. This wires LiteLLM's actual per-call spend in — mostly backend; the visible change is numbers that are true.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Task UI-13 · Details tab · Economics</span></div>
+          <div class="wf-body stack-gap">
+            <div class="bar-row">
+              <div class="card new" style="flex:1;min-width:170px"><div class="card-b"><div class="area"><span class="n">1</span> Spend</div><div style="font-weight:700;font-size:19px" class="num">$4.31 <span class="st st-ok">provider-actual</span></div><div style="font-size:11.5px;color:var(--faint)" class="num">61.2k tokens · 47 calls</div></div></div>
+              <div class="card new" style="flex:1;min-width:190px"><div class="card-b"><div class="area"><span class="n">2</span> Model mix</div><div style="font-size:12.5px;color:var(--muted)" class="num">opus 62% · gpt-4o-mini 34% · haiku 4%</div></div></div>
+              <div class="card" style="flex:1;min-width:150px"><div class="card-b"><div class="area">Cost / outcome</div><div style="font-weight:700;font-size:19px" class="num">$1.87</div></div></div>
+            </div>
+            <div class="callout"><b>Where the numbers come from:</b> LiteLLM <code>success_callback</code> → <code>POST /tally/v1/spend/ingest</code>, idempotent by request id; agent self-reports stay as a second, confidence-graded stream.</div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Real spend with a source badge</b> — <i>provider-actual</i> (from the gateway) vs <i>agent-reported</i> vs <i>unattributed</i>, so you know how much to trust each figure.</span></li>
+          <li><span class="n">2</span><span><b>Model mix per task/deliverable</b> — which models did the work, feeding the model-ROI story later (TALLY-8).</span></li>
+        </ul>
+      </section>
+
+      <!-- ================= UI-8 ================= -->
+      <section id="ui8">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-8</span><span class="area">New “Fleet” tab</span><span class="dep-mini">depends on UI-3</span></div>
+        <h2>The fleet, on one screen: hosts, wakes, runners</h2>
+        <p class="what">The task view has a runner panel, but the substrate — hosts, wake intents, kill/logs/snapshot — is MCP-only. This is the cockpit's operational core.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">new tab · Fleet</span></div>
+          <div class="wf-body stack-gap">
+            <div class="bar-row" style="gap:6px">
+              <span class="pill">Board</span><span class="pill">Mission</span><span class="pill">Inbox</span>
+              <span class="new"><span class="pill" style="background:var(--white)"><span class="n">1</span>&nbsp;Fleet</span></span>
+            </div>
+            <div class="card new">
+              <div class="card-h">Agent hosts</div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><th>host</th><th>heartbeat</th><th>capacity</th><th></th></tr>
+                  <tr><td class="mono">plan-vm (prod)</td><td><span class="st st-ok">12 s ago</span></td><td class="num">1 / 2 slots</td><td><span class="btn sm"><span class="n">2</span>&nbsp;Wake agent ▾</span></td></tr>
+                  <tr><td class="mono">steve-mbp</td><td><span class="st st-warn">6 m ago</span></td><td class="num">0 / 4 slots</td><td><span class="btn sm">Wake agent ▾</span></td></tr>
+                </table>
+              </div>
+            </div>
+            <div class="card new">
+              <div class="card-h">Wake intents <span class="st st-mut">2 queued</span></div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><td class="mono">UI-13 · claim_next</td><td>queued 8m · waiting for work-capable host</td><td><span class="btn sm">Cancel</span></td></tr>
+                </table>
+              </div>
+            </div>
+            <div class="card new">
+              <div class="card-h">Live runners</div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><td class="mono">codex/UI-13 · 42 min</td><td><span class="st st-ok">healthy</span></td><td>
+                    <span class="btn sm">Logs</span> <span class="btn sm">Snapshot</span> <span class="btn sm" style="color:var(--bad)"><span class="n">3</span>&nbsp;Kill…</span></td></tr>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>A Fleet tab</b> — first top-level surface built on UI-3's health pattern.</span></li>
+          <li><span class="n">2</span><span><b>Wake from the web</b> — pick a sleeping agent/lane; today wakes queue invisibly until someone checks MCP.</span></li>
+          <li><span class="n">3</span><span><b>Runner actions</b> — logs and snapshot are one click; <b>Kill is human-gated</b> with a typed confirmation, matching the substrate's guardrails.</span></li>
+        </ul>
+      </section>
+
+      <hr class="divider" />
+
+      <!-- ================= UI-4 ================= -->
+      <section id="ui4">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-4</span><span class="area">Settings</span></div>
+        <h2>Self-serve API keys</h2>
+        <p class="what">Getting a token today means the CLI. This is the standard Settings → API keys screen over the scoped-token backend.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Settings · API keys</span></div>
+          <div class="wf-body stack-gap">
+            <div class="callout new" style="display:flex;gap:10px;align-items:center"><span class="n">1</span><b>Copy it now — shown once.</b>&nbsp;<code>swb_9f2…c41a</code>&nbsp;<span class="btn sm">Copy</span></div>
+            <div class="card new">
+              <div class="card-h"><span class="n">2</span> API keys <span style="margin-left:auto" class="btn sm pri">Create key</span></div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><th>name</th><th>scopes</th><th>project</th><th>last used</th><th></th></tr>
+                  <tr><td>github-bridge</td><td><span class="pill">read</span> <span class="pill">write:ixp</span></td><td class="mono">switchboard</td><td>2 m ago</td><td><span class="btn sm">Revoke</span></td></tr>
+                  <tr><td>steve-cli</td><td><span class="pill">read</span> <span class="pill">write:tasks</span> <span class="pill">write:projects</span></td><td class="mono">*</td><td>1 d ago</td><td><span class="btn sm">Revoke</span></td></tr>
+                </table>
+              </div>
+            </div>
+            <div class="card new" style="max-width:430px">
+              <div class="card-h"><span class="n">3</span> Create key</div>
+              <div class="card-b" style="display:grid;gap:9px">
+                <span class="fld" style="width:100%">Name: ci-mirror</span>
+                <div class="bar-row"><span class="pill">☑ read</span><span class="pill">☑ write:ixp</span><span class="pill">☐ write:tasks</span><span class="pill">☐ write:projects</span><span class="pill">☐ write:system</span></div>
+                <div class="bar-row"><span class="sel">Project: switchboard</span><span class="sel">Expires: 90 days</span><span style="margin-left:auto" class="btn sm pri">Create</span></div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Shown-once banner</b> — the raw token never renders again (matches the substrate's hash-only storage).</span></li>
+          <li><span class="n">2</span><span><b>Key table</b> with scopes, project binding, last-used; revoke is instant and audited.</span></li>
+          <li><span class="n">3</span><span><b>Scope picker</b> mirrors the real role scopes — admin-gated screen.</span></li>
+        </ul>
+      </section>
+
+      <!-- ================= UI-5 ================= -->
+      <section id="ui5">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-5</span><span class="area">Settings</span><span class="dep-mini">depends on ACCESS-14 ✓</span></div>
+        <h2>Invite people and hand out roles</h2>
+        <p class="what">Private projects shipped, but sharing one still takes an MCP grant. This is the front door: members, roles, invites.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Settings · Members — project: chart-renderer (private)</span></div>
+          <div class="wf-body stack-gap">
+            <div class="bar-row new" style="padding:8px 10px">
+              <span class="n">1</span><span style="font-size:12.5px;color:var(--muted)">Who can see this private project:</span>
+              <span class="st st-ok">owner ✓</span><span class="st st-ok">invited members ✓</span><span class="st st-ok">org admins ✓</span><span class="st st-bad">org peers ✗</span>
+            </div>
+            <div class="card new">
+              <div class="card-h"><span class="n">2</span> Members <span style="margin-left:auto" class="btn sm pri">Invite member</span></div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><th>person</th><th>role</th><th>granted</th><th></th></tr>
+                  <tr><td>steve@taikunai.com</td><td><span class="sel">owner</span></td><td>creator</td><td></td></tr>
+                  <tr><td>jordan@client.com</td><td><span class="sel">contributor</span></td><td>by steve · Jul 9</td><td><span class="btn sm">Revoke</span></td></tr>
+                </table>
+              </div>
+            </div>
+            <div class="card new" style="max-width:420px">
+              <div class="card-h"><span class="n">3</span> Invite member</div>
+              <div class="card-b" style="display:grid;gap:9px">
+                <span class="fld" style="width:100%">email: dana@client.com</span>
+                <div class="bar-row"><span class="sel">Role: viewer</span><span style="margin-left:auto" class="btn sm pri">Send invite</span></div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Visibility explainer</b> — states the ACCESS-14 rules on the page, so "private" is never ambiguous.</span></li>
+          <li><span class="n">2</span><span><b>Members table</b> — role changes write real grants (viewer / commenter / contributor / operator / admin), audited.</span></li>
+          <li><span class="n">3</span><span><b>Invite</b> by email — pairs with the existing signup flow; coordinates with ACCESS-5.</span></li>
+        </ul>
+      </section>
+
+      <!-- ================= UI-9 ================= -->
+      <section id="ui9">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-9</span><span class="area">Settings · admin</span></div>
+        <h2>Repo wiring and provenance repairs, without the CLI</h2>
+        <p class="what">Move-task, repo topology, reconcile, offline-completion stamps — the admin toolbox agents and operators currently reach through MCP.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Settings · Repo &amp; provenance</span></div>
+          <div class="wf-body stack-gap">
+            <div class="card new">
+              <div class="card-h"><span class="n">1</span> Repo topology</div>
+              <div class="card-b">
+                <table class="tbl">
+                  <tr><td class="mono">6th-Element-Labs/projectplanner</td><td><span class="pill">canonical</span></td><td>Done authority · merge provenance</td></tr>
+                  <tr><td class="mono">6th-Element-Labs/projectplanner-ci</td><td><span class="pill">public_ci</span></td><td>verification only</td></tr>
+                </table>
+              </div>
+            </div>
+            <div class="bar-row">
+              <div class="card new" style="flex:1;min-width:280px">
+                <div class="card-h"><span class="n">2</span> Reconcile <span style="margin-left:auto" class="btn sm pri">Run now</span></div>
+                <div class="card-b" style="font-size:12.5px;color:var(--muted)">Last sweep 9 m ago · <span class="st st-warn">2 findings</span> — orphan merge on <code>UI-10</code> repaired; 1 unreachable SHA flagged.</div>
+              </div>
+              <div class="card new" style="flex:1;min-width:280px">
+                <div class="card-h"><span class="n">3</span> Verify offline completion</div>
+                <div class="card-b" style="display:grid;gap:8px">
+                  <span class="fld" style="width:100%">task: DOGFOOD-12 · evidence URL…</span>
+                  <span class="btn sm pri" style="justify-self:end">Stamp verified</span>
+                </div>
+              </div>
+            </div>
+            <div class="card new" style="max-width:430px">
+              <div class="card-h"><span class="n">4</span> Move task <span class="pill">admin 🔒</span></div>
+              <div class="card-b bar-row"><span class="fld">task: BUG-24</span><span class="edge">→</span><span class="sel">project: helm</span><span style="margin-left:auto" class="btn sm pri">Move</span></div>
+            </div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Topology card</b> — see and edit which repo holds which authority (UI-15's guided panel writes the same config at create-time).</span></li>
+          <li><span class="n">2</span><span><b>Reconcile on demand</b> with findings in plain words — today it's a timer + logs.</span></li>
+          <li><span class="n">3</span><span><b>Offline evidence stamping</b> for non-code Done, verifier-attributed.</span></li>
+          <li><span class="n">4</span><span><b>Cross-project move</b>, admin-gated and audited.</span></li>
+        </ul>
+      </section>
+
+      <!-- ================= UI-13/14 ================= -->
+      <section id="ui14">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-13</span><span class="tid-chip" style="background:#3D4C5C">UI-14</span><span class="area">Settings · Communications</span><span class="dep-mini">UI-14 depends on UI-13</span></div>
+        <h2>Give every project its own email, corpus, and audience</h2>
+        <p class="what">Today plan@taikunai.com feeds one inbox and one document corpus — Maxwell's. UI-13 makes the pipeline multi-project under the hood; UI-14 is the settings screen you actually touch.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">Settings · Communications — project: chart-renderer</span></div>
+          <div class="wf-body stack-gap">
+            <div class="card new">
+              <div class="card-h"><span class="n">1</span> Inbound — who can email this project</div>
+              <div class="card-b" style="display:grid;gap:10px">
+                <div class="bar-row"><span class="area" style="min-width:110px">plus-address</span><code>plan+chart-renderer@taikunai.com</code><span class="btn sm">Copy</span></div>
+                <table class="tbl">
+                  <tr><th>associated domain</th><th>routes to</th><th></th></tr>
+                  <tr><td class="mono">@client.com</td><td class="mono">chart-renderer</td><td><span class="btn sm">Remove</span></td></tr>
+                  <tr><td class="mono">@clientpartners.io</td><td class="mono">chart-renderer</td><td><span class="btn sm">Remove</span></td></tr>
+                </table>
+                <span class="btn sm" style="justify-self:start">+ Add domain</span>
+              </div>
+            </div>
+            <div class="card new">
+              <div class="card-h"><span class="n">2</span> Outbound — who hears from this project</div>
+              <div class="card-b" style="display:grid;gap:10px">
+                <div class="bar-row"><span class="area" style="min-width:110px">digest &amp; notify</span><span class="pill">jordan@client.com ✕</span><span class="pill">dana@client.com ✕</span><span class="btn sm">+ Add</span></div>
+                <div class="bar-row"><span class="sel">Digest: weekly · Mon 7am</span><span class="btn sm"><span class="n">3</span>&nbsp;Send test</span></div>
+              </div>
+            </div>
+            <div class="callout"><span class="n" style="background:#3D4C5C">4</span>&nbsp;<b>UI-13, the invisible half:</b> inbox items, transcripts, and the document corpus become <i>per-project</i> (the Inbox tab and "Ask" search only this project's documents). Unmatched senders keep falling back to today's behavior, so Maxwell is untouched.</div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Domain association</b> — writes the domain→project routing map the poller applies; the plus-address works with zero config.</span></li>
+          <li><span class="n">2</span><span><b>Per-project recipients</b> for digests/notifications instead of one global list in <code>.env</code>.</span></li>
+          <li><span class="n">3</span><span><b>Send test</b> proves SMTP + recipients before you rely on it.</span></li>
+          <li><span class="n" style="background:#3D4C5C">4</span><span><b>Segmented corpus</b> (UI-13) — a transcript uploaded on project X is searchable on X and invisible on Y.</span></li>
+        </ul>
+      </section>
+
+      <hr class="divider" />
+
+      <!-- ================= UI-15 ================= -->
+      <section id="ui15">
+        <div class="sec-eyebrow"><span class="tid-chip">UI-15</span><span class="area">New Project flow</span></div>
+        <h2>New project, wired to its repo in one guided flow</h2>
+        <p class="what">The New Project modal (shipped) gets an optional repo field, and a post-create panel walks the webhook wiring that today lives in a runbook — with the <code>?project=</code> pin baked in so it can't be wired wrong.</p>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">New project</span></div>
+          <div class="wf-body stack-gap">
+            <div class="card" style="max-width:460px">
+              <div class="card-h">New project</div>
+              <div class="card-b" style="display:grid;gap:10px">
+                <span class="fld" style="width:100%">Project name: Chart Renderer</span>
+                <div class="bar-row"><span class="radio on"><i></i>Private — you, invitees, org admins</span><span class="radio"><i></i>Shared — whole org</span></div>
+                <span class="new" style="display:block"><span class="fld" style="width:100%"><span class="n">1</span>&nbsp;GitHub repo (optional): 6th-Element-Labs/chart-renderer</span></span>
+                <span class="btn pri" style="justify-self:end">Create project</span>
+              </div>
+            </div>
+          </div>
+        </div></div>
+        <div class="wf-label">↓ immediately after create</div>
+        <div class="wf-scroll"><div class="wf">
+          <div class="wf-bar"><span class="dots"><i></i><i></i><i></i></span><span class="addr">chart-renderer · Wire your repo</span></div>
+          <div class="wf-body stack-gap">
+            <div class="card new">
+              <div class="card-h"><span class="n">2</span> Wire your repo — 2 steps <span class="st st-mut">provenance off until wired</span></div>
+              <div class="card-b" style="display:grid;gap:12px">
+                <div class="bar-row"><span class="area" style="min-width:90px">webhook url</span><code>https://plan.taikunai.com/api/github/webhook?project=chart-renderer</code><span class="btn sm">Copy</span></div>
+                <div class="bar-row"><span class="area" style="min-width:90px">or one-liner</span><code>gh api repos/…/hooks -f url=… -f secret=$PM_WEBHOOK_SECRET</code><span class="btn sm">Copy</span></div>
+                <div class="bar-row">
+                  <span class="btn sm pri"><span class="n">3</span>&nbsp;Verify connection</span>
+                  <span class="st st-ok">✓ delivery received 12 s ago — merges will stamp Done</span>
+                </div>
+              </div>
+            </div>
+            <div class="callout">Repo <i>creation</i> stays manual by design — auto-provisioning arrives with the Bridge GitHub App (implementation plan §3), and this panel adopts it when it lands.</div>
+          </div>
+        </div></div>
+        <ul class="redlines">
+          <li><span class="n">1</span><span><b>Repo field</b> — backend already accepts <code>owner/name</code>; the modal finally asks.</span></li>
+          <li><span class="n">2</span><span><b>Guided wiring</b> with the project pin pre-filled — the HARDEN-2 lesson (bare webhook URLs fail closed) becomes impossible to get wrong.</span></li>
+          <li><span class="n">3</span><span><b>Verify button</b> — checks reachability/recent delivery and flips green when a real event arrives.</span></li>
+        </ul>
+      </section>
+
+      <div class="foot-chip">deliverable: switchboard-operator-ui · 14 linked · UI-10 shipped ✓ · frontier: UI-3, UI-12, UI-13, UI-15</div>
+
+    </main>
+  </div>
+</div>
