@@ -13785,6 +13785,81 @@ def _github_merged_prs(repo: str, token: str = "", limit: int = 30) -> List[Dict
     return [pr for pr in page if pr.get("merged_at")]
 
 
+def _retire_branches_enabled() -> bool:
+    """Feature flag: retire (archive+delete) a PR's head branch after merge. Off by
+    default so it ships dark and is enabled per deployment once the GitHub token has
+    contents:write on the target canonical repo(s)."""
+    return (os.environ.get("PM_RETIRE_MERGED_BRANCHES") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _github_write(method: str, repo: str, path: str, token: str = "",
+                  data: Optional[Dict[str, Any]] = None):
+    """Authenticated GitHub write (POST/DELETE). Returns (status_code, body_or_error).
+    Mirrors the read helpers above; kept tiny and dependency-free for testability."""
+    body = json.dumps(data).encode() if data is not None else None
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/{path}", data=body, method=method)
+    req.add_header("Accept", "application/vnd.github+json")
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            raw = r.read().decode() or ""
+            return (getattr(r, "status", None) or r.getcode()), (json.loads(raw) if raw else None)
+    except Exception as e:  # HTTPError exposes .code/.read(); other errors -> code 0
+        code = getattr(e, "code", 0) or 0
+        try:
+            detail = e.read().decode()[:300]
+        except Exception:
+            detail = str(e)
+        return code, {"error": detail or "error"}
+
+
+def retire_merged_branch(repo: str, branch: str, head_sha: str = "",
+                         project: str = "", actor: str = "github-webhook") -> Dict[str, Any]:
+    """Archive-then-delete a merged PR head branch so merged branches stop piling up (BUG-29).
+
+    OFF unless PM_RETIRE_MERGED_BRANCHES is set. ALWAYS archives before deleting: creates
+    refs/tags/archive/<branch> at the branch head, and only deletes refs/heads/<branch> when
+    that tag exists -- so the branch is always recoverable (`git checkout -b <branch>
+    archive/<branch>`) and is NEVER deleted when archiving fails. Fail-visible: GitHub errors
+    are returned in the result (surfaced in the webhook response), never masked as success."""
+    if not _retire_branches_enabled():
+        return {"retired": False, "reason": "disabled"}
+    if not repo or "/" not in repo or not branch:
+        return {"retired": False, "reason": "missing_repo_or_branch"}
+    if not head_sha:
+        return {"retired": False, "reason": "no_head_sha_cannot_archive",
+                "repo": repo, "branch": branch}
+    token = _github_token()
+    if not token:
+        return {"retired": False, "reason": "no_github_token"}
+    out: Dict[str, Any] = {"repo": repo, "branch": branch}
+    acode, ainfo = _github_write(
+        "POST", repo, "git/refs", token,
+        {"ref": f"refs/tags/archive/{branch}", "sha": head_sha})
+    out["archived"] = acode in (200, 201, 422)  # 422 == archive tag already exists
+    out["archive_status"] = acode
+    if not out["archived"]:
+        out["retired"] = False
+        out["error"] = f"archive_failed:{acode}"
+        out["detail"] = ainfo
+        return out  # never delete a branch we could not archive
+    dcode, dinfo = _github_write("DELETE", repo, f"git/refs/heads/{branch}", token)
+    if dcode in (200, 204, 404, 422):  # 404/422 == branch already gone
+        out["deleted"] = True
+        out["already_gone"] = dcode in (404, 422)
+    else:
+        out["deleted"] = False
+        out["error"] = f"delete_failed:{dcode}"
+        out["detail"] = dinfo
+    out["retired"] = bool(out.get("deleted"))
+    return out
+
+
 def _activity_text(payload: Any) -> str:
     if isinstance(payload, str):
         return payload

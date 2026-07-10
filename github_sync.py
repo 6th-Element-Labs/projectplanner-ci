@@ -249,6 +249,13 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         else:
             closed.append(task_id)
 
+    # BUG-29: retire (archive+delete) the merged head branch so branches don't pile up.
+    # Same-repo, non-default branches only; no-op unless PM_RETIRE_MERGED_BRANCHES is set.
+    head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name") or ""
+    branch_retired = None
+    if branch and branch != default and head_repo == repo:
+        branch_retired = store.retire_merged_branch(repo, branch, head_sha, project)
+
     return {"action": "pr_processed", "repo": repo, "pr": pr_num,
             "merged_sha": merged_sha, "auto_closed_tasks": closed,
-            "skipped_tasks": skipped}
+            "skipped_tasks": skipped, "branch_retired": branch_retired}
