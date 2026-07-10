@@ -108,6 +108,21 @@ try:
     except PermissionError:
         still_authenticates = False
     ok(not still_authenticates, "MCP-revoked token stops authenticating")
+
+    global_created = json.loads(mcp_server.create_scoped_token(
+        ctx, project="*", kind="agent", display_name="global cloud agent", role="admin",
+        principal_id="agent-global-cloud-test"))
+    global_token = global_created.get("token")
+    global_principal = global_created.get("principal") or {}
+    ok(global_created.get("project") == "*" and global_principal.get("project") == "*",
+       "MCP can mint a global project='*' token")
+    helm_auth = auth.authenticate("helm", global_token, ("write:tasks",))
+    ok(helm_auth["id"] == global_principal["id"],
+       "global token authenticates for writes on another board")
+    maxwell_auth = auth.authenticate("maxwell", global_token, ("write:tasks",))
+    ok(maxwell_auth["id"] == global_principal["id"],
+       "global token authenticates for writes on maxwell")
+    mcp_server.revoke_scoped_token(global_principal["id"], ctx, project=P)
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

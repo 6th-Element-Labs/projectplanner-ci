@@ -46,6 +46,15 @@ def has_project(project: Optional[str]) -> bool:
     return (project or DEFAULT_PROJECT) in _project_map()
 
 
+def is_global_project_binding(project: Optional[str]) -> bool:
+    return (project or "").strip() == "*"
+
+
+def principal_registry_project(project: Optional[str]) -> str:
+    """SQLite file that stores a principal record for the given binding."""
+    return "switchboard" if is_global_project_binding(project) else (project or DEFAULT_PROJECT)
+
+
 def projects() -> List[Dict[str, Any]]:
     """The switcher's source of truth — [{id, label, pretitle}]."""
     visible = (os.environ.get("PM_TOP_LEVEL_PROJECTS") or "").strip()
@@ -5282,18 +5291,20 @@ def create_principal(kind: str, display_name: str, token: str, scopes: List[str]
         return {"error": "unknown scope(s): " + ", ".join(unknown)}
     if not token:
         return {"error": "token required"}
+    binding = (project or DEFAULT_PROJECT).strip()
+    registry = principal_registry_project(binding)
     principal_id = principal_id or f"{kind}-{uuid.uuid4().hex[:12]}"
     display_name = (display_name or principal_id).strip()
     now = time.time()
     scopes_json = json.dumps(scopes, sort_keys=True)
-    with _conn(project) as c:
+    with _conn(registry) as c:
         c.execute(
             "INSERT INTO principals(id, kind, display_name, project, scopes, token_hash, created_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            (principal_id, kind, display_name, project, scopes_json, hash_token(token), now),
+            (principal_id, kind, display_name, binding, scopes_json, hash_token(token), now),
         )
     return {"id": principal_id, "kind": kind, "display_name": display_name,
-            "project": project, "scopes": scopes, "created_at": now}
+            "project": binding, "scopes": scopes, "created_at": now}
 
 
 def _principal_from_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -5359,6 +5370,20 @@ def get_principal_by_token(project: str, token: str) -> Optional[Dict[str, Any]]
         row = c.execute("SELECT * FROM principals WHERE token_hash=?",
                         (hash_token(token),)).fetchone()
     return _principal_from_row(row) if row else None
+
+
+def get_principal_by_token_any_project(token: str) -> Optional[Dict[str, Any]]:
+    """Find a bearer principal by token hash across all project DBs."""
+    if not token:
+        return None
+    token_hash = hash_token(token)
+    for project_id in project_ids():
+        with _conn(project_id) as c:
+            row = c.execute("SELECT * FROM principals WHERE token_hash=?",
+                            (token_hash,)).fetchone()
+        if row:
+            return _principal_from_row(row)
+    return None
 
 
 def password_login_count(project: str = DEFAULT_PROJECT) -> int:

@@ -168,6 +168,11 @@ def authenticate(project: str, token: str,
 
     principal = store.get_principal_by_token(project, token) if token else None
     if not principal and token:
+        principal = store.get_principal_by_token_any_project(token)
+        binding = (principal or {}).get("project")
+        if binding not in (project, "*"):
+            principal = None
+    if not principal and token:
         principal = _env_principal(token, project)
     if not principal:
         raise PermissionError("unauthorized: provide Authorization: Bearer <token>")
