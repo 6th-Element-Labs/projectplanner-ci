@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "taikun-plan": {
+      "type": "http",
+      "url": "https://plan.taikunai.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SWITCHBOARD_TOKEN}"
+      }
+    }
+  }
+}
