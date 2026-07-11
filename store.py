@@ -1231,7 +1231,7 @@ def _link_tasks_to_deliverable_impl(
 
     now = time.time()
     linked: List[Dict[str, Any]] = []
-    with _conn(project) as c:
+    with _conn(project, timeout_s=5.0) as c:
         deliverable_row = c.execute(
             "SELECT board_id FROM deliverables WHERE id=?", (deliverable_id,)).fetchone()
         if not deliverable_row:
