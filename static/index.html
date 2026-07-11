@@ -196,6 +196,7 @@
                         <button id="btn-new-project" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button"><i class="ti ti-folder-plus me-1"></i>New project</button>
                         <button id="btn-project-github" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" title="Connect a GitHub repo to this project"><i class="ti ti-brand-github me-1"></i>Connect repo</button>
                         <button id="btn-project-comms" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" title="Communications: inbound domains + outbound recipients"><i class="ti ti-mail-cog me-1"></i>Communications</button>
+                        <button id="btn-project-members" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" title="Members &amp; access for this project"><i class="ti ti-users me-1"></i>Members</button>
                         <div class="dropdown w-100" id="user-menu" style="display:none">
                             <a href="#" class="d-flex align-items-center text-reset text-decoration-none px-2 py-1" data-bs-toggle="dropdown" aria-label="Account menu">
                                 <i class="ti ti-user me-2"></i><span id="user-menu-email" class="small text-truncate"></span>
@@ -563,6 +564,63 @@
         </div>
     </div>
 
+    <!-- UI-5: members & access management -->
+    <div class="modal modal-blur fade" id="members-modal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="ti ti-users me-2"></i>Members &amp; access <span id="mm-project" class="text-secondary fw-normal ms-1"></span></h5>
+                    <button type="button" id="mm-refresh" class="btn btn-sm btn-ghost-secondary ms-2 p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="mm-visibility" class="alert alert-secondary py-2 px-3 small mb-3" style="display:none"></div>
+
+                    <div class="d-flex align-items-center mb-2">
+                        <h4 class="mb-0"><i class="ti ti-user-check me-1"></i>Members</h4>
+                        <span id="mm-count" class="badge bg-secondary-lt ms-2"></span>
+                    </div>
+                    <div id="mm-members" class="table-responsive mb-3"><div class="text-secondary small">Loading…</div></div>
+
+                    <hr class="my-3">
+                    <h4><i class="ti ti-user-plus me-1"></i>Add a member</h4>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-sm-3">
+                            <label class="form-label small mb-1" for="mm-kind">Subject</label>
+                            <select id="mm-kind" class="form-select form-select-sm">
+                                <option value="user" selected>Person (email)</option>
+                                <option value="principal">Token / principal</option>
+                                <option value="agent">Agent</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-5">
+                            <label class="form-label small mb-1" for="mm-subject"><span id="mm-subject-label">Email</span></label>
+                            <input id="mm-subject" class="form-control form-control-sm" placeholder="teammate@company.com" autocomplete="off">
+                        </div>
+                        <div class="col-sm-2">
+                            <label class="form-label small mb-1" for="mm-role">Role</label>
+                            <select id="mm-role" class="form-select form-select-sm">
+                                <option value="viewer">viewer</option>
+                                <option value="commenter">commenter</option>
+                                <option value="contributor" selected>contributor</option>
+                                <option value="operator">operator</option>
+                                <option value="admin">admin</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-2">
+                            <button id="mm-add" class="btn btn-sm btn-primary w-100"><i class="ti ti-plus me-1"></i>Add</button>
+                        </div>
+                    </div>
+                    <div id="mm-add-flash" class="small mt-2 text-secondary"></div>
+                </div>
+                <div class="modal-footer">
+                    <span class="small text-secondary me-auto">Roles map to scopes; changes are audited.</span>
+                    <button type="button" class="btn" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- UI-7: compose a directed message to a live agent -->
     <div class="modal modal-blur fade" id="agent-msg-modal" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered" role="document">
@@ -786,7 +844,7 @@
     <!-- HARDEN-38: Mermaid (~1MB) + ApexCharts (~500KB) are now lazy-loaded by app.js
          only when the Mission / Gantt tab opens — off the initial critical path. -->
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js?v=42"></script>
+    <script src="app.js?v=43"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script>
       // Tab routing, nesting-aware. The nav is now 2 levels: 5 top tabs (.nav-tabs),
@@ -906,6 +964,7 @@
           cmds.push({ group: 'Do', icon: 'ti ti-folder-plus', label: 'New project', run: function () { clickId('btn-new-project'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-brand-github', label: 'Connect GitHub repo', run: function () { clickId('btn-project-github'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-bell', label: 'Open ack inbox', run: function () { clickId('btn-ack-inbox'); } });
+          cmds.push({ group: 'Do', icon: 'ti ti-users', label: 'Members & access', run: function () { clickId('btn-project-members'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-file-spreadsheet', label: 'Export to Excel', run: function () { go('dl-xlsx'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-brand-windows', label: 'Export to MS Project', run: function () { go('dl-xml'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-sparkles', label: 'Ask Taikun', run: function () { jump('#tab-ask'); setTimeout(function () { var i = document.getElementById('ask-input'); if (i) i.focus(); }, 60); } });
