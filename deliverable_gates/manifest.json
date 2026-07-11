@@ -72,12 +72,10 @@
       "id": "harness:test_deliverable_closure_gate",
       "kind": "script",
       "title": "Deliverable closure gate test",
-      "description": "End-to-end closure-gate test: fixture deliverable, scope pass/fail, grade persistence. Target file is created by DELIVERABLES-21.",
-      "command": ["python3", "test_deliverable_closure_gate.py"],
+      "description": "End-to-end closure-gate acceptance test: fixture deliverable with a fake harness, scope pass/fail, functional pass/fail, grade persistence (DELIVERABLES-21).",
+      "command": ["python3", "deliverable_closure/test_deliverable_closure_gate.py"],
       "timeout_s": 900,
-      "required": true,
-      "pending": true,
-      "pending_task": "DELIVERABLES-21"
+      "required": true
     }
   ]
 }
