@@ -102,10 +102,16 @@ def build_deliverable_source_projection(row: Mapping[str, Any],
     row = dict(row)
     links = []
     for link in linked or []:
+        # Only the narrative-material fields of each linked task: a change to any of these is
+        # exactly what should re-narrate the deliverable header (status, terminal provenance,
+        # whether it blocks the deliverable, which milestone it sits under). Task title/body
+        # churn is deliberately excluded so cosmetic task edits don't fan out.
         links.append({
             "task_id": str(link.get("task_id") or ""),
             "status": link.get("status") or "",
+            "provenance_type": link.get("provenance_type") or None,
             "blocks": bool(link.get("blocks_deliverable") or link.get("blocks")),
+            "milestone_id": link.get("milestone_id") or "",
         })
     return {
         "v": DELIVERABLE_PROJECTION_VERSION,
@@ -115,6 +121,7 @@ def build_deliverable_source_projection(row: Mapping[str, Any],
         "end_state": row.get("end_state") or "",
         "why_it_matters": row.get("why_it_matters") or "",
         "acceptance_criteria": row.get("acceptance_criteria_json") or "[]",
+        "milestones": row.get("_milestones") or [],
         "linked_tasks": sorted(links, key=lambda x: x["task_id"]),
     }
 
@@ -212,6 +219,106 @@ def emit_task_narration_request(c, task_id: str, *, project: str,
     return _emit(c, project=project, entity_type="task", entity_id=task_id, table="tasks",
                  projection=projection, cause_kind=cause_kind, actor=actor,
                  priority=priority, now=now)
+
+
+def _deliverable_projection(project: str, deliverable_id: str) -> Optional[Dict[str, Any]]:
+    """Build a deliverable's narration projection from the board — bounded to its OWN row,
+    milestones, and linked tasks. Never scans the whole project. Linked-task status + terminal
+    provenance are resolved per the task's home project so cross-project links stay correct."""
+    import store
+    with _conn(project) as c:
+        d = c.execute("SELECT * FROM deliverables WHERE id=?", (deliverable_id,)).fetchone()
+        if d is None:
+            return None
+        d = dict(d)
+        ms = c.execute("SELECT id, status FROM deliverable_milestones WHERE deliverable_id=? "
+                       "ORDER BY id", (deliverable_id,)).fetchall()
+        d["_milestones"] = [{"id": m["id"], "status": m["status"]} for m in ms]
+        linkrows = c.execute(
+            "SELECT task_id, project_id, blocks_deliverable, milestone_id "
+            "FROM deliverable_task_links WHERE deliverable_id=?", (deliverable_id,)).fetchall()
+    by_proj: Dict[str, List[Any]] = {}
+    for r in linkrows:
+        by_proj.setdefault(r["project_id"] or project, []).append(r)
+    linked: List[Dict[str, Any]] = []
+    for tp, rs in by_proj.items():
+        statuses: Dict[str, str] = {}
+        prov: Dict[str, Any] = {}
+        if store.has_project(tp):
+            tids = [r["task_id"] for r in rs]
+            with _conn(tp) as tc:
+                ph = ",".join("?" * len(tids))
+                statuses = {row["task_id"]: row["status"] for row in tc.execute(
+                    f"SELECT task_id, status FROM tasks WHERE task_id IN ({ph})", tids).fetchall()}
+                prov = store._provenance_by_task(tc, tids)
+        for r in rs:
+            tid = r["task_id"]
+            linked.append({
+                "task_id": tid,
+                "status": statuses.get(tid, ""),
+                "provenance_type": (prov.get(tid) or {}).get("type"),
+                "blocks_deliverable": r["blocks_deliverable"],
+                "milestone_id": r["milestone_id"],
+            })
+    return build_deliverable_source_projection(d, linked)
+
+
+def emit_deliverable_narration_request(project: str, deliverable_id: str, *,
+                                       cause_kind: str = "deliverable.updated",
+                                       actor: str = "system",
+                                       now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """Emit a narration request for one deliverable in its own atomic transaction. No-op when the
+    projection is unchanged (idempotent) or the deliverable is gone. Runs through _write_through
+    so the revision bump + outbox insert are one committed transaction under the single-writer
+    model (PERF-2)."""
+    if not emit_enabled():
+        return None
+    now = _now(now)
+    projection = _deliverable_projection(project, deliverable_id)
+    if projection is None:
+        return None
+    from db.connection import _write_through
+
+    def _thunk():
+        with _conn(project) as c:
+            return _emit(c, project=project, entity_type="deliverable", entity_id=deliverable_id,
+                         table="deliverables", projection=projection, cause_kind=cause_kind,
+                         actor=actor, priority="normal", now=now)
+
+    return _write_through(project, _thunk)
+
+
+def invalidate_linked_deliverables(task_id: str, task_project: str, *, actor: str = "system",
+                                   now: Optional[float] = None) -> Dict[str, Any]:
+    """Dependency-aware, BOUNDED task->deliverable narration fan-out (NARRATE-11).
+
+    After a task's narration source changed, invalidate ONLY the deliverables directly linked to
+    it, and only those whose projection actually moved. The link lookup is scoped to this one
+    task, so a single-task edit never triggers a full-project deliverable scan. Returns an
+    observable summary (examined vs invalidated, and ``scanned_full_project=False``) so traces
+    and tests can prove the fan-out stayed bounded."""
+    summary = {"task_id": task_id, "examined": 0, "invalidated": [], "scanned_full_project": False}
+    if not emit_enabled():
+        return summary
+    import store
+    now = _now(now)
+    links = store.list_task_deliverable_links(task_id, project=task_project)  # bounded to this task
+    seen = set()
+    for link in links:
+        did = (link.get("deliverable_id") or "").strip()
+        dproj = link.get("deliverable_home_project") or task_project
+        key = (dproj, did)
+        if not did or key in seen:
+            continue
+        seen.add(key)
+        summary["examined"] += 1
+        event = emit_deliverable_narration_request(
+            dproj, did, cause_kind="deliverable.linked_task_changed", actor=actor, now=now)
+        if event is not None:
+            summary["invalidated"].append(
+                {"deliverable_id": did, "project": dproj,
+                 "source_revision": event["source_revision"]})
+    return summary
 
 
 def _insert_outbox_row(c, event: Mapping[str, Any], now: float) -> None:

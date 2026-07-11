@@ -987,6 +987,9 @@ def create_deliverable(data: Dict[str, Any], actor: str = "user",
         lambda: _create_deliverable_impl(data, actor=actor, project=project))
     if isinstance(result, dict):
         return result
+    # NARRATE-11: a new deliverable is revision 1 — enqueue only it (post-commit, idempotent).
+    narration_outbox.emit_deliverable_narration_request(
+        project, result, cause_kind="deliverable.created", actor=actor)
     return get_deliverable(result, project=project) or {"error": "deliverable not found"}
 
 
@@ -1047,6 +1050,9 @@ def add_deliverable_milestone(deliverable_id: str, data: Dict[str, Any],
                    json.dumps({"deliverable_id": deliverable_id, "milestone_id": mid,
                                "title": title}, sort_keys=True), now))
         _touch_deliverable(c, deliverable_id, now)
+    # NARRATE-11: a milestone upsert changes the deliverable's projection — enqueue only it.
+    narration_outbox.emit_deliverable_narration_request(
+        project, deliverable_id, cause_kind="deliverable.milestone_upsert", actor=actor)
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 
@@ -1166,6 +1172,10 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     # response afterwards so it already reflects any auto-linked work.
     closure = (_ensure_deliverable_dependency_closure(deliverable_id, project, actor=actor)
                if run_closure else None)
+    # NARRATE-11: a new link changes the deliverable's linked-task projection — enqueue ONLY
+    # this deliverable (idempotent; no-op if the projection is unchanged). Post-commit.
+    narration_outbox.emit_deliverable_narration_request(
+        project, deliverable_id, cause_kind="deliverable.link_added", actor=actor)
     if not include_task_snapshots:
         normalized_task_project = (task_project or "").strip()
         normalized_task_id = (task_id or "").strip().upper()
@@ -1351,8 +1361,13 @@ def link_tasks_to_deliverable(deliverable_id: str, links: List[Dict[str, Any]],
                               actor: str = "user",
                               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Link N explicitly routed tasks with one retryable home-database transaction."""
-    return _write_through(project, lambda: _link_tasks_to_deliverable_impl(
+    result = _write_through(project, lambda: _link_tasks_to_deliverable_impl(
         deliverable_id, links, actor=actor, project=project))
+    # NARRATE-11: batch relink changes the deliverable's linked-task projection — enqueue only it.
+    if not (isinstance(result, dict) and result.get("error")):
+        narration_outbox.emit_deliverable_narration_request(
+            project, deliverable_id, cause_kind="deliverable.links_updated", actor=actor)
+    return result
 
 
 def _rows_for_task_ids(c: sqlite3.Connection, table: str, task_ids: List[str],
@@ -1849,6 +1864,9 @@ def unlink_task_from_deliverable(deliverable_id: str, task_project: str, task_id
                    json.dumps({"deliverable_id": deliverable_id, "project_id": task_project,
                                "task_id": task_id}, sort_keys=True), now))
         _touch_deliverable(c, deliverable_id, now)
+    # NARRATE-11: unlinking changes the deliverable's linked-task projection — enqueue only it.
+    narration_outbox.emit_deliverable_narration_request(
+        project, deliverable_id, cause_kind="deliverable.link_removed", actor=actor)
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 
@@ -4149,7 +4167,7 @@ def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
     # NARRATE-2: enqueue CEO-narration only on a real status transition, never on cosmetic
     # edits — this is the cost guarantee. The drain job applies the trigger-status filter.
     # Kept as a post-commit shadow marker alongside the outbox until NARRATE-14 cuts over.
-    return {"task_id": task_id, "changed": changed}
+    return {"task_id": task_id, "changed": changed, "emitted": bool(emitted)}
 
 
 def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
@@ -4162,6 +4180,11 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
     if "status" in changed:
         enqueue_narration(task_id, status=str(changed.get("status") or ""),
                           reason="status_change", project=project)
+    # NARRATE-11: when the task's narration source actually moved, invalidate ONLY the
+    # deliverables directly linked to it whose narrative inputs changed (bounded, no full scan).
+    # Runs fully post-commit on the caller thread so it never nests inside the task writer.
+    if isinstance(result, dict) and result.get("emitted"):
+        narration_outbox.invalidate_linked_deliverables(task_id, project, actor=actor)
     return get_task(task_id, project)
 
 
@@ -4264,6 +4287,9 @@ def create_task(data: Dict[str, Any], actor: str = "user",
     # NARRATE-2: a newly created task is a meaningful transition — enqueue its first narration.
     enqueue_narration(tid, status=(data.get("status") or "Not Started"),
                       reason="create", project=project)
+    # NARRATE-11: bounded fan-out to any deliverables this new task is already linked to
+    # (usually none at creation) — post-commit, idempotent, no full-project scan.
+    narration_outbox.invalidate_linked_deliverables(tid, project, actor=actor)
     return get_task(tid, project)
 
 
