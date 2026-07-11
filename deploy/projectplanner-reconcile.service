@@ -6,15 +6,19 @@ Description=ProjectPlanner Switchboard reconcile alerts
 After=network.target
 
 [Service]
+Slice=projectplanner-batch.slice
 Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=512M
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
-# Reconcile scans the large activity database under a 180M MemoryHigh cgroup.
+# Reconcile scans the large activity database under a batch cgroup cap.
 # Keep the web app's 256 MiB mmap default, but disable mmap for this sequential
 # background scan. It opens several project/registry connections per cycle, so
-# even small per-connection maps accumulate under the one 180M service cgroup.
+# even small per-connection maps accumulate under the batch service cgroup.
 Environment=PM_SQLITE_MMAP_BYTES=0
 RuntimeDirectory=projectplanner
 ExecStart=/usr/bin/flock -n /run/projectplanner/reconcile-alerts.lock /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py reconcile_alerts

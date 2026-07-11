@@ -8,7 +8,11 @@ After=network-online.target projectplanner.service projectplanner-gateway.servic
 Wants=network-online.target
 
 [Service]
+Slice=projectplanner-batch.slice
 Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
 User=ubuntu
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
