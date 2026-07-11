@@ -222,6 +222,56 @@ try:
     )
     ok(bad_repo.status_code == 400,
        "github_repo write rejects a malformed owner/name")
+
+    # UI-7 — operator directed messaging + ack inbox (browser-gated /api twins of /ixp).
+    no_tok = client.post(
+        f"/api/agent_messages/send?project={P}",
+        json={"project": P, "to_agent": "codex/mini", "message": "rebase", "requires_ack": True})
+    ok(no_tok.status_code == 401, "agent message send rejects missing bearer token")
+
+    sent = client.post(
+        f"/api/agent_messages/send?project={P}",
+        json={"project": P, "to_agent": "codex/mini", "message": "rebase onto master",
+              "requires_ack": True, "ack_deadline_minutes": 15},
+        headers={"Authorization": f"Bearer {TOKEN}"})
+    ok(sent.status_code == 200 and sent.json().get("id"),
+       "operator can send a directed message to a live agent")
+    smsg = sent.json()
+    mid = smsg["id"]
+    ok(smsg["from_agent"] == "codex/web-auth" and smsg["requires_ack"] is True and
+       "delivery_status" in smsg,
+       "sent message is authored as the operator, flagged requires_ack, with a delivery state")
+
+    empty = client.post(
+        f"/api/agent_messages/send?project={P}",
+        json={"project": P, "to_agent": "codex/mini", "message": "  "},
+        headers={"Authorization": f"Bearer {TOKEN}"})
+    ok(empty.status_code == 400, "send rejects an empty message")
+
+    pend = client.get(f"/api/agent_messages/pending?project={P}",
+                      headers={"Authorization": f"Bearer {TOKEN}"})
+    ok(pend.status_code == 200 and any(m["id"] == mid for m in pend.json()["pending_acks"]),
+       "the operator's ack inbox lists the unacked message they sent")
+
+    status = client.get(f"/api/agent_messages/{mid}/status?project={P}",
+                        headers={"Authorization": f"Bearer {TOKEN}"})
+    ok(status.status_code == 200 and status.json().get("acked_at") is None and
+       "delivery_status" in status.json(),
+       "message status shows unacked with a delivery state before ack")
+
+    acked = client.post(
+        f"/api/agent_messages/ack?project={P}",
+        json={"project": P, "message_id": mid, "response": "done"},
+        headers={"Authorization": f"Bearer {TOKEN}"})
+    ok(acked.status_code == 200, "operator can ack a message on the recipient's behalf")
+    pend2 = client.get(f"/api/agent_messages/pending?project={P}",
+                       headers={"Authorization": f"Bearer {TOKEN}"}).json()
+    ok(not any(m["id"] == mid for m in pend2["pending_acks"]),
+       "acked message drops out of the ack inbox")
+    status2 = client.get(f"/api/agent_messages/{mid}/status?project={P}",
+                         headers={"Authorization": f"Bearer {TOKEN}"}).json()
+    ok(status2.get("acked_at") is not None and status2.get("ack_response") == "done",
+       "message status reflects the ack and its response")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
