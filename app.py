@@ -61,6 +61,8 @@ _req_obs = request_observability.RequestObservability()
 # taikun_session JWT; agents/API callers keep bearer-token principals.
 import scripts.switchboard_path  # noqa: E402,F401
 from switchboard.application.commands import create_task as create_task_command  # noqa: E402
+from switchboard.application.commands import update_task as update_task_command  # noqa: E402
+from switchboard.application.queries import get_task as get_task_query  # noqa: E402
 from switchboard.api.routers.auth import service as _auth_service, session as _auth_session, store as _auth_store  # noqa: E402
 from switchboard.api.routers.auth.routes import router as _global_auth_router  # noqa: E402
 
@@ -1344,7 +1346,7 @@ async def list_tasks(workstream: str = None, status: str = None, assignee: str =
 
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    t = store.get_task(task_id, project=_proj(project))
+    t = get_task_query.execute_for(task_id, project=_proj(project))
     if not t:
         raise HTTPException(404, "task not found")
     return t
@@ -1367,12 +1369,14 @@ async def patch_task(request: Request, task_id: str, body: dict = Body(...), pro
     body = dict(body or {})
     binding = _resolve_public_write_actor(request, project, body, task_id=task_id)
     actor = binding["actor"]
-    t = store.update_task(task_id, _without_write_binding_fields(body),
-                          actor=actor, project=project)
+    t = update_task_command.execute_mapping_result(
+        task_id, _without_write_binding_fields(body), actor=actor, project=project)
     if not t:
         raise HTTPException(404, "task not found")
     if t.get("error") == "done_requires_merge_provenance":
         raise HTTPException(409, t.get("message") or "Done requires merge provenance")
+    if t.get("error"):
+        raise HTTPException(400, t)
     _record_public_write_binding(task_id, binding, project)
     return t
 
