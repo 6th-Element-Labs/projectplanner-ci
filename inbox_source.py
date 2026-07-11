@@ -1,4 +1,4 @@
-"""Gmail-poll source for the Live Inbox (Phase 5.5 — see docs/AGENT_ROADMAP.md).
+"""IMAP source adapter for the Live Inbox (Phase 5.5 — see docs/AGENT_ROADMAP.md).
 
 Reads plan@taikunai.com via IMAP (app password — the same simple model as the Phase-4
 SMTP sender, no OAuth), routes each message to a PROJECT, and feeds it to inbox.process.
@@ -22,7 +22,6 @@ Config (.env, all optional):
                        whose domain matches (or is a subdomain of) an entry routes to that project.
 """
 import email
-import email.utils
 import html
 import imaplib
 import logging
@@ -32,93 +31,10 @@ from email.header import decode_header
 
 import attachments
 import inbox
-import store
+import scripts.switchboard_path  # noqa: F401
+from switchboard.integrations import inbox_routing
 
-log = logging.getLogger("gmail_source")
-
-
-def _allow(sender):
-    al = (os.environ.get("PM_INBOX_ALLOWLIST") or "").strip()
-    if not al:
-        return True
-    s = (sender or "").lower()
-    return any(a.strip().lower() in s for a in al.split(",") if a.strip())
-
-
-def _routes_map():
-    """Domain→project routing map, merged from two sources:
-      1. PM_INBOX_ROUTES='domain=project, ...' — deploy-level bootstrap (domains lowercased,
-         leading @ stripped; malformed entries skipped);
-      2. the web-managed per-project associations (UI-14, comms.persisted_routes()).
-    The web map is authoritative on conflict — it's the surface an operator edits live, so an
-    association made from Settings → Communications takes effect with no .env edit."""
-    out = {}
-    for part in (os.environ.get("PM_INBOX_ROUTES") or "").split(","):
-        part = part.strip()
-        if not part or "=" not in part:
-            continue
-        dom, proj = part.split("=", 1)
-        dom, proj = dom.strip().lstrip("@").lower(), proj.strip()
-        if dom and proj:
-            out[dom] = proj
-    try:
-        import comms
-        for dom, proj in comms.persisted_routes().items():
-            if out.get(dom) not in (None, proj):
-                log.info("inbox routing: web association %s -> %s overrides PM_INBOX_ROUTES -> %s",
-                         dom, proj, out[dom])
-            out[dom] = proj
-    except Exception as e:  # never let a config read stop the poller from routing on the env map
-        log.warning("inbox routing: could not load web-managed routes (%s); using env map only", e)
-    return out
-
-
-def _plus_project(recipients, valid):
-    """A recipient of the form plan+<project>@taikunai.com routes to <project> (if it's a real
-    project). recipients is a raw header string of To/Cc/Delivered-To addresses."""
-    for _n, addr in email.utils.getaddresses([recipients or ""]):
-        local = (addr or "").split("@", 1)[0]
-        if "+" in local:
-            tag = local.split("+", 1)[1].strip().lower()
-            if tag in valid:
-                return tag
-    return None
-
-
-def _domain_project(sender, valid):
-    """Map the sender's From-domain to a project via PM_INBOX_ROUTES. Matches an exact domain
-    or any subdomain of a listed domain. Returns None (no route) if unmapped or the mapped
-    project doesn't exist — a bad map entry is a loud warning, never a silent misroute."""
-    addr = email.utils.parseaddr(sender or "")[1].lower()
-    dom = addr.split("@", 1)[1] if "@" in addr else ""
-    if not dom:
-        return None
-    routes = _routes_map()
-    proj = routes.get(dom)
-    if not proj:
-        for rdom, rproj in routes.items():
-            if dom == rdom or dom.endswith("." + rdom):
-                proj = rproj
-                break
-    if not proj:
-        return None
-    if proj not in valid:
-        log.warning("inbox routing: PM_INBOX_ROUTES maps %s -> unknown project %r; ignoring", dom, proj)
-        return None
-    return proj
-
-
-def _route(sender, recipients):
-    """Resolve (accept, project) for one inbound message. A plus-address or sender-domain route
-    wins and accepts the message; otherwise fall back to the global allowlist -> default project."""
-    valid = set(store.project_ids())
-    proj = _plus_project(recipients, valid)
-    if proj:
-        return True, proj
-    proj = _domain_project(sender, valid)
-    if proj:
-        return True, proj
-    return _allow(sender), store.DEFAULT_PROJECT
+log = logging.getLogger("inbox_source")
 
 
 def _decode(s):
@@ -204,7 +120,7 @@ def poll(max_msgs=20):
                 ", ".join(msg.get_all("Delivered-To") or []),
                 ", ".join(msg.get_all("X-Original-To") or []),
             ] if p)
-            accept, project = _route(sender, recipients)
+            accept, project = inbox_routing.route(sender, recipients)
             if not accept:
                 continue
             subject = _decode(msg.get("Subject"))

@@ -39,7 +39,7 @@ to a loop, and beyond code.
 | Feature | What it does | Builds on | Effort |
 |---|---|---|---|
 | **Autonomous delivery loop** *(flagship)* | Agent picks the next *ready, unblocked, Taikun-owned* task, dispatches it, watches the PR, and on merge marks it Done → unblocks dependents → dispatches the next. The plan executes itself; you watch it drain. | `dispatch.py`, dep graph, GitHub status | M |
-| **Ops actions (not just code)** | Most pilot tasks aren't code — "email Sahir the Entra app-reg request," "file the S3 bucket ask," "draft the data-sharing memo." Agent drafts + sends via the gmail/notify stack and logs it. | `gmail_source.py`, `notify.py` | M |
+| **Ops actions (not just code)** | Most pilot tasks aren't code — "email Sahir the Entra app-reg request," "file the S3 bucket ask," "draft the data-sharing memo." Agent drafts + sends via the inbox/notify stack and logs it. | `inbox_source.py`, `notify.py` | M |
 | **Chase agent** | Overdue human/Total-owned task → auto-drafts a grounded nudge to the owner ("Sahir, SSO-2 is the SSO go-live gate, due 6/2 — ETA?") → propose-to-send. | signals + notify | S |
 
 ### Manages — it keeps itself honest

@@ -1736,8 +1736,8 @@ async def simulate_inbox(body: dict = Body(...), project: str = Query(store.DEFA
 
 @app.post("/api/inbox/poll")
 async def poll_inbox_now():
-    import gmail_source
-    return await asyncio.to_thread(gmail_source.poll)
+    import inbox_source
+    return await asyncio.to_thread(inbox_source.poll)
 
 
 @app.get("/api/signals")
