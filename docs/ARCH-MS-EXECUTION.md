@@ -51,7 +51,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-10** | `PM_*` env flag census + delete unread flags | 0.1 | 2 | In Review | ✅ | PR #329 — `scripts/pm_env_flag_census.py`; `tests/test_pm_env_flag_census.py`; tracked declarations fail closed when unread; CONSOL-9 deletion tombstones retained |
 | **ARCH-MS-11** | Extract inbox routing; retire `gmail_source.py` | 0.1 | 10 | In Review | ✅ | `src/switchboard/integrations/inbox_routing.py`; `inbox_source.py`; `tests/test_arch_ms11_inbox_routing.py` |
 | **ARCH-MS-12** | Numbered transactional DB migrations | 0.1 | 2 | Not Started | 🔗 | **BUG-47** / PR #301 — ledgered migrations; `test_schema_migrations.py` |
-| **ARCH-MS-13** | Lockfile + Python 3.12 pin (reproducible builds) | 0.1 | 6 | Not Started | 🔗 | **HARDEN-54** / PR #303 — `uv.lock`, generated `requirements*.txt` |
+| **ARCH-MS-13** | Lockfile + Python 3.12 pin (reproducible builds) | 0.1 | 6 | In Review | ✅ | **HARDEN-54** PR #303 + `tests/test_arch_ms13_reproducible_builds.py` — lock metadata, artifact hashes, Python floor, and generated exports fail closed in CI |
 | **ARCH-MS-14** | `tests/` directory + path shim for new tests | 0.1 | 2 | In Review | ✅ | `tests/path_setup.py`; `tests/test_arch_ms14_test_layout.py`; new tests share the root + `src/` bootstrap |
 | **ARCH-MS-15** | `get_task` query + `update_task` application command | 0.2 | 8 | Not Started | ⬜ | — |
 | **ARCH-MS-16** | `api/routers/tasks.py` — extract task REST routes | 0.2 | 15 | Not Started | ⬜ | — |
