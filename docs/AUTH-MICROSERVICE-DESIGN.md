@@ -13,13 +13,14 @@ Today login is **project-scoped**: you sign in *to a project*, sessions live in 
 ## Strangler approach (how we go microservices without a big-bang)
 The monolith keeps running. We extract **one bounded context at a time** into a service with a clean seam (route → service → contracts → store), route the live app through it, delete the old path, repeat. **Auth is service #1.** Later candidates (each its own PR): Tasks CRUD, Deliverables, Access/Tokens, Ingest/Inbox, Tally/Economics.
 
-## Service #1 structure (mirrors ActionEngine)
+## Auth package structure (mirrors ActionEngine)
 ```
-services/auth/
+src/switchboard/api/routers/auth/
+  routes.py      # FastAPI routes: /api/auth/* — thin, calls service
   contracts.py   # Pydantic request/response models (RegisterBody, LoginBody, UserOut, SessionOut)
   service.py     # AuthService: business logic (hashing, user CRUD, access resolution) — no HTTP
   session.py     # SessionManager: issue/verify the session cookie
-auth_api.py      # FastAPI routes: /api/auth/* — thin, calls AuthService
+  store.py       # auth persistence over the shared project registry
 ```
 The routes are thin; all logic lives in `AuthService`; storage stays in `store.py` behind service methods (so we can later split the DB without touching callers).
 
