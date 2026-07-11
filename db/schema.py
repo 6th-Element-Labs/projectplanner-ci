@@ -520,6 +520,38 @@ def apply_schema(c):
             created_at       REAL NOT NULL,
             updated_at       REAL NOT NULL
         );
+        -- NARRATE-12: durable generation receipt for every narration attempt (ADR-0008 M3).
+        -- One row per attempt — deterministic template, LLM synthesis, or explicit fallback —
+        -- recording the exact source revision/hash, model, prompt version, latency, tokens,
+        -- cost, outcome, and fallback reason. A failed LLM receipt is NEVER overwritten by a
+        -- fallback: the fallback is a separate row that preserves the failure. Receipts are the
+        -- cost/audit ledger and the source of per-project budget accounting.
+        CREATE TABLE IF NOT EXISTS narration_receipts (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id         TEXT,
+            project          TEXT NOT NULL,
+            entity_type      TEXT NOT NULL,
+            entity_id        TEXT NOT NULL,
+            source_revision  INTEGER,
+            source_hash      TEXT,
+            content_sig      TEXT,
+            mode             TEXT NOT NULL,
+            outcome          TEXT NOT NULL,
+            model            TEXT,
+            prompt_version   TEXT,
+            latency_ms       REAL,
+            tokens_in        INTEGER NOT NULL DEFAULT 0,
+            tokens_out       INTEGER NOT NULL DEFAULT 0,
+            cost_usd         REAL NOT NULL DEFAULT 0.0,
+            fallback_reason  TEXT,
+            narration        TEXT,
+            narration_hash   TEXT,
+            created_at       REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_narration_receipts_entity
+            ON narration_receipts(project, entity_type, entity_id, id);
+        CREATE INDEX IF NOT EXISTS ix_narration_receipts_cost
+            ON narration_receipts(project, created_at);
         CREATE TABLE IF NOT EXISTS project_boards (
             id                         TEXT PRIMARY KEY,
             title                      TEXT NOT NULL,
