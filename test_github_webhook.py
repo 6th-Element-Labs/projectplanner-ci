@@ -364,8 +364,8 @@ try:
             "base": {"ref": "master"},
         },
     }
-    ok(github_sync.resolve_project(shadow_payload, "") == "",
-       "ambiguous same-repo webhook requires explicit project")
+    ok(github_sync.resolve_project(shadow_payload, "") == "switchboard",
+       "ambiguous same-repo webhook resolves to the canonical board (switchboard), not fail-closed (BUG-43)")
     ok(github_sync.resolve_project(shadow_payload, "shadow") == "shadow",
        "explicit project still routes same-repo webhook")
     shadow_opened = github_sync.handle_pr(shadow_payload, "shadow")
