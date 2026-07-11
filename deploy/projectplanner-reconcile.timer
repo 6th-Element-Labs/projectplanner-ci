@@ -9,6 +9,7 @@ Description=ProjectPlanner all-project reconcile alerts (every 15 minutes)
 
 [Timer]
 OnCalendar=*:0/15
+RandomizedDelaySec=3m
 Persistent=true
 AccuracySec=30s
 

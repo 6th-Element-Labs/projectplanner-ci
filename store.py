@@ -14671,6 +14671,119 @@ def _github_pr(repo: str, pr_number: int, token: str = "") -> Optional[Dict[str,
         return None
 
 
+def _github_prs_graphql(pr_keys: List[Tuple[str, int]], token: str = "") -> Dict[Tuple[str, int], Dict[str, Any]]:
+    """Fetch many PR records with one GitHub GraphQL request.
+
+    Returns REST-shaped PR dictionaries so reconcile's provenance logic stays shared
+    with the unauthenticated REST fallback and existing tests.
+    """
+    if not token or not pr_keys:
+        return {}
+    query_parts = []
+    alias_to_key: Dict[str, Tuple[str, int]] = {}
+    for idx, (repo, pr_number) in enumerate(pr_keys):
+        if not repo or "/" not in repo or not pr_number:
+            continue
+        owner, name = repo.split("/", 1)
+        alias = f"pr_{idx}"
+        alias_to_key[alias] = (repo, int(pr_number))
+        query_parts.append(
+            f"""{alias}: repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{
+              pullRequest(number: {int(pr_number)}) {{
+                number
+                url
+                title
+                merged
+                mergedAt
+                mergeCommit {{ oid }}
+                baseRefName
+                baseRepository {{ defaultBranchRef {{ name }} }}
+                headRefName
+                headRefOid
+              }}
+            }}"""
+        )
+    if not query_parts:
+        return {}
+    req = urllib.request.Request(
+        "https://api.github.com/graphql",
+        data=json.dumps({"query": "query ReconcilePullRequests {\n" + "\n".join(query_parts) + "\n}"}).encode(),
+        method="POST",
+    )
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=12) as r:
+            payload = json.loads(r.read().decode())
+    except Exception:
+        return {}
+    if payload.get("errors") or not isinstance(payload.get("data"), dict):
+        return {}
+    fetched: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    for alias, key in alias_to_key.items():
+        node = ((payload["data"].get(alias) or {}).get("pullRequest") or {})
+        if not node:
+            continue
+        fetched[key] = {
+            "number": node.get("number"),
+            "html_url": node.get("url") or "",
+            "title": node.get("title") or "",
+            "merged_at": node.get("mergedAt") if node.get("merged") else None,
+            "merge_commit_sha": (node.get("mergeCommit") or {}).get("oid") or "",
+            "base": {
+                "ref": node.get("baseRefName") or "",
+                "repo": {
+                    "default_branch": (
+                        (node.get("baseRepository") or {}).get("defaultBranchRef") or {}
+                    ).get("name") or ""
+                },
+            },
+            "head": {
+                "ref": node.get("headRefName") or "",
+                "sha": node.get("headRefOid") or "",
+            },
+        }
+    return fetched
+
+
+def _fetch_github_prs(pr_keys: List[Tuple[str, int]], token: str = "") -> Tuple[
+        Dict[Tuple[str, int], Optional[Dict[str, Any]]], Dict[str, Any]]:
+    ordered_keys = sorted({(repo, int(pr_number)) for repo, pr_number in pr_keys if repo and pr_number})
+    checks: Dict[str, Any] = {"github_pr_fetches": len(ordered_keys)}
+    if not ordered_keys:
+        return {}, checks
+    rest_helper_is_original = getattr(_github_pr, "__module__", __name__) == __name__
+    use_graphql = (
+        token
+        and rest_helper_is_original
+        and os.environ.get("PM_RECON_GITHUB_GRAPHQL", "1").strip().lower()
+        not in ("0", "false", "no", "off")
+    )
+    fetched = _github_prs_graphql(ordered_keys, token=token) if use_graphql else {}
+    missing = [key for key in ordered_keys if key not in fetched]
+    if fetched:
+        checks["github_pr_fetch_mode"] = "graphql"
+        checks["github_pr_graphql_queries"] = 1
+        checks["github_pr_graphql_fetches"] = len(fetched)
+    if missing:
+        checks["github_pr_rest_fallback_fetches"] = len(missing)
+        concurrency = min(16, max(1, int(os.environ.get(
+            "PM_RECON_GITHUB_CONCURRENCY", "8"))))
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(missing))) as pool:
+            fallback = dict(zip(
+                missing,
+                pool.map(lambda key: _github_pr(key[0], key[1], token=token), missing),
+            ))
+        fetched.update(fallback)
+        checks["github_pr_concurrency"] = min(concurrency, len(missing))
+        if "github_pr_fetch_mode" not in checks:
+            checks["github_pr_fetch_mode"] = "rest"
+        else:
+            checks["github_pr_fetch_mode"] = "graphql_with_rest_fallback"
+    return fetched, checks
+
+
 def _github_token() -> str:
     return (
         os.environ.get("PM_GITHUB_TOKEN")
@@ -14953,11 +15066,9 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
         })
     if pr_repos:
         checks["github_pr_repos"] = pr_repos
-        # GitHub reads are independent network operations.  Fetch them in a bounded
-        # pool, then keep every provenance decision and SQLite write in the serial
-        # loop below.  A slow/unreachable PR must not multiply its timeout by every
-        # other unresolved task on the board.
-        pr_keys = {
+        # Prefer one GraphQL round-trip for all mutable PRs; fall back to bounded
+        # REST reads for unauthenticated runs, partial GraphQL results, or tests.
+        pr_keys = [
             (
                 _github_repo_from_pr_url(
                     git_states.get(t["task_id"], {}).get("pr_url") or ""
@@ -14965,16 +15076,9 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                 int(git_states.get(t["task_id"], {}).get("pr_number") or 0),
             )
             for t in pr_tasks
-        }
-        concurrency = min(16, max(1, int(os.environ.get(
-            "PM_RECON_GITHUB_CONCURRENCY", "8"))))
-        with ThreadPoolExecutor(max_workers=min(concurrency, len(pr_keys))) as pool:
-            fetched_prs = dict(zip(
-                pr_keys,
-                pool.map(lambda key: _github_pr(key[0], key[1], token=token), pr_keys),
-            ))
-        checks["github_pr_fetches"] = len(pr_keys)
-        checks["github_pr_concurrency"] = min(concurrency, len(pr_keys))
+        ]
+        fetched_prs, fetch_checks = _fetch_github_prs(pr_keys, token=token)
+        checks.update(fetch_checks)
         for task in pr_tasks:
             state = git_states.get(task["task_id"], {})
             pr_repo = _github_repo_from_pr_url(state.get("pr_url") or "") or repo
@@ -15242,12 +15346,28 @@ def _format_reconcile_alert(project: str, findings: List[Dict[str, Any]],
     return "\n".join(lines)
 
 
-def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+def _reconcile_cursor_key() -> str:
+    return "reconcile.activity_cursor"
+
+
+def _reconcile_changed_task_ids(c: sqlite3.Connection, since_cursor: int) -> set:
+    if since_cursor <= 0:
+        return set()
+    rows = c.execute(
+        "SELECT DISTINCT task_id FROM activity WHERE id>? AND task_id IS NOT NULL",
+        (int(since_cursor),),
+    ).fetchall()
+    return {str(row["task_id"]) for row in rows if row["task_id"]}
+
+
+def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict[str, Any]:
     """Local drift report for board provenance.
 
     Board-internal checks always run. When a canonical main SHA and local git checkout are
     available, reconcile also verifies recorded SHAs against git reachability. If GitHub repo
-    config is present, PR records are checked through the GitHub API.
+    config is present, PR records are checked through the GitHub API. Scheduled callers can
+    set incremental=True to restrict board-internal task checks to activity changed since the
+    last successful incremental run while still running external/time-based backstops.
     """
     now = time.time()
     agreement = get_working_agreement(project)
@@ -15255,18 +15375,29 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     tasks: List[Dict[str, Any]] = []
     git_states: Dict[str, Dict[str, Any]] = {}
     repo = get_project_github_repo(project)
+    previous_cursor = int(get_meta(_reconcile_cursor_key(), 0, project=project) or 0) if incremental else 0
+    changed_task_ids: set = set()
+    checked_task_ids: set = set()
+    full_task_scan = not incremental or previous_cursor <= 0
     with _conn(project) as c:
+        changed_task_ids = _reconcile_changed_task_ids(c, previous_cursor)
         rows = c.execute("SELECT * FROM tasks ORDER BY sort_order, task_id").fetchall()
         for row in rows:
             task = _task_row(row)
             git_state = _load_git_state(c, task["task_id"])
             tasks.append(task)
             status = task.get("status")
+            task_changed = task["task_id"] in changed_task_ids
+            task_mutable = _needs_live_pr_recheck(task, git_state)
+            should_check_task = full_task_scan or task_changed or task_mutable
             # PR-evidence hydration retired (ADR-0006): pr_number is now derived from a
             # recorded pr_url at write time (_upsert_git_state), and the sweep/open-PR
             # backstop recover dropped-webhook tasks by matching the PR's task-id — so
             # there is nothing to scrape from activity here.
             git_states[task["task_id"]] = git_state
+            if not should_check_task:
+                continue
+            checked_task_ids.add(task["task_id"])
             if (status == "Done" and not _has_done_provenance(git_state)
                     and not (repo and git_state.get("pr_number"))):
                 findings.append({"severity": "high", "task_id": task["task_id"],
@@ -15357,6 +15488,13 @@ def reconcile(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     append_activity("reconcile.completed", "reconcile",
                     {"findings": len(findings), "backfilled": backfilled},
                     task_id=None, project=project)
+    if incremental:
+        cursor = _activity_cursor(project)
+        set_meta(_reconcile_cursor_key(), cursor, project=project)
+        external_checks["incremental"] = True
+        external_checks["since_activity_cursor"] = previous_cursor
+        external_checks["changed_task_count"] = len(changed_task_ids)
+        external_checks["board_task_checks"] = len(checked_task_ids)
     return {"project": project, "ok": not findings, "findings": findings,
             "activity_cursor": cursor, "checked_at": now,
             "external_checks": external_checks, "backfilled": backfilled}
@@ -15367,7 +15505,8 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
                          actor: str = "switchboard/reconcile",
                          min_severity: str = "medium",
                          dedupe_window_s: int = 3600,
-                         now: Optional[float] = None) -> Dict[str, Any]:
+                         now: Optional[float] = None,
+                         incremental: bool = False) -> Dict[str, Any]:
     """Run reconcile and send a deduped directed alert for actionable findings.
 
     The dedupe key is project + severity floor + finding signature + time bucket, so a
@@ -15382,7 +15521,7 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
         min_severity = "medium"
         floor = _severity_value(min_severity)
     dedupe_window_s = max(60, int(dedupe_window_s or 3600))
-    report = reconcile(project=project)
+    report = reconcile(project=project, incremental=incremental)
     findings = [f for f in report["findings"]
                 if _severity_value(str(f.get("severity") or "")) >= floor]
     if not findings:
