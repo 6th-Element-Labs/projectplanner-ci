@@ -99,6 +99,7 @@ run_test test_mcp_read_auth.py
 run_test test_mission_narrative.py
 run_test test_narrate.py
 run_test test_narration_event_contract.py
+run_test test_narration_outbox.py
 run_test test_narrate_scheduler.py
 run_test test_mission_coordinator.py
 run_test test_mission_page.py
