@@ -17,6 +17,10 @@ DELETED_RUNNER = (
     "runner/README.md",
 )
 
+DELETED_AUTH = (
+    "static/login.html",
+)
+
 SUPERSEDED_MARKERS = (
     "docs/SWITCHBOARD-STORE-DECOMPOSITION.md",
     "docs/SWITCHBOARD-STORE-ENDSTATE.md",
@@ -33,6 +37,29 @@ for rel in DELETED_STATIC:
 
 for rel in DELETED_RUNNER:
     ok(not (ROOT / rel).exists(), f"{rel} removed (wake substrate retired runner push-bridge)")
+
+for rel in DELETED_AUTH:
+    ok(not (ROOT / rel).exists(), f"{rel} removed (global auth is the only browser login)")
+
+auth_runtime_paths = [
+    ROOT / "app.py",
+    ROOT / "auth.py",
+    *(ROOT / "src/switchboard/api/routers/auth").glob("*.py"),
+    *(path for path in (ROOT / "deploy").rglob("*")
+      if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"),
+]
+for path in auth_runtime_paths:
+    text = path.read_text(encoding="utf-8")
+    ok("PM_GLOBAL_AUTH" not in text,
+       f"{path.relative_to(ROOT)} cannot restore the retired global-auth feature gate")
+
+app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+ok("app.include_router(_global_auth_router)" in app_source,
+   "global auth router remains mounted unconditionally")
+ok("/api/auth/bootstrap" not in app_source,
+   "legacy per-project auth bootstrap route remains deleted")
+ok((ROOT / "static/login-global.html").exists(),
+   "the single global browser login remains present")
 
 ok(not (ROOT / "Maxwell-Pitch-Deck.pptx").exists(),
    "pitch deck moved out of repo root")

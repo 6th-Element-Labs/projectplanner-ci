@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression: global auth middleware authenticates the caller and stashes
 the principal on request.state; handlers' _principal() must trust it instead of
-re-authenticating via the legacy bearer/per-project path (which 401s a global browser
+re-authenticating via the bearer-token path (which 401s a global browser
 login — the UI-7 agent-messaging bug: 'unauthorized: provide Authorization: Bearer …')."""
 import os
 import shutil
@@ -50,22 +50,22 @@ def _req(principal=_UNSET):
 try:
     store.init_db("switchboard")
 
-    # Count legacy re-auth attempts so we can prove the middleware principal is trusted.
+    # Count bearer-token re-auth attempts so we can prove the middleware principal is trusted.
     calls = {"n": 0}
     real_auth = app_module.auth.authenticate_request
 
     def _counting_auth(*a, **k):
         calls["n"] += 1
-        return {"id": "legacy-fallback", "kind": "system", "effective_scopes": ["admin"]}
+        return {"id": "bearer-fallback", "kind": "system", "effective_scopes": ["admin"]}
     app_module.auth.authenticate_request = _counting_auth
 
-    # 1. Browser principal (global-auth) with the required scope → trusted, no legacy re-auth.
+    # 1. Browser principal (global-auth) with the required scope → trusted, no bearer re-auth.
     br = _req({"id": "user-1", "kind": "user", "effective_scopes": ["read", "write:tasks"]})
     p = app_module._principal(br, "switchboard", ("write:tasks",))
     ok(p.get("id") == "user-1" and calls["n"] == 0,
-       "middleware-set browser principal is trusted without legacy re-authentication")
+       "middleware-set browser principal is trusted without bearer re-authentication")
 
-    # 2. Same caller, missing the required scope → 403 (still enforced), no legacy re-auth.
+    # 2. Same caller, missing the required scope → 403 (still enforced), no bearer re-auth.
     ro = _req({"id": "user-2", "kind": "user", "effective_scopes": ["read"]})
     try:
         app_module._principal(ro, "switchboard", ("write:tasks",))
@@ -78,11 +78,11 @@ try:
     p3 = app_module._principal(ad, "switchboard", ("write:system",))
     ok(p3.get("id") == "root" and calls["n"] == 0, "admin scope satisfies any requirement")
 
-    # 4. No middleware principal (non-global-auth / dev / tests) → falls back to legacy auth.
+    # 4. No middleware principal (agent bearer / dev-open / tests) → authenticate normally.
     none_req = _req()  # state has no `principal` attribute at all
     p4 = app_module._principal(none_req, "switchboard", ("read",))
-    ok(calls["n"] == 1 and p4.get("id") == "legacy-fallback",
-       "no middleware principal → falls back to legacy authenticate_request")
+    ok(calls["n"] == 1 and p4.get("id") == "bearer-fallback",
+       "no middleware principal → falls back to bearer/dev authenticate_request")
 
     app_module.auth.authenticate_request = real_auth
 except Exception:
