@@ -1084,12 +1084,43 @@ def _link_task_to_deliverable_impl(
 def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: str,
                              milestone_id: str = "", data: Optional[Dict[str, Any]] = None,
                              actor: str = "user",
-                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+                             project: str = DEFAULT_PROJECT,
+                             include_task_snapshots: bool = True) -> Dict[str, Any]:
     result = _retry_on_locked(lambda: _link_task_to_deliverable_impl(
         deliverable_id, task_project, task_id, milestone_id=milestone_id,
         data=data, actor=actor, project=project))
     if isinstance(result, dict):
         return result
+    if not include_task_snapshots:
+        normalized_task_project = (task_project or "").strip()
+        normalized_task_id = (task_id or "").strip().upper()
+        with _conn(project) as c:
+            linked_row = c.execute(
+                "SELECT * FROM deliverable_task_links "
+                "WHERE deliverable_id=? AND project_id=? AND task_id=?",
+                (deliverable_id, normalized_task_project, normalized_task_id),
+            ).fetchone()
+            linked_task_count = c.execute(
+                "SELECT COUNT(*) FROM deliverable_task_links WHERE deliverable_id=?",
+                (deliverable_id,),
+            ).fetchone()[0]
+        if not linked_row:
+            return {"error": "linked task acknowledgement unavailable",
+                    "deliverable_id": deliverable_id,
+                    "project_id": normalized_task_project,
+                    "task_id": normalized_task_id}
+        return {
+            "schema": "switchboard.deliverable_task_link_ack.v1",
+            "linked": True,
+            "project": project,
+            "deliverable_id": deliverable_id,
+            "task_project": normalized_task_project,
+            "task_id": normalized_task_id,
+            "milestone_id": linked_row["milestone_id"],
+            "task_link": _deliverable_link_row(linked_row),
+            "progress": {"linked_task_count": int(linked_task_count)},
+            "full_deliverable_tool": "get_deliverable",
+        }
     return get_deliverable(result, project=project) or {"error": "deliverable not found"}
 
 
