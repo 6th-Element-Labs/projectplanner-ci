@@ -103,6 +103,9 @@ run_discovered_tests
 section "Frontend JavaScript syntax"
 if command -v node >/dev/null 2>&1; then
   node --check static/app.js
+  for module in static/js/*.js; do
+    node --check "$module"
+  done
   node --check static/taikun-ui.js
   node --check static/taikun-theme.js
 else

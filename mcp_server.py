@@ -7,9 +7,9 @@ Code, etc. Runs as its own process (Streamable HTTP on 127.0.0.1:8111); Caddy ro
 https://plan.taikunai.com/mcp here. Reuses store/rag/agent in-process and shares the
 SQLite file (WAL) with the web app.
 
-Auth: reads are open. Writes use the shared Switchboard bearer-principal path when
-PM_AUTH_MODE=required. Existing PM_MCP_TOKEN deployments keep working as an env-token
-principal; explicit principals can be created in the SQLite store.
+Auth: reads and writes require bearer when PM_AUTH_MODE=required (MCPAuthMiddleware).
+`dev-open` passes through for local/hermetic runs. PM_MCP_TOKEN and explicit store
+principals remain supported.
 """
 import json
 import os

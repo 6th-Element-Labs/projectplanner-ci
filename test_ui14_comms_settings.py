@@ -5,7 +5,7 @@ Proves the acceptance criteria offline (no live mailbox / SMTP / LLM):
   1. inbound routing  — a domain associated with project X (from the web, no .env edit) routes a
                         matching sender to X's inbox; plus-addressing still routes zero-config;
   2. one-owner rule   — a domain already owned by another project is rejected (no silent misroute);
-  3. env + web merge  — gmail_source merges PM_INBOX_ROUTES with the web-managed map, web wins;
+  3. env + web merge  — inbox_routing merges PM_INBOX_ROUTES with the web-managed map, web wins;
   4. per-project out  — notify resolves a project's recipients, falling back to the global list;
   5. REST contract    — GET/POST /api/projects/{p}/comms + /comms/test back the operator screen;
   6. UI wiring        — index.html + app.js carry the Communications modal + handlers.
@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+from scripts.frontend_test_source import read_frontend_source
 
 _TMP = tempfile.mkdtemp(prefix="ui14-comms-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -31,12 +32,13 @@ os.environ.pop("PM_SMTP_HOST", None)
 os.environ.pop("PM_INBOX_ROUTES", None)
 os.environ.pop("PM_NOTIFY_EMAIL_TO", None)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
 try:
     import store          # noqa: E402
     import comms          # noqa: E402
     import notify         # noqa: E402
-    import gmail_source   # noqa: E402
+    from switchboard.integrations import inbox_routing  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  UI-14 comms smoke requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
@@ -83,22 +85,22 @@ def test_one_owner_rule():
 
 def test_routing_acceptance():
     print("\n[4] mapped sender routes to that board; plus-address routes zero-config")
-    accept, project = gmail_source._route("Ops <ops@acme.com>", "plan@taikunai.com")
+    accept, project = inbox_routing.route("Ops <ops@acme.com>", "plan@taikunai.com")
     check(accept and project == "helm",
           "sender @acme.com routes to helm (web association, no .env edit)")
-    accept, project = gmail_source._route("someone@random.example",
+    accept, project = inbox_routing.route("someone@random.example",
                                           "plan+switchboard@taikunai.com")
     check(accept and project == "switchboard",
           "plan+switchboard@ plus-address routes to switchboard regardless of sender")
-    accept, project = gmail_source._route("sub.acme.com person <p@east.acme.com>", "plan@taikunai.com")
+    accept, project = inbox_routing.route("sub.acme.com person <p@east.acme.com>", "plan@taikunai.com")
     check(accept and project == "helm", "subdomain of an associated domain routes too")
 
 
 def test_env_web_merge():
-    print("\n[5] gmail_source merges PM_INBOX_ROUTES with the web map (web wins)")
+    print("\n[5] inbox_routing merges PM_INBOX_ROUTES with the web map (web wins)")
     os.environ["PM_INBOX_ROUTES"] = "envonly.com=maxwell, acme.com=maxwell"
     try:
-        routes = gmail_source._routes_map()
+        routes = inbox_routing.routes_map()
         check(routes.get("envonly.com") == "maxwell", "env-only route survives the merge")
         check(routes.get("acme.com") == "helm",
               "web association wins over a conflicting PM_INBOX_ROUTES entry")
@@ -185,7 +187,7 @@ def test_ui_wiring():
     print("\n[10] UI wiring (index.html + app.js)")
     here = os.path.dirname(os.path.abspath(__file__))
     idx = open(os.path.join(here, "static", "index.html"), encoding="utf-8").read()
-    js = open(os.path.join(here, "static", "app.js"), encoding="utf-8").read()
+    js = read_frontend_source(here)
     for needle in ('id="comms-modal"', 'id="btn-project-comms"', 'id="comms-plus"'):
         check(needle in idx, f"index.html has {needle}")
     for needle in ("openComms", "saveComms", "sendCommsTest", "_commsAddDomain",

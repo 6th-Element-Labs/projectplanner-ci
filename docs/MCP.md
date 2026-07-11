@@ -38,7 +38,7 @@ Every task/board tool accepts `project`. Use `maxwell` for the TEEP Barnett plan
 the marine chartplotter board, and `switchboard` for the live dogfood board that coordinates this
 agent-collaboration product itself.
 
-Reads (open):
+Reads (bearer required when `PM_AUTH_MODE=required`; `dev-open` for local/test):
 - `list_projects()` — list routable boards.
 - `prepare_agent_session(runtime, agent_id?, project?, task_id?, lane?, deliverable_id?,
   board_id?, mission_id?, milestone_id?)` — boot-time project resolver. It validates or infers
@@ -462,7 +462,9 @@ Admin MCP credential tools:
   one call at a time without discarding the MCP session.
   The tiny `control_plane_probe` and process-local `get_mcp_observability` diagnostics remain
   inline so they can measure event-loop responsiveness while worker tools are busy.
-- Auth: reads may remain open; writes are bearer-authenticated when `PM_AUTH_MODE=required`.
+- Auth: reads and writes require a bearer principal when `PM_AUTH_MODE=required`
+  (`MCPAuthMiddleware` on `/mcp`; shipped in BUG-46 / PR #273). `dev-open` passes through
+  for local/hermetic runs. `GET /observability` remains unauthenticated (read-only metrics).
   `PM_MCP_TOKEN` and `PM_AUTH_TOKEN` map to compatibility system principals until explicit
   per-agent principals are created.
 - `PM_MCP_PUBLIC_HOST` (default `plan.taikunai.com`) is trusted by MCP's DNS-rebinding guard —

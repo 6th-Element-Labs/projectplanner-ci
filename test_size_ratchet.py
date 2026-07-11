@@ -9,12 +9,16 @@ ROOT = Path(__file__).resolve().parent
 # shrinks, lower its ceiling in the same PR; if it grows, follow ADR-0007's relief order before
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
-    "store.py": 15_470,  # ARCH-MS-20 extracted runner persistence/control into runner_store.py
+    "store.py": 15_471,  # +1: create_project busts the project-map cache (registry-churn perf fix)
     "app.py": 3_312,  # NARRATE-13 adds /api/narration health + narrate-now + reactivate endpoints
     "mcp_server.py": 3_185,  # NARRATE-13 adds get_narration_health/narrate_now/reactivate_narration tools
-    "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
+    "static/app.js": 4_888,  # ARCH-MS-21 composition root after board/mission/state extraction
+    "static/js/api.js": 25,  # project-aware fetch boundary
+    "static/js/state.js": 79,  # application state and UI vocabularies
+    "static/js/board.js": 227,  # board filters/cards/summary rendering
+    "static/js/mission.js": 1_379,  # deliverable mission cockpit and authoring
 }
-ROOT_PYTHON_FILE_CEILING = 206  # master 204 + NARRATE-13 narration_ops.py + test_narration_ops.py
+ROOT_PYTHON_FILE_CEILING = 207  # master 205 + NARRATE-13 narration_ops.py + test_narration_ops.py
 
 passed = failed = 0
 

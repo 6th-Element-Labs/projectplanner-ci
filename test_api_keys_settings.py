@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 import tempfile
+from scripts.frontend_test_source import read_frontend_source
 
 _TMP = tempfile.mkdtemp(prefix="api-keys-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -94,8 +95,7 @@ try:
            f"index.html exposes {needle}")
 
     # ---- app.js wiring -------------------------------------------------------
-    app_js = open(os.path.join(os.path.dirname(__file__), "static", "app.js"),
-                  encoding="utf-8").read()
+    app_js = read_frontend_source(os.path.dirname(__file__))
     for needle in (
         "openApiKeys",
         "_loadApiKeys",

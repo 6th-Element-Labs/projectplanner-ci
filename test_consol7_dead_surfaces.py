@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""CONSOL-7: dead surfaces stay deleted; store-decomposition docs stay bannered.
-
-gmail_source.py is intentionally live (UI-13/UI-14 inbox poll) and is retired in
-ARCH-MS-11 after ARCH-MS-10's PM_* flag census — not part of this cut.
-"""
+"""CONSOL-7/ARCH-MS-11: retired surfaces stay deleted."""
 from pathlib import Path
 
 
@@ -42,6 +38,13 @@ ok(not (ROOT / "Maxwell-Pitch-Deck.pptx").exists(),
    "pitch deck moved out of repo root")
 ok((ROOT / "assets/Maxwell-Pitch-Deck.pptx").exists(),
    "pitch deck lives under assets/")
+
+ok(not (ROOT / "gmail_source.py").exists(),
+   "ARCH-MS-11 retired the Gmail-specific source module")
+ok((ROOT / "inbox_source.py").exists(),
+   "the source-independent IMAP adapter remains live")
+ok((ROOT / "src/switchboard/integrations/inbox_routing.py").exists(),
+   "inbox routing policy lives in the integrations package")
 
 for rel in SUPERSEDED_MARKERS:
     text = (ROOT / rel).read_text(encoding="utf-8")

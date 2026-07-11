@@ -43,13 +43,13 @@ requires merge webhook or reconcile.
 | **ARCH-MS-2** | Size ratchet + CI test discovery (CONSOL-6) | 0.1 | — | Not Started | 🟡 | `test_size_ratchet.py`; `scripts/switchboard_ci.sh` pytest discovery + `TEST_DENYLIST` |
 | **ARCH-MS-3** | Delete dead MCP/REST surfaces (CONSOL-7, CONSOL-9) | 0.1 | — | In Review | ✅ | **CONSOL-7** PR #276 + `test_consol7_dead_surfaces.py`; **CONSOL-9** PR #297 + `test_consol9_h2_census.py`. `gmail_source.py` deferred → ARCH-MS-11 |
 | **ARCH-MS-4** | Caddy security headers + mission poller ETag (CONSOL-8) | 0.1 | — | In Review | ✅ | **CONSOL-8** PR #286 + `test_consol8_edge_mission_poll.py`. `deploy/Caddyfile` security headers + access log; `app.py` mission_status / dependency_graph `max_age=5` + ETag; ack poll visibility guard |
-| **ARCH-MS-5** | MCP read auth — bearer required on `/mcp` | 0.3 | — | Not Started | ⬜ | Reads still open; writes use `_require_write` only (`mcp_server.py`) |
+| **ARCH-MS-5** | MCP read auth — bearer required on `/mcp` | 0.3 | — | In Review | ✅ | **BUG-46** / PR #273 — `mcp_auth.py` + `MCPAuthMiddleware`; `test_mcp_read_auth.py`; prod `PM_AUTH_MODE=required` |
 | **ARCH-MS-6** | `pyproject.toml` package scaffold (lockfile pending) | 0.2 | 1 | In Progress | 🔗 | **HARDEN-54** / PR #303 — `pyproject.toml`, `.python-version`, `uv.lock`; lockfile task split to ARCH-MS-13 |
 | **ARCH-MS-7** | `src/switchboard/` package skeleton | 0.2 | 1 | In Review | 🟡 | `src/switchboard/` package tree + `settings.py` + `scripts/switchboard_path.py` |
 | **ARCH-MS-8** | `create_task` application command + REST/MCP wire | 0.2 | 7 | Not Started | ⬜ | — |
-| **ARCH-MS-9** | `test_arch_ms0_scaffold` CI gate | 0.2 | 7, 8 | Not Started | ⬜ | — |
+| **ARCH-MS-9** | `test_arch_ms0_scaffold` CI gate | 0.2 | 7, 8 | In Review | 🟡 | `tests/test_arch_ms0_scaffold.py` — asserts package imports, `create_task` callable, REST+MCP share the application handler; auto-discovered by `scripts/switchboard_ci.sh` |
 | **ARCH-MS-10** | `PM_*` env flag census + delete unread flags | 0.1 | 2 | In Review | ✅ | PR #329 — `scripts/pm_env_flag_census.py`; `tests/test_pm_env_flag_census.py`; tracked declarations fail closed when unread; CONSOL-9 deletion tombstones retained |
-| **ARCH-MS-11** | Extract inbox routing; retire `gmail_source.py` | 0.1 | 10 | Not Started | ⬜ | `gmail_source.py` still in tree |
+| **ARCH-MS-11** | Extract inbox routing; retire `gmail_source.py` | 0.1 | 10 | In Review | ✅ | `src/switchboard/integrations/inbox_routing.py`; `inbox_source.py`; `tests/test_arch_ms11_inbox_routing.py` |
 | **ARCH-MS-12** | Numbered transactional DB migrations | 0.1 | 2 | Not Started | 🔗 | **BUG-47** / PR #301 — ledgered migrations; `test_schema_migrations.py` |
 | **ARCH-MS-13** | Lockfile + Python 3.12 pin (reproducible builds) | 0.1 | 6 | Not Started | 🔗 | **HARDEN-54** / PR #303 — `uv.lock`, generated `requirements*.txt` |
 | **ARCH-MS-14** | `tests/` directory + path shim for new tests | 0.1 | 2 | Not Started | ⬜ | Root-level test scripts still; no `tests/` package |
@@ -135,7 +135,7 @@ Tasks with satisfied dependencies and remaining work:
 1. **ARCH-MS-1** — this charter (in flight)
 2. **ARCH-MS-2** — close CONSOL-6 (verify discovery covers ratchet; document denylist policy)
 3. ~~**ARCH-MS-3** — finish CONSOL-7 deletions + CONSOL-9 census execution~~ (done; gmail_source → ARCH-MS-11)
-4. **ARCH-MS-5** — MCP read auth (P0; blocks ARCH-MS-22 formal closure if regressed)
+4. ~~**ARCH-MS-5** — MCP read auth (P0; blocks ARCH-MS-22 formal closure if regressed)~~ (done — BUG-46 / PR #273)
 5. **ARCH-MS-7** — package skeleton (unblocks scaffold chain)
 6. **ARCH-MS-10** — flag census (unblocks inbox extraction)
 
@@ -147,4 +147,6 @@ Tasks with satisfied dependencies and remaining work:
 |---|---|---|
 | 2026-07-12 | ARCH-MS-1 | Initial tracker + ADR-0009 charter; baseline master `5305090` |
 | 2026-07-12 | ARCH-MS-3 | CONSOL-7/9 closed; added `test_consol7_dead_surfaces.py`; gmail_source scoped to ARCH-MS-11 |
+| 2026-07-12 | ARCH-MS-11 | Extracted source-independent inbox routing; renamed the IMAP adapter; retired `gmail_source.py` and rewired app/job/tests |
 | 2026-07-12 | ARCH-MS-10 | Added executable `PM_*` census and CI gate; verified all tracked declarations have runtime defenders; documented CONSOL-9 deleted-name tombstones |
+| 2026-07-12 | ARCH-MS-9 | Added `tests/test_arch_ms0_scaffold.py` Phase-0 proof gate (package imports + `create_task` callable + REST/MCP shared handler); deps ARCH-MS-7/8 merged |

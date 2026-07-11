@@ -5,14 +5,12 @@ Run:
     python3 test_frontend_project_state.py
 """
 import os
+from scripts.frontend_test_source import read_frontend_source
 import re
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-APP_JS = os.path.join(ROOT, "static", "app.js")
-
-with open(APP_JS, "r", encoding="utf-8") as f:
-    source = f.read()
+source = read_frontend_source(ROOT)
 
 passed = failed = 0
 

@@ -930,7 +930,13 @@
     <!-- HARDEN-38: Mermaid (~1MB) + ApexCharts (~500KB) are now lazy-loaded by app.js
          only when the Mission / Gantt tab opens — off the initial critical path. -->
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js?v=44"></script>
+    <!-- ARCH-MS-21: ordered feature boundaries. These stay classic deferred-by-position
+         scripts so every local asset receives the server's content-hash cache key. -->
+    <script src="js/api.js?v=1"></script>
+    <script src="js/state.js?v=1"></script>
+    <script src="js/board.js?v=1"></script>
+    <script src="js/mission.js?v=1"></script>
+    <script src="app.js?v=45"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script src="saturation-panel.js?v=1"></script>
     <script src="narration-ops-panel.js?v=1"></script>
