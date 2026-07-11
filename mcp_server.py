@@ -30,6 +30,7 @@ import store
 from mcp_observability import MCPObservability
 from mcp_dispatch import MCPToolDispatcher
 from mcp_http_timing import MCPServerTimingMiddleware
+from mcp_auth import MCPAuthMiddleware
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -3174,8 +3175,10 @@ if __name__ == "__main__":
 
     # FastMCP.run() builds this same ASGI app internally. Running it explicitly
     # lets Switchboard attach timing/reconnect headers to success and error paths.
+    # Timing wraps auth so even rejected (401) requests carry timing headers; auth wraps
+    # the tool app so anonymous callers are turned away before any tool runs (BUG-46).
     uvicorn.run(
-        MCPServerTimingMiddleware(mcp.streamable_http_app()),
+        MCPServerTimingMiddleware(MCPAuthMiddleware(mcp.streamable_http_app())),
         host=mcp.settings.host,
         port=mcp.settings.port,
         log_level=mcp.settings.log_level.lower(),
