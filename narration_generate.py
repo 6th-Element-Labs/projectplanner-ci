@@ -57,6 +57,14 @@ def _conn(project: str):
     return conn(project)
 
 
+def _coerce_number(value: Any, default: float) -> float:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return num if num >= 0 else float(default)
+
+
 def budget_config(project: str) -> Dict[str, Any]:
     cfg = dict(DEFAULT_BUDGET)
     try:
@@ -72,6 +80,13 @@ def budget_config(project: str) -> Dict[str, Any]:
             cfg["daily_cost_usd"] = float(env)
         except ValueError:
             pass
+    # Coerce the numeric ceilings so operator-supplied config (via meta) can never make generate
+    # raise on a null/non-numeric value — a bad value falls back to the default, keeping the
+    # "generate never raises; every attempt records a receipt" contract intact.
+    cfg["daily_cost_usd"] = _coerce_number(cfg.get("daily_cost_usd"), DEFAULT_BUDGET["daily_cost_usd"])
+    cfg["window_seconds"] = _coerce_number(cfg.get("window_seconds"), DEFAULT_BUDGET["window_seconds"])
+    cfg["max_tokens_per_call"] = int(_coerce_number(
+        cfg.get("max_tokens_per_call"), DEFAULT_BUDGET["max_tokens_per_call"]))
     return cfg
 
 
@@ -81,9 +96,13 @@ def content_signature(projection: Mapping[str, Any]) -> str:
     def strip(d: Mapping[str, Any]) -> Dict[str, Any]:
         return {k: v for k, v in d.items() if k not in _STATUS_FIELDS}
     filtered = strip(projection)
-    linked = filtered.get("linked_tasks")
-    if isinstance(linked, list):
-        filtered["linked_tasks"] = [strip(lt) if isinstance(lt, Mapping) else lt for lt in linked]
+    # Strip status inside the nested state-bearing lists too, so a pure milestone or linked-task
+    # status transition leaves the content signature unchanged (→ deterministic template, no LLM),
+    # consistent with a top-level status change.
+    for nested in ("linked_tasks", "milestones"):
+        items = filtered.get(nested)
+        if isinstance(items, list):
+            filtered[nested] = [strip(it) if isinstance(it, Mapping) else it for it in items]
     return narration_events.canonical_source_hash(filtered)
 
 

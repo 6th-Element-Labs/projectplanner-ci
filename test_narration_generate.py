@@ -135,6 +135,39 @@ try:
     ok(r7["mode"] == "llm" and within.calls == 1,
        "raising the per-project ceiling re-enables LLM generation")
 
+    # 7b. malformed per-project config must NOT crash generate (it would loop the worker with no
+    #     receipt). A null/non-numeric ceiling falls back to the default; generate still records.
+    store.set_meta("narration_generation_config",
+                   {"daily_cost_usd": None, "window_seconds": "oops"}, project=PROJECT)
+    store.update_task(tid, {"description": "Telemetry v6 bad config"}, actor="test", project=PROJECT)
+    safe = FakeLLM(cost=0.02)
+    try:
+        r7b = gen.generate(event_for(tid, 8), llm_fn=safe)
+        crashed = False
+    except Exception:
+        r7b = None
+        crashed = True
+    ok(not crashed and r7b is not None and r7b.get("receipt_id"),
+       "malformed per-project config falls back to defaults; generate never raises and records")
+    store.set_meta("narration_generation_config", {"daily_cost_usd": 100.0}, project=PROJECT)
+
+    # 7c. a deliverable milestone status-only flip is a routine transition (deterministic, no LLM).
+    dv = store.create_deliverable({"id": "gen-deliv", "title": "Gen deliverable",
+                                   "status": "in_progress"}, actor="test", project=PROJECT)
+    did = dv["id"] if isinstance(dv, dict) and dv.get("id") else "gen-deliv"
+    store.add_deliverable_milestone(did, {"title": "MS1", "status": "in_progress"},
+                                    actor="test", project=PROJECT)
+    dev = {"project": PROJECT, "entity_type": "deliverable", "entity_id": did,
+           "event_id": "nrq-d-1", "source_revision": 1, "source_hash": "sha256:" + ("0" * 64)}
+    first_d = gen.generate(dev, llm_fn=FakeLLM(cost=0.02))  # first narration -> LLM baseline
+    store.add_deliverable_milestone(did, {"id": did + ":ms1", "title": "MS1", "status": "done"},
+                                    actor="test", project=PROJECT)  # milestone status-only flip
+    llm_ms = FakeLLM()
+    dev2 = dict(dev, event_id="nrq-d-2", source_revision=2)
+    r_ms = gen.generate(dev2, llm_fn=llm_ms)
+    ok(first_d["mode"] == "llm" and r_ms["mode"] == "deterministic" and llm_ms.calls == 0,
+       "a milestone status-only flip is deterministic (no LLM), consistent with linked-task status")
+
     # 8. every receipt carries the full audit fields and is append-only (no overwrites).
     all_r = gen.list_receipts(PROJECT, entity_id=tid)
     ok(len(all_r) >= 7 and all(x["source_hash"] is not None and x["created_at"] for x in all_r)
