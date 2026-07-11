@@ -230,7 +230,13 @@ const TeepPlan = {
     async applyProject() {
         let cur = window.PM_PROJECT || 'maxwell';
         let list = [{ id: 'maxwell', label: 'Project Maxwell', pretitle: '' }];
-        try { list = (await (await fetch('api/projects')).json()).projects || list; } catch (e) { /* offline */ }
+        try {
+            const boot = window.TAIKUN_PICKER_BOOT;
+            const prefetched = boot && boot.projectId === cur ? await boot.projects : null;
+            list = prefetched !== null
+                ? prefetched
+                : ((await (await fetch('api/projects')).json()).projects || list);
+        } catch (e) { /* offline */ }
         // Global auth: the list is filtered to the projects this user can access.
         // Fall back to the first accessible one if the stored project isn't in it;
         // if there are none, flag an empty workspace so init() shows a message.
@@ -4378,6 +4384,15 @@ const TeepPlan = {
         // in-flight request across every picker consumer.
         if (this._deliverablesPromise) return this._deliverablesPromise;
         const request = (async () => {
+            const boot = window.TAIKUN_PICKER_BOOT;
+            const prefetched = !force && boot && boot.projectId === project
+                ? await boot.deliverables
+                : null;
+            if (prefetched !== null) {
+                this.deliverables = prefetched;
+                this._deliverablesProject = project;
+                return this.deliverables;
+            }
             const res = await fetch('api/deliverables?view=picker');
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
