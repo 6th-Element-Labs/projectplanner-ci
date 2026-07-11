@@ -52,6 +52,10 @@ class RequestObservability:
         self._counts: Dict[str, int] = defaultdict(int)
         self._failures: Dict[str, int] = defaultdict(int)
         self._dropped_webhooks = 0
+        # Trailing-window drop timestamps so the badge reflects RECENT data loss, not a
+        # lifetime total that would pin the badge red forever after the first-ever drop.
+        self._dropped_webhook_times: Deque[float] = deque(maxlen=4096)
+        self.dropped_window_s = float(_positive_int_env("PM_DROPPED_WEBHOOK_WINDOW_S", 60))
 
     def record(self, route_class: str, elapsed_ms: float,
                status_code: int = 200, *, dropped_webhook: bool = False) -> None:
@@ -63,6 +67,13 @@ class RequestObservability:
                 self._failures[route_class] += 1
             if dropped_webhook:
                 self._dropped_webhooks += 1
+                self._dropped_webhook_times.append(time.time())
+
+    def _dropped_in_window_unlocked(self) -> int:
+        cutoff = time.time() - max(1.0, self.dropped_window_s)
+        while self._dropped_webhook_times and self._dropped_webhook_times[0] < cutoff:
+            self._dropped_webhook_times.popleft()
+        return len(self._dropped_webhook_times)
 
     def record_path(self, path: str, elapsed_ms: float, status_code: int = 200,
                     *, dropped_webhook: bool = False) -> None:
@@ -88,5 +99,7 @@ class RequestObservability:
                 "uptime_s": round(max(0.0, time.time() - self.started_at), 3),
                 "sample_limit_per_route": self.sample_limit,
                 "dropped_webhook_deliveries": self._dropped_webhooks,
+                "dropped_webhook_deliveries_window": self._dropped_in_window_unlocked(),
+                "dropped_webhook_window_s": self.dropped_window_s,
                 "routes": routes,
             }

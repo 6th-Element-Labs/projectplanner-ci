@@ -115,7 +115,9 @@ def evaluate_slos(
     # Trailing-window count, not the lifetime counter (which never resets and pinned the
     # badge yellow forever after the first-ever contention). See build_alerts.
     lock_waits = int((mcp_obs or {}).get("sqlite_lock_waits_window") or 0)
-    dropped = int((request_obs or {}).get("dropped_webhook_deliveries") or 0)
+    # Windowed drop count (recent data loss), not the lifetime total that pinned the badge
+    # red forever after the first-ever dropped delivery.
+    dropped = int((request_obs or {}).get("dropped_webhook_deliveries_window") or 0)
     pending = int((inbox_depth or {}).get("pending") or 0)
     dead = int((inbox_depth or {}).get("dead") or 0)
 
@@ -226,17 +228,10 @@ def build_alerts(
             "lifetime": lock_waits_lifetime,
         })
 
-    pending = int((inbox_depth or {}).get("pending") or 0)
+    # Webhook inbox pending is a CURRENT depth; a single in-flight item is not pressure.
+    # Real backlog is caught by the webhook_inbox_pending SLO (budget = pending_max), which
+    # surfaces as an slo alert above. Alerting here on `pending > 0` was twitchy, so it's gone.
     dead = int((inbox_depth or {}).get("dead") or 0)
-    if pending > 0:
-        alerts.append({
-            "at": now,
-            "severity": "warning" if pending < DEFAULT_SLOS["webhook_inbox_pending_max"] else "critical",
-            "kind": "webhook_inbox_pending",
-            "message": f"webhook inbox pending: {pending}",
-            "value": pending,
-            "oldest_pending_age_s": (inbox_depth or {}).get("oldest_pending_age_s"),
-        })
     if dead > 0:
         alerts.append({
             "at": now,
@@ -250,7 +245,13 @@ def build_alerts(
         for resource, entry in (psi.get("resources") or {}).items():
             stall = (entry or {}).get("stall") or {}
             some = (stall.get("some") or {}).get("avg10")
-            full = (stall.get("full") or {}).get("avg10")
+            # Red (critical) keys off the SUSTAINED 60s average, not the 10s average — a
+            # 10-second full-stall spike is a normal transient on a contended box and should
+            # not paint the badge red. Fall back to avg10 only if avg60 isn't reported.
+            full_stall = stall.get("full") or {}
+            full = full_stall.get("avg60")
+            if full is None:
+                full = full_stall.get("avg10")
             if some is not None and some >= load_shed.DEFAULT_THRESHOLDS["psi_some_avg10"]:
                 alerts.append({
                     "at": now,
@@ -265,7 +266,7 @@ def build_alerts(
                     "at": now,
                     "severity": "critical",
                     "kind": "psi_full",
-                    "message": f"{resource} PSI full avg10 {full}%",
+                    "message": f"{resource} PSI full avg60 {full}% (sustained)",
                     "resource": resource,
                     "value": full,
                 })
@@ -305,14 +306,17 @@ def _concurrency_alerts(concurrency: dict) -> List[dict]:
             ),
             "retry_after_s": concurrency.get("retry_after_s"),
         })
-    shed_total = int((concurrency or {}).get("shed_total") or 0)
-    if shed_total > 0:
+    # Trailing-window rejections (recent backpressure), not the lifetime total that pinned
+    # the badge yellow forever after the first-ever rejection. shed_total stays for context.
+    shed_window = int((concurrency or {}).get("shed_window") or 0)
+    if shed_window > 0:
         alerts.append({
             "at": now,
             "severity": "warning",
             "kind": "concurrency_shed",
-            "message": f"concurrency limit rejections: {shed_total}",
-            "value": shed_total,
+            "message": f"concurrency limit rejections (recent): {shed_window}",
+            "value": shed_window,
+            "lifetime": int((concurrency or {}).get("shed_total") or 0),
         })
     return alerts
 
