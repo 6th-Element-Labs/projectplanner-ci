@@ -14068,6 +14068,7 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
             "VALUES (?,?,?,?,?,?,?)",
             (pid, project_label, project_pretitle, db_path, seed, now, actor),
         )
+    bust_project_cache()  # read-your-write: the new project resolves immediately in this process
     try:
         init_db(pid)
         set_meta("project", project_label, project=pid)
