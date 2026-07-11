@@ -298,9 +298,12 @@ fix them:
   source text* (e.g. test_mission_page.py:215) rather than exercising behavior; Vitest for
   helpers + Playwright for the core flows. (The ES-module split that enables this is the
   Decision 7 frontend shape; the tests themselves are a quality track.)
-- **Finish the two-auth cutover:** `PM_GLOBAL_AUTH` still gates a second live auth system
+- ~~**Finish the two-auth cutover:** `PM_GLOBAL_AUTH` still gates a second live auth system
   beside the legacy one — a migration state, not an architecture (already tracked as the
-  auth-strangler).
+  auth-strangler).~~ **Done (ACCESS-16 / PR #300).** The cutover shipped: `PM_GLOBAL_AUTH`,
+  the legacy per-project login path, and `static/login.html` are deleted. There is now a
+  single live auth system: the `services/auth` microservice is always mounted, backed by the
+  shared `auth.py` primitives (bearer→principal mapping + hashed, expiring session cookie).
 
 ---
 
