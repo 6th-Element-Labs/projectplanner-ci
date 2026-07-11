@@ -1120,12 +1120,27 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
                              milestone_id: str = "", data: Optional[Dict[str, Any]] = None,
                              actor: str = "user",
                              project: str = DEFAULT_PROJECT,
-                             include_task_snapshots: bool = True) -> Dict[str, Any]:
+                             include_task_snapshots: bool = True,
+                             run_closure: bool = False) -> Dict[str, Any]:
+    """Link an explicitly routed board task to a deliverable without moving or editing it.
+
+    run_closure is opt-in (default False) so the hot single-link write path stays slim —
+    it must not fan out into full get_task/get_deliverable reads (see test_mcp_link_task_slim
+    and test_deliverable_link_snapshots). When a caller does pass run_closure=True, the task's
+    transitive not-Done depends_on frontier is auto-linked as blockers, so an intentional
+    bundling never silently omits work it depends on. Batch bundling (approve_deliverable_breakdown)
+    runs the closure explicitly after materializing, independent of this flag.
+    """
     result = _retry_on_locked(lambda: _link_task_to_deliverable_impl(
         deliverable_id, task_project, task_id, milestone_id=milestone_id,
         data=data, actor=actor, project=project))
     if isinstance(result, dict):
         return result
+    # result is the deliverable_id of a successful link. Only when a caller opts in do we
+    # pull the task's transitive not-Done dependency frontier in as blockers; shape the
+    # response afterwards so it already reflects any auto-linked work.
+    closure = (_ensure_deliverable_dependency_closure(deliverable_id, project, actor=actor)
+               if run_closure else None)
     if not include_task_snapshots:
         normalized_task_project = (task_project or "").strip()
         normalized_task_id = (task_id or "").strip().upper()
@@ -1144,7 +1159,7 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
                     "deliverable_id": deliverable_id,
                     "project_id": normalized_task_project,
                     "task_id": normalized_task_id}
-        return {
+        ack = {
             "schema": "switchboard.deliverable_task_link_ack.v1",
             "linked": True,
             "project": project,
@@ -1156,7 +1171,13 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
             "progress": {"linked_task_count": int(linked_task_count)},
             "full_deliverable_tool": "get_deliverable",
         }
-    return get_deliverable(result, project=project) or {"error": "deliverable not found"}
+        if closure is not None:
+            ack["dependency_closure"] = closure
+        return ack
+    full = get_deliverable(result, project=project) or {"error": "deliverable not found"}
+    if closure is not None and not full.get("error"):
+        full["dependency_closure"] = closure
+    return full
 
 
 def _link_tasks_to_deliverable_impl(
@@ -1392,6 +1413,100 @@ def _decorate_deliverable_task_links(links: List[Dict[str, Any]]) -> List[Dict[s
             link["task"] = task or {
                 "error": "unknown task", "project_id": project_id, "task_id": link["task_id"]}
     return links
+
+
+def _deliverable_dependency_closure(deliverable_id: str,
+                                    project: str,
+                                    max_nodes: int = 500) -> Dict[str, Any]:
+    """Walk the transitive depends_on frontier of a deliverable's linked tasks.
+
+    Returns the not-Done dependencies that are NOT yet linked to the deliverable
+    (the real 'missing blockers') plus already-satisfied (Done) deps for context.
+    Traversal stops at Done tasks: a satisfied dependency is not remaining work and
+    its history must not be dragged in. Because the walk expands every not-Done node
+    regardless of whether it is linked yet, a single call yields the full transitive
+    not-Done closure. depends_on ids are same-project as the task that declares them.
+    """
+    deliverable = get_deliverable(deliverable_id, project=project)
+    if not deliverable or deliverable.get("error"):
+        return {"missing": [], "satisfied": [], "linked_task_count": 0, "capped": False}
+    links = deliverable.get("task_links") or []
+
+    def _key(proj: str, tid: str) -> Tuple[str, str]:
+        return ((proj or project).strip(), (tid or "").strip().upper())
+
+    linked_keys = {_key(l.get("project_id"), l.get("task_id")) for l in links}
+    seen: set = set()
+    queue: List[Tuple[str, str]] = []
+    for l in links:
+        k = _key(l.get("project_id"), l.get("task_id"))
+        if k not in seen:
+            seen.add(k)
+            queue.append(k)
+
+    missing: List[Dict[str, Any]] = []
+    satisfied: List[Dict[str, Any]] = []
+    reported: set = set()
+    capped = False
+    while queue:
+        if len(seen) > max_nodes:
+            capped = True
+            break
+        proj, tid = queue.pop()
+        task = get_task(tid, project=proj)
+        # Only expand outstanding work: a Done task's deps are already satisfied
+        # groundwork and must not pull historical tasks into the deliverable.
+        if not task or (task.get("status") or "").strip() == "Done":
+            continue
+        for dep in task.get("depends_on") or []:
+            dep_key = _key(proj, dep)
+            dep_task = get_task(dep, project=proj)
+            if not dep_task:
+                continue  # broken edge; add_dependency guards new ones, skip dangling
+            dep_status = (dep_task.get("status") or "").strip()
+            if dep_key not in reported and dep_key not in linked_keys:
+                entry = {"project_id": dep_key[0], "task_id": dep_key[1],
+                         "title": dep_task.get("title"), "status": dep_status,
+                         "via_task_id": tid}
+                (satisfied if dep_status == "Done" else missing).append(entry)
+                reported.add(dep_key)
+            if dep_key not in seen and dep_status != "Done":
+                seen.add(dep_key)
+                queue.append(dep_key)
+    return {"missing": missing, "satisfied": satisfied,
+            "linked_task_count": len(links), "capped": capped}
+
+
+def _ensure_deliverable_dependency_closure(deliverable_id: str,
+                                           project: str,
+                                           actor: str = "system") -> Dict[str, Any]:
+    """Auto-link a deliverable's not-Done transitive dependencies as blockers.
+
+    Runs after link/approve so a bundled deliverable always carries the work it
+    actually depends on. Missing blockers are linked with blocks_deliverable=1 (they
+    gate completion and draw in the dependency graph); already-satisfied Done deps are
+    reported but left out. Idempotent: re-running links nothing new.
+    """
+    closure = _deliverable_dependency_closure(deliverable_id, project)
+    auto_linked: List[Dict[str, Any]] = []
+    for dep in closure.get("missing") or []:
+        res = link_task_to_deliverable(
+            deliverable_id, dep["project_id"], dep["task_id"],
+            data={"role": "contributes", "blocks_deliverable": True,
+                  "metadata": {"auto_linked": "dependency_closure",
+                               "via_task_id": dep.get("via_task_id")}},
+            actor=actor, project=project, include_task_snapshots=False,
+            run_closure=False,
+        )
+        if not res.get("error"):
+            auto_linked.append({"project_id": dep["project_id"], "task_id": dep["task_id"],
+                                "title": dep.get("title"), "via_task_id": dep.get("via_task_id")})
+    return {
+        "auto_linked": auto_linked,
+        "auto_linked_count": len(auto_linked),
+        "already_satisfied": closure.get("satisfied") or [],
+        "capped": closure.get("capped", False),
+    }
 
 
 def _decorate_deliverable_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
@@ -2016,6 +2131,7 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
                 },
                 actor=actor,
                 project=project,
+                run_closure=False,
             )
             if link_result.get("error"):
                 return link_result
@@ -2043,6 +2159,10 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
         patched = create_deliverable(deliverable_patch, actor=actor, project=project)
         if patched.get("error"):
             return patched
+    # Pull in any not-Done transitive dependency of the materialized tasks that the
+    # breakdown didn't name, so an approved deliverable can't ship missing its blockers.
+    dependency_closure = _ensure_deliverable_dependency_closure(
+        deliverable_id, project, actor=actor)
     now = time.time()
     with _conn(project) as c:
         c.execute(
@@ -2055,7 +2175,10 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
                   (None, actor, "deliverable.breakdown_approved",
                    json.dumps({"deliverable_id": deliverable_id, "proposal_id": proposal_id,
                                "created_task_count": len(created_tasks),
-                               "linked_task_count": len(linked_tasks)}, sort_keys=True), now))
+                               "linked_task_count": len(linked_tasks),
+                               "auto_linked_dependency_count":
+                                   dependency_closure.get("auto_linked_count", 0)},
+                              sort_keys=True), now))
     return {
         "schema": "switchboard.deliverable_breakdown_approval.v1",
         "project_id": project,
@@ -2063,6 +2186,7 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
         "deliverable_id": deliverable_id,
         "created_tasks": created_tasks,
         "linked_tasks": linked_tasks,
+        "dependency_closure": dependency_closure,
         "deliverable": get_deliverable(deliverable_id, project=project),
         "mission_status": get_mission_status(project=project, deliverable_id=deliverable_id),
     }
