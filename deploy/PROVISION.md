@@ -30,7 +30,13 @@ Add an **A record**: `plan.taikunai.com` -> the Elastic IP. (Apex/other taikunai
 ## 3. Install
 ```bash
 ssh ubuntu@<eip>
-sudo apt-get update && sudo apt-get install -y python3-venv git debian-keyring debian-archive-keyring apt-transport-https
+sudo apt-get update && sudo apt-get install -y git debian-keyring debian-archive-keyring apt-transport-https software-properties-common
+# Python 3.12 — REQUIRED. The app targets 3.12 (pyproject `requires-python>=3.12`) and the
+# checked-in uv.lock / pinned requirements.txt resolve 3.12-only wheels (e.g. rpds-py has no
+# cp310 build), so a 3.10 venv fails `pip install -r requirements.txt`. Ubuntu 22.04 ships only
+# 3.10, so pull 3.12 from deadsnakes (has arm64/jammy). See HARDEN-66.
+sudo add-apt-repository -y ppa:deadsnakes/ppa
+sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv python3.12-dev
 # Caddy
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
@@ -59,7 +65,7 @@ sudo ln -sf /usr/local/bin/gh /usr/bin/gh && gh --version   # expect >= 2.6
 # with sudo so every file lands root-owned.
 sudo git clone <projectplanner-remote> /opt/projectplanner
 cd /opt/projectplanner
-sudo python3 -m venv .venv
+sudo python3.12 -m venv .venv    # MUST be 3.12 (see above) — `python3` is 3.10 on jammy
 sudo .venv/bin/pip install -r requirements.txt -r deploy/gateway/requirements.txt
 sudo cp .env.example .env   # set OPENAI_API_KEY + LLM_GATEWAY_MASTER_KEY (==PM_LLM_KEY)
 # UI-12: for real cost in the Economics panels, set PM_TALLY_INGEST_TOKEN to a
@@ -297,8 +303,10 @@ and posts a commit status named `Switchboard CI / VM gate` to each PR head SHA. 
 with commit-status write **and push access to the public sandbox** in `PM_GITHUB_TOKEN`,
 `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN` (the gate exports it as `GH_TOKEN` for `gh`).
 
-The gate must create its test venv with Python 3.10+ because strict CI installs `mcp>=1.9`.
-`projectplanner-ci-gate.service` pins `SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python`;
+The gate must create its test venv with **Python 3.12** — the pinned `requirements.txt` resolves
+3.12-only wheels, so its local-fallback suite fails `pip install` on 3.10 (HARDEN-66).
+`projectplanner-ci-gate.service` pins `SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python`
+(now a 3.12 interpreter);
 if that interpreter is missing or unsupported, the gate posts a red status with the checked
 candidate list instead of silently falling back to ambient `python3`.
 
