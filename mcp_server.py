@@ -2604,6 +2604,31 @@ def get_deliverable_closure_report(deliverable_id: str, project: str = "maxwell"
 
 
 @mcp.tool()
+def request_deliverable_closure_verification(deliverable_id: str, ctx: Context,
+                                             project: str = "maxwell",
+                                             agent_id: str = "",
+                                             waivers_json: str = "") -> str:
+    """Operator "Verify & stamp closure" dispatch: assemble the deliverable's context,
+    its resolved scope+functional gate list, and a closure prompt template, then dispatch a
+    verifier agent (directed inbox message + lane-less inbox wake) to run the gates and record
+    a graded switchboard.deliverable_closure_report.v1 via verify_deliverable_closure. The
+    verifier never sets status=done. Pass agent_id to target a specific verifier and
+    waivers_json ([{task_id, reason}]) for operator task waivers. Returns {dispatched, wake_id,
+    message_id, agent_id, gates, prompt, work_hosts_online, queued, …}; queues until a
+    work-capable host is online (mirrors dispatch_to_claude_code for tasks)."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    waivers = None
+    if waivers_json:
+        try:
+            waivers = json.loads(waivers_json)
+        except json.JSONDecodeError as exc:
+            return _dumps({"error": f"invalid waivers_json: {exc}"})
+    return _dumps(deliverable_closure.request_closure_verification(
+        deliverable_id, project, agent_id=agent_id,
+        actor=auth.actor(principal), waivers=waivers))
+
+
+@mcp.tool()
 def generate_mission_brief(deliverable_id: str, ctx: Context, project: str = "maxwell",
                            board_id: str = "", mission_id: str = "",
                            persist: bool = True) -> str:

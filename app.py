@@ -1183,6 +1183,22 @@ def get_deliverable_closure_report_route(deliverable_id: str, report_id: str = "
     return result
 
 
+@app.post("/api/deliverables/{deliverable_id}/closure_request")
+async def request_deliverable_closure_verification_route(request: Request, deliverable_id: str,
+                                                         body: dict = Body(default={}),
+                                                         project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    result = deliverable_closure.request_closure_verification(
+        deliverable_id, project, agent_id=payload.get("agent_id") or "",
+        actor=auth.actor(principal), waivers=payload.get("waivers"))
+    if isinstance(result, dict) and result.get("error"):
+        code = 404 if "not found" in result["error"] else 400
+        raise HTTPException(code, result["error"])
+    return result
+
+
 @app.post("/api/deliverables/{deliverable_id}/coordinator_tick")
 async def run_mission_coordinator_tick(request: Request, deliverable_id: str,
                                        project: str = Query(...)):
