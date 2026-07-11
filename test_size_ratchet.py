@@ -10,11 +10,11 @@ ROOT = Path(__file__).resolve().parent
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
     "store.py": 15_470,  # ARCH-MS-20 extracted runner persistence/control into runner_store.py
-    "app.py": 3_275,  # ARCH-MS-18 moved auth imports behind the package seam
-    "mcp_server.py": 3_157,  # pre-existing master drift remeasured by ARCH-MS-20 gate
+    "app.py": 3_274,  # ARCH-MS-18/8 share one package bootstrap and thin create adapter
+    "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
-ROOT_PYTHON_FILE_CEILING = 202  # ARCH-MS-4 adds test_consol8_edge_mission_poll.py (CONSOL-8 CI lock)
+ROOT_PYTHON_FILE_CEILING = 204  # NARRATE-12 (+2) then ARCH-MS-4 adds test_consol8_edge_mission_poll.py (CONSOL-8 CI lock)
 
 passed = failed = 0
 
