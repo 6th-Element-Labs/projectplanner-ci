@@ -60,6 +60,7 @@ _req_obs = request_observability.RequestObservability()
 # Global auth router — always mounted. Browser users authenticate via
 # taikun_session JWT; agents/API callers keep bearer-token principals.
 import scripts.switchboard_path  # noqa: E402,F401
+from switchboard.application.commands import create_task as create_task_command  # noqa: E402
 from switchboard.api.routers.auth import service as _auth_service, session as _auth_session, store as _auth_store  # noqa: E402
 from switchboard.api.routers.auth.routes import router as _global_auth_router  # noqa: E402
 
@@ -1352,12 +1353,10 @@ async def get_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
 @app.post("/api/tasks")
 async def create_task(request: Request, body: dict = Body(...), project: str = Query(...)):
     project = _proj(project)
-    body = dict(body or {})
     binding = _resolve_public_write_actor(request, project, body)
-    actor = binding["actor"]
-    t = store.create_task(_without_write_binding_fields(body), actor=actor, project=project)
-    if not t:
-        raise HTTPException(400, "workstream_id and title are required")
+    t = create_task_command.execute_mapping_result(_without_write_binding_fields(body), actor=binding["actor"], project=project)
+    if t.get("error"):
+        raise HTTPException(400, t)
     _record_public_write_binding(t.get("task_id") or "", binding, project)
     return t
 
