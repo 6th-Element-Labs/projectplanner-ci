@@ -85,6 +85,13 @@ JOB_CATALOG: Dict[str, JobSpec] = {
         task_anchors=("RECON-10",),
         description="Run reconcile_alerts per project with checkpoint resume.",
     ),
+    "drain_webhook_inbox": JobSpec(
+        job_name="drain_webhook_inbox",
+        title="Drain durable webhook inbox",
+        dbos_eligible=False,
+        task_anchors=("PERF-1",),
+        description="Apply pending webhook-inbox events idempotently off the request path.",
+    ),
 }
 
 
@@ -322,6 +329,7 @@ def _step_handler(job_name: str) -> Callable[[str, Mapping[str, Any]], Dict[str,
         "audit_export_batch": _step_audit_export,
         "receipt_projection_batch": _step_receipt_projection,
         "reconcile_alerts_resumable": _step_reconcile_alerts,
+        "drain_webhook_inbox": _step_drain_webhook_inbox,
     }
     handler = handlers.get(job_name)
     if not handler:
@@ -380,6 +388,12 @@ def _step_reconcile_alerts(project_id: str, params: Mapping[str, Any]) -> Dict[s
         min_severity=str(params.get("min_severity") or "medium"),
         dedupe_window_s=int(params.get("dedupe_window_s") or 3600),
     )
+
+
+def _step_drain_webhook_inbox(project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:
+    import webhook_inbox
+    store.init_db(project_id)
+    return webhook_inbox.drain(project_id, limit=int(params.get("limit") or 500))
 
 
 def _execute_step(manifest: Dict[str, Any], step: Dict[str, Any]) -> Dict[str, Any]:
