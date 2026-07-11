@@ -14,7 +14,7 @@ LINE_CEILINGS = {
     "mcp_server.py": 3_157,  # pre-existing master drift remeasured by ARCH-MS-20 gate
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
-ROOT_PYTHON_FILE_CEILING = 201  # master had 200; ARCH-MS-20 adds planned runner_store.py
+ROOT_PYTHON_FILE_CEILING = 202  # ARCH-MS-4 adds test_consol8_edge_mission_poll.py (CONSOL-8 CI lock)
 
 passed = failed = 0
 
