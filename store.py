@@ -851,8 +851,8 @@ def _deliverable_milestone_exists_in(
     ).fetchone())
 
 
-def create_deliverable(data: Dict[str, Any], actor: str = "user",
-                       project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
+                             project: str = DEFAULT_PROJECT) -> Any:
     """Create or update a project-owned product outcome/mission record."""
     if not has_project(project):
         return {"error": f"unknown project: {project}"}
@@ -918,7 +918,16 @@ def create_deliverable(data: Dict[str, Any], actor: str = "user",
                    json.dumps({"deliverable_id": deliverable_id, "board_id": board_id,
                                "title": title},
                               sort_keys=True), now))
-    return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
+    return deliverable_id
+
+
+def create_deliverable(data: Dict[str, Any], actor: str = "user",
+                       project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    result = _retry_on_locked(
+        lambda: _create_deliverable_impl(data, actor=actor, project=project))
+    if isinstance(result, dict):
+        return result
+    return get_deliverable(result, project=project) or {"error": "deliverable not found"}
 
 
 def add_deliverable_milestone(deliverable_id: str, data: Dict[str, Any],
@@ -994,10 +1003,11 @@ def _touch_deliverable(c: sqlite3.Connection, deliverable_id: str, ts: float) ->
     c.execute("UPDATE deliverables SET updated_at=? WHERE id=?", (ts, deliverable_id))
 
 
-def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: str,
-                             milestone_id: str = "", data: Optional[Dict[str, Any]] = None,
-                             actor: str = "user",
-                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+def _link_task_to_deliverable_impl(
+        deliverable_id: str, task_project: str, task_id: str,
+        milestone_id: str = "", data: Optional[Dict[str, Any]] = None,
+        actor: str = "user",
+        project: str = DEFAULT_PROJECT) -> Any:
     """Link an explicitly routed board task to a deliverable without moving or editing it."""
     if not has_project(project):
         return {"error": f"unknown project: {project}"}
@@ -1068,7 +1078,19 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
                                "task_id": task_id, "milestone_id": mid},
                               sort_keys=True), now))
         _touch_deliverable(c, deliverable_id, now)
-    return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
+    return deliverable_id
+
+
+def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: str,
+                             milestone_id: str = "", data: Optional[Dict[str, Any]] = None,
+                             actor: str = "user",
+                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    result = _retry_on_locked(lambda: _link_task_to_deliverable_impl(
+        deliverable_id, task_project, task_id, milestone_id=milestone_id,
+        data=data, actor=actor, project=project))
+    if isinstance(result, dict):
+        return result
+    return get_deliverable(result, project=project) or {"error": "deliverable not found"}
 
 
 def _rows_for_task_ids(c: sqlite3.Connection, table: str, task_ids: List[str],
@@ -3593,8 +3615,8 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         return t
 
 
-def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
-                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
+                      project: str = DEFAULT_PROJECT) -> Any:
     sets, vals, changed = [], [], {}
     for k, v in fields.items():
         if k not in EDITABLE:
@@ -3607,7 +3629,7 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
             continue
         sets.append(f"{k}=?"); vals.append(v); changed[k] = v
     if not sets:
-        return get_task(task_id, project)
+        return task_id
     if str(changed.get("status") or "").strip().lower() == "done":
         now = time.time()
         with _conn(project) as c:
@@ -3639,6 +3661,16 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
                   (task_id, actor, "edit", json.dumps(changed), time.time()))
     # NARRATE-2: enqueue CEO-narration only on a real status transition, never on cosmetic
     # edits — this is the cost guarantee. The drain job applies the trigger-status filter.
+    return {"task_id": task_id, "changed": changed}
+
+
+def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
+                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    result = _retry_on_locked(
+        lambda: _update_task_impl(task_id, fields, actor=actor, project=project))
+    if result is None or (isinstance(result, dict) and result.get("error")):
+        return result
+    changed = result.get("changed", {}) if isinstance(result, dict) else {}
     if "status" in changed:
         enqueue_narration(task_id, status=str(changed.get("status") or ""),
                           reason="status_change", project=project)
@@ -3686,8 +3718,8 @@ def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
     return get_task(task_id, project) if hydrate_task else {"task_id": task_id}
 
 
-def create_task(data: Dict[str, Any], actor: str = "user",
-                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+def _create_task_impl(data: Dict[str, Any], actor: str = "user",
+                      project: str = DEFAULT_PROJECT) -> Optional[str]:
     ws = (data.get("workstream_id") or "").strip()
     title = (data.get("title") or "").strip()
     if not ws or not title:
@@ -3725,6 +3757,15 @@ def create_task(data: Dict[str, Any], actor: str = "user",
              1 if data.get("is_blocking") else 0, order, now, now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (tid, actor, "create", json.dumps({"title": title}), now))
+    return tid
+
+
+def create_task(data: Dict[str, Any], actor: str = "user",
+                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    tid = _retry_on_locked(
+        lambda: _create_task_impl(data, actor=actor, project=project))
+    if not tid:
+        return None
     # NARRATE-2: a newly created task is a meaningful transition — enqueue its first narration.
     enqueue_narration(tid, status=(data.get("status") or "Not Started"),
                       reason="create", project=project)
@@ -5706,13 +5747,13 @@ def check_protocol_compatibility(advertised: Optional[Dict[str, Any]]) -> Dict[s
             "profile": advertised.get("profile")}
 
 
-def register_agent(agent_id: str, runtime: str, model: str = "", lane: str = "",
-                   task_id: str = "", ttl_s: int = 120,
-                   control: Optional[Dict[str, Any]] = None,
-                   protocol: Optional[Dict[str, Any]] = None,
-                   principal_id: str = "",
-                   actor: str = "system",
-                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+def _register_agent_impl(agent_id: str, runtime: str, model: str = "", lane: str = "",
+                         task_id: str = "", ttl_s: int = 120,
+                         control: Optional[Dict[str, Any]] = None,
+                         protocol: Optional[Dict[str, Any]] = None,
+                         principal_id: str = "",
+                         actor: str = "system",
+                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     ttl_s = max(10, int(ttl_s or 120))
     compatibility = check_protocol_compatibility(protocol)
@@ -5739,6 +5780,19 @@ def register_agent(agent_id: str, runtime: str, model: str = "", lane: str = "",
             "control": control or {}, "protocol": protocol or {},
             "protocol_compatibility": compatibility, "registered_at": now,
             "heartbeat_at": now, "expires_at": now + ttl_s, "ttl_s": ttl_s}
+
+
+def register_agent(agent_id: str, runtime: str, model: str = "", lane: str = "",
+                   task_id: str = "", ttl_s: int = 120,
+                   control: Optional[Dict[str, Any]] = None,
+                   protocol: Optional[Dict[str, Any]] = None,
+                   principal_id: str = "",
+                   actor: str = "system",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    return _retry_on_locked(lambda: _register_agent_impl(
+        agent_id, runtime, model=model, lane=lane, task_id=task_id, ttl_s=ttl_s,
+        control=control, protocol=protocol, principal_id=principal_id,
+        actor=actor, project=project))
 
 
 def heartbeat(agent_id: str, project: str = DEFAULT_PROJECT,
@@ -9814,14 +9868,14 @@ def _model_recommendation(task: Dict[str, Any], score: Dict[str, Any]) -> Dict[s
 READY_TASK_STATUSES = {"Not Started", "Ready", "Todo", "Backlog"}
 
 
-def claim_task(task_id: str, agent_id: str,
-               principal_id: str = "", actor: str = "system",
-               ttl_seconds: int = 1800, idem_key: str = "",
-               override_identity_risk: bool = False,
-               work_session_id: str = "", work_session: Any = None,
-               session_policy_profile: str = "",
-               require_work_session: bool = False,
-               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+def _claim_task_impl(task_id: str, agent_id: str,
+                     principal_id: str = "", actor: str = "system",
+                     ttl_seconds: int = 1800, idem_key: str = "",
+                     override_identity_risk: bool = False,
+                     work_session_id: str = "", work_session: Any = None,
+                     session_policy_profile: str = "",
+                     require_work_session: bool = False,
+                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Atomically claim one specific ready, unblocked task.
 
     Use this when a human/operator has already selected the task. Unlike claim_next,
@@ -9962,6 +10016,23 @@ def claim_task(task_id: str, agent_id: str,
         }
         _idem_store(c, "claim_task", idem_key, actor, payload, response)
         return response
+
+
+def claim_task(task_id: str, agent_id: str,
+               principal_id: str = "", actor: str = "system",
+               ttl_seconds: int = 1800, idem_key: str = "",
+               override_identity_risk: bool = False,
+               work_session_id: str = "", work_session: Any = None,
+               session_policy_profile: str = "",
+               require_work_session: bool = False,
+               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    return _retry_on_locked(lambda: _claim_task_impl(
+        task_id, agent_id, principal_id=principal_id, actor=actor,
+        ttl_seconds=ttl_seconds, idem_key=idem_key,
+        override_identity_risk=override_identity_risk,
+        work_session_id=work_session_id, work_session=work_session,
+        session_policy_profile=session_policy_profile,
+        require_work_session=require_work_session, project=project))
 
 
 def claim_next(agent_id: str, lanes: Any = None,
@@ -10161,10 +10232,11 @@ def claim_next(agent_id: str, lanes: Any = None,
         return response
 
 
-def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
-                   actor: str = "system",
-                   project: str = DEFAULT_PROJECT,
-                   mission_project: str = "") -> Dict[str, Any]:
+def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = "",
+                         actor: str = "system",
+                         project: str = DEFAULT_PROJECT,
+                         mission_project: str = "",
+                         finalize: bool = True) -> Dict[str, Any]:
     now = time.time()
     evidence_obj = _parse_evidence(evidence)
     requested_status = (final_status or evidence_obj.get("final_status") or evidence_obj.get("status") or "").strip()
@@ -10331,11 +10403,26 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
     if done_gate:
         response["done_gate"] = done_gate
         response["warning"] = done_gate["message"]
+    if not finalize:
+        return response
+    return _finalize_complete_claim_response(
+        response, evidence_obj, project, mission_project, actor)
+
+
+def _finalize_complete_claim_response(
+        response: Dict[str, Any], evidence_obj: Dict[str, Any], project: str,
+        mission_project: str, actor: str) -> Dict[str, Any]:
+    """Attach mission rollup after the claim transaction has committed.
+
+    This intentionally runs outside the retry boundary: retrying the completed claim
+    transaction after a later mission/read lock would turn success into
+    ``claim is not active`` and could duplicate side effects.
+    """
     deliverable_id = (evidence_obj.get("deliverable_id") or "").strip()
     milestone_id = (evidence_obj.get("milestone_id") or "").strip()
     mp = (evidence_obj.get("mission_project") or mission_project or "").strip()
     if not deliverable_id or not mp:
-        matches = _find_deliverable_links_for_task(project, row["task_id"],
+        matches = _find_deliverable_links_for_task(project, response["task_id"],
                                                    mission_project=mp,
                                                    deliverable_id=deliverable_id)
         if len(matches) == 1:
@@ -10345,7 +10432,8 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
                 milestone_id = (matches[0].get("milestone_id") or "").strip()
     if deliverable_id and mp:
         response["mission"] = _record_mission_claim_completion(
-            mp, deliverable_id, project, row["task_id"], claim_id, next_status,
+            mp, deliverable_id, project, response["task_id"], response["claim_id"],
+            response["status"],
             milestone_id=milestone_id, actor=actor)
     return response
 
@@ -10374,6 +10462,20 @@ def abandon_claim(claim_id: str, reason: str,
                   (row["task_id"], actor, "task.claim.abandoned",
                    json.dumps({"claim_id": claim_id, "reason": reason}, sort_keys=True), now))
     return {"abandoned": True, "claim_id": claim_id, "task_id": row["task_id"]}
+
+
+def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
+                   actor: str = "system",
+                   project: str = DEFAULT_PROJECT,
+                   mission_project: str = "") -> Dict[str, Any]:
+    evidence_obj = _parse_evidence(evidence)
+    response = _retry_on_locked(lambda: _complete_claim_impl(
+        claim_id, evidence=evidence, final_status=final_status, actor=actor,
+        project=project, mission_project=mission_project, finalize=False))
+    if not response.get("completed"):
+        return response
+    return _finalize_complete_claim_response(
+        response, evidence_obj, project, mission_project, actor)
 
 
 def revoke_claim(claim_id: str, reason: str,
