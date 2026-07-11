@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from constants import *  # noqa: F401,F403
 
@@ -27,6 +27,7 @@ __all__ = [
     "_retry_on_locked",
     "sqlite_lock_wait_count",
     "sqlite_lock_waits_in_window",
+    "register_lock_wait_observer",
     "_json_size_bytes",
     "_json_list_field",
     "_json_object_field",
@@ -91,6 +92,17 @@ _sqlite_lock_wait_counter = 0
 _sqlite_lock_wait_times: deque = deque(maxlen=4096)
 _sqlite_lock_wait_lock = threading.Lock()
 
+# Best-effort observers notified on every lock-wait retry. The MCP observability
+# collector registers one (HARDEN-63) so contention is attributable to the exact
+# in-flight tool; the web process leaves this empty. Kept in db.core so the
+# retry loop stays the single source of truth without importing an upward layer.
+_lock_wait_observers: List[Callable[[], None]] = []
+
+
+def register_lock_wait_observer(callback: "Callable[[], None]") -> None:
+    """Register a cheap, non-raising callback fired once per sqlite lock-wait retry."""
+    _lock_wait_observers.append(callback)
+
 
 def sqlite_lock_wait_count() -> int:
     """Lifetime lock-wait retry count (dashboard/observability)."""
@@ -113,6 +125,12 @@ def _record_sqlite_lock_wait() -> None:
     with _sqlite_lock_wait_lock:
         _sqlite_lock_wait_counter += 1
         _sqlite_lock_wait_times.append(now)
+    # Notify observers outside the lock; they must be cheap and must not raise.
+    for _observer in _lock_wait_observers:
+        try:
+            _observer()
+        except Exception:
+            pass
 
 
 def _retry_on_locked(thunk, attempts: int = 5, base_delay: float = 0.1):

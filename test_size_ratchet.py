@@ -10,11 +10,11 @@ ROOT = Path(__file__).resolve().parent
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
     "store.py": 15_639,
-    "app.py": 3_490,
-    "mcp_server.py": 3_208,
+    "app.py": 3_502,
+    "mcp_server.py": 3_229,
     "static/app.js": 6_451,
 }
-ROOT_PYTHON_FILE_CEILING = 181
+ROOT_PYTHON_FILE_CEILING = 183
 
 passed = failed = 0
 

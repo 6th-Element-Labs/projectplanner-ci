@@ -30,6 +30,7 @@ import store
 from mcp_observability import MCPObservability
 from mcp_dispatch import MCPToolDispatcher
 from mcp_http_timing import MCPServerTimingMiddleware
+from mcp_observability_http import MCPObservabilityEndpoint
 from mcp_auth import MCPAuthMiddleware
 
 store.init_project_registry()
@@ -89,6 +90,12 @@ mcp = FastMCP(
 # decorator here instruments every tool below without duplicating timing code in
 # ~150 handlers, while functools.wraps preserves the schemas FastMCP derives.
 _mcp_observability = MCPObservability()
+# HARDEN-63: attribute store lock-wait retries to the in-flight tool so per-tool
+# contention is visible even when the retry loop transparently recovers.
+try:
+    store.register_lock_wait_observer(_mcp_observability.note_sqlite_lock_wait)
+except Exception:
+    pass
 _mcp_dispatch = MCPToolDispatcher(
     # These are deliberately tiny diagnostics. Keeping them inline proves that
     # the event loop remains responsive while ordinary sync tools run in workers.
@@ -122,10 +129,13 @@ def _dumps(obj) -> str:
 def _require_write(ctx, project: str = "maxwell", scopes=("write:tasks",)):
     """Gate writes through the shared Switchboard bearer-principal path."""
     try:
-        return auth.authenticate(project, auth.bearer_from_mcp_context(ctx),
-                                 scopes, dev_actor="MCP")
+        principal = auth.authenticate(project, auth.bearer_from_mcp_context(ctx),
+                                      scopes, dev_actor="MCP")
     except PermissionError as e:
         raise ValueError(str(e))
+    # HARDEN-63: this call took the write path — feed the write-latency histogram.
+    _mcp_observability.mark_write()
+    return principal
 
 
 def _resolve_write_actor(principal, project: str = "maxwell", task_id: str = "",
@@ -740,10 +750,12 @@ def control_plane_probe(project: str = "maxwell", lane: str = "",
 
 @mcp.tool()
 def get_mcp_observability(tool: str = "", slow_limit: int = 50) -> str:
-    """Process-local MCP health: per-tool p50/p99/max latency, failures, SQLite
-    lock-wait count, and a bounded slow-call log. No arguments, results, tokens, or
-    other request content are retained. tool optionally filters by exact tool name;
-    slow_limit is capped by PM_MCP_SLOW_LOG_LIMIT."""
+    """Process-local MCP health: per-tool p50/p99/max latency, per-tool SQLite
+    lock-wait counts, write-path latency p50/p99 (per tool and aggregate), failures,
+    and a bounded slow-call log. No arguments, results, tokens, or other request
+    content are retained. tool optionally filters by exact tool name; slow_limit is
+    capped by PM_MCP_SLOW_LOG_LIMIT. The same snapshot is scrapeable over plain HTTP
+    at GET /observability for operators/monitors that don't speak MCP."""
     return _dumps(_mcp_observability.snapshot(tool=tool, slow_limit=slow_limit))
 
 
@@ -3200,8 +3212,17 @@ if __name__ == "__main__":
     # lets Switchboard attach timing/reconnect headers to success and error paths.
     # Timing wraps auth so even rejected (401) requests carry timing headers; auth wraps
     # the tool app so anonymous callers are turned away before any tool runs (BUG-46).
+    # The observability endpoint sits between timing and auth (HARDEN-63): operators
+    # scrape GET /observability without a token (read-only, no request content), and the
+    # response still carries the standard server-timing header.
+    app = MCPServerTimingMiddleware(
+        MCPObservabilityEndpoint(
+            MCPAuthMiddleware(mcp.streamable_http_app()),
+            _mcp_observability.snapshot,
+        )
+    )
     uvicorn.run(
-        MCPServerTimingMiddleware(MCPAuthMiddleware(mcp.streamable_http_app())),
+        app,
         host=mcp.settings.host,
         port=mcp.settings.port,
         log_level=mcp.settings.log_level.lower(),
