@@ -37,6 +37,12 @@ with store._conn("maxwell", timeout_s=1.25) as conn:
     check("WAL checkpoints are amortized across 4,000 pages",
           conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0] == 4_000)
 
+os.environ["PM_SQLITE_MMAP_BYTES"] = str(32 * 1024 * 1024)
+with store._conn("maxwell") as conn:
+    check("background jobs can opt into a bounded SQLite memory map",
+          conn.execute("PRAGMA mmap_size").fetchone()[0] == 32 * 1024 * 1024)
+os.environ.pop("PM_SQLITE_MMAP_BYTES", None)
+
 
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)
