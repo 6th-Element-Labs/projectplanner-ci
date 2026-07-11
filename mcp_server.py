@@ -209,7 +209,7 @@ def _project_ids_for_lane(lane: str) -> list[str]:
     matches = []
     for pid in store.project_ids():
         try:
-            if store.list_tasks(workstream=ws, project=pid):
+            if store.list_tasks_slim(workstream=ws, project=pid):
                 matches.append(pid)
         except Exception:
             continue
@@ -286,7 +286,7 @@ def _project_contract(project: str, lane: str = "", task_id: str = "",
     repo_topology = store.get_project_repo_topology(selected)
     boards_missions = store.list_project_boards(project=selected)
     repo_role_guide = store.repo_topology_role_guide(selected)
-    lane_tasks = store.list_tasks(workstream=ws, project=selected) if ws else []
+    lane_tasks = store.list_tasks_slim(workstream=ws, project=selected) if ws else []
     lane_name = None
     for lt in lane_tasks:
         if lt.get("_wsName"):

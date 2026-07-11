@@ -131,6 +131,22 @@ try:
     ok(contract["lane"]["id"] == "SEAM" and contract["assigned_task"]["task_id"] == "SEAM-1",
        "get_project_contract resolves lane from task")
 
+    # BUG-39: session bootstrap must stay on the slim/card task loader. Full
+    # task enrichment remains available through the explicit get_task call.
+    real_list_tasks = store.list_tasks
+    store.list_tasks = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("fat list_tasks called during agent bootstrap"))
+    try:
+        slim_contract = json.loads(mcp_server.get_project_contract(
+            project="vulkan", task_id="SEAM-1"))
+        ok(len(slim_contract["lane"]["tasks"]) == 2,
+           "project contract lane listing avoids fat task enrichment")
+        slim_lane_boot = call_boot(runtime="codex", lane="SEAM")
+        ok(slim_lane_boot["selected_project"] == "vulkan",
+           "lane project inference avoids fat task enrichment")
+    finally:
+        store.list_tasks = real_list_tasks
+
     inferred_lane = call_boot(runtime="codex", lane="SEAM")
     ok(inferred_lane["ok"] is True and inferred_lane["selected_project"] == "vulkan",
        "lane alone selects Vulkan")
