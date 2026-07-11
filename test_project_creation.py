@@ -190,7 +190,8 @@ try:
     seen_projects = []
 
     def fake_reconcile_alerts(project="maxwell", alert_to="switchboard/operator",
-                              min_severity="medium", dedupe_window_s=3600):
+                              min_severity="medium", dedupe_window_s=3600,
+                              incremental=False, **kwargs):
         seen_projects.append(project)
         return {"project": project, "ok": True, "alert_sent": False,
                 "deduped": False, "finding_count": 1,
