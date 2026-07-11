@@ -44,7 +44,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-3** | Delete dead MCP/REST surfaces (CONSOL-7, CONSOL-9) | 0.1 | — | In Review | ✅ | **CONSOL-7** PR #276 + `test_consol7_dead_surfaces.py`; **CONSOL-9** PR #297 + `test_consol9_h2_census.py`. `gmail_source.py` deferred → ARCH-MS-11 |
 | **ARCH-MS-4** | Caddy security headers + mission poller ETag (CONSOL-8) | 0.1 | — | In Review | ✅ | **CONSOL-8** PR #286 + `test_consol8_edge_mission_poll.py`. `deploy/Caddyfile` security headers + access log; `app.py` mission_status / dependency_graph `max_age=5` + ETag; ack poll visibility guard |
 | **ARCH-MS-5** | MCP read auth — bearer required on `/mcp` | 0.3 | — | Not Started | ⬜ | Reads still open; writes use `_require_write` only (`mcp_server.py`) |
-| **ARCH-MS-6** | `pyproject.toml` package scaffold (lockfile pending) | 0.2 | 1 | In Progress | 🔗 | **HARDEN-54** / PR #303 — `pyproject.toml`, `.python-version`, `uv.lock`; lockfile task split to ARCH-MS-13 |
+| **ARCH-MS-6** | `pyproject.toml` package scaffold (lockfile pending) | 0.2 | 1 | In Review | ✅ | **HARDEN-54** PR #303 + `tests/test_arch_ms6_pyproject_scaffold.py`. `pyproject.toml`, `.python-version`, generated `requirements*.txt`; lockfile → ARCH-MS-13 |
 | **ARCH-MS-7** | `src/switchboard/` package skeleton | 0.2 | 1 | In Review | 🟡 | `src/switchboard/` package tree + `settings.py` + `scripts/switchboard_path.py` |
 | **ARCH-MS-8** | `create_task` application command + REST/MCP wire | 0.2 | 7 | Not Started | ⬜ | — |
 | **ARCH-MS-9** | `test_arch_ms0_scaffold` CI gate | 0.2 | 7, 8 | In Review | 🟡 | `tests/test_arch_ms0_scaffold.py` — asserts package imports, `create_task` callable, REST+MCP share the application handler; auto-discovered by `scripts/switchboard_ci.sh` |
@@ -74,7 +74,7 @@ requires merge webhook or reconcile.
 | `app.py` | 3,275 | ARCH-MS-18 moved auth imports behind the package seam |
 | `mcp_server.py` | 3,157 | Pre-existing master drift remeasured by ARCH-MS-20 gate |
 | `static/app.js` | 6,566 | Held |
-| repo root `*.py` | 201 | Master had 200; ARCH-MS-20 adds planned `runner_store.py` leaf |
+| repo root `*.py` | 204 | NARRATE-12 (+2), ARCH-MS-4 (+1); ARCH-MS-6 test stays under `tests/` |
 
 Source: `test_size_ratchet.py` (CONSOL-6).
 
