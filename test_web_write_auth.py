@@ -28,6 +28,7 @@ except ModuleNotFoundError as exc:
 P = "switchboard"
 TOKEN = "web-write-token"
 ADMIN_TOKEN = "web-admin-token"
+SW_ADMIN = "sw-admin-token"
 ENV_TOKEN = os.environ["PM_AUTH_TOKEN"]
 TITLE = "no-auth write must not land"
 ENV_TITLE = "env-token write must bind identity"
@@ -272,6 +273,58 @@ try:
                          headers={"Authorization": f"Bearer {TOKEN}"}).json()
     ok(status2.get("acked_at") is not None and status2.get("ack_response") == "done",
        "message status reflects the ack and its response")
+
+    # UI-5 — members & access management.
+    m_forbidden = client.get(f"/api/access/members?project={P}",
+                             headers={"Authorization": f"Bearer {TOKEN}"})
+    ok(m_forbidden.status_code == 403, "members list refused without write:system")
+
+    store.create_principal(kind="agent", display_name="switchboard/owner", token=SW_ADMIN,
+                           scopes=["read", "write:tasks", "write:projects", "write:system", "admin"],
+                           project=P)
+    granted = client.post(f"/api/access/project_role?project={P}",
+                          json={"subject_kind": "principal", "subject_id": "codex/teammate",
+                                "role": "contributor"},
+                          headers={"Authorization": f"Bearer {SW_ADMIN}"})
+    ok(granted.status_code == 200 and granted.json().get("role") == "contributor",
+       "admin grants a project role")
+
+    members = client.get(f"/api/access/members?project={P}",
+                         headers={"Authorization": f"Bearer {SW_ADMIN}"})
+    mj = members.json()
+    ok(members.status_code == 200 and
+       any(m["subject_id"] == "codex/teammate" and m["role"] == "contributor"
+           for m in mj["members"]),
+       "members list shows the new grant with its role")
+    ok("role_definitions" in mj and "visibility" in mj and "global_auth" in mj,
+       "members payload carries role definitions, visibility, and auth mode for the UI")
+
+    revoked = client.post(f"/api/access/project_role/revoke?project={P}",
+                          json={"subject_kind": "principal", "subject_id": "codex/teammate",
+                                "role": "contributor"},
+                          headers={"Authorization": f"Bearer {SW_ADMIN}"})
+    ok(revoked.status_code == 200 and revoked.json().get("revoked") is True,
+       "admin revokes a project role")
+    members2 = client.get(f"/api/access/members?project={P}",
+                          headers={"Authorization": f"Bearer {SW_ADMIN}"}).json()
+    ok(not any(m["subject_id"] == "codex/teammate" for m in members2["members"]),
+       "revoked grant drops out of the members list")
+
+    revoke_forbidden = client.post(f"/api/access/project_role/revoke?project={P}",
+                                   json={"subject_kind": "principal", "subject_id": "x", "role": "viewer"},
+                                   headers={"Authorization": f"Bearer {TOKEN}"})
+    ok(revoke_forbidden.status_code == 403, "role revoke refused without write:system")
+
+    invite_noglobal = client.post(f"/api/access/invite?project={P}",
+                                  json={"email": "teammate@company.com", "role": "contributor"},
+                                  headers={"Authorization": f"Bearer {SW_ADMIN}"})
+    ok(invite_noglobal.status_code == 400 and
+       "global auth" in (invite_noglobal.json().get("detail") or ""),
+       "email invite returns a clear message when global auth is off")
+    invite_bad = client.post(f"/api/access/invite?project={P}",
+                             json={"email": "not-an-email", "role": "contributor"},
+                             headers={"Authorization": f"Bearer {SW_ADMIN}"})
+    ok(invite_bad.status_code == 400, "invite rejects a malformed email")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

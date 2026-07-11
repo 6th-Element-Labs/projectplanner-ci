@@ -785,7 +785,137 @@ const TeepPlan = {
             this._commsFlash(e.message || 'Failed to send test.', 'text-danger');
         }
     },
+    // ---- UI-5: members & access management --------------------------------
+    openMembers() {
+        const proj = window.PM_PROJECT || 'maxwell';
+        this._mmProject = proj;
+        const label = document.getElementById('mm-project'); if (label) label.textContent = `· ${proj}`;
+        const flash = document.getElementById('mm-add-flash'); if (flash) { flash.textContent = ''; flash.className = 'small mt-2 text-secondary'; }
+        const subj = document.getElementById('mm-subject'); if (subj) subj.value = '';
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('members-modal')).show();
+        this.loadMembers();
+    },
 
+    async loadMembers() {
+        const proj = this._mmProject || window.PM_PROJECT || 'maxwell';
+        const host = document.getElementById('mm-members');
+        try {
+            const data = await (await fetch(`api/access/members?project=${encodeURIComponent(proj)}`)).json();
+            if (data.detail) throw new Error(data.detail);
+            this._mmGlobalAuth = !!data.global_auth;
+            this.renderMembers(data);
+        } catch (e) {
+            if (host) host.innerHTML = `<div class="text-danger small">${this.esc(e.message || 'Failed to load members.')}</div>`;
+        }
+    },
+
+    renderMembers(data) {
+        // Private-visibility explainer (ACCESS-14 rules), stated on-page.
+        const vis = document.getElementById('mm-visibility');
+        if (vis) {
+            if (data.visibility === 'private') {
+                vis.style.display = '';
+                vis.innerHTML = `<i class="ti ti-lock me-1"></i><strong>Private project.</strong> Who can see it: owner <span class="text-success">✓</span> · invited members <span class="text-success">✓</span> · org admins <span class="text-success">✓</span> · other org members <span class="text-danger">✗</span>.`;
+            } else {
+                vis.style.display = '';
+                vis.innerHTML = `<i class="ti ti-users me-1"></i><strong>Shared project.</strong> Everyone in the organization can see it; roles below control what they can change.`;
+            }
+        }
+        const members = data.members || [];
+        const count = document.getElementById('mm-count');
+        if (count) count.textContent = `${members.length}`;
+        const host = document.getElementById('mm-members');
+        if (!host) return;
+        if (!members.length) {
+            host.innerHTML = `<div class="text-secondary small">No role grants yet — the owner and org admins still have access.</div>`;
+            return;
+        }
+        const roles = ['viewer', 'commenter', 'contributor', 'operator', 'admin', 'owner'];
+        const kindBadge = (k) => `<span class="badge bg-secondary-lt ms-1">${this.esc(k)}</span>`;
+        host.innerHTML = `<table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Member</th><th>Role</th><th>Granted by</th><th></th></tr></thead>
+            <tbody>${members.map((m) => {
+                const opts = roles.map((r) => `<option value="${r}"${r === m.role ? ' selected' : ''}>${r}</option>`).join('');
+                const who = this.esc(m.display_name || m.subject_id);
+                const sub = m.email && m.email !== m.display_name ? `<div class="text-secondary small">${this.esc(m.email)}</div>` : '';
+                const enc = encodeURIComponent(JSON.stringify({ subject_kind: m.subject_kind, subject_id: m.subject_id, role: m.role }));
+                return `<tr>
+                    <td><span class="fw-medium">${who}</span>${kindBadge(m.subject_kind)}${sub}</td>
+                    <td><select class="form-select form-select-sm" style="width:auto" data-mm-role="${enc}">${opts}</select></td>
+                    <td class="text-secondary small">${this.esc(m.created_by || '—')}</td>
+                    <td class="text-end"><button class="btn btn-sm btn-ghost-danger p-1" data-mm-revoke="${enc}" title="Revoke"><i class="ti ti-trash"></i></button></td>
+                </tr>`;
+            }).join('')}</tbody></table>`;
+        host.querySelectorAll('[data-mm-role]').forEach((sel) =>
+            sel.addEventListener('change', () => this.changeMemberRole(JSON.parse(decodeURIComponent(sel.getAttribute('data-mm-role'))), sel.value)));
+        host.querySelectorAll('[data-mm-revoke]').forEach((b) =>
+            b.addEventListener('click', () => this.revokeMember(JSON.parse(decodeURIComponent(b.getAttribute('data-mm-revoke'))))));
+    },
+
+    async _accessPost(path, body) {
+        const proj = this._mmProject || window.PM_PROJECT || 'maxwell';
+        const res = await fetch(`api/access/${path}?project=${encodeURIComponent(proj)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(res.status === 403
+            ? 'You need admin on this project to manage members.'
+            : (data.detail || data.error || `Failed (${res.status})`));
+        return data;
+    },
+
+    async grantMemberRole(grant) {
+        await this._accessPost('project_role', grant);
+    },
+
+    // Change role = grant the new role, then revoke the old one (grants are per-role rows).
+    async changeMemberRole(grant, newRole) {
+        if (newRole === grant.role) return;
+        try {
+            await this.grantMemberRole({ subject_kind: grant.subject_kind, subject_id: grant.subject_id, role: newRole });
+            if (grant.role) await this._accessPost('project_role/revoke', grant);
+        } catch (e) {
+            const flash = document.getElementById('mm-add-flash');
+            if (flash) { flash.textContent = e.message; flash.className = 'small mt-2 text-danger'; }
+        }
+        this.loadMembers();
+    },
+
+    async revokeMember(grant) {
+        try { await this._accessPost('project_role/revoke', grant); }
+        catch (e) {
+            const flash = document.getElementById('mm-add-flash');
+            if (flash) { flash.textContent = e.message; flash.className = 'small mt-2 text-danger'; }
+        }
+        this.loadMembers();
+    },
+
+    async addMember() {
+        const flash = document.getElementById('mm-add-flash');
+        const setFlash = (m, c) => { if (flash) { flash.textContent = m; flash.className = `small mt-2 ${c}`; } };
+        const kind = document.getElementById('mm-kind')?.value || 'user';
+        const subject = (document.getElementById('mm-subject')?.value || '').trim();
+        const role = document.getElementById('mm-role')?.value || 'contributor';
+        if (!subject) { setFlash('Enter an email or subject id.', 'text-danger'); return; }
+        const btn = document.getElementById('mm-add'); if (btn) btn.disabled = true;
+        setFlash('Adding…', 'text-secondary');
+        try {
+            if (kind === 'user' && subject.includes('@')) {
+                const r = await this._accessPost('invite', { email: subject, role });
+                setFlash(`Invited ${r.invited?.display_name || subject} as ${role}.`, 'text-success');
+            } else {
+                await this.grantMemberRole({ subject_kind: kind, subject_id: subject, role });
+                setFlash(`Granted ${role} to ${subject}.`, 'text-success');
+            }
+            const subEl = document.getElementById('mm-subject'); if (subEl) subEl.value = '';
+            this.loadMembers();
+        } catch (e) {
+            setFlash(e.message || 'Failed to add member.', 'text-danger');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    },
 
     // Board/overview columns come from the phases actually present: Maxwell's 5 lifecycle phases,
     // or Helm's "Wave 1..4". Falls back to the canonical 5 when a plan has no/standard phases.
@@ -5833,6 +5963,21 @@ const TeepPlan = {
                     navigator.clipboard.writeText(src.value).then(done).catch(() => { src.select(); document.execCommand('copy'); done(); });
                 } else { src.select(); document.execCommand('copy'); done(); }
             });
+        });
+        // UI-5: members & access.
+        const memBtn = document.getElementById('btn-project-members');
+        if (memBtn) memBtn.addEventListener('click', () => this.openMembers());
+        const mmRefresh = document.getElementById('mm-refresh');
+        if (mmRefresh) mmRefresh.addEventListener('click', () => this.loadMembers());
+        const mmAdd = document.getElementById('mm-add');
+        if (mmAdd) mmAdd.addEventListener('click', () => this.addMember());
+        const mmKind = document.getElementById('mm-kind');
+        if (mmKind) mmKind.addEventListener('change', () => {
+            const isUser = mmKind.value === 'user';
+            const lbl = document.getElementById('mm-subject-label');
+            const sub = document.getElementById('mm-subject');
+            if (lbl) lbl.textContent = isUser ? 'Email' : 'Subject id';
+            if (sub) sub.placeholder = isUser ? 'teammate@company.com' : 'principal or agent id';
         });
         // Ask Taikun (plan-wide chat)
         const askSend = document.getElementById('ask-send');

@@ -254,6 +254,39 @@ def grant_project_role(project_id: str, subject_kind: str, subject_id: str, role
     return out
 
 
+def revoke_project_role(project_id: str, subject_kind: str, subject_id: str,
+                        role: str, created_by: str = "system") -> Dict[str, Any]:
+    """Revoke one project role grant (UI-5 members management).
+
+    Idempotent: revoking an absent/already-revoked grant returns revoked=False with a
+    note rather than raising. Owner access lives in project_access.owner_user_id, not in
+    grants, so this can never strip a project's owner.
+    """
+    init_project_registry()
+    if not has_project(project_id):
+        return {"error": f"unknown project: {project_id}"}
+    subject_kind = (subject_kind or "").strip().lower()
+    subject_id = (subject_id or "").strip()
+    role = (role or "").strip().lower()
+    if not subject_id or not role:
+        return {"error": "subject_id and role are required"}
+    now = time.time()
+    with _registry_conn() as c:
+        cur = c.execute(
+            "UPDATE project_role_grants SET revoked_at=? WHERE project_id=? AND "
+            "subject_kind=? AND subject_id=? AND role=? AND revoked_at IS NULL",
+            (now, project_id, subject_kind, subject_id, role),
+        )
+        revoked = cur.rowcount > 0
+    result = {"project_id": project_id, "subject_kind": subject_kind,
+              "subject_id": subject_id, "role": role, "revoked": revoked}
+    if revoked:
+        result["revoked_at"] = now
+    else:
+        result["note"] = "no active grant to revoke"
+    return result
+
+
 def list_project_role_grants(project_id: str, include_revoked: bool = False) -> List[Dict[str, Any]]:
     init_project_registry()
     q = "SELECT * FROM project_role_grants WHERE project_id=?"
