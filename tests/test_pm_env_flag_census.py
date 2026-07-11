@@ -5,8 +5,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from path_setup import ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "pm_env_flag_census.py"
 
 
