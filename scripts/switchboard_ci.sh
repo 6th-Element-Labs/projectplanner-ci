@@ -122,6 +122,7 @@ run_test test_runner_control_api.py
 run_test test_session_health.py
 run_test test_work_session_health_panel.py
 run_test test_fleet_control.py
+run_test test_api_keys_settings.py
 run_test test_session_policy_profiles.py
 run_test test_side_effect_ledger.py
 run_test test_signals.py

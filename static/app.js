@@ -633,6 +633,108 @@ const TeepPlan = {
         return `${Math.round(s / 86400)}d`;
     },
 
+    // ---- UI-4: Settings → API keys ----------------------------------------
+    // Self-serve scoped tokens over /api/access/tokens: mint with chosen scopes, show the
+    // raw key ONCE, list active keys, revoke. Admin-gated server-side (write:system) — a
+    // non-admin load returns 403 and we show a read-only notice. Storage is hash-only, so
+    // the raw token is never re-displayed after creation.
+    openApiKeys(projectId) {
+        const proj = projectId || window.PM_PROJECT || 'maxwell';
+        const lbl = document.getElementById('apikeys-project-label'); if (lbl) lbl.textContent = proj;
+        ['apikeys-body', 'apikeys-admin-warn', 'apikeys-new-banner', 'apikeys-create-form'].forEach((id) => {
+            const el = document.getElementById(id); if (el) el.style.display = 'none';
+        });
+        const lf = document.getElementById('apikeys-load-flash'); if (lf) { lf.style.display = ''; lf.textContent = 'Loading…'; }
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('apikeys-modal')).show();
+        this._loadApiKeys();
+    },
+    async _loadApiKeys() {
+        const proj = window.PM_PROJECT || 'maxwell';
+        const lf = document.getElementById('apikeys-load-flash');
+        let res, data;
+        try {
+            res = await fetch(`/api/access/tokens?project=${encodeURIComponent(proj)}`);
+            if (res.status === 401 || res.status === 403) {
+                if (lf) lf.style.display = 'none';
+                const w = document.getElementById('apikeys-admin-warn'); if (w) w.style.display = '';
+                return;
+            }
+            data = await res.json();
+        } catch (e) { if (lf) lf.textContent = 'Could not load API keys.'; return; }
+        if (lf) lf.style.display = 'none';
+        const body = document.getElementById('apikeys-body'); if (body) body.style.display = '';
+        this._apikeysData = data;
+        this._renderApiKeyForm(data);
+        this._renderApiKeysTable(data.tokens || []);
+    },
+    _renderApiKeyForm(data) {
+        const defs = data.scope_definitions || {};
+        const kindSel = document.getElementById('apikeys-kind');
+        if (kindSel) kindSel.innerHTML = (data.valid_kinds || ['agent']).map((k) => `<option ${k === 'agent' ? 'selected' : ''}>${this.esc(k)}</option>`).join('');
+        const roleSel = document.getElementById('apikeys-role');
+        if (roleSel) roleSel.innerHTML = `<option value="">— custom —</option>` + Object.keys(defs).map((r) => `<option value="${this.esc(r)}">${this.esc(r)}</option>`).join('');
+        const allScopes = [...new Set(Object.values(defs).flat())].sort();
+        const box = document.getElementById('apikeys-scopes');
+        if (box) box.innerHTML = allScopes.map((s) => `<label class="form-check form-check-inline m-0"><input class="form-check-input apikeys-scope" type="checkbox" value="${this.esc(s)}"><span class="form-check-label font-monospace small">${this.esc(s)}</span></label>`).join('');
+        if (roleSel && box) roleSel.onchange = () => {
+            const scopes = defs[roleSel.value] || [];
+            box.querySelectorAll('.apikeys-scope').forEach((cb) => { if (roleSel.value) cb.checked = scopes.includes(cb.value); });
+        };
+    },
+    _renderApiKeysTable(tokens) {
+        const el = document.getElementById('apikeys-table');
+        if (!el) return;
+        if (!tokens.length) { el.innerHTML = `<div class="text-secondary small">No API keys yet. Create one above.</div>`; return; }
+        const rows = tokens.map((t) => {
+            const scopes = (t.scopes || []).map((s) => `<span class="badge bg-secondary-lt me-1 font-monospace">${this.esc(s)}</span>`).join('') || '<span class="text-secondary">—</span>';
+            const created = t.created_at ? new Date(t.created_at * 1000).toLocaleDateString() : '—';
+            return `<tr>
+                <td><div class="fw-medium">${this.esc(t.display_name || t.id)}</div><div class="text-secondary font-monospace" style="font-size:11px">${this.esc(t.id)}</div></td>
+                <td><span class="badge bg-secondary-lt">${this.esc(t.kind || '')}</span></td>
+                <td>${scopes}</td>
+                <td class="text-secondary small">${this.esc(created)}</td>
+                <td class="text-end"><button class="btn btn-sm btn-ghost-danger" data-revoke-key="${this.esc(t.id)}" data-revoke-name="${this.esc(t.display_name || t.id)}">Revoke</button></td>
+            </tr>`;
+        }).join('');
+        el.innerHTML = `<div class="table-responsive"><table class="table table-sm align-middle mb-0"><thead><tr><th>Name</th><th>Kind</th><th>Scopes</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        el.querySelectorAll('[data-revoke-key]').forEach((b) =>
+            b.addEventListener('click', () => this._revokeApiKey(b.getAttribute('data-revoke-key'), b.getAttribute('data-revoke-name'))));
+    },
+    async _createApiKey() {
+        const flash = document.getElementById('apikeys-create-flash');
+        const setFlash = (cls, msg) => { if (flash) { flash.className = 'small text-' + cls; flash.textContent = msg; } };
+        const name = (document.getElementById('apikeys-name').value || '').trim();
+        const kind = document.getElementById('apikeys-kind').value;
+        const scopes = [...document.querySelectorAll('.apikeys-scope:checked')].map((c) => c.value);
+        if (!scopes.length) { setFlash('danger', 'Pick at least one scope.'); return; }
+        setFlash('secondary', 'Creating…');
+        try {
+            const res = await fetch(`/api/access/tokens?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ display_name: name || kind, kind, scopes }),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+            setFlash('secondary', '');
+            const banner = document.getElementById('apikeys-new-banner');
+            document.getElementById('apikeys-new-token').value = data.token || '';
+            if (banner) banner.style.display = '';
+            document.getElementById('apikeys-name').value = '';
+            document.getElementById('apikeys-create-form').style.display = 'none';
+            this._loadApiKeys();
+        } catch (e) { setFlash('danger', `Create failed: ${e.message}`); }
+    },
+    async _revokeApiKey(id, name) {
+        if (!id || !window.confirm(`Revoke API key "${name || id}"?\nThis immediately and permanently disables it.`)) return;
+        try {
+            const res = await fetch(`/api/access/tokens/${encodeURIComponent(id)}/revoke?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`,
+                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+        } catch (e) { /* result reflected on reload */ }
+        this._loadApiKeys();
+    },
+
     // ---- UI-14: Settings → Communications ---------------------------------
     // Inbound domain associations (the editable UI-13 routing map) + per-project outbound
     // recipients/cadence. Admin-gated writes; anyone who can read the project can view.
@@ -6144,6 +6246,24 @@ const TeepPlan = {
         // Prime the bell badge and keep it fresh (unacked required messages the operator sent).
         this.loadAckInbox();
         if (!this._ackPoll) this._ackPoll = setInterval(() => this.loadAckInbox(), 30000);
+        // UI-4: API keys settings (create / list / revoke scoped tokens).
+        const apikeysBtn = document.getElementById('btn-project-apikeys');
+        if (apikeysBtn) apikeysBtn.addEventListener('click', () => this.openApiKeys(window.PM_PROJECT));
+        const apikeysToggle = document.getElementById('apikeys-create-toggle');
+        if (apikeysToggle) apikeysToggle.addEventListener('click', () => {
+            const f = document.getElementById('apikeys-create-form');
+            if (f) f.style.display = f.style.display === 'none' ? '' : 'none';
+        });
+        const apikeysCreate = document.getElementById('apikeys-create-btn');
+        if (apikeysCreate) apikeysCreate.addEventListener('click', () => this._createApiKey());
+        const apikeysCopy = document.getElementById('apikeys-copy-token');
+        if (apikeysCopy) apikeysCopy.addEventListener('click', () => {
+            const i = document.getElementById('apikeys-new-token');
+            if (!i) return;
+            i.select();
+            if (navigator.clipboard) navigator.clipboard.writeText(i.value).catch(() => {});
+            else { try { document.execCommand('copy'); } catch (e) { /* noop */ } }
+        });
         // UI-14: Communications settings (inbound domains + outbound recipients).
         const commsBtn = document.getElementById('btn-project-comms');
         if (commsBtn) commsBtn.addEventListener('click', () => this.openComms(window.PM_PROJECT));
