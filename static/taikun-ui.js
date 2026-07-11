@@ -55,8 +55,9 @@
   function read() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
   function write(v) { try { localStorage.setItem(KEY, v ? '1' : '0'); } catch (e) {} }
 
-  var stored = read();
-  var collapsed = (stored === null) ? true : (stored === '1'); // DEFAULT: collapsed
+  // Persistent, always-expanded sidebar: no collapse toggle, no hover-overlay (the rail
+  // must never cover content). Kept the render() below only to reserve the 15rem gutter.
+  var collapsed = false;
 
   var DESKTOP = '(min-width: 992px)';
   function render() {

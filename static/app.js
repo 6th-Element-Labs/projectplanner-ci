@@ -4724,10 +4724,9 @@ const TeepPlan = {
         };
         const pills = (g.nodes || []).map((n) => pill(n, n.external)).join('');
         const contextPills = (g.context_nodes || []).map((n) => pill(n, false)).join('');
-        return `<div class="card mb-4" id="mission-dag-panel"><div class="card-header">
-            <h3 class="card-title"><i class="ti ti-git-fork me-2"></i>Dependency map</h3>
-            ${this._missionAuthorButtons()}
-            <div class="card-actions text-secondary small ms-auto">${[
+        return `<div class="card mb-4" id="mission-dag-panel"><div class="card-header d-flex flex-wrap align-items-center gap-2">
+            <h3 class="card-title mb-0 text-nowrap"><i class="ti ti-git-fork me-2"></i>Dependency map</h3>
+            <div class="text-secondary small mx-auto text-center">${[
                 [stats.done_count, 'done'],
                 [stats.done_unproven_count, 'done · no proof'],
                 [stats.in_progress_count, 'in progress'],
@@ -4737,6 +4736,7 @@ const TeepPlan = {
                 [stats.external_node_count, 'external'],
                 [stats.context_task_count, 'context'],
             ].filter(([n]) => n).map(([n, l]) => `${n} ${l}`).join(' · ') || 'no tasks'}</div>
+            ${this._missionAuthorButtons()}
         </div><div class="card-body">
             <div class="mb-2">${legend}</div>
             <div id="mission-dag-graph" class="mission-dag-graph overflow-auto mb-3"></div>
