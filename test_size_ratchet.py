@@ -12,9 +12,13 @@ LINE_CEILINGS = {
     "store.py": 15_470,  # ARCH-MS-20 extracted runner persistence/control into runner_store.py
     "app.py": 3_274,  # ARCH-MS-18/8 share one package bootstrap and thin create adapter
     "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
-    "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
+    "static/app.js": 4_888,  # ARCH-MS-21 composition root after board/mission/state extraction
+    "static/js/api.js": 25,  # project-aware fetch boundary
+    "static/js/state.js": 79,  # application state and UI vocabularies
+    "static/js/board.js": 227,  # board filters/cards/summary rendering
+    "static/js/mission.js": 1_379,  # deliverable mission cockpit and authoring
 }
-ROOT_PYTHON_FILE_CEILING = 204  # NARRATE-12 (+2) then ARCH-MS-4 adds test_consol8_edge_mission_poll.py (CONSOL-8 CI lock)
+ROOT_PYTHON_FILE_CEILING = 205  # ARCH-MS-4 then ARCH-MS-21 add one focused regression proof each
 
 passed = failed = 0
 
