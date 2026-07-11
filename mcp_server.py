@@ -2493,6 +2493,21 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
 
 
 @mcp.tool()
+def link_tasks_to_deliverable(deliverable_id: str, links: list[dict], ctx: Context,
+                              project: str = "maxwell") -> str:
+    """Link many explicitly routed tasks to one deliverable in one write transaction.
+
+    Each links item requires task_project and task_id. Optional fields match the
+    single-link tool: milestone_id, board_id/mission_id, role, blocks_deliverable,
+    proof_required/proof_required_json, and metadata/metadata_json.
+    """
+    principal = _require_write(ctx, project, ("write:tasks",))
+    result = store.link_tasks_to_deliverable(
+        deliverable_id, links, actor=auth.actor(principal), project=project)
+    return _dumps(result)
+
+
+@mcp.tool()
 def create_board(title: str, ctx: Context, project: str = "maxwell",
                  board_id: str = "", kind: str = "board", status: str = "active",
                  purpose: str = "", end_state: str = "", description: str = "",
