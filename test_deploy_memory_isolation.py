@@ -37,10 +37,14 @@ ok("MemorySwapMax=0" in guards, "apply-resource-guards sets MemorySwapMax=0")
 ok("MemoryMin=${mem_min}" in guards, "apply-resource-guards sets MemoryMin")
 ok("MemoryMax=${mem_max}" in guards, "apply-resource-guards sets MemoryMax on batch jobs")
 ok("320M" in guards, "ci-gate keeps 320M MemoryMax")
+ok(re.search(r"apply_batch\s+projectplanner-reconcile\.service\s+20\s+384M\s+512M", guards) is not None,
+   "reconcile keeps the production-validated 384M/512M envelope")
 
 ok("MemorySwapMax=0" in verify, "verify script checks MemorySwapMax=0")
 ok("grep -q zram" in verify, "verify script checks zram swap")
 ok("MemoryMax" in verify, "verify script checks batch MemoryMax")
+ok("projectplanner-reconcile.service MemoryMax <= 512M" in verify,
+   "verify script accepts the reconcile-specific hard cap")
 ok("setup-zram-swap.sh" in provision, "PROVISION.md documents zram setup")
 ok("verify_memory_isolation.sh" in provision, "PROVISION.md documents verification")
 
