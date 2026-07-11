@@ -193,17 +193,21 @@ try:
                               min_severity="medium", dedupe_window_s=3600):
         seen_projects.append(project)
         return {"project": project, "ok": True, "alert_sent": False,
-                "deduped": False, "finding_count": 0}
+                "deduped": False, "finding_count": 1,
+                "findings": [{"large_detail": "x" * 100_000}]}
 
     jobs.store.run_reconcile_alerts = fake_reconcile_alerts
     try:
-        jobs.reconcile_alerts()
+        scheduled = jobs.reconcile_alerts()
     finally:
         jobs.store.run_reconcile_alerts = original_reconcile_alerts
         if original_recon_projects is not None:
             os.environ["PM_RECON_ALERT_PROJECTS"] = original_recon_projects
     ok({"vulkan", "vkrender", "helm", "switchboard"}.issubset(set(seen_projects)),
        "scheduled reconcile defaults across dynamic and built-in projects")
+    ok(all("findings" not in r and r.get("finding_count") == 1
+           for r in scheduled.get("results") or []),
+       "scheduled reconcile retains bounded summaries, not full finding payloads")
 
     # UI-15: webhook-delivery evidence powers the "Verify connection" button.
     deliveries0 = store.github_webhook_deliveries("chart-renderer")
