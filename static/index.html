@@ -184,6 +184,7 @@
                         <li class="nav-item"><a class="nav-link" id="toptab-mission" data-bs-toggle="tab" href="#tab-mission" role="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverable</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span></a></li>
+                        <li class="nav-item" id="nav-settings" style="display:none"><a class="nav-link" id="toptab-settings" data-bs-toggle="tab" href="#tab-settings" role="tab"><span class="nav-link-icon"><i class="ti ti-settings"></i></span><span class="nav-link-title">Settings</span></a></li>
                     </ul>
                     <div class="mt-auto px-2 pb-2 tk-rail-full">
                         <button id="btn-new-project" class="btn btn-sm btn-outline-light w-100 mb-2" type="button"><i class="ti ti-folder-plus me-1"></i>New project</button>
@@ -396,6 +397,13 @@
                                 <div class="card-body" id="mission-page">
                                     <div class="text-secondary small">Loading mission…</div>
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- UI-9: admin-gated project & provenance settings (rendered by app.js on tab show) -->
+                        <div class="tab-pane" id="tab-settings" role="tabpanel">
+                            <div id="settings-page" class="mt-3">
+                                <div class="text-secondary small">Loading settings…</div>
                             </div>
                         </div>
                     </div>
