@@ -1420,6 +1420,21 @@ async def submit_deliverable_outcome(request: Request, deliverable_id: str,
     return result
 
 
+@app.post("/api/deliverables/{deliverable_id}/archive")
+async def archive_deliverable_route(request: Request, deliverable_id: str,
+                                    body: dict = Body(default={}),
+                                    project: str = Query(...)):
+    """UI-11: archive a deliverable (or restore it). Body {"archived": bool} (default true)."""
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    archived = True if not body else bool(body.get("archived", True))
+    result = store.archive_deliverable(
+        deliverable_id, project=project, actor=auth.actor(principal), archived=archived)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.patch("/api/deliverables/breakdown_proposals/{proposal_id}")
 async def update_deliverable_breakdown_proposal(request: Request, proposal_id: str,
                                                 body: dict = Body(...),

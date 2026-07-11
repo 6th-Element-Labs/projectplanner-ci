@@ -1622,6 +1622,26 @@ def list_deliverable_summaries(project: str = DEFAULT_PROJECT,
     return [dict(row, mission_id=row["board_id"] or None) for row in rows]
 
 
+def archive_deliverable(deliverable_id: str, project: str = DEFAULT_PROJECT,
+                        actor: str = "user", archived: bool = True) -> Dict[str, Any]:
+    """UI-11: archive a deliverable (or restore it) by flipping its status to/from
+    'archived'. Archived deliverables are hidden from the picker by default but remain
+    fully readable — nothing is deleted. Restore lands in 'in_review' (the operator can
+    re-mark it Done)."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    deliverable = get_deliverable(deliverable_id, project=project)
+    if not deliverable:
+        return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+    new_status = "archived" if archived else "in_review"
+    now = time.time()
+    with _conn(project) as c:
+        c.execute("UPDATE deliverables SET status=?, updated_at=? WHERE id=?",
+                  (new_status, now, deliverable_id))
+    return {"ok": True, "deliverable_id": deliverable_id, "status": new_status,
+            "archived": archived, "actor": actor}
+
+
 def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
     links = deliverable.get("task_links") or []
     status_counts: Dict[str, int] = {}

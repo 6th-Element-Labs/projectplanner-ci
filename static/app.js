@@ -4782,6 +4782,56 @@ const TeepPlan = {
         return html;
     },
 
+    // UI-11: deliverables the picker should show — archived ones are hidden unless the
+    // "Show archived" toggle is on, but the currently-selected one always stays visible.
+    _pickerDeliverables() {
+        const showArchived = !!(document.getElementById('mission-show-archived') || {}).checked;
+        const cur = this.selectedDeliverableId;
+        return (this.deliverables || []).filter((d) =>
+            showArchived || (d.status || '') !== 'archived' || d.id === cur);
+    },
+
+    // UI-11: reflect the selected deliverable's archived state on the header button.
+    _syncArchiveButton() {
+        const btn = document.getElementById('mission-archive');
+        if (!btn) return;
+        const cur = (this.deliverables || []).find((d) => d.id === this.selectedDeliverableId);
+        if (!cur) { btn.style.display = 'none'; return; }
+        btn.style.display = '';
+        const isArchived = (cur.status || '') === 'archived';
+        btn.innerHTML = isArchived
+            ? '<i class="ti ti-archive-off me-1"></i>Unarchive'
+            : '<i class="ti ti-archive me-1"></i>Archive';
+        btn.title = isArchived ? 'Restore this deliverable' : 'Archive this deliverable';
+    },
+
+    // UI-11: archive / restore the selected deliverable (explicit confirm on archive).
+    async _archiveSelectedDeliverable() {
+        const id = (this.selectedDeliverableId || '').trim();
+        if (!id) return;
+        const cur = (this.deliverables || []).find((d) => d.id === id);
+        const isArchived = cur && (cur.status || '') === 'archived';
+        const willArchive = !isArchived;
+        const title = (cur && (cur.title || cur.id)) || id;
+        if (willArchive && !window.confirm(
+            `Archive “${title}”?\n\nIt will be hidden from the deliverable picker (tick “Show archived” to find it again). Nothing is deleted.`)) return;
+        try {
+            const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/archive`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ archived: willArchive }),
+            });
+            if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || d.error || `HTTP ${res.status}`); }
+            // Just archived and archived ones are hidden → drop the selection so the picker
+            // falls to the first visible deliverable.
+            if (willArchive && !(document.getElementById('mission-show-archived') || {}).checked) {
+                this.selectedDeliverableId = '';
+            }
+            await this.refreshMissionPage(true);
+        } catch (e) {
+            window.alert(`Could not ${willArchive ? 'archive' : 'restore'} the deliverable: ${e.message}`);
+        }
+    },
+
     async refreshMissionPage(reloadDeliverables = false) {
         const el = document.getElementById('mission-page');
         const picker = document.getElementById('mission-deliverable-picker');
@@ -4796,17 +4846,20 @@ const TeepPlan = {
             return;
         }
         if (picker) {
-            const cur = this.selectedDeliverableId;
-            picker.innerHTML = this.deliverables.length
-                ? this.deliverables.map((d) =>
-                    `<option value="${this.esc(d.id)}"${d.id === cur ? ' selected' : ''}>${this.esc(d.title || d.id)}</option>`).join('')
+            const visible = this._pickerDeliverables();
+            let cur = this.selectedDeliverableId;
+            if (cur && !visible.some((d) => d.id === cur)) { cur = ''; this.selectedDeliverableId = ''; }
+            picker.innerHTML = visible.length
+                ? visible.map((d) =>
+                    `<option value="${this.esc(d.id)}"${d.id === cur ? ' selected' : ''}>${this.esc(d.title || d.id)}${(d.status || '') === 'archived' ? ' · archived' : ''}</option>`).join('')
                 : '<option value="">No deliverables yet</option>';
-            if (!cur && this.deliverables.length) {
-                this.selectedDeliverableId = this.deliverables[0].id;
+            if (!cur && visible.length) {
+                this.selectedDeliverableId = visible[0].id;
                 picker.value = this.selectedDeliverableId;
             }
         }
         this._syncHeaderDeliverable();
+        this._syncArchiveButton();
         if (!this.selectedDeliverableId) {
             el.innerHTML = `<div class="empty py-5"><div class="empty-icon"><i class="ti ti-target-arrow"></i></div>
                 <p class="empty-title">No mission deliverables</p>
@@ -5185,7 +5238,7 @@ const TeepPlan = {
         const sel = document.getElementById('header-deliverable-switcher');
         const wrap = document.getElementById('header-deliverable-wrap');
         const picker = document.getElementById('mission-deliverable-picker');
-        const list = this.deliverables || [];
+        const list = this._pickerDeliverables();
         if (!list.length) {
             if (wrap) wrap.style.display = 'none';
             if (picker) picker.innerHTML = '<option value="">No deliverables yet</option>';
@@ -5195,7 +5248,8 @@ const TeepPlan = {
         if (wrap) wrap.style.display = '';
         const cur = this.selectedDeliverableId || list[0].id;
         const options = list.map((d) =>
-            `<option value="${this.esc(d.id)}"${d.id === cur ? ' selected' : ''}>${this.esc(d.title || d.id)}</option>`).join('');
+            `<option value="${this.esc(d.id)}"${d.id === cur ? ' selected' : ''}>${this.esc(d.title || d.id)}${(d.status || '') === 'archived' ? ' · archived' : ''}</option>`).join('');
+        this._syncArchiveButton();
         if (picker) {
             picker.innerHTML = options;
             if (cur) picker.value = cur;
@@ -6402,6 +6456,10 @@ const TeepPlan = {
             this.selectedDeliverableId = e.target.value || '';
             this.refreshMissionPage();
         });
+        const missionArchive = document.getElementById('mission-archive');
+        if (missionArchive) missionArchive.addEventListener('click', () => this._archiveSelectedDeliverable());
+        const missionShowArchived = document.getElementById('mission-show-archived');
+        if (missionShowArchived) missionShowArchived.addEventListener('change', () => this.refreshMissionPage());
         const missionPage = document.getElementById('mission-page');
         if (missionPage && !this._missionWired) {
             this._missionWired = true;
