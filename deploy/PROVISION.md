@@ -317,6 +317,31 @@ For the rename migration, first add aliases such as `/opt/switchboard -> /opt/pr
 and `switchboard*.service` wrappers. Verify health, MCP, Agent Host, reconcile, and Tally
 before making any alias canonical.
 
+## Merged PR branch retirement (BUG-29)
+
+After a same-repo PR merges, the webhook handler can archive the head branch as
+`refs/tags/archive/<branch>` at the PR head SHA, then delete `refs/heads/<branch>`.
+PR records stay on GitHub; only branch refs are cleaned up.
+
+Enable on the Plan VM once `PM_GITHUB_TOKEN` (or `GITHUB_TOKEN`) has `contents:write`
+on `6th-Element-Labs/projectplanner`:
+
+```bash
+printf '\nPM_RETIRE_MERGED_BRANCHES=1\n' >> /opt/projectplanner/.env
+sudo systemctl restart projectplanner
+```
+
+Backfill historical merged branches (dry-run first):
+
+```bash
+cd /opt/projectplanner
+PM_RETIRE_MERGED_BRANCHES=1 .venv/bin/python scripts/backfill_retire_merged_branches.py --dry-run
+PM_RETIRE_MERGED_BRANCHES=1 .venv/bin/python scripts/backfill_retire_merged_branches.py
+```
+
+Recover an archived branch locally: `git fetch origin refs/tags/archive/<branch>` then
+`git checkout -b <branch> archive/<branch>`.
+
 ## Bootstrap direct-default provenance backfill
 Use this only for legacy dogfood commits that landed directly on the default branch before the
 PR webhook flow was enforced. Normal agent work still goes through `complete_claim` → PR merge
