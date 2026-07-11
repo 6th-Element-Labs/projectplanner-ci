@@ -663,7 +663,9 @@ const TeepPlan = {
             { label: 'Milestones', value: (this.plan.milestones || []).length, icon: 'ti-flag' },
             { label: 'Open decisions', value: (this.plan.consolidated_decisions || []).length, icon: 'ti-help-circle' },
         ];
-        document.getElementById('plan-stats').innerHTML = cards.map((c) => `
+        const ps = document.getElementById('plan-stats');
+        if (!ps) return;   // the hidden rollup strip was removed in the sidebar redesign
+        ps.innerHTML = cards.map((c) => `
             <div class="col-6 col-sm-4 col-xl-2">
                 <div class="card card-sm">
                     <div class="card-body">
@@ -1121,7 +1123,7 @@ const TeepPlan = {
     // whatever top tab ended up active. #tab-exec is already rendered on boot;
     // #tab-mission is driven by _missionDeliverableFromUrl.
     _renderActiveTop() {
-        const active = document.querySelector('.nav-tabs .nav-link.active');
+        const active = document.querySelector('#main-nav .nav-link.active');
         const href = active ? active.getAttribute('href') : '#tab-exec';
         if (href === '#tab-plan-hub') this._renderPlanActive();
         else if (href === '#tab-inbox-hub') { this.initInbox(); this.renderTables(); }
@@ -3344,7 +3346,7 @@ const TeepPlan = {
                 // Target the TOP tab (in .nav-tabs) — that's the element Bootstrap fires
                 // shown.bs.tab on, which drives refreshMissionPage. The sidebar link shares
                 // href="#tab-mission" and would otherwise win document.querySelector.
-                const tab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
+                const tab = document.querySelector('#toptab-mission');
                 if (tab && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(tab).show();
             }
         } catch (e) { /* ignore */ }
@@ -3822,7 +3824,7 @@ const TeepPlan = {
 
     async _missionLiveTick() {
         if (document.hidden) return;
-        const tab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
+        const tab = document.querySelector('#toptab-mission');
         if (!tab || !tab.classList.contains('active')) return;   // only when the tab is showing
         const id = (this.selectedDeliverableId || '').trim();
         if (!id || this._missionLiveBusy) return;
@@ -3867,7 +3869,7 @@ const TeepPlan = {
             sel._wired = true;
             sel.addEventListener('change', () => {
                 this.selectedDeliverableId = sel.value || '';
-                const tab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
+                const tab = document.querySelector('#toptab-mission');
                 if (tab && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(tab).show();
                 this.refreshMissionPage();
             });
@@ -3927,8 +3929,9 @@ const TeepPlan = {
             const dtl = link.task_detail || link.task || {};
             return `<tr><td>${this.esc(link.project_id || '')}</td><td><a href="#" data-linked-task="${this.esc(link.task_id)}" data-linked-project="${this.esc(link.project_id)}">${this.esc(link.task_id)}</a></td><td>${this.esc(dtl.title || dtl.error || '')}</td><td>${this._missionBadge(dtl.status || 'missing', this.STATUS_COLOR)}</td><td>${this.esc(link.milestone_id || '—')}</td><td>${this.esc(link.role || '—')}</td></tr>`;
         }).join('') || '<tr><td colspan="6" class="text-secondary">No cross-project links</td></tr>';
-        const blockerHtml = (s.blockers || []).length ? `<div class="card mb-4 border-danger"><div class="card-header"><h3 class="card-title text-red">Blockers</h3></div><div class="list-group list-group-flush">${(s.blockers || []).map((b) =>
-            `<div class="list-group-item"><div class="fw-semibold">${this.esc(b.kind || 'blocker')}${b.finding_code ? ` · ${this.esc(b.finding_code)}` : ''}</div><div>${this.esc(b.title || b.message || b.task_id || '')}</div>${b.repair ? `<div class="small text-secondary">${this.esc(b.repair)}</div>` : ''}</div>`).join('')}</div></div>` : '';
+        // Blockers box removed — it dumped raw kinds like "dependency_unsatisfied". The
+        // dependency map already outlines blockers with a thick dark border.
+        const blockerHtml = '';
         const nextActions = (s.next_actions || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Next best actions</h3></div><div class="list-group list-group-flush">${(s.next_actions || []).map((a) =>
             `<div class="list-group-item"><span class="badge bg-primary-lt me-2">${this.esc(a.action || 'action')}</span>${this.esc(a.title || a.reason || '')}${a.task_id ? ` <span class="text-secondary small">· ${this.esc(a.project_id || '')} ${this.esc(a.task_id)}</span>` : ''}</div>`).join('')}</div></div>` : '';
         const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
@@ -4080,7 +4083,7 @@ const TeepPlan = {
         if (inboxSimGo) inboxSimGo.addEventListener('click', () => this.simulateInbox());
         // Bootstrap fires shown.bs.tab on the TOP tab trigger (in .nav-tabs), not the
         // sidebar link that shares the same href — so listen on the top tab.
-        const missionTab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
+        const missionTab = document.querySelector('#toptab-mission');
         if (missionTab) missionTab.addEventListener('shown.bs.tab', () => this.refreshMissionPage());
         const missionRefresh = document.getElementById('mission-refresh');
         if (missionRefresh) missionRefresh.addEventListener('click', () => this.refreshMissionPage());
@@ -4111,7 +4114,7 @@ const TeepPlan = {
                 else this._stopMissionLive();
             });
             document.addEventListener('visibilitychange', () => {
-                const tab = document.querySelector('.nav-tabs a[href="#tab-mission"]');
+                const tab = document.querySelector('#toptab-mission');
                 if (document.hidden) this._stopMissionLive();
                 else if (tab && tab.classList.contains('active')) this._startMissionLive();
             });
