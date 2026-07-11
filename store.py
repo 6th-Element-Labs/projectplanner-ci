@@ -11,6 +11,7 @@ import subprocess
 import time
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import evidence_claims
@@ -14770,18 +14771,41 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
         checks["github_prs"] = "checked" if token else "checked_unauthenticated"
     if repo and not pr_tasks:
         checks["github_prs"] = "configured_no_prs"
+    pr_repos: List[str] = []
     if repo and pr_tasks:
         pr_repos = sorted({
             _github_repo_from_pr_url(git_states.get(t["task_id"], {}).get("pr_url") or "") or repo
             for t in pr_tasks
         })
-        if pr_repos:
-            checks["github_pr_repos"] = pr_repos
+    if pr_repos:
+        checks["github_pr_repos"] = pr_repos
+        # GitHub reads are independent network operations.  Fetch them in a bounded
+        # pool, then keep every provenance decision and SQLite write in the serial
+        # loop below.  A slow/unreachable PR must not multiply its timeout by every
+        # other unresolved task on the board.
+        pr_keys = {
+            (
+                _github_repo_from_pr_url(
+                    git_states.get(t["task_id"], {}).get("pr_url") or ""
+                ) or repo,
+                int(git_states.get(t["task_id"], {}).get("pr_number") or 0),
+            )
+            for t in pr_tasks
+        }
+        concurrency = min(16, max(1, int(os.environ.get(
+            "PM_RECON_GITHUB_CONCURRENCY", "8"))))
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(pr_keys))) as pool:
+            fetched_prs = dict(zip(
+                pr_keys,
+                pool.map(lambda key: _github_pr(key[0], key[1], token=token), pr_keys),
+            ))
+        checks["github_pr_fetches"] = len(pr_keys)
+        checks["github_pr_concurrency"] = min(concurrency, len(pr_keys))
         for task in pr_tasks:
             state = git_states.get(task["task_id"], {})
             pr_repo = _github_repo_from_pr_url(state.get("pr_url") or "") or repo
             role_info = get_project_repo_role(pr_repo, project)
-            pr = _github_pr(pr_repo, int(state.get("pr_number") or 0), token=token)
+            pr = fetched_prs.get((pr_repo, int(state.get("pr_number") or 0)))
             if not pr:
                 findings.append({"severity": "medium", "task_id": task["task_id"],
                                  "code": "pr_state_unavailable",
