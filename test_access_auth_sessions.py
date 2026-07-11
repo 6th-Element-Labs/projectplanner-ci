@@ -21,8 +21,9 @@ try:
     import auth  # noqa: E402
     import store  # noqa: E402
     from app import app  # noqa: E402
-    from services.auth import store as auth_store  # noqa: E402
-    from services.auth import session as auth_session  # noqa: E402
+    import scripts.switchboard_path  # noqa: E402,F401
+    from switchboard.api.routers.auth import session as auth_session  # noqa: E402
+    from switchboard.api.routers.auth import store as auth_store  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  ACCESS auth/session smoke requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
