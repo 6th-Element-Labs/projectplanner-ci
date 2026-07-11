@@ -74,18 +74,24 @@ try:
     insert_receipt("llm", "error", 0.01, 120, 1200, now - 90)
     insert_receipt("deterministic", "delivered", 0.0, 0, 1, now - 80)
     insert_receipt("fallback", "fallback", 0.0, 0, None, now - 70)
+    # two more llm-delivered rows with NO latency (fallback-that-still-recorded style): these must
+    # NOT skew avg_latency_ms — it should average only the 3 non-null latencies (900, 1200, 1).
+    insert_receipt("llm", "delivered", 0.0, 0, None, now - 60)
+    insert_receipt("llm", "delivered", 0.0, 0, None, now - 55)
 
     # 1. health distinguishes states + reports rates/cost + freshness.
     h = narration_ops.narration_health(PROJECT, now=now)
     ok(h["queue"]["pending"] >= 2 and h["queue"]["actionable"] >= 2,
        "health reports the pending/actionable queue depth")
-    ok(h["receipts"]["delivered"] == 2 and h["receipts"]["failed"] == 1
+    ok(h["receipts"]["delivered"] == 4 and h["receipts"]["failed"] == 1
        and h["receipts"]["fallback"] == 1 and h["receipts"]["deterministic"] == 1,
        "health separates delivered / failed / fallback / deterministic receipts")
     ok(abs(h["cost"]["total_cost_usd"] - 0.03) < 1e-9 and h["cost"]["total_tokens"] == 300,
        "health totals model token + cost spend over the window")
-    ok(h["receipts"]["failure_rate"] == round(2 / 4, 4),
+    ok(h["receipts"]["failure_rate"] == round(2 / 6, 4),
        "health computes a failure+fallback rate for alerting")
+    ok(h["receipts"]["avg_latency_ms"] == round((900 + 1200 + 1) / 3, 2),
+       "avg_latency_ms averages only non-null latencies (null-latency rows don't skew it)")
     ok(h["freshness"]["oldest_pending_age_seconds"] >= 0,
        "health reports oldest-pending freshness age")
 

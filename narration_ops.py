@@ -65,7 +65,8 @@ def narration_health(project: str, *, now: Optional[float] = None,
         ).fetchone()[0]
         receipt_rows = c.execute(
             "SELECT mode, outcome, COUNT(*) AS cnt, COALESCE(SUM(cost_usd),0) AS cost, "
-            "COALESCE(SUM(tokens_in+tokens_out),0) AS toks, AVG(latency_ms) AS lat "
+            "COALESCE(SUM(tokens_in+tokens_out),0) AS toks, "
+            "COALESCE(SUM(latency_ms),0) AS lat_sum, COUNT(latency_ms) AS lat_n "
             "FROM narration_receipts WHERE created_at >= ? GROUP BY mode, outcome",
             (since,),
         ).fetchall()
@@ -88,9 +89,11 @@ def narration_health(project: str, *, now: Optional[float] = None,
         cnt = int(r["cnt"])
         total_cost += float(r["cost"] or 0.0)
         total_tokens += float(r["toks"] or 0.0)
-        if r["lat"] is not None:
-            lat_weighted += float(r["lat"]) * cnt
-            lat_count += cnt
+        # Weight by the count of NON-NULL latencies only (SQLite COUNT(col) excludes NULLs), so
+        # receipts with no provider latency (deterministic/budget/outage fallbacks) don't skew it.
+        if r["lat_n"]:
+            lat_weighted += float(r["lat_sum"] or 0.0)
+            lat_count += int(r["lat_n"])
         if r["mode"] == "deterministic":
             deterministic += cnt
         elif r["mode"] == "llm":
