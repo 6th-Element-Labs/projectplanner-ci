@@ -279,7 +279,7 @@ def _write_required_scopes(path: str) -> tuple:
     # ACCESS-14: creating a project needs write:projects (contributors and up), not write:system.
     if path == "/api/projects":
         return ("write:projects",)
-    if ((path.startswith("/api/projects/") and path.endswith("/repo_topology")) or
+    if ((path.startswith("/api/projects/") and path.endswith(("/repo_topology", "/github_repo"))) or
             path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))):
         return ("write:system",)
     return ("write:tasks",)
@@ -401,7 +401,7 @@ async def _auth_boundary(request: Request, call_next):
         )
     required_scopes = ("write:system",) if (
         path == "/api/projects" or
-        (path.startswith("/api/projects/") and path.endswith("/repo_topology")) or
+        (path.startswith("/api/projects/") and path.endswith(("/repo_topology", "/github_repo"))) or
         path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))
     ) else ("write:tasks",)
     try:
@@ -821,6 +821,57 @@ async def set_project_repo_topology(request: Request, project: str, body: dict =
     return result
 
 
+@app.get("/api/projects/{project}/github_association")
+def project_github_association(request: Request, project: str, check: int = 0):
+    """UI-15: everything the "Wire your repo" panel needs — the webhook payload URL with
+    the ?project= pin PRE-FILLED (HARDEN-2/BUG-24: bare URLs fail closed on shared repos),
+    the secret name, a copyable gh one-liner, and delivery-based verification. Pass ?check=1
+    (the Verify button) to also probe repo reachability; the panel open path omits it so it
+    never makes a network call until the operator asks."""
+    project = _proj(project)
+    repo = store.get_project_github_repo(project) or ""
+    base = str(request.base_url).rstrip("/")
+    payload_url = f"{base}/api/github/webhook?project={project}"
+    gh_command = ""
+    if repo:
+        gh_command = (
+            f"gh api -X POST repos/{repo}/hooks -f name=web -F active=true "
+            f"-f 'events[]=push' -f 'events[]=pull_request' "
+            f"-f 'config[url]={payload_url}' -f config[content_type]=json "
+            f"-f 'config[secret]=$PM_GITHUB_WEBHOOK_SECRET'"
+        )
+    deliveries = store.github_webhook_deliveries(project)
+    reachable = store.github_repo_reachable(repo) if (check and repo) else None
+    status = "connected" if deliveries["delivered"] else ("configured" if repo else "unconfigured")
+    return {
+        "project": project,
+        "repo": repo,
+        "repo_configured": bool(repo),
+        "webhook": {
+            "payload_url": payload_url,
+            "content_type": "application/json",
+            "secret_env": "PM_GITHUB_WEBHOOK_SECRET",
+            "secret_configured": bool(_GH_SECRET),
+            "events": ["push", "pull_request"],
+            "gh_command": gh_command,
+        },
+        "verification": {**deliveries, "status": status, "repo_reachable": reachable},
+    }
+
+
+@app.post("/api/projects/{project}/github_repo")
+async def set_project_github_repo_route(request: Request, project: str, body: dict = Body(...)):
+    """UI-15: record/replace a project's canonical repo from the web (Settings path for
+    existing projects). Reroutes Done/webhook provenance, so it is gated like repo_topology."""
+    project = _proj(project)
+    _principal(request, project, ("write:system",), dev_actor="web")
+    result = store.set_project_github_repo(
+        repo=body.get("github_repo") or body.get("repo") or "", project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.get("/api/projects/{project}/boards")
 async def list_project_boards(project: str, kind: str = "", status: str = ""):
     project = _proj(project)
@@ -862,6 +913,36 @@ async def create_deliverable(request: Request, body: dict = Body(...),
     project = _proj(project)
     principal = _principal(request, project, ("write:tasks",), dev_actor="web")
     result = store.create_deliverable(body or {}, actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+# These literal-path reads MUST be registered before the `/{deliverable_id}` route
+# below — otherwise Starlette matches `/api/deliverables/breakdown_proposals` against
+# `{deliverable_id}` (first-registered wins) and the list 404s as an "unknown
+# deliverable". Keep them here; do not move them back down with the other breakdown
+# routes (UI-1).
+@app.get("/api/deliverables/breakdown_proposals")
+async def list_deliverable_breakdown_proposals(deliverable_id: str = "",
+                                               project: str = Query(...),
+                                               status: str = ""):
+    project = _proj(project)
+    return {
+        "project": project,
+        "deliverable_id": deliverable_id or None,
+        "proposals": store.list_deliverable_breakdown_proposals(
+            deliverable_id=deliverable_id, project=project, status=status),
+    }
+
+
+@app.get("/api/deliverables/breakdown_proposals/{proposal_id}")
+async def get_deliverable_breakdown_proposal(proposal_id: str,
+                                             project: str = Query(...)):
+    project = _proj(project)
+    result = store.get_deliverable_breakdown_proposal(proposal_id, project=project)
+    if not result:
+        raise HTTPException(404, "proposal not found")
     if result.get("error"):
         raise HTTPException(400, result["error"])
     return result
@@ -1056,31 +1137,6 @@ async def submit_deliverable_outcome(request: Request, deliverable_id: str,
         acceptance_criteria=payload.get("acceptance_criteria"),
         use_llm=bool(payload.get("use_llm")),
     )
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.get("/api/deliverables/breakdown_proposals")
-async def list_deliverable_breakdown_proposals(deliverable_id: str = "",
-                                               project: str = Query(...),
-                                               status: str = ""):
-    project = _proj(project)
-    return {
-        "project": project,
-        "deliverable_id": deliverable_id or None,
-        "proposals": store.list_deliverable_breakdown_proposals(
-            deliverable_id=deliverable_id, project=project, status=status),
-    }
-
-
-@app.get("/api/deliverables/breakdown_proposals/{proposal_id}")
-async def get_deliverable_breakdown_proposal(proposal_id: str,
-                                             project: str = Query(...)):
-    project = _proj(project)
-    result = store.get_deliverable_breakdown_proposal(proposal_id, project=project)
-    if not result:
-        raise HTTPException(404, "proposal not found")
     if result.get("error"):
         raise HTTPException(400, result["error"])
     return result

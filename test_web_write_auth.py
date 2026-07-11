@@ -27,6 +27,7 @@ except ModuleNotFoundError as exc:
 
 P = "switchboard"
 TOKEN = "web-write-token"
+ADMIN_TOKEN = "web-admin-token"
 ENV_TOKEN = os.environ["PM_AUTH_TOKEN"]
 TITLE = "no-auth write must not land"
 ENV_TITLE = "env-token write must bind identity"
@@ -160,6 +161,67 @@ try:
            a["payload"].get("text") == "bound comment"
            for a in commented["activity"]),
        "bound shared-token comment is authored as the explicit system actor")
+
+    # UI-15 — GitHub association panel data + Settings-path repo write gating.
+    store.set_project_github_repo("6th-Element-Labs/projectplanner", project=P)
+    assoc = client.get(
+        f"/api/projects/{P}/github_association",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    ok(assoc.status_code == 200, "github_association read resolves bearer auth")
+    aj = assoc.json()
+    ok(aj["repo_configured"] is True and aj["repo"] == "6th-Element-Labs/projectplanner",
+       "github_association returns the configured canonical repo")
+    ok(aj["webhook"]["payload_url"].endswith(f"/api/github/webhook?project={P}"),
+       "webhook payload URL pins ?project= (HARDEN-2: bare URLs fail closed)")
+    ok(aj["webhook"]["secret_env"] == "PM_GITHUB_WEBHOOK_SECRET" and
+       f"?project={P}" in aj["webhook"]["gh_command"] and
+       "6th-Element-Labs/projectplanner" in aj["webhook"]["gh_command"],
+       "gh one-liner carries the repo, secret name, and pinned project")
+    ok(aj["verification"]["status"] == "configured" and
+       aj["verification"]["delivered"] is False and
+       aj["verification"]["repo_reachable"] is None,
+       "verification is 'configured' (amber) with no network probe until Verify is pressed")
+
+    repo_forbidden = client.post(
+        f"/api/projects/{P}/github_repo",
+        json={"github_repo": "6th-Element-Labs/evil"},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    ok(repo_forbidden.status_code == 403,
+       "github_repo write is refused without write:system")
+    ok(store.get_project_github_repo(P) == "6th-Element-Labs/projectplanner",
+       "refused github_repo write does not change the recorded repo")
+
+    # The real UI-15 Settings path is a dynamic project (no built-in canonical topology),
+    # where recording github_repo actually reroutes Done provenance.
+    store.create_project("Webhook Wiring", project_id="webhookwire", actor="test")
+    store.create_principal(
+        kind="agent", display_name="codex/web-admin", token=ADMIN_TOKEN,
+        scopes=["read", "write:tasks", "write:projects", "write:system"], project="webhookwire")
+    repo_ok = client.post(
+        "/api/projects/webhookwire/github_repo",
+        json={"github_repo": "6th-Element-Labs/projectplanner-fork"},
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+    )
+    ok(repo_ok.status_code == 200 and
+       store.get_project_github_repo("webhookwire") == "6th-Element-Labs/projectplanner-fork",
+       "github_repo write with write:system records the canonical repo on a dynamic project")
+    assoc2 = client.get(
+        "/api/projects/webhookwire/github_association",
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+    )
+    ok(assoc2.status_code == 200 and
+       assoc2.json()["repo"] == "6th-Element-Labs/projectplanner-fork" and
+       assoc2.json()["webhook"]["payload_url"].endswith("/api/github/webhook?project=webhookwire"),
+       "the just-wired repo surfaces in the association panel with its pinned payload URL")
+    bad_repo = client.post(
+        "/api/projects/webhookwire/github_repo",
+        json={"github_repo": "not-a-valid-repo"},
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+    )
+    ok(bad_repo.status_code == 400,
+       "github_repo write rejects a malformed owner/name")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

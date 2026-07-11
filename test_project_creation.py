@@ -205,6 +205,26 @@ try:
     ok({"vulkan", "vkrender", "helm", "switchboard"}.issubset(set(seen_projects)),
        "scheduled reconcile defaults across dynamic and built-in projects")
 
+    # UI-15: webhook-delivery evidence powers the "Verify connection" button.
+    deliveries0 = store.github_webhook_deliveries("chart-renderer")
+    ok(deliveries0["delivered"] is False and deliveries0["delivery_count"] == 0,
+       "github_webhook_deliveries reports no delivery before any webhook lands")
+    store.append_activity("pr.merged", "github-webhook", {"pr": 1},
+                          task_id=None, project="chart-renderer")
+    deliveries1 = store.github_webhook_deliveries("chart-renderer")
+    ok(deliveries1["delivered"] is True and deliveries1["delivery_count"] == 1 and
+       deliveries1["last_delivery_event"] == "pr.merged" and
+       deliveries1["last_delivery_at"] is not None,
+       "github_webhook_deliveries flips to delivered on the first github-webhook activity")
+    ok(store.github_webhook_deliveries("vulkan")["delivered"] is False,
+       "webhook-delivery evidence is board-scoped and never leaks across projects")
+    ok(store.github_repo_reachable("") is None and store.github_repo_reachable("noslash") is None,
+       "repo reachability probe returns None for malformed input without a network call")
+    set_repo = store.set_project_github_repo("StevenRidder/vulkan-renderer", project="vulkan")
+    ok(set_repo.get("github_repo") == "StevenRidder/vulkan-renderer" and
+       store.get_project_github_repo("vulkan") == "StevenRidder/vulkan-renderer",
+       "set_project_github_repo records the repo for an existing project (Settings path)")
+
     reserved = store.create_project("Helm", project_id="helm", actor="test")
     ok("error" in reserved and "reserved" in reserved["error"],
        "built-in project ids are reserved")

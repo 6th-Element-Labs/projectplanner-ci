@@ -977,7 +977,21 @@ def add_deliverable_milestone(deliverable_id: str, data: Dict[str, Any],
                   (None, actor, "deliverable.milestone_upsert",
                    json.dumps({"deliverable_id": deliverable_id, "milestone_id": mid,
                                "title": title}, sort_keys=True), now))
+        _touch_deliverable(c, deliverable_id, now)
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
+
+
+def _touch_deliverable(c: sqlite3.Connection, deliverable_id: str, ts: float) -> None:
+    """Bump the deliverable row's updated_at.
+
+    mission_status / dependency-graph caches are stamped on deliverables.updated_at
+    (see _mission_cache_stamp), but link/milestone rows live in child tables whose
+    edits don't touch the parent. Without this bump a freshly-linked or -unlinked
+    task, or a new milestone, only appears after the cache TTL — so the editable
+    mission page would look like it dropped the change. Call this on every
+    link/unlink/milestone mutation so the operator sees edits immediately.
+    """
+    c.execute("UPDATE deliverables SET updated_at=? WHERE id=?", (ts, deliverable_id))
 
 
 def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: str,
@@ -1053,6 +1067,7 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
                                "project_id": task_project,
                                "task_id": task_id, "milestone_id": mid},
                               sort_keys=True), now))
+        _touch_deliverable(c, deliverable_id, now)
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 
@@ -1320,6 +1335,7 @@ def unlink_task_from_deliverable(deliverable_id: str, task_project: str, task_id
                   (None, actor, "deliverable.task_unlinked",
                    json.dumps({"deliverable_id": deliverable_id, "project_id": task_project,
                                "task_id": task_id}, sort_keys=True), now))
+        _touch_deliverable(c, deliverable_id, now)
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 
@@ -2720,7 +2736,7 @@ def _empty_economics_totals() -> Dict[str, Any]:
         "rejected_outcomes": 0,
         "superseded_outcomes": 0,
         "verified_kpi_contribution": 0.0,
-        "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}},
+        "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}, "by_model": {}},
         "unit_cost": {
             "cost_per_verified_outcome": None,
             "cost_per_kpi_contribution_unit": None,
@@ -2789,7 +2805,7 @@ def _merge_kpi_group(target: Dict[str, Dict[str, Any]], tally: Dict[str, Any],
             "unit": group.get("unit"),
             "direction": group.get("direction"),
             "verified_contribution": 0.0,
-            "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}},
+            "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}, "by_model": {}},
             "unit_cost": {"cost_per_contribution_unit": None},
             "links": [],
         })
@@ -10852,22 +10868,31 @@ def _spend_for_task(c: sqlite3.Connection, task_id: str,
 
 
 def _spend_summary(rows: List[sqlite3.Row]) -> Dict[str, Any]:
-    spend = {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}}
+    spend = {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}, "by_model": {}}
     seen = set()
     for row in rows:
         if row["id"] in seen:
             continue
         seen.add(row["id"])
+        cost = float(row["cost_usd"] or 0.0)
+        tokens = int(row["total_tokens"] or 0)
         source = row["source"]
         bucket = spend["by_source"].setdefault(source, {"cost_usd": 0.0, "total_tokens": 0,
                                                         "confidence": row["confidence"]})
-        bucket["cost_usd"] += float(row["cost_usd"] or 0.0)
-        bucket["total_tokens"] += int(row["total_tokens"] or 0)
-        spend["cost_usd"] += float(row["cost_usd"] or 0.0)
-        spend["total_tokens"] += int(row["total_tokens"] or 0)
+        bucket["cost_usd"] += cost
+        bucket["total_tokens"] += tokens
+        # UI-12: per-model breakdown drives the model-mix line in the Economics panels.
+        model = row["model"] or "unknown"
+        mbucket = spend["by_model"].setdefault(model, {"cost_usd": 0.0, "total_tokens": 0})
+        mbucket["cost_usd"] += cost
+        mbucket["total_tokens"] += tokens
+        spend["cost_usd"] += cost
+        spend["total_tokens"] += tokens
     spend["cost_usd"] = round(spend["cost_usd"], 6)
     for bucket in spend["by_source"].values():
         bucket["cost_usd"] = round(bucket["cost_usd"], 6)
+    for mbucket in spend["by_model"].values():
+        mbucket["cost_usd"] = round(mbucket["cost_usd"], 6)
     return spend
 
 
@@ -10988,6 +11013,12 @@ def _merge_spend_totals(target: Dict[str, Any], spend: Dict[str, Any]) -> None:
         dst["total_tokens"] = int(dst.get("total_tokens") or 0) + int(bucket.get("total_tokens") or 0)
         if bucket.get("confidence"):
             dst["confidence"] = bucket["confidence"]
+    by_model = target.setdefault("by_model", {})
+    for model, bucket in (spend.get("by_model") or {}).items():
+        dst = by_model.setdefault(model, {"cost_usd": 0.0, "total_tokens": 0})
+        dst["cost_usd"] = round(float(dst.get("cost_usd") or 0.0) +
+                                float(bucket.get("cost_usd") or 0.0), 6)
+        dst["total_tokens"] = int(dst.get("total_tokens") or 0) + int(bucket.get("total_tokens") or 0)
 
 
 def project_tally(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
@@ -11007,7 +11038,7 @@ def project_tally(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "rejected_outcomes": 0,
         "superseded_outcomes": 0,
         "verified_kpi_contribution": 0.0,
-        "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}},
+        "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}, "by_model": {}},
         "unit_cost": {
             "cost_per_verified_outcome": None,
             "cost_per_kpi_contribution_unit": None,
@@ -11051,7 +11082,7 @@ def project_tally(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "verified_outcomes": 0,
             "proposed_outcomes": 0,
             "verified_kpi_contribution": 0.0,
-            "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}},
+            "spend": {"cost_usd": 0.0, "total_tokens": 0, "by_source": {}, "by_model": {}},
             "unit_cost": {"cost_per_verified_outcome": None},
         })
         ws["task_count"] += 1
@@ -13200,6 +13231,56 @@ def set_project_github_repo(repo: str, project: str = DEFAULT_PROJECT) -> Dict[s
         set_meta("repo_topology", topology, project=project)
     return {"project": project, "github_repo": repo,
             "repo_topology": get_project_repo_topology(project=project)}
+
+
+def github_webhook_deliveries(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Local webhook-delivery evidence for a project's board (UI-15 Verify button).
+
+    Any activity row written by the 'github-webhook' actor proves GitHub actually
+    reached this board through the pinned ?project= payload URL, so the association
+    panel 'flips green on first delivery' without needing GitHub API credentials —
+    the same board-internal signal reconcile trusts over remote scraping.
+    """
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n, MAX(created_at) AS last FROM activity WHERE actor=?",
+            ("github-webhook",),
+        ).fetchone()
+        count = int(row["n"] or 0) if row else 0
+        last_at = float(row["last"]) if row and row["last"] else None
+        last_kind = None
+        if count:
+            latest = c.execute(
+                "SELECT kind FROM activity WHERE actor=? ORDER BY id DESC LIMIT 1",
+                ("github-webhook",),
+            ).fetchone()
+            last_kind = latest["kind"] if latest else None
+    return {"delivered": count > 0, "delivery_count": count,
+            "last_delivery_at": last_at, "last_delivery_event": last_kind}
+
+
+def github_repo_reachable(repo: str) -> Optional[bool]:
+    """Best-effort reachability probe for a repo (UI-15 Verify button, explicit only).
+
+    True = the repo exists and we can see it; False = a definitive not-found/forbidden;
+    None = the probe itself was inconclusive (offline, rate-limited, timeout). Uses the
+    same optional token as reconcile so private canonical repos resolve when creds exist.
+    """
+    if not repo or "/" not in repo:
+        return None
+    req = urllib.request.Request(f"https://api.github.com/repos/{repo}")
+    req.add_header("Accept", "application/vnd.github+json")
+    token = _github_token()
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return (getattr(r, "status", None) or r.getcode()) == 200
+    except Exception as exc:  # HTTPError carries .code; other errors are inconclusive
+        code = getattr(exc, "code", 0) or 0
+        if code in (401, 403, 404):
+            return False
+        return None
 
 
 def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: str = "",

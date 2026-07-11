@@ -37,14 +37,18 @@ _SYSTEM = (
 )
 
 
-def _llm(task_context: str) -> str:
+def _llm(task_context: str, meta: Optional[dict] = None) -> str:
+    body = {"model": SUMMARIZE_MODEL,
+            "messages": [{"role": "system", "content": _SYSTEM},
+                         {"role": "user", "content": task_context}],
+            "max_tokens": MAX_TOKENS}
+    if meta:
+        # UI-12: tag the gateway call so its provider-actual spend rolls onto this task.
+        body["metadata"] = meta
     r = httpx.post(
         f"{BASE}/chat/completions",
         headers={"Authorization": f"Bearer {KEY}"},
-        json={"model": SUMMARIZE_MODEL,
-              "messages": [{"role": "system", "content": _SYSTEM},
-                           {"role": "user", "content": task_context}],
-              "max_tokens": MAX_TOKENS},
+        json=body,
         timeout=30,
     )
     r.raise_for_status()
@@ -107,7 +111,8 @@ def summarize_task(task_id: str, project: str = store.DEFAULT_PROJECT,
         f"{activity_text}"
     )
 
-    llm = _llm_fn or _llm
+    llm = _llm_fn or (lambda ctx: _llm(
+        ctx, meta={"source": "summarizer", "task_id": task_id, "project": project}))
     rationale = llm(task_context)
     store.set_task_summary(task_id, rationale, last_cursor, project=project)
     return {"task_id": task_id, "rationale": rationale,

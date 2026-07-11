@@ -148,6 +148,70 @@ try:
     ok(isinstance((brief_body.get("narrative_state") or {}), dict),
        "mission brief generation returns narrative_state")
 
+    # --- UI-1: the mission page is now an editable planning surface. Prove every REST
+    # contract the operator UI drives to author the deliverable graph — no MCP/CLI. ---
+    ms2 = client.post(
+        f"/api/deliverables/{deliverable['id']}/milestones",
+        params={"project": HOME},
+        json={"title": "Wire access UI", "status": "not_started",
+              "acceptance_criteria": ["Login form renders", "Session cookie set"]},
+    )
+    ok(ms2.status_code == 200, "POST milestone (add) returns 200")
+    ok(len((ms2.json() or {}).get("milestones") or []) == 2,
+       "add_deliverable_milestone REST appended a second milestone")
+
+    second_task = store.create_task(
+        {"workstream_id": "ACCESS", "title": "Access UI shell"},
+        actor="test", project=TARGET)
+    link2 = client.post(
+        f"/api/deliverables/{deliverable['id']}/task_links",
+        params={"project": HOME},
+        json={"task_project": TARGET, "task_id": second_task["task_id"],
+              "role": "contributes", "blocks_deliverable": False},
+    )
+    ok(link2.status_code == 200, "POST task_links (link) returns 200")
+    ok(any(l.get("task_id") == second_task["task_id"]
+           for l in ((link2.json() or {}).get("task_links") or [])),
+       "link_task_to_deliverable REST attached the task")
+
+    unlink2 = client.delete(
+        f"/api/deliverables/{deliverable['id']}/task_links",
+        params={"project": HOME, "task_project": TARGET,
+                "task_id": second_task["task_id"]},
+    )
+    ok(unlink2.status_code == 200, "DELETE task_links (unlink) returns 200")
+
+    outcome_res = client.post(
+        f"/api/deliverables/{deliverable['id']}/outcome",
+        params={"project": HOME},
+        json={"outcome": "Operators self-serve access from the web.",
+              "target_projects": [TARGET],
+              "acceptance_criteria": ["No CLI needed"]},
+    )
+    ok(outcome_res.status_code == 200, "POST outcome returns 200")
+    outcome_body = outcome_res.json() or {}
+    proposal = outcome_body.get("proposal") or outcome_body
+    proposal_id = proposal.get("id") or proposal.get("proposal_id")
+    ok(bool(proposal_id),
+       "submit_deliverable_outcome REST drafted a breakdown proposal")
+
+    proposals = client.get(
+        "/api/deliverables/breakdown_proposals",
+        params={"project": HOME, "deliverable_id": deliverable["id"]},
+    )
+    ok(proposals.status_code == 200, "GET breakdown_proposals returns 200")
+    plist = (proposals.json() or {}).get("proposals") or []
+    ok(any(p.get("id") == proposal_id for p in plist),
+       "breakdown review card can list the pending proposal")
+
+    if proposal_id:
+        rej = client.post(
+            f"/api/deliverables/breakdown_proposals/{proposal_id}/reject",
+            params={"project": HOME}, json={"reason": "superseded by manual plan"})
+        rej_status = ((rej.json() or {}).get("proposal") or {}).get("status")
+        ok(rej.status_code == 200 and rej_status == "rejected",
+           "POST breakdown reject transitions the proposal")
+
     index = client.get("/")
     ok(index.status_code == 200 and "tab-mission" in index.text,
        "index.html exposes Mission tab shell")
@@ -155,6 +219,8 @@ try:
        "index.html exposes generate brief control")
     ok("mission-page" in index.text and "mission-deliverable-picker" in index.text,
        "index.html exposes mission page containers")
+    for shell in ("dl-link-modal", "dl-milestone-modal", "dl-outcome-modal", "dl-node-modal"):
+        ok(shell in index.text, f"index.html exposes {shell} authoring modal")
 
     app_js = open(os.path.join(os.path.dirname(__file__), "static", "app.js"),
                   encoding="utf-8").read()
@@ -167,6 +233,21 @@ try:
         "openLinkedTask",
         "_missionPolicyDrift",
         "_missionNodeTooltip",
+        # UI-1 authoring surface
+        "loadBreakdownProposals",
+        "_missionBreakdownHtml",
+        "openLinkModal",
+        "submitLinkTask",
+        "openMilestoneModal",
+        "submitMilestone",
+        "openOutcomeModal",
+        "submitOutcome",
+        "openNodeModal",
+        "submitNodeLink",
+        "unlinkNode",
+        "approveProposal",
+        "rejectProposal",
+        "deferProposal",
     ):
         ok(needle in app_js, f"app.js defines {needle}")
 
