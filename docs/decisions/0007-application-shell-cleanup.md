@@ -4,7 +4,11 @@
 - **Date:** 2026-07-11
 - **Author:** application-shell audit session (Claude Code / Fable 5) — four parallel audit
   threads (app/MCP surface, store.py regrowth, frontend/polling, repo hygiene) plus a
-  verification pass; all numbers measured on master @ `d83d59e`.
+  verification pass; all numbers measured on master @ `d83d59e`. **Amended 2026-07-11** after
+  a second, independent deep review (run against the stale `4a97e71` branch) converged on the
+  same downward-ratchet-plus-strangler direction and surfaced findings folded in below —
+  its exact figures were already stale (it read a branch, not master), so the shape was kept
+  and the digits re-measured, CONSOL-5 style.
 - **Relates to:** [ADR-0006](0006-control-plane-done-enough.md) (the discipline this extends;
   its Decision 2 pre-authorizes the ratchet) · [ADR-0005](0005-store-module-decomposition.md)
   (retired decomposition; its verbatim-move rules are reused for on-touch extraction) ·
@@ -90,6 +94,14 @@ measurably not the problem, and adds config surface, a migration, and a second w
 wrong about TLS. Revisit only with endpoint-level evidence that the edge itself is the
 bottleneck.
 
+**Keeping Caddy means finishing it, not just leaving it.** The current `Caddyfile` does TLS,
+compression, caching, and proxying but ships **no security headers and no access log** — so
+"keep Caddy" carries a small hardening rider (CONSOL-8): add HSTS, `X-Content-Type-Options:
+nosniff`, a `frame-ancestors`/`X-Frame-Options` and `Referrer-Policy`, a tested CSP, and
+structured access logging, all in the file we already own. This is the cheapest possible win
+— edge hardening with zero application change — and it is the counterexample to "keeping a
+component means ignoring it."
+
 ## Decision 2 — The ratchet (the promotion ADR-0006 pre-authorized)
 
 One plain test in the standard suite — `test_size_ratchet.py`, run by
@@ -103,12 +115,24 @@ mcp_server.py    3,182      static/app.js    5,945
 repo root       159 .py files
 ```
 
+**Precondition — the gate must actually run (this is load-bearing, not hygiene).** The CI gate
+is a *hand-maintained list* (`run_test <file>` lines in `switchboard_ci.sh`); it currently
+enumerates **88 tests while the tree tracks 111 — ~23 are silently omitted** (the second
+review flagged this against its branch; re-measured on master it is worse than reported).
+Adding a size ratchet to a list that already drops a fifth of the suite means the ratchet can
+drift out the same way. So CONSOL-6 first converts the gate to **pytest discovery with an
+explicit, commented denylist** — every test runs unless a line says why it doesn't — and only
+then is the ratchet meaningful. A gate that doesn't run every test can't enforce anything,
+least of all itself.
+
 Rules:
 
 1. **Red gate → relief in this order:** (a) delete dead weight in the same file; (b) take the
    `runner` extraction (verbatim-move rules from ADR-0005; 445 lines of headroom, 2 external
-   call sites); (c) raise the constant **in the same PR** with a one-line justification —
-   visible in diff review, answerable at the SESSION-12 chokepoint.
+   call sites — this is the live `runner_*` control cluster *inside* store.py, **not**
+   `runner/service.py`, which Decision 7 deletes); (c) raise the constant **in the same PR**
+   with a one-line justification — visible in diff review, answerable at the SESSION-12
+   chokepoint.
 2. **The ratchet turns one way.** A PR that shrinks a file below its ceiling lowers the
    constant to the new size.
 3. **Subtraction accounting:** one mechanism in (this test), one out (the policy-only
@@ -122,17 +146,33 @@ For **new** code only; existing code moves on-touch only, as verbatim moves:
 | New thing | Lands in | Proven by |
 |---|---|---|
 | Domain state (tables + their CRUD) | `<domain>_store.py` over `db/`, re-exported through the `store.py` facade | the 7 leaf stores (ARCH-2/3) |
-| Web routes | an APIRouter module included by `app.py` | `services/auth` |
+| Web routes | an APIRouter module included by `app.py`, taking a **typed Pydantic DTO** (not `body: dict`) | `services/auth` |
 | MCP tools | a tool module registering on the shared server instance | first such extraction establishes it |
 | Frontend feature | its own `static/` JS file | `taikun-ui.js` |
 | Tests | `tests/` (with a working path shim) | — |
 | Root-level `.py` | nowhere — the root is frozen at its high-water mark | the ratchet |
 
+Two hygiene rules ride with the redirect, both cheap and both enabling the static analysis a
+ratchet depends on:
+
+- **No new `import *`.** store.py has 11 star-imports today; they are why a stock Ruff run
+  reports ~687 undefined-name findings and why "what does this file actually export" is
+  unanswerable by tooling. New modules use explicit imports; the facade's existing
+  re-exports are grandfathered, not extended.
+- **New routes are typed.** 96 of app.py's routes take `body: dict` and hand-roll validation
+  into 138 `HTTPException` sites. New routes take a Pydantic DTO so the contract lives in one
+  place and OpenAPI/MCP parity is mechanical — this is the same move that lets REST and MCP
+  become thin adapters over one typed service (Decision 4's duplication fix, Decision 7's
+  `application/` layer).
+
 Cross-cutting infrastructure (lock-retry shims, cache plumbing — the BUG-31/32 class of work)
 is the recognized exception that may edit the monoliths in place, under the ratchet, using
-the relief order. **No migration program. No module map. No target tree.** The monoliths
-shrink by attrition or not at all; either is acceptable. ADR-0005's mistake was not the seams
-— it was scheduling other people's futures on the fleet's hottest file.
+the relief order. **No migration *program* and no *scheduled* module map** — Decision 7 names
+a target *shape* for extractions to aim at, but nothing is scheduled and no bulk move is
+authorized; the monoliths shrink by attrition or not at all, and either is acceptable.
+ADR-0005's mistake was not the seams and not the destination — it was *scheduling* other
+people's futures on the fleet's hottest file. A map you steer toward when you happen to be in
+a domain is not a march everyone must complete.
 
 ## Decision 4 — The census (the second kill list, on ADR-0006's terms)
 
@@ -173,6 +213,81 @@ At the H2 post-Helm-sprint review — the judge ADR-0006 already appointed:
 - **Perf SLOs, slim reads, lock-retry:** deliverable `mcp-agent-path-performance` owns them.
 - **The provenance model, the subtraction rule, fleet-default-Helm:** ADR-0006, unchanged.
 
+## Decision 7 — Direction of travel: a target shape to aim at, not a march to complete
+
+ADR-0006 refused a target tree because ADR-0005 turned one into a 17-step *schedule* that the
+dependency graph invalidated twice. The failure was the schedule, not the map. A second
+independent review re-derived essentially the same modular-monolith target as the leaf-store
+pattern already implies — so the destination is not controversial; only *mandating a route to
+it* is. This ADR therefore records the shape as **the place an extraction lands when the fleet
+is already in that domain**, and nothing more. The ratchet (Decision 2) is the only thing that
+is enforced; this section is never a red gate and never a backlog.
+
+```
+src/switchboard/
+  main.py                 app factory + lifespan only
+  settings.py             typed settings
+  api/routers/            auth · projects · tasks · deliverables · coordination · tally · webhooks
+  mcp/tools/              board · tasks · coordination · deliverables   (thin adapters)
+  application/            commands/ · queries/ · contracts/   (one typed service per op; REST + MCP call it)
+  domain/                 access · board · coordination · deliverables · provenance
+  storage/                connection · migrations/ · repositories/   (SQL lives only here)
+  integrations/           github · llm · gmail · notifications
+  jobs/
+static/js/                api · state · board · mission · coordination   (ES modules)
+tests/                    unit/ · integration/ · browser/
+```
+
+Three load-bearing invariants this shape encodes — these are the *why*, and they hold whether
+or not the tree is ever fully realized:
+
+1. **REST and MCP are adapters over one `application/` service.** Every duplicate pair
+   Decision 4 named (create_task, update_task, claim, record_outcome, send_message) collapses
+   to one typed command/query with two thin callers. This is the subtraction that pays for the
+   layer.
+2. **SQL lives only in `storage/repositories/`.** The 88 `subprocess`/`urllib` calls and raw
+   SQL tangled into store.py are what make it un-unit-testable; the repository seam is where a
+   domain becomes testable in isolation.
+3. **Migrations are numbered and run once** (see the related-work note on the
+   `except Exception: pass` startup loop) — the `storage/migrations/` directory is where that
+   safety fix lands when it is done.
+
+**How this composes with Decision 3:** when a lane genuinely needs to touch, say, the
+deliverables domain, the verbatim extraction it does *anyway* aims at `domain/deliverables/`
++ `storage/repositories/` + an `application/` service, instead of a fresh ad-hoc seam. Same
+work, a shared destination. No lane is ever assigned "go build `src/switchboard/`."
+
+## Related work this ADR does *not* address (shape ≠ security ≠ reproducibility)
+
+The deep review surfaced findings that are real and, in one case, **live** — but they are not
+code-*shape* decisions and must not be laundered through a cleanup ADR, where they would be
+invisible. Each is its own track; this list exists so the reader knows the ratchet does not
+fix them:
+
+- **P0 — MCP reads are unauthenticated (LIVE).** Verified 2026-07-11: an anonymous
+  `tools/call` for `list_projects` against the public `/mcp` endpoint returns the full
+  project/board list with no bearer token; only writes call `_require_write`
+  (mcp_server.py, docs/MCP.md:50, Caddyfile exposes `/mcp`). Unless every board is
+  intentionally public this is a data exposure. **Filed separately and urgently** — it is not
+  gated on this ADR.
+- **Schema migrations swallow every error** (`except Exception: pass`, db/schema.py:748, run
+  at import by both web and MCP): a disk/permission/corruption/lock failure is indistinguishable
+  from "column exists." Numbered, transactional, run-once migrations; catch only duplicate-column.
+- **Non-reproducible builds:** lower-bound-only `requirements.txt`; adopt `pyproject.toml`,
+  pin Python 3.12, commit a lockfile.
+- **Runtime writability / service identity:** services run as a general account with the code
+  tree writable; dedicated service users, read-only code, declarative systemd hardening.
+- **`/health/deep` is public and leaks project identifiers, and startup can skip a failed
+  project yet report healthy** (app.py:648, :72): a real readiness endpoint that checks
+  schema/DB without exposing project data.
+- **Executable frontend tests:** several "UI proof" tests assert a function *name appears in
+  source text* (e.g. test_mission_page.py:215) rather than exercising behavior; Vitest for
+  helpers + Playwright for the core flows. (The ES-module split that enables this is the
+  Decision 7 frontend shape; the tests themselves are a quality track.)
+- **Finish the two-auth cutover:** `PM_GLOBAL_AUTH` still gates a second live auth system
+  beside the legacy one — a migration state, not an architecture (already tracked as the
+  auth-strangler).
+
 ---
 
 ## Execution — four cuts, then it's culture
@@ -180,8 +295,8 @@ At the H2 post-Helm-sprint review — the judge ADR-0006 already appointed:
 | Task | Cut | What it subtracts |
 |---|---|---|
 | **CONSOL-6** | `test_size_ratchet.py` with ceilings measured at merge | the policy-only moratorium |
-| **CONSOL-7** | delete `gmail_source.py`, `index-legacy.html`, `rebrand.html`, `ocr.html`; add the superseded banners ADR-0006 promised to `SWITCHBOARD-STORE-DECOMPOSITION.md` / `SWITCHBOARD-STORE-ENDSTATE.md`; move `Maxwell-Pitch-Deck.pptx` out of the code root | ~1,200 lines of dead surface + two docs that contradict the plan of record |
-| **CONSOL-8** | mission pollers → TTL+ETag parity with the board; ack poll gains a visibility guard | two uncached hot paths |
+| **CONSOL-7** | delete `gmail_source.py`, the retired `runner/` push-bridge (`service.py` + `run_task.sh` + README — dispatch.py's own header says the wake substrate replaced it; **not** store.py's live `runner_*` cluster), `index-legacy.html`, `rebrand.html`, `ocr.html`; add the superseded banners ADR-0006 promised to `SWITCHBOARD-STORE-DECOMPOSITION.md` / `SWITCHBOARD-STORE-ENDSTATE.md`; move `Maxwell-Pitch-Deck.pptx` out of the code root | ~1,700 lines of dead surface + two docs that contradict the plan of record |
+| **CONSOL-8** | Caddy security headers + access log; mission pollers → TTL+ETag parity with the board; ack poll gains a visibility guard | two uncached hot paths + an unhardened edge |
 | **CONSOL-9** | H2 census: call counts → delete zero-callers (seeded with the six RECON-8/9/10 surfaces) + unread `PM_*` flags | the parked mechanisms' surfaces |
 
 Nothing else is authorized by this ADR. A fifth cut needs its own justification against the
@@ -201,9 +316,15 @@ subtraction rule.
   deleted was ADR-0006's rule; the census is where parked items finally find a defender or
   die.
 - No fallback UI once `index-legacy.html` is gone.
-- This document deliberately decides **nothing** about decomposition targets. If the fleet
-  touches a domain and extracts it verbatim, good; if not, the ceiling still holds. Either
-  way the trend line breaks.
+- Decision 7 names a decomposition *destination* but schedules nothing. The risk it carries:
+  a named target tempts someone to treat it as a backlog. The mitigation is written into the
+  decision (never a red gate, never assigned) and into the culture ADR-0006 set — but if the
+  fleet starts building `src/switchboard/` speculatively instead of on-touch, that is the
+  ADR-0005 failure returning, and the subtraction rule should kill it. **The map is a compass,
+  not a schedule; the moment it becomes a schedule it is wrong.**
+- The related-work list is deliberately *outside* this ADR's authority. Its items — led by the
+  live MCP-read exposure — are filed as their own tasks so a docs-cleanup merge never gets
+  mistaken for a security or reproducibility fix.
 
 ## Alternatives rejected
 
@@ -212,7 +333,14 @@ subtraction rule.
 - **Restart the decomposition (ARCH-6…17), or a routers/-migration program, or a frontend
   framework rewrite.** ADR-0006 retired the program for reasons regrowth does not refute —
   the regrowth refutes only the *policy-only enforcement*. Bulk moves on the fleet's hottest
-  files remain maximum conflict surface for a win invisible until fully done.
+  files remain maximum conflict surface for a win invisible until fully done. Decision 7
+  keeps the map and drops the march: same rejection of a *scheduled* program, while giving
+  on-touch extractions a shared destination instead of ad-hoc seams.
+- **Fold the security/ops/reproducibility findings into this ADR.** Rejected on purpose. A
+  cleanup ADR that also "fixes" a live auth hole buries the urgent thing behind the tidy
+  thing; the reader skims a docs-shape decision and misses that `/mcp` is open. Separate
+  tracks keep each finding at its true severity — the MCP-read exposure especially, which is
+  filed and worked independently of whether this PR ever merges.
 - **Multiple Uvicorn workers now.** Splits the read cache, multiplies writers against SQLite;
   see Decision 6.
 - **SSE/WebSockets now.** A second delivery mechanism bolted alongside polling, before the
