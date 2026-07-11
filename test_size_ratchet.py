@@ -14,7 +14,7 @@ LINE_CEILINGS = {
     "mcp_server.py": 3_157,  # pre-existing master drift remeasured by ARCH-MS-20 gate
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
-ROOT_PYTHON_FILE_CEILING = 201  # master had 200; ARCH-MS-20 adds planned runner_store.py
+ROOT_PYTHON_FILE_CEILING = 203  # NARRATE-12 adds narration_generate.py + test_narration_generate.py
 
 passed = failed = 0
 
