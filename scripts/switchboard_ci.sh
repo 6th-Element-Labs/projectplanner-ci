@@ -52,6 +52,7 @@ run_test test_activity_payloads.py
 run_test test_audit_export.py
 run_test test_adapter_conformance.py
 run_test test_board_load_perf.py
+run_test test_search_tasks_perf.py
 
 section "Concurrent agent-path SLO gate"
 CONCURRENT_LOAD_REPORT="${CONCURRENT_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-concurrent-load-report.json}" \
