@@ -1695,6 +1695,182 @@ const TeepPlan = {
         if (href === '#tab-plan-hub') this._renderPlanActive();
         else if (href === '#tab-inbox-hub') { this.initInbox(); this.renderTables(); }
         else if (href === '#tab-ask') this.initAsk();
+        else if (href === '#tab-fleet') this.renderFleet();
+    },
+
+    // ---- UI-8 Fleet control tab: agent hosts, wake queue, live runners --------
+    // Builds on UI-3's health pattern. Hosts show who's alive; the wake queue lets an
+    // operator wake or cancel a sleeping agent; runner rows expose logs/snapshot and a
+    // human-gated (typed-confirm) kill. Every write is an audited MCP-backed REST call.
+    renderFleet() {
+        if (!this._fleetWired) {
+            this._fleetWired = true;
+            const refresh = document.getElementById('fleet-refresh');
+            if (refresh) refresh.addEventListener('click', () => this._loadFleet());
+            const send = document.getElementById('wake-send');
+            if (send) send.addEventListener('click', () => this._submitWake());
+        }
+        this._loadFleet();
+    },
+    _loadFleet() {
+        this._loadFleetHosts();
+        this._loadWakeIntents();
+        this._loadFleetRunners();
+    },
+    _fleetAge(ts) {
+        if (!ts) return '—';
+        const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+        if (s < 60) return `${s}s ago`;
+        if (s < 3600) return `${Math.round(s / 60)}m ago`;
+        if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+        return `${Math.round(s / 86400)}d ago`;
+    },
+    async _loadFleetHosts() {
+        const body = document.getElementById('fleet-hosts-body');
+        const count = document.getElementById('fleet-hosts-count');
+        if (!body) return;
+        let hosts;
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=true`;
+            hosts = (await (await fetch(`/ixp/v1/agent_hosts?${q}`)).json()).hosts || [];
+        } catch (e) { body.innerHTML = `<div class="text-danger small">Hosts unavailable: ${this.esc(e.message)}</div>`; return; }
+        const live = hosts.filter((h) => !h.stale);
+        if (count) { count.className = live.length ? 'badge bg-green-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${live.length} live`; }
+        if (!hosts.length) { body.innerHTML = `<div class="text-secondary small">No agent hosts are registered for this project.</div>`; return; }
+        body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
+            <thead><tr><th>Host</th><th>Heartbeat</th><th>Capacity</th><th>Runtimes</th><th class="text-end">Actions</th></tr></thead>
+            <tbody>${hosts.map((h) => this._hostRow(h)).join('')}</tbody></table></div>`;
+        body.querySelectorAll('[data-wake-runtimes]').forEach((b) =>
+            b.addEventListener('click', () => this._openWakeModal(b.getAttribute('data-wake-runtimes'))));
+    },
+    _hostRow(h) {
+        const cap = h.capacity || {}; const lim = h.limits || {};
+        const active = cap.active_sessions != null ? cap.active_sessions : 0;
+        const max = lim.max_sessions != null ? lim.max_sessions
+            : (h.available_sessions != null ? active + h.available_sessions : '—');
+        const color = h.stale ? 'yellow' : 'green';
+        const rnames = (h.runtimes || []).map((r) => (typeof r === 'string' ? r : (r && (r.runtime || r.name)) || '')).filter(Boolean);
+        const runtimes = rnames.map((r) => `<span class="badge bg-secondary-lt me-1">${this.esc(r)}</span>`).join('') || '<span class="text-secondary">—</span>';
+        return `<tr>
+            <td><div class="font-monospace small">${this.esc(h.host_id || '')}</div><div class="text-secondary small">${this.esc(h.hostname || '')}</div></td>
+            <td><span class="badge bg-${color}-lt">${h.stale ? 'stale' : 'live'}</span> <span class="text-secondary small">${this.esc(this._fleetAge(h.heartbeat_at))}</span></td>
+            <td class="font-monospace small">${this.esc(String(active))} / ${this.esc(String(max))}</td>
+            <td>${runtimes}</td>
+            <td class="text-end"><button class="btn btn-sm" data-wake-runtimes="${this.esc(rnames.join(','))}"><i class="ti ti-bell-z me-1"></i>Wake…</button></td>
+        </tr>`;
+    },
+    async _loadWakeIntents() {
+        const body = document.getElementById('fleet-wakes-body');
+        const count = document.getElementById('fleet-wakes-count');
+        if (!body) return;
+        let wakes;
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
+            wakes = (await (await fetch(`/ixp/v1/wake_intents?${q}`)).json()).wake_intents || [];
+        } catch (e) { body.innerHTML = `<div class="text-danger small">Wake intents unavailable: ${this.esc(e.message)}</div>`; return; }
+        const active = wakes.filter((w) => w.status === 'pending' || w.status === 'claimed');
+        if (count) { count.className = active.length ? 'badge bg-yellow-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${active.length} queued`; }
+        const rows = active.length ? active : wakes.slice(-8).reverse();
+        if (!rows.length) { body.innerHTML = `<div class="text-secondary small">No wake intents.</div>`; return; }
+        const hist = !active.length ? `<div class="text-secondary small mt-2"><i class="ti ti-info-circle me-1"></i>No active wakes — showing recent history.</div>` : '';
+        body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
+            <thead><tr><th>Target</th><th>Task</th><th>Reason</th><th>Status</th><th>Requested</th><th class="text-end"></th></tr></thead>
+            <tbody>${rows.map((w) => this._wakeRow(w)).join('')}</tbody></table></div>${hist}`;
+        body.querySelectorAll('[data-cancel-wake]').forEach((b) =>
+            b.addEventListener('click', () => this._cancelWake(b.getAttribute('data-cancel-wake'))));
+    },
+    _wakeRow(w) {
+        const sel = w.selector || {};
+        const target = w.agent_id || sel.agent_id || [sel.runtime, sel.lane].filter(Boolean).join(' · ') || '—';
+        const colors = { pending: 'yellow', claimed: 'blue', completed: 'green', failed: 'red', cancelled: 'secondary' };
+        const c = colors[w.status] || 'secondary';
+        const cancelable = w.status === 'pending' || w.status === 'claimed';
+        return `<tr>
+            <td class="font-monospace small">${this.esc(target)}</td>
+            <td class="font-monospace small">${this.esc(w.task_id || '—')}</td>
+            <td class="small">${this.esc(w.reason || '—')}</td>
+            <td><span class="badge bg-${c}-lt">${this.esc(w.status || '')}</span></td>
+            <td class="text-secondary small">${this.esc(this._fleetAge(w.requested_at))}</td>
+            <td class="text-end">${cancelable ? `<button class="btn btn-sm btn-ghost-danger" data-cancel-wake="${this.esc(w.wake_id || '')}">Cancel</button>` : ''}</td>
+        </tr>`;
+    },
+    async _loadFleetRunners() {
+        const body = document.getElementById('fleet-runners-body');
+        const count = document.getElementById('fleet-runners-count');
+        if (!body) return;
+        let sessions;
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=true`;
+            sessions = (await (await fetch(`/ixp/v1/runner_sessions?${q}`)).json()).sessions || [];
+        } catch (e) { body.innerHTML = `<div class="text-danger small">Runners unavailable: ${this.esc(e.message)}</div>`; return; }
+        if (count) { count.className = sessions.length ? 'badge bg-azure-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${sessions.length}`; }
+        if (!sessions.length) { body.innerHTML = `<div class="text-secondary small">No live runners registered for this project.</div>`; return; }
+        body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
+            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Claim</th><th>Fidelity</th><th>Environment</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead>
+            <tbody>${sessions.map((s) => this._runnerSessionRow(s)).join('')}</tbody></table></div>`;
+        body.querySelectorAll('[data-runner-action]').forEach((btn) =>
+            btn.addEventListener('click', () => this._fleetRunnerAction(btn.getAttribute('data-runner-id'), btn.getAttribute('data-runner-action'))));
+    },
+    _openWakeModal(runtimesCsv) {
+        const rt = (runtimesCsv || '').split(',').filter(Boolean)[0] || '';
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('wake-runtime', rt); set('wake-lane', ''); set('wake-task', ''); set('wake-reason', 'operator wake from Fleet');
+        const flash = document.getElementById('wake-flash'); if (flash) { flash.className = 'small text-secondary'; flash.textContent = ''; }
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('wake-modal')).show();
+    },
+    async _submitWake() {
+        const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+        const flash = document.getElementById('wake-flash');
+        const runtime = val('wake-runtime');
+        if (!runtime) { if (flash) { flash.className = 'small text-danger'; flash.textContent = 'Runtime is required.'; } return; }
+        const selector = { runtime };
+        const lane = val('wake-lane'); if (lane) selector.lane = lane;
+        if (flash) { flash.className = 'small text-secondary'; flash.textContent = 'Sending…'; }
+        try {
+            const res = await fetch('/ixp/v1/request_wake', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project: window.PM_PROJECT || 'maxwell', selector,
+                    reason: val('wake-reason') || 'operator wake from Fleet', task_id: val('wake-task'),
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+            if (flash) { flash.className = 'small text-green'; flash.textContent = `Wake queued (${data.status || 'pending'}).`; }
+            this._loadWakeIntents();
+            setTimeout(() => window.bootstrap.Modal.getOrCreateInstance(document.getElementById('wake-modal')).hide(), 800);
+        } catch (e) { if (flash) { flash.className = 'small text-danger'; flash.textContent = `Wake failed: ${e.message}`; } }
+    },
+    async _cancelWake(wakeId) {
+        if (!wakeId || !window.confirm(`Cancel wake ${wakeId}?`)) return;
+        try {
+            const res = await fetch('/ixp/v1/cancel_wake', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell', wake_id: wakeId }),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+        } catch (e) { /* result reflected on reload */ }
+        this._loadWakeIntents();
+    },
+    async _fleetRunnerAction(runnerId, action) {
+        if (!runnerId || !action) return;
+        if (action === 'kill') {
+            const typed = window.prompt(`Kill is destructive and can't be undone.\nType the runner id to confirm:\n${runnerId}`);
+            if (typed !== runnerId) return;
+        }
+        const endpoints = {
+            kill: '/ixp/v1/request_runner_kill', snapshot: '/ixp/v1/request_runner_snapshot',
+            health: '/ixp/v1/request_runner_health', logs: '/ixp/v1/request_runner_logs',
+            open: '/ixp/v1/request_runner_open',
+        };
+        try {
+            await fetch(endpoints[action] || endpoints.snapshot, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: window.PM_PROJECT || 'maxwell', runner_session_id: runnerId, reason: `operator ${action} from Fleet` }),
+            });
+        } catch (e) { /* result reflected on reload */ }
+        this._loadFleetRunners();
     },
 
     // Render whichever Plan sub-view is active — called when the Plan hub top tab opens,
@@ -5270,6 +5446,8 @@ const TeepPlan = {
         if (overviewTop) overviewTop.addEventListener('shown.bs.tab', () => { this.renderTallyPulse(); this.initPulse(); });
         const planTop = document.getElementById('toptab-plan');
         if (planTop) planTop.addEventListener('shown.bs.tab', () => this._renderPlanActive());
+        const fleetTop = document.getElementById('toptab-fleet');
+        if (fleetTop) fleetTop.addEventListener('shown.bs.tab', () => this.renderFleet());
         const inboxTopTab = document.getElementById('toptab-inbox');
         if (inboxTopTab) inboxTopTab.addEventListener('shown.bs.tab', () => { this.initInbox(); this.renderTables(); });
         const inboxTab = document.querySelector('a[href="#tab-inbox"]');
