@@ -1124,6 +1124,156 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     return get_deliverable(result, project=project) or {"error": "deliverable not found"}
 
 
+def _link_tasks_to_deliverable_impl(
+        deliverable_id: str, links: List[Dict[str, Any]], actor: str = "user",
+        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Validate and persist a batch of deliverable links in one home transaction."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    if not isinstance(links, list) or not links:
+        return {"error": "links must be a non-empty list"}
+
+    normalized: List[Dict[str, Any]] = []
+    unique: Dict[tuple, Dict[str, Any]] = {}
+    skipped: List[Dict[str, Any]] = []
+    task_ids_by_project: Dict[str, List[str]] = {}
+    for index, raw in enumerate(links):
+        if not isinstance(raw, dict):
+            return {"error": "each link must be an object", "link_index": index}
+        task_project = (raw.get("task_project") or raw.get("project_id") or "").strip()
+        task_id = (raw.get("task_id") or "").strip().upper()
+        if not task_project or not task_id:
+            return {"error": "task_project and task_id required", "link_index": index}
+        if not has_project(task_project):
+            return {"error": f"unknown linked project: {task_project}",
+                    "link_index": index}
+        item = dict(raw)
+        item["task_project"] = task_project
+        item["task_id"] = task_id
+        key = (task_project, task_id)
+        prior = unique.get(key)
+        if prior is not None:
+            if item != prior:
+                return {"error": "conflicting duplicate link", "link_index": index,
+                        "project_id": task_project, "task_id": task_id}
+            skipped.append({"task_project": task_project, "task_id": task_id,
+                            "reason": "duplicate_input"})
+            continue
+        unique[key] = item
+        normalized.append(item)
+        task_ids_by_project.setdefault(task_project, []).append(task_id)
+
+    targets: Dict[tuple, Dict[str, Any]] = {}
+    for task_project, task_ids in task_ids_by_project.items():
+        snapshots = _deliverable_task_snapshots(task_project, task_ids)
+        for task_id in task_ids:
+            target = snapshots.get(task_id)
+            if not target:
+                return {"error": "unknown linked task", "project_id": task_project,
+                        "task_id": task_id}
+            targets[(task_project, task_id)] = target
+
+    now = time.time()
+    linked: List[Dict[str, Any]] = []
+    with _conn(project) as c:
+        deliverable_row = c.execute(
+            "SELECT board_id FROM deliverables WHERE id=?", (deliverable_id,)).fetchone()
+        if not deliverable_row:
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        deliverable_board_id = (deliverable_row["board_id"] or "").strip() or None
+
+        prepared: List[Dict[str, Any]] = []
+        for index, item in enumerate(normalized):
+            requested_board_id = (
+                item.get("board_id") or item.get("mission_id") or "").strip() or None
+            if requested_board_id and not _project_board_exists_in(c, requested_board_id):
+                return {"error": "unknown board", "board_id": requested_board_id,
+                        "project_id": project, "link_index": index}
+            if (requested_board_id and deliverable_board_id and
+                    requested_board_id != deliverable_board_id):
+                return {"error": "board mismatch", "board_id": requested_board_id,
+                        "deliverable_board_id": deliverable_board_id,
+                        "deliverable_id": deliverable_id, "link_index": index}
+            milestone_id = (item.get("milestone_id") or "").strip() or None
+            if (milestone_id and
+                    not _deliverable_milestone_exists_in(c, deliverable_id, milestone_id)):
+                return {"error": "unknown milestone", "deliverable_id": deliverable_id,
+                        "milestone_id": milestone_id, "link_index": index}
+            role = (item.get("role") or "").strip()
+            if not role or role.lower() == "auto":
+                target = targets[(item["task_project"], item["task_id"])]
+                role = ("foundation" if (target.get("status") or "").strip() == "Done"
+                        else "contributes")
+            prepared.append({**item, "board_id": requested_board_id or deliverable_board_id,
+                             "milestone_id": milestone_id, "role": role})
+
+        for item in prepared:
+            task_project = item["task_project"]
+            task_id = item["task_id"]
+            link_id = (item.get("id") or item.get("link_id") or
+                       f"link-{deliverable_id}-{task_project}-{task_id}")
+            c.execute(
+                """INSERT INTO deliverable_task_links
+                   (id, deliverable_id, board_id, milestone_id, project_id, task_id, role,
+                    blocks_deliverable, proof_required_json, metadata_json, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(deliverable_id, project_id, task_id) DO UPDATE SET
+                    board_id=excluded.board_id,
+                    milestone_id=excluded.milestone_id,
+                    role=excluded.role,
+                    blocks_deliverable=excluded.blocks_deliverable,
+                    proof_required_json=excluded.proof_required_json,
+                    metadata_json=excluded.metadata_json,
+                    updated_at=excluded.updated_at""",
+                (link_id, deliverable_id, item["board_id"], item["milestone_id"],
+                 task_project, task_id, item["role"],
+                 1 if item.get("blocks_deliverable") else 0,
+                 _json_object_field(item.get("proof_required",
+                                             item.get("proof_required_json"))),
+                 _json_object_field(item.get("metadata", item.get("metadata_json"))),
+                 now, now),
+            )
+            activity_payload = {
+                "deliverable_id": deliverable_id, "board_id": item["board_id"],
+                "project_id": task_project, "task_id": task_id,
+                "milestone_id": item["milestone_id"],
+            }
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (None, actor, "deliverable.task_linked",
+                 json.dumps(activity_payload, sort_keys=True), now),
+            )
+            linked.append({"task_project": task_project, "task_id": task_id,
+                           "role": item["role"], "milestone_id": item["milestone_id"]})
+        _touch_deliverable(c, deliverable_id, now)
+        linked_task_count = c.execute(
+            "SELECT COUNT(*) FROM deliverable_task_links WHERE deliverable_id=?",
+            (deliverable_id,),
+        ).fetchone()[0]
+
+    return {
+        "schema": "switchboard.deliverable_task_links_ack.v1",
+        "project": project,
+        "deliverable_id": deliverable_id,
+        "linked": linked,
+        "skipped": skipped,
+        "progress_counts": {
+            "requested": len(links), "linked": len(linked), "skipped": len(skipped),
+            "linked_task_count": int(linked_task_count),
+        },
+        "full_deliverable_tool": "get_deliverable",
+    }
+
+
+def link_tasks_to_deliverable(deliverable_id: str, links: List[Dict[str, Any]],
+                              actor: str = "user",
+                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Link N explicitly routed tasks with one retryable home-database transaction."""
+    return _retry_on_locked(lambda: _link_tasks_to_deliverable_impl(
+        deliverable_id, links, actor=actor, project=project))
+
+
 def _rows_for_task_ids(c: sqlite3.Connection, table: str, task_ids: List[str],
                        order_by: str) -> List[sqlite3.Row]:
     """Read task-scoped rows in bounded batches without exceeding SQLite variables."""
