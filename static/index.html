@@ -18,7 +18,7 @@
     <link rel="shortcut icon" href="taikun-favicon.png" type="image/png"/>
     <!-- HARDEN-38: pin Tabler versions (was @latest — a Tabler release could break the UI without warning). These are the versions @latest resolved to at pin time. -->
     <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
-    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/tabler-icons.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
     <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. Old UI preserved at /index-legacy.html. -->
@@ -102,16 +102,22 @@
          + sets the page-wrapper margin; this narrows the aside to an icon rail when collapsed. */
       .navbar-vertical .nav-link-icon{font-size:1.15rem;margin-inline-end:.6rem}
       .navbar-vertical .nav-link{border-radius:.5rem}
-      /* Sidebar collapse control (the demo header has no toggle, so it lives in the rail). */
-      .navbar-vertical .tk-rail-toggle{align-self:flex-end;margin:.35rem .5rem .1rem}
+      .navbar-vertical .nav-link-icon{color:var(--tblr-body-color)}
       @media (min-width:992px){
-        body.tk-sidebar-collapsed .navbar-vertical .tk-rail-toggle{align-self:center;margin-inline:0}
+        /* No toggle button: collapsed is a slim icon rail that expands on HOVER to reveal labels. */
+        .navbar-vertical{transition:width .12s ease}
         body.tk-sidebar-collapsed .navbar-vertical{width:4.25rem;overflow:visible}
         body.tk-sidebar-collapsed .navbar-vertical .nav-link-title,
         body.tk-sidebar-collapsed .navbar-vertical .tk-rail-full{display:none}
         body.tk-sidebar-collapsed .navbar-vertical .nav-link{justify-content:center;padding-inline:.5rem}
         body.tk-sidebar-collapsed .navbar-vertical .nav-link-icon{margin-inline-end:0}
         body.tk-sidebar-collapsed .navbar-vertical .navbar-brand{justify-content:center;padding-inline:0}
+        /* Hover to peek — widen + reveal labels/actions, overlaying content (page margin stays put). */
+        body.tk-sidebar-collapsed .navbar-vertical:hover{width:15rem !important;box-shadow:.35rem 0 1.75rem rgba(0,0,0,.10)}
+        body.tk-sidebar-collapsed .navbar-vertical:hover .nav-link-title{display:inline !important}
+        body.tk-sidebar-collapsed .navbar-vertical:hover .tk-rail-full{display:block !important}
+        body.tk-sidebar-collapsed .navbar-vertical:hover .nav-link{justify-content:flex-start;padding-inline:.75rem}
+        body.tk-sidebar-collapsed .navbar-vertical:hover .nav-link-icon{margin-inline-end:.6rem}
         /* Full-width header sits on top → the fixed sidebar starts below it. */
         .navbar-vertical{inset-block-start:var(--tk-header-h) !important}
       }
@@ -172,8 +178,7 @@
                 <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu" aria-controls="sidebar-menu" aria-expanded="false" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
-                <!-- Brand lives in the top header; the collapse control sits at the top of the rail. -->
-                <button class="btn btn-icon btn-ghost-secondary tk-rail-toggle d-none d-lg-inline-flex" type="button" data-tk-sidebar-toggle title="Collapse sidebar" aria-label="Toggle sidebar"><i class="ti ti-layout-sidebar-left-collapse"></i></button>
+                <!-- Brand lives in the top header. No collapse button — the rail expands on hover (desktop). -->
                 <div class="collapse navbar-collapse" id="sidebar-menu">
                     <div class="px-2 pt-2 pb-1 tk-rail-full">
                         <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
@@ -186,7 +191,7 @@
                         <li class="nav-item"><a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span></a></li>
                     </ul>
                     <div class="mt-auto px-2 pb-2 tk-rail-full">
-                        <button id="btn-new-project" class="btn btn-sm btn-outline-light w-100 mb-2" type="button"><i class="ti ti-folder-plus me-1"></i>New project</button>
+                        <button id="btn-new-project" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button"><i class="ti ti-folder-plus me-1"></i>New project</button>
                         <button id="btn-project-github" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" title="Connect a GitHub repo to this project"><i class="ti ti-brand-github me-1"></i>Connect repo</button>
                         <div class="dropdown w-100" id="user-menu" style="display:none">
                             <a href="#" class="d-flex align-items-center text-reset text-decoration-none px-2 py-1" data-bs-toggle="dropdown" aria-label="Account menu">

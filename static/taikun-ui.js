@@ -103,9 +103,5 @@
   }
 })();
 
-// Load the Taikun theme switcher (brand color + light/dark Settings cog).
-(function () {
-  if (document.getElementById('tk-theme-js')) return;
-  var s = document.createElement('script'); s.id = 'tk-theme-js'; s.src = 'taikun-theme.js?v=2';
-  document.head.appendChild(s);
-})();
+// Color-scheme / brand picker (the floating Settings cog) intentionally NOT loaded —
+// the app is a single clean light theme. (taikun-theme.js still exists for legacy pages.)

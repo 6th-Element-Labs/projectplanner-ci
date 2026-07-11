@@ -744,7 +744,7 @@ const TeepPlan = {
         const worst = 'danger';
         // explicit user toggle wins; otherwise auto — open only when something needs attention
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
-        const anchor = 'position:fixed;right:1rem;bottom:4.25rem;z-index:1031;';
+        const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
         const rerender = () => this._renderFleetDock(sessions);
         if (collapsed) {
             const dot = nAttn ? `var(--tblr-${worst})` : 'var(--tblr-success)';
