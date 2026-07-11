@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""PERF-3 — static checks for deploy memory-isolation scripts."""
+"""PERF-3/4 — static checks for zram swap + cgroup slice isolation."""
 import os
-import re
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -22,7 +21,10 @@ def read(rel_path):
 
 zram = read("deploy/setup-zram-swap.sh")
 guards = read("deploy/apply-resource-guards.sh")
-verify = read("scripts/verify_memory_isolation.sh")
+verify_mem = read("scripts/verify_memory_isolation.sh")
+verify_slices = read("scripts/verify_cgroup_slices.sh")
+interactive_slice = read("deploy/projectplanner-interactive.slice")
+reconcile = read("deploy/projectplanner-reconcile.service")
 provision = read("deploy/PROVISION.md")
 
 ok(os.path.isfile(os.path.join(ROOT, "deploy/setup-zram-swap.sh")), "setup-zram-swap.sh exists")
@@ -30,23 +32,23 @@ ok("compression-algorithm = zstd" in zram, "zram config selects zstd compression
 ok("swap = on" in zram, "zram config enables swap")
 ok("disable_disk_swap" in zram, "zram setup disables disk swap")
 
-for unit in ("projectplanner.service", "projectplanner-mcp.service", "projectplanner-gateway.service"):
-    ok(re.search(rf"apply_interactive\s+{re.escape(unit)}\s+\d+\s+\d+M\s+\d+M", guards) is not None,
-       f"interactive guard covers {unit}")
-ok("MemorySwapMax=0" in guards, "apply-resource-guards sets MemorySwapMax=0")
-ok("MemoryMin=${mem_min}" in guards, "apply-resource-guards sets MemoryMin")
-ok("MemoryMax=${mem_max}" in guards, "apply-resource-guards sets MemoryMax on batch jobs")
-ok("320M" in guards, "ci-gate keeps 320M MemoryMax")
-ok(re.search(r"apply_batch\s+projectplanner-reconcile\.service\s+20\s+384M\s+512M", guards) is not None,
-   "reconcile keeps the production-validated 384M/512M envelope")
+ok("MemorySwapMax=0" in interactive_slice, "interactive slice forbids swap")
+ok("MemoryLow=250M" in interactive_slice, "interactive slice sets memory floor")
+ok("projectplanner-interactive.slice" in guards and "projectplanner-batch.slice" in guards,
+   "apply-resource-guards installs slice units")
+ok("reset-property" in guards, "apply-resource-guards clears legacy set-property overrides")
+ok("MemoryMax=512M" in reconcile, "reconcile keeps production-validated 512M MemoryMax")
+ok("PM_SQLITE_MMAP_BYTES=0" in reconcile, "reconcile disables sqlite mmap under batch cap")
 
-ok("MemorySwapMax=0" in verify, "verify script checks MemorySwapMax=0")
-ok("grep -q zram" in verify, "verify script checks zram swap")
-ok("MemoryMax" in verify, "verify script checks batch MemoryMax")
-ok("projectplanner-reconcile.service MemoryMax <= 512M" in verify,
-   "verify script accepts the reconcile-specific hard cap")
+ok("grep -q zram" in verify_mem, "verify_memory_isolation checks zram swap")
+ok("projectplanner-reconcile.service MemoryMax <= 512M" in verify_mem,
+   "verify_memory_isolation accepts reconcile hard cap")
+ok("projectplanner-interactive.slice" in verify_slices, "verify_cgroup_slices checks interactive slice")
+ok("Slice=projectplanner-batch.slice" in verify_slices, "verify_cgroup_slices checks batch Slice=")
+
 ok("setup-zram-swap.sh" in provision, "PROVISION.md documents zram setup")
-ok("verify_memory_isolation.sh" in provision, "PROVISION.md documents verification")
+ok("verify_memory_isolation.sh" in provision, "PROVISION.md documents memory verification")
+ok("verify_cgroup_slices.sh" in provision, "PROVISION.md documents slice verification")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -1,0 +1,12 @@
+# /etc/systemd/system/projectplanner-interactive.slice
+# PERF-4: request-path tier (web, MCP, gateway, agent host). High CPU share,
+# reserved memory floor, and no swap so batch spikes cannot page the hot path.
+[Unit]
+Description=ProjectPlanner interactive tier (web, MCP, gateway)
+Before=slices.target
+
+[Slice]
+CPUWeight=900
+MemoryMin=128M
+MemoryLow=250M
+MemorySwapMax=0

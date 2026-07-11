@@ -6,7 +6,11 @@ Description=ProjectPlanner Switchboard PR CI gate
 After=network.target
 
 [Service]
+Slice=projectplanner-batch.slice
 Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=320M
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/projectplanner

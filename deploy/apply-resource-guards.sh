@@ -1,48 +1,41 @@
 #!/usr/bin/env bash
-# HARDEN-40 / PERF-3: pin cgroup resource guards so batch/timer jobs cannot starve
-# the interactive tier on the small (2-vCPU / ~900 MB) box.
+# PERF-4 / HARDEN-40: install interactive vs batch systemd slices so timer/oneshot
+# jobs cannot starve the web/MCP request path on the small (2-vCPU / ~900 MB) box.
 #
-# PERF-3 adds MemoryMin + MemoryLow + MemorySwapMax=0 on web/MCP/gateway and
-# MemoryMax hard caps on batch jobs so OOM is contained instead of swap-thrashing
-# the request path. Pair with deploy/setup-zram-swap.sh.
+# PERF-3 zram swap (`deploy/setup-zram-swap.sh`) complements these slice caps.
+#
+# Slice hierarchy (declarative in deploy/*.slice + Slice= on each unit):
+#   projectplanner-interactive.slice — web, MCP, gateway, agent host
+#   projectplanner-batch.slice       — reconcile, narrate, ci-gate, timers
+#
+# Run once on a fresh box AFTER the units are installed and enabled (see
+# PROVISION.md). Idempotent — re-running re-copies slices and clears legacy
+# per-service set-property overrides so the repo units stay authoritative.
 set -euo pipefail
 
-apply_interactive() {
-  local unit=$1 cpu=$2 mem_min=$3 mem_low=$4
-  systemctl set-property "$unit" \
-    "CPUWeight=${cpu}" \
-    "MemoryMin=${mem_min}" \
-    "MemoryLow=${mem_low}" \
-    "MemorySwapMax=0"
-}
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-apply_batch() {
-  local unit=$1 cpu=$2 mem_high=$3 mem_max=$4
-  systemctl set-property "$unit" \
-    "CPUWeight=${cpu}" \
-    "MemoryHigh=${mem_high}" \
-    "MemoryMax=${mem_max}"
-}
+install -m 644 "${DEPLOY_DIR}/projectplanner-interactive.slice" /etc/systemd/system/
+install -m 644 "${DEPLOY_DIR}/projectplanner-batch.slice" /etc/systemd/system/
+systemctl daemon-reload
 
-apply_interactive projectplanner.service 900 200M 250M
-apply_interactive projectplanner-mcp.service 400 120M 150M
-apply_interactive projectplanner-gateway.service 300 80M 100M
+INTERACTIVE_UNITS=(projectplanner projectplanner-mcp projectplanner-gateway projectplanner-agent-host)
+BATCH_UNITS=(projectplanner-narrate projectplanner-monitors projectplanner-inbox
+             projectplanner-reconcile projectplanner-summarize projectplanner-digest
+             projectplanner-ci-gate projectplanner-backup)
+LEGACY_PROPS=(CPUWeight MemoryLow MemoryHigh MemoryMax MemoryMin CPUQuota IOWeight MemorySwapMax)
 
-# Batch/timer jobs: low CPU share + bounded working sets.
-for unit in narrate monitors inbox summarize digest; do
-  apply_batch "projectplanner-${unit}.service" 20 180M 220M
+for unit in "${INTERACTIVE_UNITS[@]}" "${BATCH_UNITS[@]}"; do
+  for prop in "${LEGACY_PROPS[@]}"; do
+    systemctl reset-property "${unit}.service" "${prop}" 2>/dev/null || true
+  done
 done
 
-# Reconcile scans every project DB. Production profiling (HARDEN-51..61) proved
-# its legitimate file-cache working set exceeds the generic 180M batch ceiling;
-# this envelope completed all 12 projects in 30s while the web service retained
-# MemoryLow=250M. Keep a hard cap so drift scans cannot consume the whole VM.
-apply_batch projectplanner-reconcile.service 20 384M 512M
-
-apply_batch projectplanner-ci-gate.service 10 220M 320M
-
-echo "resource guards applied. verify e.g.:"
+echo "PERF-4 slice guards installed. verify e.g.:"
+echo "  bash scripts/verify_cgroup_slices.sh"
 echo "  bash scripts/verify_memory_isolation.sh"
-echo "  systemctl show projectplanner.service -p MemoryMin -p MemoryLow -p MemorySwapMax"
-echo "  systemctl show projectplanner-ci-gate.service -p MemoryMax"
-echo "  systemctl show projectplanner-reconcile.service -p MemoryHigh -p MemoryMax"
+echo "  systemctl show projectplanner-interactive.slice -p CPUWeight -p MemoryLow -p MemorySwapMax"
+echo "  systemctl show projectplanner-batch.slice -p CPUWeight -p CPUQuota -p IOWeight -p MemoryHigh"
+echo "  systemctl show projectplanner.service -p Slice"
+echo ""
+echo "Restart interactive + batch units (or reboot) for Slice= assignments to take effect."

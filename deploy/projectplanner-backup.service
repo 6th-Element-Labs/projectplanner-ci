@@ -10,7 +10,12 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+Slice=projectplanner-batch.slice
 Type=oneshot
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+MemoryMax=256M
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/projectplanner
@@ -19,10 +24,4 @@ ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/scripts/backu
 StandardOutput=journal
 StandardError=journal
 # Keep a backup run from starving the web app on the 1 GB box (HARDEN-32).
-Nice=10
-IOSchedulingClass=best-effort
-IOSchedulingPriority=7
-CPUQuota=50%
-MemoryHigh=192M
-MemoryMax=256M
 TimeoutStartSec=30min

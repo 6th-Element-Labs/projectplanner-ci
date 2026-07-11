@@ -6,7 +6,11 @@ Description=ProjectPlanner Switchboard monitor sweep
 After=network.target
 
 [Service]
+Slice=projectplanner-batch.slice
 Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/projectplanner
