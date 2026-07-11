@@ -36,6 +36,7 @@ import agent  # noqa: E402
 import attachments  # noqa: E402
 import auth  # noqa: E402
 import comms  # noqa: E402
+import concurrency_limiter  # noqa: E402
 import digest  # noqa: E402
 import transcribe  # noqa: E402
 import dispatch  # noqa: E402
@@ -401,6 +402,25 @@ async def _request_observability(request: Request, call_next):
         dropped_webhook=(path == "/api/github/webhook" and response.status_code >= 500),
     )
     return response
+
+
+@app.middleware("http")
+async def _global_concurrency_limit(request: Request, call_next):
+    """PERF-5: reject expensive work immediately when global slots are full (429 + Retry-After)."""
+    path = request.url.path
+    if not concurrency_limiter.is_expensive_request(request.method, path):
+        return await call_next(request)
+    acquired, snap = concurrency_limiter.try_acquire()
+    if not acquired:
+        return JSONResponse(
+            concurrency_limiter.build_shed_payload(snap),
+            status_code=429,
+            headers=concurrency_limiter.build_shed_headers(snap),
+        )
+    try:
+        return await call_next(request)
+    finally:
+        concurrency_limiter.release()
 
 
 @app.middleware("http")
@@ -852,6 +872,9 @@ def health_saturation(project: str = Query(store.DEFAULT_PROJECT)):
         "sqlite_lock_waits_window": (snap.get("mcp_observability") or {}).get(
             "sqlite_lock_waits_window", 0),
         "webhook_inbox_pending": (snap.get("webhook_inbox_depth") or {}).get("pending", 0),
+        "concurrency_inflight": (snap.get("concurrency_limiter") or {}).get("inflight", 0),
+        "concurrency_limit": (snap.get("concurrency_limiter") or {}).get("limit", 0),
+        "concurrency_saturated": (snap.get("concurrency_limiter") or {}).get("saturated", False),
     }
 
 

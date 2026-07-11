@@ -10,6 +10,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+import concurrency_limiter
 import load_shed
 import psi_pressure
 
@@ -259,6 +260,34 @@ def build_alerts(
     return alerts
 
 
+def _concurrency_alerts(concurrency: dict) -> List[dict]:
+    alerts: List[dict] = []
+    if not (concurrency or {}).get("enabled"):
+        return alerts
+    now = round(time.time(), 3)
+    if concurrency.get("saturated"):
+        alerts.append({
+            "at": now,
+            "severity": "warning",
+            "kind": "concurrency_saturated",
+            "message": (
+                f"global expensive-op slots full "
+                f"({concurrency.get('inflight')}/{concurrency.get('limit')})"
+            ),
+            "retry_after_s": concurrency.get("retry_after_s"),
+        })
+    shed_total = int((concurrency or {}).get("shed_total") or 0)
+    if shed_total > 0:
+        alerts.append({
+            "at": now,
+            "severity": "warning",
+            "kind": "concurrency_shed",
+            "message": f"concurrency limit rejections: {shed_total}",
+            "value": shed_total,
+        })
+    return alerts
+
+
 def compute_saturation_signals(
     project: str = "switchboard",
     *,
@@ -302,6 +331,7 @@ def compute_saturation_signals(
         sqlite_lock_waits=store_lock_waits_window,
         webhook_inbox_pending=int((inbox_depth or {}).get("pending") or 0),
     )
+    concurrency = concurrency_limiter.snapshot()
     alerts = build_alerts(
         psi=psi,
         mcp_obs=mcp_obs,
@@ -309,6 +339,7 @@ def compute_saturation_signals(
         slo=slo,
         load_shed_state=shed,
     )
+    alerts.extend(_concurrency_alerts(concurrency))
     severity_rank = {"critical": 3, "warning": 2, "info": 1}
     top_severity = "healthy"
     if alerts:
@@ -334,6 +365,7 @@ def compute_saturation_signals(
         "webhook_inbox_depth": inbox_depth,
         "slos": slo,
         "load_shed": shed,
+        "concurrency_limiter": concurrency,
         "alerts": alerts,
         "alert_count": len(alerts),
     }
