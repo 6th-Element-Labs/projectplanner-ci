@@ -1005,7 +1005,7 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     task_id = (task_id or "").strip().upper()
     if not has_project(task_project):
         return {"error": f"unknown linked project: {task_project}"}
-    target = get_task(task_id, project=task_project)
+    target = _deliverable_task_snapshots(task_project, [task_id]).get(task_id)
     if not target:
         return {"error": "unknown linked task", "project_id": task_project, "task_id": task_id}
     payload = data or {}
@@ -1071,25 +1071,94 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 
+def _rows_for_task_ids(c: sqlite3.Connection, table: str, task_ids: List[str],
+                       order_by: str) -> List[sqlite3.Row]:
+    """Read task-scoped rows in bounded batches without exceeding SQLite variables."""
+    rows: List[sqlite3.Row] = []
+    for i in range(0, len(task_ids), 400):
+        batch = task_ids[i:i + 400]
+        placeholders = ",".join("?" * len(batch))
+        rows.extend(c.execute(
+            f"SELECT * FROM {table} WHERE task_id COLLATE NOCASE IN ({placeholders}) "
+            f"ORDER BY task_id, {order_by}",
+            batch,
+        ).fetchall())
+    return rows
+
+
+def _deliverable_task_snapshots(project: str,
+                                task_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Load the compact task shape used by deliverable links in bounded queries.
+
+    This deliberately avoids get_task(): deliverable responses do not consume activity,
+    claims, session health, dependency state, or project context.  Base task rows,
+    provenance, external-CI runs, and publication evidence are each loaded in batches.
+    """
+    requested = list(dict.fromkeys(str(t or "").strip() for t in task_ids if str(t or "").strip()))
+    if not requested or not has_project(project):
+        return {}
+    folded = {task_id.upper(): task_id for task_id in requested}
+    with _conn(project) as c:
+        task_rows = [_task_row(row) for row in _rows_for_task_ids(
+            c, "tasks", requested, "sort_order")]
+        tasks = {task["task_id"].upper(): task for task in task_rows}
+        canonical_ids = [task["task_id"] for task in tasks.values()]
+        git_states = _git_states_by_task(c, canonical_ids)
+        external_rows: Dict[str, List[Dict[str, Any]]] = {}
+        for row in _rows_for_task_ids(c, "external_ci_runs", canonical_ids,
+                                      "updated_at DESC, run_id"):
+            external_rows.setdefault(row["task_id"].upper(), []).append(_external_ci_row(row))
+        publication_rows: Dict[str, List[Dict[str, Any]]] = {}
+        for row in _rows_for_task_ids(c, "publication_evidence", canonical_ids,
+                                      "updated_at DESC, publication_id"):
+            publication_rows.setdefault(row["task_id"].upper(), []).append(_publication_row(row))
+    contract = _external_ci_topology_contract(project)
+    snapshots: Dict[str, Dict[str, Any]] = {}
+    for folded_id, task in tasks.items():
+        requested_id = folded.get(folded_id, task["task_id"])
+        git_state = git_states.get(task["task_id"], _git_state_row(None))
+        task["git_state"] = git_state
+        external_ci = _external_ci_summary(
+            external_rows.get(folded_id, []), source_sha=git_state.get("head_sha") or "",
+            project=project, contract=contract)
+        publication = _publication_summary(
+            publication_rows.get(folded_id, []),
+            source_sha=git_state.get("merged_sha") or git_state.get("head_sha") or "")
+        snapshots[requested_id] = {
+            "task_id": task["task_id"],
+            "title": task.get("title"),
+            "status": task.get("status"),
+            "workstream": task.get("_wsId"),
+            "provenance": _provenance_summary(git_state),
+            "external_ci": _external_ci_review_gate(
+                task, project=project, summary=external_ci),
+            "publication": _publication_review_gate(
+                task, project=project, summary=publication),
+        }
+    return snapshots
+
+
+def _decorate_deliverable_task_links(links: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    links_by_project: Dict[str, List[Dict[str, Any]]] = {}
+    for link in links:
+        project_id = link.get("project_id") or ""
+        if not has_project(project_id):
+            link["task"] = {"error": "unknown project", "project_id": project_id}
+            continue
+        links_by_project.setdefault(project_id, []).append(link)
+    for project_id, project_links in links_by_project.items():
+        snapshots = _deliverable_task_snapshots(
+            project_id, [link["task_id"] for link in project_links])
+        for link in project_links:
+            task = snapshots.get(link["task_id"])
+            link["task"] = task or {
+                "error": "unknown task", "project_id": project_id, "task_id": link["task_id"]}
+    return links
+
+
 def _decorate_deliverable_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
-    if not has_project(link.get("project_id")):
-        link["task"] = {"error": "unknown project", "project_id": link.get("project_id")}
-        return link
-    task = get_task(link["task_id"], project=link["project_id"])
-    if not task:
-        link["task"] = {"error": "unknown task", "project_id": link["project_id"],
-                        "task_id": link["task_id"]}
-        return link
-    link["task"] = {
-        "task_id": task["task_id"],
-        "title": task.get("title"),
-        "status": task.get("status"),
-        "workstream": task.get("_wsId"),
-        "provenance": task.get("provenance"),
-        "external_ci": task.get("external_ci"),
-        "publication": task.get("publication"),
-    }
-    return link
+    """Compatibility wrapper for callers decorating one link."""
+    return _decorate_deliverable_task_links([link])[0]
 
 
 def get_deliverable(deliverable_id: str, project: str = DEFAULT_PROJECT,
@@ -1126,7 +1195,7 @@ def get_deliverable(deliverable_id: str, project: str = DEFAULT_PROJECT,
             ).fetchall()
         ]
     if include_task_snapshots:
-        links = [_decorate_deliverable_task_link(link) for link in links]
+        links = _decorate_deliverable_task_links(links)
     deliverable["milestones"] = milestones
     deliverable["task_links"] = links
     deliverable["progress"] = deliverable_progress(deliverable)
@@ -3170,11 +3239,9 @@ def _load_git_state(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
     return state
 
 
-def _provenance_by_task(c: sqlite3.Connection, task_ids: List[str]) -> Dict[str, Dict[str, Any]]:
-    """Batch equivalent of _provenance_summary(_load_git_state(c, id)) for many tasks:
-    one query for all task_git_state rows instead of one per task. This is the board
-    N+1 fix (HARDEN-34) — the whole-board list needs provenance for every card's
-    Done-proof badge, and doing it per-task was ~1 query/task."""
+def _git_states_by_task(c: sqlite3.Connection,
+                        task_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Load full git-state rows for many task ids in bounded queries."""
     if not task_ids:
         return {}
     by_id: Dict[str, sqlite3.Row] = {}
@@ -3186,12 +3253,23 @@ def _provenance_by_task(c: sqlite3.Connection, task_ids: List[str]) -> Dict[str,
             f"SELECT * FROM task_git_state WHERE task_id IN ({placeholders})", batch
         ).fetchall():
             by_id[r["task_id"]] = r
-    out: Dict[str, Dict[str, Any]] = {}
-    for tid in task_ids:
-        state = _git_state_row(by_id.get(tid))
+    states: Dict[str, Dict[str, Any]] = {}
+    for task_id in task_ids:
+        state = _git_state_row(by_id.get(task_id))
         state["provenance_type"] = _provenance_summary(state)["type"]
-        out[tid] = _provenance_summary(state)
-    return out
+        states[task_id] = state
+    return states
+
+
+def _provenance_by_task(c: sqlite3.Connection, task_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Batch equivalent of _provenance_summary(_load_git_state(c, id)) for many tasks:
+    one query for all task_git_state rows instead of one per task. This is the board
+    N+1 fix (HARDEN-34) — the whole-board list needs provenance for every card's
+    Done-proof badge, and doing it per-task was ~1 query/task."""
+    return {
+        task_id: _provenance_summary(state)
+        for task_id, state in _git_states_by_task(c, task_ids).items()
+    }
 
 
 def _active_task_claims_in(c: sqlite3.Connection, task_id: str,
@@ -4208,17 +4286,9 @@ def _sha_matches(candidate: str, target: str) -> bool:
     return cand.startswith(want) or want.startswith(cand)
 
 
-def _task_external_ci_summary_in(c: sqlite3.Connection, task_id: str,
-                                 source_sha: str = "",
-                                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    rows = [
-        _external_ci_row(row)
-        for row in c.execute(
-            "SELECT * FROM external_ci_runs WHERE task_id=? "
-            "ORDER BY updated_at DESC, run_id",
-            (task_id,),
-        ).fetchall()
-    ]
+def _external_ci_summary(rows: List[Dict[str, Any]], source_sha: str = "",
+                         project: str = DEFAULT_PROJECT,
+                         contract: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if source_sha:
         rows = [r for r in rows if _sha_matches(r.get("source_sha") or "", source_sha)]
     success = [r for r in rows if r.get("status") == "success" and r.get("conclusion") == "success"]
@@ -4238,7 +4308,7 @@ def _task_external_ci_summary_in(c: sqlite3.Connection, task_id: str,
     else:
         status = "missing"
         selected = None
-    contract = _external_ci_topology_contract(project)
+    contract = contract or _external_ci_topology_contract(project)
     source_repo = (
         (selected or {}).get("source_repo")
         or (rows[0].get("source_repo") if rows else None)
@@ -4284,6 +4354,20 @@ def _task_external_ci_summary_in(c: sqlite3.Connection, task_id: str,
     }
 
 
+def _task_external_ci_summary_in(c: sqlite3.Connection, task_id: str,
+                                 source_sha: str = "",
+                                 project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    rows = [
+        _external_ci_row(row)
+        for row in c.execute(
+            "SELECT * FROM external_ci_runs WHERE task_id=? "
+            "ORDER BY updated_at DESC, run_id",
+            (task_id,),
+        ).fetchall()
+    ]
+    return _external_ci_summary(rows, source_sha=source_sha, project=project)
+
+
 def task_external_ci_summary(task_id: str, source_sha: str = "",
                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     init_db(project)
@@ -4315,7 +4399,8 @@ def _external_ci_required_from(task: Dict[str, Any],
 def _external_ci_review_gate(task: Dict[str, Any],
                              evidence: Optional[Dict[str, Any]] = None,
                              c: Optional[sqlite3.Connection] = None,
-                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+                             project: str = DEFAULT_PROJECT,
+                             summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     evidence = evidence or {}
     source_sha = (
         evidence.get("external_ci_source_sha")
@@ -4324,7 +4409,9 @@ def _external_ci_review_gate(task: Dict[str, Any],
         or (task.get("git_state") or {}).get("head_sha")
         or ""
     )
-    if c is None:
+    if summary is not None:
+        summary = dict(summary)
+    elif c is None:
         with _conn(project) as own:
             summary = _task_external_ci_summary_in(
                 own, task["task_id"], source_sha=source_sha, project=project)
@@ -4967,16 +5054,8 @@ def list_publication_evidence(task_id: str = "", source_project: str = "",
         return [_publication_row(row) for row in c.execute(q, params).fetchall()]
 
 
-def _task_publication_summary_in(c: sqlite3.Connection, task_id: str,
-                                 source_sha: str = "") -> Dict[str, Any]:
-    rows = [
-        _publication_row(row)
-        for row in c.execute(
-            "SELECT * FROM publication_evidence WHERE task_id=? "
-            "ORDER BY updated_at DESC, publication_id",
-            (task_id,),
-        ).fetchall()
-    ]
+def _publication_summary(rows: List[Dict[str, Any]],
+                         source_sha: str = "") -> Dict[str, Any]:
     matched = rows
     if source_sha:
         matched = [r for r in rows if _sha_matches(r.get("source_sha") or "", source_sha)]
@@ -5021,6 +5100,19 @@ def _task_publication_summary_in(c: sqlite3.Connection, task_id: str,
     }
 
 
+def _task_publication_summary_in(c: sqlite3.Connection, task_id: str,
+                                 source_sha: str = "") -> Dict[str, Any]:
+    rows = [
+        _publication_row(row)
+        for row in c.execute(
+            "SELECT * FROM publication_evidence WHERE task_id=? "
+            "ORDER BY updated_at DESC, publication_id",
+            (task_id,),
+        ).fetchall()
+    ]
+    return _publication_summary(rows, source_sha=source_sha)
+
+
 def task_publication_summary(task_id: str, source_sha: str = "",
                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     init_db(project)
@@ -5062,7 +5154,8 @@ def _publication_required_from(task: Dict[str, Any],
 def _publication_review_gate(task: Dict[str, Any],
                              evidence: Optional[Dict[str, Any]] = None,
                              c: Optional[sqlite3.Connection] = None,
-                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+                             project: str = DEFAULT_PROJECT,
+                             summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     evidence = evidence or {}
     git_state = task.get("git_state") or {}
     source_sha = (
@@ -5073,7 +5166,9 @@ def _publication_review_gate(task: Dict[str, Any],
         or git_state.get("head_sha")
         or ""
     )
-    if c is None:
+    if summary is not None:
+        summary = dict(summary)
+    elif c is None:
         with _conn(project) as own:
             summary = _task_publication_summary_in(own, task["task_id"], source_sha=source_sha)
     else:
