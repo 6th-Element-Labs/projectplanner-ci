@@ -125,6 +125,7 @@ run_test test_tally_project_surface.py
 run_test test_ui2_kpi_outcomes.py
 run_test test_task_move_archive.py
 run_test test_web_write_auth.py
+run_test test_ui9_admin.py
 run_test test_auth_rate_limit.py
 run_test test_switchboard_pr_gate.py
 run_test test_pr_provenance_gate.py
