@@ -199,10 +199,13 @@ def _url_check(value: str) -> Dict[str, Any]:
     return {"type": "url", "value": raw, "status": "missing", "detail": "URL must be HTTP(S)"}
 
 
-def _ref_check(repo_root: Path, value: str) -> Dict[str, Any]:
+def _ref_check(repo_root: Path, value: str,
+               batched: Mapping[str, Dict[str, Any]] | None = None) -> Dict[str, Any]:
     raw = (value or "").strip()
     if not raw:
         return {"type": "ref", "value": value, "status": "missing", "detail": "empty ref"}
+    if batched is not None and raw in batched:
+        return dict(batched[raw])
     proc = subprocess.run(
         ["git", "cat-file", "-e", f"{raw}^{{commit}}"],
         cwd=str(repo_root),
@@ -215,14 +218,38 @@ def _ref_check(repo_root: Path, value: str) -> Dict[str, Any]:
     return {"type": "ref", "value": raw, "status": "missing", "detail": "git commit/ref not reachable"}
 
 
-def _evidence_checks(declared: Mapping[str, List[str]], repo_root: Path) -> List[Dict[str, Any]]:
+def _batch_ref_checks(repo_root: Path, refs: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+    unique = list(dict.fromkeys((ref or "").strip() for ref in refs if (ref or "").strip()))
+    if not unique:
+        return {}
+    expressions = [f"{ref}^{{commit}}" for ref in unique]
+    proc = subprocess.run(
+        ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        cwd=str(repo_root), text=True, input="\n".join(expressions) + "\n",
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    lines = proc.stdout.splitlines()
+    results: Dict[str, Dict[str, Any]] = {}
+    for index, raw in enumerate(unique):
+        line = lines[index] if index < len(lines) else ""
+        reachable = bool(re.fullmatch(r"[0-9a-fA-F]{40,64} commit", line.strip()))
+        results[raw] = {
+            "type": "ref", "value": raw,
+            "status": "pass" if reachable else "missing",
+            "detail": "git commit is reachable" if reachable else "git commit/ref not reachable",
+        }
+    return results
+
+
+def _evidence_checks(declared: Mapping[str, List[str]], repo_root: Path,
+                     batched_refs: Mapping[str, Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
     checks: List[Dict[str, Any]] = []
     for value in declared.get("paths") or []:
         checks.append(_path_check(repo_root, value))
     for value in declared.get("urls") or []:
         checks.append(_url_check(value))
     for value in declared.get("refs") or []:
-        checks.append(_ref_check(repo_root, value))
+        checks.append(_ref_check(repo_root, value, batched=batched_refs))
     return checks
 
 
@@ -230,7 +257,8 @@ def _kind_is_claim_relevant(kind: str) -> bool:
     return any((kind or "").startswith(prefix) for prefix in CLAIM_KIND_PREFIXES)
 
 
-def evaluate_activity(activity: Mapping[str, Any], repo_root: str | Path) -> Dict[str, Any]:
+def evaluate_activity(activity: Mapping[str, Any], repo_root: str | Path,
+                      batched_refs: Mapping[str, Dict[str, Any]] | None = None) -> Dict[str, Any]:
     """Return a claim/evidence report for one activity row, or {} if irrelevant."""
     kind = str(activity.get("kind") or "")
     if not _kind_is_claim_relevant(kind):
@@ -244,7 +272,7 @@ def evaluate_activity(activity: Mapping[str, Any], repo_root: str | Path) -> Dic
     if not artifacts and not keywords and not has_declared:
         return {}
 
-    checks = _evidence_checks(declared, Path(repo_root))
+    checks = _evidence_checks(declared, Path(repo_root), batched_refs=batched_refs)
     missing = [check for check in checks if check.get("status") != "pass"]
     if checks and not missing:
         status = "pass"
@@ -291,9 +319,15 @@ def evaluate_activity(activity: Mapping[str, Any], repo_root: str | Path) -> Dic
 
 def evaluate_activities(activities: Iterable[Mapping[str, Any]],
                         repo_root: str | Path) -> List[Dict[str, Any]]:
+    materialized = list(activities)
+    refs: List[str] = []
+    for activity in materialized:
+        if _kind_is_claim_relevant(str(activity.get("kind") or "")):
+            refs.extend(_collect_declared(_payload(activity.get("payload"))).get("refs") or [])
+    batched_refs = _batch_ref_checks(Path(repo_root), refs)
     reports = []
-    for activity in activities:
-        report = evaluate_activity(activity, repo_root)
+    for activity in materialized:
+        report = evaluate_activity(activity, repo_root, batched_refs=batched_refs)
         if report:
             reports.append(report)
     return reports
