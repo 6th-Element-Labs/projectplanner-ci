@@ -479,6 +479,39 @@ def apply_schema(c):
             reason      TEXT,
             enqueued_at REAL NOT NULL
         );
+        -- NARRATE-8: transactional narration outbox (ADR-0008). A meaningful task/
+        -- deliverable mutation and its narration intent commit in the same SQLite
+        -- transaction; durable outbox state — not the post-commit wake or a timer —
+        -- is the source of pending work. Rows hold a strict
+        -- switchboard.narration_requested.v1 envelope (see narration_events.py) plus
+        -- mutable attempt/lease delivery state. Nothing consumes this yet; NARRATE-9
+        -- owns the wakeable worker. The unique dedupe_key makes a retried domain write
+        -- idempotent (INSERT OR IGNORE), so one request revision is emitted at most once.
+        CREATE TABLE IF NOT EXISTS narration_outbox (
+            event_id         TEXT PRIMARY KEY,
+            schema_version   TEXT NOT NULL,
+            event_type       TEXT NOT NULL,
+            project          TEXT NOT NULL,
+            entity_type      TEXT NOT NULL,
+            entity_id        TEXT NOT NULL,
+            source_revision  INTEGER NOT NULL,
+            source_hash      TEXT NOT NULL,
+            causal_event     TEXT NOT NULL,
+            priority         TEXT NOT NULL DEFAULT 'normal',
+            requested_at     REAL NOT NULL,
+            dedupe_key       TEXT NOT NULL,
+            supersedes       TEXT,
+            attempt_state    TEXT NOT NULL DEFAULT 'pending',
+            attempt_count    INTEGER NOT NULL DEFAULT 0,
+            available_at     REAL NOT NULL,
+            claimed_by       TEXT,
+            lease_expires_at REAL,
+            last_error       TEXT,
+            authorization    TEXT NOT NULL,
+            trace_id         TEXT NOT NULL,
+            created_at       REAL NOT NULL,
+            updated_at       REAL NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS project_boards (
             id                         TEXT PRIMARY KEY,
             title                      TEXT NOT NULL,
@@ -750,6 +783,14 @@ def apply_schema(c):
         CREATE INDEX IF NOT EXISTS ix_activity_ts ON activity(created_at);
         CREATE INDEX IF NOT EXISTS ix_chat_session ON chat(session);
         CREATE INDEX IF NOT EXISTS ix_leases_agent ON file_leases(agent_id);
+        -- NARRATE-8 outbox access paths: idempotent emit (unique dedupe_key),
+        -- recovery-only sweep over actionable rows, and per-entity revision order.
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_narration_outbox_dedupe
+            ON narration_outbox(dedupe_key);
+        CREATE INDEX IF NOT EXISTS ix_narration_outbox_recovery
+            ON narration_outbox(attempt_state, available_at);
+        CREATE INDEX IF NOT EXISTS ix_narration_outbox_entity
+            ON narration_outbox(entity_type, entity_id, source_revision);
         """
     )
     # Additive column migrations — safe to run on every startup
@@ -768,6 +809,14 @@ def apply_schema(c):
         "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN deferred_until REAL",
         "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN reviewed_by TEXT",
         "ALTER TABLE external_ci_runs ADD COLUMN status_context TEXT",
+        # NARRATE-8: monotonic per-entity narration source revision + canonical
+        # source hash of the last projection. Default 0 marks "never projected";
+        # backfill_narration_source_revisions() sets revision 1 without emitting
+        # historical provider work.
+        "ALTER TABLE tasks ADD COLUMN narration_source_revision INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN narration_source_hash TEXT",
+        "ALTER TABLE deliverables ADD COLUMN narration_source_revision INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE deliverables ADD COLUMN narration_source_hash TEXT",
     ]:
         try:
             c.execute(col_sql)
