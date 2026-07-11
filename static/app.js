@@ -4520,7 +4520,15 @@ const TeepPlan = {
                 // shown.bs.tab on, which drives refreshMissionPage. The sidebar link shares
                 // href="#tab-mission" and would otherwise win document.querySelector.
                 const tab = document.querySelector('#toptab-mission');
-                if (tab && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(tab).show();
+                if (tab && window.bootstrap) {
+                    // The inline deep-link handler may have already activated this tab during
+                    // page parse (to avoid an Overview flash on refresh). If so, .show() is a
+                    // no-op that won't re-fire shown.bs.tab, so drive the cockpit directly;
+                    // otherwise .show() fires the event and its listener does the same.
+                    const alreadyActive = tab.classList.contains('active');
+                    window.bootstrap.Tab.getOrCreateInstance(tab).show();
+                    if (alreadyActive) { this.refreshMissionPage(); this._startMissionLive(); }
+                }
             }
         } catch (e) { /* ignore */ }
     },

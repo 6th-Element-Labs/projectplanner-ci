@@ -925,6 +925,19 @@
         // handler in app.js (it also resolves the selected deliverable), so skip it here.
         var h = (location.hash || '').trim();
         if (/^#tab-[a-z0-9-]+$/i.test(h) && h !== '#tab-mission') showTab(h);
+        // Deep-link the Deliverable board: a ?deliverable= / ?mission= query param means
+        // the operator was on the Deliverable board, so activate that top tab now — during
+        // page parse, before app.js init or the board fetch — so a refresh lands there on
+        // the first paint with no Overview flash. app.js then fills in the selected
+        // deliverable + cockpit. Uses the top-tab element directly (it lives in .navbar-nav,
+        // not a .nav, so ctrlFor/showTab wouldn't resolve it).
+        try {
+          var qp = new URLSearchParams(location.search);
+          if (qp.get('deliverable') || qp.get('mission')) {
+            var mt = document.getElementById('toptab-mission');
+            if (mt && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(mt).show();
+          }
+        } catch (e) { /* ignore */ }
       })();
     </script>
     <script>
