@@ -27,6 +27,7 @@ import notify as notify_mod
 import rag
 import signals
 import store
+from mcp_observability import MCPObservability
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -80,6 +81,24 @@ mcp = FastMCP(
     stateless_http=True,
     transport_security=_SECURITY,
 )
+
+# FastMCP registers functions at decoration time.  Replacing the instance's
+# decorator here instruments every tool below without duplicating timing code in
+# ~150 handlers, while functools.wraps preserves the schemas FastMCP derives.
+_mcp_observability = MCPObservability()
+_register_mcp_tool = mcp.tool
+
+
+def _observed_mcp_tool(*args, **kwargs):
+    register = _register_mcp_tool(*args, **kwargs)
+
+    def observed_register(fn):
+        return register(_mcp_observability.wrap(fn))
+
+    return observed_register
+
+
+mcp.tool = _observed_mcp_tool
 
 
 def _dumps(obj) -> str:
@@ -705,6 +724,15 @@ def control_plane_probe(project: str = "maxwell", lane: str = "",
         "approx_tool_payload_bytes": len(_dumps(probe).encode("utf-8")),
     }
     return _dumps(probe)
+
+
+@mcp.tool()
+def get_mcp_observability(tool: str = "", slow_limit: int = 50) -> str:
+    """Process-local MCP health: per-tool p50/p99/max latency, failures, SQLite
+    lock-wait count, and a bounded slow-call log. No arguments, results, tokens, or
+    other request content are retained. tool optionally filters by exact tool name;
+    slow_limit is capped by PM_MCP_SLOW_LOG_LIMIT."""
+    return _dumps(_mcp_observability.snapshot(tool=tool, slow_limit=slow_limit))
 
 
 @mcp.tool()
