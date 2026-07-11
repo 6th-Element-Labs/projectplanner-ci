@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+from scripts.frontend_test_source import read_frontend_source
 
 _TMP = tempfile.mkdtemp(prefix="ui14-comms-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -186,7 +187,7 @@ def test_ui_wiring():
     print("\n[10] UI wiring (index.html + app.js)")
     here = os.path.dirname(os.path.abspath(__file__))
     idx = open(os.path.join(here, "static", "index.html"), encoding="utf-8").read()
-    js = open(os.path.join(here, "static", "app.js"), encoding="utf-8").read()
+    js = read_frontend_source(here)
     for needle in ('id="comms-modal"', 'id="btn-project-comms"', 'id="comms-plus"'):
         check(needle in idx, f"index.html has {needle}")
     for needle in ("openComms", "saveComms", "sendCommsTest", "_commsAddDomain",
