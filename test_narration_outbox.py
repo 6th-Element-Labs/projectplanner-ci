@@ -104,18 +104,27 @@ try:
     ok(len(dupes) == 1, "re-emitting the same revision is idempotent on dedupe_key")
 
     # 8. atomicity: if the mutation transaction raises, neither mutation nor outbox row commit.
+    #    Under PERF-2's single-writer model an atomic multi-statement write must run through
+    #    _write_through (the writer thread), which is exactly how store.create_task/update_task
+    #    invoke the emit — so this exercises the real atomic boundary. (A bare `with _conn` on a
+    #    non-writer thread routes each mutating statement through the queue independently and is
+    #    intentionally NOT a single transaction.)
     t3 = store.create_task({"workstream_id": "NAR", "title": "Rollback probe"},
                            actor="test", project=PROJECT)
     rb_id = t3["task_id"]
     base_rev = task_rev(rb_id)[0]
     base_rows = len([e for e in outbox() if e["entity_id"] == rb_id])
-    raised = False
-    try:
+
+    def _atomic_probe():
         with narration_outbox._conn(PROJECT) as c:
             c.execute("UPDATE tasks SET status='Done' WHERE task_id=?", (rb_id,))
             narration_outbox.emit_task_narration_request(
                 c, rb_id, project=PROJECT, cause_kind="task.updated", actor="test")
             raise RuntimeError("boom after emit, before commit")
+
+    raised = False
+    try:
+        store._write_through(PROJECT, _atomic_probe)
     except RuntimeError:
         raised = True
     with narration_outbox._conn(PROJECT) as c:

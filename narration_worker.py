@@ -260,6 +260,52 @@ def count_actionable(project: str, *, now: Optional[float] = None) -> int:
         ).fetchone()[0]
 
 
+def preview_impact_set(project: str, *, now: Optional[float] = None) -> Dict[str, Any]:
+    """Read-only twin of the claim loop: the request the worker WOULD narrate for each entity
+    right now, after coalescing and stale suppression — without claiming, mutating, or
+    publishing anything. This is what NARRATE-10 shadow-compares against the legacy queue.
+
+    Returns ``impacts`` (one freshest non-stale request per entity), ``coalesced`` (older
+    actionable revisions that would be superseded without a provider call), and
+    ``stale_suppressed`` (entities whose every actionable revision is behind the entity and
+    would be dropped with zero provider work)."""
+    now = _now(now)
+    impacts: List[Dict[str, Any]] = []
+    coalesced = 0
+    stale_suppressed = 0
+    with narration_outbox._conn(project) as c:
+        rows = c.execute(_ACTIONABLE_SQL, (now, now)).fetchall()
+        order: List[Tuple[str, str]] = []
+        by_entity: Dict[Tuple[str, str], List[Any]] = {}
+        for r in rows:
+            key = (r["entity_type"], r["entity_id"])
+            if key not in by_entity:
+                by_entity[key] = []
+                order.append(key)
+            by_entity[key].append(r)
+        for key in order:
+            cur_rev, cur_hash = _entity_current(c, key[0], key[1])
+            target = None
+            stale_here = 0
+            for r in by_entity[key]:
+                if _classify(r["source_revision"], r["source_hash"], cur_rev, cur_hash) == "stale":
+                    stale_here += 1
+                else:
+                    target = r
+            if target is not None:
+                impacts.append({
+                    "entity_type": target["entity_type"],
+                    "entity_id": target["entity_id"],
+                    "source_revision": target["source_revision"],
+                    "source_hash": target["source_hash"],
+                    "trace_id": target["trace_id"],
+                })
+                coalesced += stale_here  # older revisions folded into this impact
+            else:
+                stale_suppressed += 1  # entity advanced past every queued revision
+    return {"impacts": impacts, "coalesced": coalesced, "stale_suppressed": stale_suppressed}
+
+
 def drain(project: str, *, worker_id: str, generate: Callable[[Dict[str, Any]], Any],
           now_fn: Callable[[], float] = time.time, max_items: int = 100,
           lease_seconds: float = DEFAULT_LEASE_SECONDS,
