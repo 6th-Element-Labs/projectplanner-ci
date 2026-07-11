@@ -27,11 +27,13 @@ import notify as notify_mod
 import rag
 import signals
 import store
+import scripts.switchboard_path  # noqa: F401
 from mcp_observability import MCPObservability
 from mcp_dispatch import MCPToolDispatcher
 from mcp_http_timing import MCPServerTimingMiddleware
 from mcp_observability_http import MCPObservabilityEndpoint
 from mcp_auth import MCPAuthMiddleware
+from switchboard.application.commands import create_task as create_task_command
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -2941,19 +2943,12 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
     if not binding.get("ok"):
         return _dumps(binding)
     actor_name = binding["actor"]
-    deps = _dep_ids(depends_on)
-    unknown = _unknown_ids(deps, project)
-    if unknown:   # FAIL LOUD: refuse to create a task carrying edges to non-existent tasks
-        return _dumps({"error": "unknown dependency id(s) on project '%s': %s — task NOT created. "
-                       "Create them first or fix the id." % (project, ", ".join(unknown))})
-    data = {"workstream_id": workstream_id, "title": title, "description": description or None,
-            "owner_org": owner_org or None, "owner_person_or_role": owner_person_or_role or None,
-            "status": status or None, "phase": phase or None, "risk_level": risk_level or None,
-            "depends_on": deps}
-    t = store.create_task(data, actor=actor_name, project=project)
+    t = create_task_command.execute_mapping_result(locals(), actor=actor_name, project=project)
+    if t.get("error"):
+        return _dumps(t)
     if t:
         _write_binding_comment(t.get("task_id") or "", binding, project)
-    return _dumps(agent._task_brief(t)) if t else "workstream_id and title required"
+    return _dumps(agent._task_brief(t))
 
 
 @mcp.tool()
