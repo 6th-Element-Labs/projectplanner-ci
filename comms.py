@@ -4,9 +4,10 @@ Backs the operator-facing Communications surface. All state lives in each projec
 table (via store.get_meta/set_meta) — no new tables, no store.py growth. Two halves:
 
 INBOUND (routing): each project owns a list of sender DOMAINS that route inbound mail to it.
-This is the UI-13 domain→project map (gmail_source), now editable from the web instead of the
-deploy-level PM_INBOX_ROUTES env — so an operator can associate @client.com with a project with
-no .env edit. `plus_address(project)` is the zero-config routing path for the same mailbox.
+This is the UI-13 domain→project map (`switchboard.integrations.inbox_routing`), now editable
+from the web instead of the deploy-level PM_INBOX_ROUTES env — so an operator can associate
+@client.com with a project with no .env edit. `plus_address(project)` is the zero-config routing
+path for the same mailbox.
 
 OUTBOUND (digest/notify): each project owns its own digest + notify recipient lists and a digest
 cadence. notify.py reads these first and falls back to the global .env list (PM_NOTIFY_EMAIL_TO),
@@ -121,7 +122,7 @@ def set_inbound_domains(project, domains):
 
 def persisted_routes():
     """Merged {domain: project} over every project's associated domains — the web-managed half of
-    gmail_source's routing map. First-writer-wins with a loud warning if two boards ever claim the
+    shared inbox routing map. First-writer-wins with a loud warning if two boards ever claim the
     same domain (set-time validation normally prevents this)."""
     out = {}
     for pid in sorted(store.project_ids()):

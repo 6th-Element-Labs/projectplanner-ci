@@ -78,7 +78,7 @@
 
 ## UI-13 · Multi-project intake + per-project corpus — *backend* · **unlocks UI-14**
 
-- Domain→project routing map applied in `gmail_source.py`; **plus-addressing** `plan+<project>@taikunai.com` as zero-config routing; unmatched senders fall back to today's allowlist→maxwell (Maxwell unchanged).
+- Domain→project routing map applied in `src/switchboard/integrations/inbox_routing.py`; **plus-addressing** `plan+<project>@taikunai.com` as zero-config routing; unmatched senders fall back to today's allowlist→maxwell (Maxwell unchanged).
 - `project` column through `inbox_store` / `rag_store` / `intake` / `transcribe` (the standard `_conn(project)` pattern); migrate existing rows to maxwell; `doc_search`/`rag.search` take `project`.
 - Acceptance: mapped-domain email lands in that project's Inbox tab; a transcript uploaded on X is searchable on X, invisible on Y.
 

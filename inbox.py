@@ -1,6 +1,6 @@
 """Live Inbox (Phase 5.5 / autonomous — see docs/AGENT_ROADMAP.md).
 
-The Gmail-poll source (gmail_source.py) feeds each inbound message to `process()`, which
+The IMAP adapter (`inbox_source.py`) feeds each inbound message to `process()`, which
 runs the Phase-5 ingest+triage core and — in AUTONOMOUS mode (default) — APPLIES the
 implied changes immediately (audited "Maxwell (email)") and EMAILS the sender back
 (answers questions, confirms what changed). The Inbox tab is then a LOG of what the agent

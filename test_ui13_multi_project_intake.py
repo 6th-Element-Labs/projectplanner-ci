@@ -5,7 +5,7 @@ Proves the acceptance criteria without a live mailbox or LLM gateway:
   1. corpus isolation  — a doc ingested on project X is searchable on X and INVISIBLE on Y;
   2. inbox isolation   — an inbox item added on X shows only on X (dedupe is per-board too);
   3. Maxwell unchanged — the default project still ingests/searches its own corpus;
-  4. routing           — gmail_source._route resolves plus-address > sender-domain map >
+  4. routing           — inbox_routing.route resolves plus-address > sender-domain map >
                          global-allowlist fallback -> default project (today's behavior).
 
 Each project is its own sqlite file (physical isolation, no project column) — the pattern
@@ -24,11 +24,12 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
 try:
     import store          # noqa: E402
     import rag            # noqa: E402
-    import gmail_source   # noqa: E402
+    from switchboard.integrations import inbox_routing  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  UI-13 intake smoke requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
@@ -114,32 +115,32 @@ def test_inbox_isolation():
 
 
 def test_routing():
-    print("\n[4] gmail_source routing: plus-address > domain map > allowlist fallback")
+    print("\n[4] inbox routing: plus-address > domain map > allowlist fallback")
     os.environ["PM_INBOX_ROUTES"] = "totalenergy.com=maxwell, acme.com=helm"
     os.environ["PM_INBOX_ALLOWLIST"] = ""   # empty -> accept-all for unmapped senders (today's default)
 
-    check(gmail_source._route("Anyone <x@random.com>", "plan+switchboard@taikunai.com") == (True, "switchboard"),
+    check(inbox_routing.route("Anyone <x@random.com>", "plan+switchboard@taikunai.com") == (True, "switchboard"),
           "plus-address plan+switchboard@ routes to switchboard (accepts)")
-    check(gmail_source._route("Bob <bob@acme.com>", "plan@taikunai.com") == (True, "helm"),
+    check(inbox_routing.route("Bob <bob@acme.com>", "plan@taikunai.com") == (True, "helm"),
           "sender-domain acme.com routes to helm (accepts)")
-    check(gmail_source._route("bob@mail.acme.com", "plan@taikunai.com") == (True, "helm"),
+    check(inbox_routing.route("bob@mail.acme.com", "plan@taikunai.com") == (True, "helm"),
           "subdomain of a mapped domain routes to helm")
-    check(gmail_source._route("j@totalenergy.com", "plan@taikunai.com") == (True, "maxwell"),
+    check(inbox_routing.route("j@totalenergy.com", "plan@taikunai.com") == (True, "maxwell"),
           "sender-domain totalenergy.com routes to maxwell")
-    check(gmail_source._route("bob@acme.com", "plan+switchboard@taikunai.com") == (True, "switchboard"),
+    check(inbox_routing.route("bob@acme.com", "plan+switchboard@taikunai.com") == (True, "switchboard"),
           "plus-address WINS over the sender-domain map")
-    check(gmail_source._route("bob@random.com",
+    check(inbox_routing.route("bob@random.com",
                               "plan@taikunai.com, plan+helm@taikunai.com") == (True, "helm"),
           "plus-address is found even when it is not the first recipient (comma list)")
-    check(gmail_source._route("stranger@nowhere.com", "plan@taikunai.com") == (True, "maxwell"),
+    check(inbox_routing.route("stranger@nowhere.com", "plan@taikunai.com") == (True, "maxwell"),
           "unmapped sender falls back to default project (accept-all allowlist)")
-    check(gmail_source._route("x@random.com", "plan+bogus@taikunai.com") == (True, "maxwell"),
+    check(inbox_routing.route("x@random.com", "plan+bogus@taikunai.com") == (True, "maxwell"),
           "unknown plus-tag is ignored -> falls back to default project")
 
     os.environ["PM_INBOX_ALLOWLIST"] = "knownpartner.com"
-    check(gmail_source._route("y@knownpartner.com", "plan@taikunai.com") == (True, "maxwell"),
+    check(inbox_routing.route("y@knownpartner.com", "plan@taikunai.com") == (True, "maxwell"),
           "allowlisted unmapped sender is accepted -> default project")
-    check(gmail_source._route("z@stranger.com", "plan@taikunai.com") == (False, "maxwell"),
+    check(inbox_routing.route("z@stranger.com", "plan@taikunai.com") == (False, "maxwell"),
           "non-allowlisted unmapped sender is REJECTED (unchanged allowlist gate)")
 
 
