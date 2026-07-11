@@ -1885,6 +1885,74 @@ async def api_coordination(project: str = Query(store.DEFAULT_PROJECT), limit: i
     }
 
 
+# ---- UI-7: operator-facing directed messaging + ack inbox ----
+# The /ixp/v1/* message bus authenticates agents by write:ixp bearer; these /api/*
+# twins let a browser operator steer a live agent from a task's chip (send, with an
+# optional required ack) and watch the ack land — using their normal session scopes.
+
+@app.post("/api/agent_messages/send")
+async def api_send_agent_message(request: Request, body: dict = Body(...)):
+    """Operator → live agent nudge/redirect. from_agent is the operator's own identity so
+    the ack inbox can find it again; requires_ack + a deadline arm a durable monitor.
+    Pass ?project= in the query so the auth middleware scopes to the right board."""
+    project = _proj(request.query_params.get("project") or body.get("project") or store.DEFAULT_PROJECT)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    to_agent = (body.get("to_agent") or body.get("to") or "").strip()
+    if not to_agent:
+        raise HTTPException(400, "to_agent is required")
+    if not (body.get("message") or "").strip():
+        raise HTTPException(400, "message is required")
+    deadline = body.get("ack_deadline_minutes")
+    return store.send_agent_message(
+        from_agent=auth.actor(principal),
+        to_agent=to_agent,
+        message=body.get("message"),
+        task_id=(body.get("task_id") or body.get("task") or None),
+        requires_ack=bool(body.get("requires_ack")),
+        ack_deadline_minutes=(int(deadline) if deadline not in (None, "", 0, "0") else None),
+        priority=int(body.get("priority") or 0),
+        principal_id=principal["id"],
+        idem_key=body.get("idem_key") or "",
+        project=project)
+
+
+@app.get("/api/agent_messages/pending")
+async def api_pending_acks(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+                           agent_id: str = ""):
+    """The operator's ack inbox: required messages they are party to that are still
+    unacked (defaults to the caller's own identity so it survives a reload)."""
+    proj = _proj(project)
+    principal = _principal(request, proj, ("read",), dev_actor="web")
+    return {"project": proj,
+            "pending_acks": store.list_pending_acks(
+                agent_id=(agent_id or auth.actor(principal)), project=proj)}
+
+
+@app.get("/api/agent_messages/{message_id}/status")
+async def api_message_status(request: Request, message_id: int,
+                             project: str = Query(store.DEFAULT_PROJECT)):
+    """Poll one message to see whether the recipient has acked it (and delivery state)."""
+    proj = _proj(project)
+    _principal(request, proj, ("read",), dev_actor="web")
+    msg = store.get_message_status(message_id, project=proj)
+    if not msg:
+        raise HTTPException(404, "message not found")
+    return msg
+
+
+@app.post("/api/agent_messages/ack")
+async def api_ack_message(request: Request, body: dict = Body(...)):
+    """Operator acks/dismisses a required message on the recipient's behalf.
+    Pass ?project= in the query so the auth middleware scopes to the right board."""
+    project = _proj(request.query_params.get("project") or body.get("project") or store.DEFAULT_PROJECT)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    mid = body.get("message_id") if body.get("message_id") is not None else body.get("id")
+    if mid is None:
+        raise HTTPException(400, "message_id is required")
+    return store.ack_message(int(mid), response=body.get("response") or "",
+                             actor=auth.actor(principal), project=project)
+
+
 @app.post("/ixp/v1/register_host")
 async def ixp_register_host(request: Request, body: dict = Body(...)):
     project = _body_project(body)

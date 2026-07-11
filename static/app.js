@@ -441,6 +441,171 @@ const TeepPlan = {
         if (btn) btn.disabled = false;
     },
 
+    // ---- UI-7: directed agent messaging + ack inbox -----------------------
+    // Compose popover: steer a live agent from its chip. toAgent/taskId come from the chip.
+    openAgentMessage(toAgent, taskId) {
+        if (!toAgent) return;
+        this._amTo = toAgent;
+        this._amTask = taskId || '';
+        this._amLastId = null;
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        set('am-to', toAgent);
+        set('am-task', this._amTask);
+        const taskWrap = document.getElementById('am-task-wrap');
+        if (taskWrap) taskWrap.style.display = this._amTask ? '' : 'none';
+        const msg = document.getElementById('am-message'); if (msg) msg.value = '';
+        const ack = document.getElementById('am-requires-ack'); if (ack) ack.checked = false;
+        const dl = document.getElementById('am-deadline'); if (dl) dl.disabled = true;
+        const res = document.getElementById('am-result'); if (res) res.innerHTML = '';
+        const flash = document.getElementById('am-flash'); if (flash) flash.textContent = '';
+        const send = document.getElementById('am-send'); if (send) send.disabled = false;
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('agent-msg-modal')).show();
+        setTimeout(() => msg && msg.focus(), 200);
+    },
+
+    async submitAgentMessage() {
+        const flash = document.getElementById('am-flash');
+        const setFlash = (m, c) => { if (flash) { flash.textContent = m; flash.className = `small ${c} me-auto`; } };
+        const message = (document.getElementById('am-message')?.value || '').trim();
+        if (!message) { setFlash('Enter a message.', 'text-danger'); return; }
+        const requires_ack = !!document.getElementById('am-requires-ack')?.checked;
+        const dlVal = document.getElementById('am-deadline')?.value || '';
+        const send = document.getElementById('am-send');
+        if (send) send.disabled = true;
+        setFlash('Sending…', 'text-secondary');
+        try {
+            const body = {
+                project: window.PM_PROJECT || 'maxwell',
+                to_agent: this._amTo, message, requires_ack,
+                task_id: this._amTask || undefined,
+            };
+            if (requires_ack && dlVal) body.ack_deadline_minutes = Number(dlVal);
+            const res = await fetch(`api/agent_messages/send?project=${encodeURIComponent(body.project)}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Failed (${res.status})`);
+            this._amLastId = data.id;
+            setFlash('Sent.', 'text-success');
+            this._renderMsgResult(data);
+            this.loadAckInbox();               // refresh the bell badge
+            if (requires_ack && data.id) this._pollMsgStatus(data.id, 0);
+        } catch (e) {
+            setFlash(e.message || 'Failed to send.', 'text-danger');
+        } finally {
+            if (send) send.disabled = false;
+        }
+    },
+
+    _deliveryBadge(status) {
+        const map = { delivered: 'green', mailbox_stored: 'blue', queued: 'blue',
+            unreachable_agent: 'yellow', identity_unbound: 'red' };
+        const c = map[status] || 'secondary';
+        return `<span class="badge bg-${c}-lt">${this.esc((status || 'sent').replace(/_/g, ' '))}</span>`;
+    },
+
+    _renderMsgResult(data) {
+        const res = document.getElementById('am-result');
+        if (!res) return;
+        const acked = !!data.acked_at;
+        const ackLine = data.requires_ack
+            ? `<div class="mt-1">Ack: <span id="am-ack-state" class="badge bg-${acked ? 'green' : 'yellow'}-lt">${acked ? 'acknowledged' : 'awaiting ack…'}</span></div>`
+            : '';
+        const warn = data.warning ? `<div class="text-warning mt-1"><i class="ti ti-alert-triangle me-1"></i>${this.esc(data.warning)}</div>` : '';
+        res.innerHTML = `<div class="p-2 border rounded">
+            <div>Delivery: ${this._deliveryBadge(data.delivery_status || (data.delivery || {}).status)}</div>
+            ${ackLine}${warn}</div>`;
+    },
+
+    async _pollMsgStatus(messageId, tries) {
+        if (!messageId || tries > 40) return;                 // ~2 min at 3s
+        if (this._amLastId !== messageId) return;             // superseded by a newer send
+        try {
+            const proj = encodeURIComponent(window.PM_PROJECT || 'maxwell');
+            const data = await (await fetch(`api/agent_messages/${messageId}/status?project=${proj}`)).json();
+            const el = document.getElementById('am-ack-state');
+            if (data.acked_at) {
+                if (el) { el.className = 'badge bg-green-lt'; el.textContent = data.ack_response ? `acked: ${data.ack_response}` : 'acknowledged'; }
+                this.loadAckInbox();
+                return;                                       // done
+            }
+        } catch (e) { /* transient */ }
+        setTimeout(() => this._pollMsgStatus(messageId, tries + 1), 3000);
+    },
+
+    // Ack inbox (top-bar bell): required messages the operator is party to, still unacked.
+    openAckInbox() {
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('ack-inbox-modal')).show();
+        this.loadAckInbox(true);
+    },
+
+    async loadAckInbox(renderBody) {
+        try {
+            const proj = encodeURIComponent(window.PM_PROJECT || 'maxwell');
+            const data = await (await fetch(`api/agent_messages/pending?project=${proj}`)).json();
+            const list = data.pending_acks || [];
+            const n = list.length;
+            const badge = document.getElementById('ack-inbox-count');
+            if (badge) { badge.style.display = n ? '' : 'none'; badge.textContent = n > 99 ? '99+' : String(n); }
+            const tc = document.getElementById('ack-inbox-title-count');
+            if (tc) tc.textContent = `${n} awaiting`;
+            if (renderBody) this._renderAckInbox(list);
+        } catch (e) { /* offline */ }
+    },
+
+    _renderAckInbox(list) {
+        const body = document.getElementById('ack-inbox-body');
+        if (!body) return;
+        if (!list.length) {
+            body.innerHTML = `<div class="text-secondary small py-2"><i class="ti ti-check me-1"></i>No messages are awaiting acknowledgment.</div>`;
+            return;
+        }
+        const now = Date.now() / 1000;
+        body.innerHTML = list.map((m) => {
+            const age = this._agoShort(now - (m.sent_at || now));
+            let deadline = '';
+            if (m.ack_deadline) {
+                const left = m.ack_deadline - now;
+                deadline = left > 0
+                    ? `<span class="badge bg-yellow-lt">due in ${this._agoShort(left)}</span>`
+                    : `<span class="badge bg-red-lt">overdue ${this._agoShort(-left)}</span>`;
+            }
+            return `<div class="p-2 border rounded mb-2">
+                <div class="d-flex align-items-center gap-2 mb-1">
+                    <span class="font-monospace small text-truncate" title="${this.esc(m.to_agent || '')}">${this.esc(m.to_agent || '—')}</span>
+                    ${m.task_id ? `<span class="badge bg-secondary-lt">${this.esc(m.task_id)}</span>` : ''}
+                    <span class="text-secondary small ms-auto">sent ${age} ago</span>
+                    ${deadline}
+                </div>
+                <div class="small">${this.esc(m.message || '')}</div>
+                <div class="mt-2 text-end"><button class="btn btn-sm btn-outline-secondary" data-ack-msg="${this.esc(String(m.id))}"><i class="ti ti-check me-1"></i>Mark acked</button></div>
+            </div>`;
+        }).join('');
+        body.querySelectorAll('[data-ack-msg]').forEach((b) =>
+            b.addEventListener('click', () => this.ackMessage(b.getAttribute('data-ack-msg'))));
+    },
+
+    async ackMessage(id) {
+        try {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const res = await fetch(`api/agent_messages/ack?project=${encodeURIComponent(proj)}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project: proj, message_id: Number(id) }),
+            });
+            if (!res.ok) throw new Error(`Failed (${res.status})`);
+        } catch (e) { /* surfaced by refresh */ }
+        this.loadAckInbox(true);
+    },
+
+    _agoShort(seconds) {
+        const s = Math.max(0, Math.round(seconds));
+        if (s < 60) return `${s}s`;
+        if (s < 3600) return `${Math.round(s / 60)}m`;
+        if (s < 86400) return `${Math.round(s / 3600)}h`;
+        return `${Math.round(s / 86400)}d`;
+    },
+
     // Board/overview columns come from the phases actually present: Maxwell's 5 lifecycle phases,
     // or Helm's "Wave 1..4". Falls back to the canonical 5 when a plan has no/standard phases.
     derivePhases() {
@@ -767,7 +932,7 @@ const TeepPlan = {
                         <div class="text-secondary text-truncate" style="font-size:12px;font-family:var(--tblr-font-monospace);">${this.esc(s.agent_id || '')}</div>
                         <div class="mt-1" style="font-size:13px;">${this.esc(r.text)}</div>
                         ${r.repair ? `<div class="text-secondary mt-1" style="font-size:12px;">${this.esc(r.repair)}</div>` : ''}
-                        <div class="mt-2"><button class="btn btn-sm" data-dock-open="${this.esc(s.task_id)}"><i class="ti ti-arrow-up-right me-1"></i>Open task</button></div>
+                        <div class="mt-2 d-flex gap-2"><button class="btn btn-sm" data-dock-open="${this.esc(s.task_id)}"><i class="ti ti-arrow-up-right me-1"></i>Open task</button>${s.agent_id ? `<button class="btn btn-sm" data-dock-msg="${this.esc(s.agent_id)}" data-dock-msg-task="${this.esc(s.task_id || '')}"><i class="ti ti-send me-1"></i>Message</button>` : ''}</div>
                     </div>
                 </div></div>`;
         }).join('');
@@ -791,6 +956,8 @@ const TeepPlan = {
             ${body}</div>`;
         host.querySelectorAll('[data-dock-open]').forEach((b) =>
             b.addEventListener('click', () => this.openTask(b.getAttribute('data-dock-open'), proj)));
+        host.querySelectorAll('[data-dock-msg]').forEach((b) =>
+            b.addEventListener('click', () => this.openAgentMessage(b.getAttribute('data-dock-msg'), b.getAttribute('data-dock-msg-task'))));
         document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
         document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock());
     },
@@ -833,9 +1000,11 @@ const TeepPlan = {
             return;
         }
         body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0 align-middle">
-            <thead><tr><th>Agent</th><th>Branch</th><th>Workspace</th><th>State</th></tr></thead>
+            <thead><tr><th>Agent</th><th>Branch</th><th>Workspace</th><th>State</th><th></th></tr></thead>
             <tbody>${sessions.map((s) => this._workSessionRow(s)).join('')}</tbody>
         </table></div>`;
+        body.querySelectorAll('[data-msg-agent]').forEach((b) =>
+            b.addEventListener('click', () => this.openAgentMessage(b.getAttribute('data-msg-agent'), b.getAttribute('data-msg-task'))));
     },
     _workSessionRow(s) {
         const health = s.health || {};
@@ -852,6 +1021,7 @@ const TeepPlan = {
             <td class="font-monospace small text-truncate" style="max-width:160px" title="${this.esc(branch)}">${this.esc(branch || '—')}</td>
             <td class="font-monospace small text-truncate" style="max-width:200px" title="${this.esc(path)}">${this.esc(path || '—')}</td>
             <td>${chips}</td>
+            <td class="text-end">${s.agent_id ? `<button class="btn btn-sm btn-ghost-secondary p-1" data-msg-agent="${this.esc(s.agent_id)}" data-msg-task="${this.esc(s.task_id || '')}" title="Message this agent"><i class="ti ti-send"></i></button>` : ''}</td>
         </tr>`;
     },
     // UI-3: merge-gate verdict in plain words with a Re-check button. Semantic colors
@@ -5046,6 +5216,20 @@ const TeepPlan = {
                 } else { src.select(); document.execCommand('copy'); done(); }
             });
         });
+        // UI-7: directed agent messaging + ack inbox.
+        const amSend = document.getElementById('am-send');
+        if (amSend) amSend.addEventListener('click', () => this.submitAgentMessage());
+        const amAck = document.getElementById('am-requires-ack');
+        if (amAck) amAck.addEventListener('change', () => {
+            const dl = document.getElementById('am-deadline'); if (dl) dl.disabled = !amAck.checked;
+        });
+        const ackBell = document.getElementById('btn-ack-inbox');
+        if (ackBell) ackBell.addEventListener('click', () => this.openAckInbox());
+        const ackRefresh = document.getElementById('ack-inbox-refresh');
+        if (ackRefresh) ackRefresh.addEventListener('click', () => this.loadAckInbox(true));
+        // Prime the bell badge and keep it fresh (unacked required messages the operator sent).
+        this.loadAckInbox();
+        if (!this._ackPoll) this._ackPoll = setInterval(() => this.loadAckInbox(), 30000);
         // Ask Taikun (plan-wide chat)
         const askSend = document.getElementById('ask-send');
         if (askSend) askSend.addEventListener('click', () => this.sendAsk());
