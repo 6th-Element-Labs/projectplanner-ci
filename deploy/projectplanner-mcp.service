@@ -12,7 +12,7 @@ User=projectplanner
 Group=projectplanner
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
-# Production MCP writes must fail closed even if .env is missing PM_AUTH_MODE.
+# Production MCP reads and writes must fail closed even if .env is missing PM_AUTH_MODE.
 Environment=PM_AUTH_MODE=required
 # Code tree is read-only; don't try to write .pyc back into it.
 Environment=PYTHONDONTWRITEBYTECODE=1

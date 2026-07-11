@@ -12,7 +12,10 @@ Project-level Cursor config for the **taikun-plan** MCP server (`https://plan.ta
 3. Restart Cursor so it picks up the env var and MCP config.
 4. Confirm **taikun-plan** is enabled under **Settings → Tools & MCP**.
 
-Reads work without a token. Writes (`register_agent`, `create_task`, `complete_claim`, etc.) require `PM_MCP_TOKEN` or a scoped bearer token in the Authorization header.
+Reads and writes require a bearer token when `PM_AUTH_MODE=required` (production default).
+In `dev-open` mode reads work without a token. Writes (`register_agent`, `create_task`,
+`complete_claim`, etc.) always require `PM_MCP_TOKEN` or a scoped bearer token in the
+Authorization header when auth mode is `required`.
 
 ## Cloud Agents
 
