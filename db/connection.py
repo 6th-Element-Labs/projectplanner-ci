@@ -29,6 +29,16 @@ _SQLITE_MMAP_BYTES = 256 * 1024 * 1024
 _SQLITE_WAL_AUTOCHECKPOINT_PAGES = 4_000
 
 
+def _sqlite_mmap_bytes() -> int:
+    raw = (os.environ.get("PM_SQLITE_MMAP_BYTES") or "").strip()
+    if not raw:
+        return _SQLITE_MMAP_BYTES
+    value = int(raw)
+    if value < 0:
+        raise ValueError("PM_SQLITE_MMAP_BYTES must be >= 0")
+    return value
+
+
 def _dynamic_projects() -> Dict[str, Dict[str, str]]:
     init_project_registry()
     with _registry_conn() as c:
@@ -71,7 +81,7 @@ def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
         # WAL+NORMAL durability tradeoff accepted for this control-plane store.
         c.execute("PRAGMA synchronous=NORMAL")
         c.execute(f"PRAGMA cache_size={-_SQLITE_CACHE_KIB}")
-        c.execute(f"PRAGMA mmap_size={_SQLITE_MMAP_BYTES}")
+        c.execute(f"PRAGMA mmap_size={_sqlite_mmap_bytes()}")
         c.execute(f"PRAGMA wal_autocheckpoint={_SQLITE_WAL_AUTOCHECKPOINT_PAGES}")
         return c
     except Exception:
