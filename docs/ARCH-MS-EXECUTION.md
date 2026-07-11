@@ -48,7 +48,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-7** | `src/switchboard/` package skeleton | 0.2 | 1 | In Review | 🟡 | `src/switchboard/` package tree + `settings.py` + `scripts/switchboard_path.py` |
 | **ARCH-MS-8** | `create_task` application command + REST/MCP wire | 0.2 | 7 | Not Started | ⬜ | — |
 | **ARCH-MS-9** | `test_arch_ms0_scaffold` CI gate | 0.2 | 7, 8 | Not Started | ⬜ | — |
-| **ARCH-MS-10** | `PM_*` env flag census + delete unread flags | 0.1 | 2 | Not Started | ⬜ | 112+ flags per ADR-0007; census not complete |
+| **ARCH-MS-10** | `PM_*` env flag census + delete unread flags | 0.1 | 2 | In Progress | 🟡 | `scripts/pm_env_flag_census.py`; `tests/test_pm_env_flag_census.py`; tracked declarations fail closed when unread; CONSOL-9 deletion tombstones retained |
 | **ARCH-MS-11** | Extract inbox routing; retire `gmail_source.py` | 0.1 | 10 | Not Started | ⬜ | `gmail_source.py` still in tree |
 | **ARCH-MS-12** | Numbered transactional DB migrations | 0.1 | 2 | Not Started | 🔗 | **BUG-47** / PR #301 — ledgered migrations; `test_schema_migrations.py` |
 | **ARCH-MS-13** | Lockfile + Python 3.12 pin (reproducible builds) | 0.1 | 6 | Not Started | 🔗 | **HARDEN-54** / PR #303 — `uv.lock`, generated `requirements*.txt` |
@@ -147,3 +147,4 @@ Tasks with satisfied dependencies and remaining work:
 |---|---|---|
 | 2026-07-12 | ARCH-MS-1 | Initial tracker + ADR-0009 charter; baseline master `5305090` |
 | 2026-07-12 | ARCH-MS-3 | CONSOL-7/9 closed; added `test_consol7_dead_surfaces.py`; gmail_source scoped to ARCH-MS-11 |
+| 2026-07-12 | ARCH-MS-10 | Added executable `PM_*` census and CI gate; verified all tracked declarations have runtime defenders; documented CONSOL-9 deleted-name tombstones |
