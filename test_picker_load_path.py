@@ -77,7 +77,7 @@ try:
 
     js = Path("static/app.js").read_text(encoding="utf-8")
     picker_fetch = "fetch('api/deliverables?view=picker')"
-    deliverables_start = "const deliverablesReq = this.loadDeliverables()"
+    deliverables_start = "const initialDeliverablesReq = this.loadDeliverables()"
     board_start = "const boardReq = fetch('api/board')"
     ok(picker_fetch in js, "browser picker calls the metadata-only endpoint")
     ok(js.index(deliverables_start) < js.index(board_start),

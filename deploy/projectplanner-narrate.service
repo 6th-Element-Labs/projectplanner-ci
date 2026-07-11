@@ -16,3 +16,10 @@ EnvironmentFile=/opt/projectplanner/.env
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py narrate_pending
 StandardOutput=journal
 StandardError=journal
+# Narration is best-effort background work. It must yield CPU and I/O to the
+# interactive web/MCP paths even when an LLM backlog or repair cycle is large.
+Nice=10
+CPUWeight=20
+CPUQuota=50%
+IOSchedulingClass=idle
+TimeoutStartSec=5min

@@ -11,11 +11,11 @@ Description=ProjectPlanner CEO-voice narrator drain (every ~45s)
 
 [Timer]
 # Monotonic cadence: first run 15s after the timer starts, then 45s after each
-# drain completes. Using OnActiveSec/OnUnitActiveSec (not OnBootSec) avoids the
-# NextElapse=infinity trap once boot is far in the past. Persistent has no effect
-# on monotonic timers, so it is intentionally omitted.
+# drain completes. OnUnitInactiveSec is intentional: OnUnitActiveSec measures
+# from service start, so any drain longer than 45s becomes immediately due and
+# loops continuously (BUG-44). Persistent has no effect on monotonic timers.
 OnActiveSec=15s
-OnUnitActiveSec=45s
+OnUnitInactiveSec=45s
 AccuracySec=5s
 
 [Install]

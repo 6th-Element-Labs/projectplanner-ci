@@ -136,14 +136,23 @@ const TeepPlan = {
     },
 
     async init() {
-        try { await this.applyProject(); } catch (e) { /* switcher is best-effort */ }
-        if (this._noProjects) { this.renderNoProjects(); return; }
-        // BUG-42: picker metadata is independent of the board payload. Start it
-        // immediately after project resolution and render both selectors as soon
-        // as it arrives; a slow board/context build must not hold navigation hostage.
-        const deliverablesReq = this.loadDeliverables()
+        // BUG-44: the URL/local state already names the intended project, so
+        // start its tiny picker request at the same time as the accessible-
+        // projects request. If auth falls back to a different project, discard
+        // the speculative result and refetch for the authorized selection.
+        const initialProject = window.PM_PROJECT || 'maxwell';
+        const initialDeliverablesReq = this.loadDeliverables()
             .then(() => this._syncHeaderDeliverable())
             .catch(() => { this.deliverables = []; });
+        try { await this.applyProject(); } catch (e) { /* switcher is best-effort */ }
+        if (this._noProjects) { this.renderNoProjects(); return; }
+        let deliverablesReq = initialDeliverablesReq;
+        if ((window.PM_PROJECT || 'maxwell') !== initialProject) {
+            await initialDeliverablesReq;
+            deliverablesReq = this.loadDeliverables(true)
+                .then(() => this._syncHeaderDeliverable())
+                .catch(() => { this.deliverables = []; });
+        }
         try {
             // HARDEN-38: fire board/people/tally concurrently — they're independent
             // once the project is known, so the critical path isn't 3 serial round-trips.

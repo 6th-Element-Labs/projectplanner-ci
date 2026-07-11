@@ -71,9 +71,19 @@ def narrate_pending():
     total = deliverables = 0
     for project_id in store.project_ids():
         store.init_db(project_id)
+        # BUG-44: run_deliverables computes full cross-project mission status for
+        # every deliverable before its fingerprint can self-skip. Doing that on
+        # every nominally idle 45s drain kept one production CPU saturated. A
+        # task create/status transition already enqueues pending_narrations, so
+        # use that durable queue as the cheap project-level dirty signal.
+        pending = store.list_pending_narrations(project=project_id)
         results = narrate_mod.run_pending(project=project_id)
-        # NARRATE-3: re-narrate deliverable headers whose brief fingerprint moved this cycle.
-        deliv = narrate_mod.run_deliverables(project=project_id)
+        # NARRATE-3: only inspect deliverable fingerprints when this project had
+        # material narration work. Explicit/manual run_deliverables remains
+        # available for deliverable-only edits and repair/backfill operations.
+        # ``or results`` closes the small race where a row is enqueued between
+        # the cheap pre-read and run_pending's own queue read.
+        deliv = narrate_mod.run_deliverables(project=project_id) if (pending or results) else []
         print(f"  [{project_id}] narrated {len(results)} task(s), {len(deliv)} deliverable(s)")
         total += len(results)
         deliverables += len(deliv)

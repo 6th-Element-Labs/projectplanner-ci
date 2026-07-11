@@ -97,6 +97,7 @@ run_test test_mcp_threadpool.py
 run_test test_mcp_reconnect.py
 run_test test_mission_narrative.py
 run_test test_narrate.py
+run_test test_narrate_scheduler.py
 run_test test_mission_coordinator.py
 run_test test_mission_page.py
 run_test test_mission_attention_model.py
