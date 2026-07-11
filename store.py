@@ -13725,6 +13725,25 @@ def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "done_sources": ["github_pr_merged", "default_branch_backfill", "offline_evidence_verified"],
         },
         "push_before_claiming_progress": True,
+        "agent_call_patterns": {
+            "writes": (
+                "Serialize MCP writes to Switchboard: issue one write at a time. "
+                "If SQLite reports 'database is locked', wait 5-15 seconds and retry "
+                "the same write; do not start a parallel write burst."
+            ),
+            "heavy_reads": (
+                "Never fan out parallel search_tasks, list_deliverables, or board_summary "
+                "calls. Run these heavier reads one at a time."
+            ),
+            "polling": (
+                "Prefer get_lane_delta for polling. Call board_summary at most once per "
+                "agent session unless the operator explicitly requests a fresh full snapshot."
+            ),
+            "diagnostics": (
+                "Use control_plane_probe to separate Switchboard server latency from "
+                "network, MCP bridge, transfer, or client-side latency."
+            ),
+        },
         "claim_before_starting": (
             "Before building anything, search_tasks for the feature area and claim (or create) "
             "the board task — this prevents two agents shipping the same work. Fleet PRs on the "
