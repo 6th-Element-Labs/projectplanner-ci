@@ -1,0 +1,57 @@
+[project]
+# taikun-pm / Switchboard — the opt-in project-board satellite microservice (ADR-0007).
+# This is a deployed application, not a published library, so it declares no build
+# backend and is locked as a non-package project (see [tool.uv] below). pyproject.toml
+# is the abstract dependency source of truth; uv.lock pins the exact resolution and the
+# checked-in requirements*.txt files are generated exports of that lock (see below).
+name = "taikun-pm"
+version = "0.0.0"
+description = "Switchboard — model-agnostic agent coordination layer behind plan.taikunai.com"
+# Pin the interpreter floor to 3.12. CI (actions/setup-python) and prod both run 3.12;
+# the exact minor is pinned for local/uv work by .python-version. HARDEN-54 exists because
+# a fresh 3.12 install surfaced deprecation warnings the old 3.9 env hid — 3.9 is no longer
+# a supported target.
+requires-python = ">=3.12"
+
+# Core runtime dependencies for the web app process (uvicorn app:app).
+# Lower bounds here are the *abstract* floors; the exact installed versions are pinned by
+# uv.lock and by the generated requirements.txt. Do not hand-edit requirements.txt — change
+# a bound here and re-run `uv lock` + the export commands documented in [tool.uv] notes.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "openpyxl>=3.1",
+    "httpx>=0.27",
+    "mcp>=1.9",
+    "pypdf>=4.0",
+    "pymupdf>=1.24",
+    "python-docx>=1.1",
+    "python-pptx>=0.6",
+    "python-multipart>=0.0.9",
+]
+
+[dependency-groups]
+# The bundled LLM gateway process (deploy/projectplanner-gateway.service runs
+# `.venv/bin/litellm`). Only that process needs litellm[proxy]; the core app does not.
+# Kept as an isolated group so `uv export --only-group gateway` regenerates
+# deploy/gateway/requirements.txt without dragging litellm into the core requirements.txt.
+gateway = [
+    "litellm[proxy]>=1.40",
+]
+# Developer tooling. NOT installed in prod and NOT wired into the CI gate
+# (scripts/switchboard_ci.sh discovers and runs test_*.py with plain python). Available
+# opt-in via `uv run ruff ...`. Kept out of runtime so it never affects the deployed venv.
+dev = [
+    "ruff>=0.13",
+]
+
+[tool.uv]
+# This project is an application, not a distributable package: there is no src/ layout or
+# build backend, so lock/sync must not try to build it into a wheel.
+package = false
+# Regenerating the checked-in exports after any dependency change (run from repo root):
+#   uv lock
+#   uv export --no-hashes --no-emit-project --no-default-groups -o requirements.txt
+#   uv export --no-hashes --no-emit-project --only-group gateway -o deploy/gateway/requirements.txt
+# Hashes are intentionally omitted so a single pinned file installs across both the
+# x86_64 CI runner and the aarch64 prod box; the `==` pins are what make builds reproducible.
