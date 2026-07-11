@@ -4806,6 +4806,39 @@ const TeepPlan = {
     },
 
     // UI-11: archive / restore the selected deliverable (explicit confirm on archive).
+    // Reusable Tabler confirm dialog → Promise<boolean> (true = confirmed, false = dismissed).
+    // Falls back to window.confirm if the modal / Bootstrap isn't available.
+    _confirm(opts) {
+        opts = opts || {};
+        const modalEl = document.getElementById('confirm-modal');
+        if (!modalEl || !(window.bootstrap && window.bootstrap.Modal)) {
+            return Promise.resolve(window.confirm(opts.body || opts.title || 'Are you sure?'));
+        }
+        document.getElementById('confirm-modal-title').textContent = opts.title || 'Are you sure?';
+        document.getElementById('confirm-modal-body').textContent = opts.body || '';
+        document.getElementById('confirm-modal-icon').className =
+            'ti mb-2 ' + (opts.icon || 'ti-help-circle') + ' text-' + (opts.iconVariant || 'secondary');
+        const ok = document.getElementById('confirm-modal-ok');
+        ok.className = 'btn w-100 btn-' + (opts.confirmVariant || 'primary');
+        ok.textContent = opts.confirmLabel || 'Confirm';
+        const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+        return new Promise((resolve) => {
+            let settled = false;
+            const finish = (val) => {
+                if (settled) return;
+                settled = true;
+                ok.removeEventListener('click', onOk);
+                modalEl.removeEventListener('hidden.bs.modal', onHide);
+                resolve(val);
+            };
+            const onOk = () => { finish(true); modal.hide(); };
+            const onHide = () => finish(false);
+            ok.addEventListener('click', onOk);
+            modalEl.addEventListener('hidden.bs.modal', onHide);
+            modal.show();
+        });
+    },
+
     async _archiveSelectedDeliverable() {
         const id = (this.selectedDeliverableId || '').trim();
         if (!id) return;
@@ -4813,8 +4846,15 @@ const TeepPlan = {
         const isArchived = cur && (cur.status || '') === 'archived';
         const willArchive = !isArchived;
         const title = (cur && (cur.title || cur.id)) || id;
-        if (willArchive && !window.confirm(
-            `Archive “${title}”?\n\nIt will be hidden from the deliverable picker (tick “Show archived” to find it again). Nothing is deleted.`)) return;
+        if (willArchive) {
+            const ok = await this._confirm({
+                title: `Archive “${title}”?`,
+                body: 'It will be hidden from the deliverable picker — tick “Show archived” to find it again. Nothing is deleted.',
+                icon: 'ti-archive', iconVariant: 'secondary',
+                confirmLabel: 'Archive', confirmVariant: 'primary',
+            });
+            if (!ok) return;
+        }
         try {
             const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/archive`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
