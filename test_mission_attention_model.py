@@ -13,6 +13,7 @@ Pure-function test (no DB / server). Run: `python test_mission_attention_model.p
 """
 import os
 import sys
+from scripts.frontend_test_source import read_frontend_source
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -135,8 +136,7 @@ def test_empty_deliverable_proposes_breakdown():
 
 def test_ui_wiring():
     print("\n[8] frontend consumes the model (app.js)")
-    js = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "app.js"),
-              encoding="utf-8").read()
+    js = read_frontend_source(os.path.dirname(os.path.abspath(__file__)))
     for needle in ("_missionActionsHtml", "_sessionImpact", "Decisions needed from you",
                    "being handled automatically", "delivery unaffected"):
         check(needle in js, f"app.js has {needle!r}")

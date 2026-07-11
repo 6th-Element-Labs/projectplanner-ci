@@ -74,7 +74,8 @@ try:
     ok(r.headers.get("cache-control") == "no-cache", "/ (index shell) is served no-cache")
 
     html = r.text
-    for name in ("app.js", "taikun-ui.js", "taikun-tabler.css", "taikun-ui.css"):
+    for name in ("js/api.js", "js/state.js", "js/board.js", "js/mission.js",
+                 "app.js", "taikun-ui.js", "taikun-tabler.css", "taikun-ui.css"):
         ok(f"{name}?v={content_hash(name)}" in html,
            f"{name} ?v= equals its content hash")
 

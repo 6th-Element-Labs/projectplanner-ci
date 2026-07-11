@@ -7,6 +7,7 @@ the new list endpoints (GET /tally/v1/kpis, /tally/v1/outcomes) the tiles/queue
 read, and that static/app.js is wired to all of them."""
 import os
 import re
+from scripts.frontend_test_source import read_frontend_source
 import shutil
 import sys
 import tempfile
@@ -106,7 +107,7 @@ try:
 
     # 10. app.js is wired to the whole surface.
     here = os.path.dirname(os.path.abspath(__file__))
-    appjs = open(os.path.join(here, "static", "app.js")).read()
+    appjs = read_frontend_source(here)
     needles = ["_missionKpiOutcomesHtml", "loadKpisAndOutcomes", "tally/v1/kpis",
                "tally/v1/outcomes", "tally/v1/outcome_kpi_links", "submitKpi",
                "verifyTallyOutcome", "rejectTallyOutcome", "submitKpiLink",
