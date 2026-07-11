@@ -14,15 +14,28 @@ MCP tools (``agent._search_tasks``, ``store.add_comment``, and
 ``agent.board_summary_text``); network/TLS/client bridge time is deliberately
 outside this CI measurement.
 
-Environment overrides are intended for deliberate capacity experiments.  CI
-uses the deliverable SLOs as defaults:
+The enforced latency ceilings are NOT hard-coded here.  They live in the
+committed ratchet baseline ``perf/concurrent_load_slo.json`` (HARDEN-64), so a
+change to what the gate tolerates is a reviewable diff, not a silent default.
+Each metric carries a ``ratchet_ms`` (the committed high-water ceiling the gate
+fails at) and a ``slo_ms`` (the hard product SLO the ratchet may never be
+relaxed to — the loader asserts ``ratchet_ms < slo_ms``).  This is the ADR-0007
+ratchet philosophy applied to the perf SLO: prove it once, then never silently
+regress.
+
+Environment overrides remain for deliberate capacity experiments, but the
+``LOAD_GATE_*_MS`` knobs are now **tighten-only** — an env value is applied as
+``min(committed_ratchet, env)`` so a local run can demand a stricter ceiling but
+nothing (a shell, a CI job, a stray export) can loosen the gate below what is
+committed in the baseline:
 
   LOAD_GATE_AGENTS=8
   LOAD_GATE_ROUNDS=20
-  LOAD_GATE_SEARCH_P99_MS=150
-  LOAD_GATE_BOARD_P95_MS=400
-  LOAD_GATE_WRITE_P99_MS=100
-  LOAD_GATE_CALL_MAX_MS=5000
+  LOAD_GATE_SEARCH_P99_MS=<= committed ratchet, tighten-only>
+  LOAD_GATE_BOARD_P95_MS=<= committed ratchet, tighten-only>
+  LOAD_GATE_WRITE_P99_MS=<= committed ratchet, tighten-only>
+  LOAD_GATE_CALL_MAX_MS=<= committed ratchet, tighten-only>
+  CONCURRENT_LOAD_SLO_BASELINE=perf/concurrent_load_slo.json  (override path)
   CONCURRENT_LOAD_REPORT=.artifacts/concurrent-load-report.json
 """
 from __future__ import annotations
@@ -69,12 +82,62 @@ def percentile(values: list[float], rank: float) -> float:
     return ordered[index]
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_BASELINE = REPO_ROOT / "perf" / "concurrent_load_slo.json"
+
+
+def load_ratchet(path: Path | None = None) -> dict[str, dict[str, float]]:
+    """Read the committed SLO ratchet baseline (HARDEN-64).
+
+    Returns ``{metric: {"ratchet_ms": float, "slo_ms": float}}``.  The ratchet is
+    the enforced ceiling; the SLO is the hard product invariant it may never be
+    relaxed to.  Any file that sets ``ratchet_ms >= slo_ms`` is a config error —
+    that is precisely the silent loosening this baseline exists to forbid.
+    """
+    baseline = Path(os.environ.get("CONCURRENT_LOAD_SLO_BASELINE", "") or (path or DEFAULT_BASELINE))
+    try:
+        raw = json.loads(baseline.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit(f"concurrent-load SLO ratchet baseline missing: {baseline}")
+    except (ValueError, OSError) as exc:
+        raise SystemExit(f"concurrent-load SLO ratchet baseline unreadable ({baseline}): {exc}")
+    metrics = raw.get("metrics")
+    if not isinstance(metrics, dict):
+        raise SystemExit(f"{baseline}: 'metrics' object is required")
+    ceilings: dict[str, dict[str, float]] = {}
+    for name in ("writes", "search_tasks", "board_summary", "all_calls"):
+        entry = metrics.get(name)
+        if not isinstance(entry, dict):
+            raise SystemExit(f"{baseline}: metric '{name}' is missing")
+        try:
+            ratchet = float(entry["ratchet_ms"])
+            slo = float(entry["slo_ms"])
+        except (KeyError, TypeError, ValueError):
+            raise SystemExit(f"{baseline}: metric '{name}' needs numeric ratchet_ms and slo_ms")
+        if ratchet <= 0 or slo <= 0:
+            raise SystemExit(f"{baseline}: metric '{name}' ceilings must be > 0")
+        if ratchet >= slo:
+            raise SystemExit(
+                f"{baseline}: metric '{name}' ratchet_ms {ratchet} must stay below the "
+                f"hard SLO {slo} — the ratchet turns one way and never loosens to the SLO"
+            )
+        ceilings[name] = {"ratchet_ms": ratchet, "slo_ms": slo}
+    return ceilings
+
+
+def _tighten_only(env_name: str, ratchet_ms: float) -> float:
+    """Apply an env override as ``min(ratchet, env)`` — it can tighten, never loosen."""
+    override = _env_float(env_name, ratchet_ms)
+    return min(ratchet_ms, override)
+
+
 AGENTS = _env_int("LOAD_GATE_AGENTS", 8, minimum=6)
 ROUNDS = _env_int("LOAD_GATE_ROUNDS", 20)
-SEARCH_P99_MS = _env_float("LOAD_GATE_SEARCH_P99_MS", 150.0)
-BOARD_P95_MS = _env_float("LOAD_GATE_BOARD_P95_MS", 400.0)
-WRITE_P99_MS = _env_float("LOAD_GATE_WRITE_P99_MS", 100.0)
-CALL_MAX_MS = _env_float("LOAD_GATE_CALL_MAX_MS", 5_000.0)
+_RATCHET = load_ratchet()
+SEARCH_P99_MS = _tighten_only("LOAD_GATE_SEARCH_P99_MS", _RATCHET["search_tasks"]["ratchet_ms"])
+BOARD_P95_MS = _tighten_only("LOAD_GATE_BOARD_P95_MS", _RATCHET["board_summary"]["ratchet_ms"])
+WRITE_P99_MS = _tighten_only("LOAD_GATE_WRITE_P99_MS", _RATCHET["writes"]["ratchet_ms"])
+CALL_MAX_MS = _tighten_only("LOAD_GATE_CALL_MAX_MS", _RATCHET["all_calls"]["ratchet_ms"])
 SEARCHES_PER_ROUND = 6
 WRITES_PER_ROUND = 3
 TASKS_PER_LANE = 3
@@ -254,6 +317,21 @@ def main() -> int:
             "scope": "server-side; excludes network, TLS, and client bridge time",
         },
         "metrics": metrics,
+        "slo_ratchet": {
+            "baseline": str(DEFAULT_BASELINE.relative_to(REPO_ROOT)),
+            "enforced_ms": {
+                "writes_p99": WRITE_P99_MS,
+                "search_tasks_p99": SEARCH_P99_MS,
+                "board_summary_p95": BOARD_P95_MS,
+                "all_calls_max": CALL_MAX_MS,
+            },
+            "hard_slo_ms": {
+                "writes_p99": _RATCHET["writes"]["slo_ms"],
+                "search_tasks_p99": _RATCHET["search_tasks"]["slo_ms"],
+                "board_summary_p95": _RATCHET["board_summary"]["slo_ms"],
+                "all_calls_max": _RATCHET["all_calls"]["slo_ms"],
+            },
+        },
         "error_count": len(errors),
         "database_lock_error_count": len(locked_errors),
         "errors": errors[:20],
