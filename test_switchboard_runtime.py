@@ -107,6 +107,19 @@ try:
        "failure_class" in schema.get("required_fields", []) and
        "hidden_fallback" in schema.get("failure_classes", {}),
        "working agreement publishes fail_fix_signal.v1 taxonomy")
+    call_patterns = agreement.get("agent_call_patterns", {})
+    ok("one write at a time" in call_patterns.get("writes", ""),
+       "working agreement requires serialized MCP writes")
+    ok("5-15 seconds" in call_patterns.get("writes", ""),
+       "working agreement publishes SQLite lock retry guidance")
+    ok(all(tool in call_patterns.get("heavy_reads", "") for tool in
+           ("search_tasks", "list_deliverables", "board_summary")),
+       "working agreement prohibits parallel heavy reads")
+    ok("get_lane_delta" in call_patterns.get("polling", "") and
+       "once per" in call_patterns.get("polling", ""),
+       "working agreement prefers delta polling and bounds board summaries")
+    ok("control_plane_probe" in call_patterns.get("diagnostics", ""),
+       "working agreement publishes the latency diagnostic path")
     bug_policy = agreement.get("bug_intake_policy", {})
     ok(bug_policy.get("scope") == "write:bug_intake" and
        "create implementation work outside the BUG lane"

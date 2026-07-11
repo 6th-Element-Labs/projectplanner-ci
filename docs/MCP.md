@@ -10,6 +10,28 @@ Product naming note: this MCP surface is Switchboard. The deployed unit is still
 [`SWITCHBOARD-RENAME-MIGRATION.md`](SWITCHBOARD-RENAME-MIGRATION.md) before renaming units,
 paths, repo remotes, or env prefixes.
 
+## Agent call patterns
+
+Switchboard uses SQLite in WAL mode and deliberately bounds MCP worker concurrency. Agents must
+use the following call pattern to avoid lock contention, oversized concurrent responses, and
+client-side hangs:
+
+- **Serialize writes.** Send one MCP write at a time, including task updates, claim operations,
+  comments, and deliverable linking. If a write returns `database is locked`, wait 5-15 seconds and
+  retry that write; do not fan it out or start a parallel write burst.
+- **Do not parallelize heavy reads.** Run `search_tasks`, `list_deliverables`, and `board_summary`
+  one at a time. Parallel batches of these calls multiply SQLite and response-processing load.
+- **Use deltas for polling.** Prefer `get_lane_delta` for repeated checks. Use `board_summary` once
+  during normal session startup; request another full snapshot only when the operator or workflow
+  specifically needs one.
+- **Probe before diagnosing.** Use `control_plane_probe` to compare `server_elapsed_ms` with client
+  wall time. A large difference points to network, TLS, MCP bridge, transfer, or client scheduling
+  latency rather than Switchboard's Python/SQLite path.
+
+Independent lightweight reads may still be grouped when useful. The restriction is specifically on
+write bursts and the heavy full-list/full-board reads above. `get_working_agreement(project)` returns
+the same rules in its `agent_call_patterns` field so clients can enforce them at session start.
+
 ## Tools
 
 Every task/board tool accepts `project`. Use `maxwell` for the TEEP Barnett plan, `helm` for
