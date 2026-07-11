@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent
 LINE_CEILINGS = {
     "store.py": 15_789,  # BUG-48/HARDEN-55 drift: probe_project_db + readiness helpers
     "app.py": 3_273,  # ACCESS-16: global-auth cutover removed legacy login routes
-    "mcp_server.py": 3_154,
+    "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
 ROOT_PYTHON_FILE_CEILING = 197  # pre-existing drift on master (+2 root files from merged PRs, not BUG-49)
