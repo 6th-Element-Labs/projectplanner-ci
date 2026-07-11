@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
     "store.py": 15_470,  # ARCH-MS-20 extracted runner persistence/control into runner_store.py
-    "app.py": 3_276,  # pre-existing master drift remeasured by ARCH-MS-20 gate
+    "app.py": 3_275,  # ARCH-MS-18 moved auth imports behind the package seam
     "mcp_server.py": 3_157,  # pre-existing master drift remeasured by ARCH-MS-20 gate
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }

@@ -26,8 +26,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scr
 
 import auth  # noqa: E402
 import store  # noqa: E402
-from services.auth import store as ast  # noqa: E402
-from services.auth import service as asvc  # noqa: E402
+import scripts.switchboard_path  # noqa: E402,F401
+from switchboard.api.routers.auth import service as asvc  # noqa: E402
+from switchboard.api.routers.auth import store as ast  # noqa: E402
 import migrate_auth_to_global as M  # noqa: E402
 
 passed = failed = 0
