@@ -3412,6 +3412,34 @@ def list_tasks(workstream: Optional[str] = None, status: Optional[str] = None,
         return tasks
 
 
+def list_tasks_slim(workstream: Optional[str] = None, status: Optional[str] = None,
+                    assignee: Optional[str] = None,
+                    project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """Slim, filtered task rows with provenance loaded in one batched query.
+
+    This is the card/agent-list path.  It deliberately omits the per-task
+    ``external_ci``, ``publication``, and ``session_health`` enrichment reserved
+    for task detail.  Optional filters stay in SQL so a lane-scoped MCP search
+    does not hydrate or even materialize every task on the board.
+    """
+    q = "SELECT * FROM tasks WHERE 1=1"
+    params: List[Any] = []
+    if workstream:
+        q += " AND workstream_id=?"; params.append(workstream)
+    if status:
+        q += " AND status=?"; params.append(status)
+    if assignee:
+        q += " AND assignee=?"; params.append(assignee)
+    q += " ORDER BY sort_order"
+    with _conn(project) as c:
+        rows = c.execute(q, params).fetchall()
+        tasks = [_task_row(r) for r in rows]
+        provenance = _provenance_by_task(c, [t["task_id"] for t in tasks])
+        for t in tasks:
+            t["provenance"] = provenance.get(t["task_id"])
+        return tasks
+
+
 def list_tasks_for_board(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     """Slim, batched task list for the board/kanban and its rollups (HARDEN-34).
 
@@ -3422,19 +3450,13 @@ def list_tasks_for_board(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]
     re-fetches them via get_task). That turns the board's ~4-queries-per-task
     (≈1600 for a 400-task board, ~73s under swap) into 2 queries total.
     """
-    with _conn(project) as c:
-        rows = c.execute("SELECT * FROM tasks ORDER BY sort_order").fetchall()
-        tasks = [_task_row(r) for r in rows]
-        provenance = _provenance_by_task(c, [t["task_id"] for t in tasks])
-        for t in tasks:
-            t["provenance"] = provenance.get(t["task_id"])
-        return tasks
+    return list_tasks_slim(project=project)
 
 
 def board_rollups(project: str = DEFAULT_PROJECT,
                   tasks: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Compute board-level counts from live task rows, not seed metadata."""
-    rows = tasks if tasks is not None else list_tasks(project=project)
+    rows = tasks if tasks is not None else list_tasks_for_board(project=project)
     status_counts: Dict[str, int] = {}
     workstream_counts: Dict[str, int] = {}
     effort = 0.0
