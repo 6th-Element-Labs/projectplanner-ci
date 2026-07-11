@@ -95,6 +95,7 @@ run_test test_mcp_link_task_slim.py
 run_test test_mcp_deliverables_slim.py
 run_test test_mcp_threadpool.py
 run_test test_mcp_reconnect.py
+run_test test_mcp_read_auth.py
 run_test test_mission_narrative.py
 run_test test_narrate.py
 run_test test_narrate_scheduler.py

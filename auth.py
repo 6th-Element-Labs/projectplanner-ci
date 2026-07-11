@@ -186,6 +186,33 @@ def authenticate(project: str, token: str,
     return principal
 
 
+def principal_for_token_any_project(token: str) -> Optional[Dict[str, Any]]:
+    """Transport-level authentication: does this bearer map to any known, live principal?
+
+    Used by the MCP request middleware (BUG-46) to reject anonymous callers before any tool
+    runs — reads used to bypass auth entirely, exposing project/task/activity data to anyone
+    who could reach /mcp. This answers only "is the caller a real principal"; per-project and
+    per-scope authorization still happen inside each tool via authenticate(). A store lookup
+    error falls through to the env-token bridge rather than failing the whole surface closed
+    on a transient DB blip. Returns the principal on success, or None when the token is
+    missing, unknown, or revoked.
+    """
+    token = (token or "").strip()
+    if not token:
+        return None
+    try:
+        principal = store.get_principal_by_token_any_project(token)
+    except Exception:
+        principal = None
+    if not principal:
+        principal = _env_principal(token, "*")
+    if not principal:
+        return None
+    if principal.get("revoked_at"):
+        return None
+    return principal
+
+
 def authenticate_request(request: Any, project: str,
                          required_scopes: Iterable[str] = ("write:ixp",),
                          dev_actor: str = "dev-open") -> Dict[str, Any]:
