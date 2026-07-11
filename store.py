@@ -1443,6 +1443,35 @@ def list_deliverables(project: str = DEFAULT_PROJECT, board_id: str = "",
     return deliverables
 
 
+def list_deliverable_summaries(project: str = DEFAULT_PROJECT,
+                               board_id: str = "") -> List[Dict[str, Any]]:
+    """Return the metadata needed by project-scoped deliverable pickers.
+
+    This deliberately does not call ``get_deliverable``: picker rendering needs
+    no milestones, task links, cross-project task snapshots, or progress proof.
+    Keeping this as one local SQL read prevents a navigation control from
+    competing with the mission cockpit's much heavier live status reads.
+    """
+    if not has_project(project):
+        return []
+    board_id = (board_id or "").strip()
+    with _conn(project) as c:
+        if board_id:
+            if not _project_board_exists_in(c, board_id):
+                return []
+            rows = c.execute(
+                "SELECT id, board_id, title, status, updated_at FROM deliverables "
+                "WHERE board_id=? ORDER BY updated_at DESC, id",
+                (board_id,),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT id, board_id, title, status, updated_at FROM deliverables "
+                "ORDER BY updated_at DESC, id"
+            ).fetchall()
+    return [dict(row, mission_id=row["board_id"] or None) for row in rows]
+
+
 def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
     links = deliverable.get("task_links") or []
     status_counts: Dict[str, int] = {}

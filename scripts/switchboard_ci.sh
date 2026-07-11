@@ -74,6 +74,7 @@ run_test test_deliverables_dogfood.py
 run_test test_deliverables_model.py
 run_test test_deliverable_link_snapshots.py
 run_test test_bulk_deliverable_links.py
+run_test test_picker_load_path.py
 run_test test_evidence_claims.py
 run_test test_external_ci_mirror_evidence.py
 run_test test_external_ci_mirror_model.py
