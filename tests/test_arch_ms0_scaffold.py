@@ -18,20 +18,17 @@ from __future__ import annotations
 import importlib
 import os
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 
+from path_setup import ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
 TMP = tempfile.mkdtemp(prefix="arch-ms0-scaffold-")
 os.environ["PM_DB_PATH"] = str(Path(TMP) / "maxwell.db")
 os.environ["PM_HELM_DB_PATH"] = str(Path(TMP) / "helm.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = str(Path(TMP) / "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(Path(TMP) / "project_registry.db")
 os.environ["PM_AUTH_MODE"] = "dev-open"
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
 
 
 passed = failed = 0
