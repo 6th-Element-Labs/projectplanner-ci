@@ -14320,13 +14320,23 @@ def update_canonical_main_sha(sha: str, actor: str = "github-webhook",
                     task_id=None, project=project)
 
 
-def _git_ok(args: List[str]) -> bool:
+def _git_ok(args: List[str], timeout: float = 5) -> bool:
     try:
         return subprocess.run(["git", *args], cwd=os.path.dirname(__file__),
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              timeout=5).returncode == 0
+                              timeout=timeout).returncode == 0
     except Exception:
         return False
+
+
+def _git_fetch_origin(timeout: float = 45) -> bool:
+    """Best-effort `git fetch origin` so canonical-main ancestry checks are not blinded
+    by a stale checkout. Deploy is the only thing that fetches the box's checkout, but
+    canonical main advances on every merge — so between deploys the recorded
+    canonical_main_sha is routinely absent from the local object database, permanently
+    blocking the per-task merged_sha reachability checks. A single bounded fetch before
+    giving up keeps the git-reachability backstop live without a redeploy."""
+    return _git_ok(["fetch", "--quiet", "origin"], timeout=timeout)
 
 
 def _git_checks_available() -> bool:
@@ -14562,6 +14572,12 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                 checks["local_repo"] = local_repo
             main_ref = canonical_main_sha
             if not _git_ok(["cat-file", "-e", f"{main_ref}^{{commit}}"]):
+                # Stale checkout: the box only fetches on deploy, but canonical main
+                # advances on every merge, so the recorded sha is routinely absent
+                # locally. Try one bounded fetch before declaring the backstop blind.
+                if _git_fetch_origin():
+                    checks["canonical_main_fetch"] = "refreshed"
+            if not _git_ok(["cat-file", "-e", f"{main_ref}^{{commit}}"]):
                 checks["git_reachability"] = "blocked_missing_canonical_main"
                 checks["canonical_main_sha"] = main_ref
                 findings.append({
@@ -14569,8 +14585,8 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                     "task_id": None,
                     "code": "canonical_main_sha_not_found",
                     "detail": (
-                        "Canonical main SHA is not present in the local git object database; "
-                        "fetch or refresh the local checkout before per-task ancestry checks."
+                        "Canonical main SHA is not present in the local git object database "
+                        "even after a refresh fetch; check the box's git remote/credentials."
                     ),
                 })
             else:

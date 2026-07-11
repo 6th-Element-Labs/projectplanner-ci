@@ -1286,7 +1286,9 @@ try:
     original_git_checks_available = store._git_checks_available
     original_local_github_repo = store._local_github_repo
 
-    def fake_git_ok(args):
+    def fake_git_ok(args, timeout=5):
+        if args[:1] == ["fetch"]:
+            return False  # refresh fetch cannot recover a bogus sha (e.g. offline box)
         if args == ["cat-file", "-e", f"{missing_main_sha}^{{commit}}"]:
             return False
         raise AssertionError("per-task git reachability should be skipped when canonical main is missing")
@@ -1301,7 +1303,7 @@ try:
         store._git_checks_available = original_git_checks_available
         store._local_github_repo = original_local_github_repo
     ok(missing_main_report["external_checks"]["git_reachability"] == "blocked_missing_canonical_main",
-       "reconcile reports missing canonical main as a single blocked git check")
+       "reconcile reports missing canonical main (after a refresh fetch) as a single blocked git check")
     ok(sum(1 for f in missing_main_report["findings"]
            if f["code"] == "canonical_main_sha_not_found") == 1,
        "reconcile emits one canonical-main-missing finding")
@@ -1309,6 +1311,36 @@ try:
                f["code"] in ("merged_sha_not_found", "merged_sha_not_on_canonical_main")
                for f in missing_main_report["findings"]),
        "missing canonical main does not fan out into per-task merged-sha findings")
+
+    # A stale checkout self-heals: when the recorded canonical main is absent locally but
+    # a refresh fetch brings it in, reconcile proceeds to per-task ancestry checks instead
+    # of staying blind (the between-deploys case that stranded merged-PR provenance).
+    heal_state = {"fetched": False}
+
+    def selfheal_git_ok(args, timeout=5):
+        if args[:1] == ["fetch"]:
+            heal_state["fetched"] = True
+            return True
+        if args == ["cat-file", "-e", f"{missing_main_sha}^{{commit}}"]:
+            return heal_state["fetched"]
+        return True  # per-task reachability + ancestry pass once main is present
+
+    store._git_ok = selfheal_git_ok
+    store._git_checks_available = lambda: True
+    store._local_github_repo = lambda: "6th-Element-Labs/projectplanner"
+    try:
+        healed_report = store.reconcile(project=P)
+    finally:
+        store._git_ok = original_git_ok
+        store._git_checks_available = original_git_checks_available
+        store._local_github_repo = original_local_github_repo
+    ok(heal_state["fetched"], "reconcile attempts a refresh fetch when canonical main is missing locally")
+    ok(healed_report["external_checks"]["git_reachability"] == "checked",
+       "reconcile recovers the git-reachability backstop after a refresh fetch")
+    ok(healed_report["external_checks"].get("canonical_main_fetch") == "refreshed",
+       "reconcile records that a refresh fetch restored canonical main")
+    ok(not any(f["code"] == "canonical_main_sha_not_found" for f in healed_report["findings"]),
+       "no canonical-main-missing finding once the refresh fetch recovers the sha")
     store.update_canonical_main_sha(head, actor="test", project=P)
     squashed = store.create_task({"workstream_id": "TEST", "title": "squashed branch head"},
                                  actor="seed", project=P)
