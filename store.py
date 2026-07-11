@@ -562,6 +562,31 @@ def seed_if_empty(project: str = DEFAULT_PROJECT):
         return seed_from_plan(c, _resolve(project)["seed"])
 
 
+# Core tables that apply_schema() creates and every request path assumes exist.
+# A board db missing any of these is not safely serveable, so readiness fails closed.
+READINESS_REQUIRED_TABLES = ("tasks", "activity", "meta")
+
+
+def probe_project_db(project: str) -> Optional[str]:
+    """Cheap liveness+schema check for one board db. Returns None when the db is
+    accessible and carries the required schema, else a SHORT reason string that
+    NEVER embeds task/project data (safe to surface on an unauthenticated probe)."""
+    try:
+        with _conn(project) as c:
+            present = {
+                r["name"]
+                for r in c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+    except Exception as e:  # locked / missing / corrupt db, permission error, etc.
+        return type(e).__name__
+    missing = [t for t in READINESS_REQUIRED_TABLES if t not in present]
+    if missing:
+        return "missing_tables:" + ",".join(missing)
+    return None
+
+
 def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
     d = dict(r)
     d["depends_on"] = _normalize_depends_on(d.get("depends_on"))

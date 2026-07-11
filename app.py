@@ -72,12 +72,17 @@ store.init_db()
 _seeded = store.seed_if_empty()
 # Additional projects — each in its OWN db file; one-shot seed, guarded so a restart never
 # wipes or re-imports. Maxwell (DEFAULT_PROJECT) is seeded above, untouched.
+# A project that fails to initialize does NOT block startup (the box must keep serving the
+# projects that are healthy), but it is recorded so /health/deep can fail readiness closed —
+# a silently-skipped project must never let the service report itself ready. BUG-48.
+_PROJECT_INIT_FAILURES: dict[str, str] = {}
 for _pid in store.project_ids():
     if _pid != store.DEFAULT_PROJECT:
         try:
             store.init_db(_pid)
             store.seed_if_empty(_pid)
         except Exception as _e:  # never let a second project block startup
+            _PROJECT_INIT_FAILURES[_pid] = f"{type(_e).__name__}: {_e}"
             print(f"[projects] seed {_pid} skipped: {_e}")
 
 
@@ -638,13 +643,34 @@ async def health():
 
 @app.get("/health/deep")
 async def health_deep():
-    """Ops-only readiness: counts tasks/projects (can be slow; never wire to load balancers)."""
-    return {
-        "status": "ok",
+    """Readiness probe. Publicly routed under Caddy's /health*, so it must NOT expose any
+    project data (ids, task counts, names). It verifies that every configured board db is
+    accessible with the required schema, and fails CLOSED (503) if any configured project
+    could not initialize at startup or is not reachable now. BUG-48."""
+    def _probe():
+        configured = store.project_ids()
+        unready = 0
+        for pid in configured:
+            # A project skipped at startup is unready regardless of a later live probe;
+            # otherwise re-check the db + schema live so a db that went away is caught.
+            reason = _PROJECT_INIT_FAILURES.get(pid) or store.probe_project_db(pid)
+            if reason:
+                unready += 1
+                # Detail (which project, why) goes to the server log only — never the wire.
+                print(f"[readiness] project not ready: {pid}: {reason}")
+        return len(configured), unready
+
+    projects_configured, projects_unready = await asyncio.to_thread(_probe)
+    ready = projects_unready == 0
+    body = {
+        "status": "ready" if ready else "unready",
         "service": "taikun-pm",
-        "tasks": len(store.list_tasks()),
-        "projects": store.project_ids(),
+        "ready": ready,
+        "projects_configured": projects_configured,
+        "projects_ready": projects_configured - projects_unready,
+        "projects_unready": projects_unready,
     }
+    return JSONResponse(body, status_code=200 if ready else 503)
 
 
 @app.get("/health/saturation")

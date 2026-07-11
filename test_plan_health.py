@@ -46,9 +46,27 @@ ok(body.get("status") == "ok" and body.get("service") == "taikun-pm", "/health r
 ok("tasks" not in body and "projects" not in body, "/health does not call list_tasks")
 ok(elapsed_ms < 500, f"/health responds quickly ({elapsed_ms:.1f}ms)")
 
-deep = client.get("/health/deep").json()
-ok("tasks" in deep and deep["tasks"] >= 30, "/health/deep exposes task count for ops")
-ok("projects" in deep, "/health/deep exposes project ids for ops")
+# BUG-48: /health/deep is a readiness probe, publicly routed, so it must NOT leak project
+# data (task counts, project ids/names) and must fail closed when a project is unready.
+deep_r = client.get("/health/deep")
+deep = deep_r.json()
+ok(deep_r.status_code == 200 and deep.get("ready") is True, "/health/deep is 200/ready when all dbs are healthy")
+ok("tasks" not in deep and "projects" not in deep, "/health/deep does not leak task counts or project ids")
+ok(deep.get("projects_configured", 0) >= 1 and deep.get("projects_unready") == 0,
+   "/health/deep reports project readiness counts without identifiers")
+
+# Fail closed: a configured project that failed to initialize makes readiness 503.
+import app as _app_mod  # noqa: E402
+_app_mod._PROJECT_INIT_FAILURES["switchboard"] = "RuntimeError: simulated init failure"
+try:
+    unready_r = client.get("/health/deep")
+    unready = unready_r.json()
+    ok(unready_r.status_code == 503 and unready.get("ready") is False,
+       "/health/deep fails closed (503) when a configured project could not initialize")
+    ok(unready.get("projects_unready") >= 1 and "switchboard" not in unready_r.text,
+       "/health/deep counts the unready project without naming it")
+finally:
+    _app_mod._PROJECT_INIT_FAILURES.pop("switchboard", None)
 
 print(f"\nPlan health: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)
