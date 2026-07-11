@@ -58,10 +58,13 @@ try:
         snapshot_calls.append((project, list(ids)))
         return real_snapshots(project, ids)
 
+    from contextlib import contextmanager
+
+    @contextmanager
     def traced_conn(*args, **kwargs):
-        conn = real_conn(*args, **kwargs)
-        conn.set_trace_callback(lambda sql: batch_queries.append(sql))
-        return conn
+        with real_conn(*args, **kwargs) as conn:
+            conn.set_trace_callback(lambda sql: batch_queries.append(sql))
+            yield conn
 
     store.get_task = forbidden_get_task
     store._deliverable_task_snapshots = tracked_snapshots
