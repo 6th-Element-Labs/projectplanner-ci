@@ -47,6 +47,10 @@ const TeepPlan = {
     _missionPollMs: 5000,   // live cockpit poll interval (ms) — snappy now the graph is ~0.2s
     _missionLiveTimer: null,
     _missionSig: null,
+    _fleetPollMs: 10000,
+    _fleetLiveTimer: null,
+    _fleetSig: null,
+    _fleetLoadBusy: false,
     wsMeta: {},         // workstream_id -> {name, lead_org}
     gantt: null,        // ApexCharts instance
     ganttMode: 'task',  // default 'task' (per-task detail) · 'workstream' = 12-bar overview
@@ -1022,25 +1026,60 @@ const TeepPlan = {
     // project-wide on the board, deliverable-scoped on the mission page. Data comes from
     // /ixp/v1/work_sessions plus each session's derived health (SESSION-8 read models).
     renderFleetDock(ctx) {
-        this._dockCtx = ctx || { mode: 'project' };
-        this._loadFleetDock();
+        const nextCtx = ctx || { mode: 'project' };
+        const previousScope = JSON.stringify(this._dockCtx || {});
+        this._dockCtx = nextCtx;
+        if (JSON.stringify(nextCtx) !== previousScope) this._fleetSig = null;
+        this._startFleetLive();
+        this._loadFleetDock(true);
     },
-    async _loadFleetDock() {
+    _fleetSignature(sessions) {
+        return JSON.stringify((sessions || []).map((s) => [
+            s.work_session_id || '',
+            s.task_id || '',
+            s.status || '',
+            (s.health || {}).status || '',
+            s.updated_at || 0,
+        ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    },
+    async _loadFleetDock(force) {
         const host = document.getElementById('fleet-dock');
-        if (!host) return;
+        if (!host || this._fleetLoadBusy) return;
+        this._fleetLoadBusy = true;
         let sessions = [];
         try {
             const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
-            const data = await (await fetch(`/ixp/v1/work_sessions?${p}&include_expired=false`)).json();
+            const data = await (await fetch(`/ixp/v1/work_sessions?${p}&include_expired=false`, { cache: 'no-store' })).json();
             sessions = data.work_sessions || [];
-        } catch (e) { host.innerHTML = ''; return; }
+        } catch (e) { this._fleetLoadBusy = false; return; }
         const ctx = this._dockCtx || { mode: 'project' };
         if (ctx.mode === 'deliverable' && Array.isArray(ctx.taskIds)) {
             const ids = new Set(ctx.taskIds.map((x) => String(x).toUpperCase()));
             sessions = sessions.filter((s) => ids.has(String(s.task_id || '').toUpperCase()));
         }
         this._fleetScopeLabel = ctx.mode === 'deliverable' ? 'this deliverable' : '';
-        this._renderFleetDock(sessions);
+        const sig = this._fleetSignature(sessions);
+        const changed = sig !== this._fleetSig;
+        this._fleetLoadBusy = false;
+        if (force || changed) {
+            this._fleetSig = sig;
+            this._renderFleetDock(sessions);
+        }
+    },
+    _fleetLiveTick() {
+        if (document.hidden) return;
+        this._loadFleetDock(false);
+    },
+    _startFleetLive() {
+        if (document.hidden || this._fleetLiveTimer) return;
+        this._fleetLiveTimer = window.setInterval(
+            () => this._fleetLiveTick(), this._fleetPollMs || 10000);
+    },
+    _stopFleetLive() {
+        if (this._fleetLiveTimer) {
+            window.clearInterval(this._fleetLiveTimer);
+            this._fleetLiveTimer = null;
+        }
     },
     // ---- Attention model: the mission action queue, grouped by owner ------------
     _ownerBadge(owner) {
@@ -1192,7 +1231,7 @@ const TeepPlan = {
         host.querySelectorAll('[data-dock-msg]').forEach((b) =>
             b.addEventListener('click', () => this.openAgentMessage(b.getAttribute('data-dock-msg'), b.getAttribute('data-dock-msg-task'))));
         document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
-        document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock());
+        document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock(true));
     },
     // UI-3: per-task Work Sessions panel (Dev tab) — who holds which worktree, on what
     // branch, clean or dirty. Sits beside the runner panel.
@@ -5603,8 +5642,14 @@ const TeepPlan = {
             });
             document.addEventListener('visibilitychange', () => {
                 const tab = document.querySelector('#toptab-mission');
-                if (document.hidden) this._stopMissionLive();
-                else if (tab && tab.classList.contains('active')) this._startMissionLive();
+                if (document.hidden) {
+                    this._stopMissionLive();
+                    this._stopFleetLive();
+                } else {
+                    this._startFleetLive();
+                    this._loadFleetDock(false);
+                    if (tab && tab.classList.contains('active')) this._startMissionLive();
+                }
             });
         }
     },

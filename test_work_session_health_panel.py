@@ -138,6 +138,10 @@ try:
     for needle in (
         "renderFleetDock",       # bottom-right dock entry point
         "_loadFleetDock",        # fetch + scope (project vs deliverable)
+        "_fleetSignature",       # lifecycle/health change detector
+        "_fleetLiveTick",        # independent visible-page refresh
+        "_startFleetLive",
+        "_stopFleetLive",
         "_renderFleetDock",      # collapsed pill / expanded list
         "_dockReason",           # plain-language reason from health findings
         "_fleetTaskTitle",       # task-id -> title lookup
@@ -151,6 +155,13 @@ try:
         ok(needle in app_js, f"app.js defines {needle}")
     ok("mode: 'deliverable'" in app_js,
        "dock is deliverable-scoped on the mission page")
+    ok("s.work_session_id" in app_js and "(s.health || {}).status" in app_js and
+       "s.updated_at" in app_js,
+       "fleet signature tracks session identity, lifecycle, health, and updates")
+    ok("if (document.hidden) return" in app_js and "_stopFleetLive();" in app_js,
+       "fleet polling pauses while the browser tab is hidden")
+    ok("cache: 'no-store'" in app_js,
+       "fleet polling bypasses browser response caches")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
