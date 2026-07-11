@@ -27,6 +27,7 @@ import notify as notify_mod
 import rag
 import signals
 import store
+import deliverable_closure
 import scripts.switchboard_path  # noqa: F401
 from mcp_observability import MCPObservability
 from mcp_dispatch import MCPToolDispatcher
@@ -2561,6 +2562,43 @@ def update_mission_narrative(deliverable_id: str, narrative: str, ctx: Context,
         deliverable_id, narrative, actor=auth.actor(principal),
         project=project, append=append)
     return _dumps(result)
+
+
+@mcp.tool()
+def verify_deliverable_closure(deliverable_id: str, ctx: Context, project: str = "maxwell",
+                               report_json: str = "", submitted_functional_json: str = "",
+                               waivers_json: str = "", generated_by: str = "") -> str:
+    """Run scope + functional closure gates for a deliverable (or accept an agent-submitted
+    switchboard.deliverable_closure_report.v1), grade it, persist the report, and stamp
+    deliverable.closure_verified. Pass submitted_functional_json for verifier-run script/pytest
+    gate results ({gate_id: {pass, duration_s?, artifact_hash?}}) and waivers_json for
+    operator task waivers; the server never executes heavy gates in-process."""
+    principal = _require_write(ctx, project, ("write:tasks",))
+    parsed = {}
+    for name, raw in (("report", report_json),
+                      ("submitted_functional", submitted_functional_json),
+                      ("waivers", waivers_json)):
+        if not raw:
+            continue
+        try:
+            parsed[name] = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return _dumps({"error": f"invalid {name}_json: {exc}"})
+    return _dumps(deliverable_closure.verify_and_record_closure(
+        deliverable_id, project, actor=auth.actor(principal),
+        report=parsed.get("report"),
+        submitted_functional=parsed.get("submitted_functional"),
+        waivers=parsed.get("waivers"),
+        generated_by=generated_by or auth.actor(principal)))
+
+
+@mcp.tool()
+def get_deliverable_closure_report(deliverable_id: str, project: str = "maxwell",
+                                   report_id: str = "") -> str:
+    """Fetch the latest (or a specific report_id) persisted deliverable closure report
+    plus its retained grade history."""
+    return _dumps(store.get_deliverable_closure_report(
+        deliverable_id, project=project, report_id=report_id))
 
 
 @mcp.tool()
