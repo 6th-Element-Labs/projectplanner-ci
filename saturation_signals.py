@@ -20,7 +20,15 @@ DEFAULT_SLOS = {
     "dropped_webhook_deliveries_max": int(
         os.environ.get("PM_SLO_WEBHOOK_DROPPED_MAX", "0")
     ),
-    "sqlite_lock_waits_max": int(os.environ.get("PM_SLO_SQLITE_LOCK_WAITS_MAX", "0")),
+    # Evaluated over the trailing WINDOW (see evaluate_slos), not the lifetime counter, so
+    # the health SLO recovers to green when contention subsides. Default budget agrees with
+    # the load-shed threshold so alerting, shedding, and the SLO tell one story.
+    "sqlite_lock_waits_max": int(
+        os.environ.get(
+            "PM_SLO_SQLITE_LOCK_WAITS_MAX",
+            str(load_shed.DEFAULT_THRESHOLDS.get("sqlite_lock_waits", 10)),
+        )
+    ),
     "webhook_inbox_pending_max": int(
         os.environ.get("PM_SLO_WEBHOOK_INBOX_PENDING_MAX", "25")
     ),
@@ -104,7 +112,9 @@ def evaluate_slos(
 
     webhook = _route_metric(request_obs, "webhook_ingest")
     web = _route_metric(request_obs, "web")
-    lock_waits = int((mcp_obs or {}).get("sqlite_lock_waits") or 0)
+    # Trailing-window count, not the lifetime counter (which never resets and pinned the
+    # badge yellow forever after the first-ever contention). See build_alerts.
+    lock_waits = int((mcp_obs or {}).get("sqlite_lock_waits_window") or 0)
     dropped = int((request_obs or {}).get("dropped_webhook_deliveries") or 0)
     pending = int((inbox_depth or {}).get("pending") or 0)
     dead = int((inbox_depth or {}).get("dead") or 0)
@@ -168,6 +178,16 @@ def evaluate_slos(
     }
 
 
+def _lock_wait_alert_threshold() -> int:
+    """Windowed lock-wait count that trips the badge. Defaults to the load-shed threshold so
+    the badge, load-shedding, and the SLO agree; override with PM_SQLITE_LOCK_WAIT_ALERT."""
+    default = int(load_shed.DEFAULT_THRESHOLDS.get("sqlite_lock_waits", 10) or 10)
+    try:
+        return max(1, int(os.environ.get("PM_SQLITE_LOCK_WAIT_ALERT", default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def build_alerts(
     *,
     psi: dict,
@@ -187,14 +207,23 @@ def build_alerts(
             "message": violation,
         })
 
-    lock_waits = int((mcp_obs or {}).get("sqlite_lock_waits") or 0)
-    if lock_waits > 0:
+    # Alert on the trailing-window count, NOT the lifetime counter. The lifetime counter only
+    # ever increases, so keying the badge off it pinned the light yellow forever after the
+    # first lock-wait retry — it could never return to green without a process restart, and a
+    # bigger box can't help a counter that only counts up. The window recovers to zero when
+    # contention subsides. (sqlite_lock_waits stays in the payload as the lifetime total.)
+    lock_waits_window = int((mcp_obs or {}).get("sqlite_lock_waits_window") or 0)
+    lock_waits_lifetime = int((mcp_obs or {}).get("sqlite_lock_waits") or 0)
+    window_s = int((mcp_obs or {}).get("sqlite_lock_wait_window_s") or 60)
+    if lock_waits_window >= _lock_wait_alert_threshold():
         alerts.append({
             "at": now,
             "severity": "warning",
             "kind": "sqlite_lock_wait",
-            "message": f"sqlite lock waits: {lock_waits}",
-            "value": lock_waits,
+            "message": f"sqlite lock waits (last {window_s}s): {lock_waits_window}",
+            "value": lock_waits_window,
+            "window_s": window_s,
+            "lifetime": lock_waits_lifetime,
         })
 
     pending = int((inbox_depth or {}).get("pending") or 0)
