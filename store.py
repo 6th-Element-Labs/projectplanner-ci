@@ -4115,8 +4115,13 @@ def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
         # NARRATE-8: emit the narration intent inside the SAME transaction as the mutation
         # (ADR-0008). Materiality is decided by the source projection hash, so a cosmetic
         # edit bumps no revision and emits nothing. Commit binds mutation + intent atomically.
-        narration_outbox.emit_task_narration_request(
+        emitted = narration_outbox.emit_task_narration_request(
             c, task_id, project=project, cause_kind="task.updated", actor=actor)
+    # NARRATE-9: wake a worker only after the emit transaction has committed (boundary 1 → wake).
+    # Best-effort acceleration; durable outbox state is the source of truth, so a lost wake is
+    # recovered by the sweep. No-op until the daemon registers a sink.
+    if emitted:
+        narration_outbox.request_wake(project, entity_type="task", entity_id=task_id)
     # NARRATE-2: enqueue CEO-narration only on a real status transition, never on cosmetic
     # edits — this is the cost guarantee. The drain job applies the trigger-status filter.
     # Kept as a post-commit shadow marker alongside the outbox until NARRATE-14 cuts over.
@@ -4218,8 +4223,11 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
                   (tid, actor, "create", json.dumps({"title": title}), now))
         # NARRATE-8: a new task is revision 1 — emit its narration intent atomically with
         # the insert (ADR-0008). Rollback of the create drops the outbox row too.
-        narration_outbox.emit_task_narration_request(
+        emitted = narration_outbox.emit_task_narration_request(
             c, tid, project=project, cause_kind="task.created", actor=actor)
+    # NARRATE-9: post-commit best-effort wake (see update path).
+    if emitted:
+        narration_outbox.request_wake(project, entity_type="task", entity_id=tid)
     return tid
 
 

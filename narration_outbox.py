@@ -247,6 +247,36 @@ def _now(now: Optional[float]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Wake seam (ADR-0008 boundary 1 → wake). The producer signals after an emit
+# commits so a healthy worker can claim within seconds instead of waiting for the
+# recovery sweep. The wake is only an *acceleration* signal: durable outbox state
+# is the source of truth, so a missing/failed wake never loses work. The daemon
+# (NARRATE-10) registers the real sink; the default is a no-op, so this is inert
+# until then and safe to ship now.
+# ---------------------------------------------------------------------------
+
+_WAKE_SINK = None
+
+
+def register_wake_sink(fn) -> None:
+    """Register the process-local wake sink (called post-commit with project + context)."""
+    global _WAKE_SINK
+    _WAKE_SINK = fn
+
+
+def request_wake(project: str, **context: Any) -> bool:
+    """Best-effort wake after an emit commits. Never raises into the caller's write path."""
+    sink = _WAKE_SINK
+    if sink is None:
+        return False
+    try:
+        sink(project, **context)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Backfill + read accessors (project-aware; open their own connection).
 # ---------------------------------------------------------------------------
 
