@@ -35,7 +35,8 @@ def weekly_digest():
     d = digest.generate_digest()
     proj = store.get_meta("project") or "the plan"
     subject = f"{proj} — weekly digest"
-    results = notify.send(subject, d["content"])
+    # UI-14: resolve this project's digest recipients (falls back to the global list if unset).
+    results = notify.send(subject, d["content"], project=store.DEFAULT_PROJECT, kind="digest")
     print(f"digest #{d['id']} generated; notify: {results}")
     return results
 

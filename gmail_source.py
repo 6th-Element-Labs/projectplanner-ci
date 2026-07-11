@@ -7,7 +7,8 @@ the projectplanner-inbox timer (jobs.py poll_inbox).
 
 One mailbox, many boards (UI-13): a message is routed to a project by, in order,
   1. plus-addressing — plan+<project>@taikunai.com on any recipient (zero-config, same mailbox);
-  2. the sender-domain map PM_INBOX_ROUTES (e.g. 'totalenergy.com=maxwell, acme.com=helm');
+  2. the sender-domain map — per-project associations edited from Settings → Communications
+     (UI-14) merged over the PM_INBOX_ROUTES env bootstrap (e.g. 'totalenergy.com=maxwell');
   3. otherwise the global PM_INBOX_ALLOWLIST gate -> the default project (today's behavior, unchanged).
 A routing match (1 or 2) also ACCEPTS the message; unmatched senders still pass through the
 allowlist so nothing that arrives today stops arriving. Each project's inbox/corpus is isolated
@@ -45,8 +46,12 @@ def _allow(sender):
 
 
 def _routes_map():
-    """Parse PM_INBOX_ROUTES='domain=project, domain2=project2' -> {domain: project} (domains
-    lowercased, leading @ stripped). Malformed entries are skipped."""
+    """Domain→project routing map, merged from two sources:
+      1. PM_INBOX_ROUTES='domain=project, ...' — deploy-level bootstrap (domains lowercased,
+         leading @ stripped; malformed entries skipped);
+      2. the web-managed per-project associations (UI-14, comms.persisted_routes()).
+    The web map is authoritative on conflict — it's the surface an operator edits live, so an
+    association made from Settings → Communications takes effect with no .env edit."""
     out = {}
     for part in (os.environ.get("PM_INBOX_ROUTES") or "").split(","):
         part = part.strip()
@@ -56,6 +61,15 @@ def _routes_map():
         dom, proj = dom.strip().lstrip("@").lower(), proj.strip()
         if dom and proj:
             out[dom] = proj
+    try:
+        import comms
+        for dom, proj in comms.persisted_routes().items():
+            if out.get(dom) not in (None, proj):
+                log.info("inbox routing: web association %s -> %s overrides PM_INBOX_ROUTES -> %s",
+                         dom, proj, out[dom])
+            out[dom] = proj
+    except Exception as e:  # never let a config read stop the poller from routing on the env map
+        log.warning("inbox routing: could not load web-managed routes (%s); using env map only", e)
     return out
 
 
