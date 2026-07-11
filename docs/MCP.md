@@ -440,6 +440,9 @@ Admin MCP credential tools:
   should still prefer `get_lane_delta` or `control_plane_probe` for polling and diagnostics.
 - HTTP responses include `Server-Timing: app;dur=...` and `X-Switchboard-Server-Ms` so operators can
   separate application time from public network, TLS, transfer, and MCP/client bridge overhead.
+  MCP responses also include `X-Switchboard-MCP-Session: stateless`: after a transport timeout,
+  clients should discard the failed transport, create a fresh Streamable HTTP connection, run
+  `initialize`, and call `control_plane_probe`. No server-side session recovery is required.
 - `projectplanner-mcp.service` is a compatibility unit name. Future `switchboard-mcp.service`
   support should be introduced as an alias first, not as an in-place replacement.
 - The coordination monitor sweep is host-owned: enable `projectplanner-monitors.timer` so
@@ -455,3 +458,29 @@ Admin MCP credential tools:
   per-agent principals are created.
 - `PM_MCP_PUBLIC_HOST` (default `plan.taikunai.com`) is trusted by MCP's DNS-rebinding guard —
   set it if the public host changes, or you'll get HTTP 421.
+
+### Timeout and reconnect runbook
+
+Use `python scripts/mcp_reconnect_probe.py` to exercise the supported recovery contract. The probe
+starts parallel `search_tasks` calls, deliberately cancels the first transport at a tiny client
+budget, creates a fresh MCP transport in the same process, initializes it, and requires a successful
+`control_plane_probe`. A passing result proves server recovery without restarting Switchboard or the
+client process; it does not prove that a particular IDE build automatically creates that transport.
+
+Cursor reconnect behavior is version-dependent. After `Not connected`, `fetch failed`, or a tool
+timeout:
+
+1. Retry one `control_plane_probe`. If it succeeds, the server is healthy and the earlier delay was
+   in the tool, network, or client bridge.
+2. If Cursor does not reconnect, open **Settings → Tools & MCP**, toggle/reconnect `taikun-plan`, and
+   retry the probe. This is the first manual recovery step; an IDE restart is not required.
+3. If the toggle fails, use **View → Output**, select the MCP output, preserve the exact error, then
+   reload the Cursor window. Do not restart the Switchboard service when the public probe is healthy.
+
+These steps follow Cursor support's current guidance to update first, then reconnect/toggle the
+individual MCP server and inspect the MCP Output channel before escalating to a window reload:
+[disconnect guidance](https://forum.cursor.com/t/mcp-servers-disconnect-repeatedly-not-connected-error/149353/3),
+[reconnect workaround](https://forum.cursor.com/t/better-resilience-for-mcp-services/150510/3).
+
+The server-side per-tool deadline is tracked separately in BUG-40. BUG-38 guarantees a stateless,
+observable reconnect path; it does not pretend an inline client bridge can be repaired by the server.
