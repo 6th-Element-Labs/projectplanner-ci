@@ -2,6 +2,7 @@
 """BUG-35 — synchronous MCP tools must not block the request event loop."""
 import asyncio
 import inspect
+import json
 import threading
 import time
 
@@ -81,5 +82,35 @@ async def bounded_pool_test():
 
 asyncio.run(bounded_pool_test())
 check(peak == 2, f"worker concurrency is capped at configured size (peak={peak})")
+
+
+deadline_dispatcher = MCPToolDispatcher(
+    max_workers=1,
+    inline_tools={"control_plane_probe"},
+    deadline_seconds=0.05,
+)
+deadline_slow = deadline_dispatcher.wrap(slow_tool)
+deadline_probe = deadline_dispatcher.wrap(control_plane_probe)
+
+
+async def deadline_test():
+    started = time.perf_counter()
+    result = json.loads(await deadline_slow(0.2))
+    elapsed = time.perf_counter() - started
+    check(result["error"] == "tool_deadline_exceeded",
+          "slow tool returns a structured deadline error")
+    check(result["tool_name"] == "slow_tool",
+          "deadline error identifies the expired tool")
+    check(result["hint"] == "retry serialized",
+          "deadline error gives the safe retry hint")
+    check(40 <= result["server_elapsed_ms"] < 150,
+          f"deadline error reports elapsed time inside budget ({result['server_elapsed_ms']}ms)")
+    check(elapsed < 0.15, f"deadline response returns before the slow worker finishes ({elapsed:.3f}s)")
+    probe = deadline_probe()
+    check("at" in probe, "inline probe remains usable after a tool deadline")
+    await asyncio.sleep(0.18)  # let the abandoned test worker exit cleanly
+
+
+asyncio.run(deadline_test())
 
 print("MCP threadpool tests passed")
