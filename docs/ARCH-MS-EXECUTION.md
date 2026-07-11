@@ -74,7 +74,7 @@ requires merge webhook or reconcile.
 | `app.py` | 3,275 | ARCH-MS-18 moved auth imports behind the package seam |
 | `mcp_server.py` | 3,157 | Pre-existing master drift remeasured by ARCH-MS-20 gate |
 | `static/app.js` | 6,566 | Held |
-| repo root `*.py` | 201 | Master had 200; ARCH-MS-20 adds planned `runner_store.py` leaf |
+| repo root `*.py` | 205 | ARCH-MS-4 + ARCH-MS-21 add focused root proofs; ARCH-MS-6 stays under `tests/` |
 
 Source: `test_size_ratchet.py` (CONSOL-6).
 
