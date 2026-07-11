@@ -315,12 +315,12 @@ try:
                                    headers={"Authorization": f"Bearer {TOKEN}"})
     ok(revoke_forbidden.status_code == 403, "role revoke refused without write:system")
 
-    invite_noglobal = client.post(f"/api/access/invite?project={P}",
-                                  json={"email": "teammate@company.com", "role": "contributor"},
-                                  headers={"Authorization": f"Bearer {SW_ADMIN}"})
-    ok(invite_noglobal.status_code == 400 and
-       "global auth" in (invite_noglobal.json().get("detail") or ""),
-       "email invite returns a clear message when global auth is off")
+    invite_unknown = client.post(f"/api/access/invite?project={P}",
+                                 json={"email": "teammate@company.com", "role": "contributor"},
+                                 headers={"Authorization": f"Bearer {SW_ADMIN}"})
+    ok(invite_unknown.status_code == 404 and
+       "sign up" in (invite_unknown.json().get("detail") or "").lower(),
+       "email invite tells admin to have the user sign up first when no account exists")
     invite_bad = client.post(f"/api/access/invite?project={P}",
                              json={"email": "not-an-email", "role": "contributor"},
                              headers={"Authorization": f"Bearer {SW_ADMIN}"})

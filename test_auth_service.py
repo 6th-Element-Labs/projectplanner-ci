@@ -12,7 +12,6 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_TOP_LEVEL_PROJECTS"] = "alpha,beta"
-os.environ["PM_GLOBAL_AUTH"] = "1"
 os.environ["PM_JWT_SECRET"] = "test-secret-do-not-use-in-prod"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
