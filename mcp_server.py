@@ -2344,6 +2344,9 @@ def create_deliverable(title: str, ctx: Context, project: str = "maxwell",
     """Create/update a deliverable under one Project and optional Board/Mission.
 
     If board_id/mission_id is supplied it must already exist in the owning project.
+    When PM_ENFORCE_DELIVERABLE_INTAKE is on, moving a deliverable into status=in_progress
+    requires end_state + acceptance_criteria + a well-formed proof_requirements
+    (schema switchboard.deliverable_proof_requirements.v1); see docs/DELIVERABLE-CLOSURE-GATE.md.
     """
     principal = _require_write(ctx, project, ("write:tasks",))
     result = store.create_deliverable({
