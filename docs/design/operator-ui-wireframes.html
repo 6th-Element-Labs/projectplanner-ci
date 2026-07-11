@@ -618,7 +618,7 @@
               <div class="card-h"><span class="n">2</span> Wire your repo — 2 steps <span class="st st-mut">provenance off until wired</span></div>
               <div class="card-b" style="display:grid;gap:12px">
                 <div class="bar-row"><span class="area" style="min-width:90px">webhook url</span><code>https://plan.taikunai.com/api/github/webhook?project=chart-renderer</code><span class="btn sm">Copy</span></div>
-                <div class="bar-row"><span class="area" style="min-width:90px">or one-liner</span><code>gh api repos/…/hooks -f url=… -f secret=$PM_WEBHOOK_SECRET</code><span class="btn sm">Copy</span></div>
+                <div class="bar-row"><span class="area" style="min-width:90px">or one-liner</span><code>gh api repos/…/hooks -f url=… -f secret=$PM_GITHUB_WEBHOOK_SECRET</code><span class="btn sm">Copy</span></div>
                 <div class="bar-row">
                   <span class="btn sm pri"><span class="n">3</span>&nbsp;Verify connection</span>
                   <span class="st st-ok">✓ delivery received 12 s ago — merges will stamp Done</span>

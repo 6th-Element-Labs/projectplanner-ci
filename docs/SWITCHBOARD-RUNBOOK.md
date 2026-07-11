@@ -294,7 +294,7 @@ Operators with `write:system` can download a redacted enterprise evidence bundle
 
 ```bash
 curl -s "$PM_BASE/api/audit/export?project=switchboard" \
-  -H "Authorization: Bearer $PM_SYSTEM_TOKEN" > switchboard-audit-export.json
+  -H "Authorization: Bearer $PM_MCP_TOKEN" > switchboard-audit-export.json
 ```
 
 The export is `switchboard.audit_export.v1` JSON. It includes tasks, activity, claims, directed
@@ -308,10 +308,10 @@ provenance through `cleanup.*` activity plus archive snapshots instead of raw de
 
 ```bash
 curl -s "$PM_BASE/api/cleanup/candidates?project=switchboard" \
-  -H "Authorization: Bearer $PM_SYSTEM_TOKEN"
+  -H "Authorization: Bearer $PM_MCP_TOKEN"
 
 curl -s "$PM_BASE/api/cleanup/apply" \
-  -H "Authorization: Bearer $PM_SYSTEM_TOKEN" \
+  -H "Authorization: Bearer $PM_MCP_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"project":"switchboard","dry_run":true}'
 ```
@@ -417,10 +417,10 @@ and `open`; unsupported actions are recorded as refused control requests with
 
 ```bash
 curl -s "$PM_BASE/ixp/v1/runner_sessions?project=switchboard&task_id=HARDEN-24&include_stale=true" \
-  -H "Authorization: Bearer $PM_OPERATOR_TOKEN"
+  -H "Authorization: Bearer $PM_MCP_TOKEN"
 
 curl -s "$PM_BASE/ixp/v1/request_runner_health" \
-  -H "Authorization: Bearer $PM_OPERATOR_TOKEN" \
+  -H "Authorization: Bearer $PM_MCP_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"project":"switchboard","runner_session_id":"run_...","reason":"operator triage"}'
 ```

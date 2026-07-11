@@ -29,7 +29,6 @@ from digests_store import *    # noqa: F401,F403
 from inbox_store import *      # noqa: F401,F403
 from summaries_store import *  # noqa: F401,F403
 from decisions_store import *  # noqa: F401,F403
-from receipts_store import *   # noqa: F401,F403
 from jobs_store import *       # noqa: F401,F403
 
 
@@ -12227,58 +12226,6 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "archives": {"tasks": archived_tasks},
     }
     return _audit_redact(bundle)
-
-
-def replay_verify(project: str = DEFAULT_PROJECT, from_cursor: int = 0,
-                  until_cursor: Optional[int] = None,
-                  task_id: str = "") -> Dict[str, Any]:
-    """Replay activity events and compare derived task/git state to the live board."""
-    import event_replay
-    return event_replay.verify_board(
-        project,
-        from_cursor=from_cursor,
-        until_cursor=until_cursor,
-        task_id=task_id,
-    )
-
-
-def simulate_dispatch(project: str = DEFAULT_PROJECT, agent_id: str = "",
-                      from_cursor: int = 0, until_cursor: Optional[int] = None,
-                      lanes: Any = None, capabilities: Any = None,
-                      max_risk: str = "", max_budget_usd: Optional[float] = None,
-                      deliverable_id: str = "") -> Dict[str, Any]:
-    """Dry-run claim_next dispatch against a replayed historical snapshot (no writes)."""
-    import event_replay
-    if not (agent_id or "").strip():
-        return {"error": "agent_id required", "project": project}
-    return event_replay.simulate_dispatch(
-        project,
-        agent_id.strip(),
-        from_cursor=from_cursor,
-        until_cursor=until_cursor,
-        lanes=lanes,
-        capabilities=capabilities,
-        max_risk=max_risk,
-        max_budget_usd=max_budget_usd,
-        deliverable_id=deliverable_id,
-    )
-
-
-def project_task_receipts(project: str = DEFAULT_PROJECT, task_id: str = "",
-                          from_cursor: int = 0,
-                          until_cursor: Optional[int] = None,
-                          claim_id: str = "") -> List[Dict[str, Any]]:
-    """Project all coordination receipts for one task from activity history."""
-    import coordination_receipts
-    if not (task_id or "").strip():
-        return []
-    return coordination_receipts.project_task_receipts(
-        project,
-        task_id.strip(),
-        from_cursor=from_cursor,
-        until_cursor=until_cursor,
-        claim_id=claim_id,
-    )
 
 
 def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:
