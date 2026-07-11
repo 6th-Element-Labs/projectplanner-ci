@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent
 LINE_CEILINGS = {
     "store.py": 15_470,  # ARCH-MS-20 extracted runner persistence/control into runner_store.py
     "app.py": 3_276,  # pre-existing master drift remeasured by ARCH-MS-20 gate
-    "mcp_server.py": 3_157,  # pre-existing master drift remeasured by ARCH-MS-20 gate
+    "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
 ROOT_PYTHON_FILE_CEILING = 201  # master had 200; ARCH-MS-20 adds planned runner_store.py
