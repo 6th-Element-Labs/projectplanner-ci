@@ -9,12 +9,12 @@ ROOT = Path(__file__).resolve().parent
 # shrinks, lower its ceiling in the same PR; if it grows, follow ADR-0007's relief order before
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
-    "store.py": 15_764,
-    "app.py": 3_468,
+    "store.py": 15_789,  # BUG-48/HARDEN-55 drift: probe_project_db + readiness helpers
+    "app.py": 3_273,  # ACCESS-16: global-auth cutover removed legacy login routes
     "mcp_server.py": 3_154,
     "static/app.js": 6_526,
 }
-ROOT_PYTHON_FILE_CEILING = 194  # BUG-47: adds test_schema_migrations.py (fail-loud migration guard)
+ROOT_PYTHON_FILE_CEILING = 195  # BUG-47: test_schema_migrations.py on master
 
 passed = failed = 0
 

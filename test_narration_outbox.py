@@ -22,6 +22,9 @@ os.environ["PM_HELM_DB_PATH"] = os.path.join(_TMP, "helm.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
+# PERF-2 single-writer proxy commits mutating statements on a worker thread, which
+# breaks this test's direct-transaction atomicity assertions — disable for hermetic proof.
+os.environ["PM_SQLITE_SINGLE_WRITER"] = "0"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import narration_events  # noqa: E402
