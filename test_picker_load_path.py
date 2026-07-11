@@ -76,6 +76,7 @@ try:
        "/api/projects sync SQLite/auth work runs in FastAPI's threadpool")
 
     js = Path("static/app.js").read_text(encoding="utf-8")
+    index = Path("static/index.html").read_text(encoding="utf-8")
     picker_fetch = "fetch('api/deliverables?view=picker')"
     deliverables_start = "const initialDeliverablesReq = this.loadDeliverables()"
     board_start = "const boardReq = fetch('api/board')"
@@ -86,6 +87,12 @@ try:
        "concurrent header/mission picker loads share one in-flight request")
     ok("missionRefresh.addEventListener('click', () => this.refreshMissionPage(true))" in js,
        "manual refresh can still force fresh picker metadata")
+    boot_idx = index.index("window.TAIKUN_PICKER_BOOT = boot")
+    bootstrap_idx = index.index("bootstrap.bundle.min.js")
+    ok(boot_idx < bootstrap_idx,
+       "inline picker hydration starts before the blocking Bootstrap CDN script")
+    ok("await boot.projects" in js and "await boot.deliverables" in js,
+       "app boot reuses inline picker promises instead of issuing duplicate fetches")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
