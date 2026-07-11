@@ -11,12 +11,34 @@ Type=oneshot
 Nice=10
 IOSchedulingClass=idle
 MemoryMax=320M
-User=ubuntu
-Group=ubuntu
+# HARDEN-55: dedicated non-login service account (not the general `ubuntu` login).
+User=projectplanner
+Group=projectplanner
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
 Environment=SWITCHBOARD_CI_WORKDIR=/var/lib/projectplanner/ci-gate
 Environment=SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python
+# The gate checks out PRs and shells out to git/gh/pip, which need a writable HOME
+# for credential-helper config + caches. Point it at the data dir (not the ci-gate
+# checkout subdir, which churns per run) so ProtectHome=yes can hide /home.
+Environment=HOME=/var/lib/projectplanner
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py ci_gate_prs
 StandardOutput=journal
 StandardError=journal
+# HARDEN-55: runtime least-privilege sandbox. Code tree + venv are root-owned and
+# read-only to this service; the only writable path is the data dir (+ journal).
+# The gate builds throwaway test venvs and runs PR code UNDER the data dir, never
+# in the deployed code tree.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner

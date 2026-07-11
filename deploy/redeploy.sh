@@ -40,13 +40,14 @@ cd "$ROOT"
 #    file; the re-exec (guarded against looping) runs the updated script cleanly.
 if [ -z "${_REDEPLOY_PULLED:-}" ]; then
     section "git pull"
-    git pull --ff-only
+    # HARDEN-55: the code tree is root-owned/read-only to the runtime, so pull as root.
+    sudo git pull --ff-only
     exec env _REDEPLOY_PULLED=1 bash "$ROOT/deploy/redeploy.sh" "$@"
 fi
 
-# 2. Python deps (app + LLM gateway).
+# 2. Python deps (app + LLM gateway). Root-owned venv (HARDEN-55) → install as root.
 section "pip install"
-.venv/bin/pip install -q -r requirements.txt -r deploy/gateway/requirements.txt
+sudo .venv/bin/pip install -q -r requirements.txt -r deploy/gateway/requirements.txt
 
 # 3. Optional local CI gate. CI runs off-box now (public sandbox); opt in with RUN_CI=1
 #    if you want the on-box strict gate to guard this deploy.
@@ -59,8 +60,9 @@ fi
 # 4. Sync systemd units into /etc and pick up unit-file changes.
 section "systemd units"
 sudo cp deploy/*.service deploy/*.timer /etc/systemd/system/
-sudo mkdir -p /var/lib/projectplanner/ci-gate           # ci-gate state dir (idempotent)
-sudo chown -R ubuntu:ubuntu /var/lib/projectplanner/ci-gate
+# HARDEN-55: re-assert the least-privilege posture (dedicated service account, root-owned
+# read-only code tree, service-owned data dir incl. the ci-gate state dir). Idempotent.
+sudo bash deploy/apply-least-privilege.sh
 sudo systemctl daemon-reload
 
 # 5. Sync the Caddyfile into /etc and reload Caddy — the step a bare `git pull` skips.

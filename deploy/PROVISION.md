@@ -54,14 +54,14 @@ curl -fsSL -o /tmp/gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VE
 sudo tar -xzf /tmp/gh.tgz -C /usr/local/bin --strip-components=2 "gh_${GH_VER}_linux_${GH_ARCH}/bin/gh"
 sudo ln -sf /usr/local/bin/gh /usr/bin/gh && gh --version   # expect >= 2.6
 
-# App
+# App. HARDEN-55: the code tree + venv are owned by root and never by the runtime,
+# so the services can read/execute their code but can never rewrite it. Build them
+# with sudo so every file lands root-owned.
 sudo git clone <projectplanner-remote> /opt/projectplanner
 cd /opt/projectplanner
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt -r deploy/gateway/requirements.txt
-sudo mkdir -p /var/lib/projectplanner/runner /var/lib/projectplanner/repo-hygiene-archive
-sudo chown -R ubuntu:ubuntu /var/lib/projectplanner
-cp .env.example .env   # set OPENAI_API_KEY + LLM_GATEWAY_MASTER_KEY (==PM_LLM_KEY)
+sudo python3 -m venv .venv
+sudo .venv/bin/pip install -r requirements.txt -r deploy/gateway/requirements.txt
+sudo cp .env.example .env   # set OPENAI_API_KEY + LLM_GATEWAY_MASTER_KEY (==PM_LLM_KEY)
 # UI-12: for real cost in the Economics panels, set PM_TALLY_INGEST_TOKEN to a
 # DEDICATED least-privilege token — write:ixp only, bound to all boards (the
 # gateway proxies every project's LLM calls). Mint it, do NOT reuse PM_MCP_TOKEN:
@@ -70,10 +70,14 @@ cp .env.example .env   # set OPENAI_API_KEY + LLM_GATEWAY_MASTER_KEY (==PM_LLM_K
 # each call's spend to /tally/v1/spend/ingest. Without the token the ledger stays
 # empty. Restarting projectplanner-gateway briefly interrupts in-flight LLM calls.
 # The production units also force PM_AUTH_MODE=required; keep it explicit here for audits.
-printf '\nPM_AUTH_MODE=required\n' >> .env
+printf '\nPM_AUTH_MODE=required\n' | sudo tee -a .env >/dev/null
 # First human admin bootstrap. Remove the password line after first successful startup/login.
-printf '\nPM_BOOTSTRAP_ADMIN_LOGIN=admin\nPM_BOOTSTRAP_ADMIN_PASSWORD=<replace-me>\n' >> .env
-sudo chown -R ubuntu /opt/projectplanner
+printf '\nPM_BOOTSTRAP_ADMIN_LOGIN=admin\nPM_BOOTSTRAP_ADMIN_PASSWORD=<replace-me>\n' | sudo tee -a .env >/dev/null
+
+# HARDEN-55: create the dedicated non-login service account, chown the DATA dir
+# (/var/lib/projectplanner) to it, keep the CODE tree root-owned/read-only, and
+# lock .env to root-only. Idempotent — redeploy.sh re-runs it on every deploy.
+sudo bash deploy/apply-least-privilege.sh
 ```
 
 ## 4. Run (systemd + Caddy)
@@ -133,6 +137,35 @@ gh --version                                    # off-box CI mirror needs gh >= 
 # The self-hosted Actions runner is DECOMMISSIONED (CI runs off-box now, see step 6);
 # it should be inactive/disabled — a running one is a redundant idle drain:
 systemctl is-active actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service  # expect: inactive
+```
+
+## Runtime least-privilege (HARDEN-55)
+
+The services do NOT run as the general `ubuntu` login account and cannot rewrite their own
+code. `deploy/apply-least-privilege.sh` (run in step 3 and re-run on every `redeploy.sh`)
+establishes and re-asserts the posture:
+
+- **Dedicated identity.** A system account `projectplanner` (no login shell, home on the data
+  dir) owns the runtime. Every `projectplanner-*.service` sets `User=projectplanner`.
+- **Read-only code.** `/opt/projectplanner` and its `.venv` are root-owned and not
+  group/other-writable. The runtime reads/executes but can never write its code. `.env` is
+  `root:projectplanner` mode 640 (secret from other users; systemd reads it as root).
+- **Confined writes.** Each unit declares `ProtectSystem=strict` + `ReadWritePaths=/var/lib/projectplanner`,
+  so `/var/lib/projectplanner` (service-owned) is the ONLY writable tree; everything else is
+  read-only. `reconcile` additionally gets a `RuntimeDirectory` for its flock.
+- **Sandbox.** Every unit sets `NoNewPrivileges`, `PrivateTmp`, `ProtectHome`,
+  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, plus
+  `ProtectKernel*`/`ProtectControlGroups`/`RestrictRealtime`/`RestrictSUIDSGID`/`LockPersonality`.
+
+Because the code tree is root-owned, `git pull` and `pip install` in `redeploy.sh` run under
+`sudo`, and manual `jobs.py` maintenance runs as `sudo -u projectplanner` (see below).
+
+Verify the sandbox is actually applied to the running services:
+```bash
+systemctl show projectplanner -p User -p ProtectSystem -p ReadWritePaths -p NoNewPrivileges
+systemd-analyze security projectplanner projectplanner-mcp   # lower exposure score = more locked down
+# The runtime must NOT be able to write its own code:
+sudo -u projectplanner test -w /opt/projectplanner && echo "FAIL: code tree writable" || echo "ok: code read-only"
 ```
 
 ## Site hung / 0-byte response (HARDEN-32)
@@ -205,7 +238,7 @@ make idle cycles cost zero LLM calls.
 systemctl list-timers projectplanner-narrate.timer
 journalctl -u projectplanner-narrate.service -n 40 --no-pager
 # one-shot backfill / manual drain:
-cd /opt/projectplanner && sudo -u ubuntu .venv/bin/python jobs.py narrate_pending
+cd /opt/projectplanner && sudo -u projectplanner .venv/bin/python jobs.py narrate_pending
 ```
 
 ## VM-backed GitHub PR gate
@@ -223,9 +256,12 @@ Provision the off-box path once (after step 3 installed `gh`):
 
 ```bash
 # 1. Let git authenticate github.com HTTPS via gh + the CI token, so external_ci_mirror can
-#    `git push` to the public sandbox. Run as the ci-gate user (ubuntu):
-export GH_TOKEN=$(grep -E '^(SWITCHBOARD_CI_GITHUB_TOKEN|PM_GITHUB_TOKEN)=' /opt/projectplanner/.env | head -1 | cut -d= -f2-)
-gh auth setup-git   # sets credential.https://github.com.helper = !gh auth git-credential
+#    `git push` to the public sandbox. HARDEN-55: the ci-gate service runs as the dedicated
+#    `projectplanner` account with HOME=/var/lib/projectplanner, so the credential helper must
+#    be written into THAT home. .env is now root-only, so read the token with sudo:
+GH_TOKEN=$(sudo grep -E '^(SWITCHBOARD_CI_GITHUB_TOKEN|PM_GITHUB_TOKEN)=' /opt/projectplanner/.env | head -1 | cut -d= -f2-)
+sudo -u projectplanner env HOME=/var/lib/projectplanner GH_TOKEN="$GH_TOKEN" \
+  gh auth setup-git   # sets credential.https://github.com.helper = !gh auth git-credential
 
 # 2. Declare the repo roles so the gate routes to the sandbox (MCP set_project_repo_topology or
 #    POST /api/projects/switchboard/repo_topology):
@@ -286,12 +322,15 @@ Use this only for legacy dogfood commits that landed directly on the default bra
 PR webhook flow was enforced. Normal agent work still goes through `complete_claim` → PR merge
 webhook → `Done`.
 
+# HARDEN-55: run manual jobs.py commands as the `projectplanner` service account so any
+# SQLite -wal/-shm files stay service-owned (running as root would leave root-owned journal
+# files the service then can't write). That account can read .env (root:projectplanner 640).
 ```bash
 cd /opt/projectplanner
-PM_BACKFILL_PROJECT=switchboard PM_BACKFILL_DRY_RUN=1 \
+sudo -u projectplanner env PM_BACKFILL_PROJECT=switchboard PM_BACKFILL_DRY_RUN=1 \
   .venv/bin/python jobs.py backfill_default_branch_provenance
 # If the candidates are correct:
-PM_BACKFILL_PROJECT=switchboard \
+sudo -u projectplanner env PM_BACKFILL_PROJECT=switchboard \
   .venv/bin/python jobs.py backfill_default_branch_provenance
 ```
 
@@ -305,9 +344,11 @@ project list in `/opt/projectplanner/.env`, then restart `projectplanner-reconci
 
 ## Rebase timeline
 ```bash
-# rebase kickoff (regenerates seed_plan.json); apply to the LIVE db with a dates-only UPDATE:
-.venv/bin/python build_plan_artifacts.py 2026-06-01
-.venv/bin/python - <<'PY'
+# rebase kickoff (regenerates seed_plan.json); apply to the LIVE db with a dates-only UPDATE.
+# HARDEN-55: build_plan_artifacts.py writes seed_plan.json into the root-owned code tree, so
+# regenerate it as root; apply the DB UPDATE as the projectplanner service account.
+sudo .venv/bin/python build_plan_artifacts.py 2026-06-01
+sudo -u projectplanner .venv/bin/python - <<'PY'
 import json, sqlite3, os
 seed = json.load(open("/opt/projectplanner/seed_plan.json"))
 c = sqlite3.connect(os.environ.get("PM_DB_PATH", "/var/lib/projectplanner/plan.db"))
