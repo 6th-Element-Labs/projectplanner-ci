@@ -3,6 +3,7 @@
 import inspect
 import os
 from pathlib import Path
+from scripts.frontend_test_source import read_frontend_source
 import shutil
 import sys
 import tempfile
@@ -75,7 +76,7 @@ try:
     ok(not inspect.iscoroutinefunction(app_module.list_projects),
        "/api/projects sync SQLite/auth work runs in FastAPI's threadpool")
 
-    js = Path("static/app.js").read_text(encoding="utf-8")
+    js = read_frontend_source(Path.cwd())
     index = Path("static/index.html").read_text(encoding="utf-8")
     picker_fetch = "fetch('api/deliverables?view=picker')"
     deliverables_start = "const initialDeliverablesReq = this.loadDeliverables()"
