@@ -40,6 +40,13 @@ _TIMEOUT = float(os.environ.get("PM_TALLY_INGEST_TIMEOUT", "8"))
 # Metadata keys we forward as first-class attribution columns.
 _ATTRIBUTION_KEYS = ("task_id", "claim_id", "agent_id", "outcome_id", "source", "project")
 
+# LiteLLM's PROXY injects internal bookkeeping into litellm_params.metadata
+# (a UserAPIKeyAuth object, the caller's api-key hash, spend-log config, etc.).
+# None of it is caller attribution, some of it is opaque/non-JSON-serializable,
+# and some is sensitive (key hashes) — so it must never reach the ingest POST.
+_PROXY_META_SKIP_PREFIXES = ("user_api_key", "litellm", "hidden_params",
+                             "spend_logs", "proxy_server")
+
 
 def _dig_metadata(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """Merge the attribution metadata LiteLLM exposes across proxy versions.
@@ -161,10 +168,16 @@ def build_spend_payload(
     for key in ("task_id", "claim_id", "agent_id", "outcome_id"):
         if meta.get(key):
             payload[key] = meta[key]
-    # Anything else the caller tagged is preserved for forensics but kept out of
-    # the first-class columns.
-    extra = {k: v for k, v in meta.items()
-             if k not in _ATTRIBUTION_KEYS and k not in ("confidence", "call_site")}
+    # Anything else the caller explicitly tagged is preserved for forensics, but
+    # ONLY JSON-serializable scalars and never proxy-internal keys — the whole
+    # payload is about to be json-encoded for the ingest POST, so an opaque object
+    # here (e.g. UserAPIKeyAuth) would raise and drop the spend row entirely.
+    extra = {
+        k: v for k, v in meta.items()
+        if k not in _ATTRIBUTION_KEYS and k not in ("confidence", "call_site")
+        and isinstance(v, (str, int, float, bool))
+        and not any(k.startswith(p) for p in _PROXY_META_SKIP_PREFIXES)
+    }
     if extra:
         payload["metadata"] = extra
     return payload

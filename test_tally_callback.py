@@ -3,6 +3,7 @@
 `/tally/v1/spend/ingest` body — attribution, provider-actual defaults, idempotency key."""
 import datetime
 import importlib.util
+import json
 import os
 import sys
 
@@ -76,6 +77,35 @@ p5 = tally_callback.build_spend_payload(
     _resp())
 ok(p5.get("metadata", {}).get("cycle") == "triage", "unknown caller tags preserved in metadata")
 ok("source" not in p5.get("metadata", {}), "first-class keys not duplicated into metadata")
+
+# 6. REGRESSION: the LiteLLM proxy injects non-serializable internal objects and
+# sensitive key hashes into litellm_params.metadata. The payload must stay
+# JSON-serializable and must not leak any of it (this dropped every spend row
+# on prod: "Object of type UserAPIKeyAuth is not JSON serializable").
+class _FakeUserAPIKeyAuth:  # opaque, non-JSON-serializable — mimics the proxy object
+    def __init__(self): self.token = "sk-secret"
+
+p6 = tally_callback.build_spend_payload(
+    {"litellm_call_id": "c",
+     "litellm_params": {"metadata": {
+         "source": "narrator", "task_id": "UI-12",
+         "user_api_key": _FakeUserAPIKeyAuth(),          # opaque object
+         "user_api_key_hash": "hash-abc",                 # sensitive scalar
+         "spend_logs_metadata": {"nested": "obj"},        # non-scalar
+         "note": "keep-me"}}},                            # legit caller scalar
+    _resp())
+try:
+    json.dumps(p6)
+    serializable = True
+except TypeError:
+    serializable = False
+ok(serializable, "payload is JSON-serializable even when proxy injects opaque objects")
+md = p6.get("metadata", {})
+ok("user_api_key" not in md, "opaque proxy object dropped from metadata")
+ok("user_api_key_hash" not in md, "sensitive proxy key hash not leaked into metadata")
+ok("spend_logs_metadata" not in md, "non-scalar proxy metadata dropped")
+ok(md.get("note") == "keep-me", "legit scalar caller tag still preserved")
+ok(p6["task_id"] == "UI-12" and p6["source"] == "narrator", "first-class attribution intact")
 
 print("\n%d passed, %d failed" % (passed, failed))
 sys.exit(1 if failed else 0)
