@@ -1017,7 +1017,10 @@ async def create_deliverable(request: Request, body: dict = Body(...),
     principal = _principal(request, project, ("write:tasks",), dev_actor="web")
     result = store.create_deliverable(body or {}, actor=auth.actor(principal), project=project)
     if result.get("error"):
-        raise HTTPException(400, result["error"])
+        # DELIVERABLES-13: surface the full error object (error + per-field details) when the
+        # intake gate rejects a move into in_progress, so the operator sees which fields are
+        # missing rather than a bare message. Falls back to the string for simple errors.
+        raise HTTPException(400, result if result.get("details") else result["error"])
     return result
 
 

@@ -911,6 +911,80 @@ def _deliverable_milestone_exists_in(
     ).fetchone())
 
 
+# DELIVERABLES-13: intake contract enforced when a deliverable ENTERS in_progress.
+# See docs/DELIVERABLE-CLOSURE-GATE.md ("Intake at creation"). Gated off by default so
+# existing deliverables and legacy flows are unaffected until operators opt in per-prod
+# (mirrors PM_VERIFY_COMPLETION_PUSH / PM_RETIRE_MERGED_BRANCHES rollout style); DELIVERABLES-22
+# flips it on after backfill.
+PROOF_REQUIREMENTS_SCHEMA = "switchboard.deliverable_proof_requirements.v1"
+
+
+def _enforce_deliverable_intake() -> bool:
+    return (os.environ.get("PM_ENFORCE_DELIVERABLE_INTAKE") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _validate_proof_requirements(proof: Any) -> List[str]:
+    """Structural validation of a proof_requirements object and its gate refs.
+
+    Registry existence of each gate id (harness:*, store_check, ...) is validated separately
+    once the gate registry (DELIVERABLES-14) lands; here we only prove the refs are
+    well-formed: a non-empty gates list, each gate a {id:str, required:bool} with unique ids.
+    """
+    if not isinstance(proof, dict) or not proof:
+        return ["proof_requirements must be an object with a non-empty gates list"]
+    errors: List[str] = []
+    schema = (proof.get("schema") or "").strip()
+    if schema and schema != PROOF_REQUIREMENTS_SCHEMA:
+        errors.append(f"proof_requirements.schema must be {PROOF_REQUIREMENTS_SCHEMA}")
+    gates = proof.get("gates")
+    if not isinstance(gates, list) or not gates:
+        errors.append("proof_requirements.gates must be a non-empty list of gate refs")
+        return errors
+    seen: set = set()
+    for i, gate in enumerate(gates):
+        if not isinstance(gate, dict):
+            errors.append(f"proof_requirements.gates[{i}] must be an object")
+            continue
+        gid = gate.get("id")
+        gid = gid.strip() if isinstance(gid, str) else ""
+        if not gid:
+            errors.append(f"proof_requirements.gates[{i}].id is required")
+        elif gid in seen:
+            errors.append(f"proof_requirements.gates[{i}].id '{gid}' is duplicated")
+        else:
+            seen.add(gid)
+        if not isinstance(gate.get("required"), bool):
+            errors.append(f"proof_requirements.gates[{i}].required must be true or false")
+    return errors
+
+
+def _validate_deliverable_intake(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return an error dict if a deliverable entering in_progress is missing its intake
+    contract (end_state + acceptance_criteria + well-formed proof_requirements), else None.
+    Parses list/object fields exactly as they are stored so validation matches persistence.
+    """
+    details: List[str] = []
+    if not (data.get("end_state") or "").strip():
+        details.append("end_state is required: a plain-English success statement")
+    # acceptance_criteria / proof_requirements may arrive as lists/dicts (store API) or as
+    # JSON/CSV strings (MCP tool args); normalize through the same coercion used for storage.
+    criteria = json.loads(_json_list_field(data.get("acceptance_criteria")))
+    if not [c for c in criteria if str(c).strip()]:
+        details.append("acceptance_criteria must be a non-empty list of success statements")
+    proof = json.loads(_json_object_field(data.get("proof_requirements")))
+    details.extend(_validate_proof_requirements(proof))
+    if details:
+        return {
+            "error": "deliverable intake incomplete",
+            "details": details,
+            "required": ["end_state", "acceptance_criteria", "proof_requirements"],
+            "proof_requirements_schema": PROOF_REQUIREMENTS_SCHEMA,
+            "spec": "docs/DELIVERABLE-CLOSURE-GATE.md",
+        }
+    return None
+
+
 def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
                              project: str = DEFAULT_PROJECT) -> Any:
     """Create or update a project-owned product outcome/mission record."""
@@ -939,6 +1013,17 @@ def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
     with _conn(project) as c:
         if board_id and not _project_board_exists_in(c, board_id):
             return {"error": "unknown board", "board_id": board_id, "project_id": project}
+        # DELIVERABLES-13: require the intake contract when a deliverable MOVES INTO
+        # in_progress (new deliverable created as in_progress, or a status transition into
+        # it). Re-saving an already-in_progress deliverable is not re-validated, so legacy
+        # deliverables with empty criteria stay editable. Gated by PM_ENFORCE_DELIVERABLE_INTAKE.
+        if status == "in_progress" and _enforce_deliverable_intake():
+            prior = c.execute(
+                "SELECT status FROM deliverables WHERE id=?", (deliverable_id,)).fetchone()
+            if (prior[0] if prior else None) != "in_progress":
+                intake_error = _validate_deliverable_intake(data)
+                if intake_error:
+                    return intake_error
         c.execute(
             """INSERT INTO deliverables
                (id, board_id, title, status, owner_org, owner_person_or_role, end_state,
