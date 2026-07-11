@@ -142,7 +142,20 @@ def reconcile_alerts():
         res = store.run_reconcile_alerts(
             project=project_id, alert_to=alert_to,
             min_severity=min_severity, dedupe_window_s=dedupe_s)
-        results.append(res)
+        # Keep the scheduled job's aggregate response bounded.  A reconcile report
+        # can contain hundreds of richly annotated findings; retaining every full
+        # report until all projects finish pushed the 1 GB production VM into its
+        # 180 MB cgroup MemoryHigh on every cycle.  The detailed report is already
+        # persisted/audited by store.run_reconcile_alerts; this coordinator needs
+        # only the small per-project outcome.
+        results.append({
+            "project": project_id,
+            "ok": bool(res.get("ok")),
+            "finding_count": int(res.get("finding_count") or 0),
+            "alert_sent": bool(res.get("alert_sent")),
+            "deduped": bool(res.get("deduped")),
+            "message_id": res.get("message_id"),
+        })
         sent += 1 if res.get("alert_sent") else 0
         deduped += 1 if res.get("deduped") else 0
         findings += int(res.get("finding_count") or 0)
