@@ -35,6 +35,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 import agent  # noqa: E402
 import attachments  # noqa: E402
 import auth  # noqa: E402
+import comms  # noqa: E402
 import digest  # noqa: E402
 import transcribe  # noqa: E402
 import dispatch  # noqa: E402
@@ -872,6 +873,59 @@ async def set_project_github_repo_route(request: Request, project: str, body: di
     return result
 
 
+@app.get("/api/projects/{project}/comms")
+def project_comms(request: Request, project: str):
+    """UI-14: everything the Settings → Communications screen needs — the project's plus-address,
+    its associated inbound domains (the editable UI-13 routing map), per-project digest/notify
+    recipients + cadence, the global .env fallback, and channel status. Readable to anyone who can
+    read the project; edits below are admin-gated."""
+    project = _proj(project)
+    cfg = comms.get_config(project)
+    # Reflect whether THIS caller may edit, so the UI can disable Save/Test up front instead of
+    # only failing on POST. Non-raising probe of the same scope the write routes require.
+    try:
+        auth.authenticate_request(request, project, ("write:system",), dev_actor="web")
+        cfg["can_edit"] = True
+    except PermissionError:
+        cfg["can_edit"] = False
+    return cfg
+
+
+@app.post("/api/projects/{project}/comms")
+async def set_project_comms(request: Request, project: str, body: dict = Body(...)):
+    """UI-14: persist a Communications edit — associated inbound domains and/or outbound
+    recipients/cadence. Reroutes inbound mail and outbound recipients, so it is admin-gated
+    (write:system, same as repo settings) and audited."""
+    project = _proj(project)
+    principal = _principal(request, project, ("write:system",), dev_actor="web")
+    result = comms.update_config(body or {}, project=project, actor=auth.actor(principal))
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    store.append_activity("comms.updated", auth.actor(principal),
+                          result.get("audit") or {}, project=project)
+    return result
+
+
+@app.post("/api/projects/{project}/comms/test")
+async def test_project_comms(request: Request, project: str, body: dict = Body(...)):
+    """UI-14 Send-test: email the project's effective recipients so an operator can confirm the
+    wiring end-to-end. Admin-gated + audited; dry-runs (logs, sent=false) until SMTP is configured."""
+    project = _proj(project)
+    principal = _principal(request, project, ("write:system",), dev_actor="web")
+    kind = (body or {}).get("kind") or "notify"
+    if kind not in ("notify", "digest"):
+        raise HTTPException(400, "kind must be 'notify' or 'digest'")
+    recipients = comms.recipients_for(project, kind) or comms.global_fallback_recipients()
+    subject = f"{project} — communications test"
+    text = (f"Communications test from plan.taikunai.com for project '{project}'. "
+            f"If you received this, {project}'s {kind} recipients are wired correctly.")
+    results = await asyncio.to_thread(notify.send, subject, text, ("email",), project, kind)
+    store.append_activity("comms.test_sent", auth.actor(principal),
+                          {"kind": kind, "recipients": recipients, "results": results},
+                          project=project)
+    return {"project": project, "kind": kind, "recipients": recipients, "results": results}
+
+
 @app.get("/api/projects/{project}/boards")
 async def list_project_boards(project: str, kind: str = "", status: str = ""):
     project = _proj(project)
@@ -1666,7 +1720,11 @@ async def send_digest(digest_id: int):
     if not d:
         raise HTTPException(404, "no such digest")
     proj = store.get_meta("project") or "the plan"
-    return {"results": await asyncio.to_thread(notify.send, f"{proj} — digest", d["content"])}
+    # UI-14: honor this project's configured digest recipients (matches jobs.weekly_digest);
+    # falls back to the global list when unset.
+    return {"results": await asyncio.to_thread(
+        notify.send, f"{proj} — digest", d["content"], ("slack", "email"),
+        store.DEFAULT_PROJECT, "digest")}
 
 
 def _people_of(t, people):

@@ -606,6 +606,175 @@ const TeepPlan = {
         return `${Math.round(s / 86400)}d`;
     },
 
+    // ---- UI-14: Settings → Communications ---------------------------------
+    // Inbound domain associations (the editable UI-13 routing map) + per-project outbound
+    // recipients/cadence. Admin-gated writes; anyone who can read the project can view.
+    openComms(projectId) {
+        const proj = projectId || window.PM_PROJECT || 'maxwell';
+        this._commsProject = proj;
+        this._comms = { domains: [], notify: [], digest: [] };
+        this._commsAdmin = true;
+        ['comms-project-label', 'comms-dom-proj'].forEach((id) => {
+            const el = document.getElementById(id); if (el) el.textContent = proj;
+        });
+        const flash = document.getElementById('comms-flash'); if (flash) flash.textContent = '';
+        const load = document.getElementById('comms-load-flash');
+        if (load) { load.style.display = ''; load.textContent = 'Loading…'; load.className = 'small text-secondary'; }
+        const body = document.getElementById('comms-body'); if (body) body.style.display = 'none';
+        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('comms-modal')).show();
+        this.loadComms();
+    },
+
+    async loadComms() {
+        const proj = this._commsProject;
+        const load = document.getElementById('comms-load-flash');
+        try {
+            const res = await fetch(`api/projects/${encodeURIComponent(proj)}/comms`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Failed (${res.status})`);
+            this.renderComms(data);
+            if (load) load.style.display = 'none';
+            const body = document.getElementById('comms-body'); if (body) body.style.display = '';
+        } catch (e) {
+            if (load) { load.style.display = ''; load.textContent = e.message || 'Failed to load.'; load.className = 'small text-danger'; }
+        }
+    },
+
+    renderComms(data) {
+        const inb = data.inbound || {}, out = data.outbound || {}, fb = data.global_fallback || {};
+        if (typeof data.can_edit === 'boolean') this._commsAdmin = data.can_edit;
+        this._comms = {
+            domains: (inb.domains || []).slice(),
+            notify: (out.notify_recipients || []).slice(),
+            digest: (out.digest_recipients || []).slice(),
+        };
+        const plus = document.getElementById('comms-plus'); if (plus) plus.value = inb.plus_address || '';
+        const fbEl = document.getElementById('comms-fallback');
+        if (fbEl) fbEl.textContent = fb.configured ? (fb.notify_to || []).join(', ') : '(none configured)';
+        // Cadence select
+        const sel = document.getElementById('comms-cadence');
+        if (sel) {
+            sel.innerHTML = (out.cadence_options || ['off', 'daily', 'weekly', 'monthly'])
+                .map((c) => `<option value="${this.esc(c)}">${this.esc(c)}</option>`).join('');
+            sel.value = out.cadence || 'weekly';
+        }
+        this._renderCommsChips();
+    },
+
+    _renderCommsChips() {
+        const admin = this._commsAdmin;
+        const chip = (val, kind) => {
+            const x = admin ? `<button type="button" class="btn-close btn-close-sm ms-1" data-rm-kind="${kind}" data-rm-val="${this.esc(val)}" aria-label="Remove"></button>` : '';
+            return `<span class="badge bg-blue-lt d-inline-flex align-items-center">${this.esc(val)}${x}</span>`;
+        };
+        const put = (id, list, kind, empty) => {
+            const el = document.getElementById(id); if (!el) return;
+            el.innerHTML = list.length ? list.map((v) => chip(v, kind)).join('')
+                : `<span class="text-secondary small">${empty}</span>`;
+        };
+        put('comms-domains', this._comms.domains, 'domains', 'No domains associated — plus-address still works.');
+        put('comms-notify', this._comms.notify, 'notify', 'Falls back to the global list.');
+        put('comms-digest', this._comms.digest, 'digest', 'Falls back to the global list.');
+        // Remove-chip handlers
+        document.querySelectorAll('#comms-body [data-rm-kind]').forEach((b) => {
+            b.addEventListener('click', () => {
+                const kind = b.getAttribute('data-rm-kind'), val = b.getAttribute('data-rm-val');
+                this._comms[kind] = this._comms[kind].filter((v) => v !== val);
+                this._renderCommsChips();
+            });
+        });
+        // Disable editing controls when not admin
+        document.querySelectorAll('#comms-modal .comms-editable, #comms-modal .comms-editable input, #comms-modal .comms-editable button, #comms-modal .comms-editable select').forEach((el) => {
+            if ('disabled' in el) el.disabled = !admin;
+        });
+        const save = document.getElementById('comms-save'); if (save) save.disabled = !admin;
+        const warn = document.getElementById('comms-admin-warn'); if (warn) warn.style.display = admin ? 'none' : '';
+    },
+
+    _commsAddDomain() {
+        const inp = document.getElementById('comms-domain-input');
+        const v = (inp?.value || '').trim().replace(/^@/, '').toLowerCase();
+        if (!v) return;
+        if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(v)) { this._commsFlash('Enter a valid domain like client.com.', 'text-danger'); return; }
+        if (this._comms.domains.indexOf(v) < 0) this._comms.domains.push(v);
+        if (inp) inp.value = '';
+        this._commsFlash('', '');
+        this._renderCommsChips();
+    },
+
+    _commsAddRecipient(kind) {
+        const inp = document.getElementById(`comms-${kind}-input`);
+        const v = (inp?.value || '').trim();
+        if (!v) return;
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { this._commsFlash('Enter a valid email address.', 'text-danger'); return; }
+        if (this._comms[kind].map((x) => x.toLowerCase()).indexOf(v.toLowerCase()) < 0) this._comms[kind].push(v);
+        if (inp) inp.value = '';
+        this._commsFlash('', '');
+        this._renderCommsChips();
+    },
+
+    _commsFlash(msg, cls) {
+        const f = document.getElementById('comms-flash');
+        if (f) { f.textContent = msg; f.className = `small me-auto ${cls || 'text-secondary'}`; }
+    },
+
+    async saveComms() {
+        const proj = this._commsProject;
+        const btn = document.getElementById('comms-save');
+        if (btn) btn.disabled = true;
+        this._commsFlash('Saving…', 'text-secondary');
+        const cadence = document.getElementById('comms-cadence')?.value || 'weekly';
+        try {
+            const res = await fetch(`api/projects/${encodeURIComponent(proj)}/comms`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    inbound: { domains: this._comms.domains },
+                    outbound: {
+                        notify_recipients: this._comms.notify,
+                        digest_recipients: this._comms.digest,
+                        cadence,
+                    },
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(res.status === 403
+                    ? 'You need admin on this project to change Communications.'
+                    : (data.detail || data.error || `Failed (${res.status})`));
+            }
+            if (data.config) this.renderComms(data.config);
+            this._commsFlash('Saved.', 'text-success');
+        } catch (e) {
+            this._commsFlash(e.message || 'Failed to save.', 'text-danger');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    },
+
+    async sendCommsTest(kind) {
+        const proj = this._commsProject;
+        this._commsFlash('Sending test…', 'text-secondary');
+        try {
+            const res = await fetch(`api/projects/${encodeURIComponent(proj)}/comms/test`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kind }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(res.status === 403
+                    ? 'You need admin on this project to send a test.'
+                    : (data.detail || data.error || `Failed (${res.status})`));
+            }
+            const sent = (data.results || []).some((r) => r.sent);
+            const to = (data.recipients || []).join(', ') || '(no recipients — set some or a global fallback)';
+            this._commsFlash(sent ? `Test sent to ${to}.` : `Dry-run (SMTP not configured) — would send to ${to}.`,
+                sent ? 'text-success' : 'text-secondary');
+        } catch (e) {
+            this._commsFlash(e.message || 'Failed to send test.', 'text-danger');
+        }
+    },
+
+
     // Board/overview columns come from the phases actually present: Maxwell's 5 lifecycle phases,
     // or Helm's "Wave 1..4". Falls back to the canonical 5 when a plan has no/standard phases.
     derivePhases() {
@@ -5230,6 +5399,34 @@ const TeepPlan = {
         // Prime the bell badge and keep it fresh (unacked required messages the operator sent).
         this.loadAckInbox();
         if (!this._ackPoll) this._ackPoll = setInterval(() => this.loadAckInbox(), 30000);
+        // UI-14: Communications settings (inbound domains + outbound recipients).
+        const commsBtn = document.getElementById('btn-project-comms');
+        if (commsBtn) commsBtn.addEventListener('click', () => this.openComms(window.PM_PROJECT));
+        const commsSave = document.getElementById('comms-save');
+        if (commsSave) commsSave.addEventListener('click', () => this.saveComms());
+        const domAdd = document.getElementById('comms-domain-add');
+        if (domAdd) domAdd.addEventListener('click', () => this._commsAddDomain());
+        const domInput = document.getElementById('comms-domain-input');
+        if (domInput) domInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); this._commsAddDomain(); } });
+        document.querySelectorAll('#comms-modal [data-add-recipient]').forEach((b) => {
+            const kind = b.getAttribute('data-add-recipient');
+            b.addEventListener('click', () => this._commsAddRecipient(kind));
+            const inp = document.getElementById(`comms-${kind}-input`);
+            if (inp) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); this._commsAddRecipient(kind); } });
+        });
+        document.querySelectorAll('#comms-modal [data-test-kind]').forEach((b) => {
+            b.addEventListener('click', () => this.sendCommsTest(b.getAttribute('data-test-kind')));
+        });
+        document.querySelectorAll('#comms-modal .comms-copy').forEach((b) => {
+            b.addEventListener('click', () => {
+                const src = document.getElementById(b.getAttribute('data-copy'));
+                if (!src) return;
+                const done = () => { const i = b.querySelector('i'); if (i) { const p = i.className; i.className = 'ti ti-check'; setTimeout(() => { i.className = p; }, 1200); } };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(src.value).then(done).catch(() => { src.select(); document.execCommand('copy'); done(); });
+                } else { src.select(); document.execCommand('copy'); done(); }
+            });
+        });
         // Ask Taikun (plan-wide chat)
         const askSend = document.getElementById('ask-send');
         if (askSend) askSend.addEventListener('click', () => this.sendAsk());
