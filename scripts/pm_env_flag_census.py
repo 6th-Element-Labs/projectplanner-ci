@@ -9,11 +9,13 @@ defender is actionable dead configuration and makes ``--check`` fail.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tokenize
 from typing import Iterable
 
 
@@ -58,6 +60,17 @@ def bucket(relative: Path) -> str:
     return "runtime"
 
 
+def referenced_names(path: Path, text: str) -> set[str]:
+    """Return literal names, excluding Python comments from runtime evidence."""
+    if path.suffix != ".py":
+        return set(TOKEN_RE.findall(text))
+    names: set[str] = set()
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        if token.type != tokenize.COMMENT:
+            names.update(TOKEN_RE.findall(token.string))
+    return names
+
+
 def census(root: Path) -> dict:
     references: dict[str, dict[str, set[str]]] = {}
     declared: dict[str, set[str]] = {}
@@ -71,7 +84,7 @@ def census(root: Path) -> dict:
         except UnicodeDecodeError:
             continue
         category = bucket(relative)
-        for name in TOKEN_RE.findall(text):
+        for name in referenced_names(path, text):
             references.setdefault(name, {}).setdefault(category, set()).add(str(relative))
 
         for line in text.splitlines():

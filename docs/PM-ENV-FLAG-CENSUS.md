@@ -17,8 +17,10 @@ It inventories literal `PM_*` names in tracked text files and distinguishes:
 - unread declarations: tracked configuration with no runtime defender.
 
 `--check` fails when an unread declaration exists. Delete that declaration and any obsolete
-documentation in the same change. Do not make the census green by adding a comment-only runtime
-reference; the conservative scanner is a tripwire, and review still verifies the named consumer.
+documentation in the same change. Python comments are excluded from runtime evidence, and the
+negative regression fixture proves that a comment-only mention cannot make the census green.
+The scanner remains conservative for other source formats, so review still verifies the named
+consumer.
 
 At the ARCH-MS-10 baseline, every tracked deployment declaration has a runtime defender. The four
 known unread names identified during CONSOL-9 (`PM_OPERATOR_TOKEN`, `PM_SYSTEM_TOKEN`,
