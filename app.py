@@ -2826,6 +2826,18 @@ async def tally_link_outcome_kpi(request: Request, body: dict = Body(...)):
         project=project)
 
 
+@app.get("/tally/v1/kpis")
+async def tally_list_kpis(project: str = Query(store.DEFAULT_PROJECT)):
+    return {"kpis": store.list_kpis(project=_proj(project))}
+
+
+@app.get("/tally/v1/outcomes")
+async def tally_list_outcomes(project: str = Query(store.DEFAULT_PROJECT),
+                              status: str = Query(""), limit: int = Query(200)):
+    return {"outcomes": store.list_outcomes(project=_proj(project),
+                                            status=status, limit=limit)}
+
+
 @app.get("/tally/v1/task/{task_id}")
 async def tally_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
     return store.task_tally(task_id, project=_proj(project))
