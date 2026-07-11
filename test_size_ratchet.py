@@ -14,7 +14,7 @@ LINE_CEILINGS = {
     "mcp_server.py": 3_154,
     "static/app.js": 6_526,
 }
-ROOT_PYTHON_FILE_CEILING = 193
+ROOT_PYTHON_FILE_CEILING = 194  # BUG-47: adds test_schema_migrations.py (fail-loud migration guard)
 
 passed = failed = 0
 
