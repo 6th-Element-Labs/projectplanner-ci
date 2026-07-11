@@ -718,6 +718,32 @@ def apply_schema(c):
             ON background_job_runs(job_name, updated_at);
         CREATE INDEX IF NOT EXISTS ix_background_job_runs_project
             ON background_job_runs(project, updated_at);
+        -- PERF-1: durable webhook inbox (accept-and-ack, never drop). The GitHub
+        -- webhook handler appends the raw event here in O(1) and returns 2xx; a
+        -- separate drain worker applies provenance idempotently off the request
+        -- path (dedup on delivery_guid). Canonical DDL mirrored in
+        -- webhook_inbox._DDL, which self-heals pre-existing DBs on first touch.
+        CREATE TABLE IF NOT EXISTS webhook_inbox (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            delivery_guid      TEXT NOT NULL,
+            event              TEXT NOT NULL,
+            project            TEXT NOT NULL,
+            requested_project  TEXT,
+            signature_verified INTEGER NOT NULL DEFAULT 0,
+            headers_json       TEXT NOT NULL DEFAULT '{}',
+            payload            TEXT NOT NULL,
+            status             TEXT NOT NULL DEFAULT 'pending',
+            attempts           INTEGER NOT NULL DEFAULT 0,
+            last_error         TEXT,
+            result_json        TEXT NOT NULL DEFAULT '{}',
+            received_at        REAL NOT NULL,
+            updated_at         REAL NOT NULL,
+            applied_at         REAL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_webhook_inbox_guid
+            ON webhook_inbox(delivery_guid);
+        CREATE INDEX IF NOT EXISTS ix_webhook_inbox_status
+            ON webhook_inbox(status, id);
         CREATE INDEX IF NOT EXISTS ix_tasks_ws ON tasks(workstream_id);
         CREATE INDEX IF NOT EXISTS ix_inbox_status ON inbox(status);
         CREATE INDEX IF NOT EXISTS ix_activity_task ON activity(task_id);

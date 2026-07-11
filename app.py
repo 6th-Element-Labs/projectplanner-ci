@@ -44,6 +44,7 @@ import external_ci_mirror  # noqa: E402
 import inbox as inbox_mod  # noqa: E402
 import intake  # noqa: E402
 import github_sync  # noqa: E402
+import webhook_inbox  # noqa: E402
 import notify  # noqa: E402
 import ocr  # noqa: E402
 import rebrand  # noqa: E402
@@ -3159,9 +3160,24 @@ async def _handle_pr(payload: dict, project: str):
     return await asyncio.to_thread(github_sync.handle_pr, payload, project)
 
 
+async def _drain_webhook_inbox_bg(project: str):
+    """Best-effort drain kicked off the request path. Failures are non-fatal: the
+    event is already durable in the inbox, and the backstop drain job / reconcile
+    will apply it on the next pass."""
+    try:
+        await asyncio.to_thread(webhook_inbox.drain, project)
+    except Exception:
+        pass
+
+
 @app.post("/api/github/webhook")
 async def github_webhook(request: Request, project: str = ""):
-    """Receive GitHub push/pull_request events. project selects the board to update.
+    """Receive GitHub push/pull_request events (PERF-1: accept-and-ack, never drop).
+
+    The request path does ONE durable thing — append the raw event to the webhook
+    inbox and return 2xx in O(1). No synchronous provenance fan-out, so it cannot
+    lock-timeout under a burst and GitHub never sees a 5xx that would drop the
+    delivery. A separate drain worker applies provenance idempotently off-path.
     Set PM_GITHUB_WEBHOOK_SECRET in .env and configure the matching secret in GitHub."""
     body = await request.body()
     sig = request.headers.get("X-Hub-Signature-256", "")
@@ -3169,21 +3185,48 @@ async def github_webhook(request: Request, project: str = ""):
         raise HTTPException(401, "invalid webhook signature")
 
     event = request.headers.get("X-GitHub-Event", "")
+    delivery = request.headers.get("X-GitHub-Delivery", "")
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(400, "invalid JSON payload")
 
+    requested_project = project
     project = github_sync.resolve_project(payload, project)
-    _proj(project)  # fail-closed on unknown project
-    if event == "push":
-        result = await _handle_push(payload, project)
-    elif event == "pull_request":
-        result = await _handle_pr(payload, project)
-    else:
-        result = {"action": "ignored", "event": event}
+    _proj(project)  # fail-closed on unknown project — a misroute is not a drop class
 
-    return JSONResponse(result)
+    # Durable commit point: once this returns, the delivery survives process death.
+    enq = await asyncio.to_thread(
+        webhook_inbox.enqueue_event, project,
+        delivery_guid=delivery, event=event,
+        payload_bytes=body, headers=dict(request.headers),
+        signature_verified=True, requested_project=requested_project,
+    )
+    # Apply provenance off the request path — never blocks the ack.
+    asyncio.create_task(_drain_webhook_inbox_bg(project))
+
+    return JSONResponse({
+        "action": "accepted", "event": event, "project": project,
+        "delivery": enq.get("delivery_guid"),
+        "inbox_id": enq.get("id"),
+        "queued": enq.get("enqueued", False),
+        "duplicate": enq.get("duplicate", False),
+    })
+
+
+@app.post("/api/github/webhook/drain")
+async def github_webhook_drain(project: str = Query(...), limit: int = 200):
+    """Operator/backstop: apply pending inbox rows now. Idempotent."""
+    _proj(project)
+    return JSONResponse(await asyncio.to_thread(
+        webhook_inbox.drain, project, limit=limit))
+
+
+@app.get("/api/github/webhook/inbox")
+async def github_webhook_inbox_depth(project: str = Query(...)):
+    """Observable inbox depth: counts by status + oldest-pending age."""
+    _proj(project)
+    return JSONResponse(await asyncio.to_thread(webhook_inbox.inbox_depth, project))
 
 
 class _VersionedStaticFiles(StaticFiles):
