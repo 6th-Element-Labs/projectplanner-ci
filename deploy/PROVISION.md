@@ -173,30 +173,24 @@ CI gate off this box (per HARDEN-40).
 **Acceptance:** `curl -m5 https://plan.taikunai.com/health` returns `200` in under 2s.
 
 ## Update live code
+One idempotent command pulls the latest code, syncs the systemd units **and the Caddyfile**
+into `/etc`, then restarts the web tier + reloads Caddy (behind a `caddy validate` gate and a
+`/health` check):
 ```bash
-cd /opt/projectplanner && git pull && .venv/bin/pip install -r requirements.txt
-PYTHON=.venv/bin/python SWITCHBOARD_CI_PYTHON=.venv/bin/python SWITCHBOARD_CI_STRICT=1 scripts/switchboard_ci.sh
-sudo systemctl restart projectplanner projectplanner-mcp
-sudo systemctl restart projectplanner-monitors.timer
-sudo cp deploy/projectplanner-reconcile.service deploy/projectplanner-reconcile.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now projectplanner-reconcile.timer
-sudo systemctl restart projectplanner-reconcile.timer
-sudo cp deploy/projectplanner-ci-gate.service deploy/projectplanner-ci-gate.timer /etc/systemd/system/
-sudo mkdir -p /var/lib/projectplanner/ci-gate
-sudo chown -R ubuntu:ubuntu /var/lib/projectplanner/ci-gate
-sudo systemctl daemon-reload
-sudo systemctl enable --now projectplanner-ci-gate.timer
-sudo systemctl restart projectplanner-ci-gate.timer
-sudo cp deploy/projectplanner-agent-host.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now projectplanner-agent-host
-sudo systemctl restart projectplanner-agent-host
-sudo cp deploy/projectplanner-narrate.service deploy/projectplanner-narrate.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now projectplanner-narrate.timer
-sudo systemctl restart projectplanner-narrate.timer
+cd /opt/projectplanner && bash deploy/redeploy.sh
 ```
+`deploy/redeploy.sh` is the single source of truth for a redeploy. It exists because a bare
+`git pull` updates neither `/etc/caddy/Caddyfile` nor `/etc/systemd/system/*` — so edge and
+unit changes used to reach prod only if someone remembered the extra `cp` (that is how the
+Caddyfile drifted from the repo). It copies every `deploy/*.service`/`*.timer`, mirrors the
+Caddyfile (validating it first — a broken edge is never reloaded), restarts
+`projectplanner{,-gateway,-mcp}`, and restarts any auxiliary timer/service that is currently
+active. Flags: `RUN_CI=1` runs the on-box strict CI gate first (CI otherwise runs off-box);
+`SKIP_CADDY=1` leaves the edge untouched.
+
+It restarts only units that are **already active**, so it won't fight timers you stopped during
+a HARDEN-32 wedge. A brand-new unit still needs its one-time
+`sudo systemctl enable --now <unit>` (see step 4).
 
 ## CEO-voice narrator timer
 
