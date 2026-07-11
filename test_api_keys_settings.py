@@ -107,6 +107,8 @@ try:
         ok(needle in app_js, f"app.js defines {needle}")
     ok("apikeys-admin-warn" in app_js and "403" in app_js,
        "non-admin load is handled with a read-only notice")
+    ok("_clearApiKeySecret" in app_js and "hidden.bs.modal" in app_js,
+       "shown-once raw key is wiped from the DOM on modal close/reopen")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
