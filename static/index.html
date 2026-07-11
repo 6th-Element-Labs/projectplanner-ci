@@ -840,6 +840,49 @@
         </div>
     </div>
 
+    <script>
+      // BUG-45: hydrate the two navigation pickers while the parser is still
+      // downloading Bootstrap/app.js. A slow CDN or large app bundle must not
+      // leave basic project navigation blank. app.js reuses these promises, so
+      // this starts work earlier without duplicating API calls.
+      (function () {
+        var fromUrl = null;
+        try { fromUrl = new URL(window.location.href).searchParams.get('project'); } catch (e) {}
+        var stored = null;
+        try { stored = localStorage.getItem('pm_project'); } catch (e) {}
+        var project = ((fromUrl || stored || 'maxwell') + '').trim() || 'maxwell';
+        var selectedDeliverable = '';
+        try { selectedDeliverable = new URL(window.location.href).searchParams.get('deliverable') || ''; } catch (e) {}
+        function options(select, rows, selected, emptyLabel) {
+          if (!select || !Array.isArray(rows)) return;
+          select.replaceChildren();
+          if (!rows.length && emptyLabel) select.add(new Option(emptyLabel, ''));
+          rows.forEach(function (row) {
+            var id = String(row.id || '');
+            select.add(new Option(String(row.label || row.title || id), id, false, id === selected));
+          });
+        }
+        var qs = '?project=' + encodeURIComponent(project);
+        var boot = { projectId: project };
+        boot.projects = fetch('/api/projects' + qs, { credentials: 'same-origin' })
+          .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('projects ' + r.status)); })
+          .then(function (data) {
+            var rows = data.projects || [];
+            options(document.getElementById('project-switcher'), rows, project, 'No projects yet');
+            return rows;
+          }).catch(function () { return null; });
+        boot.deliverables = fetch('/api/deliverables?view=picker&project=' + encodeURIComponent(project),
+          { credentials: 'same-origin' })
+          .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('deliverables ' + r.status)); })
+          .then(function (data) {
+            var rows = data.deliverables || [];
+            options(document.getElementById('mission-deliverable-picker'), rows,
+              selectedDeliverable, 'No deliverables yet');
+            return rows;
+          }).catch(function () { return null; });
+        window.TAIKUN_PICKER_BOOT = boot;
+      })();
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <!-- HARDEN-38: Mermaid (~1MB) + ApexCharts (~500KB) are now lazy-loaded by app.js
          only when the Mission / Gantt tab opens — off the initial critical path. -->
