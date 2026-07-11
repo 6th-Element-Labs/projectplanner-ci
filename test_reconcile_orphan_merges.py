@@ -81,8 +81,13 @@ try:
         return (list(fake_prs) if repo == REPO else []), {"merged_pr_count": len(fake_prs)}
 
     orphan_merge_discovery.fetch_recent_merged_prs = _fake_fetch
-    store._github_pr = lambda repo, pr_number, token="": next(
-        (p for p in fake_prs if p["number"] == pr_number), None)
+    live_pr_calls = []
+
+    def _fake_github_pr(repo, pr_number, token=""):
+        live_pr_calls.append((repo, pr_number))
+        return next((p for p in fake_prs if p["number"] == pr_number), None)
+
+    store._github_pr = _fake_github_pr
 
     _set_token()
     result = store.reconcile(project=HOME)
@@ -112,6 +117,18 @@ try:
     swept_again = [b for b in (again.get("backfilled") or [])
                    if b.get("source") == "orphan_merge_discovery"]
     ok(not swept_again, "second reconcile run is idempotent (git_state no longer empty)")
+    ok(len(live_pr_calls) == 0,
+       "terminal GitHub merge provenance is not re-polled on later reconcile runs")
+    ok((again.get("external_checks") or {}).get("github_prs_skipped_immutable") == 1,
+       "reconcile reports the immutable PR lookup it skipped")
+
+    # If terminal proof becomes incomplete, fail-safe behavior resumes live checking.
+    with store._conn(HOME) as c:
+        c.execute("UPDATE task_git_state SET in_main_content=0 WHERE task_id=?",
+                  (orphan["task_id"],))
+    store.reconcile(project=HOME)
+    ok(len(live_pr_calls) == 1,
+       "incomplete terminal provenance still receives a live GitHub PR check")
 
     # Without any GitHub token the discovery must fail soft and touch nothing.
     fresh = store.create_task({"workstream_id": "ORPH", "title": "second orphan"},
