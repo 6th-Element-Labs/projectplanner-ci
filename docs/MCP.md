@@ -158,11 +158,14 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
   metadata_json?)` — create a deliverable, optionally attached to an existing Board/Mission.
   Unknown `board_id` / `mission_id` fails closed.
 - `get_deliverable(deliverable_id, project)`, `list_deliverables(project, board_id?)`,
-  `add_deliverable_milestone(...)`, and `link_task_to_deliverable(...)` — build the cross-epic and
+  `add_deliverable_milestone(...)`, `link_task_to_deliverable(...)`, and
+  `link_tasks_to_deliverable(deliverable_id, links, project)` — build the cross-epic and
   cross-board mission rollup. Linked tasks are validated by explicit `task_project + task_id` and
   are not moved or mutated. `list_deliverables` is the orientation path: it returns metadata,
   milestones, raw link ids, and progress counts without linked-task snapshots. Use
-  `get_deliverable` only when one deliverable needs its compact linked-task detail.
+  `get_deliverable` only when one deliverable needs its compact linked-task detail. The bulk tool
+  validates all links first, writes them in one home-project transaction, and returns a slim
+  acknowledgement with `linked`, `skipped`, and `progress_counts`.
 - `create_board(...)`, `create_mission(...)` — aliases for `create_project_board` with
   `kind=board` or `kind=mission`.
 - `unlink_task_from_deliverable(...)`, `get_mission_status(...)`, `mission_status(...)` —
