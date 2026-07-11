@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from scripts.frontend_test_source import read_frontend_source
 
 _TMP = tempfile.mkdtemp(prefix="surface-parity-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -181,7 +182,7 @@ try:
        mcp_tally["kpis"][0]["verified_contribution"] == 1.0,
        "REST and MCP KPI contribution match")
 
-    app_js = Path("static/app.js").read_text(encoding="utf-8")
+    app_js = read_frontend_source(Path.cwd())
     ok("controlTruthHtml(t)" in app_js and "dependency_state" in app_js
        and "rationale_state" in app_js and "identity" in app_js
        and "terminal_state" in app_js and "externalCiDetail(t)" in app_js,

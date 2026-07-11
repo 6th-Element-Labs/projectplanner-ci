@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+from scripts.frontend_test_source import read_frontend_source
 
 _TMP = tempfile.mkdtemp(prefix="ws-health-panel-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -133,8 +134,7 @@ try:
        "index.html mounts the fleet-health dock container")
 
     # ---- app.js wiring -------------------------------------------------------
-    app_js = open(os.path.join(os.path.dirname(__file__), "static", "app.js"),
-                  encoding="utf-8").read()
+    app_js = read_frontend_source(os.path.dirname(__file__))
     for needle in (
         "renderFleetDock",       # bottom-right dock entry point
         "_loadFleetDock",        # fetch + scope (project vs deliverable)
