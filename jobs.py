@@ -62,8 +62,8 @@ def weekly_digest():
 
 def poll_inbox():
     """Poll the Live Inbox mailbox (IMAP) and queue triaged messages. No-op until configured."""
-    import gmail_source
-    res = gmail_source.poll()
+    import inbox_source
+    res = inbox_source.poll()
     print(f"inbox poll: {res}")
     return res
 
