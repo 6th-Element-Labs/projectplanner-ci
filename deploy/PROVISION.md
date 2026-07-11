@@ -83,6 +83,7 @@ sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-monitors.timer deploy/projectplanner-reconcile.service \
   deploy/projectplanner-reconcile.timer deploy/projectplanner-ci-gate.service \
   deploy/projectplanner-ci-gate.timer deploy/projectplanner-agent-host.service \
+  deploy/projectplanner-interactive.slice deploy/projectplanner-batch.slice \
   /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp
@@ -92,9 +93,10 @@ sudo systemctl enable --now projectplanner-reconcile.timer
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
 sudo systemctl enable --now projectplanner-agent-host
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
-# HARDEN-40: pin cgroup resource guards so the batch/timer jobs (narrate, ci-gate)
-# can't starve the web app on this small box. Persists across reboot; idempotent.
+# PERF-4: interactive vs batch cgroup slices so timer jobs (narrate, ci-gate)
+# cannot starve the web app on this small box. Persists across reboot; idempotent.
 sudo bash deploy/apply-resource-guards.sh
+bash scripts/verify_cgroup_slices.sh
 ```
 
 ### Off-box backups (HARDEN-43)
@@ -152,9 +154,11 @@ sudo systemctl restart caddy
 
 After deploy, `/health` stays cheap (no DB walk). Caddy uses short timeouts on `/health*` and
 active health checks on the main upstream so hung backends fail fast instead of holding clients
-for minutes. The cgroup guards from `deploy/apply-resource-guards.sh` give the web app a reserved
-memory floor + top CPU share so a batch spike (narrate/ci-gate) throttles instead of jamming the
-worker. If a batch job still wedges the box, stop the timers to recover fast:
+for minutes. PERF-4 splits services into `projectplanner-interactive.slice` (web/MCP/gateway:
+high CPUWeight, memory reservations, no swap) and `projectplanner-batch.slice` (reconcile/narrate/
+ci-gate: CPUQuota~40%, Nice=10, low IOWeight, memory-capped). Install with
+`deploy/apply-resource-guards.sh`; verify with `bash scripts/verify_cgroup_slices.sh`. If a batch
+job still wedges the box, stop the timers to recover fast:
 ```bash
 sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,summarize,ci-gate}.timer
 sudo pkill -9 -f jobs.py   # then restart the web app if needed

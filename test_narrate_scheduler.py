@@ -50,7 +50,7 @@ try:
        "timer cannot become immediately due while an overlong drain is active")
 
     service = Path("deploy/projectplanner-narrate.service").read_text(encoding="utf-8")
-    ok("CPUQuota=50%" in service and "IOSchedulingClass=idle" in service,
+    ok("Slice=projectplanner-batch.slice" in service and "IOSchedulingClass=idle" in service,
        "background narrator is resource-bounded below interactive traffic")
     ok("TimeoutStartSec=5min" in service,
        "runaway narration drains have a finite service timeout")

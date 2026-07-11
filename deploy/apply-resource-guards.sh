@@ -1,36 +1,38 @@
 #!/usr/bin/env bash
-# HARDEN-40: pin cgroup resource guards so the batch/timer jobs can't starve the
-# web app on the small (2-vCPU / ~900 MB) box.
+# PERF-4 / HARDEN-40: install interactive vs batch systemd slices so timer/oneshot
+# jobs cannot starve the web/MCP request path on the small (2-vCPU / ~900 MB) box.
 #
-# Background (2026-07-08 outage): narrate (~90% of a core) + the per-PR ci-gate
-# (fresh venv + pytest) can saturate both cores AND thrash swap, which jams the
-# single uvicorn worker's event loop so even the cheap /health times out. These
-# limits give the web app a reserved memory floor + the lion's share of CPU, and
-# soft-cap the batch jobs so a spike throttles (reclaim) instead of taking the
-# site down.
+# Slice hierarchy (declarative in deploy/*.slice + Slice= on each unit):
+#   projectplanner-interactive.slice — web, MCP, gateway, agent host
+#   projectplanner-batch.slice       — reconcile, narrate, ci-gate, timers
 #
-# Applied via `systemctl set-property`, which persists under
-# /etc/systemd/system.control/ and survives reboot. Idempotent — re-running just
-# re-asserts the values. Run once on a fresh box AFTER the units are installed and
-# enabled (see PROVISION.md). These are the exact values running in prod today.
+# Run once on a fresh box AFTER the units are installed and enabled (see
+# PROVISION.md). Idempotent — re-running re-copies slices and clears legacy
+# HARDEN-40 per-service set-property overrides so the repo units stay authoritative.
 set -euo pipefail
 
-# Web app: top CPU share + a memory floor it can always reclaim under pressure.
-systemctl set-property projectplanner.service CPUWeight=900 MemoryLow=250M
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# MCP tool surface: second priority.
-systemctl set-property projectplanner-mcp.service CPUWeight=400
+install -m 644 "${DEPLOY_DIR}/projectplanner-interactive.slice" /etc/systemd/system/
+install -m 644 "${DEPLOY_DIR}/projectplanner-batch.slice" /etc/systemd/system/
+systemctl daemon-reload
 
-# Batch/timer jobs: low CPU share + a per-job soft memory cap, so a spike gets
-# throttled instead of swapping the box into the ground.
-for unit in narrate monitors inbox reconcile summarize digest; do
-  systemctl set-property "projectplanner-${unit}.service" CPUWeight=20 MemoryHigh=180M
+INTERACTIVE_UNITS=(projectplanner projectplanner-mcp projectplanner-gateway projectplanner-agent-host)
+BATCH_UNITS=(projectplanner-narrate projectplanner-monitors projectplanner-inbox
+             projectplanner-reconcile projectplanner-summarize projectplanner-digest
+             projectplanner-ci-gate projectplanner-backup)
+LEGACY_PROPS=(CPUWeight MemoryLow MemoryHigh MemoryMax MemoryMin CPUQuota IOWeight MemorySwapMax)
+
+for unit in "${INTERACTIVE_UNITS[@]}" "${BATCH_UNITS[@]}"; do
+  for prop in "${LEGACY_PROPS[@]}"; do
+    systemctl reset-property "${unit}.service" "${prop}" 2>/dev/null || true
+  done
 done
 
-# CI gate is the heaviest batch job (fresh venv + pytest per PR): stricter still,
-# with a HARD ceiling so it can never OOM the box.
-systemctl set-property projectplanner-ci-gate.service CPUWeight=10 MemoryHigh=220M MemoryMax=320M
-
-echo "resource guards applied. verify e.g.:"
-echo "  systemctl show projectplanner.service -p CPUWeight -p MemoryLow"
-echo "  systemctl show projectplanner-ci-gate.service -p MemoryHigh -p MemoryMax"
+echo "PERF-4 slice guards installed. verify e.g.:"
+echo "  bash scripts/verify_cgroup_slices.sh"
+echo "  systemctl show projectplanner-interactive.slice -p CPUWeight -p MemoryLow -p MemorySwapMax"
+echo "  systemctl show projectplanner-batch.slice -p CPUWeight -p CPUQuota -p IOWeight -p MemoryHigh"
+echo "  systemctl show projectplanner.service -p Slice"
+echo ""
+echo "Restart interactive + batch units (or reboot) for Slice= assignments to take effect."
