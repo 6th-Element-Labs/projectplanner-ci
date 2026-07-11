@@ -1,0 +1,32 @@
+{
+  "schema": "switchboard.concurrent_load_slo_ratchet.v1",
+  "task": "HARDEN-64",
+  "purpose": "ADR-0007 ratchet applied to the mcp-agent-path concurrent-load SLO. scripts/concurrent_load_gate.py reads THIS committed file for its enforced ceilings instead of hard-coded, env-overridable defaults. The gate fails when a measured statistic reaches its 'ratchet_ms'. 'slo_ms' is the hard product SLO that the ratchet may never be relaxed to or past (the loader asserts ratchet_ms < slo_ms); 'ratchet_ms' is the committed high-water ceiling that turns one way — a change that proves a lower number lowers it here in the same PR, and a change that needs a higher one must raise it here with a justification visible in diff review. Env vars (LOAD_GATE_*_MS) may only TIGHTEN a ceiling for local experiments; they can never loosen it, so no change can silently regress past what is committed here.",
+  "notes": "Seeded from the real sandbox-CI high-water, not a dev box: measured_high_water_ms below are from the HARDEN-50 public-CI run (8 agents x 20 rounds, projectplanner-ci run 29136993388), which runs ~2-10x slower and noisier than local. ratchet_ms is set ~1.6-2.6x above that CI high-water so ordinary runner variance never trips the gate while a real regression does — the incident this defends against (reintroduced client-visible locks) serializes writes and pushes p99 into the hundreds of ms, far past every ratchet here. all_calls.max is the single worst call and is left deliberately generous (only a spike into the seconds is pathological enough to matter). HARDEN-62 records multi-run CI numbers and tightens each ratchet_ms toward its measured high-water + margin.",
+  "metrics": {
+    "writes": {
+      "stat": "p99",
+      "ratchet_ms": 70.0,
+      "slo_ms": 100.0,
+      "measured_high_water_ms": 42.25
+    },
+    "search_tasks": {
+      "stat": "p99",
+      "ratchet_ms": 130.0,
+      "slo_ms": 150.0,
+      "measured_high_water_ms": 74.74
+    },
+    "board_summary": {
+      "stat": "p95",
+      "ratchet_ms": 250.0,
+      "slo_ms": 400.0,
+      "measured_high_water_ms": 85.55
+    },
+    "all_calls": {
+      "stat": "max",
+      "ratchet_ms": 2500.0,
+      "slo_ms": 5000.0,
+      "measured_high_water_ms": 88.85
+    }
+  }
+}
