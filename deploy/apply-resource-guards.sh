@@ -1,44 +1,48 @@
 #!/usr/bin/env bash
-# HARDEN-40: pin cgroup resource guards so the batch/timer jobs can't starve the
-# web app on the small (2-vCPU / ~900 MB) box.
+# HARDEN-40 / PERF-3: pin cgroup resource guards so batch/timer jobs cannot starve
+# the interactive tier on the small (2-vCPU / ~900 MB) box.
 #
-# Background (2026-07-08 outage): narrate (~90% of a core) + the per-PR ci-gate
-# (fresh venv + pytest) can saturate both cores AND thrash swap, which jams the
-# single uvicorn worker's event loop so even the cheap /health times out. These
-# limits give the web app a reserved memory floor + the lion's share of CPU, and
-# soft-cap the batch jobs so a spike throttles (reclaim) instead of taking the
-# site down.
-#
-# Applied via `systemctl set-property`, which persists under
-# /etc/systemd/system.control/ and survives reboot. Idempotent — re-running just
-# re-asserts the values. Run once on a fresh box AFTER the units are installed and
-# enabled (see PROVISION.md). These are the exact values running in prod today.
+# PERF-3 adds MemoryMin + MemoryLow + MemorySwapMax=0 on web/MCP/gateway and
+# MemoryMax hard caps on batch jobs so OOM is contained instead of swap-thrashing
+# the request path. Pair with deploy/setup-zram-swap.sh.
 set -euo pipefail
 
-# Web app: top CPU share + a memory floor it can always reclaim under pressure.
-systemctl set-property projectplanner.service CPUWeight=900 MemoryLow=250M
+apply_interactive() {
+  local unit=$1 cpu=$2 mem_min=$3 mem_low=$4
+  systemctl set-property "$unit" \
+    "CPUWeight=${cpu}" \
+    "MemoryMin=${mem_min}" \
+    "MemoryLow=${mem_low}" \
+    "MemorySwapMax=0"
+}
 
-# MCP tool surface: second priority.
-systemctl set-property projectplanner-mcp.service CPUWeight=400
+apply_batch() {
+  local unit=$1 cpu=$2 mem_high=$3 mem_max=$4
+  systemctl set-property "$unit" \
+    "CPUWeight=${cpu}" \
+    "MemoryHigh=${mem_high}" \
+    "MemoryMax=${mem_max}"
+}
 
-# Batch/timer jobs: low CPU share + a per-job soft memory cap, so a spike gets
-# throttled instead of swapping the box into the ground.
+apply_interactive projectplanner.service 900 200M 250M
+apply_interactive projectplanner-mcp.service 400 120M 150M
+apply_interactive projectplanner-gateway.service 300 80M 100M
+
+# Batch/timer jobs: low CPU share + bounded working sets.
 for unit in narrate monitors inbox summarize digest; do
-  systemctl set-property "projectplanner-${unit}.service" CPUWeight=20 MemoryHigh=180M
+  apply_batch "projectplanner-${unit}.service" 20 180M 220M
 done
 
 # Reconcile scans every project DB. Production profiling (HARDEN-51..61) proved
 # its legitimate file-cache working set exceeds the generic 180M batch ceiling;
 # this envelope completed all 12 projects in 30s while the web service retained
 # MemoryLow=250M. Keep a hard cap so drift scans cannot consume the whole VM.
-systemctl set-property projectplanner-reconcile.service \
-  CPUWeight=20 MemoryHigh=384M MemoryMax=512M
+apply_batch projectplanner-reconcile.service 20 384M 512M
 
-# CI gate is the heaviest batch job (fresh venv + pytest per PR): stricter still,
-# with a HARD ceiling so it can never OOM the box.
-systemctl set-property projectplanner-ci-gate.service CPUWeight=10 MemoryHigh=220M MemoryMax=320M
+apply_batch projectplanner-ci-gate.service 10 220M 320M
 
 echo "resource guards applied. verify e.g.:"
-echo "  systemctl show projectplanner.service -p CPUWeight -p MemoryLow"
-echo "  systemctl show projectplanner-ci-gate.service -p MemoryHigh -p MemoryMax"
+echo "  bash scripts/verify_memory_isolation.sh"
+echo "  systemctl show projectplanner.service -p MemoryMin -p MemoryLow -p MemorySwapMax"
+echo "  systemctl show projectplanner-ci-gate.service -p MemoryMax"
 echo "  systemctl show projectplanner-reconcile.service -p MemoryHigh -p MemoryMax"
