@@ -1,4 +1,4 @@
-"""Global auth routes (Service #1).
+"""Global auth routes.
 
 Registered before the monolith's routes. Authenticates via the JWT
 taikun_session cookie.
@@ -10,9 +10,7 @@ import os
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import contracts
-from . import service
-from . import session
+from . import contracts, service, session
 
 router = APIRouter()
 
