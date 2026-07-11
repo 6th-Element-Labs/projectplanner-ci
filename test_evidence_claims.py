@@ -183,6 +183,29 @@ try:
     )
     ok(direct["status"] == "pass", "HTTP(S) evidence URL is accepted as declared evidence")
 
+    real_run = evidence_claims.subprocess.run
+    batch_calls = []
+
+    def counting_run(*args, **kwargs):
+        if "--batch-check=%(objectname) %(objecttype)" in args[0]:
+            batch_calls.append(args[0])
+        return real_run(*args, **kwargs)
+
+    evidence_claims.subprocess.run = counting_run
+    try:
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        batch_reports = evidence_claims.evaluate_activities([
+            {"task_id": "BATCH-1", "actor": "test", "kind": "comment",
+             "payload": {"text": "Artifact report", "evidence_refs": [head]}},
+            {"task_id": "BATCH-2", "actor": "test", "kind": "comment",
+             "payload": {"text": "Artifact report", "evidence_refs": [head, "0" * 40]}},
+        ], os.path.dirname(os.path.abspath(__file__)))
+    finally:
+        evidence_claims.subprocess.run = real_run
+    ok(len(batch_calls) == 1, "multiple historical refs use one git cat-file batch")
+    ok(batch_reports[0]["status"] == "pass" and batch_reports[1]["status"] == "red",
+       "batched ref checks preserve reachable and missing evidence verdicts")
+
     bundle = store.audit_export(project=P)
     ok("evidence_claims" in bundle, "audit export includes claim-to-evidence reports")
     ok(
