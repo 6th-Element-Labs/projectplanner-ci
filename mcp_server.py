@@ -28,6 +28,7 @@ import rag
 import signals
 import store
 from mcp_observability import MCPObservability
+from mcp_dispatch import MCPToolDispatcher
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -86,6 +87,11 @@ mcp = FastMCP(
 # decorator here instruments every tool below without duplicating timing code in
 # ~150 handlers, while functools.wraps preserves the schemas FastMCP derives.
 _mcp_observability = MCPObservability()
+_mcp_dispatch = MCPToolDispatcher(
+    # These are deliberately tiny diagnostics. Keeping them inline proves that
+    # the event loop remains responsive while ordinary sync tools run in workers.
+    inline_tools={"control_plane_probe", "get_mcp_observability"},
+)
 _register_mcp_tool = mcp.tool
 
 
@@ -93,7 +99,11 @@ def _observed_mcp_tool(*args, **kwargs):
     register = _register_mcp_tool(*args, **kwargs)
 
     def observed_register(fn):
-        return register(_mcp_observability.wrap(fn))
+        observed = _mcp_observability.wrap(fn)
+        register(_mcp_dispatch.wrap(observed))
+        # Keep direct Python callers and the existing hermetic tests synchronous;
+        # only FastMCP's registered request handler needs worker dispatch.
+        return fn
 
     return observed_register
 

@@ -423,6 +423,11 @@ Admin MCP credential tools:
 - The coordination monitor sweep is host-owned: enable `projectplanner-monitors.timer` so
   `requires_ack` messages can time out and notify senders even if no Codex thread is awake.
 - Shares the SQLite file (WAL) with the web app; reuses `store`/`rag`/`agent` in-process.
+- Synchronous MCP tools run in a bounded worker pool so slow SQLite calls do not block the
+  Streamable HTTP event loop. `PM_MCP_SYNC_WORKERS` sets the process-wide concurrency cap
+  (default `4`); keep it bounded to avoid turning event-loop stalls into SQLite write stampedes.
+  The tiny `control_plane_probe` and process-local `get_mcp_observability` diagnostics remain
+  inline so they can measure event-loop responsiveness while worker tools are busy.
 - Auth: reads may remain open; writes are bearer-authenticated when `PM_AUTH_MODE=required`.
   `PM_MCP_TOKEN` and `PM_AUTH_TOKEN` map to compatibility system principals until explicit
   per-agent principals are created.
