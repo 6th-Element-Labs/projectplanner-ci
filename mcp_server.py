@@ -3212,12 +3212,16 @@ if __name__ == "__main__":
     # lets Switchboard attach timing/reconnect headers to success and error paths.
     # Timing wraps auth so even rejected (401) requests carry timing headers; auth wraps
     # the tool app so anonymous callers are turned away before any tool runs (BUG-46).
+    from concurrency_limiter import ConcurrencyLimitASGIMiddleware
+
     # The observability endpoint sits between timing and auth (HARDEN-63): operators
     # scrape GET /observability without a token (read-only, no request content), and the
     # response still carries the standard server-timing header.
     app = MCPServerTimingMiddleware(
         MCPObservabilityEndpoint(
-            MCPAuthMiddleware(mcp.streamable_http_app()),
+            MCPAuthMiddleware(
+                ConcurrencyLimitASGIMiddleware(mcp.streamable_http_app()),
+            ),
             _mcp_observability.snapshot,
         )
     )
