@@ -644,6 +644,7 @@ const TeepPlan = {
         ['apikeys-body', 'apikeys-admin-warn', 'apikeys-new-banner', 'apikeys-create-form'].forEach((id) => {
             const el = document.getElementById(id); if (el) el.style.display = 'none';
         });
+        this._clearApiKeySecret();   // never carry a prior session's raw key into a new open
         const lf = document.getElementById('apikeys-load-flash'); if (lf) { lf.style.display = ''; lf.textContent = 'Loading…'; }
         window.bootstrap.Modal.getOrCreateInstance(document.getElementById('apikeys-modal')).show();
         this._loadApiKeys();
@@ -733,6 +734,12 @@ const TeepPlan = {
             if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
         } catch (e) { /* result reflected on reload */ }
         this._loadApiKeys();
+    },
+    // Wipe the shown-once raw key from the DOM so "shown once" holds even against devtools —
+    // called when the banner is superseded, the modal closes, or it re-opens.
+    _clearApiKeySecret() {
+        const tok = document.getElementById('apikeys-new-token'); if (tok) tok.value = '';
+        const banner = document.getElementById('apikeys-new-banner'); if (banner) banner.style.display = 'none';
     },
 
     // ---- UI-14: Settings → Communications ---------------------------------
@@ -6272,6 +6279,8 @@ const TeepPlan = {
             if (navigator.clipboard) navigator.clipboard.writeText(i.value).catch(() => {});
             else { try { document.execCommand('copy'); } catch (e) { /* noop */ } }
         });
+        const apikeysModal = document.getElementById('apikeys-modal');
+        if (apikeysModal) apikeysModal.addEventListener('hidden.bs.modal', () => this._clearApiKeySecret());
         // UI-14: Communications settings (inbound domains + outbound recipients).
         const commsBtn = document.getElementById('btn-project-comms');
         if (commsBtn) commsBtn.addEventListener('click', () => this.openComms(window.PM_PROJECT));
