@@ -448,6 +448,10 @@ Admin MCP credential tools:
 - Synchronous MCP tools run in a bounded worker pool so slow SQLite calls do not block the
   Streamable HTTP event loop. `PM_MCP_SYNC_WORKERS` sets the process-wide concurrency cap
   (default `4`); keep it bounded to avoid turning event-loop stalls into SQLite write stampedes.
+  `PM_MCP_TOOL_DEADLINE_S` sets the ordinary-tool server deadline (default `28` seconds). An
+  expired call returns `{"error":"tool_deadline_exceeded","server_elapsed_ms":...,"tool_name":
+  "...","hint":"retry serialized"}` before the client session timeout, so the caller can retry
+  one call at a time without discarding the MCP session.
   The tiny `control_plane_probe` and process-local `get_mcp_observability` diagnostics remain
   inline so they can measure event-loop responsiveness while worker tools are busy.
 - Auth: reads may remain open; writes are bearer-authenticated when `PM_AUTH_MODE=required`.
