@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parent
 # shrinks, lower its ceiling in the same PR; if it grows, follow ADR-0007's relief order before
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
-    "store.py": 15_471,  # +1: create_project busts the project-map cache (registry-churn perf fix)
-    "app.py": 3_312,  # NARRATE-13 adds /api/narration health + narrate-now + reactivate endpoints
-    "mcp_server.py": 3_185,  # NARRATE-13 adds get_narration_health/narrate_now/reactivate_narration tools
+    "store.py": 15_566,  # DELIVERABLES-16 closure surface atop create_project cache fix
+    "app.py": 3_343,  # DELIVERABLES-16 closure routes + NARRATE-13 narration health/control routes
+    "mcp_server.py": 3_223,  # DELIVERABLES-16 closure tools + NARRATE-13 narration ops tools
     "static/app.js": 4_888,  # ARCH-MS-21 composition root after board/mission/state extraction
     "static/js/api.js": 25,  # project-aware fetch boundary
     "static/js/state.js": 79,  # application state and UI vocabularies

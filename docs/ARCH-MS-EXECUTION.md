@@ -44,7 +44,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-3** | Delete dead MCP/REST surfaces (CONSOL-7, CONSOL-9) | 0.1 | — | In Review | ✅ | **CONSOL-7** PR #276 + `test_consol7_dead_surfaces.py`; **CONSOL-9** PR #297 + `test_consol9_h2_census.py`. `gmail_source.py` deferred → ARCH-MS-11 |
 | **ARCH-MS-4** | Caddy security headers + mission poller ETag (CONSOL-8) | 0.1 | — | In Review | ✅ | **CONSOL-8** PR #286 + `test_consol8_edge_mission_poll.py`. `deploy/Caddyfile` security headers + access log; `app.py` mission_status / dependency_graph `max_age=5` + ETag; ack poll visibility guard |
 | **ARCH-MS-5** | MCP read auth — bearer required on `/mcp` | 0.3 | — | In Review | ✅ | **BUG-46** / PR #273 — `mcp_auth.py` + `MCPAuthMiddleware`; `test_mcp_read_auth.py`; prod `PM_AUTH_MODE=required` |
-| **ARCH-MS-6** | `pyproject.toml` package scaffold (lockfile pending) | 0.2 | 1 | In Progress | 🔗 | **HARDEN-54** / PR #303 — `pyproject.toml`, `.python-version`, `uv.lock`; lockfile task split to ARCH-MS-13 |
+| **ARCH-MS-6** | `pyproject.toml` package scaffold (lockfile pending) | 0.2 | 1 | In Review | ✅ | **HARDEN-54** PR #303 + `tests/test_arch_ms6_pyproject_scaffold.py`. `pyproject.toml`, `.python-version`, generated `requirements*.txt`; lockfile → ARCH-MS-13 |
 | **ARCH-MS-7** | `src/switchboard/` package skeleton | 0.2 | 1 | In Review | 🟡 | `src/switchboard/` package tree + `settings.py` + `scripts/switchboard_path.py` |
 | **ARCH-MS-8** | `create_task` application command + REST/MCP wire | 0.2 | 7 | Not Started | ⬜ | — |
 | **ARCH-MS-9** | `test_arch_ms0_scaffold` CI gate | 0.2 | 7, 8 | In Review | 🟡 | `tests/test_arch_ms0_scaffold.py` — asserts package imports, `create_task` callable, REST+MCP share the application handler; auto-discovered by `scripts/switchboard_ci.sh` |
@@ -52,7 +52,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-11** | Extract inbox routing; retire `gmail_source.py` | 0.1 | 10 | In Review | ✅ | `src/switchboard/integrations/inbox_routing.py`; `inbox_source.py`; `tests/test_arch_ms11_inbox_routing.py` |
 | **ARCH-MS-12** | Numbered transactional DB migrations | 0.1 | 2 | Not Started | 🔗 | **BUG-47** / PR #301 — ledgered migrations; `test_schema_migrations.py` |
 | **ARCH-MS-13** | Lockfile + Python 3.12 pin (reproducible builds) | 0.1 | 6 | Not Started | 🔗 | **HARDEN-54** / PR #303 — `uv.lock`, generated `requirements*.txt` |
-| **ARCH-MS-14** | `tests/` directory + path shim for new tests | 0.1 | 2 | Not Started | ⬜ | Root-level test scripts still; no `tests/` package |
+| **ARCH-MS-14** | `tests/` directory + path shim for new tests | 0.1 | 2 | In Review | ✅ | `tests/path_setup.py`; `tests/test_arch_ms14_test_layout.py`; new tests share the root + `src/` bootstrap |
 | **ARCH-MS-15** | `get_task` query + `update_task` application command | 0.2 | 8 | Not Started | ⬜ | — |
 | **ARCH-MS-16** | `api/routers/tasks.py` — extract task REST routes | 0.2 | 15 | Not Started | ⬜ | — |
 | **ARCH-MS-17** | `mcp/tools/tasks.py` — extract task MCP tools | 0.2 | 15 | Not Started | ⬜ | — |
@@ -61,7 +61,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-20** | `runner_*` → `runner_store.py` leaf extraction | 0.2 | 7 | Not Started | ⬜ | ADR-0007: ~445 lines, 2 external callers — headroom for ratchet relief |
 | **ARCH-MS-21** | Split `static/app.js` → `static/js/{api,state,board,mission}` | 0.2 | 2 | Not Started | ⬜ | `static/app.js` still monolith (ratchet ceiling 6,566 lines) |
 | **ARCH-MS-22** | `/health/deep` — stop leaking project identifiers | 0.3 | 5 | Not Started | 🔗 | **BUG-48** / PR #299 |
-| **ARCH-MS-23** | Global auth cutover — remove `PM_GLOBAL_AUTH` gate | 0.3 | 18 | Not Started | 🔗 | **ACCESS-16** / PR #300 — legacy login + flag deleted |
+| **ARCH-MS-23** | Global auth cutover — remove `PM_GLOBAL_AUTH` gate | 0.3 | 18 | In Review | 🔗 | **ACCESS-16** / PR #300 deleted the legacy login + flag; ARCH-MS-23 adds a CI regression guard against their return |
 | **ARCH-MS-24** | Phase 0 exit gate — ratchet lowered, application layer proven | 0.2 | 11,12,13,14,16,17,19,20,21,22,23 | Not Started | ⬜ | Blocked on scaffold + enforcement remainder |
 
 ---
@@ -74,7 +74,7 @@ requires merge webhook or reconcile.
 | `app.py` | 3,275 | ARCH-MS-18 moved auth imports behind the package seam |
 | `mcp_server.py` | 3,157 | Pre-existing master drift remeasured by ARCH-MS-20 gate |
 | `static/app.js` | 6,566 | Held |
-| repo root `*.py` | 201 | Master had 200; ARCH-MS-20 adds planned `runner_store.py` leaf |
+| repo root `*.py` | 205 | ARCH-MS-4 + ARCH-MS-21 add focused root proofs; ARCH-MS-6 stays under `tests/` |
 
 Source: `test_size_ratchet.py` (CONSOL-6).
 
@@ -148,5 +148,6 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-12 | ARCH-MS-1 | Initial tracker + ADR-0009 charter; baseline master `5305090` |
 | 2026-07-12 | ARCH-MS-3 | CONSOL-7/9 closed; added `test_consol7_dead_surfaces.py`; gmail_source scoped to ARCH-MS-11 |
 | 2026-07-12 | ARCH-MS-11 | Extracted source-independent inbox routing; renamed the IMAP adapter; retired `gmail_source.py` and rewired app/job/tests |
+| 2026-07-12 | ARCH-MS-14 | Made `tests/` a package; added the direct-execution root + `src/` path shim; migrated all current nested tests and added a no-drift guard |
 | 2026-07-12 | ARCH-MS-10 | Added executable `PM_*` census and CI gate; verified all tracked declarations have runtime defenders; documented CONSOL-9 deleted-name tombstones |
 | 2026-07-12 | ARCH-MS-9 | Added `tests/test_arch_ms0_scaffold.py` Phase-0 proof gate (package imports + `create_task` callable + REST/MCP shared handler); deps ARCH-MS-7/8 merged |

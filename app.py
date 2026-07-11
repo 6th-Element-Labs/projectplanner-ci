@@ -54,6 +54,7 @@ import request_observability  # noqa: E402
 import saturation_signals  # noqa: E402
 import signals  # noqa: E402
 import store  # noqa: E402
+import deliverable_closure  # noqa: E402
 
 app = FastAPI(title="Taikun PM", version="0.1.0")
 _req_obs = request_observability.RequestObservability()
@@ -1186,6 +1187,36 @@ def deliverable_dependency_graph(request: Request, deliverable_id: str, project:
         code = 404 if "unknown" in result["error"] else 400
         raise HTTPException(code, result["error"])
     return _etag_json(request, result, max_age=5)  # CONSOL-8: TTL+ETag poll parity
+
+
+@app.post("/api/deliverables/{deliverable_id}/closure_verify")
+async def verify_deliverable_closure_route(request: Request, deliverable_id: str,
+                                           body: dict = Body(...), project: str = Query(...)):
+    project = _proj(project)
+    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
+    payload = body or {}
+    result = deliverable_closure.verify_and_record_closure(
+        deliverable_id, project, actor=auth.actor(principal),
+        report=payload.get("report"),
+        submitted_functional=payload.get("submitted_functional"),
+        waivers=payload.get("waivers"),
+        generated_by=payload.get("generated_by") or auth.actor(principal))
+    if isinstance(result, dict) and result.get("error"):
+        code = 404 if "unknown deliverable" in result["error"] else 400
+        raise HTTPException(code, result["error"])
+    return result
+
+
+@app.get("/api/deliverables/{deliverable_id}/closure_report")
+def get_deliverable_closure_report_route(deliverable_id: str, report_id: str = "",
+                                         project: str = Query(store.DEFAULT_PROJECT)):
+    project = _proj(project)
+    result = store.get_deliverable_closure_report(
+        deliverable_id, project=project, report_id=report_id)
+    if result.get("error"):
+        code = 404 if ("unknown" in result["error"] or "not found" in result["error"]) else 400
+        raise HTTPException(code, result["error"])
+    return result
 
 
 @app.post("/api/deliverables/{deliverable_id}/coordinator_tick")
