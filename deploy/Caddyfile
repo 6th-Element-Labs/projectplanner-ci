@@ -48,8 +48,8 @@ plan.taikunai.com {
 
 # Vanity URL: format.taikunai.com SERVES the self-serve tools page in place (the URL
 # stays format.taikunai.com). The root path is internally rewritten to /format.html —
-# one page with both boxes (deck rebrand + PDF OCR). The standalone /rebrand.html and
-# /ocr.html still work as deep links; everything (CSS, POST /api/*) proxies to :8110.
+# one page with both boxes (deck rebrand + PDF OCR) — it supersedes the retired standalone
+# /rebrand.html and /ocr.html surfaces (CONSOL-7). Everything (CSS, POST /api/*) proxies to :8110.
 # Caddy auto-issues the Let's Encrypt cert once the A record resolves to this VM.
 format.taikunai.com {
     encode zstd gzip

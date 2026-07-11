@@ -1,5 +1,13 @@
 # store.py decomposition map (15,817 lines → 37 modules)
 
+> **⚠️ SUPERSEDED (ADR-0006, 2026-07-08).** This 37-module decomposition (ARCH-6…17) is no
+> longer the plan of record. [ADR-0006](decisions/0006-control-plane-done-enough.md) retired
+> the remaining decomposition program: the foundation cuts (ARCH-1…5) shipped, and the rest
+> was replaced by a growth moratorium — now the `test_size_ratchet.py` ceiling
+> ([ADR-0007](decisions/0007-application-shell-cleanup.md), Decision 2). The module map below
+> is kept for historical reference and as an on-touch extraction compass **only** — nothing
+> here is scheduled or assigned. Do not treat this document as a backlog.
+
 - **Companion to:** [ADR-0005](decisions/0005-store-module-decomposition.md) ·
   [`SWITCHBOARD-TARGET-ARCHITECTURE.md`](SWITCHBOARD-TARGET-ARCHITECTURE.md) ·
   [`SWITCHBOARD-STORE-ENDSTATE.md`](SWITCHBOARD-STORE-ENDSTATE.md)

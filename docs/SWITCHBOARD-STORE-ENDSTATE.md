@@ -1,5 +1,12 @@
 # Switchboard — software end-state after `store.py` decomposition
 
+> **⚠️ SUPERSEDED (ADR-0006, 2026-07-08).** This end-state describes the completed ARCH-5…17
+> `store.py` decomposition, a program [ADR-0006](decisions/0006-control-plane-done-enough.md)
+> retired after the foundation cuts (ARCH-1…5). The enforced discipline is now the
+> `test_size_ratchet.py` line-count ceiling ([ADR-0007](decisions/0007-application-shell-cleanup.md),
+> Decision 2), and Decision 7 there records the modular-monolith shape as a compass to aim at
+> on-touch — never a scheduled march. Kept for historical reference only.
+
 - **Status:** Target end-state
 - **Date:** 2026-07-07
 - **Companion to:** [ADR-0005](decisions/0005-store-module-decomposition.md) ·
