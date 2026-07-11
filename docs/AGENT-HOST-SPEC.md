@@ -263,7 +263,6 @@ When a host launches a runtime, the child process must receive:
 | `PM_MCP_TOKEN` | scoped credential |
 | `PM_AGENT_ID` | stable address, often runtime/lane/session |
 | `PM_RUNNER_SESSION_ID` | stable kill/status target |
-| `PM_WAKE_ID` | wake intent that caused launch, if any |
 | `PM_LANE` | preferred lane filter |
 | `PM_CAPABILITIES` | advertised capabilities |
 

@@ -15,7 +15,6 @@ from db.connection import *  # noqa: F401,F403
 
 __all__ = [
     "list_background_jobs",
-    "evaluate_dbos_runtime",
     "run_background_job",
     "get_background_job_run",
     "list_background_job_runs",
@@ -26,12 +25,6 @@ def list_background_jobs() -> Dict[str, Any]:
     """Catalog of resumable background jobs and DBOS eligibility boundaries."""
     import background_jobs
     return background_jobs.list_background_jobs()
-
-
-def evaluate_dbos_runtime() -> Dict[str, Any]:
-    """Evaluate whether DBOS is available and the recommended job runtime."""
-    import background_jobs
-    return background_jobs.evaluate_dbos_runtime()
 
 
 def run_background_job(project: str = DEFAULT_PROJECT, job_name: str = "",
