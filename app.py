@@ -2680,6 +2680,45 @@ async def ixp_leases(project: str = Query(store.DEFAULT_PROJECT)):
     return {"leases": store.list_active_resource_leases(project=_proj(project))}
 
 
+# UI-8 Fleet control: wake-intent read/write over REST (hosts + runners already have
+# their routes above). Mirrors the request_wake / list_wake_intents / cancel_wake tools.
+@app.get("/ixp/v1/wake_intents")
+async def ixp_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
+                           status: str = "", host_id: str = "", runtime: str = ""):
+    return {"wake_intents": store.list_wake_intents(
+        status=status, host_id=host_id, runtime=runtime, project=_proj(project))}
+
+
+@app.post("/ixp/v1/request_wake")
+async def ixp_request_wake(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+    selector = body.get("selector") or {}
+    if not isinstance(selector, dict):
+        raise HTTPException(400, "selector must be an object")
+    result = store.request_wake(
+        selector=selector, reason=body.get("reason") or "",
+        source=body.get("source") or auth.actor(principal),
+        policy=body.get("policy") or {}, task_id=(body.get("task_id") or None),
+        principal_id=principal["id"], actor=auth.actor(principal),
+        idem_key=body.get("idem_key") or "", project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/ixp/v1/cancel_wake")
+async def ixp_cancel_wake(request: Request, body: dict = Body(...)):
+    project = _body_project(body)
+    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+    result = store.cancel_wake(
+        (body.get("wake_id") or "").strip(), reason=body.get("reason") or "cancelled",
+        actor=auth.actor(principal), project=project)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.post("/ixp/v1/send")
 async def ixp_send(request: Request, body: dict = Body(...)):
     project = _body_project(body)

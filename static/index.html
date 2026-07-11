@@ -172,6 +172,7 @@
                         <li class="nav-item"><a class="nav-link active" id="toptab-overview" data-bs-toggle="tab" href="#tab-exec" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Overview</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-plan" data-bs-toggle="tab" href="#tab-plan-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-kanban"></i></span><span class="nav-link-title">Plan</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-mission" data-bs-toggle="tab" href="#tab-mission" role="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverable</span></a></li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-fleet" data-bs-toggle="tab" href="#tab-fleet" role="tab"><span class="nav-link-icon"><i class="ti ti-server-bolt"></i></span><span class="nav-link-title">Fleet</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span></a></li>
                         <li class="nav-item" id="nav-settings" style="display:none"><a class="nav-link" id="toptab-settings" data-bs-toggle="tab" href="#tab-settings" role="tab"><span class="nav-link-icon"><i class="ti ti-settings"></i></span><span class="nav-link-title">Settings</span></a></li>
@@ -393,6 +394,27 @@
                         <div class="tab-pane" id="tab-settings" role="tabpanel">
                             <div id="settings-page" class="mt-3">
                                 <div class="text-secondary small">Loading settings…</div>
+                            </div>
+                        </div>
+
+                        <!-- UI-8 FLEET: live hosts, wake queue, and runner actions -->
+                        <div class="tab-pane" id="tab-fleet" role="tabpanel">
+                            <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
+                                <h2 class="page-title m-0"><i class="ti ti-server-bolt me-2"></i>Fleet</h2>
+                                <span class="text-secondary small">Live hosts, the wake queue, and runners for this project.</span>
+                                <button id="fleet-refresh" class="btn btn-sm btn-outline-secondary ms-auto" type="button"><i class="ti ti-refresh me-1"></i>Refresh</button>
+                            </div>
+                            <div class="card mb-3">
+                                <div class="card-header"><h3 class="card-title"><i class="ti ti-server me-2"></i>Agent hosts</h3><span id="fleet-hosts-count" class="badge bg-secondary-lt ms-2">…</span></div>
+                                <div id="fleet-hosts-body" class="card-body"><div class="text-secondary small">Loading hosts…</div></div>
+                            </div>
+                            <div class="card mb-3">
+                                <div class="card-header"><h3 class="card-title"><i class="ti ti-bell-z me-2"></i>Wake intents</h3><span id="fleet-wakes-count" class="badge bg-secondary-lt ms-2">…</span></div>
+                                <div id="fleet-wakes-body" class="card-body"><div class="text-secondary small">Loading wake intents…</div></div>
+                            </div>
+                            <div class="card mb-3">
+                                <div class="card-header"><h3 class="card-title"><i class="ti ti-player-play me-2"></i>Live runners</h3><span id="fleet-runners-count" class="badge bg-secondary-lt ms-2">…</span></div>
+                                <div id="fleet-runners-body" class="card-body"><div class="text-secondary small">Loading runners…</div></div>
                             </div>
                         </div>
                     </div>
@@ -1079,5 +1101,26 @@
       })();
     </script>
     <div id="fleet-dock"></div>
+    <div class="modal modal-blur fade" id="wake-modal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="ti ti-bell-z me-2"></i>Wake an agent</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-2"><label class="form-label">Runtime</label><input id="wake-runtime" class="form-control" placeholder="claude-code"/></div>
+                    <div class="mb-2"><label class="form-label">Lane <span class="text-secondary">(optional)</span></label><input id="wake-lane" class="form-control" placeholder="UI"/></div>
+                    <div class="mb-2"><label class="form-label">Task id <span class="text-secondary">(optional)</span></label><input id="wake-task" class="form-control" placeholder="UI-8"/></div>
+                    <div class="mb-2"><label class="form-label">Reason</label><input id="wake-reason" class="form-control" placeholder="operator wake from Fleet"/></div>
+                    <div id="wake-flash" class="small text-secondary"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" id="wake-send" class="btn btn-primary"><i class="ti ti-bell-ringing me-1"></i>Wake</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
