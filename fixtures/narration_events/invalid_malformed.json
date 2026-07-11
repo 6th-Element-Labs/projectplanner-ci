@@ -1,0 +1,37 @@
+{
+  "expected": "missing_field",
+  "validation_context": {
+    "expected_project": "switchboard",
+    "now": 1780000010
+  },
+  "event": {
+    "attempt": {
+      "available_at": 1780000001,
+      "count": 0,
+      "state": "pending"
+    },
+    "authorization": {
+      "decision_id": "authz-00000001",
+      "principal_id": "principal-codex-root",
+      "project": "switchboard",
+      "scope": "narration:request"
+    },
+    "causal_event": {
+      "event_id": "activity-4242",
+      "kind": "task.status_changed",
+      "occurred_at": 1780000000
+    },
+    "dedupe_key": "nrq:162a0a014ce7b2ca7be53042c2b7dc45406afe53adc07d6a85216cb417ba4cb5",
+    "entity_id": "NARRATE-7",
+    "entity_type": "task",
+    "event_id": "nr-event-00000001",
+    "event_type": "narration_requested",
+    "priority": "normal",
+    "project": "switchboard",
+    "requested_at": 1780000001,
+    "schema": "switchboard.narration_requested.v1",
+    "source_hash": "sha256:e2b06d0d75f9080632c827357015d5d873a94aead3bc0c0850f8c26c86f3d0a7",
+    "source_revision": 7,
+    "supersedes": null
+  }
+}
