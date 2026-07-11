@@ -138,6 +138,12 @@ const TeepPlan = {
     async init() {
         try { await this.applyProject(); } catch (e) { /* switcher is best-effort */ }
         if (this._noProjects) { this.renderNoProjects(); return; }
+        // BUG-42: picker metadata is independent of the board payload. Start it
+        // immediately after project resolution and render both selectors as soon
+        // as it arrives; a slow board/context build must not hold navigation hostage.
+        const deliverablesReq = this.loadDeliverables()
+            .then(() => this._syncHeaderDeliverable())
+            .catch(() => { this.deliverables = []; });
         try {
             // HARDEN-38: fire board/people/tally concurrently — they're independent
             // once the project is known, so the critical path isn't 3 serial round-trips.
@@ -181,6 +187,7 @@ const TeepPlan = {
         this.initPulse();
         this._missionDeliverableFromUrl();
         await this._preloadDeliverableDefault();
+        await deliverablesReq;
         await this.initHeaderDeliverableSwitcher();
         this._renderActiveTop();   // deep-linked URLs land on a rendered tab, not a blank one
         const ds = document.getElementById('data-status');
@@ -4224,11 +4231,24 @@ const TeepPlan = {
         } catch (e) { /* ignore */ }
     },
 
-    async loadDeliverables() {
-        const res = await fetch('api/deliverables');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        this.deliverables = data.deliverables || [];
+    async loadDeliverables(force = false) {
+        const project = window.PM_PROJECT || 'maxwell';
+        if (!force && this._deliverablesProject === project) return this.deliverables;
+        // Deep links used to trigger refreshMissionPage while init simultaneously
+        // populated the header, producing duplicate full list calls. Share one
+        // in-flight request across every picker consumer.
+        if (this._deliverablesPromise) return this._deliverablesPromise;
+        const request = (async () => {
+            const res = await fetch('api/deliverables?view=picker');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            this.deliverables = data.deliverables || [];
+            this._deliverablesProject = project;
+            return this.deliverables;
+        })();
+        this._deliverablesPromise = request;
+        try { return await request; }
+        finally { if (this._deliverablesPromise === request) this._deliverablesPromise = null; }
     },
 
     async loadMissionStatus(deliverableId) {
@@ -4313,7 +4333,7 @@ const TeepPlan = {
         return html;
     },
 
-    async refreshMissionPage() {
+    async refreshMissionPage(reloadDeliverables = false) {
         const el = document.getElementById('mission-page');
         const picker = document.getElementById('mission-deliverable-picker');
         if (!el) return;
@@ -4321,7 +4341,7 @@ const TeepPlan = {
         // map isn't waiting on a cold ~1MB CDN download after the data is already in.
         this._ensureScript(this.MERMAID_SRC).catch(() => {});
         el.innerHTML = '<div class="text-secondary small">Loading mission…</div>';
-        try { await this.loadDeliverables(); }
+        try { await this.loadDeliverables(reloadDeliverables); }
         catch (e) {
             el.innerHTML = `<div class="alert alert-danger mb-0">Could not load deliverables: ${this.esc(e.message)}</div>`;
             return;
@@ -4715,13 +4735,24 @@ const TeepPlan = {
     _syncHeaderDeliverable() {
         const sel = document.getElementById('header-deliverable-switcher');
         const wrap = document.getElementById('header-deliverable-wrap');
-        if (!sel) return;
+        const picker = document.getElementById('mission-deliverable-picker');
         const list = this.deliverables || [];
-        if (!list.length) { if (wrap) wrap.style.display = 'none'; return; }
+        if (!list.length) {
+            if (wrap) wrap.style.display = 'none';
+            if (picker) picker.innerHTML = '<option value="">No deliverables yet</option>';
+            return;
+        }
+        if (!this.selectedDeliverableId) this.selectedDeliverableId = list[0].id;
         if (wrap) wrap.style.display = '';
         const cur = this.selectedDeliverableId || list[0].id;
-        sel.innerHTML = list.map((d) =>
+        const options = list.map((d) =>
             `<option value="${this.esc(d.id)}"${d.id === cur ? ' selected' : ''}>${this.esc(d.title || d.id)}</option>`).join('');
+        if (picker) {
+            picker.innerHTML = options;
+            if (cur) picker.value = cur;
+        }
+        if (!sel) return;
+        sel.innerHTML = options;
         if (cur) sel.value = cur;
         if (!sel._wired) {
             sel._wired = true;
@@ -5871,7 +5902,7 @@ const TeepPlan = {
         const missionTab = document.querySelector('#toptab-mission');
         if (missionTab) missionTab.addEventListener('shown.bs.tab', () => this.refreshMissionPage());
         const missionRefresh = document.getElementById('mission-refresh');
-        if (missionRefresh) missionRefresh.addEventListener('click', () => this.refreshMissionPage());
+        if (missionRefresh) missionRefresh.addEventListener('click', () => this.refreshMissionPage(true));
         const missionGenerate = document.getElementById('mission-generate-brief');
         if (missionGenerate) missionGenerate.addEventListener('click', () => this.generateMissionBrief());
         const missionPicker = document.getElementById('mission-deliverable-picker');

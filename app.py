@@ -732,7 +732,7 @@ async def reset_password_page():
 
 
 @app.get("/api/projects")
-async def list_projects(request: Request):
+def list_projects(request: Request):
     """The project switcher's source of truth — [{id, label, pretitle}] + the default.
 
     Under global auth the list is filtered to the caller's accessible projects
@@ -953,10 +953,17 @@ async def get_project_board(project: str, board_id: str):
 
 
 @app.get("/api/deliverables")
-def list_deliverables(project: str = Query(store.DEFAULT_PROJECT), board_id: str = ""):
+def list_deliverables(project: str = Query(store.DEFAULT_PROJECT), board_id: str = "",
+                      view: str = ""):
     # def (not async): run the SQLite/deliverable work in the threadpool so a slow
     # deliverable read can't block the single worker's event loop (same as /api/board).
     project = _proj(project)
+    if view == "picker":
+        return {"project": project, "board_id": board_id or None, "view": "picker",
+                "deliverables": store.list_deliverable_summaries(
+                    project=project, board_id=board_id)}
+    if view:
+        raise HTTPException(400, "unknown deliverable list view")
     return {"project": project, "board_id": board_id or None,
             "deliverables": store.list_deliverables(project=project, board_id=board_id)}
 
