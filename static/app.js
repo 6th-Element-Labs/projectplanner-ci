@@ -40,6 +40,8 @@ const TeepPlan = {
     deliverables: [],
     missionStatus: null,
     selectedDeliverableId: '',
+    missionKpis: [],        // UI-2: project KPIs with rollup (tiles)
+    missionOutcomes: [],    // UI-2: outcomes-to-verify queue
     missionGraph: null,
     _missionDagRenderId: 0,
     _missionPollMs: 5000,   // live cockpit poll interval (ms) — snappy now the graph is ~0.2s
@@ -3833,6 +3835,7 @@ const TeepPlan = {
                 this.loadMissionStatus(this.selectedDeliverableId),
                 this.loadDependencyGraph(this.selectedDeliverableId),
                 this.loadBreakdownProposals(this.selectedDeliverableId),
+                this.loadKpisAndOutcomes(),
             ]);
             this._setMissionDeliverableInUrl(this.selectedDeliverableId);
             this.renderMissionPage();
@@ -4291,7 +4294,7 @@ const TeepPlan = {
             + this._missionDependencyGraphHtml() + this._missionBreakdownHtml() + nextActions;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
-        const detail = kpi + this._missionEconomicsHtml(s.economics) + narrative + endState + milestoneMap +
+        const detail = kpi + this._missionEconomicsHtml(s.economics) + this._missionKpiOutcomesHtml() + narrative + endState + milestoneMap +
             `<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Active work</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Status</th><th>Session</th><th>Assignee</th><th>Claims</th></tr></thead><tbody>${activeRows}</tbody></table></div></div></div>
             <div class="col-lg-6"><div class="card h-100"><div class="card-header"><h3 class="card-title">Done with proof</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Task</th><th>Title</th><th>Provenance</th><th>PR</th></tr></thead><tbody>${doneRows}</tbody></table></div></div></div></div>` +
             agents +
@@ -4336,6 +4339,82 @@ const TeepPlan = {
         return this.missionProposals;
     },
 
+    // ---- UI-2: KPIs & outcomes ------------------------------------------
+    // The global fetch wrapper only appends ?project= to `api/…` URLs, so tally
+    // reads/writes must carry the project explicitly (query for GETs, body for
+    // writes) or they silently hit the default 'maxwell' board.
+    _pmProject() { return window.PM_PROJECT || 'maxwell'; },
+    async loadKpisAndOutcomes() {
+        try {
+            const p = encodeURIComponent(this._pmProject());
+            const [kres, ores] = await Promise.all([
+                fetch(`tally/v1/kpis?project=${p}`, { cache: 'no-store' }),
+                fetch(`tally/v1/outcomes?limit=100&project=${p}`, { cache: 'no-store' }),
+            ]);
+            const kdata = await kres.json();
+            const odata = await ores.json();
+            this.missionKpis = (kres.ok && Array.isArray(kdata.kpis)) ? kdata.kpis : [];
+            this.missionOutcomes = (ores.ok && Array.isArray(odata.outcomes)) ? odata.outcomes : [];
+        } catch (e) { this.missionKpis = []; this.missionOutcomes = []; }
+        return this.missionKpis;
+    },
+
+    _kpiTrend(k) {
+        // Direction-aware arrow comparing current vs baseline (green = toward goal).
+        const cur = Number(k.current_value), base = Number(k.baseline_value);
+        if (!isFinite(cur) || !isFinite(base) || cur === base) return '<span class="text-secondary">→</span>';
+        const up = cur > base;
+        const good = (k.direction === 'decrease') ? !up : up;
+        const icon = up ? 'ti-trending-up' : 'ti-trending-down';
+        return `<span class="text-${good ? 'green' : 'red'}"><i class="ti ${icon}"></i></span>`;
+    },
+
+    _missionKpiOutcomesHtml() {
+        const kpis = this.missionKpis || [];
+        const outcomes = this.missionOutcomes || [];
+        const kpiTiles = kpis.length ? kpis.map((k) => {
+            const cur = (k.current_value != null) ? this.compact(k.current_value) : '—';
+            const target = (k.target_value != null) ? ` / ${this.compact(k.target_value)}` : '';
+            const spend = (k.spend || {}).cost_usd || 0;
+            const cpu = (k.unit_cost || {}).cost_per_contribution_unit;
+            return `<div class="col-6 col-md-4 col-xl-3"><div class="card card-sm h-100"><div class="card-body">
+                <div class="d-flex align-items-start"><div class="subheader text-truncate" title="${this.esc(k.name)}">${this.esc(k.name)}</div>
+                    <div class="ms-auto">${this._kpiTrend(k)}</div></div>
+                <div class="h2 mb-0 mt-1">${cur}<span class="text-secondary fs-4">${target} ${this.esc(k.unit || '')}</span></div>
+                <div class="text-secondary small">${this.compact(k.verified_contribution || 0)} verified${cpu != null ? ` · ${this.money(cpu)}/unit` : ''}${spend ? ` · ${this.money(spend)}` : ''}</div>
+                <div class="mt-2"><button class="btn btn-sm btn-ghost-secondary" type="button" data-dl-action="kpi-edit" data-kpi="${this.esc(k.id)}"><i class="ti ti-pencil me-1"></i>Update value</button></div>
+            </div></div></div>`;
+        }).join('') : '<div class="col-12"><div class="text-secondary small">No KPIs yet — define one to track whether the work moves the needle.</div></div>';
+
+        const pending = outcomes.filter((o) => String(o.status) === 'proposed');
+        const decided = outcomes.filter((o) => String(o.status) !== 'proposed').slice(0, 8);
+        const statusColor = { proposed: 'yellow', verified: 'green', rejected: 'red', superseded: 'secondary' };
+        const outcomeRow = (o, withActions) => {
+            const links = (o.kpi_links || []).map((l) => `<span class="badge bg-blue-lt me-1" title="${this.esc(l.kpi_name || l.kpi_id)}">${this.esc(l.kpi_name || l.kpi_id)}${l.contribution != null ? ` +${this.compact(l.contribution)}` : ''}</span>`).join('') || '<span class="text-secondary small">—</span>';
+            const where = o.task_id ? `<a href="#" data-linked-task="${this.esc(o.task_id)}" data-linked-project="${this.esc(window.PM_PROJECT || '')}">${this.esc(o.task_id)}</a>` : (o.epic_id ? this.esc(o.epic_id) : '<span class="text-secondary">—</span>');
+            const actions = withActions ? `<div class="btn-list flex-nowrap">
+                <button class="btn btn-sm btn-success" type="button" data-dl-action="outcome-verify" data-outcome="${this.esc(o.id)}"><i class="ti ti-check me-1"></i>Verify</button>
+                <button class="btn btn-sm btn-outline-danger" type="button" data-dl-action="outcome-reject" data-outcome="${this.esc(o.id)}">Reject</button>
+                <button class="btn btn-sm btn-outline-primary" type="button" data-dl-action="outcome-link" data-outcome="${this.esc(o.id)}"><i class="ti ti-link me-1"></i>KPI</button>
+            </div>` : this._missionBadge(o.status, statusColor);
+            return `<tr><td>${this.esc(o.title || o.id)}</td><td><span class="badge bg-secondary-lt">${this.esc(o.type || '—')}</span></td><td>${where}</td><td>${links}</td><td class="text-end">${actions}</td></tr>`;
+        };
+        const queueBody = pending.length ? pending.map((o) => outcomeRow(o, true)).join('')
+            : '<tr><td colspan="5" class="text-secondary text-center py-3">No outcomes awaiting verification.</td></tr>';
+        const decidedBody = decided.length ? decided.map((o) => outcomeRow(o, false)).join('') : '';
+
+        return `<div class="card mb-4"><div class="card-header">
+                <h3 class="card-title"><i class="ti ti-target-arrow me-2"></i>KPIs &amp; outcomes</h3>
+                <div class="card-actions btn-list">
+                    <button class="btn btn-sm btn-primary" type="button" data-dl-action="kpi-new"><i class="ti ti-plus me-1"></i>New KPI</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" data-dl-action="tally-outcome"><i class="ti ti-flag me-1"></i>Record outcome</button>
+                </div></div>
+            <div class="card-body"><div class="row row-cards g-2 mb-1">${kpiTiles}</div></div>
+            <div class="table-responsive"><table class="table table-vcenter card-table">
+                <thead><tr><th>Outcome</th><th>Type</th><th>Where</th><th>KPIs</th><th class="text-end">${pending.length ? 'Verify / reject / link' : ''}</th></tr></thead>
+                <tbody>${queueBody}${decidedBody}</tbody></table></div></div>`;
+    },
+
     _missionBreakdownHtml() {
         const all = this.missionProposals || [];
         const pending = all.filter((p) => ['proposed', 'deferred'].includes(String(p.status || '').toLowerCase()));
@@ -4375,6 +4454,13 @@ const TeepPlan = {
             case 'approve': return this.approveProposal(ds.proposal);
             case 'reject': return this.rejectProposal(ds.proposal);
             case 'defer': return this.deferProposal(ds.proposal);
+            // UI-2: KPIs & outcomes
+            case 'kpi-new': return this.openKpiModal();
+            case 'kpi-edit': return this.updateKpiValue(ds.kpi);
+            case 'tally-outcome': return this.openTallyOutcomeModal();
+            case 'outcome-verify': return this.verifyTallyOutcome(ds.outcome);
+            case 'outcome-reject': return this.rejectTallyOutcome(ds.outcome);
+            case 'outcome-link': return this.openKpiLinkModal(ds.outcome);
         }
     },
 
@@ -4601,6 +4687,158 @@ const TeepPlan = {
         finally { if (btn) btn.disabled = false; }
     },
 
+    // ---- UI-2: KPI create / update, tally-outcome record / verify / reject / link ----
+    _directionOptions(sel) {
+        return ['increase', 'decrease'].map((d) => `<option value="${d}"${d === sel ? ' selected' : ''}>${d}</option>`).join('');
+    },
+    openKpiModal() {
+        const body = document.getElementById('dl-kpi-body');
+        body.innerHTML = `
+            <div class="mb-3"><label class="form-label required">Name</label>
+                <input id="dl-kpi-name" class="form-control" placeholder="e.g. Weekly active operators" autocomplete="off"></div>
+            <div class="row g-2 mb-2">
+                <div class="col-md-6"><label class="form-label">Unit</label><input id="dl-kpi-unit" class="form-control" placeholder="e.g. operators, %, $"></div>
+                <div class="col-md-6"><label class="form-label">Direction</label><select id="dl-kpi-direction" class="form-select">${this._directionOptions('increase')}</select></div>
+            </div>
+            <div class="row g-2 mb-2">
+                <div class="col-md-4"><label class="form-label">Baseline</label><input id="dl-kpi-baseline" type="number" step="any" class="form-control"></div>
+                <div class="col-md-4"><label class="form-label">Current</label><input id="dl-kpi-current" type="number" step="any" class="form-control"></div>
+                <div class="col-md-4"><label class="form-label">Target</label><input id="dl-kpi-target" type="number" step="any" class="form-control"></div>
+            </div>
+            <div class="mb-1"><label class="form-label">Period</label><input id="dl-kpi-period" class="form-control" placeholder="e.g. weekly, Q3"></div>`;
+        this._dlFlash('dl-kpi-flash', '', 'text-secondary');
+        this._dlShow('dl-kpi-modal');
+        setTimeout(() => document.getElementById('dl-kpi-name')?.focus(), 200);
+    },
+    async submitKpi() {
+        const name = (document.getElementById('dl-kpi-name').value || '').trim();
+        const unit = (document.getElementById('dl-kpi-unit').value || '').trim();
+        if (!name || !unit) { this._dlFlash('dl-kpi-flash', 'Name and unit are required.', 'text-danger'); return; }
+        const num = (id) => { const v = document.getElementById(id).value; return v === '' ? undefined : Number(v); };
+        const body = {
+            project: this._pmProject(),
+            name, unit,
+            direction: document.getElementById('dl-kpi-direction').value,
+            baseline_value: num('dl-kpi-baseline'), current_value: num('dl-kpi-current'),
+            target_value: num('dl-kpi-target'), period: (document.getElementById('dl-kpi-period').value || '').trim(),
+        };
+        const btn = document.getElementById('dl-kpi-save'); if (btn) btn.disabled = true;
+        this._dlFlash('dl-kpi-flash', 'Creating…', 'text-secondary');
+        try {
+            await this._dlSend('tally/v1/kpis', 'POST', body);
+            this._dlHide('dl-kpi-modal');
+            await this.refreshMissionPage();
+        } catch (e) { this._dlFlash('dl-kpi-flash', e.message, 'text-danger'); }
+        finally { if (btn) btn.disabled = false; }
+    },
+    async updateKpiValue(kpiId) {
+        const id = (kpiId || '').trim();
+        if (!id) return;
+        const kpi = (this.missionKpis || []).find((k) => k.id === id) || {};
+        const raw = prompt(`New current value for “${kpi.name || id}”${kpi.unit ? ` (${kpi.unit})` : ''}:`,
+            kpi.current_value != null ? String(kpi.current_value) : '');
+        if (raw === null) return;
+        const val = Number(raw);
+        if (!isFinite(val)) { alert('Enter a number.'); return; }
+        try {
+            await this._dlSend(`tally/v1/kpis/${encodeURIComponent(id)}`, 'PATCH', { project: this._pmProject(), current_value: val });
+            await this.refreshMissionPage();
+        } catch (e) { alert(`Could not update KPI: ${e.message}`); }
+    },
+    openTallyOutcomeModal() {
+        const body = document.getElementById('dl-tally-outcome-body');
+        const linked = ((this.missionStatus || {}).linked_tasks || []).map((l) =>
+            `<option value="${this.esc(l.task_id)}">${this.esc(l.task_id)}${l.title ? ' — ' + this.esc(l.title) : ''}</option>`).join('');
+        body.innerHTML = `
+            <div class="mb-3"><label class="form-label required">Outcome</label>
+                <input id="dl-tally-outcome-title" class="form-control" placeholder="What was achieved" autocomplete="off"></div>
+            <div class="row g-2 mb-2">
+                <div class="col-md-6"><label class="form-label">Type</label><input id="dl-tally-outcome-type" class="form-control" placeholder="e.g. feature, metric, fix" value="feature"></div>
+                <div class="col-md-6"><label class="form-label">Against task</label>
+                    <select id="dl-tally-outcome-task" class="form-select"><option value="">— none —</option>${linked}</select></div>
+            </div>
+            <div class="form-hint">Records a proposed outcome; verify it below once it’s real.</div>`;
+        this._dlFlash('dl-tally-outcome-flash', '', 'text-secondary');
+        this._dlShow('dl-tally-outcome-modal');
+        setTimeout(() => document.getElementById('dl-tally-outcome-title')?.focus(), 200);
+    },
+    async submitTallyOutcome() {
+        const title = (document.getElementById('dl-tally-outcome-title').value || '').trim();
+        if (!title) { this._dlFlash('dl-tally-outcome-flash', 'Enter an outcome.', 'text-danger'); return; }
+        const body = {
+            project: this._pmProject(),
+            title, type: (document.getElementById('dl-tally-outcome-type').value || 'feature').trim(),
+            task_id: document.getElementById('dl-tally-outcome-task').value || undefined,
+            status: 'proposed',
+        };
+        const btn = document.getElementById('dl-tally-outcome-save'); if (btn) btn.disabled = true;
+        this._dlFlash('dl-tally-outcome-flash', 'Recording…', 'text-secondary');
+        try {
+            await this._dlSend('tally/v1/outcomes', 'POST', body);
+            this._dlHide('dl-tally-outcome-modal');
+            await this.refreshMissionPage();
+        } catch (e) { this._dlFlash('dl-tally-outcome-flash', e.message, 'text-danger'); }
+        finally { if (btn) btn.disabled = false; }
+    },
+    async verifyTallyOutcome(outcomeId) {
+        const id = (outcomeId || '').trim();
+        if (!id) return;
+        if (!confirm('Verify this outcome? It counts toward KPI movement and cost-per-outcome.')) return;
+        try {
+            await this._dlSend(`tally/v1/outcomes/${encodeURIComponent(id)}/verify`, 'POST', { project: this._pmProject() });
+            await this.refreshMissionPage();
+        } catch (e) { alert(`Could not verify outcome: ${e.message}`); }
+    },
+    async rejectTallyOutcome(outcomeId) {
+        const id = (outcomeId || '').trim();
+        if (!id) return;
+        const reason = prompt('Reason for rejecting this outcome?');
+        if (reason === null) return;
+        try {
+            await this._dlSend(`tally/v1/outcomes/${encodeURIComponent(id)}/reject`, 'POST', { project: this._pmProject(), reason: reason || 'rejected' });
+            await this.refreshMissionPage();
+        } catch (e) { alert(`Could not reject outcome: ${e.message}`); }
+    },
+    openKpiLinkModal(outcomeId) {
+        const id = (outcomeId || '').trim();
+        if (!id) return;
+        const kpis = this.missionKpis || [];
+        if (!kpis.length) { alert('Define a KPI first, then link the outcome to it.'); return; }
+        this._dlLinkOutcomeId = id;
+        const opts = kpis.map((k) => `<option value="${this.esc(k.id)}">${this.esc(k.name)}${k.unit ? ` (${this.esc(k.unit)})` : ''}</option>`).join('');
+        const outcome = (this.missionOutcomes || []).find((o) => o.id === id) || {};
+        const body = document.getElementById('dl-kpi-link-body');
+        body.innerHTML = `
+            <div class="mb-3"><div class="text-secondary small">Outcome</div><div class="fw-semibold">${this.esc(outcome.title || id)}</div></div>
+            <div class="mb-2"><label class="form-label">KPI</label><select id="dl-kpi-link-kpi" class="form-select">${opts}</select></div>
+            <div class="row g-2 mb-2">
+                <div class="col-md-6"><label class="form-label">Contribution</label><input id="dl-kpi-link-contribution" type="number" step="any" class="form-control" placeholder="e.g. 3"></div>
+                <div class="col-md-6"><label class="form-label">Confidence</label><select id="dl-kpi-link-confidence" class="form-select">
+                    <option value="directional">directional</option><option value="estimated">estimated</option><option value="measured">measured</option></select></div>
+            </div>`;
+        this._dlFlash('dl-kpi-link-flash', '', 'text-secondary');
+        this._dlShow('dl-kpi-link-modal');
+    },
+    async submitKpiLink() {
+        const outcomeId = (this._dlLinkOutcomeId || '').trim();
+        if (!outcomeId) return;
+        const contribRaw = document.getElementById('dl-kpi-link-contribution').value;
+        const body = {
+            project: this._pmProject(),
+            outcome_id: outcomeId, kpi_id: document.getElementById('dl-kpi-link-kpi').value,
+            confidence: document.getElementById('dl-kpi-link-confidence').value,
+        };
+        if (contribRaw !== '') body.contribution = Number(contribRaw);
+        const btn = document.getElementById('dl-kpi-link-save'); if (btn) btn.disabled = true;
+        this._dlFlash('dl-kpi-link-flash', 'Linking…', 'text-secondary');
+        try {
+            await this._dlSend('tally/v1/outcome_kpi_links', 'POST', body);
+            this._dlHide('dl-kpi-link-modal');
+            await this.refreshMissionPage();
+        } catch (e) { this._dlFlash('dl-kpi-link-flash', e.message, 'text-danger'); }
+        finally { if (btn) btn.disabled = false; }
+    },
+
     // ---- node actions: set milestone/role, unlink, open task ----
     openNodeModal(taskId, projectId) {
         const id = String(taskId || '').trim();
@@ -4810,7 +5048,11 @@ const TeepPlan = {
                 const act = e.target.closest('[data-dl-action]');
                 if (act && missionPage.contains(act)) {
                     e.preventDefault();
-                    this._missionAction(act.getAttribute('data-dl-action'), { proposal: act.getAttribute('data-proposal') });
+                    this._missionAction(act.getAttribute('data-dl-action'), {
+                        proposal: act.getAttribute('data-proposal'),
+                        kpi: act.getAttribute('data-kpi'),
+                        outcome: act.getAttribute('data-outcome'),
+                    });
                     return;
                 }
                 const node = e.target.closest('.mission-dag-node');
@@ -4832,6 +5074,10 @@ const TeepPlan = {
         wireBtn('dl-outcome-save', this.submitOutcome);
         wireBtn('dl-node-save', this.submitNodeLink);
         wireBtn('dl-node-unlink', this.unlinkNode);
+        // UI-2: KPI + tally-outcome modal save buttons.
+        wireBtn('dl-kpi-save', this.submitKpi);
+        wireBtn('dl-tally-outcome-save', this.submitTallyOutcome);
+        wireBtn('dl-kpi-link-save', this.submitKpiLink);
         // Live cockpit: poll while the Deliverable tab is showing and the browser
         // tab is visible; stop when the user leaves either.
         if (!this._missionLiveWired) {
