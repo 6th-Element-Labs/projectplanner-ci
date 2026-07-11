@@ -42,7 +42,12 @@ SWITCHBOARD_CI_PROJECT = (os.environ.get("SWITCHBOARD_CI_PROJECT") or "switchboa
 # external_ci_mirror failure_class values that mean the suite actually RAN and was red
 # (a genuine gate failure). Every other failure_class is an infra/dispatch problem where
 # the mirror produced no test verdict -> fall back to the local suite instead of hard-failing.
-_EXTERNAL_CI_TEST_FAILURE_CLASSES = {"test", "test_failed", "tests_failed"}
+# `workflow_failed` is the class external_ci_mirror actually emits when the sandbox workflow
+# ran and concluded failure (it also sets result["status"]=="failure" only in that case); the
+# older "test*" names it never emits are kept for compatibility. Before this fix the set
+# omitted `workflow_failed`, so EVERY red sandbox run was misread as "infra" and fell back to
+# the local venv suite — masking real CI failures AND running the ~200MB HARDEN-32 hog per PR.
+_EXTERNAL_CI_GENUINE_FAILURE_CLASSES = {"workflow_failed", "test", "test_failed", "tests_failed"}
 
 
 class GateError(RuntimeError):
@@ -170,14 +175,40 @@ def _status_description(text: str) -> str:
     return text[:140]
 
 
+def latest_status(repo: str, sha: str, context: str, *, token: str) -> Optional[Dict[str, Any]]:
+    """Most recent commit-status dict for (sha, context), or None. GitHub returns the
+    per-context statuses newest-first, so the first match is the current one."""
+    try:
+        rows = _github_request(
+            "GET", f"repos/{repo}/commits/{sha}/statuses?per_page=100", token=token)
+    except GateError:
+        return None
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if isinstance(row, dict) and (row.get("context") or "") == context:
+            return row
+    return None
+
+
 def post_status(repo: str, sha: str, state: str, *, context: str, description: str,
                 target_url: str = "", token: str) -> Any:
     if not token:
         raise GateError("A GitHub token is required to post PR gate status.")
+    desc = _status_description(description)
+    # Idempotent: GitHub caps a (commit, context) at 1000 statuses, then every POST 422s. This
+    # gate re-runs on a ~2-min timer over every open PR, so blindly re-posting an unchanged
+    # status exhausts that cap on long-lived PRs and wedges the gate (observed on Helm PRs:
+    # "This SHA and context has reached the maximum number of statuses"). Skip the POST when the
+    # latest status for this context already matches — a real transition (state or description
+    # change) still posts.
+    current = latest_status(repo, sha, context, token=token)
+    if current and (current.get("state") or "") == state and (current.get("description") or "") == desc:
+        return {"skipped": "unchanged", "state": state, "context": context, "sha": sha}
     payload: Dict[str, Any] = {
         "state": state,
         "context": context,
-        "description": _status_description(description),
+        "description": desc,
     }
     if target_url:
         payload["target_url"] = target_url
@@ -428,8 +459,10 @@ def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: st
     fclass = (result.get("failure_class") or "").strip().lower()
     if status == "success":
         return "success", result
-    if fclass in _EXTERNAL_CI_TEST_FAILURE_CLASSES:
-        # The mirror actually ran the suite and it was red — a genuine gate failure.
+    if status == "failure" or fclass in _EXTERNAL_CI_GENUINE_FAILURE_CLASSES:
+        # The mirror actually ran the suite and it was red — a genuine gate failure. Use the
+        # mirror's own status=="failure" verdict (set only for workflow_failed) as the primary
+        # signal; do NOT fall back to the local suite, which would mask the red and run the hog.
         raise GateError(
             f"external CI mirror not green (status={status}, conclusion={result.get('conclusion')}, "
             f"class={fclass}) — {result.get('run_url') or ''}")
@@ -448,6 +481,15 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
     number = int(pr["number"])
     sha = pr["head"]["sha"]
     pr_url = pr.get("html_url", f"https://github.com/{repo}/pull/{number}")
+    # CI for an immutable commit is deterministic, so gate each head SHA exactly once: if a
+    # terminal (success/failure) status already exists for (sha, context), skip. Without this
+    # the timer re-ran the full suite (and the external mirror / local venv hog) for EVERY open
+    # PR every ~2 min, and the repeated pending->terminal posts burned the 1000-status cap. A new
+    # commit changes the SHA and re-gates naturally; a stuck "pending" (no terminal) still runs.
+    existing = latest_status(repo, sha, context, token=token)
+    if existing and (existing.get("state") or "") in ("success", "failure"):
+        return {"pr": number, "sha": sha, "state": existing.get("state"),
+                "skipped": "already_gated", "context": context}
     run_tag = _run_tag(number, sha)
     logs = work_root / "logs"
     logs.mkdir(parents=True, exist_ok=True)
