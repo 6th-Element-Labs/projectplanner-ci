@@ -1270,9 +1270,26 @@ def list_deliverables(project: str = DEFAULT_PROJECT, board_id: str = "",
             ).fetchall()
         else:
             rows = c.execute("SELECT id FROM deliverables ORDER BY updated_at DESC, id").fetchall()
-    return [d for d in (get_deliverable(r["id"], project=project,
-                                        include_task_snapshots=include_task_snapshots)
-                        for r in rows) if d]
+    # Build every row without snapshots first, then decorate the flattened link set
+    # once. This keeps list latency proportional to linked projects rather than
+    # N deliverables x M links, while still producing truthful progress counts.
+    deliverables = [d for d in (
+        get_deliverable(r["id"], project=project, include_task_snapshots=False)
+        for r in rows
+    ) if d]
+    all_links = [
+        link
+        for deliverable in deliverables
+        for link in (deliverable.get("task_links") or [])
+    ]
+    if all_links:
+        _decorate_deliverable_task_links(all_links)
+    for deliverable in deliverables:
+        deliverable["progress"] = deliverable_progress(deliverable)
+        if not include_task_snapshots:
+            for link in deliverable.get("task_links") or []:
+                link.pop("task", None)
+    return deliverables
 
 
 def deliverable_progress(deliverable: Dict[str, Any]) -> Dict[str, Any]:
