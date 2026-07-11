@@ -14,7 +14,7 @@ LINE_CEILINGS = {
     "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
-ROOT_PYTHON_FILE_CEILING = 203  # NARRATE-12 adds narration_generate.py + test_narration_generate.py
+ROOT_PYTHON_FILE_CEILING = 204  # NARRATE-12 (+2) then ARCH-MS-4 adds test_consol8_edge_mission_poll.py (CONSOL-8 CI lock)
 
 passed = failed = 0
 
