@@ -44,12 +44,7 @@
              overscroll-behavior-x:contain}
       #board > .tk-board-col{flex:0 0 clamp(17rem,22vw,21rem);min-width:17rem;scroll-snap-align:start}
       #board > .tk-board-col > div:last-child{min-height:2rem}
-      /* Unified top bar (sidebar removed): full-width content + compact switcher chips. */
-      /* Kill the old sidebar's reserved gutter — taikun-ui.js still re-adds the
-         persisted tk-sidebar-collapsed class, whose rule outranks a bare .page-wrapper. */
-      .page-wrapper,
-      body.tk-sidebar-collapsed .page-wrapper{margin-inline-start:0 !important;margin-left:0 !important}
-      .tk-topbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color)}
+      /* (The left nav rail is back — taikun-ui.js owns the .page-wrapper inline margin now.) */
       .tk-switch{display:flex;align-items:center;gap:.4rem;background:var(--tblr-bg-surface-secondary,#f6f7f9);
         border:1px solid var(--tblr-border-color);border-radius:.5rem;padding:.1rem .5rem}
       .tk-switch>label{margin:0;font-size:.7rem;text-transform:uppercase;letter-spacing:.03em;
@@ -103,140 +98,124 @@
       #mission-detail>summary:hover{color:var(--tblr-body-color)}
       .mission-detail-chev{transition:transform .15s ease;display:inline-block}
       #mission-detail[open]>summary .mission-detail-chev{transform:rotate(90deg)}
+      /* Left nav rail (Tabler .navbar-vertical). taikun-ui.js toggles body.tk-sidebar-collapsed
+         + sets the page-wrapper margin; this narrows the aside to an icon rail when collapsed. */
+      .navbar-vertical .nav-link-icon{font-size:1.15rem;margin-inline-end:.6rem}
+      .navbar-vertical .nav-link{border-radius:.5rem}
+      /* Sidebar collapse control (the demo header has no toggle, so it lives in the rail). */
+      .navbar-vertical .tk-rail-toggle{align-self:flex-end;margin:.35rem .5rem .1rem}
+      @media (min-width:992px){
+        body.tk-sidebar-collapsed .navbar-vertical .tk-rail-toggle{align-self:center;margin-inline:0}
+        body.tk-sidebar-collapsed .navbar-vertical{width:4.25rem;overflow:visible}
+        body.tk-sidebar-collapsed .navbar-vertical .nav-link-title,
+        body.tk-sidebar-collapsed .navbar-vertical .tk-rail-full{display:none}
+        body.tk-sidebar-collapsed .navbar-vertical .nav-link{justify-content:center;padding-inline:.5rem}
+        body.tk-sidebar-collapsed .navbar-vertical .nav-link-icon{margin-inline-end:0}
+        body.tk-sidebar-collapsed .navbar-vertical .navbar-brand{justify-content:center;padding-inline:0}
+        /* Full-width header sits on top → the fixed sidebar starts below it. */
+        .navbar-vertical{inset-block-start:var(--tk-header-h) !important}
+      }
+      /* Full-width top header (combo layout): spans the whole page; sidebar + content sit below it. */
+      :root{--tk-header-h:3rem}
+      .tk-toolbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color);min-height:var(--tk-header-h);position:sticky;top:0;z-index:1035}
     </style>
 </head>
-<body class="layout-fluid">
+<body class="layout-fluid tk-sidebar-collapsed">
     <div class="page">
-
-
-        <div class="page-wrapper">
-
-            <!-- Unified top bar: brand + project/deliverable switchers + actions.
-                 Replaces the old left sidebar, which only duplicated the top tabs. -->
-            <div class="page-header d-print-none tk-topbar">
-                <div class="container-xl">
-                    <div class="d-flex align-items-center gap-2 flex-wrap py-2">
-                        <a href="#tab-exec" data-bs-toggle="tab" class="text-reset d-flex align-items-center me-1" aria-label="Taikun — home">
-                            <img src="taikun-mark.svg" alt="Taikun" style="height:30px;width:30px;flex:0 0 auto"/>
-                        </a>
-                        <div class="tk-switch">
-                            <label for="project-switcher"><i class="ti ti-folders"></i>Project</label>
-                            <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
-                            <button id="btn-new-project" class="btn btn-sm btn-outline-primary ms-1" type="button" title="Create a new project"><i class="ti ti-folder-plus me-1"></i>New project</button>
-                            <button id="btn-project-github" class="btn btn-sm btn-outline-secondary" type="button" title="Connect a GitHub repo to this project"><i class="ti ti-brand-github me-1"></i>Connect repo</button>
+            <!-- One thin content toolbar: sidebar toggle · context · search · filters · new · export. -->
+            <header class="navbar navbar-expand-md d-print-none tk-toolbar py-1">
+                <div class="container-fluid d-flex align-items-center">
+                    <!-- Brand — EXACT ActionEngine/Atlas lockup (demo.taikunai.com, per the ActionEngine repo navbar.js): flush-left h1.navbar-brand, no toggle before it. -->
+                    <h1 class="navbar-brand navbar-brand-autodark pe-0 pe-md-3 me-md-3 mb-0">
+                    <a href="#tab-exec" data-bs-toggle="tab" class="d-flex align-items-center text-decoration-none" aria-label="Taikun Switchboard — home" style="gap:10px">
+                        <svg viewBox="168.5 168.5 302.7 302.7" fill="currentColor" aria-hidden="true" style="height:28px;width:28px;flex:0 0 auto;color:var(--tblr-primary)"><defs><clipPath clipPathUnits="userSpaceOnUse" id="tkc-tb"><path clip-rule="evenodd" d="m 3451.39,2273.83 -99.65,-34.31 z m -2102.78,156.88 v -262.12 l 157.02,-54.07 60.08,-145.06 -72.78,-149.26 327.27,-327.27 149.26,72.78 145.06,-60.09 54.09,-157.01 h 462.77 l 54.09,157.01 145.07,60.09 149.25,-72.78 327.27,327.27 -72.77,149.26 60.07,145.06 157.03,54.07 v 105.24 l -99.65,-34.32 -131.63,-45.33 c -31.53,-76.23 -62.94,-152.52 -94.7,-228.65 l 61.04,-125.02 -226.95,-226.96 -125.05,60.98 c -76.15,-31.75 -152.42,-63.22 -228.69,-94.71 l -45.28,-131.56 h -320.96 l -45.29,131.56 c -76.26,31.49 -152.53,62.96 -228.69,94.71 l -125.05,-60.98 -226.94,226.96 3.42,7.01 57.61,118.01 c -31.75,76.13 -63.16,152.42 -94.7,228.65 l -131.63,45.34 v 129.76 h 214.85 v -135.37 h 99.65 v 311.52 h -99.65 v -114.72 h -214.85 z m 2102.78,-61.43 v 262.13 l -157.03,54.07 -60.07,145.06 72.77,149.26 -327.27,327.27 -149.25,-72.78 -145.07,60.09 -54.09,157.01 h -462.77 l -54.09,-157.01 -145.06,-60.09 -149.26,72.78 -327.27,-327.27 72.78,-149.26 -60.08,-145.06 -157.02,-54.07 v -105.25 l 99.64,34.32 131.63,45.34 c 31.54,76.23 62.95,152.51 94.7,228.65 l -61.03,125.02 226.94,226.96 125.05,-60.99 c 76.16,31.76 152.43,63.23 228.69,94.72 l 45.29,131.56 h 320.96 l 45.28,-131.56 c 76.27,-31.49 152.54,-62.96 228.69,-94.72 l 125.05,60.99 226.95,-226.96 -61.04,-125.02 c 31.76,-76.14 63.17,-152.42 94.7,-228.65 l 131.63,-45.34 v -129.77 h -202.9 v 119.88 h -99.65 v -320.82 h 99.65 v 139.51 h 202.9 z m -633.21,464.28 V 1946.8 h 99.65 v 886.76 z m -231.02,-61.97 v -469.52 h 99.65 v 469.52 z m -231.02,264.9 V 1763.5 h 99.66 V 3036.49 Z M 2125.13,2478.3 v -467.46 h 99.65 v 467.46 z m -231.01,351.13 v -879.52 h 99.65 v 879.52 z"/></clipPath></defs><path d="m 3451.39,2273.83 -99.65,-34.31 z m -2102.78,156.88 v -262.12 l 157.02,-54.07 60.08,-145.06 -72.78,-149.26 327.27,-327.27 149.26,72.78 145.06,-60.09 54.09,-157.01 h 462.77 l 54.09,157.01 145.07,60.09 149.25,-72.78 327.27,327.27 -72.77,149.26 60.07,145.06 157.03,54.07 v 105.24 l -99.65,-34.32 -131.63,-45.33 c -31.53,-76.23 -62.94,-152.52 -94.7,-228.65 l 61.04,-125.02 -226.95,-226.96 -125.05,60.98 c -76.15,-31.75 -152.42,-63.22 -228.69,-94.71 l -45.28,-131.56 h -320.96 l -45.29,131.56 c -76.26,31.49 -152.53,62.96 -228.69,94.71 l -125.05,-60.98 -226.94,226.96 3.42,7.01 57.61,118.01 c -31.75,76.13 -63.16,152.42 -94.7,228.65 l -131.63,45.34 v 129.76 h 214.85 v -135.37 h 99.65 v 311.52 h -99.65 v -114.72 h -214.85 z m 2102.78,-61.43 v 262.13 l -157.03,54.07 -60.07,145.06 72.77,149.26 -327.27,327.27 -149.25,-72.78 -145.07,60.09 -54.09,157.01 h -462.77 l -54.09,-157.01 -145.06,-60.09 -149.26,72.78 -327.27,-327.27 72.78,-149.26 -60.08,-145.06 -157.02,-54.07 v -105.25 l 99.64,34.32 131.63,45.34 c 31.54,76.23 62.95,152.51 94.7,228.65 l -61.03,125.02 226.94,226.96 125.05,-60.99 c 76.16,31.76 152.43,63.23 228.69,94.72 l 45.29,131.56 h 320.96 l 45.28,-131.56 c 76.27,-31.49 152.54,-62.96 228.69,-94.72 l 125.05,60.99 226.95,-226.96 -61.04,-125.02 c 31.76,-76.14 63.17,-152.42 94.7,-228.65 l 131.63,-45.34 v -129.77 h -202.9 v 119.88 h -99.65 v -320.82 h 99.65 v 139.51 h 202.9 z m -633.21,464.28 V 1946.8 h 99.65 v 886.76 z m -231.02,-61.97 v -469.52 h 99.65 v 469.52 z m -231.02,264.9 V 1763.5 h 99.66 V 3036.49 Z M 2125.13,2478.3 v -467.46 h 99.65 v 467.46 z m -231.01,351.13 v -879.52 h 99.65 v 879.52 h -99.65" transform="matrix(0.13333333,0,0,-0.13333333,0,640)" clip-path="url(#tkc-tb)"/></svg>
+                        <span style="font-size:18px;font-weight:500;letter-spacing:.14em;color:var(--tblr-body-color);line-height:1;white-space:nowrap">TAIKUN<span style="font-weight:400;color:var(--tblr-primary);margin-left:.4em">SWITCHBOARD</span></span>
+                    </a>
+                    </h1>
+                    <div id="toolbar-context" class="d-none align-items-center gap-1 text-secondary text-truncate" style="min-width:0"></div>
+                    <!-- Tools — pushed to the far right (demo: search + actions on the right). -->
+                    <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0">
+                        <div class="input-icon d-none d-sm-block" style="width:210px">
+                            <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                            <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search…  ⌘K" autocomplete="off"/>
                         </div>
-                        <div class="tk-switch" id="header-deliverable-wrap" style="display:none">
-                            <label for="header-deliverable-switcher"><i class="ti ti-target-arrow"></i>Deliverable</label>
-                            <select id="header-deliverable-switcher" class="form-select form-select-sm" aria-label="Switch deliverable"></select>
-                        </div>
-                        <div class="page-pretitle d-none"></div>
-                        <h2 class="page-title d-none"></h2>
-                        <div class="ms-auto btn-list align-items-center">
-                            <span id="data-status" class="badge bg-secondary-lt">Loading…</span>
-                            <span id="plan-generated" class="badge bg-secondary-lt"></span>
-                            <button id="btn-new-task" class="btn btn-primary btn-sm"><i class="ti ti-plus me-1"></i>New task</button>
-                            <a id="dl-xlsx" href="api/export.xlsx" class="btn btn-outline-primary btn-sm"><i class="ti ti-file-spreadsheet me-1"></i>Excel</a>
-                            <a id="dl-xml" href="api/export.xml" class="btn btn-outline-primary btn-sm"><i class="ti ti-brand-windows me-1"></i>MS Project</a>
-                            <div class="dropdown" id="user-menu" style="display:none">
-                                <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Account menu">
-                                    <i class="ti ti-user"></i><span id="user-menu-email" class="ms-1 d-none d-sm-inline"></span>
-                                </button>
-                                <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="/account"><i class="ti ti-key me-2"></i>Account &amp; password</a></li>
-                                    <li><a class="dropdown-item" href="/coordination" id="menu-coordination"><i class="ti ti-messages me-2"></i>Agent coordination</a></li>
-                                    <li><hr class="dropdown-divider"></li>
-                                    <li><a class="dropdown-item" href="#" id="user-menu-signout"><i class="ti ti-logout me-2"></i>Sign out</a></li>
-                                </ul>
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="ti ti-filter me-1"></i>Filters<span id="filter-count" class="badge bg-primary ms-1 d-none"></span></button>
+                            <div class="dropdown-menu dropdown-menu-end p-3" style="min-width:300px">
+                                <div class="mb-2"><select id="f-ws" class="form-select form-select-sm"></select></div>
+                                <div class="mb-2"><select id="f-owner" class="form-select form-select-sm"></select></div>
+                                <div class="mb-2"><select id="f-assignee" class="form-select form-select-sm"></select></div>
+                                <div class="mb-2"><select id="f-risk" class="form-select form-select-sm"></select></div>
+                                <label class="form-check form-switch"><input id="f-blocking" class="form-check-input" type="checkbox"/><span class="form-check-label">Blocking only</span></label>
+                                <label class="form-check form-switch m-0"><input id="f-hidedone" class="form-check-input" type="checkbox" checked/><span class="form-check-label">Hide done</span></label>
                             </div>
+                        </div>
+                        <button id="btn-new-task" class="btn btn-sm btn-primary"><i class="ti ti-plus me-1"></i>New task</button>
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Export"><i class="ti ti-download"></i></button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><a class="dropdown-item" id="dl-xlsx" href="api/export.xlsx"><i class="ti ti-file-spreadsheet me-2"></i>Excel</a></li>
+                                <li><a class="dropdown-item" id="dl-xml" href="api/export.xml"><i class="ti ti-brand-windows me-2"></i>MS Project</a></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><h6 class="dropdown-header" id="data-status">Loading…</h6></li>
+                                <li><h6 class="dropdown-header text-secondary fw-normal" id="plan-generated"></h6></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+        <!-- Left nav rail — Tabler navbar-vertical. Expandable/hidable via taikun-ui.js
+             ([data-tk-sidebar-toggle], persists 'taikun.sidebar.collapsed', default collapsed). -->
+        <aside class="navbar navbar-vertical navbar-expand-lg">
+            <div class="container-fluid">
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu" aria-controls="sidebar-menu" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <!-- Brand lives in the top header; the collapse control sits at the top of the rail. -->
+                <button class="btn btn-icon btn-ghost-secondary tk-rail-toggle d-none d-lg-inline-flex" type="button" data-tk-sidebar-toggle title="Collapse sidebar" aria-label="Toggle sidebar"><i class="ti ti-layout-sidebar-left-collapse"></i></button>
+                <div class="collapse navbar-collapse" id="sidebar-menu">
+                    <div class="px-2 pt-2 pb-1 tk-rail-full">
+                        <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project"></select>
+                    </div>
+                    <ul class="navbar-nav pt-lg-1" id="main-nav" role="tablist">
+                        <li class="nav-item"><a class="nav-link active" id="toptab-overview" data-bs-toggle="tab" href="#tab-exec" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Overview</span></a></li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-plan" data-bs-toggle="tab" href="#tab-plan-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-kanban"></i></span><span class="nav-link-title">Plan</span></a></li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-mission" data-bs-toggle="tab" href="#tab-mission" role="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverable</span></a></li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
+                        <li class="nav-item"><a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span></a></li>
+                    </ul>
+                    <div class="mt-auto px-2 pb-2 tk-rail-full">
+                        <button id="btn-new-project" class="btn btn-sm btn-outline-light w-100 mb-2" type="button"><i class="ti ti-folder-plus me-1"></i>New project</button>
+                        <button id="btn-project-github" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" title="Connect a GitHub repo to this project"><i class="ti ti-brand-github me-1"></i>Connect repo</button>
+                        <div class="dropdown w-100" id="user-menu" style="display:none">
+                            <a href="#" class="d-flex align-items-center text-reset text-decoration-none px-2 py-1" data-bs-toggle="dropdown" aria-label="Account menu">
+                                <i class="ti ti-user me-2"></i><span id="user-menu-email" class="small text-truncate"></span>
+                                <i class="ti ti-dots-vertical ms-auto"></i>
+                            </a>
+                            <ul class="dropdown-menu">
+                                <li><a class="dropdown-item" href="/account"><i class="ti ti-key me-2"></i>Account &amp; password</a></li>
+                                <li><a class="dropdown-item" href="/coordination" id="menu-coordination"><i class="ti ti-messages me-2"></i>Agent coordination</a></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item" href="#" id="user-menu-signout"><i class="ti ti-logout me-2"></i>Sign out</a></li>
+                            </ul>
                         </div>
                     </div>
                 </div>
             </div>
+        </aside>
+
+        <div class="page-wrapper">
+
 
             <!-- Page Body -->
             <div class="page-body">
+                <div id="filter-chips" class="container-xl d-flex align-items-center gap-1 flex-wrap px-3"></div>
                 <div class="container-xl">
 
                     <!-- Error surface (hidden until needed) -->
                     <div id="plan-error"></div>
 
-                    <!-- Rollup stats (hidden: the Exec Summary tab carries the KPI strip now) -->
-                    <div class="row row-cards mb-3 d-none" id="plan-stats"></div>
-
-                    <!-- About (collapsible) — hidden; executive summary lives in the Exec Summary tab -->
-                    <div class="card mb-3 d-none">
-                        <div class="card-header">
-                            <h3 class="card-title"><i class="ti ti-info-circle me-2"></i>About this plan</h3>
-                            <div class="card-actions">
-                                <a class="btn btn-sm" data-bs-toggle="collapse" href="#about-body" role="button" aria-expanded="false" aria-controls="about-body">
-                                    <i class="ti ti-chevron-down me-1"></i>Executive summary &amp; timeline
-                                </a>
-                            </div>
-                        </div>
-                        <div class="collapse" id="about-body">
-                            <div class="card-body" id="about-content"></div>
-                        </div>
-                    </div>
-
-                    <!-- Search + collapsible filters. The 7 always-on controls are gone: search
-                         stays visible, the rest hide behind "Filters", and whatever is set
-                         shows as removable chips. ⌘K opens the command palette (jump/filter/act). -->
-                    <div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
-                        <div class="input-icon flex-fill" style="min-width:180px;max-width:440px">
-                            <span class="input-icon-addon"><i class="ti ti-search"></i></span>
-                            <input id="f-search" type="text" class="form-control" placeholder="Search…   or press ⌘K" autocomplete="off"/>
-                        </div>
-                        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#filter-adv" aria-expanded="false">
-                            <i class="ti ti-filter me-1"></i>Filters<span id="filter-count" class="badge bg-primary ms-2 d-none"></span>
-                        </button>
-                        <button id="cmdk-open" class="btn btn-outline-secondary" type="button" title="Command palette (⌘K)" aria-label="Command palette">
-                            <i class="ti ti-command"></i>
-                        </button>
-                        <div id="filter-chips" class="d-flex align-items-center gap-1 flex-wrap"></div>
-                    </div>
-                    <div class="collapse mb-3" id="filter-adv">
-                        <div class="card"><div class="card-body py-2">
-                            <div class="row g-2 align-items-center">
-                                <div class="col-6 col-md-3"><select id="f-ws" class="form-select"></select></div>
-                                <div class="col-6 col-md-3"><select id="f-owner" class="form-select"></select></div>
-                                <div class="col-6 col-md-3"><select id="f-assignee" class="form-select"></select></div>
-                                <div class="col-6 col-md-3"><select id="f-risk" class="form-select"></select></div>
-                                <div class="col-6 col-md-auto">
-                                    <label class="form-check form-switch m-0">
-                                        <input id="f-blocking" class="form-check-input" type="checkbox"/>
-                                        <span class="form-check-label">Blocking only</span>
-                                    </label>
-                                </div>
-                                <div class="col-6 col-md-auto">
-                                    <label class="form-check form-switch m-0">
-                                        <input id="f-hidedone" class="form-check-input" type="checkbox" checked/>
-                                        <span class="form-check-label">Hide done</span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div></div>
-                    </div>
-
-                    <!-- Tabs: 5 destinations grouped by intent (was 11 flat peers).
-                         Plan + Inbox are hubs whose sub-views switch via a segmented
-                         sub-nav inside the pane; Overview folds in the Pulse digest. -->
-                    <ul class="nav nav-tabs" role="tablist">
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link active" id="toptab-overview" data-bs-toggle="tab" href="#tab-exec" role="tab"><i class="ti ti-layout-dashboard me-1"></i>Overview</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" id="toptab-plan" data-bs-toggle="tab" href="#tab-plan-hub" role="tab"><i class="ti ti-layout-kanban me-1"></i>Plan</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" id="toptab-mission" data-bs-toggle="tab" href="#tab-mission" role="tab"><i class="ti ti-target-arrow me-1"></i>Deliverable</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><i class="ti ti-sparkles me-1"></i>Ask</a>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><i class="ti ti-inbox me-1"></i>Inbox</a>
-                        </li>
-                    </ul>
 
                     <div class="tab-content">
                         <!-- OVERVIEW — shareable exec summary + the weekly Pulse digest (folded in from its own tab) -->
@@ -273,6 +252,7 @@
                                 </div>
                                 <!-- Board (kanban) -->
                                 <div class="tab-pane" id="tab-board" role="tabpanel">
+                                    <div id="session-health-strip" class="mt-1 mb-2"></div>
                                     <div class="mt-1" id="board"></div>
                                 </div>
                                 <!-- Timeline (Gantt) -->
@@ -694,6 +674,44 @@
       })();
     </script>
     <script>
+      // Left-rail active state + toolbar breadcrumb. Bootstrap can't auto-deactivate rail
+      // links (.navbar-nav isn't a .nav), so we sync on shown.bs.tab; the breadcrumb shows
+      // Project › Section (› Deliverable on the Deliverable screen).
+      (function () {
+        var ctx = document.getElementById('toolbar-context');
+        function activeTop() { return document.querySelector('#main-nav .nav-link.active'); }
+        function esc(s) { return (s || '').replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+        function update() {
+          if (!ctx) return;
+          var link = activeTop();
+          var section = link ? (link.querySelector('.nav-link-title') || link).textContent.trim() : '';
+          var parts = [];
+          var ps = document.getElementById('project-switcher');
+          if (ps && ps.selectedIndex >= 0 && ps.options.length) parts.push(ps.options[ps.selectedIndex].textContent.trim());
+          if (section && section !== 'Overview') parts.push(section);
+          if (link && link.id === 'toptab-mission') {
+            var dp = document.getElementById('mission-deliverable-picker');
+            if (dp && dp.value && dp.selectedIndex >= 0) parts.push(dp.options[dp.selectedIndex].textContent.trim());
+          }
+          ctx.innerHTML = parts.map(function (p, i) {
+            return (i ? '<i class="ti ti-chevron-right text-secondary" style="font-size:.8rem"></i>' : '') +
+              '<span class="' + (i === parts.length - 1 ? 'text-body' : 'text-secondary') + '">' + esc(p) + '</span>';
+          }).join('');
+        }
+        document.addEventListener('shown.bs.tab', function (e) {
+          if (e.target.closest('#main-nav')) {
+            document.querySelectorAll('#main-nav .nav-link').forEach(function (a) { a.classList.toggle('active', a === e.target); });
+          }
+          update();
+        });
+        document.addEventListener('change', function (e) {
+          if (e.target && (e.target.id === 'project-switcher' || e.target.id === 'mission-deliverable-picker')) update();
+        });
+        update();
+        var n = 0, t = setInterval(function () { update(); if (++n > 12) clearInterval(t); }, 500);
+      })();
+    </script>
+    <script>
       // ⌘K command palette + active-filter chips. Reads the live DOM (tabs, filter selects,
       // project/deliverable switchers) and drives the existing controls, so it stays in sync
       // with whatever app.js renders and needs no coupling to app internals.
@@ -720,7 +738,7 @@
 
         function commands() {
           var cmds = [];
-          document.querySelectorAll('.nav-tabs [data-bs-toggle="tab"]').forEach(function (a) {
+          document.querySelectorAll('#main-nav [data-bs-toggle="tab"]').forEach(function (a) {
             cmds.push({ group: 'Jump to', icon: iconOf(a), label: txt(a), run: function () { jump(a.getAttribute('href')); } });
           });
           document.querySelectorAll('.tk-subnav [data-bs-toggle="tab"]').forEach(function (a) {
