@@ -212,11 +212,45 @@ try:
     ok(len(scoped) == 1 and scoped[0]["board_id"] == mission["id"],
        "list_deliverables can scope by mission board id")
 
+    second = store.create_deliverable(
+        {"id": "second-deliverable", "title": "Second deliverable"},
+        actor="test", project="qa-deliv-home")
+    store.link_task_to_deliverable(
+        second["id"], "qa-deliv-target", target_task["task_id"],
+        actor="test", project="qa-deliv-home")
+    snapshot_calls = []
+    original_snapshots = store._deliverable_task_snapshots
+
+    def counted_snapshots(project, task_ids):
+        snapshot_calls.append((project, list(task_ids)))
+        return original_snapshots(project, task_ids)
+
+    store._deliverable_task_snapshots = counted_snapshots
+    try:
+        slim = store.list_deliverables(
+            project="qa-deliv-home", include_task_snapshots=False)
+    finally:
+        store._deliverable_task_snapshots = original_snapshots
+    linked_rows = [row for row in slim if row.get("task_links")]
+    ok(len(snapshot_calls) == 1,
+       "slim deliverable list batches shared-project task snapshots once across rows")
+    ok(all("task" not in link for row in linked_rows for link in row["task_links"]),
+       "slim deliverable list omits per-link task snapshots")
+    ok(all(row["progress"]["status_counts"].get("Not Started") == 1
+           for row in linked_rows),
+       "slim deliverable list keeps truthful progress counts")
+    full = store.get_deliverable(
+        "helm-cpp-webgpu-renderer", project="qa-deliv-home")
+    ok(full["task_links"][0]["task"]["task_id"] == "RENDER-1",
+       "get_deliverable remains the explicit full-snapshot path")
+
     export = store.audit_export(project="qa-deliv-home")
     ok(export["summary"]["project_board_count"] == 1 and
-       export["summary"]["deliverable_count"] == 1 and
+       export["summary"]["deliverable_count"] == 2 and
        export["deliverables"]["boards"][0]["id"] == mission["id"] and
-       export["deliverables"]["task_links"][0]["task_id"] == "RENDER-1",
+       len(export["deliverables"]["task_links"]) == 2 and
+       all(link["task_id"] == "RENDER-1"
+           for link in export["deliverables"]["task_links"]),
        "audit export includes project boards, deliverable records, and links")
 
     status = store.get_mission_status(project="qa-deliv-home",
