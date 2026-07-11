@@ -3568,7 +3568,16 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
 
 
 def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
-                project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+                project: str = DEFAULT_PROJECT,
+                hydrate_task: bool = True) -> Optional[Dict[str, Any]]:
+    """Append task activity, optionally skipping the expensive task-detail readback.
+
+    REST comment creation returns the updated task and keeps the default hydration.
+    Acknowledgement-only callers such as the MCP ``add_comment`` tool can pass
+    ``hydrate_task=False``: they still validate the task and commit the exact same
+    activity/audit rows, but avoid loading provenance, sessions, CI, publication,
+    and project context only to discard them.
+    """
     now = time.time()
     with _conn(project) as c:
         if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
@@ -3596,7 +3605,7 @@ def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
                     (task_id, "switchboard/identity", "principal.unbound_write",
                      json.dumps(payload, sort_keys=True), now),
                 )
-    return get_task(task_id, project)
+    return get_task(task_id, project) if hydrate_task else {"task_id": task_id}
 
 
 def create_task(data: Dict[str, Any], actor: str = "user",

@@ -3004,7 +3004,8 @@ def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell",
     if not binding.get("ok"):
         return _dumps(binding)
     _write_binding_comment(task_id, binding, project)
-    t = store.add_comment(task_id, binding["actor"], text, project=project)
+    t = store.add_comment(
+        task_id, binding["actor"], text, project=project, hydrate_task=False)
     return "ok" if t else "no such task"
 
 
