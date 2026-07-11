@@ -14683,6 +14683,17 @@ def _pr_references_task(pr: Dict[str, Any], task_id: str) -> bool:
     return bool(token.search(head_ref) or token.search(title))
 
 
+def _has_immutable_github_merge(task: Dict[str, Any], state: Dict[str, Any]) -> bool:
+    """True once canonical GitHub merge provenance cannot change anymore."""
+    return bool(
+        state.get("pr_number")
+        and task.get("status") == "Done"
+        and state.get("merged_sha")
+        and state.get("in_main_content")
+        and state.get("provenance_type") == "github_pr_merged"
+    )
+
+
 def _needs_live_pr_recheck(task: Dict[str, Any], state: Dict[str, Any]) -> bool:
     """Whether reconcile still needs GitHub's mutable PR view for this task.
 
@@ -14694,12 +14705,7 @@ def _needs_live_pr_recheck(task: Dict[str, Any], state: Dict[str, Any]) -> bool:
     """
     if not state.get("pr_number"):
         return False
-    return not (
-        task.get("status") == "Done"
-        and bool(state.get("merged_sha"))
-        and bool(state.get("in_main_content"))
-        and state.get("provenance_type") == "github_pr_merged"
-    )
+    return not _has_immutable_github_merge(task, state)
 
 
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
@@ -14760,12 +14766,21 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                     ),
                 })
             else:
+                skipped_immutable_git = 0
                 for task in tasks:
                     task_id = task["task_id"]
                     state = git_states.get(task_id, {})
                     state_repo = _github_repo_from_pr_url(state.get("pr_url") or "")
                     state_role = get_project_repo_role(state_repo, project) if state_repo else {}
                     if state_repo and not state_role.get("canonical"):
+                        continue
+                    # The webhook/reconcile merge stamp already proved this exact
+                    # canonical merge is in main. Re-running cat-file + merge-base
+                    # for every historical PR on every 15-minute cycle needlessly
+                    # spawns hundreds of git processes and charges packfile cache to
+                    # the small VM's reconcile cgroup.
+                    if _has_immutable_github_merge(task, state):
+                        skipped_immutable_git += 1
                         continue
                     for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
                         if (field == "head_sha" and task.get("status") == "Done"
@@ -14789,6 +14804,7 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                             findings.append({"severity": "high", "task_id": task_id,
                                              "code": "merged_sha_not_on_canonical_main",
                                              "detail": "Recorded merged_sha is not reachable from canonical main."})
+                checks["git_checks_skipped_immutable"] = skipped_immutable_git
 
     token = _github_token()
     recorded_pr_tasks = [
