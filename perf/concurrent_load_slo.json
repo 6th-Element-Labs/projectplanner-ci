@@ -1,0 +1,32 @@
+{
+  "schema": "switchboard.concurrent_load_slo_ratchet.v1",
+  "task": "HARDEN-64",
+  "purpose": "ADR-0007 ratchet applied to the mcp-agent-path concurrent-load SLO. scripts/concurrent_load_gate.py reads THIS committed file for its enforced ceilings instead of hard-coded, env-overridable defaults. The gate fails when a measured statistic reaches its 'ratchet_ms'. 'slo_ms' is the hard product SLO that the ratchet may never be relaxed to or past (the loader asserts ratchet_ms < slo_ms); 'ratchet_ms' is the committed high-water ceiling that turns one way — a change that proves a lower number lowers it here in the same PR, and a change that needs a higher one must raise it here with a justification visible in diff review. Env vars (LOAD_GATE_*_MS) may only TIGHTEN a ceiling for local experiments; they can never loosen it, so no change can silently regress past what is committed here.",
+  "notes": "Initial ratchet position seeded at half of each hard SLO — a real, safe first tightening that halves every silent-regression window while leaving generous headroom over the measured high-water (writes/search p99 ~= 22 ms, board p95 ~= 8 ms on a warm dev box; server-side only). HARDEN-62 records the production-shaped CI numbers and tightens each ratchet_ms toward its measured high-water + margin.",
+  "metrics": {
+    "writes": {
+      "stat": "p99",
+      "ratchet_ms": 50.0,
+      "slo_ms": 100.0,
+      "measured_high_water_ms": 22.5
+    },
+    "search_tasks": {
+      "stat": "p99",
+      "ratchet_ms": 75.0,
+      "slo_ms": 150.0,
+      "measured_high_water_ms": 21.8
+    },
+    "board_summary": {
+      "stat": "p95",
+      "ratchet_ms": 200.0,
+      "slo_ms": 400.0,
+      "measured_high_water_ms": 8.4
+    },
+    "all_calls": {
+      "stat": "max",
+      "ratchet_ms": 2500.0,
+      "slo_ms": 5000.0,
+      "measured_high_water_ms": 22.5
+    }
+  }
+}
