@@ -39,9 +39,9 @@ requires merge webhook or reconcile.
 
 | Task | Title | Milestone | Deps | Board | Tracker | Repo evidence |
 |---|---|---|---|---|---|---|
-| **ARCH-MS-1** | ADR-0009 charter + ARCH-MS-EXECUTION tracker | 0.2 | — | In Progress | 🟡 | This PR (`docs/decisions/0009-microservices-modernization.md`, `docs/ARCH-MS-EXECUTION.md`) |
+| **ARCH-MS-1** | ADR-0009 charter + ARCH-MS-EXECUTION tracker | 0.2 | — | Done | ✅ | PR #314 — `docs/decisions/0009-microservices-modernization.md`, `docs/ARCH-MS-EXECUTION.md` |
 | **ARCH-MS-2** | Size ratchet + CI test discovery (CONSOL-6) | 0.1 | — | Not Started | 🟡 | `test_size_ratchet.py`; `scripts/switchboard_ci.sh` pytest discovery + `TEST_DENYLIST` |
-| **ARCH-MS-3** | Delete dead MCP/REST surfaces (CONSOL-7, CONSOL-9) | 0.1 | — | Not Started | 🟡 | `test_consol9_h2_census.py` (census checks); `gmail_source.py` still present — CONSOL-7 incomplete |
+| **ARCH-MS-3** | Delete dead MCP/REST surfaces (CONSOL-7, CONSOL-9) | 0.1 | — | In Review | ✅ | **CONSOL-7** PR #276 + `test_consol7_dead_surfaces.py`; **CONSOL-9** PR #297 + `test_consol9_h2_census.py`. `gmail_source.py` deferred → ARCH-MS-11 |
 | **ARCH-MS-4** | Caddy security headers + mission poller ETag (CONSOL-8) | 0.1 | — | Not Started | ✅ | `deploy/Caddyfile` security headers + access log; `app.py` mission_status / dependency_graph `max_age=5` + ETag |
 | **ARCH-MS-5** | MCP read auth — bearer required on `/mcp` | 0.3 | — | Not Started | ⬜ | Reads still open; writes use `_require_write` only (`mcp_server.py`) |
 | **ARCH-MS-6** | `pyproject.toml` package scaffold (lockfile pending) | 0.2 | 1 | In Progress | 🔗 | **HARDEN-54** / PR #303 — `pyproject.toml`, `.python-version`, `uv.lock`; lockfile task split to ARCH-MS-13 |
@@ -134,7 +134,7 @@ Tasks with satisfied dependencies and remaining work:
 
 1. **ARCH-MS-1** — this charter (in flight)
 2. **ARCH-MS-2** — close CONSOL-6 (verify discovery covers ratchet; document denylist policy)
-3. **ARCH-MS-3** — finish CONSOL-7 deletions + CONSOL-9 census execution
+3. ~~**ARCH-MS-3** — finish CONSOL-7 deletions + CONSOL-9 census execution~~ (done; gmail_source → ARCH-MS-11)
 4. **ARCH-MS-5** — MCP read auth (P0; blocks ARCH-MS-22 formal closure if regressed)
 5. **ARCH-MS-7** — package skeleton (unblocks scaffold chain)
 6. **ARCH-MS-10** — flag census (unblocks inbox extraction)
@@ -146,3 +146,4 @@ Tasks with satisfied dependencies and remaining work:
 | Date | Actor | Note |
 |---|---|---|
 | 2026-07-12 | ARCH-MS-1 | Initial tracker + ADR-0009 charter; baseline master `5305090` |
+| 2026-07-12 | ARCH-MS-3 | CONSOL-7/9 closed; added `test_consol7_dead_surfaces.py`; gmail_source scoped to ARCH-MS-11 |
