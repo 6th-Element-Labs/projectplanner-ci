@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 # shrinks, lower its ceiling in the same PR; if it grows, follow ADR-0007's relief order before
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
-    "store.py": 15_470,  # ARCH-MS-20 extracted runner persistence/control into runner_store.py
+    "store.py": 15_471,  # +1: create_project busts the project-map cache (registry-churn perf fix)
     "app.py": 3_274,  # ARCH-MS-18/8 share one package bootstrap and thin create adapter
     "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet

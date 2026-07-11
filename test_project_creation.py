@@ -233,6 +233,28 @@ try:
     reserved = store.create_project("Helm", project_id="helm", actor="test")
     ok("error" in reserved and "reserved" in reserved["error"],
        "built-in project ids are reserved")
+
+    # --- registry churn (perf): project resolution must be cached, not re-open + re-init
+    # the registry on every store op (the live web worker was pegged at 107% CPU here) ---
+    import db.connection as _dbc
+    _loads = {"n": 0}
+    _orig_load = _dbc._load_dynamic_projects
+    _dbc._load_dynamic_projects = lambda: (_loads.__setitem__("n", _loads["n"] + 1) or _orig_load())
+    try:
+        _dbc.bust_project_cache()
+        store._project_map()          # warm the cache once
+        _loads["n"] = 0
+        for _ in range(50):
+            store._project_map()      # 50 hot-path resolutions
+        ok(_loads["n"] == 0,
+           "50 project resolutions hit the cache — zero registry rebuilds (was: one per call)")
+        made = store.create_project("Cachetest", project_id="cachetest", actor="test")
+        ok(made.get("created") is True, "create_project succeeds")
+        ok("cachetest" in store._project_map(),
+           "a newly created project resolves immediately — create_project busts the cache")
+    finally:
+        _dbc._load_dynamic_projects = _orig_load
+        _dbc.bust_project_cache()
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
