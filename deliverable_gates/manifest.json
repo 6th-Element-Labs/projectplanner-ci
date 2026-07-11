@@ -1,0 +1,83 @@
+{
+  "schema": "switchboard.deliverable_gate_registry.v1",
+  "description": "Registry of named closure-gate checks a deliverable's proof_requirements.gates can reference by id. DELIVERABLES-14. The closure engine (DELIVERABLES-15) executes what deliverable_gates.resolve_gates() returns; this file only maps ids to check definitions.",
+  "doc": "docs/DELIVERABLE-CLOSURE-GATE.md",
+  "kinds": {
+    "script": {
+      "runs": "an external command; passes when it exits 0",
+      "fields": {
+        "command": "list[str], required, argv run from the repo root",
+        "cwd": "str, optional working directory relative to the repo root",
+        "timeout_s": "number, optional wall-clock ceiling",
+        "env_allowlist": "list[str], optional env var names/globs passed through"
+      }
+    },
+    "pytest": {
+      "runs": "python3 -m pytest <target> <args>; passes on a clean pytest exit",
+      "fields": {
+        "target": "str, required test path or node id",
+        "args": "list[str], optional extra pytest arguments",
+        "timeout_s": "number, optional wall-clock ceiling"
+      }
+    },
+    "store_check": {
+      "runs": "a named pure-store assertion resolved by the closure engine",
+      "fields": {
+        "check": "str, required named predicate id",
+        "params": "object, optional predicate arguments"
+      }
+    },
+    "offline_evidence": {
+      "runs": "asserts a task carries terminal offline provenance (no command)",
+      "fields": {
+        "task_id": "str, required task the evidence must exist on",
+        "task_project": "str, optional owning project (defaults to the deliverable's project)"
+      }
+    },
+    "scope": {
+      "runs": "reserved built-in Gate 1 (scope complete); never declared in this manifest, referenced as {\"id\": \"scope\"}",
+      "fields": {}
+    }
+  },
+  "gates": [
+    {
+      "id": "harness:concurrent_load_gate",
+      "kind": "script",
+      "title": "Concurrent agent-path SLO gate",
+      "description": "HARDEN-50/64 production-shaped 8-agent concurrent MCP load gate against the committed perf/concurrent_load_slo.json ratchet.",
+      "command": ["python3", "scripts/concurrent_load_gate.py"],
+      "timeout_s": 1200,
+      "env_allowlist": ["LOAD_GATE_*", "CONCURRENT_LOAD_*"],
+      "required": true
+    },
+    {
+      "id": "harness:test_concurrent_load_ratchet",
+      "kind": "script",
+      "title": "Concurrent-load SLO ratchet test",
+      "description": "Asserts the committed SLO ratchet baseline is tighten-only and internally consistent (HARDEN-64).",
+      "command": ["python3", "test_concurrent_load_ratchet.py"],
+      "timeout_s": 600,
+      "required": true
+    },
+    {
+      "id": "harness:test_mcp_observability",
+      "kind": "script",
+      "title": "MCP observability test",
+      "description": "Asserts the MCP observability surface exposes per-tool lock-wait counts and write-path latency (HARDEN-63).",
+      "command": ["python3", "test_mcp_observability.py"],
+      "timeout_s": 600,
+      "required": false
+    },
+    {
+      "id": "harness:test_deliverable_closure_gate",
+      "kind": "script",
+      "title": "Deliverable closure gate test",
+      "description": "End-to-end closure-gate test: fixture deliverable, scope pass/fail, grade persistence. Target file is created by DELIVERABLES-21.",
+      "command": ["python3", "test_deliverable_closure_gate.py"],
+      "timeout_s": 900,
+      "required": true,
+      "pending": true,
+      "pending_task": "DELIVERABLES-21"
+    }
+  ]
+}
