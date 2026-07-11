@@ -9,16 +9,16 @@ ROOT = Path(__file__).resolve().parent
 # shrinks, lower its ceiling in the same PR; if it grows, follow ADR-0007's relief order before
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
-    "store.py": 15_566,  # DELIVERABLES-16 closure surface (+95) atop create_project cache fix
-    "app.py": 3_305,  # DELIVERABLES-16: closure_verify + closure_report REST routes
-    "mcp_server.py": 3_190,  # DELIVERABLES-16: verify_deliverable_closure + get_deliverable_closure_report tools
+    "store.py": 15_566,  # DELIVERABLES-16 closure surface atop create_project cache fix
+    "app.py": 3_343,  # DELIVERABLES-16 closure routes + NARRATE-13 narration health/control routes
+    "mcp_server.py": 3_223,  # DELIVERABLES-16 closure tools + NARRATE-13 narration ops tools
     "static/app.js": 4_888,  # ARCH-MS-21 composition root after board/mission/state extraction
     "static/js/api.js": 25,  # project-aware fetch boundary
     "static/js/state.js": 79,  # application state and UI vocabularies
     "static/js/board.js": 227,  # board filters/cards/summary rendering
     "static/js/mission.js": 1_379,  # deliverable mission cockpit and authoring
 }
-ROOT_PYTHON_FILE_CEILING = 205  # ARCH-MS-4 then ARCH-MS-21 add one focused regression proof each
+ROOT_PYTHON_FILE_CEILING = 207  # master 205 + NARRATE-13 narration_ops.py + test_narration_ops.py
 
 passed = failed = 0
 

@@ -786,6 +786,39 @@ def get_saturation_signals(project: str = "switchboard") -> str:
 
 
 @mcp.tool()
+def get_narration_health(project: str = "switchboard") -> str:
+    """NARRATE-13: bounded narration queue + generation-receipt snapshot — attempt-state depth,
+    oldest-pending age, success/failure/fallback rates, model-token-cost totals, and alert flags
+    (queue age, failure rate, dead letters). Read-only; indexed aggregates only."""
+    import narration_ops
+    return _dumps(narration_ops.narration_health(project))
+
+
+@mcp.tool()
+def narrate_now(entity_type: str, entity_id: str, ctx: Context,
+                project: str = "switchboard", reason: str = "") -> str:
+    """NARRATE-13: force (re)generation of an entity's current narration revision now. Audited,
+    deduped (re-queues the current revision, no new visible effect), and still budget-gated —
+    it does not bypass the NARRATE-12 generation policy. entity_type is task or deliverable."""
+    import narration_ops
+    principal = _require_write(ctx, project, ("write:system",))
+    return _dumps(narration_ops.narrate_now(project, entity_type, entity_id,
+                                            actor=auth.actor(principal), reason=reason))
+
+
+@mcp.tool()
+def reactivate_narration(event_id: str, ctx: Context, project: str = "switchboard",
+                         action: str = "retry", reason: str = "") -> str:
+    """NARRATE-13: authorized retry / dead-letter recovery on one narration request (audited).
+    action='retry' returns a dead-lettered/errored request to the queue; action='dead_letter'
+    parks a poison request. Operates on the existing row; immutable event fields are untouched."""
+    import narration_ops
+    principal = _require_write(ctx, project, ("write:system",))
+    return _dumps(narration_ops.reactivate_request(project, event_id, actor=auth.actor(principal),
+                                                   action=action, reason=reason))
+
+
+@mcp.tool()
 def doc_search(query: str, project: str = "maxwell") -> str:
     """Search a project's corpus and return cited snippets: [{file, text}]. The static plan docs
     (PRD, architecture, integrations, security, the full plan) are Maxwell's, so the default
