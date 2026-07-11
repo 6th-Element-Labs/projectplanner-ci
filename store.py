@@ -14683,14 +14683,15 @@ def _pr_references_task(pr: Dict[str, Any], task_id: str) -> bool:
     return bool(token.search(head_ref) or token.search(title))
 
 
-def _has_immutable_github_merge(task: Dict[str, Any], state: Dict[str, Any]) -> bool:
-    """True once canonical GitHub merge provenance cannot change anymore."""
+def _has_immutable_canonical_merge(task: Dict[str, Any], state: Dict[str, Any]) -> bool:
+    """True once canonical merge provenance cannot change anymore."""
     return bool(
-        state.get("pr_number")
-        and task.get("status") == "Done"
+        task.get("status") == "Done"
         and state.get("merged_sha")
         and state.get("in_main_content")
-        and state.get("provenance_type") == "github_pr_merged"
+        and state.get("provenance_type") in {
+            "github_pr_merged", "default_branch_commit"
+        }
     )
 
 
@@ -14705,7 +14706,7 @@ def _needs_live_pr_recheck(task: Dict[str, Any], state: Dict[str, Any]) -> bool:
     """
     if not state.get("pr_number"):
         return False
-    return not _has_immutable_github_merge(task, state)
+    return not _has_immutable_canonical_merge(task, state)
 
 
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
@@ -14779,7 +14780,7 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                     # for every historical PR on every 15-minute cycle needlessly
                     # spawns hundreds of git processes and charges packfile cache to
                     # the small VM's reconcile cgroup.
-                    if _has_immutable_github_merge(task, state):
+                    if _has_immutable_canonical_merge(task, state):
                         skipped_immutable_git += 1
                         continue
                     for field, severity in (("head_sha", "medium"), ("merged_sha", "high")):
