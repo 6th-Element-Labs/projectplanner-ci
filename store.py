@@ -997,8 +997,15 @@ def _touch_deliverable(c: sqlite3.Connection, deliverable_id: str, ts: float) ->
 def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: str,
                              milestone_id: str = "", data: Optional[Dict[str, Any]] = None,
                              actor: str = "user",
-                             project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """Link an explicitly routed board task to a deliverable without moving or editing it."""
+                             project: str = DEFAULT_PROJECT,
+                             run_closure: bool = True) -> Dict[str, Any]:
+    """Link an explicitly routed board task to a deliverable without moving or editing it.
+
+    When run_closure is True (the default for MCP/REST callers), the task's transitive
+    not-Done depends_on frontier is auto-linked as blockers afterwards, so bundling a
+    deliverable never silently omits work it depends on. Internal/recursive callers pass
+    run_closure=False to avoid re-walking on every edge.
+    """
     if not has_project(project):
         return {"error": f"unknown project: {project}"}
     task_project = (task_project or "").strip()
@@ -1068,7 +1075,108 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
                                "task_id": task_id, "milestone_id": mid},
                               sort_keys=True), now))
         _touch_deliverable(c, deliverable_id, now)
-    return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
+    result = get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
+    if run_closure and not result.get("error"):
+        closure = _ensure_deliverable_dependency_closure(deliverable_id, project, actor=actor)
+        # Re-read so the returned deliverable reflects any auto-linked blockers.
+        if closure.get("auto_linked"):
+            result = get_deliverable(deliverable_id, project=project) or result
+        if not result.get("error"):
+            result["dependency_closure"] = closure
+    return result
+
+
+def _deliverable_dependency_closure(deliverable_id: str,
+                                    project: str,
+                                    max_nodes: int = 500) -> Dict[str, Any]:
+    """Walk the transitive depends_on frontier of a deliverable's linked tasks.
+
+    Returns the not-Done dependencies that are NOT yet linked to the deliverable
+    (the real 'missing blockers') plus already-satisfied (Done) deps for context.
+    Traversal stops at Done tasks: a satisfied dependency is not remaining work and
+    its history must not be dragged in. Because the walk expands every not-Done node
+    regardless of whether it is linked yet, a single call yields the full transitive
+    not-Done closure. depends_on ids are same-project as the task that declares them.
+    """
+    deliverable = get_deliverable(deliverable_id, project=project)
+    if not deliverable or deliverable.get("error"):
+        return {"missing": [], "satisfied": [], "linked_task_count": 0, "capped": False}
+    links = deliverable.get("task_links") or []
+
+    def _key(proj: str, tid: str) -> Tuple[str, str]:
+        return ((proj or project).strip(), (tid or "").strip().upper())
+
+    linked_keys = {_key(l.get("project_id"), l.get("task_id")) for l in links}
+    seen: set = set()
+    queue: List[Tuple[str, str]] = []
+    for l in links:
+        k = _key(l.get("project_id"), l.get("task_id"))
+        if k not in seen:
+            seen.add(k)
+            queue.append(k)
+
+    missing: List[Dict[str, Any]] = []
+    satisfied: List[Dict[str, Any]] = []
+    reported: set = set()
+    capped = False
+    while queue:
+        if len(seen) > max_nodes:
+            capped = True
+            break
+        proj, tid = queue.pop()
+        task = get_task(tid, project=proj)
+        # Only expand outstanding work: a Done task's deps are already satisfied
+        # groundwork and must not pull historical tasks into the deliverable.
+        if not task or (task.get("status") or "").strip() == "Done":
+            continue
+        for dep in task.get("depends_on") or []:
+            dep_key = _key(proj, dep)
+            dep_task = get_task(dep, project=proj)
+            if not dep_task:
+                continue  # broken edge; add_dependency guards new ones, skip dangling
+            dep_status = (dep_task.get("status") or "").strip()
+            if dep_key not in reported and dep_key not in linked_keys:
+                entry = {"project_id": dep_key[0], "task_id": dep_key[1],
+                         "title": dep_task.get("title"), "status": dep_status,
+                         "via_task_id": tid}
+                (satisfied if dep_status == "Done" else missing).append(entry)
+                reported.add(dep_key)
+            if dep_key not in seen and dep_status != "Done":
+                seen.add(dep_key)
+                queue.append(dep_key)
+    return {"missing": missing, "satisfied": satisfied,
+            "linked_task_count": len(links), "capped": capped}
+
+
+def _ensure_deliverable_dependency_closure(deliverable_id: str,
+                                           project: str,
+                                           actor: str = "system") -> Dict[str, Any]:
+    """Auto-link a deliverable's not-Done transitive dependencies as blockers.
+
+    Runs after link/approve so a bundled deliverable always carries the work it
+    actually depends on. Missing blockers are linked with blocks_deliverable=1 (they
+    gate completion and draw in the dependency graph); already-satisfied Done deps are
+    reported but left out. Idempotent: re-running links nothing new.
+    """
+    closure = _deliverable_dependency_closure(deliverable_id, project)
+    auto_linked: List[Dict[str, Any]] = []
+    for dep in closure.get("missing") or []:
+        res = link_task_to_deliverable(
+            deliverable_id, dep["project_id"], dep["task_id"],
+            data={"role": "contributes", "blocks_deliverable": True,
+                  "metadata": {"auto_linked": "dependency_closure",
+                               "via_task_id": dep.get("via_task_id")}},
+            actor=actor, project=project, run_closure=False,
+        )
+        if not res.get("error"):
+            auto_linked.append({"project_id": dep["project_id"], "task_id": dep["task_id"],
+                                "title": dep.get("title"), "via_task_id": dep.get("via_task_id")})
+    return {
+        "auto_linked": auto_linked,
+        "auto_linked_count": len(auto_linked),
+        "already_satisfied": closure.get("satisfied") or [],
+        "capped": closure.get("capped", False),
+    }
 
 
 def _decorate_deliverable_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
@@ -1663,6 +1771,7 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
                 },
                 actor=actor,
                 project=project,
+                run_closure=False,
             )
             if link_result.get("error"):
                 return link_result
@@ -1690,6 +1799,10 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
         patched = create_deliverable(deliverable_patch, actor=actor, project=project)
         if patched.get("error"):
             return patched
+    # Pull in any not-Done transitive dependency of the materialized tasks that the
+    # breakdown didn't name, so an approved deliverable can't ship missing its blockers.
+    dependency_closure = _ensure_deliverable_dependency_closure(
+        deliverable_id, project, actor=actor)
     now = time.time()
     with _conn(project) as c:
         c.execute(
@@ -1702,7 +1815,10 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
                   (None, actor, "deliverable.breakdown_approved",
                    json.dumps({"deliverable_id": deliverable_id, "proposal_id": proposal_id,
                                "created_task_count": len(created_tasks),
-                               "linked_task_count": len(linked_tasks)}, sort_keys=True), now))
+                               "linked_task_count": len(linked_tasks),
+                               "auto_linked_dependency_count":
+                                   dependency_closure.get("auto_linked_count", 0)},
+                              sort_keys=True), now))
     return {
         "schema": "switchboard.deliverable_breakdown_approval.v1",
         "project_id": project,
@@ -1710,6 +1826,7 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
         "deliverable_id": deliverable_id,
         "created_tasks": created_tasks,
         "linked_tasks": linked_tasks,
+        "dependency_closure": dependency_closure,
         "deliverable": get_deliverable(deliverable_id, project=project),
         "mission_status": get_mission_status(project=project, deliverable_id=deliverable_id),
     }
