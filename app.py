@@ -132,6 +132,18 @@ def _proj(project: str) -> str:
 
 
 def _principal(request: Request, project: str, scopes=("write:ixp",), dev_actor: str = "web"):
+    # When PM_GLOBAL_AUTH is on, the _global_auth_gate middleware has already
+    # authenticated the caller (browser JWT session or agent bearer token) and stashed
+    # the principal on request.state. Trust it — authenticate_request only understands
+    # bearer + legacy per-project session cookies, so a global browser login would
+    # otherwise be rejected here ("provide Authorization: Bearer …") even though the
+    # middleware admitted it. Required scopes are still enforced. Falls through to the
+    # legacy path when no principal is present (non-global-auth mode, tests, dev-open).
+    pre = getattr(request.state, "principal", None)
+    if isinstance(pre, dict):
+        if auth._has_scopes(pre, scopes, _proj(project)):
+            return pre
+        raise HTTPException(403, "forbidden: token is missing required scope")
     try:
         return auth.authenticate_request(request, _proj(project), scopes, dev_actor=dev_actor)
     except PermissionError as e:
