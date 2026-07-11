@@ -4,6 +4,7 @@ import time
 import os
 import sqlite3
 import hashlib
+import threading
 import uuid
 import copy
 from contextlib import contextmanager
@@ -27,6 +28,7 @@ __all__ = [
     "_conn",
     "_write_through",
     "_sqlite_write_queue_stats",
+    "bust_project_cache",
 ]
 
 
@@ -49,7 +51,25 @@ def _sqlite_mmap_bytes() -> int:
     return value
 
 
-def _dynamic_projects() -> Dict[str, Dict[str, str]]:
+# The project map changes only when a project is created, but _resolve() consults it on
+# EVERY store operation (per project). Reading it uncached meant re-running the registry
+# schema-init (init_project_registry) AND opening a fresh registry connection on every
+# resolve — which, on the live box, pegged the web worker's core in _open_sqlite /
+# _registry_conn / init_project_registry and made unrelated requests queue (7s p99).
+# Cache the built map behind a short TTL; create_project busts it in-process for
+# read-your-write, and the TTL bounds cross-process staleness (a project created by the
+# MCP process appears to the web process within the TTL).
+_PROJECT_MAP_TTL_S = float(os.environ.get("PM_PROJECT_MAP_TTL_S", "10") or 10)
+_project_map_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+_project_map_lock = threading.Lock()
+
+
+def bust_project_cache() -> None:
+    """Invalidate the cached project map (call after writing the project registry)."""
+    _project_map_cache["data"] = None
+
+
+def _load_dynamic_projects() -> Dict[str, Dict[str, str]]:
     init_project_registry()
     with _registry_conn() as c:
         rows = c.execute("SELECT * FROM projects ORDER BY id").fetchall()
@@ -62,6 +82,20 @@ def _dynamic_projects() -> Dict[str, Dict[str, str]]:
         }
         for r in rows
     }
+
+
+def _dynamic_projects() -> Dict[str, Dict[str, str]]:
+    data = _project_map_cache["data"]
+    if data is not None and (time.monotonic() - _project_map_cache["at"]) < _PROJECT_MAP_TTL_S:
+        return data
+    with _project_map_lock:
+        data = _project_map_cache["data"]
+        if data is not None and (time.monotonic() - _project_map_cache["at"]) < _PROJECT_MAP_TTL_S:
+            return data
+        data = _load_dynamic_projects()
+        _project_map_cache["data"] = data
+        _project_map_cache["at"] = time.monotonic()
+        return data
 
 
 def _project_map() -> Dict[str, Dict[str, str]]:
