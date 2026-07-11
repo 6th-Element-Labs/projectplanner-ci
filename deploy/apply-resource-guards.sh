@@ -23,9 +23,16 @@ systemctl set-property projectplanner-mcp.service CPUWeight=400
 
 # Batch/timer jobs: low CPU share + a per-job soft memory cap, so a spike gets
 # throttled instead of swapping the box into the ground.
-for unit in narrate monitors inbox reconcile summarize digest; do
+for unit in narrate monitors inbox summarize digest; do
   systemctl set-property "projectplanner-${unit}.service" CPUWeight=20 MemoryHigh=180M
 done
+
+# Reconcile scans every project DB. Production profiling (HARDEN-51..61) proved
+# its legitimate file-cache working set exceeds the generic 180M batch ceiling;
+# this envelope completed all 12 projects in 30s while the web service retained
+# MemoryLow=250M. Keep a hard cap so drift scans cannot consume the whole VM.
+systemctl set-property projectplanner-reconcile.service \
+  CPUWeight=20 MemoryHigh=384M MemoryMax=512M
 
 # CI gate is the heaviest batch job (fresh venv + pytest per PR): stricter still,
 # with a HARD ceiling so it can never OOM the box.
@@ -34,3 +41,4 @@ systemctl set-property projectplanner-ci-gate.service CPUWeight=10 MemoryHigh=22
 echo "resource guards applied. verify e.g.:"
 echo "  systemctl show projectplanner.service -p CPUWeight -p MemoryLow"
 echo "  systemctl show projectplanner-ci-gate.service -p MemoryHigh -p MemoryMax"
+echo "  systemctl show projectplanner-reconcile.service -p MemoryHigh -p MemoryMax"
