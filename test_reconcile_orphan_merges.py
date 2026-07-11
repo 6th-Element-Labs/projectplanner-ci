@@ -125,11 +125,19 @@ try:
        "terminal GitHub merge provenance is not re-polled on later reconcile runs")
     ok((again.get("external_checks") or {}).get("github_prs_skipped_immutable") == 1,
        "reconcile reports the immutable PR lookup it skipped")
+    terminal_task = store.get_task(orphan["task_id"], project=HOME) or {}
+    ok(store._has_immutable_github_merge(
+        terminal_task, terminal_task.get("git_state") or {}),
+       "complete canonical merge proof is immutable for remote and local git checks")
 
     # If terminal proof becomes incomplete, fail-safe behavior resumes live checking.
     with store._conn(HOME) as c:
         c.execute("UPDATE task_git_state SET in_main_content=0 WHERE task_id=?",
                   (orphan["task_id"],))
+    incomplete_task = store.get_task(orphan["task_id"], project=HOME) or {}
+    ok(not store._has_immutable_github_merge(
+        incomplete_task, incomplete_task.get("git_state") or {}),
+       "incomplete merge proof remains eligible for local ancestry verification")
     store.reconcile(project=HOME)
     ok(len(live_pr_calls) == 1,
        "incomplete terminal provenance still receives a live GitHub PR check")
