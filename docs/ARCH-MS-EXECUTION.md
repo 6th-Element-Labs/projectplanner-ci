@@ -42,7 +42,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-1** | ADR-0009 charter + ARCH-MS-EXECUTION tracker | 0.2 | — | In Progress | 🟡 | This PR (`docs/decisions/0009-microservices-modernization.md`, `docs/ARCH-MS-EXECUTION.md`) |
 | **ARCH-MS-2** | Size ratchet + CI test discovery (CONSOL-6) | 0.1 | — | Not Started | 🟡 | `test_size_ratchet.py`; `scripts/switchboard_ci.sh` pytest discovery + `TEST_DENYLIST` |
 | **ARCH-MS-3** | Delete dead MCP/REST surfaces (CONSOL-7, CONSOL-9) | 0.1 | — | Not Started | 🟡 | `test_consol9_h2_census.py` (census checks); `gmail_source.py` still present — CONSOL-7 incomplete |
-| **ARCH-MS-4** | Caddy security headers + mission poller ETag (CONSOL-8) | 0.1 | — | Not Started | ✅ | `deploy/Caddyfile` security headers + access log; `app.py` mission_status / dependency_graph `max_age=5` + ETag |
+| **ARCH-MS-4** | Caddy security headers + mission poller ETag (CONSOL-8) | 0.1 | — | In Review | ✅ | **CONSOL-8** PR #286 + `test_consol8_edge_mission_poll.py`. `deploy/Caddyfile` security headers + access log; `app.py` mission_status / dependency_graph `max_age=5` + ETag; ack poll visibility guard |
 | **ARCH-MS-5** | MCP read auth — bearer required on `/mcp` | 0.3 | — | Not Started | ⬜ | Reads still open; writes use `_require_write` only (`mcp_server.py`) |
 | **ARCH-MS-6** | `pyproject.toml` package scaffold (lockfile pending) | 0.2 | 1 | In Progress | 🔗 | **HARDEN-54** / PR #303 — `pyproject.toml`, `.python-version`, `uv.lock`; lockfile task split to ARCH-MS-13 |
 | **ARCH-MS-7** | `src/switchboard/` package skeleton | 0.2 | 1 | Not Started | ⬜ | No `src/switchboard/` on master yet |
