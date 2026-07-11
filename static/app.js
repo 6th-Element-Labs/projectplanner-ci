@@ -1042,6 +1042,59 @@ const TeepPlan = {
         this._fleetScopeLabel = ctx.mode === 'deliverable' ? 'this deliverable' : '';
         this._renderFleetDock(sessions);
     },
+    // ---- Attention model: the mission action queue, grouped by owner ------------
+    _ownerBadge(owner) {
+        const m = {
+            agent: ['bg-blue-lt', 'Agent'],
+            coordinator: ['bg-purple-lt', 'Coordinator'],
+            reviewer: ['bg-teal-lt', 'Reviewer'],
+            project_owner: ['bg-orange-lt', 'You'],
+        };
+        const [cls, label] = m[owner] || ['bg-secondary-lt', owner || 'system'];
+        return `<span class="badge ${cls}">${this.esc(label)}</span>`;
+    },
+    _actionRef(a) {
+        return a.task_id ? ` <span class="text-secondary small">· ${this.esc(a.project_id || '')} ${this.esc(a.task_id)}</span>` : '';
+    },
+    // Split the generated coordinator queue by OWNERSHIP so it stops reading like the user's to-do
+    // list. Only "Decisions needed from you" gets prominence; agent/coordinator automation collapses
+    // into a quiet count. Ownership/attention come from the server (store._mission_next_actions),
+    // never inferred from the action name here.
+    _missionActionsHtml(s) {
+        const acts = s.next_actions || [];
+        if (!acts.length) return '';
+        const decisions = acts.filter((a) => a.attention);
+        const auto = acts.filter((a) => !a.attention && a.automatic);
+        const followups = acts.filter((a) => !a.attention && !a.automatic);
+        let html = '';
+        if (decisions.length) {
+            html += `<div class="card mb-4 border-orange"><div class="card-header bg-orange-lt"><h3 class="card-title"><i class="ti ti-hand-stop me-2"></i>Decisions needed from you</h3></div><div class="list-group list-group-flush">${decisions.map((a) =>
+                `<div class="list-group-item"><div class="fw-medium">${this.esc(a.label || a.action)}</div><div class="text-secondary small">${this.esc(a.reason || '')}${this._actionRef(a)}</div></div>`).join('')}</div></div>`;
+        }
+        if (followups.length) {
+            html += `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Team follow-ups</h3></div><div class="list-group list-group-flush">${followups.map((a) =>
+                `<div class="list-group-item d-flex align-items-start gap-2">${this._ownerBadge(a.owner_type)}<div class="flex-fill"><div>${this.esc(a.label || a.action)}</div><div class="text-secondary small">${this.esc(a.reason || '')}${this._actionRef(a)}</div></div></div>`).join('')}</div></div>`;
+        }
+        if (auto.length) {
+            html += `<details class="card mb-4"><summary class="card-header" style="cursor:pointer;list-style:none;"><span class="card-title text-secondary"><i class="ti ti-robot me-2"></i>${auto.length} action${auto.length === 1 ? '' : 's'} being handled automatically</span></summary><div class="list-group list-group-flush">${auto.map((a) =>
+                `<div class="list-group-item d-flex align-items-start gap-2">${this._ownerBadge(a.owner_type)}<div class="flex-fill"><div class="text-secondary">${this.esc(a.label || a.action)}</div><div class="text-secondary small">${this.esc(a.reason || '')}${this._actionRef(a)}</div></div></div>`).join('')}</div></details>`;
+        }
+        if (!decisions.length && !followups.length && auto.length) {
+            html = `<div class="text-secondary small mb-4"><i class="ti ti-check me-1"></i>No decisions needed from you.</div>` + html;
+        }
+        return html;
+    },
+    // Delivery impact of an unsafe agent workspace: does its task still need to ship? A session on an
+    // already-merged (In Review/Done), unknown, or cross-project task is quiet cleanup (no impact);
+    // on a live blocking task it escalates. Read from the loaded board tasks — no server round-trip.
+    _sessionImpact(session) {
+        const id = String(session.task_id || '').toUpperCase();
+        const t = (this.tasks || []).find((x) => String(x.task_id || '').toUpperCase() === id);
+        if (!t) return 'none';
+        if (t.status === 'In Review' || t.status === 'Done') return 'none';
+        if (t.is_blocking) return 'blocking';
+        return 'at_risk';
+    },
     _fleetTaskTitle(taskId) {
         const id = String(taskId || '').toUpperCase();
         const t = (this.tasks || []).find((x) => String(x.task_id || '').toUpperCase() === id);
@@ -1069,47 +1122,58 @@ const TeepPlan = {
         const working = sessions.length;
         if (!working) { host.innerHTML = ''; return; }   // keep the corner clean
         const proj = window.PM_PROJECT || 'maxwell';
-        // "Needs attention" = genuinely blocked (unsafe): dirty worktree, conflicts, a
-        // failed/blocking preflight — the things that stop a merge. A non-blocking
-        // 'warning' (e.g. hasn't run preflight yet) is normal mid-work, so it folds into
-        // "on track" rather than nagging on every fresh session.
-        const attention = sessions.filter((s) => (s.health || {}).status === 'unsafe');
-        const nAttn = attention.length;
+        // ATTENTION MODEL: an unsafe session earns your attention only when its task still needs to
+        // ship. An unsafe/stale session on an already-merged (In Review/Done) or unknown task is
+        // coordinator cleanup with NO delivery impact — it stays a quiet line, never auto-opens the
+        // dock, and never leads with the task title (that framing made stale sessions read like server
+        // incidents). A non-blocking 'warning' folds into "on track" as before.
+        const unsafe = sessions.filter((s) => (s.health || {}).status === 'unsafe');
+        const impactful = unsafe.filter((s) => this._sessionImpact(s) !== 'none');
+        const cleanup = unsafe.filter((s) => this._sessionImpact(s) === 'none');
+        const nAttn = impactful.length;
+        const nCleanup = cleanup.length;
         const worst = 'danger';
-        // explicit user toggle wins; otherwise auto — open only when something needs attention
+        // explicit user toggle wins; otherwise auto — open ONLY when something actually threatens delivery
         const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
         const anchor = 'position:fixed;right:1rem;bottom:1rem;z-index:1031;';
         const rerender = () => this._renderFleetDock(sessions);
+        const scope = this._fleetScopeLabel ? ` <span class="text-secondary small">· ${this.esc(this._fleetScopeLabel)}</span>` : '';
         if (collapsed) {
             const dot = nAttn ? `var(--tblr-${worst})` : 'var(--tblr-success)';
+            const extra = !nAttn && nCleanup ? ` <span class="text-secondary small">· ${nCleanup} cleaning up</span>` : '';
             host.innerHTML = `<button id="fleet-dock-pill" class="btn btn-sm shadow-sm" style="${anchor}border-radius:999px;display:inline-flex;align-items:center;gap:8px;">
                 <span style="width:8px;height:8px;border-radius:50%;background:${dot};"></span>
                 <span class="fw-medium">${nAttn ? this.esc(String(nAttn)) + ' need attention' : 'Fleet clear'}</span>
-                <span class="text-secondary small">· ${working} working</span>
+                <span class="text-secondary small">· ${working} working</span>${extra}
                 <i class="ti ti-chevron-up"></i></button>`;
             document.getElementById('fleet-dock-pill').addEventListener('click', () => { this._dockCollapsed = false; rerender(); });
             return;
         }
-        const rows = attention.map((s) => {
+        const rows = impactful.map((s) => {
             const r = this._dockReason(s.health);
             const dot = `var(--tblr-${r.severity})`;
+            // Lead with the DIAGNOSIS; demote the task id to a subtitle (workspace problem, not incident).
             return `<div class="p-2 border rounded mb-2">
                 <div class="d-flex align-items-start gap-2">
                     <span style="margin-top:6px;width:8px;height:8px;border-radius:50%;background:${dot};flex:none;"></span>
                     <div class="flex-fill" style="min-width:0;">
-                        <div class="fw-medium text-truncate">${this.esc(this._fleetTaskTitle(s.task_id))}</div>
-                        <div class="text-secondary text-truncate" style="font-size:12px;font-family:var(--tblr-font-monospace);">${this.esc(s.agent_id || '')}</div>
-                        <div class="mt-1" style="font-size:13px;">${this.esc(r.text)}</div>
+                        <div class="fw-medium">${this.esc(r.text)}</div>
+                        <div class="text-secondary text-truncate" style="font-size:12px;font-family:var(--tblr-font-monospace);">${this.esc(s.task_id || '')} · ${this.esc(s.agent_id || '')}</div>
                         ${r.repair ? `<div class="text-secondary mt-1" style="font-size:12px;">${this.esc(r.repair)}</div>` : ''}
                         <div class="mt-2 d-flex gap-2"><button class="btn btn-sm" data-dock-open="${this.esc(s.task_id)}"><i class="ti ti-arrow-up-right me-1"></i>Open task</button>${s.agent_id ? `<button class="btn btn-sm" data-dock-msg="${this.esc(s.agent_id)}" data-dock-msg-task="${this.esc(s.task_id || '')}"><i class="ti ti-send me-1"></i>Message</button>` : ''}</div>
                     </div>
                 </div></div>`;
         }).join('');
-        const clean = working - nAttn;
-        const scope = this._fleetScopeLabel ? ` <span class="text-secondary small">· ${this.esc(this._fleetScopeLabel)}</span>` : '';
+        const clean = working - nAttn - nCleanup;
+        const cleanupLine = nCleanup
+            ? `<div class="text-secondary small px-1 pb-1"><i class="ti ti-recycle me-1"></i>${nCleanup} stale workspace${nCleanup === 1 ? '' : 's'} being cleaned up — delivery unaffected.</div>`
+            : '';
+        const cleanLine = clean > 0
+            ? `<div class="text-secondary small px-1 pb-1"><i class="ti ti-check me-1"></i>${clean} other${clean === 1 ? '' : 's'} clean and on track</div>`
+            : '';
         const body = nAttn
-            ? `<div class="p-2">${rows}${clean > 0 ? `<div class="text-secondary small px-1 pb-1"><i class="ti ti-check me-1"></i>${clean} other${clean === 1 ? '' : 's'} clean and on track</div>` : ''}</div>`
-            : `<div class="p-3 text-secondary small"><i class="ti ti-check me-1"></i>All ${working} agents clean and on track.</div>`;
+            ? `<div class="p-2">${rows}${cleanupLine}${cleanLine}</div>`
+            : `<div class="p-3 text-secondary small"><i class="ti ti-check me-1"></i>All ${working} agents on track.${nCleanup ? ` ${nCleanup} stale workspace${nCleanup === 1 ? '' : 's'} being cleaned up.` : ''}</div>`;
         const attnBadge = nAttn
             ? `<span class="ms-auto small text-${worst}"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} need attention</span>`
             : `<span class="ms-auto small text-success"><i class="ti ti-check me-1"></i>all clear</span>`;
@@ -4686,8 +4750,7 @@ const TeepPlan = {
         // Blockers box removed — it dumped raw kinds like "dependency_unsatisfied". The
         // dependency map already outlines blockers with a thick dark border.
         const blockerHtml = '';
-        const nextActions = (s.next_actions || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Next best actions</h3></div><div class="list-group list-group-flush">${(s.next_actions || []).map((a) =>
-            `<div class="list-group-item"><span class="badge bg-primary-lt me-2">${this.esc(a.action || 'action')}</span>${this.esc(a.title || a.reason || '')}${a.task_id ? ` <span class="text-secondary small">· ${this.esc(a.project_id || '')} ${this.esc(a.task_id)}</span>` : ''}</div>`).join('')}</div></div>` : '';
+        const nextActions = this._missionActionsHtml(s);
         const agents = (s.active_agents || []).length ? `<div class="card mb-4"><div class="card-header"><h3 class="card-title">Live agents</h3></div><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr><th>Agent</th><th>Task</th><th>Project</th></tr></thead><tbody>${(s.active_agents || []).map((a) =>
             `<tr><td>${this.esc(a.agent_id || '')}</td><td><a href="#" data-linked-task="${this.esc(a.task_id)}" data-linked-project="${this.esc(a.project_id)}">${this.esc(a.task_id || '')}</a></td><td>${this.esc(a.project_id || '')}</td></tr>`).join('')}</tbody></table></div></div>` : '';
         const activeRows = (s.active_work || []).map((w) => `<tr><td><a href="#" data-linked-task="${this.esc(w.task_id)}" data-linked-project="${this.esc(w.project_id)}">${this.esc(w.task_id)}</a></td><td>${this.esc(w.title || '')}</td><td>${this._missionBadge(w.status, this.STATUS_COLOR)}</td><td>${this.sessionHealthPill(w.session_health)}</td><td>${this.esc(w.assignee || '—')}</td><td class="small">${this.esc((w.active_claims || []).map((c) => c.agent_id).join(', ') || '—')}</td></tr>`).join('') || '<tr><td colspan="6" class="text-secondary">No active linked work</td></tr>';

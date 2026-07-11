@@ -2346,84 +2346,108 @@ def _mission_blockers(deliverable: Dict[str, Any],
     return blockers
 
 
+# Every next-action carries an OWNER and an ATTENTION model so the UI can stop presenting agent
+# housekeeping, coordinator automation, and human decisions as one undifferentiated to-do list.
+#   owner_type       who acts: agent | coordinator | reviewer | project_owner
+#   attention        True only when a HUMAN with authority must decide (→ "Decisions needed from you")
+#   automatic        True when the control plane handles it without anyone lifting a finger
+#   delivery_impact  none | at_risk | blocking — does the deliverable actually suffer if untouched?
+#   label            plain-English imperative for humans (the raw `action` verb stays for machines)
+def _action(action, *, owner, label, reason, attention=False, automatic=False,
+            delivery_impact="none", **extra):
+    a = {"action": action, "owner_type": owner, "label": label, "reason": reason,
+         "attention": bool(attention), "automatic": bool(automatic),
+         "delivery_impact": delivery_impact}
+    a.update({k: v for k, v in extra.items() if v is not None})
+    return a
+
+
+def _task_blocks_others(detail: Dict[str, Any]) -> bool:
+    if detail.get("is_blocking"):
+        return True
+    return bool((detail.get("dependency_state") or {}).get("blocking"))
+
+
 def _mission_next_actions(deliverable: Dict[str, Any],
                           linked_tasks: List[Dict[str, Any]],
                           pending_proposal: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     actions: List[Dict[str, Any]] = []
     if pending_proposal and pending_proposal.get("status") == "proposed":
-        actions.append({
-            "action": "approve_breakdown",
-            "proposal_id": pending_proposal.get("id"),
-            "reason": "A milestone/task breakdown is waiting for approval",
-        })
+        actions.append(_action(
+            "approve_breakdown", owner="project_owner", attention=True, delivery_impact="at_risk",
+            label="Approve the proposed breakdown",
+            reason="A milestone/task breakdown is waiting for your approval",
+            proposal_id=pending_proposal.get("id")))
     for link in linked_tasks:
         detail = link.get("task_detail") or {}
         if detail.get("error"):
-            actions.append({
-                "action": "repair_task_link",
-                "project_id": link.get("project_id"),
-                "task_id": link.get("task_id"),
-                "reason": detail.get("error"),
-            })
+            actions.append(_action(
+                "repair_task_link", owner="coordinator", delivery_impact="at_risk",
+                label="Repair a broken task link", reason=detail.get("error"),
+                project_id=link.get("project_id"), task_id=link.get("task_id")))
             continue
         status = detail.get("status")
         claims = detail.get("active_claims") or []
         dep = detail.get("dependency_state") or {}
+        blocks = _task_blocks_others(detail)
         if status == "Not Started" and dep.get("ready") and not claims:
-            actions.append({
-                "action": "claim_task",
-                "project_id": link.get("project_id"),
-                "task_id": detail.get("task_id"),
-                "title": detail.get("title"),
-                "reason": "Ready and unclaimed",
-            })
+            actions.append(_action(
+                "claim_task", owner="agent", automatic=True,
+                delivery_impact="blocking" if blocks else "none",
+                label="Agent will claim a ready task", reason="Ready and unclaimed",
+                project_id=link.get("project_id"), task_id=detail.get("task_id"),
+                title=detail.get("title")))
         elif status == "In Review":
-            actions.append({
-                "action": "verify_merge_provenance",
-                "project_id": link.get("project_id"),
-                "task_id": detail.get("task_id"),
-                "title": detail.get("title"),
-                "reason": "Awaiting merge/default-branch provenance for Done",
-            })
+            actions.append(_action(
+                "verify_merge_provenance", owner="coordinator", automatic=True,
+                delivery_impact="none",
+                label="Coordinator will verify merge provenance",
+                reason="Awaiting merge/default-branch provenance for Done",
+                project_id=link.get("project_id"), task_id=detail.get("task_id"),
+                title=detail.get("title")))
         elif status == "In Progress" and not claims:
-            actions.append({
-                "action": "resume_or_claim",
-                "project_id": link.get("project_id"),
-                "task_id": detail.get("task_id"),
-                "title": detail.get("title"),
-                "reason": "In progress without an active claim",
-            })
+            actions.append(_action(
+                "resume_or_claim", owner="agent", automatic=True,
+                delivery_impact="at_risk" if blocks else "none",
+                label="Agent will resume dropped work",
+                reason="In progress without an active claim",
+                project_id=link.get("project_id"), task_id=detail.get("task_id"),
+                title=detail.get("title")))
         gate = detail.get("human_gate") or {}
         if gate.get("blocked"):
-            actions.append({
-                "action": "request_human_approval",
-                "project_id": link.get("project_id"),
-                "task_id": detail.get("task_id"),
-                "title": detail.get("title"),
-                "reason": gate.get("reason") or "Human gate blocked",
-            })
+            actions.append(_action(
+                "request_human_approval", owner="project_owner", attention=True,
+                delivery_impact="blocking",
+                label="Approve to unblock a gated task",
+                reason=gate.get("reason") or "Human gate blocked",
+                project_id=link.get("project_id"), task_id=detail.get("task_id"),
+                title=detail.get("title")))
         session_health = detail.get("session_health") or {}
+        # A stale/unsafe Work Session is COORDINATOR housekeeping that resolves automatically. It only
+        # touches delivery when the underlying task hasn't already merged — an unsafe session on an
+        # In Review/Done task (the classic "old blocked session on shipped work") has no impact.
+        terminal = status in ("In Review", "Done")
         if session_health.get("status") == "unsafe":
-            actions.append({
-                "action": "repair_work_session",
-                "project_id": link.get("project_id"),
-                "task_id": detail.get("task_id"),
-                "title": detail.get("title"),
-                "reason": session_health.get("recommended_repair") or "Unsafe Work Session",
-            })
+            actions.append(_action(
+                "repair_work_session", owner="coordinator", automatic=True,
+                delivery_impact="none" if terminal else "at_risk",
+                label="Coordinator will clean up an unsafe agent workspace",
+                reason=session_health.get("recommended_repair") or "Unsafe Work Session",
+                project_id=link.get("project_id"), task_id=detail.get("task_id"),
+                title=detail.get("title")))
         elif session_health.get("status") == "warning":
-            actions.append({
-                "action": "refresh_work_session_health",
-                "project_id": link.get("project_id"),
-                "task_id": detail.get("task_id"),
-                "title": detail.get("title"),
-                "reason": session_health.get("recommended_repair") or "Work Session warning",
-            })
+            actions.append(_action(
+                "refresh_work_session_health", owner="coordinator", automatic=True,
+                delivery_impact="none",
+                label="Coordinator will refresh a Work Session's health",
+                reason=session_health.get("recommended_repair") or "Work Session warning",
+                project_id=link.get("project_id"), task_id=detail.get("task_id"),
+                title=detail.get("title")))
     if not linked_tasks and not (deliverable.get("milestones") or []):
-        actions.append({
-            "action": "propose_breakdown",
-            "reason": "No milestones or linked tasks yet",
-        })
+        actions.append(_action(
+            "propose_breakdown", owner="coordinator", automatic=True, delivery_impact="at_risk",
+            label="Propose a milestone/task breakdown",
+            reason="No milestones or linked tasks yet"))
     return actions
 
 
