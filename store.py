@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import evidence_claims
+import narration_outbox
 import push_verification
 
 # Module-level constants + static config live in constants.py (ARCH-2); re-exported
@@ -4091,8 +4092,14 @@ def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
             return None
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, "edit", json.dumps(changed), time.time()))
+        # NARRATE-8: emit the narration intent inside the SAME transaction as the mutation
+        # (ADR-0008). Materiality is decided by the source projection hash, so a cosmetic
+        # edit bumps no revision and emits nothing. Commit binds mutation + intent atomically.
+        narration_outbox.emit_task_narration_request(
+            c, task_id, project=project, cause_kind="task.updated", actor=actor)
     # NARRATE-2: enqueue CEO-narration only on a real status transition, never on cosmetic
     # edits — this is the cost guarantee. The drain job applies the trigger-status filter.
+    # Kept as a post-commit shadow marker alongside the outbox until NARRATE-14 cuts over.
     return {"task_id": task_id, "changed": changed}
 
 
@@ -4189,6 +4196,10 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
              1 if data.get("is_blocking") else 0, order, now, now))
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (tid, actor, "create", json.dumps({"title": title}), now))
+        # NARRATE-8: a new task is revision 1 — emit its narration intent atomically with
+        # the insert (ADR-0008). Rollback of the create drops the outbox row too.
+        narration_outbox.emit_task_narration_request(
+            c, tid, project=project, cause_kind="task.created", actor=actor)
     return tid
 
 
