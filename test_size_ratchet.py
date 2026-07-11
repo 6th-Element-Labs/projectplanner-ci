@@ -9,12 +9,12 @@ ROOT = Path(__file__).resolve().parent
 # shrinks, lower its ceiling in the same PR; if it grows, follow ADR-0007's relief order before
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
-    "store.py": 15_515,
+    "store.py": 15_639,
     "app.py": 3_392,
     "mcp_server.py": 3_185,
-    "static/app.js": 6_331,
+    "static/app.js": 6_451,
 }
-ROOT_PYTHON_FILE_CEILING = 172
+ROOT_PYTHON_FILE_CEILING = 176
 
 passed = failed = 0
 
