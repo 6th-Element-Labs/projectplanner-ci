@@ -11021,6 +11021,62 @@ def _merge_spend_totals(target: Dict[str, Any], spend: Dict[str, Any]) -> None:
         dst["total_tokens"] = int(dst.get("total_tokens") or 0) + int(bucket.get("total_tokens") or 0)
 
 
+def list_kpis(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """All KPIs for a project with their live rollup (UI-2 tiles).
+
+    Each entry is the KPI row plus verified_contribution, spend, and cost-per-unit
+    from kpi_tally so the tile can show movement and unit economics without a
+    second round-trip per KPI."""
+    with _conn(project) as c:
+        rows = c.execute("SELECT * FROM kpis ORDER BY created_at").fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        kpi = _kpi_row(row)
+        tally = kpi_tally(kpi["id"], project=project)
+        kpi["verified_contribution"] = tally.get("verified_contribution", 0.0)
+        kpi["spend"] = tally.get("spend", {})
+        kpi["unit_cost"] = tally.get("unit_cost", {})
+        kpi["outcome_count"] = len(tally.get("outcomes", []))
+        out.append(kpi)
+    return out
+
+
+def list_outcomes(project: str = DEFAULT_PROJECT, status: str = "",
+                  limit: int = 200) -> List[Dict[str, Any]]:
+    """Outcomes for a project, newest first, each with its KPI links (UI-2 queue).
+
+    status filters to one lifecycle state (e.g. 'proposed' for the verify queue);
+    empty returns all. limit caps the result."""
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        limit = 200
+    clauses = ""
+    params: List[Any] = []
+    if status:
+        clauses = " WHERE status=?"
+        params.append(status)
+    params.append(limit)
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT * FROM outcomes" + clauses + " ORDER BY created_at DESC LIMIT ?",
+            params).fetchall()
+        outcomes = [_outcome_row(r) for r in rows]
+        if outcomes:
+            ids = [o["id"] for o in outcomes]
+            links = c.execute(
+                "SELECT l.outcome_id, l.kpi_id, l.contribution, l.contribution_unit, "
+                "l.confidence, k.name kpi_name, k.unit kpi_unit "
+                "FROM outcome_kpi_links l JOIN kpis k ON k.id=l.kpi_id "
+                "WHERE l.outcome_id IN (%s)" % ",".join("?" for _ in ids), ids).fetchall()
+            by_outcome: Dict[str, List[Dict[str, Any]]] = {}
+            for link in links:
+                by_outcome.setdefault(link["outcome_id"], []).append(dict(link))
+            for outcome in outcomes:
+                outcome["kpi_links"] = by_outcome.get(outcome["id"], [])
+    return outcomes
+
+
 def project_tally(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Project-level economic surface for TALLY-3.
 
