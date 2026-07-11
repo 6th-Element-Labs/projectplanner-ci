@@ -20,6 +20,15 @@ __all__ = [
 ]
 
 
+# Connection-local defaults for the WAL-backed board databases.  A negative
+# cache_size is measured in KiB (rather than pages), so it stays stable if the
+# SQLite page size changes.  The larger autocheckpoint threshold amortizes EBS
+# checkpoint I/O while keeping the WAL bounded to roughly 16 MiB at 4 KiB/page.
+_SQLITE_CACHE_KIB = 32 * 1024
+_SQLITE_MMAP_BYTES = 256 * 1024 * 1024
+_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 4_000
+
+
 def _dynamic_projects() -> Dict[str, Dict[str, str]]:
     init_project_registry()
     with _registry_conn() as c:
@@ -52,6 +61,19 @@ def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
     timeout = _sqlite_timeout_s("PM_SQLITE_TIMEOUT_S", 5.0) if timeout_s is None else timeout_s
     c = sqlite3.connect(_resolve(project)["db"], timeout=timeout)
     c.row_factory = sqlite3.Row
-    c.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
-    c.execute("PRAGMA journal_mode=WAL")
-    return c
+    try:
+        c.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
+        c.execute("PRAGMA journal_mode=WAL")
+        # NORMAL avoids a second fsync for each WAL transaction.  SQLite still
+        # syncs the WAL at checkpoints, preserving database consistency while
+        # substantially shortening the writer lock window.  A power or OS crash
+        # can roll back a recently committed transaction, which is the documented
+        # WAL+NORMAL durability tradeoff accepted for this control-plane store.
+        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute(f"PRAGMA cache_size={-_SQLITE_CACHE_KIB}")
+        c.execute(f"PRAGMA mmap_size={_SQLITE_MMAP_BYTES}")
+        c.execute(f"PRAGMA wal_autocheckpoint={_SQLITE_WAL_AUTOCHECKPOINT_PAGES}")
+        return c
+    except Exception:
+        c.close()
+        raise

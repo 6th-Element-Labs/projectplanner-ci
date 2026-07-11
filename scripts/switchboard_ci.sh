@@ -53,6 +53,7 @@ run_test test_audit_export.py
 run_test test_adapter_conformance.py
 run_test test_board_load_perf.py
 run_test test_plan_health.py
+run_test test_sqlite_pragmas.py
 run_test test_dispatch_wake.py
 run_test test_agent_bootstrap.py
 run_test test_agent_host.py
