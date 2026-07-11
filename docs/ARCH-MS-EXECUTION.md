@@ -70,11 +70,11 @@ requires merge webhook or reconcile.
 
 | File | Ceiling (lines) | Notes |
 |---|---|---|
-| `store.py` | 15,789 | Held; not yet lowered — ARCH-MS-24 requires a decrease |
-| `app.py` | 3,273 | ACCESS-16 shrank vs ADR-0007 baseline |
-| `mcp_server.py` | 3,154 | Held |
+| `store.py` | 15,470 | ARCH-MS-20 extracted runner persistence/control |
+| `app.py` | 3,276 | Pre-existing master drift remeasured by ARCH-MS-20 gate |
+| `mcp_server.py` | 3,157 | Pre-existing master drift remeasured by ARCH-MS-20 gate |
 | `static/app.js` | 6,566 | Held |
-| repo root `*.py` | 197 | Pytest discovery; new tests should move to `tests/` |
+| repo root `*.py` | 201 | Master had 200; ARCH-MS-20 adds planned `runner_store.py` leaf |
 
 Source: `test_size_ratchet.py` (CONSOL-6).
 
