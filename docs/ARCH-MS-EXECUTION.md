@@ -61,7 +61,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-20** | `runner_*` → `runner_store.py` leaf extraction | 0.2 | 7 | Not Started | ⬜ | ADR-0007: ~445 lines, 2 external callers — headroom for ratchet relief |
 | **ARCH-MS-21** | Split `static/app.js` → `static/js/{api,state,board,mission}` | 0.2 | 2 | Not Started | ⬜ | `static/app.js` still monolith (ratchet ceiling 6,566 lines) |
 | **ARCH-MS-22** | `/health/deep` — stop leaking project identifiers | 0.3 | 5 | Not Started | 🔗 | **BUG-48** / PR #299 |
-| **ARCH-MS-23** | Global auth cutover — remove `PM_GLOBAL_AUTH` gate | 0.3 | 18 | Not Started | 🔗 | **ACCESS-16** / PR #300 — legacy login + flag deleted |
+| **ARCH-MS-23** | Global auth cutover — remove `PM_GLOBAL_AUTH` gate | 0.3 | 18 | In Review | 🔗 | **ACCESS-16** / PR #300 deleted the legacy login + flag; ARCH-MS-23 adds a CI regression guard against their return |
 | **ARCH-MS-24** | Phase 0 exit gate — ratchet lowered, application layer proven | 0.2 | 11,12,13,14,16,17,19,20,21,22,23 | Not Started | ⬜ | Blocked on scaffold + enforcement remainder |
 
 ---
