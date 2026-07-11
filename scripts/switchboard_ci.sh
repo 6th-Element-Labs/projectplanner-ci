@@ -17,6 +17,52 @@ run_test() {
   "$PYTHON" "$1"
 }
 
+# Every executable Python test is discovered automatically. A test may be skipped only by
+# adding its repo-relative path here with a reason that can survive code review.
+TEST_DENYLIST=(
+  ""  # Empty sentinel keeps macOS Bash 3 + `set -u` happy when nothing is denied.
+  # "test_example.py"  # Example: requires a provider fixture unavailable in hermetic CI.
+)
+
+is_denied_test() {
+  local candidate="$1"
+  local denied
+  for denied in "${TEST_DENYLIST[@]}"; do
+    [ -z "$denied" ] && continue
+    if [ "$candidate" = "$denied" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_discovered_tests() {
+  local discovered=0
+  local test_file
+
+  while IFS= read -r test_file; do
+    test_file="${test_file#./}"
+    if is_denied_test "$test_file"; then
+      printf 'SKIP  %s (documented in TEST_DENYLIST)\n' "$test_file"
+      continue
+    fi
+    run_test "$test_file"
+    discovered=$((discovered + 1))
+  done < <(
+    find . \
+      -path './.git' -prune -o \
+      -path './.venv' -prune -o \
+      -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print \
+      | LC_ALL=C sort
+  )
+
+  if [ "$discovered" -eq 0 ]; then
+    echo "No Python tests discovered." >&2
+    return 1
+  fi
+  printf '\nDiscovered and ran %d Python test files.\n' "$discovered"
+}
+
 section "Python runtime"
 "$PYTHON" --version
 
@@ -48,104 +94,11 @@ fi
 section "Python compile"
 "$PYTHON" -m compileall -q . -x '(^|/)(\.git|\.venv|__pycache__)(/|$)|(^|/)\._'
 
-run_test test_activity_payloads.py
-run_test test_audit_export.py
-run_test test_adapter_conformance.py
-run_test test_board_load_perf.py
-run_test test_search_tasks_perf.py
-
 section "Concurrent agent-path SLO gate"
 CONCURRENT_LOAD_REPORT="${CONCURRENT_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-concurrent-load-report.json}" \
   "$PYTHON" scripts/concurrent_load_gate.py
 
-run_test test_plan_health.py
-run_test test_sqlite_pragmas.py
-run_test test_dispatch_wake.py
-run_test test_agent_bootstrap.py
-run_test test_agent_host.py
-run_test test_bug_intake.py
-run_test test_cleanup_lifecycle.py
-run_test test_qa9_fail_early_negative.py
-run_test test_codex_adapter.py
-run_test test_codex_supervisor.py
-run_test test_control_plane_fail_fast.py
-run_test test_deliverables_breakdown.py
-run_test test_deliverables_dogfood.py
-run_test test_deliverables_model.py
-run_test test_deliverable_link_snapshots.py
-run_test test_bulk_deliverable_links.py
-run_test test_picker_load_path.py
-run_test test_evidence_claims.py
-run_test test_external_ci_mirror_evidence.py
-run_test test_external_ci_mirror_model.py
-run_test test_external_ci_mirror_runner.py
-run_test test_external_artifact_roots.py
-run_test test_frontend_project_state.py
-run_test test_asset_versioning.py
-run_test test_github_webhook.py
-run_test test_retire_merged_branch.py
-run_test test_ci_gate_policy.py
-run_test test_langgraph_adapter.py
-run_test test_managed_work_session.py
-run_test test_merge_gate.py
-run_test test_webhook_retry.py
-run_test test_agent_write_retry.py
-run_test test_mcp_dependencies.py
-run_test test_mcp_link_task_slim.py
-run_test test_mcp_deliverables_slim.py
-run_test test_mcp_threadpool.py
-run_test test_mcp_reconnect.py
-run_test test_mcp_read_auth.py
-run_test test_mission_narrative.py
-run_test test_narrate.py
-run_test test_narration_event_contract.py
-run_test test_narrate_scheduler.py
-run_test test_mission_coordinator.py
-run_test test_mission_page.py
-run_test test_mission_attention_model.py
-run_test test_project_creation.py
-run_test test_access_private_projects.py
-run_test test_publication_evidence.py
-run_test test_pre_tool_check.py
-run_test test_complete_claim_work_session_gate.py
-run_test test_task_id_parser.py
-run_test test_orphan_merge_discovery.py
-run_test test_reconcile_orphan_merges.py
-run_test test_open_pr_backstop.py
-run_test test_repo_hierarchy_surface.py
-run_test test_repo_hygiene_archive.py
-run_test test_repo_preflight.py
-run_test test_review_preflight.py
-run_test test_review_verifier_runs.py
-run_test test_runner_environment.py
-run_test test_runner_control_api.py
-run_test test_session_health.py
-run_test test_work_session_health_panel.py
-run_test test_fleet_control.py
-run_test test_api_keys_settings.py
-run_test test_session_policy_profiles.py
-run_test test_side_effect_ledger.py
-run_test test_signals.py
-run_test test_surface_parity.py
-run_test test_switchboard_runtime.py
-run_test test_tally_project_surface.py
-run_test test_ui2_kpi_outcomes.py
-run_test test_task_move_archive.py
-run_test test_web_write_auth.py
-run_test test_ui9_admin.py
-run_test test_auth_rate_limit.py
-run_test test_switchboard_pr_gate.py
-run_test test_pr_provenance_gate.py
-run_test test_unattended_proof.py
-run_test test_run_session_auto_session.py
-run_test test_work_session_test_run.py
-run_test test_work_session_model.py
-run_test test_work_session_claim_binding.py
-run_test test_backup_restore.py
-run_test test_uptime_probe.py
-run_test test_deploy_memory_isolation.py
-run_test test_ui13_multi_project_intake.py
-run_test test_ui14_comms_settings.py
+run_discovered_tests
 
 section "Frontend JavaScript syntax"
 if command -v node >/dev/null 2>&1; then

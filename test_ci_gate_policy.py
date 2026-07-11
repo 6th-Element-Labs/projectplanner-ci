@@ -21,6 +21,7 @@ actions_dir = Path(".github/workflows")
 workflow_files = sorted(actions_dir.glob("*.yml")) + sorted(actions_dir.glob("*.yaml")) \
     if actions_dir.exists() else []
 pr_gate = Path("scripts/switchboard_pr_gate.py").read_text(encoding="utf-8")
+ci_suite = Path("scripts/switchboard_ci.sh").read_text(encoding="utf-8")
 runbook = Path("docs/SWITCHBOARD-RUNBOOK.md").read_text(encoding="utf-8")
 provision = Path("deploy/PROVISION.md").read_text(encoding="utf-8")
 web_unit = Path("deploy/projectplanner.service").read_text(encoding="utf-8")
@@ -52,6 +53,11 @@ ok("SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python" in provision
    and "Environment=SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python" in
    Path("deploy/projectplanner-ci-gate.service").read_text(encoding="utf-8"),
    "VM gate pins an explicit Python 3.10+ runtime")
+ok("run_discovered_tests" in ci_suite and "TEST_DENYLIST" in ci_suite
+   and "find ." in ci_suite,
+   "CI gate discovers every Python test unless the documented denylist excludes it")
+ok(not any(line.startswith("run_test test_") for line in ci_suite.splitlines()),
+   "CI gate cannot silently regress to a hand-maintained per-test allowlist")
 
 print("\n%d passed, %d failed" % (passed, failed))
 raise SystemExit(1 if failed else 0)
