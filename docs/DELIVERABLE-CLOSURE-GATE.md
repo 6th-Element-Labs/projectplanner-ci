@@ -118,6 +118,23 @@ When a deliverable moves to `in_progress`, require:
 
 `proof_requirements.gates[]` references the **gate registry** (DELIVERABLES-14).
 
+**Enforcement (shipped, DELIVERABLES-13).** The check lives in `store.create_deliverable`,
+the single choke point every write goes through (MCP tool, `POST /api/deliverables`, the
+breakdown/outcome flow, and any future Mission Page status control). It fires only on the
+**transition into `in_progress`** (a new deliverable created as `in_progress`, or a status
+change into it) — re-saving an already-`in_progress` deliverable is not re-validated, so
+legacy deliverables with empty criteria stay editable. A rejection returns
+`{"error": "deliverable intake incomplete", "details": [...]}` (HTTP 400 with the same body
+on the REST route) naming each missing field. It validates: non-empty `end_state`, non-empty
+`acceptance_criteria`, and a well-formed `proof_requirements` — a non-empty `gates` list where
+each gate is `{id: str, required: bool}` with unique ids and (if present) the correct `schema`.
+Registry-existence of each gate id is validated once the gate registry lands (DELIVERABLES-14);
+until then only structural well-formedness of the refs is checked.
+
+Gated by **`PM_ENFORCE_DELIVERABLE_INTAKE`** (default **off**, mirroring the
+`PM_VERIFY_COMPLETION_PUSH` rollout style) so existing deliverables and legacy flows are
+unaffected; DELIVERABLES-22 turns it on per-prod after new deliverables are backfilled.
+
 ### Gate registry (DELIVERABLES-14)
 
 Manifest: `deliverable_gates/manifest.json` (or per-deliverable YAML).
