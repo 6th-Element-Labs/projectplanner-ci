@@ -29,6 +29,7 @@ import signals
 import store
 from mcp_observability import MCPObservability
 from mcp_dispatch import MCPToolDispatcher
+from mcp_http_timing import MCPServerTimingMiddleware
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -3145,4 +3146,13 @@ def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: s
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    import uvicorn
+
+    # FastMCP.run() builds this same ASGI app internally. Running it explicitly
+    # lets Switchboard attach timing/reconnect headers to success and error paths.
+    uvicorn.run(
+        MCPServerTimingMiddleware(mcp.streamable_http_app()),
+        host=mcp.settings.host,
+        port=mcp.settings.port,
+        log_level=mcp.settings.log_level.lower(),
+    )

@@ -87,6 +87,7 @@ run_test test_merge_gate.py
 run_test test_webhook_retry.py
 run_test test_mcp_dependencies.py
 run_test test_mcp_threadpool.py
+run_test test_mcp_reconnect.py
 run_test test_mission_narrative.py
 run_test test_narrate.py
 run_test test_mission_coordinator.py
