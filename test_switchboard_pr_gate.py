@@ -23,6 +23,10 @@ calls = []
 
 def fake_request(method, path, *, token, body=None):
     calls.append({"method": method, "path": path, "token": token, "body": body})
+    # GET .../commits/<sha>/statuses backs post_status idempotency; default to no prior
+    # status so the POST proceeds. Individual tests below override the return as needed.
+    if method == "GET" and "/statuses" in path:
+        return []
     return {"ok": True}
 
 
@@ -41,7 +45,9 @@ try:
 finally:
     gate._github_request = original_request
 
-call = calls[0]
+posts = [c for c in calls if c["method"] == "POST"]
+ok(len(posts) == 1, "post_status issues exactly one POST when no prior status exists")
+call = posts[0]
 body = call["body"]
 ok(call["method"] == "POST", "commit status uses POST")
 ok(call["path"] == "repos/6th-Element-Labs/projectplanner/statuses/abc123",
@@ -237,8 +243,75 @@ try:
             ok(False, "genuine external CI test failure should raise")
         except gate.GateError:
             ok(True, "genuine external CI test failure (class=test) still fails the gate")
+
+        # The class external_ci_mirror ACTUALLY emits for a red suite is workflow_failed
+        # (+ status=="failure"). It must hard-fail the gate, NOT fall back to the local hog.
+        gate.external_ci_mirror.request_external_ci_mirror_run = lambda *a, **k: {
+            "status": "failure", "failure_class": "workflow_failed",
+            "conclusion": "failure", "run_url": "https://x/runs/2"}
+        try:
+            gate._verify_on_external_ci_mirror(
+                wt, lp, project="switchboard", number=5, token="t", timeout_s=5)
+            ok(False, "workflow_failed should raise (real red suite, not infra)")
+        except gate.GateError:
+            ok(True, "workflow_failed (the class the mirror really emits) hard-fails; no local fallback")
 finally:
     gate.external_ci_mirror.request_external_ci_mirror_run = _orig_ecm
     gate.subprocess.check_output = _orig_co
 
-print("\n22 passed, 0 failed")
+# Idempotency: post_status must NOT re-POST when the latest status for (sha, context) already
+# matches — this is what stops the 1000-status-cap 422 loop that wedged the gate on long-lived PRs.
+def _idem_request(rows):
+    def _req(method, path, *, token, body=None):
+        _req.calls.append((method, path, body))
+        if method == "GET" and "/statuses" in path:
+            return rows
+        return {"ok": True}
+    _req.calls = []
+    return _req
+
+_orig_req = gate._github_request
+try:
+    same = _idem_request([{"context": "Switchboard / claim gate", "state": "success",
+                           "description": "Backed by HARDEN-67"}])
+    gate._github_request = same
+    res = gate.post_status("r", "sha1", "success", context="Switchboard / claim gate",
+                           description="Backed by HARDEN-67", token="t")
+    ok(res.get("skipped") == "unchanged", "post_status skips an unchanged re-post (422-cap guard)")
+    ok(not any(m == "POST" for m, _p, _b in same.calls),
+       "no POST is issued when the status is unchanged")
+
+    changed = _idem_request([{"context": "Switchboard / claim gate", "state": "success",
+                              "description": "Backed by HARDEN-67"}])
+    gate._github_request = changed
+    gate.post_status("r", "sha1", "success", context="Switchboard / claim gate",
+                     description="Backed by HARDEN-99 (newly claimed)", token="t")
+    ok(any(m == "POST" for m, _p, _b in changed.calls),
+       "post_status still POSTs when the verdict/description actually changes")
+finally:
+    gate._github_request = _orig_req
+
+# A PR whose head SHA already has a terminal VM-gate status is skipped: no suite run, no re-post.
+# This is what stops the timer re-running full CI (mirror/local venv hog) for every decided PR.
+_orig_req2 = gate._github_request
+_orig_cache2 = gate._ensure_cache_repo
+try:
+    gate._github_request = _idem_request(
+        [{"context": "Switchboard CI / VM gate", "state": "success", "description": "passed"}])
+
+    def _must_not_run(*_a, **_k):
+        raise AssertionError("suite must not run for an already-gated SHA")
+
+    gate._ensure_cache_repo = _must_not_run
+    result = gate.run_gate_for_pr(
+        {"number": 42, "head": {"sha": "cafe1234"}, "html_url": "https://x/pull/42"},
+        repo="6th-Element-Labs/projectplanner", token="t",
+        context="Switchboard CI / VM gate", work_root=Path("/tmp"), source_repo=Path("/tmp"),
+        timeout_s=5)
+    ok(result.get("skipped") == "already_gated" and result.get("state") == "success",
+       "already-gated head SHA is skipped (no suite re-run, no re-post)")
+finally:
+    gate._github_request = _orig_req2
+    gate._ensure_cache_repo = _orig_cache2
+
+print("\n29 passed, 0 failed")

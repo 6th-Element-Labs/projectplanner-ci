@@ -77,7 +77,7 @@ are under 10 lines, none over 50; the fat lives in `store.py`, where ADR-0005 sa
 Both surfaces already carry `server-timing` (app.py:189; `mcp_http_timing.py`), and
 `mcp_observability.py` already samples per-tool latency and errors — **measurement exists;
 use it, don't rebuild it.** Every redirect rule in Decision 3 has a shipped precedent: 7 leaf
-stores over `db/` behind the `store.py` facade (ARCH-2/3), `services/auth` proving APIRouter
+stores over `db/` behind the `store.py` facade (ARCH-2/3), the auth router package proving APIRouter
 inclusion, `taikun-ui.js` proving the frontend grows fine in new files. This ADR adds no new
 architecture; it makes the existing patterns the default instead of the exception.
 
@@ -146,7 +146,7 @@ For **new** code only; existing code moves on-touch only, as verbatim moves:
 | New thing | Lands in | Proven by |
 |---|---|---|
 | Domain state (tables + their CRUD) | `<domain>_store.py` over `db/`, re-exported through the `store.py` facade | the 7 leaf stores (ARCH-2/3) |
-| Web routes | an APIRouter module included by `app.py`, taking a **typed Pydantic DTO** (not `body: dict`) | `services/auth` |
+| Web routes | an APIRouter module included by `app.py`, taking a **typed Pydantic DTO** (not `body: dict`) | `src/switchboard/api/routers/auth` |
 | MCP tools | a tool module registering on the shared server instance | first such extraction establishes it |
 | Frontend feature | its own `static/` JS file | `taikun-ui.js` |
 | Tests | `tests/` (with a working path shim) | — |
@@ -302,7 +302,7 @@ fix them:
   beside the legacy one — a migration state, not an architecture (already tracked as the
   auth-strangler).~~ **Done (ACCESS-16 / PR #300).** The cutover shipped: `PM_GLOBAL_AUTH`,
   the legacy per-project login path, and `static/login.html` are deleted. There is now a
-  single live auth system: the `services/auth` microservice is always mounted, backed by the
+  single live auth system: the `switchboard.api.routers.auth` package is always mounted, backed by the
   shared `auth.py` primitives (bearer→principal mapping + hashed, expiring session cookie).
 
 ---

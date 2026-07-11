@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot: migrate per-project password logins into the global auth (Service #1).
+"""One-shot: migrate per-project password logins into global auth.
 
 Copies every per-project `principal_passwords` login into the global `users` +
 `user_auth` tables so the SAME credentials work at the global email+password login.
@@ -9,7 +9,7 @@ usernames, so a username is mapped to an email (known ones below; else
 <login>@taikunai.com). Project owners (project_access.owner_user_id) are marked
 superadmin so they see every project, including future ones.
 
-Idempotent: re-running only fills gaps. Requires services/auth on the box.
+Idempotent: re-running only fills gaps. Requires the Switchboard package on the box.
 Run:  cd /opt/projectplanner && set -a && . ./.env && set +a && .venv/bin/python scripts/migrate_auth_to_global.py
 """
 from __future__ import annotations
@@ -21,7 +21,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import store  # noqa: E402
-from services.auth import store as ast  # noqa: E402
+import switchboard_path  # noqa: E402,F401
+from switchboard.api.routers.auth import store as ast  # noqa: E402
 
 # Per-project logins are usernames; the global login is by email.
 EMAIL_MAP = {"steve": "steve@taikunai.com", "root": "root@taikunai.com"}

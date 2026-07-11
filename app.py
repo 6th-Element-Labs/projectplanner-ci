@@ -57,12 +57,11 @@ import store  # noqa: E402
 app = FastAPI(title="Taikun PM", version="0.1.0")
 _req_obs = request_observability.RequestObservability()
 
-# Service #1 (global auth) — always mounted. Browser users authenticate via
+# Global auth router — always mounted. Browser users authenticate via
 # taikun_session JWT; agents/API callers keep bearer-token principals.
-from services.auth import store as _auth_store
-from services.auth import service as _auth_service
-from services.auth import session as _auth_session
-from services.auth.auth_api import router as _global_auth_router
+import scripts.switchboard_path  # noqa: E402,F401
+from switchboard.api.routers.auth import service as _auth_service, session as _auth_session, store as _auth_store  # noqa: E402
+from switchboard.api.routers.auth.routes import router as _global_auth_router  # noqa: E402
 
 _auth_store.init()
 app.include_router(_global_auth_router)
@@ -1017,7 +1016,10 @@ async def create_deliverable(request: Request, body: dict = Body(...),
     principal = _principal(request, project, ("write:tasks",), dev_actor="web")
     result = store.create_deliverable(body or {}, actor=auth.actor(principal), project=project)
     if result.get("error"):
-        raise HTTPException(400, result["error"])
+        # DELIVERABLES-13: surface the full error object (error + per-field details) when the
+        # intake gate rejects a move into in_progress, so the operator sees which fields are
+        # missing rather than a bare message. Falls back to the string for simple errors.
+        raise HTTPException(400, result if result.get("details") else result["error"])
     return result
 
 
