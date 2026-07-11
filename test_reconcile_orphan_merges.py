@@ -11,6 +11,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 
 _TMP = tempfile.mkdtemp(prefix="orphan-sweep-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -82,9 +84,11 @@ try:
 
     orphan_merge_discovery.fetch_recent_merged_prs = _fake_fetch
     live_pr_calls = []
+    live_pr_call_lock = threading.Lock()
 
     def _fake_github_pr(repo, pr_number, token=""):
-        live_pr_calls.append((repo, pr_number))
+        with live_pr_call_lock:
+            live_pr_calls.append((repo, pr_number))
         return next((p for p in fake_prs if p["number"] == pr_number), None)
 
     store._github_pr = _fake_github_pr
@@ -129,6 +133,33 @@ try:
     store.reconcile(project=HOME)
     ok(len(live_pr_calls) == 1,
        "incomplete terminal provenance still receives a live GitHub PR check")
+
+    # Independent unresolved PR reads overlap, while the reconciliation loop keeps
+    # all subsequent state transitions serial.
+    second = store.create_task({"workstream_id": "ORPH", "title": "second live PR"},
+                               actor="test", project=HOME)
+    store.mark_task_pr_opened(second["task_id"], 505,
+                              pr_url=f"https://github.com/{REPO}/pull/505",
+                              branch=f"cursor/{second['task_id']}-work",
+                              head_sha="9" * 40, actor="test", project=HOME)
+    fake_prs.append(_merged_pr(505, second["task_id"], "8" * 40))
+    with store._conn(HOME) as c:
+        c.execute("UPDATE task_git_state SET in_main_content=0 WHERE task_id=?",
+                  (orphan["task_id"],))
+    starts = []
+
+    def _slow_github_pr(repo, pr_number, token=""):
+        starts.append(time.monotonic())
+        time.sleep(0.15)
+        return next((p for p in fake_prs if p["number"] == pr_number), None)
+
+    store._github_pr = _slow_github_pr
+    parallel = store.reconcile(project=HOME)
+    ok(len(starts) == 2 and max(starts) - min(starts) < 0.08,
+       "two unresolved GitHub PR reads overlap instead of serializing")
+    checks = parallel.get("external_checks") or {}
+    ok(checks.get("github_pr_fetches") == 2 and checks.get("github_pr_concurrency") == 2,
+       "reconcile reports bounded GitHub fetch concurrency")
 
     # Without any GitHub token the discovery must fail soft and touch nothing.
     fresh = store.create_task({"workstream_id": "ORPH", "title": "second orphan"},
