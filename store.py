@@ -959,7 +959,7 @@ def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
 
 def create_deliverable(data: Dict[str, Any], actor: str = "user",
                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    result = _retry_on_locked(
+    result = _write_through(project,
         lambda: _create_deliverable_impl(data, actor=actor, project=project))
     if isinstance(result, dict):
         return result
@@ -1132,7 +1132,7 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     bundling never silently omits work it depends on. Batch bundling (approve_deliverable_breakdown)
     runs the closure explicitly after materializing, independent of this flag.
     """
-    result = _retry_on_locked(lambda: _link_task_to_deliverable_impl(
+    result = _write_through(project, lambda: _link_task_to_deliverable_impl(
         deliverable_id, task_project, task_id, milestone_id=milestone_id,
         data=data, actor=actor, project=project))
     if isinstance(result, dict):
@@ -1327,7 +1327,7 @@ def link_tasks_to_deliverable(deliverable_id: str, links: List[Dict[str, Any]],
                               actor: str = "user",
                               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Link N explicitly routed tasks with one retryable home-database transaction."""
-    return _retry_on_locked(lambda: _link_tasks_to_deliverable_impl(
+    return _write_through(project, lambda: _link_tasks_to_deliverable_impl(
         deliverable_id, links, actor=actor, project=project))
 
 
@@ -4130,7 +4130,7 @@ def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
 
 def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
                 project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
-    result = _retry_on_locked(
+    result = _write_through(project,
         lambda: _update_task_impl(task_id, fields, actor=actor, project=project))
     if result is None or (isinstance(result, dict) and result.get("error")):
         return result
@@ -4233,7 +4233,7 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
 
 def create_task(data: Dict[str, Any], actor: str = "user",
                 project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
-    tid = _retry_on_locked(
+    tid = _write_through(project,
         lambda: _create_task_impl(data, actor=actor, project=project))
     if not tid:
         return None
@@ -6260,7 +6260,7 @@ def register_agent(agent_id: str, runtime: str, model: str = "", lane: str = "",
                    principal_id: str = "",
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    return _retry_on_locked(lambda: _register_agent_impl(
+    return _write_through(project, lambda: _register_agent_impl(
         agent_id, runtime, model=model, lane=lane, task_id=task_id, ttl_s=ttl_s,
         control=control, protocol=protocol, principal_id=principal_id,
         actor=actor, project=project))
@@ -10497,7 +10497,7 @@ def claim_task(task_id: str, agent_id: str,
                session_policy_profile: str = "",
                require_work_session: bool = False,
                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    return _retry_on_locked(lambda: _claim_task_impl(
+    return _write_through(project, lambda: _claim_task_impl(
         task_id, agent_id, principal_id=principal_id, actor=actor,
         ttl_seconds=ttl_seconds, idem_key=idem_key,
         override_identity_risk=override_identity_risk,
@@ -11026,7 +11026,7 @@ def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
     if push_check and push_check.get("status") == push_verification.ABSENT:
         return _completion_push_absent_response(
             claim_id, evidence_obj, push_check, project, actor)
-    response = _retry_on_locked(lambda: _complete_claim_impl(
+    response = _write_through(project, lambda: _complete_claim_impl(
         claim_id, evidence=evidence, final_status=final_status, actor=actor,
         project=project, mission_project=mission_project, finalize=False,
         push_check=push_check))
@@ -11153,7 +11153,7 @@ def mark_task_pr_opened(task_id: str, pr_number: int, pr_url: str = "",
                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     # Retry the whole write on a transient sqlite lock so a busy DB never silently drops the
     # PR-open provenance event (dropped webhook -> stuck 'Not Started' task -> blocked claim gate).
-    return _retry_on_locked(lambda: _mark_task_pr_opened_impl(
+    return _write_through(project, lambda: _mark_task_pr_opened_impl(
         task_id, pr_number, pr_url, branch, head_sha, actor, project))
 
 
@@ -11207,7 +11207,7 @@ def mark_task_merged(task_id: str, merged_sha: str, pr_number: Optional[int] = N
                      task_ids_found: Any = None) -> Dict[str, Any]:
     # Retry the whole write on a transient sqlite lock so a busy DB never silently drops the
     # merge provenance event (dropped webhook -> task stuck In Review instead of Done).
-    return _retry_on_locked(lambda: _mark_task_merged_impl(
+    return _write_through(project, lambda: _mark_task_merged_impl(
         task_id, merged_sha, pr_number, pr_url, branch, head_sha, actor, project,
         provenance_source, task_ids_found))
 

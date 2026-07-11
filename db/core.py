@@ -134,24 +134,12 @@ def _record_sqlite_lock_wait() -> None:
 
 
 def _retry_on_locked(thunk, attempts: int = 5, base_delay: float = 0.1):
-    """Run thunk(), retrying on a transient sqlite 'database is locked' with exponential
-    backoff; non-busy errors propagate immediately.
+    """Deprecated — PERF-2 routes writes through the single-writer queue instead.
 
-    For provenance-critical webhook writes (mark_task_pr_opened / mark_task_merged): under
-    board write-contention the busy_timeout can still expire and raise 'database is locked',
-    which — with no retry — silently drops the PR-open/merge event and strands the task's
-    status/provenance (BUG: dropped-webhook -> stuck task -> blocked claim gate). thunk must
-    be idempotent (open its own connection each call), which these writers are.
+    Kept as a no-retry pass-through so legacy call sites and tests that patch this
+    symbol keep working until they are migrated to ``_write_through``.
     """
-    for attempt in range(attempts):
-        try:
-            return thunk()
-        except sqlite3.OperationalError as exc:
-            if _sqlite_busy(exc) and attempt < attempts - 1:
-                _record_sqlite_lock_wait()
-                time.sleep(base_delay * (2 ** attempt))
-                continue
-            raise
+    return thunk()
 
 
 def _json_size_bytes(value: Any) -> int:
