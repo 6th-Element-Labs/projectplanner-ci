@@ -1,0 +1,13 @@
+# /etc/systemd/system/projectplanner-batch.slice
+# PERF-4: timer/oneshot tier (reconcile, narrate, ci-gate, …). Low CPU/IO share
+# with a hard quota so batch work is provably capped under load.
+[Unit]
+Description=ProjectPlanner batch tier (timers, reconcile, narrate, ci-gate)
+Before=slices.target
+
+[Slice]
+CPUWeight=50
+# ~40% of a 2-vCPU box (80% of one CPU unit).
+CPUQuota=80%
+IOWeight=10
+MemoryHigh=512M

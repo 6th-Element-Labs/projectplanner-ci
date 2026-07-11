@@ -58,6 +58,12 @@ section "Concurrent agent-path SLO gate"
 CONCURRENT_LOAD_REPORT="${CONCURRENT_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-concurrent-load-report.json}" \
   "$PYTHON" scripts/concurrent_load_gate.py
 
+section "Saturation SLO gate (PERF-7)"
+SATURATION_SLO_REPORT="${SATURATION_SLO_REPORT:-${TMPDIR:-/tmp}/switchboard-saturation-slo-report.json}" \
+  "$PYTHON" scripts/saturation_slo_gate.py
+
+run_test test_saturation_signals.py
+
 run_test test_plan_health.py
 run_test test_sqlite_pragmas.py
 run_test test_dispatch_wake.py
@@ -99,6 +105,7 @@ run_test test_mcp_read_auth.py
 run_test test_mission_narrative.py
 run_test test_narrate.py
 run_test test_narrate_scheduler.py
+run_test test_perf_slices.py
 run_test test_mission_coordinator.py
 run_test test_mission_page.py
 run_test test_mission_attention_model.py

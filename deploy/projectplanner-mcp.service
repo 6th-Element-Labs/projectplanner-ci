@@ -5,6 +5,7 @@ After=network-online.target projectplanner-gateway.service
 Wants=network-online.target
 
 [Service]
+Slice=projectplanner-interactive.slice
 Type=simple
 User=ubuntu
 WorkingDirectory=/opt/projectplanner
