@@ -682,47 +682,117 @@ const TeepPlan = {
             </div>
         </div>`;
     },
-    // UI-3: Work-session health strip (board + mission header). Answers "is the fleet
-    // safe right now?" at a glance — active sessions, dirty worktrees, blocked merge
-    // gates, held file leases — from the same read models SESSION-8 exposed.
-    sessionStripHtml(sessions, leases) {
-        sessions = sessions || [];
-        leases = leases || [];
-        const dirty = sessions.filter((s) => (s.dirty_status || '').toLowerCase() === 'dirty').length;
-        const blocked = sessions.filter((s) => (s.health || {}).status === 'unsafe').length;
-        const warn = sessions.filter((s) => (s.health || {}).status === 'warning').length;
-        const leaseFiles = leases.reduce((n, l) => n + ((l.names || []).length || 0), 0);
-        if (!sessions.length && !leaseFiles) {
-            return `<span class="text-secondary small"><i class="ti ti-folder-off me-1"></i>No active work sessions</span>`;
-        }
-        const pills = [];
-        const sColor = sessions.length ? 'green' : 'secondary';
-        pills.push(`<span class="badge bg-${sColor}-lt"><span class="status-dot bg-${sColor} me-1"></span>${sessions.length} session${sessions.length === 1 ? '' : 's'} active</span>`);
-        if (dirty) pills.push(`<span class="badge bg-yellow-lt"><i class="ti ti-alert-triangle me-1"></i>${dirty} dirty worktree${dirty === 1 ? '' : 's'}</span>`);
-        if (blocked) pills.push(`<span class="badge bg-red-lt"><i class="ti ti-shield-x me-1"></i>merge gate: ${blocked} blocked</span>`);
-        else if (warn) pills.push(`<span class="badge bg-yellow-lt"><i class="ti ti-alert-triangle me-1"></i>${warn} warning</span>`);
-        if (leaseFiles) pills.push(`<span class="badge bg-secondary-lt"><i class="ti ti-lock me-1"></i>leases: ${leaseFiles} file${leaseFiles === 1 ? '' : 's'} held</span>`);
-        return pills.join(' ');
+    // UI-3: Agent-fleet health dock (bottom-right, floats over every tab). Replaces the
+    // header pill strip. Quiet when healthy — a small pill; auto-opens a plain-language
+    // list the moment an agent needs attention (can't merge / dirty worktree). Scope is
+    // project-wide on the board, deliverable-scoped on the mission page. Data comes from
+    // /ixp/v1/work_sessions plus each session's derived health (SESSION-8 read models).
+    renderFleetDock(ctx) {
+        this._dockCtx = ctx || { mode: 'project' };
+        this._loadFleetDock();
     },
-    async _loadSessionHealthStrip(targetId) {
-        const el = document.getElementById(targetId);
-        if (!el) return;
-        // Throttle rapid re-renders (renderBoard fires on every filter change).
-        const now = Date.now();
-        this._stripLoadedAt = this._stripLoadedAt || {};
-        if (el.dataset.loaded && (now - (this._stripLoadedAt[targetId] || 0)) < 4000) return;
-        this._stripLoadedAt[targetId] = now;
+    async _loadFleetDock() {
+        const host = document.getElementById('fleet-dock');
+        if (!host) return;
+        let sessions = [];
         try {
             const p = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`;
-            const [sw, ls] = await Promise.all([
-                fetch(`/ixp/v1/work_sessions?${p}&include_expired=false`).then((r) => r.json()),
-                fetch(`/ixp/v1/leases?${p}`).then((r) => r.json()),
-            ]);
-            el.innerHTML = `<div class="d-flex flex-wrap align-items-center gap-2">${this.sessionStripHtml(sw.work_sessions, ls.leases)}</div>`;
-            el.dataset.loaded = '1';
-        } catch (e) {
-            el.innerHTML = `<span class="text-secondary small">Session health unavailable</span>`;
+            const data = await (await fetch(`/ixp/v1/work_sessions?${p}&include_expired=false`)).json();
+            sessions = data.work_sessions || [];
+        } catch (e) { host.innerHTML = ''; return; }
+        const ctx = this._dockCtx || { mode: 'project' };
+        if (ctx.mode === 'deliverable' && Array.isArray(ctx.taskIds)) {
+            const ids = new Set(ctx.taskIds.map((x) => String(x).toUpperCase()));
+            sessions = sessions.filter((s) => ids.has(String(s.task_id || '').toUpperCase()));
         }
+        this._fleetScopeLabel = ctx.mode === 'deliverable' ? 'this deliverable' : '';
+        this._renderFleetDock(sessions);
+    },
+    _fleetTaskTitle(taskId) {
+        const id = String(taskId || '').toUpperCase();
+        const t = (this.tasks || []).find((x) => String(x.task_id || '').toUpperCase() === id);
+        if (t && t.title) return t.title;
+        const links = (this.missionStatus && this.missionStatus.linked_tasks) || [];
+        for (const l of links) {
+            const d = l.task_detail || {};
+            if (String(l.task_id || d.task_id || '').toUpperCase() === id && d.title) return d.title;
+        }
+        return taskId || 'task';
+    },
+    _dockReason(health) {
+        const findings = (health && health.findings) || [];
+        const pick = findings.filter((f) => f.blocking)[0] || findings[0] || null;
+        const severity = (health && health.status) === 'unsafe' ? 'danger' : 'warning';
+        return {
+            severity,
+            text: pick ? pick.message : (severity === 'danger' ? "Can't merge yet." : 'Needs a look.'),
+            repair: (pick && pick.repair) || '',
+        };
+    },
+    _renderFleetDock(sessions) {
+        const host = document.getElementById('fleet-dock');
+        if (!host) return;
+        const working = sessions.length;
+        if (!working) { host.innerHTML = ''; return; }   // keep the corner clean
+        const proj = window.PM_PROJECT || 'maxwell';
+        // "Needs attention" = genuinely blocked (unsafe): dirty worktree, conflicts, a
+        // failed/blocking preflight — the things that stop a merge. A non-blocking
+        // 'warning' (e.g. hasn't run preflight yet) is normal mid-work, so it folds into
+        // "on track" rather than nagging on every fresh session.
+        const attention = sessions.filter((s) => (s.health || {}).status === 'unsafe');
+        const nAttn = attention.length;
+        const worst = 'danger';
+        // explicit user toggle wins; otherwise auto — open only when something needs attention
+        const collapsed = this._dockCollapsed == null ? (nAttn === 0) : this._dockCollapsed;
+        const anchor = 'position:fixed;right:1rem;bottom:4.25rem;z-index:1031;';
+        const rerender = () => this._renderFleetDock(sessions);
+        if (collapsed) {
+            const dot = nAttn ? `var(--tblr-${worst})` : 'var(--tblr-success)';
+            host.innerHTML = `<button id="fleet-dock-pill" class="btn btn-sm shadow-sm" style="${anchor}border-radius:999px;display:inline-flex;align-items:center;gap:8px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:${dot};"></span>
+                <span class="fw-medium">${nAttn ? this.esc(String(nAttn)) + ' need attention' : 'Fleet clear'}</span>
+                <span class="text-secondary small">· ${working} working</span>
+                <i class="ti ti-chevron-up"></i></button>`;
+            document.getElementById('fleet-dock-pill').addEventListener('click', () => { this._dockCollapsed = false; rerender(); });
+            return;
+        }
+        const rows = attention.map((s) => {
+            const r = this._dockReason(s.health);
+            const dot = `var(--tblr-${r.severity})`;
+            return `<div class="p-2 border rounded mb-2">
+                <div class="d-flex align-items-start gap-2">
+                    <span style="margin-top:6px;width:8px;height:8px;border-radius:50%;background:${dot};flex:none;"></span>
+                    <div class="flex-fill" style="min-width:0;">
+                        <div class="fw-medium text-truncate">${this.esc(this._fleetTaskTitle(s.task_id))}</div>
+                        <div class="text-secondary text-truncate" style="font-size:12px;font-family:var(--tblr-font-monospace);">${this.esc(s.agent_id || '')}</div>
+                        <div class="mt-1" style="font-size:13px;">${this.esc(r.text)}</div>
+                        ${r.repair ? `<div class="text-secondary mt-1" style="font-size:12px;">${this.esc(r.repair)}</div>` : ''}
+                        <div class="mt-2"><button class="btn btn-sm" data-dock-open="${this.esc(s.task_id)}"><i class="ti ti-arrow-up-right me-1"></i>Open task</button></div>
+                    </div>
+                </div></div>`;
+        }).join('');
+        const clean = working - nAttn;
+        const scope = this._fleetScopeLabel ? ` <span class="text-secondary small">· ${this.esc(this._fleetScopeLabel)}</span>` : '';
+        const body = nAttn
+            ? `<div class="p-2">${rows}${clean > 0 ? `<div class="text-secondary small px-1 pb-1"><i class="ti ti-check me-1"></i>${clean} other${clean === 1 ? '' : 's'} clean and on track</div>` : ''}</div>`
+            : `<div class="p-3 text-secondary small"><i class="ti ti-check me-1"></i>All ${working} agents clean and on track.</div>`;
+        const attnBadge = nAttn
+            ? `<span class="ms-auto small text-${worst}"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor" class="me-1"></span>${nAttn} need attention</span>`
+            : `<span class="ms-auto small text-success"><i class="ti ti-check me-1"></i>all clear</span>`;
+        host.innerHTML = `<div class="card shadow-sm" style="${anchor}width:340px;max-height:70vh;overflow:auto;">
+            <div class="card-header py-2 d-flex align-items-center gap-2">
+                <i class="ti ti-users-group text-secondary"></i>
+                <span class="fw-medium">Agent fleet</span>
+                <span class="text-secondary small">${working} working</span>${scope}
+                ${attnBadge}
+                <button id="fleet-dock-refresh" class="btn btn-sm btn-ghost-secondary p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
+                <button id="fleet-dock-min" class="btn btn-sm btn-ghost-secondary p-1" title="Collapse"><i class="ti ti-chevron-down"></i></button>
+            </div>
+            ${body}</div>`;
+        host.querySelectorAll('[data-dock-open]').forEach((b) =>
+            b.addEventListener('click', () => this.openTask(b.getAttribute('data-dock-open'), proj)));
+        document.getElementById('fleet-dock-min').addEventListener('click', () => { this._dockCollapsed = true; rerender(); });
+        document.getElementById('fleet-dock-refresh').addEventListener('click', () => this._loadFleetDock());
     },
     // UI-3: per-task Work Sessions panel (Dev tab) — who holds which worktree, on what
     // branch, clean or dirty. Sits beside the runner panel.
@@ -1112,7 +1182,7 @@ const TeepPlan = {
                     <div>${cards}</div>
                 </div>`;
         }).join('');
-        this._loadSessionHealthStrip('session-health-strip');
+        this.renderFleetDock({ mode: 'project' });
     },
 
     taskCard(t) {
@@ -4313,7 +4383,7 @@ const TeepPlan = {
         // real change, and stamp the freshly-rendered "updated" time.
         this._missionSig = this._missionSignature();
         this._missionLiveStamp(true);
-        this._loadSessionHealthStrip('mission-session-health-strip');
+        this.renderFleetDock({ mode: 'deliverable', taskIds: (s.linked_tasks || []).map((l) => l.task_id) });
     },
 
     async openLinkedTask(taskId, projectId) {
