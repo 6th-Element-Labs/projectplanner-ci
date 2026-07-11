@@ -43,9 +43,24 @@ def _addrs(v):
     return out
 
 
-def _email(subject, text, to=None, cc=None, in_reply_to=None, references=None):
+def _recipients(project, kind):
+    """UI-14: per-project digest/notify recipients, or [] if the project set none. Isolated in a
+    try/except so a comms/config read never breaks the global send path."""
+    if not project:
+        return []
+    try:
+        import comms
+        return comms.recipients_for(project, kind or "notify")
+    except Exception as e:
+        log.warning("notify: per-project recipients unavailable for %s (%s); using global", project, e)
+        return []
+
+
+def _email(subject, text, to=None, cc=None, in_reply_to=None, references=None,
+           project=None, kind="notify"):
     host = (os.environ.get("PM_SMTP_HOST") or "").strip()
-    to_list = _addrs(to) or _addrs(os.environ.get("PM_NOTIFY_EMAIL_TO"))
+    # Precedence: explicit `to` > this project's recipients (UI-14) > global PM_NOTIFY_EMAIL_TO.
+    to_list = _addrs(to) or _recipients(project, kind) or _addrs(os.environ.get("PM_NOTIFY_EMAIL_TO"))
     cc_list = [a for a in _addrs(cc) if a.lower() not in {x.lower() for x in to_list}]
     frm = (os.environ.get("PM_SMTP_FROM") or os.environ.get("PM_SMTP_USER") or "").strip()
     if not host or not to_list or not frm:
@@ -70,11 +85,14 @@ def _email(subject, text, to=None, cc=None, in_reply_to=None, references=None):
     return {"channel": "email", "sent": True, "to": to_list, "cc": cc_list}
 
 
-def send(subject, text, channels=("slack", "email")):
+def send(subject, text, channels=("slack", "email"), project=None, kind="notify"):
+    """Send to Slack + Email. When `project` is given, email resolves that project's per-project
+    recipients (UI-14) before falling back to the global list; `kind` is 'notify' or 'digest'."""
     out = []
     for ch in channels:
         try:
-            out.append(_slack(text) if ch == "slack" else _email(subject, text))
+            out.append(_slack(text) if ch == "slack"
+                       else _email(subject, text, project=project, kind=kind))
         except Exception as e:
             log.warning("notify %s failed: %s", ch, e)
             out.append({"channel": ch, "sent": False, "error": str(e)})
