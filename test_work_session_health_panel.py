@@ -129,24 +129,28 @@ try:
 
     # ---- index.html shell ----------------------------------------------------
     index = client.get("/")
-    ok(index.status_code == 200 and "session-health-strip" in index.text,
-       "index.html exposes the board health-strip container")
+    ok(index.status_code == 200 and 'id="fleet-dock"' in index.text,
+       "index.html mounts the fleet-health dock container")
 
     # ---- app.js wiring -------------------------------------------------------
     app_js = open(os.path.join(os.path.dirname(__file__), "static", "app.js"),
                   encoding="utf-8").read()
     for needle in (
-        "sessionStripHtml",
-        "_loadSessionHealthStrip",
-        "mission-session-health-strip",
-        "workSessionsPanelHtml",
+        "renderFleetDock",       # bottom-right dock entry point
+        "_loadFleetDock",        # fetch + scope (project vs deliverable)
+        "_renderFleetDock",      # collapsed pill / expanded list
+        "_dockReason",           # plain-language reason from health findings
+        "_fleetTaskTitle",       # task-id -> title lookup
+        "workSessionsPanelHtml",  # per-task Work Sessions table (Dev tab)
         "_loadWorkSessions",
         "_workSessionRow",
-        "mergeGatePanelHtml",
+        "mergeGatePanelHtml",     # per-task merge-gate verdict + Re-check
         "_loadMergeGate",
         "_initMergeGate",
     ):
         ok(needle in app_js, f"app.js defines {needle}")
+    ok("mode: 'deliverable'" in app_js,
+       "dock is deliverable-scoped on the mission page")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
