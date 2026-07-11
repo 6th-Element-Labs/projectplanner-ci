@@ -1,7 +1,41 @@
 # Caddy auto-provisions a Let's Encrypt cert for plan.taikunai.com once DNS
 # points at this VM, and reverse-proxies to the app. That's the whole TLS story.
 # /mcp* -> the MCP server (Streamable HTTP, :8111); everything else -> the web app (:8110).
+
+# CONSOL-8 (ADR-0007): the edge did TLS/compression/caching/proxying but shipped no
+# security headers and no access log. These snippets add both in the file we already own —
+# edge hardening with zero application change. Imported by every site block below.
+#
+# The CSP is tested against what the app actually loads: everything is same-origin ('self')
+# except Bootstrap JS + Tabler CSS/icon-webfont from cdn.jsdelivr.net, and mermaid + its ELK
+# layout module (also jsdelivr), which run a layout web worker off a blob: URL. Inline <script>
+# blocks and inline style="" attributes (both hand-authored and injected via innerHTML) force
+# 'unsafe-inline' on script-/style-src until the frontend is nonce-able (no build step today).
+# Widen an origin here — never in application code — if a new dependency is added.
+(security_headers) {
+    header {
+        # HSTS: pin HTTPS for a year (no preload — that list is one-way and out of scope).
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; img-src 'self' data: https:; font-src 'self' https://cdn.jsdelivr.net data:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; connect-src 'self'"
+        # Don't advertise the server software.
+        -Server
+    }
+}
+
+# Structured (JSON) per-request access log. Output goes to stderr -> journald (journalctl -u
+# caddy), so there's no new log file, rotation, or writable path to provision on the 911MB box.
+(access_log) {
+    log {
+        format json
+    }
+}
+
 plan.taikunai.com {
+    import security_headers
+    import access_log
     handle /mcp* {
         reverse_proxy 127.0.0.1:8111 {
             transport http {
@@ -52,6 +86,8 @@ plan.taikunai.com {
 # /rebrand.html and /ocr.html surfaces (CONSOL-7). Everything (CSS, POST /api/*) proxies to :8110.
 # Caddy auto-issues the Let's Encrypt cert once the A record resolves to this VM.
 format.taikunai.com {
+    import security_headers
+    import access_log
     encode zstd gzip
 
     @root path /

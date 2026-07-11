@@ -979,6 +979,21 @@ async def project_repo_topology(project: str):
     return store.get_project_repo_topology(project=_proj(project))
 
 
+def _etag_json(request: Request, payload, *, max_age: int) -> Response:
+    """Serialize payload to JSON with a weak ETag + short max-age, returning a bodyless
+    304 when the client's If-None-Match already matches. The one reused shape behind the
+    hot poll endpoints (/api/board + project_context, HARDEN-36/37; and the mission
+    pollers, CONSOL-8): a tab refocus/reload — or a 5s live tick that revalidates — skips
+    re-downloading an unchanged payload. Pairs with the store's short-TTL read cache: the
+    TTL saves the server rebuild, the ETag saves the wire."""
+    body = json.dumps(payload, default=str, separators=(",", ":")).encode()
+    etag = 'W/"%s"' % hashlib.md5(body).hexdigest()  # noqa: S324 (cache tag, not security)
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=%d" % max_age}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
 @app.get("/api/projects/{project}/context")
 def project_context(request: Request, project: str):
     # HARDEN-35: project_context (repo roles, hierarchy, policy profiles) is a
@@ -987,12 +1002,7 @@ def project_context(request: Request, project: str):
     # refocus / reload reuse the browser-cached copy (bodyless 304). Sync def so
     # its SQLite I/O runs in the threadpool, like /api/board (HARDEN-36).
     payload = store.get_project_context(project=_proj(project))
-    body = json.dumps(payload, default=str, separators=(",", ":")).encode()
-    etag = 'W/"%s"' % hashlib.md5(body).hexdigest()  # noqa: S324 (cache tag, not security)
-    headers = {"ETag": etag, "Cache-Control": "private, max-age=60"}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=headers)
-    return Response(content=body, media_type="application/json", headers=headers)
+    return _etag_json(request, payload, max_age=60)
 
 
 @app.post("/api/projects/{project}/repo_topology")
@@ -1273,7 +1283,7 @@ async def unlink_task_from_deliverable(request: Request, deliverable_id: str,
 
 
 @app.get("/api/mission_status")
-def mission_status_query(project: str = Query(...), deliverable_id: str = "",
+def mission_status_query(request: Request, project: str = Query(...), deliverable_id: str = "",
                          board_id: str = "", mission_id: str = ""):
     project = _proj(project)
     result = store.get_mission_status(
@@ -1282,28 +1292,31 @@ def mission_status_query(project: str = Query(...), deliverable_id: str = "",
     if result.get("error"):
         code = 404 if "unknown" in result["error"] or "no deliverable" in result["error"] else 400
         raise HTTPException(code, result["error"])
-    return result
+    # CONSOL-8: the live cockpit polls this on a 5s timer. The store already serves a
+    # short-TTL cached copy (HARDEN-36); the ETag/304 gives the mission pollers the same
+    # wire-level parity /api/board has — an unchanged tick returns a bodyless 304.
+    return _etag_json(request, result, max_age=5)
 
 
 @app.get("/api/deliverables/{deliverable_id}/mission_status")
-def deliverable_mission_status(deliverable_id: str, project: str = Query(...)):
+def deliverable_mission_status(request: Request, deliverable_id: str, project: str = Query(...)):
     project = _proj(project)
     result = store.get_mission_status(project=project, deliverable_id=deliverable_id)
     if result.get("error"):
         code = 404 if "unknown" in result["error"] else 400
         raise HTTPException(code, result["error"])
-    return result
+    return _etag_json(request, result, max_age=5)  # CONSOL-8: TTL+ETag poll parity
 
 
 @app.get("/api/deliverables/{deliverable_id}/dependency_graph")
-def deliverable_dependency_graph(deliverable_id: str, project: str = Query(...)):
+def deliverable_dependency_graph(request: Request, deliverable_id: str, project: str = Query(...)):
     # def (not async): threadpool the graph build so it can't block the event loop.
     project = _proj(project)
     result = store.get_deliverable_dependency_graph(project=project, deliverable_id=deliverable_id)
     if result.get("error"):
         code = 404 if "unknown" in result["error"] else 400
         raise HTTPException(code, result["error"])
-    return result
+    return _etag_json(request, result, max_age=5)  # CONSOL-8: TTL+ETag poll parity
 
 
 @app.post("/api/deliverables/{deliverable_id}/coordinator_tick")
@@ -1469,12 +1482,7 @@ def board(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
     payload = store.board_payload(_proj(project), lite=True)
     # HARDEN-37: ETag + short max-age so a tab refocus / reload that finds the
     # board unchanged gets a bodyless 304 instead of re-downloading ~250KB.
-    body = json.dumps(payload, default=str, separators=(",", ":")).encode()
-    etag = 'W/"%s"' % hashlib.md5(body).hexdigest()  # noqa: S324 (cache tag, not security)
-    headers = {"ETag": etag, "Cache-Control": "private, max-age=5"}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=headers)
-    return Response(content=body, media_type="application/json", headers=headers)
+    return _etag_json(request, payload, max_age=5)
 
 
 @app.get("/api/people")

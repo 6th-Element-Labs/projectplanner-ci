@@ -4694,9 +4694,10 @@ const TeepPlan = {
     async loadMissionStatus(deliverableId) {
         const id = (deliverableId || '').trim();
         if (!id) { this.missionStatus = null; return null; }
-        // no-store: the live poll must see the current server state every tick, never a
-        // cached response — otherwise node colours only change on a hard refresh.
-        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_status`, { cache: 'no-store' });
+        // CONSOL-8: no-cache (not no-store) — the live poll still revalidates every tick so
+        // it never shows stale state, but the server's ETag lets an unchanged tick come back
+        // as a bodyless 304 (served from cache) instead of re-downloading the whole rollup.
+        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_status`, { cache: 'no-cache' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
         this.missionStatus = data;
@@ -4706,7 +4707,8 @@ const TeepPlan = {
     async loadDependencyGraph(deliverableId) {
         const id = (deliverableId || '').trim();
         if (!id) { this.missionGraph = null; return null; }
-        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/dependency_graph`, { cache: 'no-store' });
+        // CONSOL-8: no-cache so the ETag/304 revalidation applies (see loadMissionStatus).
+        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/dependency_graph`, { cache: 'no-cache' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
         this.missionGraph = data;
@@ -6245,7 +6247,13 @@ const TeepPlan = {
         if (ackRefresh) ackRefresh.addEventListener('click', () => this.loadAckInbox(true));
         // Prime the bell badge and keep it fresh (unacked required messages the operator sent).
         this.loadAckInbox();
-        if (!this._ackPoll) this._ackPoll = setInterval(() => this.loadAckInbox(), 30000);
+        // CONSOL-8: skip the tick while the tab is hidden (matches the mission/fleet pollers)
+        // so a backgrounded tab stops hitting the box every 30s; refresh on refocus below.
+        if (!this._ackPoll) this._ackPoll = setInterval(() => { if (!document.hidden) this.loadAckInbox(); }, 30000);
+        if (!this._ackVisSync) {
+            this._ackVisSync = true;
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) this.loadAckInbox(); });
+        }
         // UI-4: API keys settings (create / list / revoke scoped tokens).
         const apikeysBtn = document.getElementById('btn-project-apikeys');
         if (apikeysBtn) apikeysBtn.addEventListener('click', () => this.openApiKeys(window.PM_PROJECT));
