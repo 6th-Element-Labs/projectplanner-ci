@@ -1999,6 +1999,101 @@ def update_mission_narrative(deliverable_id: str, narrative: str, actor: str = "
     return get_deliverable(deliverable_id, project=project) or {"error": "deliverable not found"}
 
 
+# DELIVERABLES-16: persisted closure reports live in deliverable metadata. We keep
+# the newest N full reports plus a last_closure_* summary for the mission header;
+# grading itself happens in deliverable_closure (this only stores the graded result).
+CLOSURE_REPORT_HISTORY_LIMIT = 10
+
+
+def _closure_report_id(report: Dict[str, Any], now: float) -> str:
+    existing = (report.get("report_id") or "").strip()
+    if existing:
+        return existing
+    stamp = int(report.get("generated_at") or now)
+    digest = (report.get("evidence_hash") or "").split(":")[-1][:12] or f"{stamp:x}"
+    return f"closure-{stamp}-{digest}"
+
+
+def _closure_summary(report: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "report_id": report.get("report_id"),
+        "grade": report.get("grade"),
+        "recommendation": report.get("recommendation"),
+        "generated_at": report.get("generated_at"),
+        "generated_by": report.get("generated_by"),
+        "evidence_hash": report.get("evidence_hash"),
+    }
+
+
+def _record_deliverable_closure_impl(deliverable_id: str, report: Dict[str, Any],
+                                     actor: str, project: str) -> Dict[str, Any]:
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    if not isinstance(report, dict) or not report.get("grade"):
+        return {"error": "report must be a closure report object with a grade"}
+    now = time.time()
+    report = dict(report)
+    report["report_id"] = _closure_report_id(report, now)
+    with _conn(project) as c:
+        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
+                        (deliverable_id,)).fetchone()
+        if not row:
+            return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+        metadata = _json_payload(row["metadata_json"])
+        history = [r for r in (metadata.get("closure_reports") or [])
+                   if isinstance(r, dict) and r.get("report_id") != report["report_id"]]
+        metadata["closure_reports"] = ([report] + history)[:CLOSURE_REPORT_HISTORY_LIMIT]
+        metadata["last_closure_report"] = report
+        metadata["last_closure_grade"] = report.get("grade")
+        metadata["last_closure_at"] = now
+        c.execute("UPDATE deliverables SET metadata_json=?, updated_at=? WHERE id=?",
+                  (json.dumps(metadata, sort_keys=True), now, deliverable_id))
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (None, actor, "deliverable.closure_verified",
+                   json.dumps({"deliverable_id": deliverable_id, **_closure_summary(report)},
+                              sort_keys=True), now))
+    return {"ok": True, "deliverable_id": deliverable_id, "report_id": report["report_id"],
+            "grade": report.get("grade"), "recommendation": report.get("recommendation"),
+            "report": report}
+
+
+def record_deliverable_closure(deliverable_id: str, report: Dict[str, Any],
+                               actor: str = "verifier",
+                               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Persist a graded closure report on the deliverable and stamp
+    ``deliverable.closure_verified``. Retains the newest
+    ``CLOSURE_REPORT_HISTORY_LIMIT`` full reports plus a ``last_closure_*`` summary
+    for the mission header. Atomic (report write + audit stamp) via _write_through.
+    Grading lives in :mod:`deliverable_closure`; this only stores the result."""
+    return _write_through(project,
+        lambda: _record_deliverable_closure_impl(deliverable_id, report, actor, project))
+
+
+def get_deliverable_closure_report(deliverable_id: str, project: str = DEFAULT_PROJECT,
+                                   report_id: str = "") -> Dict[str, Any]:
+    """Return the latest (or a specific ``report_id``) persisted closure report plus
+    a summary of the retained grade history."""
+    if not has_project(project):
+        return {"error": f"unknown project: {project}"}
+    with _conn(project) as c:
+        row = c.execute("SELECT metadata_json FROM deliverables WHERE id=?",
+                        (deliverable_id,)).fetchone()
+    if not row:
+        return {"error": "unknown deliverable", "deliverable_id": deliverable_id}
+    metadata = _json_payload(row["metadata_json"])
+    reports = [r for r in (metadata.get("closure_reports") or []) if isinstance(r, dict)]
+    history = [_closure_summary(r) for r in reports]
+    if report_id:
+        report = next((r for r in reports if r.get("report_id") == report_id), None)
+        if report is None:
+            return {"error": "closure report not found", "deliverable_id": deliverable_id,
+                    "report_id": report_id, "history": history}
+    else:
+        report = metadata.get("last_closure_report") or (reports[0] if reports else None)
+    return {"deliverable_id": deliverable_id, "report": report,
+            "grade": (report or {}).get("grade"), "history": history, "count": len(reports)}
+
+
 def propose_deliverable_breakdown(deliverable_id: str, payload: Any, actor: str = "user",
                                   project: str = DEFAULT_PROJECT,
                                   proposal_id: str = "",

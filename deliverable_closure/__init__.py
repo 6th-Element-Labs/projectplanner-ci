@@ -408,3 +408,43 @@ def _scrub(obj: Any) -> Any:
 
 def _evidence_hash(report: Dict[str, Any]) -> str:
     return _sha256(json.dumps(_scrub(report), sort_keys=True, default=str))
+
+
+# --- verify + persist (DELIVERABLES-16 orchestrator) ------------------------
+
+def verify_and_record_closure(
+    deliverable_id: str,
+    project: str,
+    *,
+    actor: str = "verifier",
+    report: Optional[Dict[str, Any]] = None,
+    submitted_functional: Optional[Dict[str, Any]] = None,
+    waivers: Optional[List[Dict[str, Any]]] = None,
+    acceptance_criteria_results: Optional[List[Dict[str, Any]]] = None,
+    generated_by: str = "",
+    run_scripts: bool = False,
+) -> Dict[str, Any]:
+    """Run (or accept) a closure verification and persist it via :mod:`store`.
+
+    With no ``report``, the engine runs scope + functional gates (passing any
+    ``submitted_functional`` verifier results; ``run_scripts`` stays off on the
+    server path). A supplied ``report`` is treated as an agent-submitted
+    ``switchboard.deliverable_closure_report.v1`` and persisted as-is. Returns
+    ``store.record_deliverable_closure``'s result, or ``{"error": ...}`` on a
+    closure error (missing deliverable, malformed proof_requirements, or a
+    malformed submitted report) — mirroring the store's error convention so the
+    MCP/REST callers surface it uniformly.
+    """
+    try:
+        if report is None:
+            report = verify_deliverable_closure(
+                deliverable_id, project, waivers=waivers,
+                submitted_functional=submitted_functional,
+                acceptance_criteria_results=acceptance_criteria_results,
+                generated_by=generated_by or actor, run_scripts=run_scripts)
+        elif not isinstance(report, dict) or report.get("schema") != CLOSURE_REPORT_SCHEMA:
+            raise ClosureError(
+                f"submitted report must be a {CLOSURE_REPORT_SCHEMA} object")
+    except ClosureError as exc:
+        return {"error": str(exc), "deliverable_id": deliverable_id}
+    return store.record_deliverable_closure(deliverable_id, report, actor=actor, project=project)

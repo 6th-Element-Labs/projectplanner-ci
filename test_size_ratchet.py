@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parent
 # shrinks, lower its ceiling in the same PR; if it grows, follow ADR-0007's relief order before
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
-    "store.py": 15_471,  # +1: create_project busts the project-map cache (registry-churn perf fix)
-    "app.py": 3_274,  # ARCH-MS-18/8 share one package bootstrap and thin create adapter
-    "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
+    "store.py": 15_566,  # DELIVERABLES-16 closure surface (+95) atop create_project cache fix (+1)
+    "app.py": 3_305,  # DELIVERABLES-16: closure_verify + closure_report REST routes
+    "mcp_server.py": 3_190,  # DELIVERABLES-16: verify_deliverable_closure + get_deliverable_closure_report tools
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
 ROOT_PYTHON_FILE_CEILING = 204  # NARRATE-12 (+2) then ARCH-MS-4 adds test_consol8_edge_mission_poll.py (CONSOL-8 CI lock)
