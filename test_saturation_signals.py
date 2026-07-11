@@ -105,6 +105,47 @@ _lw = [a for a in _alerts_hot if a["kind"] == "sqlite_lock_wait"]
 ok(len(_lw) == 1 and _lw[0]["value"] == 999 and _lw[0].get("lifetime") == 9999,
    "elevated windowed lock-waits still warn, reporting the windowed value + lifetime context")
 
+# --- Remaining lifetime-counter root causes: dropped deliveries, concurrency shed, PSI red, pending ---
+# Dropped webhook deliveries: a lifetime total must NOT fail the SLO; only a recent (windowed) drop.
+_slo_stuck = saturation_signals.evaluate_slos(
+    request_obs={"dropped_webhook_deliveries": 9999, "dropped_webhook_deliveries_window": 0},
+    mcp_obs={}, inbox_depth={})
+ok(_slo_stuck["checks"]["dropped_webhook_deliveries"]["status"] == "pass",
+   "lifetime dropped deliveries with empty window no longer fail the SLO (badge recovers to green)")
+_slo_hot = saturation_signals.evaluate_slos(
+    request_obs={"dropped_webhook_deliveries": 9999, "dropped_webhook_deliveries_window": 3},
+    mcp_obs={}, inbox_depth={})
+ok(_slo_hot["checks"]["dropped_webhook_deliveries"]["status"] == "fail",
+   "a recent dropped delivery still fails the SLO")
+
+# Concurrency shed: lifetime total must NOT alert; only recent (windowed) rejections do.
+_cc_stuck = saturation_signals._concurrency_alerts({"enabled": True, "shed_total": 9999, "shed_window": 0})
+ok(not any(a["kind"] == "concurrency_shed" for a in _cc_stuck),
+   "lifetime concurrency rejections with empty window no longer pin the badge yellow")
+_cc_hot = saturation_signals._concurrency_alerts({"enabled": True, "shed_total": 9999, "shed_window": 4})
+_cs = [a for a in _cc_hot if a["kind"] == "concurrency_shed"]
+ok(len(_cs) == 1 and _cs[0]["value"] == 4 and _cs[0].get("lifetime") == 9999,
+   "recent concurrency rejections alert with the windowed value + lifetime context")
+
+# PSI red keys off the SUSTAINED avg60, not a 10s spike.
+_psi_spike = saturation_signals.build_alerts(
+    psi={"available": True, "resources": {"cpu": {"stall": {"full": {"avg10": 99.0, "avg60": 0.0}}}}},
+    mcp_obs={}, inbox_depth={}, slo={"violations": []}, load_shed_state={})
+ok(not any(a["kind"] == "psi_full" for a in _psi_spike),
+   "a 10s PSI-full spike with a calm avg60 no longer paints the badge red")
+_psi_sustained = saturation_signals.build_alerts(
+    psi={"available": True, "resources": {"cpu": {"stall": {"full": {"avg10": 99.0, "avg60": 40.0}}}}},
+    mcp_obs={}, inbox_depth={}, slo={"violations": []}, load_shed_state={})
+ok(any(a["kind"] == "psi_full" and a["severity"] == "critical" for a in _psi_sustained),
+   "sustained PSI-full (avg60 over threshold) still raises red")
+
+# Webhook inbox pending is no longer a twitchy `> 0` alert (the SLO catches real backlog).
+_pending = saturation_signals.build_alerts(
+    psi={"available": None}, mcp_obs={},
+    inbox_depth={"pending": 5, "dead": 0}, slo={"violations": []}, load_shed_state={})
+ok(not any(a["kind"] == "webhook_inbox_pending" for a in _pending),
+   "a few pending inbox items no longer trip the badge (SLO catches real backlog)")
+
 try:
     from fastapi.testclient import TestClient  # noqa: E402
     from app import app  # noqa: E402

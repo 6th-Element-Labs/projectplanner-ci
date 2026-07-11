@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Any, Dict, FrozenSet, Optional, Tuple
+import time
+from collections import deque
+from typing import Any, Deque, Dict, FrozenSet, Optional, Tuple
 
 CONCURRENCY_EXEMPT_PATHS: FrozenSet[str] = frozenset({
     "/api/github/webhook",
@@ -23,7 +25,24 @@ CONCURRENCY_EXEMPT_PATHS: FrozenSet[str] = frozenset({
 _lock = threading.Lock()
 _inflight = 0
 _shed_total = 0
+# Trailing-window shed timestamps so the badge reflects RECENT backpressure, not a lifetime
+# total that would pin the badge yellow forever after the first-ever rejection.
+_shed_times: "Deque[float]" = deque(maxlen=4096)
 _test_limit: Optional[int] = None
+
+
+def _shed_window_s() -> float:
+    try:
+        return float(max(1, int(os.environ.get("PM_CONCURRENCY_SHED_WINDOW_S", "60"))))
+    except (TypeError, ValueError):
+        return 60.0
+
+
+def _shed_in_window_unlocked() -> int:
+    cutoff = time.time() - _shed_window_s()
+    while _shed_times and _shed_times[0] < cutoff:
+        _shed_times.popleft()
+    return len(_shed_times)
 
 
 def _int_env(name: str, default: int, minimum: int = 1) -> int:
@@ -73,6 +92,7 @@ def _snapshot_unlocked(*, limit: Optional[int] = None) -> dict:
         "saturated": _inflight >= resolved,
         "retry_after_s": retry_after_s(),
         "shed_total": _shed_total,
+        "shed_window": _shed_in_window_unlocked(),
     }
 
 
@@ -88,6 +108,7 @@ def try_acquire() -> Tuple[bool, dict]:
         limit = configured_limit()
         if _inflight >= limit:
             _shed_total += 1
+            _shed_times.append(time.time())
             snap = _snapshot_unlocked(limit=limit)
             snap["shed"] = True
             return False, snap
@@ -110,6 +131,7 @@ def reset_for_tests(*, limit: Optional[int] = None, inflight: int = 0, shed_tota
         _test_limit = limit
         _inflight = max(0, int(inflight or 0))
         _shed_total = max(0, int(shed_total or 0))
+        _shed_times.clear()
 
 
 def build_shed_payload(snap: Optional[dict] = None) -> dict:
