@@ -150,6 +150,7 @@
                                 <label class="form-check form-switch m-0"><input id="f-hidedone" class="form-check-input" type="checkbox" checked/><span class="form-check-label">Hide done</span></label>
                             </div>
                         </div>
+                        <button id="btn-ack-inbox" class="btn btn-sm btn-outline-secondary position-relative" type="button" title="Agent ack inbox" aria-label="Agent ack inbox"><i class="ti ti-bell"></i><span id="ack-inbox-count" class="badge bg-red position-absolute top-0 start-100 translate-middle" style="display:none;font-size:10px"></span></button>
                         <button id="btn-new-task" class="btn btn-sm btn-primary"><i class="ti ti-plus me-1"></i>New task</button>
                         <div class="dropdown">
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Export"><i class="ti ti-download"></i></button>
@@ -548,6 +549,65 @@
         </div>
     </div>
 
+    <!-- UI-7: compose a directed message to a live agent -->
+    <div class="modal modal-blur fade" id="agent-msg-modal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="ti ti-send me-2"></i>Message agent</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-2 small text-secondary">To <code id="am-to" class="ms-1"></code><span id="am-task-wrap"> · on task <code id="am-task"></code></span></div>
+                    <div class="mb-3">
+                        <label class="form-label" for="am-message">Message</label>
+                        <textarea id="am-message" class="form-control" rows="3" placeholder="e.g. Rebase onto master and re-run the merge gate before continuing."></textarea>
+                    </div>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-auto">
+                            <label class="form-check form-switch mb-0">
+                                <input id="am-requires-ack" class="form-check-input" type="checkbox">
+                                <span class="form-check-label">Require acknowledgment</span>
+                            </label>
+                        </div>
+                        <div class="col">
+                            <label class="form-label small mb-1" for="am-deadline">Ack deadline</label>
+                            <select id="am-deadline" class="form-select form-select-sm" disabled>
+                                <option value="">No deadline</option>
+                                <option value="5">5 minutes</option>
+                                <option value="15" selected>15 minutes</option>
+                                <option value="30">30 minutes</option>
+                                <option value="60">1 hour</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="am-result" class="mt-3 small"></div>
+                </div>
+                <div class="modal-footer">
+                    <span id="am-flash" class="small text-secondary me-auto"></span>
+                    <button type="button" class="btn" data-bs-dismiss="modal">Close</button>
+                    <button type="button" id="am-send" class="btn btn-primary"><i class="ti ti-send me-1"></i>Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- UI-7: ack inbox — required messages the operator sent that are awaiting ack -->
+    <div class="modal modal-blur fade" id="ack-inbox-modal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="ti ti-bell me-2"></i>Ack inbox <span id="ack-inbox-title-count" class="badge bg-secondary-lt ms-2"></span></h5>
+                    <button type="button" id="ack-inbox-refresh" class="btn btn-sm btn-ghost-secondary ms-2 p-1" title="Refresh"><i class="ti ti-refresh"></i></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="ack-inbox-body"><div class="text-secondary small">Loading…</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- UI-1: deliverable authoring modals (bodies are populated by app.js on open) -->
     <div class="modal modal-blur fade" id="dl-link-modal" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered" role="document"><div class="modal-content">
@@ -636,7 +696,7 @@
     <!-- HARDEN-38: Mermaid (~1MB) + ApexCharts (~500KB) are now lazy-loaded by app.js
          only when the Mission / Gantt tab opens — off the initial critical path. -->
     <script>window.TAIKUN_NO_BS_WIRE=true;</script>
-    <script src="app.js?v=41"></script>
+    <script src="app.js?v=42"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script>
       // Tab routing, nesting-aware. The nav is now 2 levels: 5 top tabs (.nav-tabs),
@@ -755,6 +815,7 @@
           cmds.push({ group: 'Do', icon: 'ti ti-plus', label: 'New task', run: function () { clickId('btn-new-task'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-folder-plus', label: 'New project', run: function () { clickId('btn-new-project'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-brand-github', label: 'Connect GitHub repo', run: function () { clickId('btn-project-github'); } });
+          cmds.push({ group: 'Do', icon: 'ti ti-bell', label: 'Open ack inbox', run: function () { clickId('btn-ack-inbox'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-file-spreadsheet', label: 'Export to Excel', run: function () { go('dl-xlsx'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-brand-windows', label: 'Export to MS Project', run: function () { go('dl-xml'); } });
           cmds.push({ group: 'Do', icon: 'ti ti-sparkles', label: 'Ask Taikun', run: function () { jump('#tab-ask'); setTimeout(function () { var i = document.getElementById('ask-input'); if (i) i.focus(); }, 60); } });
