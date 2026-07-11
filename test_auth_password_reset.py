@@ -20,7 +20,6 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_TOP_LEVEL_PROJECTS"] = "demo"
-os.environ["PM_GLOBAL_AUTH"] = "1"
 os.environ["PM_JWT_SECRET"] = "test-secret"
 os.environ["PM_AUTH_MODE"] = "dev-open"
 for _k in ("PM_SMTP_HOST", "PM_SMTP_USER", "PM_SMTP_PASSWORD"):

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from constants import *  # noqa: F401,F403
 from db.core import *     # noqa: F401,F403
+from db.migrations import run_additive_migrations
 
 __all__ = ["apply_schema", "seed_from_plan", "init_project_registry"]
 
@@ -103,6 +104,13 @@ def apply_schema(c):
             task_id TEXT, actor TEXT, kind TEXT, payload TEXT, created_at REAL
         );
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+        -- BUG-47: ledger for numbered additive migrations (db/migrations.py). One row per
+        -- applied migration name; the runner uses it to skip already-applied migrations
+        -- instead of relying on catch-all exception swallowing to detect "already done".
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            name       TEXT PRIMARY KEY,
+            applied_at REAL NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS chat (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session TEXT, role TEXT, content TEXT, payload TEXT, created_at REAL
@@ -793,40 +801,12 @@ def apply_schema(c):
             ON narration_outbox(entity_type, entity_id, source_revision);
         """
     )
-    # Additive column migrations — safe to run on every startup
-    for col_sql in [
-        "ALTER TABLE tasks ADD COLUMN agent_state TEXT",  # JSON blob per agent
-        "ALTER TABLE agent_messages ADD COLUMN signal TEXT",
-        "ALTER TABLE agent_messages ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE agent_messages ADD COLUMN idem_key TEXT",
-        "ALTER TABLE agent_messages ADD COLUMN principal_id TEXT",
-        "ALTER TABLE wake_intents ADD COLUMN effect_key TEXT",
-        "ALTER TABLE runner_control_requests ADD COLUMN effect_key TEXT",
-        "ALTER TABLE deliverables ADD COLUMN board_id TEXT",
-        "ALTER TABLE deliverable_task_links ADD COLUMN board_id TEXT",
-        "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN outcome_text TEXT",
-        "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN review_reason TEXT",
-        "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN deferred_until REAL",
-        "ALTER TABLE deliverable_breakdown_proposals ADD COLUMN reviewed_by TEXT",
-        "ALTER TABLE external_ci_runs ADD COLUMN status_context TEXT",
-        # NARRATE-8: monotonic per-entity narration source revision + canonical
-        # source hash of the last projection. Default 0 marks "never projected";
-        # backfill_narration_source_revisions() sets revision 1 without emitting
-        # historical provider work.
-        "ALTER TABLE tasks ADD COLUMN narration_source_revision INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE tasks ADD COLUMN narration_source_hash TEXT",
-        "ALTER TABLE deliverables ADD COLUMN narration_source_revision INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE deliverables ADD COLUMN narration_source_hash TEXT",
-    ]:
-        try:
-            c.execute(col_sql)
-        except Exception:
-            pass  # column already exists
-    try:
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_idem "
-                  "ON agent_messages(idem_key) WHERE idem_key IS NOT NULL")
-    except Exception:
-        pass
+    # BUG-47: additive column/index migrations run through the numbered, ledgered runner in
+    # db/migrations.py — idempotent and safe on every startup, but a real failure (disk,
+    # lock, permission, corruption, syntax) now propagates instead of being swallowed as a
+    # benign "column already exists". The migration list, including the narration source
+    # revision/hash columns (NARRATE-8) and ux_messages_idem, lives there.
+    run_additive_migrations(c)
 
 
 def seed_from_plan(c, seed_path):

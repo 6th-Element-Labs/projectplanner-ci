@@ -14,6 +14,7 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "required"
+os.environ["PM_JWT_SECRET"] = "test-secret-do-not-use-in-prod"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
@@ -21,6 +22,7 @@ try:
     import auth  # noqa: E402
     import store  # noqa: E402
     from app import app  # noqa: E402
+    from services.auth import store as auth_store  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  ACCESS project-boundary smoke requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
@@ -53,6 +55,7 @@ import mcp_server  # noqa: E402
 P = "switchboard"
 NEW = "boundarylab"
 PASSWORD = "boundary-admin-2026"
+ADMIN_EMAIL = "admin@test.com"
 PURPOSE = "Boundary lab validates customer project isolation."
 BOUNDARY = "Only ACCESS-4 boundary-lab work belongs here; no Helm/Vulkan task leakage."
 passed = failed = 0
@@ -71,12 +74,13 @@ def authz(token):
 
 try:
     client = TestClient(app)
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"project": P, "login": "admin", "password": PASSWORD},
-    )
-    ok(bootstrap.status_code == 200, "bootstrap admin succeeds")
-    admin_id = bootstrap.json()["principal"]["id"]
+    auth_store.init()
+    admin = auth_store.create_user(
+        ADMIN_EMAIL, "Admin", auth.password_hash(PASSWORD), is_superadmin=True)
+    store.ensure_bootstrap_project_owner(P, admin["id"], "admin", "Admin", actor="test")
+    ok(client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": PASSWORD}).status_code == 200,
+       "global admin login succeeds")
+    admin_id = admin["id"]
 
     contributor = client.post(
         "/api/access/tokens",
@@ -84,12 +88,18 @@ try:
         json={"kind": "agent", "display_name": "limited creator", "role": "contributor"},
     )
     contributor_token = contributor.json().get("token")
+    viewer = client.post(
+        "/api/access/tokens",
+        params={"project": P},
+        json={"kind": "agent", "display_name": "read-only viewer", "role": "viewer"},
+    )
+    viewer_token = viewer.json().get("token")
     denied = client.post(
         "/api/projects",
         json={"project_id": "deniedproj", "name": "Denied Project"},
-        headers=authz(contributor_token),
+        headers=authz(viewer_token),
     )
-    ok(denied.status_code == 403, "non-system principal cannot create projects")
+    ok(denied.status_code == 403, "viewer principal cannot create projects")
 
     created = client.post(
         "/api/projects",

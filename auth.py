@@ -217,49 +217,7 @@ def authenticate_request(request: Any, project: str,
                          required_scopes: Iterable[str] = ("write:ixp",),
                          dev_actor: str = "dev-open") -> Dict[str, Any]:
     bearer = bearer_from_request(request)
-    if bearer:
-        return authenticate(project, bearer, required_scopes, dev_actor=dev_actor)
-
-    cookie = session_from_request(request)
-    if cookie:
-        principal = store.get_principal_by_session(project, cookie)
-        if not principal:
-            principal = store.get_principal_by_session_any_project(cookie)
-            if principal and principal.get("home_project") != project:
-                project_roles = store.principal_project_roles(project, principal.get("id") or "")
-                if not project_roles:
-                    raise PermissionError("unauthorized: session is not valid for this project")
-                principal = dict(principal)
-                principal["scopes"] = []
-        if not principal:
-            raise PermissionError("unauthorized: session expired or invalid")
-        if principal.get("project") not in (project, "*") and not principal.get("home_project"):
-            raise PermissionError("unauthorized: session is not valid for this project")
-        principal = _attach_effective_access(principal, project)
-        if not _has_scopes(principal, required_scopes, project):
-            raise PermissionError("forbidden: session is missing required scope")
-        return principal
-
-    return authenticate(project, "", required_scopes, dev_actor=dev_actor)
-
-
-def verify_login(project: str, login: str, password: str) -> Optional[Dict[str, Any]]:
-    row = store.get_password_login(login, project=project)
-    if not row or row.get("revoked_at"):
-        return None
-    if not verify_password(password, row.get("password_hash") or ""):
-        return None
-    return {
-        "id": row["principal_id"],
-        "kind": row["kind"],
-        "display_name": row["display_name"],
-        "project": row["project"],
-        "scopes": row["scopes"],
-        "effective_scopes": store.effective_principal_scopes(project, row["principal_id"], row["scopes"]),
-        "project_roles": store.principal_project_roles(project, row["principal_id"]),
-        "login": row["login"],
-        "must_rotate": bool(row.get("must_rotate")),
-    }
+    return authenticate(project, bearer, required_scopes, dev_actor=dev_actor)
 
 
 def actor(principal: Dict[str, Any]) -> str:

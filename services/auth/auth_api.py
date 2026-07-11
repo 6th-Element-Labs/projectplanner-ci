@@ -1,9 +1,7 @@
-"""Global auth routes (Service #1) — mounted only when PM_GLOBAL_AUTH is on.
+"""Global auth routes (Service #1).
 
-Registered before the monolith's routes, so when the flag is on these override
-/api/auth/login, /api/auth/logout and /api/projects; /api/auth/register and
-/api/auth/session are new. The router is self-contained — it authenticates via
-the JWT taikun_session cookie, not the monolith's per-project middleware.
+Registered before the monolith's routes. Authenticates via the JWT
+taikun_session cookie.
 """
 from __future__ import annotations
 

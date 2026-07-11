@@ -12,6 +12,7 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "required"
+os.environ["PM_JWT_SECRET"] = "test-secret-do-not-use-in-prod"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
@@ -19,6 +20,7 @@ try:
     import auth  # noqa: E402
     import store  # noqa: E402
     from app import app  # noqa: E402
+    from services.auth import store as auth_store  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  ACCESS role-model smoke requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
@@ -26,6 +28,7 @@ except ModuleNotFoundError as exc:
 
 
 P = "switchboard"
+ADMIN_EMAIL = "admin@test.com"
 ADMIN_PASSWORD = "role-model-admin-2026"
 VIEWER_TOKEN = "viewer-token"
 NOROLE_TOKEN = "norole-token"
@@ -41,14 +44,14 @@ def ok(condition, message):
 
 try:
     client = TestClient(app)
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"project": P, "login": "admin", "password": ADMIN_PASSWORD},
-    )
-    ok(bootstrap.status_code == 200, "bootstrap admin succeeds")
-    admin = bootstrap.json()["principal"]
-    ok("admin" in admin["effective_scopes"], "bootstrap admin receives effective admin scope")
-    ok(any(r["role"] == "admin" for r in admin["project_roles"]),
+    auth_store.init()
+    admin = auth_store.create_user(
+        ADMIN_EMAIL, "Admin", auth.password_hash(ADMIN_PASSWORD), is_superadmin=True)
+    store.ensure_bootstrap_project_owner(P, admin["id"], "admin", "Admin", actor="test")
+    ok(client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}).status_code == 200,
+       "global admin login succeeds")
+    ok(admin.get("is_superadmin"), "bootstrap admin is superadmin")
+    ok(any(r["role"] == "admin" for r in store.principal_project_roles(P, admin["id"])),
        "bootstrap admin receives project admin role")
 
     model = client.get("/api/access/model", params={"project": P})

@@ -13,6 +13,7 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "required"
+os.environ["PM_JWT_SECRET"] = "test-secret-do-not-use-in-prod"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
@@ -20,13 +21,15 @@ try:
     import auth  # noqa: E402
     import store  # noqa: E402
     from app import app  # noqa: E402
+    from services.auth import store as auth_store  # noqa: E402
+    from services.auth import session as auth_session  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  ACCESS auth/session smoke requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
     sys.exit(0)
 
-
 P = "switchboard"
+EMAIL = "admin@test.com"
 PASSWORD = "correct-horse-2026"
 passed = failed = 0
 
@@ -44,83 +47,63 @@ def title_exists(title):
 
 try:
     client = TestClient(app)
+    auth_store.init()
 
     unauth = client.get("/api/board", params={"project": P})
     ok(unauth.status_code == 401, "required auth blocks unauthenticated project data reads")
 
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"project": P, "login": "admin", "password": PASSWORD},
-    )
-    ok(bootstrap.status_code == 200, "local first-admin bootstrap succeeds")
-    ok(auth.session_cookie_name() in client.cookies, "bootstrap issues an HttpOnly session cookie")
+    admin = auth_store.create_user(
+        EMAIL, "Admin", auth.password_hash(PASSWORD), is_superadmin=True)
+    store.ensure_bootstrap_project_owner(P, admin["id"], "admin", "Admin", actor="test")
+    login = client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD})
+    ok(login.status_code == 200, "global admin login succeeds")
+    ok(auth_session.COOKIE_NAME in client.cookies, "login issues an HttpOnly session cookie")
 
-    duplicate = client.post(
-        "/api/auth/bootstrap",
-        json={"project": P, "login": "admin2", "password": PASSWORD},
-    )
-    ok(duplicate.status_code == 409, "bootstrap refuses to overwrite an existing password admin")
+    ok(auth_store.create_user("other@test.com", "Other", auth.password_hash(PASSWORD)).get("id"),
+       "second global user can be created without overwriting admin")
 
-    me = client.get("/api/auth/me", params={"project": P})
-    ok(me.status_code == 200 and me.json()["principal"]["id"].startswith("user-"),
-       "session cookie resolves the current principal")
+    session = client.get("/api/auth/session")
+    ok(session.status_code == 200 and session.json()["user"]["id"] == admin["id"],
+       "session cookie resolves the current user")
 
     board = client.get("/api/board", params={"project": P})
     ok(board.status_code == 200 and "workstreams" in board.json(),
        "session cookie can read project board data")
 
     title = "session-auth task create"
-    created = client.post(
-        f"/api/tasks?project={P}",
-        json={"workstream_id": "ACCESS", "title": title},
-    )
+    created = client.post(f"/api/tasks?project={P}", json={"workstream_id": "ACCESS", "title": title})
     ok(created.status_code == 200 and created.json()["title"] == title,
        "session cookie can write through the web API")
     ok(title_exists(title), "session-auth write persisted")
 
-    logout = client.post("/api/auth/logout", json={"project": P})
-    ok(logout.status_code == 200 and auth.session_cookie_name() not in client.cookies,
+    logout = client.post("/api/auth/logout")
+    ok(logout.status_code == 200 and auth_session.COOKIE_NAME not in client.cookies,
        "logout clears the browser session cookie")
-    after_logout = client.get("/api/board", params={"project": P})
-    ok(after_logout.status_code == 401, "logged-out session cannot read project data")
+    ok(client.get("/api/board", params={"project": P}).status_code == 401,
+       "logged-out session cannot read project data")
 
-    bad_login = client.post(
-        "/api/auth/login",
-        json={"project": P, "login": "admin", "password": "wrong-password"},
-    )
-    ok(bad_login.status_code == 401, "bad password is rejected")
-    good_login = client.post(
-        "/api/auth/login",
-        json={"project": P, "login": "admin", "password": PASSWORD},
-    )
-    ok(good_login.status_code == 200 and auth.session_cookie_name() in client.cookies,
+    ok(client.post("/api/auth/login", json={"email": EMAIL, "password": "wrong-password"}).status_code == 401,
+       "bad password is rejected")
+    good_login = client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD})
+    ok(good_login.status_code == 200 and auth_session.COOKIE_NAME in client.cookies,
        "valid password login creates a new session")
 
-    principal_id = good_login.json()["principal"]["id"]
     expired_token = auth.new_secret_token()
-    expired = store.create_auth_session(principal_id, expired_token, 60, project=P)
-    with store._conn(P) as c:
-        c.execute("UPDATE auth_sessions SET expires_at=? WHERE session_id=?",
-                  (time.time() - 1, expired["session_id"]))
+    auth_store.create_session(admin["id"], expired_token, 60)
+    with auth_store._conn() as c:
+        c.execute("UPDATE auth_sessions_v2 SET expires_at=? WHERE token_hash=?",
+                  (time.time() - 1, auth_store.token_hash(expired_token)))
     expired_client = TestClient(app)
-    expired_client.cookies.set(auth.session_cookie_name(), expired_token)
-    expired_read = expired_client.get("/api/board", params={"project": P})
-    ok(expired_read.status_code == 401, "expired session token is rejected")
+    expired_client.cookies.set(auth_session.COOKIE_NAME, expired_token)
+    ok(expired_client.get("/api/board", params={"project": P}).status_code == 401,
+       "expired session token is rejected")
 
     bearer_token = "adapter-bearer-token"
-    store.create_principal(
-        kind="agent",
-        display_name="codex/access-bearer",
-        token=bearer_token,
-        scopes=["read", "write:tasks"],
-        project=P,
-    )
-    bearer_read = expired_client.get(
-        "/api/board",
-        params={"project": P},
-        headers={"Authorization": f"Bearer {bearer_token}"},
-    )
-    ok(bearer_read.status_code == 200, "adapter bearer tokens still authenticate API reads")
+    store.create_principal(kind="agent", display_name="codex/access-bearer", token=bearer_token,
+                           scopes=["read", "write:tasks"], project=P)
+    ok(expired_client.get("/api/board", params={"project": P},
+                          headers={"Authorization": f"Bearer {bearer_token}"}).status_code == 200,
+       "adapter bearer tokens still authenticate API reads")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

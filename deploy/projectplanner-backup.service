@@ -16,12 +16,31 @@ Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 MemoryMax=256M
-User=ubuntu
-Group=ubuntu
+# HARDEN-55: dedicated non-login service account (not the general `ubuntu` login).
+User=projectplanner
+Group=projectplanner
 WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/etc/projectplanner-backup.env
+# aws/botocore may look for a config dir; keep HOME on the writable data dir.
+Environment=HOME=/var/lib/projectplanner
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/scripts/backup_databases.py
 StandardOutput=journal
 StandardError=journal
 # Keep a backup run from starving the web app on the 1 GB box (HARDEN-32).
 TimeoutStartSec=30min
+# HARDEN-55: runtime least-privilege sandbox. Code tree + venv are root-owned and
+# read-only to this service; it reads the data dir, snapshots to a private tmp,
+# and ships to S3. Writable paths: the data dir (+ private /tmp + journal).
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner

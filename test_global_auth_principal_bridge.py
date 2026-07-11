@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression: under PM_GLOBAL_AUTH the middleware authenticates the caller and stashes
+"""Regression: global auth middleware authenticates the caller and stashes
 the principal on request.state; handlers' _principal() must trust it instead of
 re-authenticating via the legacy bearer/per-project path (which 401s a global browser
 login — the UI-7 agent-messaging bug: 'unauthorized: provide Authorization: Bearer …')."""

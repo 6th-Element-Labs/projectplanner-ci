@@ -20,13 +20,16 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "dev-open"
+os.environ["PM_JWT_SECRET"] = "test-secret-do-not-use-in-prod"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import store  # noqa: E402
+from services.auth import store as auth_store  # noqa: E402
 
 try:
     from fastapi.testclient import TestClient  # noqa: E402
     from app import app  # noqa: E402
+    import auth  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  UI-9 admin proof requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
@@ -54,11 +57,14 @@ try:
     store.init_db(DEST)
 
     # --- who am I: the frontend gates the Settings tab on this ---
-    me = client.get("/api/auth/me", params={"project": HOME})
-    ok(me.status_code == 200, "GET /api/auth/me returns 200")
-    principal = (me.json() or {}).get("principal") or {}
-    ok("effective_scopes" in principal,
-       "auth/me exposes effective_scopes for admin-tab gating")
+    auth_store.init()
+    auth_store.create_user("admin@test.com", "Admin", auth.password_hash("admin-pass-2026"),
+                           is_superadmin=True)
+    client.post("/api/auth/login", json={"email": "admin@test.com", "password": "admin-pass-2026"})
+    me = client.get("/api/auth/session")
+    ok(me.status_code == 200, "GET /api/auth/session returns 200 when logged in")
+    ok((me.json() or {}).get("user", {}).get("is_superadmin"),
+       "auth/session exposes superadmin for admin-tab gating")
 
     # --- repo topology: read, then write, then read-back ---
     topo = client.get(f"/api/projects/{HOME}/repo_topology")

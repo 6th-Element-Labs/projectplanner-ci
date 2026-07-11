@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""BUG-47 — additive schema migrations are numbered, ledgered, and fail loud.
+
+Guards the regression where db.schema.apply_schema ran every additive ALTER inside
+`try: c.execute(col_sql) except Exception: pass`, so a disk-full, permission, corruption,
+lock, or syntax failure was indistinguishable from a benign "column already exists" and was
+silently swallowed at import by both the web and MCP startup paths.
+"""
+import os
+import sqlite3
+import tempfile
+
+os.environ.setdefault("PM_DB_PATH", tempfile.mktemp(suffix=".bug47.db"))
+os.environ.setdefault("PM_PROJECT_REGISTRY_DB_PATH", os.environ["PM_DB_PATH"] + ".reg")
+
+from db.schema import apply_schema
+from db.migrations import (
+    ADDITIVE_COLUMN_MIGRATIONS,
+    DDL_MIGRATIONS,
+    run_additive_migrations,
+    _is_duplicate_column,
+)
+
+passed = 0
+failed = 0
+
+
+def check(name, condition):
+    global passed, failed
+    if condition:
+        passed += 1
+        print(f"  PASS  {name}")
+    else:
+        failed += 1
+        print(f"  FAIL  {name}")
+
+
+def mem():
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    return c
+
+
+def cols(conn, table):
+    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def ledger(conn):
+    return {r["name"] for r in conn.execute("SELECT name FROM schema_migrations").fetchall()}
+
+
+ALL_NAMES = {m[0] for m in ADDITIVE_COLUMN_MIGRATIONS} | {m[0] for m in DDL_MIGRATIONS}
+
+# 1. Fresh DB: apply_schema builds the full additive schema and records every migration.
+c = mem()
+apply_schema(c)
+check("tasks.agent_state added", "agent_state" in cols(c, "tasks"))
+check("tasks.narration_source_revision added", "narration_source_revision" in cols(c, "tasks"))
+check("deliverables.board_id added", "board_id" in cols(c, "deliverables"))
+check("breakdown_proposals.reviewed_by added",
+      "reviewed_by" in cols(c, "deliverable_breakdown_proposals"))
+check("every migration recorded in the ledger", ledger(c) == ALL_NAMES)
+check("ux_messages_idem index created", c.execute(
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ux_messages_idem'"
+).fetchone()[0] == 1)
+
+# 2. Idempotent: re-running executes nothing new and never errors.
+check("second run applies zero new migrations", run_additive_migrations(c) == [])
+apply_schema(c)
+check("ledger stable after a second apply_schema", ledger(c) == ALL_NAMES)
+
+# 3. Legacy DB (columns already present, ledger lost): reconcile via PRAGMA, no error, no
+#    duplicate-column ALTER. This is the exact case the old swallow-all loop was hiding.
+c3 = mem()
+apply_schema(c3)
+c3.execute("DELETE FROM schema_migrations")
+run_additive_migrations(c3)  # must not raise even though every column already exists
+check("legacy DB with pre-existing columns reconciles the ledger", ledger(c3) == ALL_NAMES)
+
+# 4. Regression: a real, non-duplicate failure propagates instead of being swallowed. A DB
+#    that is missing the `tasks` table makes migration 0001 raise "no such table".
+c4 = mem()
+c4.execute("CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at REAL NOT NULL)")
+propagated = False
+try:
+    run_additive_migrations(c4)
+except sqlite3.OperationalError as exc:
+    propagated = "no such table" in str(exc).lower()
+check("a real migration failure propagates rather than being swallowed", propagated)
+
+# 5. The tolerated-error classifier catches ONLY duplicate-column.
+check("duplicate column name is classified benign",
+      _is_duplicate_column(sqlite3.OperationalError("duplicate column name: agent_state")))
+check("disk I/O error is NOT classified benign",
+      not _is_duplicate_column(sqlite3.OperationalError("disk I/O error")))
+check("corruption is NOT classified benign",
+      not _is_duplicate_column(sqlite3.DatabaseError("database disk image is malformed")))
+
+# 6. Migration names are unique and stable (a duplicated/renumbered key would corrupt the
+#    ledger's idempotency).
+names = [m[0] for m in ADDITIVE_COLUMN_MIGRATIONS] + [m[0] for m in DDL_MIGRATIONS]
+check("migration names are unique", len(names) == len(set(names)))
+
+print(f"\n{passed} passed, {failed} failed")
+raise SystemExit(1 if failed else 0)

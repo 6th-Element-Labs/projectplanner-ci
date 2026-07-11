@@ -85,7 +85,7 @@ try:
     ok("https://cdn.jsdelivr.net/npm/bootstrap" in html,
        "absolute/CDN references are left untouched (not rewritten)")
 
-    # auth shells share the same treatment (login.html under non-global auth)
+    # auth shells share the same treatment (login-global.html)
     ok(f"taikun-tabler.css?v={content_hash('taikun-tabler.css')}" in c.get("/login").text,
        "/login shell also gets content-hash asset versions")
 

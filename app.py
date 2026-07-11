@@ -57,30 +57,32 @@ import store  # noqa: E402
 app = FastAPI(title="Taikun PM", version="0.1.0")
 _req_obs = request_observability.RequestObservability()
 
-# Service #1 (global auth) — strangler-migrated behind a flag. Mounted BEFORE the
-# monolith's per-project auth routes so, when on, it overrides /api/auth/login,
-# /api/auth/logout and /api/projects (register + session are new). Off by default
-# so prod is untouched until we flip PM_GLOBAL_AUTH.
-_GLOBAL_AUTH = os.environ.get("PM_GLOBAL_AUTH", "").strip().lower() in ("1", "true", "on", "yes")
-if _GLOBAL_AUTH:
-    from services.auth import store as _auth_store
-    from services.auth import service as _auth_service
-    from services.auth import session as _auth_session
-    from services.auth.auth_api import router as _global_auth_router
-    _auth_store.init()
-    app.include_router(_global_auth_router)
+# Service #1 (global auth) — always mounted. Browser users authenticate via
+# taikun_session JWT; agents/API callers keep bearer-token principals.
+from services.auth import store as _auth_store
+from services.auth import service as _auth_service
+from services.auth import session as _auth_session
+from services.auth.auth_api import router as _global_auth_router
+
+_auth_store.init()
+app.include_router(_global_auth_router)
 
 store.init_project_registry()
 store.init_db()
 _seeded = store.seed_if_empty()
 # Additional projects — each in its OWN db file; one-shot seed, guarded so a restart never
 # wipes or re-imports. Maxwell (DEFAULT_PROJECT) is seeded above, untouched.
+# A project that fails to initialize does NOT block startup (the box must keep serving the
+# projects that are healthy), but it is recorded so /health/deep can fail readiness closed —
+# a silently-skipped project must never let the service report itself ready. BUG-48.
+_PROJECT_INIT_FAILURES: dict[str, str] = {}
 for _pid in store.project_ids():
     if _pid != store.DEFAULT_PROJECT:
         try:
             store.init_db(_pid)
             store.seed_if_empty(_pid)
         except Exception as _e:  # never let a second project block startup
+            _PROJECT_INIT_FAILURES[_pid] = f"{type(_e).__name__}: {_e}"
             print(f"[projects] seed {_pid} skipped: {_e}")
 
 
@@ -93,32 +95,24 @@ def _bootstrap_admin_from_env():
     if not password:
         return
     project = (os.environ.get("PM_BOOTSTRAP_PROJECT") or "switchboard").strip()
-    if not store.has_project(project) or store.password_login_count(project):
+    if not store.has_project(project):
         return
     login = (os.environ.get("PM_BOOTSTRAP_ADMIN_LOGIN") or
              os.environ.get("PM_ADMIN_LOGIN") or "admin").strip().lower()
     display_name = (os.environ.get("PM_BOOTSTRAP_ADMIN_NAME") or login).strip()
+    email = (os.environ.get("PM_BOOTSTRAP_ADMIN_EMAIL") or f"{login}@taikunai.com").strip().lower()
     principal_id = "user-" + hashlib.sha256(f"{project}:{login}".encode("utf-8")).hexdigest()[:16]
-    principal = store.create_password_principal(
-        login=login,
-        display_name=display_name,
-        password_hash=auth.password_hash(password),
-        scopes=ADMIN_SCOPES,
-        principal_id=principal_id,
-        project=project,
-    )
+    if _auth_store.get_user_by_email(email):
+        return
+    account = _auth_store.create_user(
+        email, display_name, auth.password_hash(password),
+        is_superadmin=True, user_id=principal_id)
     store.ensure_bootstrap_project_owner(
-        project, principal["id"], login, display_name, actor="switchboard/auth")
-    principal["effective_scopes"] = store.effective_principal_scopes(
-        project, principal["id"], principal.get("scopes") or [])
-    principal["project_roles"] = store.principal_project_roles(project, principal["id"])
+        project, account["id"], login, display_name, actor="switchboard/auth")
     store.append_activity(
-        "auth.admin_bootstrapped",
-        "switchboard/auth",
-        {"project": project, "login": login, "principal_id": principal["id"], "source": "env"},
-        task_id=None,
-        project=project,
-    )
+        "auth.admin_bootstrapped", "switchboard/auth",
+        {"project": project, "email": email, "principal_id": account["id"], "source": "env"},
+        task_id=None, project=project)
 
 
 _bootstrap_admin_from_env()
@@ -133,13 +127,6 @@ def _proj(project: str) -> str:
 
 
 def _principal(request: Request, project: str, scopes=("write:ixp",), dev_actor: str = "web"):
-    # When PM_GLOBAL_AUTH is on, the _global_auth_gate middleware has already
-    # authenticated the caller (browser JWT session or agent bearer token) and stashed
-    # the principal on request.state. Trust it — authenticate_request only understands
-    # bearer + legacy per-project session cookies, so a global browser login would
-    # otherwise be rejected here ("provide Authorization: Bearer …") even though the
-    # middleware admitted it. Required scopes are still enforced. Falls through to the
-    # legacy path when no principal is present (non-global-auth mode, tests, dev-open).
     pre = getattr(request.state, "principal", None)
     if isinstance(pre, dict):
         if auth._has_scopes(pre, scopes, _proj(project)):
@@ -270,15 +257,6 @@ def _request_project(request: Request, path: str) -> str:
     return request.query_params.get("project") or store.DEFAULT_PROJECT
 
 
-def _project_from_session_cookie(request: Request) -> str:
-    token = auth.session_from_request(request)
-    if not token:
-        return ""
-    for project in store.project_ids():
-        if store.get_principal_by_session(project, token):
-            return project
-    return ""
-
 
 def _protected_read_path(path: str) -> bool:
     return path.startswith(("/api/", "/ixp/", "/txp/", "/tally/"))
@@ -330,9 +308,7 @@ def _global_principal(user: dict, scopes: list) -> dict:
 
 
 async def _global_auth_gate(request: Request, call_next, started_at: float, path: str, method: str):
-    """PM_GLOBAL_AUTH gate. Bearer tokens (agents) keep the monolith's per-project
-    token auth untouched; browser users authenticate via the taikun_session JWT and
-    are checked against their project grants (deny-by-default)."""
+    """Global auth gate. Bearer tokens use per-project auth; browser users use JWT."""
     is_read = method in {"GET", "HEAD"}
     is_write = method in {"POST", "PATCH", "DELETE"}
     protocol = path.startswith(("/ixp/", "/txp/", "/tally/"))
@@ -340,7 +316,10 @@ async def _global_auth_gate(request: Request, call_next, started_at: float, path
     if not gated:
         return _attach_server_timing(await call_next(request), started_at)
 
-    # Agents / API tokens — unchanged per-project bearer-token authentication.
+    if auth.auth_mode() == auth.DEV_OPEN and not auth.bearer_from_request(request):
+        return _attach_server_timing(await call_next(request), started_at)
+
+    # Agents / API tokens
     if auth.bearer_from_request(request):
         project = _request_project(request, path)
         if not store.has_project(project):
@@ -470,173 +449,7 @@ async def _auth_boundary(request: Request, call_next):
     if _auth_exempt_path(path):
         return _attach_server_timing(await call_next(request), started_at)
 
-    if _GLOBAL_AUTH:
-        return await _global_auth_gate(request, call_next, started_at, path, method)
-
-    if method in {"GET", "HEAD"} and auth.auth_mode() == auth.REQUIRED and _protected_read_path(path):
-        project = _request_project(request, path)
-        if not store.has_project(project):
-            return _attach_server_timing(
-                JSONResponse({"detail": f"unknown project: {project}"}, status_code=400),
-                started_at,
-            )
-        try:
-            request.state.principal = auth.authenticate_request(
-                request, project, ("read",), dev_actor="web")
-        except PermissionError as e:
-            status = 403 if "forbidden" in str(e) else 401
-            return _attach_server_timing(JSONResponse({"detail": str(e)}, status_code=status), started_at)
-        return _attach_server_timing(await call_next(request), started_at)
-
-    if method not in {"POST", "PATCH", "DELETE"}:
-        return _attach_server_timing(await call_next(request), started_at)
-    if path.startswith(("/ixp/", "/txp/", "/tally/")):
-        return _attach_server_timing(await call_next(request), started_at)
-
-    project = _request_project(request, path)
-    if not store.has_project(project):
-        return _attach_server_timing(
-            JSONResponse({"detail": f"unknown project: {project}"}, status_code=400),
-            started_at,
-        )
-    required_scopes = ("write:system",) if (
-        path == "/api/projects" or
-        (path.startswith("/api/projects/") and path.endswith(("/repo_topology", "/github_repo"))) or
-        path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))
-    ) else ("write:tasks",)
-    try:
-        request.state.principal = auth.authenticate_request(
-            request, project, required_scopes, dev_actor="web")
-    except PermissionError as e:
-        status = 403 if "forbidden" in str(e) else 401
-        return _attach_server_timing(JSONResponse({"detail": str(e)}, status_code=status), started_at)
-    return _attach_server_timing(await call_next(request), started_at)
-
-
-def _client_is_loopback(request: Request) -> bool:
-    host = (request.client.host if request.client else "") or ""
-    return host in {"127.0.0.1", "::1", "testclient"}
-
-
-def _session_cookie_secure(request: Request) -> bool:
-    configured = (os.environ.get("PM_SESSION_COOKIE_SECURE") or "").strip().lower()
-    if configured in {"1", "true", "yes", "on"}:
-        return True
-    if configured in {"0", "false", "no", "off"}:
-        return False
-    return (
-        request.url.scheme == "https" or
-        (request.headers.get("x-forwarded-proto") or "").lower() == "https"
-    )
-
-
-def _set_session_cookie(response: Response, request: Request,
-                        session_token: str, expires_at: float) -> Response:
-    max_age = max(0, int(expires_at - time.time()))
-    response.set_cookie(
-        key=auth.session_cookie_name(),
-        value=session_token,
-        max_age=max_age,
-        expires=max_age,
-        path="/",
-        httponly=True,
-        secure=_session_cookie_secure(request),
-        samesite="lax",
-    )
-    return response
-
-
-def _bootstrap_authorized(request: Request, body: dict) -> bool:
-    expected = (os.environ.get("PM_BOOTSTRAP_TOKEN") or "").strip()
-    supplied = (
-        request.headers.get("x-switchboard-bootstrap-token") or
-        request.headers.get("x-bootstrap-token") or
-        (body or {}).get("bootstrap_token") or
-        ""
-    ).strip()
-    if expected:
-        return hmac.compare_digest(expected, supplied)
-    return _client_is_loopback(request)
-
-
-@app.post("/api/auth/bootstrap")
-async def auth_bootstrap(request: Request, body: dict = Body(...)):
-    project = _proj((body or {}).get("project") or "switchboard")
-    if store.password_login_count(project):
-        raise HTTPException(409, "bootstrap already completed")
-    if not _bootstrap_authorized(request, body or {}):
-        raise HTTPException(403, "bootstrap requires localhost access or PM_BOOTSTRAP_TOKEN")
-    login = ((body or {}).get("login") or "admin").strip().lower()
-    password = (body or {}).get("password") or ""
-    display_name = ((body or {}).get("display_name") or login).strip()
-    if len(login) < 3:
-        raise HTTPException(422, "login must be at least 3 characters")
-    if len(password) < 10:
-        raise HTTPException(422, "password must be at least 10 characters")
-    principal_id = "user-" + hashlib.sha256(f"{project}:{login}".encode("utf-8")).hexdigest()[:16]
-    principal = store.create_password_principal(
-        login=login,
-        display_name=display_name,
-        password_hash=auth.password_hash(password),
-        scopes=ADMIN_SCOPES,
-        principal_id=principal_id,
-        project=project,
-    )
-    store.ensure_bootstrap_project_owner(
-        project, principal["id"], login, display_name, actor="switchboard/auth")
-    principal["effective_scopes"] = store.effective_principal_scopes(
-        project, principal["id"], principal.get("scopes") or [])
-    principal["project_roles"] = store.principal_project_roles(project, principal["id"])
-    store.append_activity(
-        "auth.admin_bootstrapped",
-        "switchboard/auth",
-        {"project": project, "login": login, "principal_id": principal["id"], "source": "api"},
-        task_id=None,
-        project=project,
-    )
-    session_token = auth.new_secret_token()
-    session = store.create_auth_session(
-        principal["id"],
-        session_token,
-        auth.session_ttl_seconds(),
-        user_agent=request.headers.get("user-agent", ""),
-        ip=(request.client.host if request.client else ""),
-        project=project,
-    )
-    principal["session_expires_at"] = session["expires_at"]
-    response = JSONResponse({"principal": auth.public_principal(principal),
-                             "session": {"expires_at": session["expires_at"]}})
-    return _set_session_cookie(response, request, session_token, session["expires_at"])
-
-
-@app.post("/api/auth/login")
-async def auth_login(request: Request, body: dict = Body(...)):
-    project = _proj((body or {}).get("project") or store.DEFAULT_PROJECT)
-    login = ((body or {}).get("login") or "").strip().lower()
-    password = (body or {}).get("password") or ""
-    principal = auth.verify_login(project, login, password)
-    if not principal:
-        raise HTTPException(401, "invalid login or password")
-    session_token = auth.new_secret_token()
-    session = store.create_auth_session(
-        principal["id"],
-        session_token,
-        auth.session_ttl_seconds(),
-        user_agent=request.headers.get("user-agent", ""),
-        ip=(request.client.host if request.client else ""),
-        project=project,
-    )
-    principal["session_expires_at"] = session["expires_at"]
-    response = JSONResponse({"principal": auth.public_principal(principal),
-                             "session": {"expires_at": session["expires_at"]}})
-    return _set_session_cookie(response, request, session_token, session["expires_at"])
-
-
-@app.get("/api/auth/me")
-async def auth_me(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
-    principal = _principal(request, project, ("read",), dev_actor="web")
-    return {"principal": auth.public_principal(principal),
-            "mode": auth.auth_mode(), "project": _proj(project)}
+    return await _global_auth_gate(request, call_next, started_at, path, method)
 
 
 @app.get("/api/access/model")
@@ -678,9 +491,8 @@ def _resolve_member_identity(subject_kind: str, subject_id: str, principals_by_i
         p = principals_by_id.get(subject_id) or {}
         return {"display_name": p.get("display_name") or subject_id,
                 "email": None, "revoked": bool(p.get("revoked_at")) if p else None}
-    if subject_kind == "user" and _GLOBAL_AUTH:
+    if subject_kind == "user":
         try:
-            from services.auth import store as _auth_store
             u = _auth_store.get_user(subject_id) or _auth_store.get_user_by_email(subject_id)
         except Exception:
             u = None
@@ -712,7 +524,7 @@ async def access_members(request: Request, project: str = Query(store.DEFAULT_PR
         "visibility": (access.get("visibility") or "org"),
         "owner_user_id": access.get("owner_user_id"),
         "role_definitions": {r: list(s) for r, s in sorted(store.ROLE_SCOPES.items())},
-        "global_auth": _GLOBAL_AUTH,
+        "global_auth": True,
     }
 
 
@@ -748,10 +560,6 @@ async def access_invite(request: Request, body: dict = Body(...),
         raise HTTPException(400, "a valid email is required")
     if not store.role_scopes(role):
         raise HTTPException(400, f"unknown role: {role}")
-    if not _GLOBAL_AUTH:
-        raise HTTPException(
-            400, "email invites need global auth (PM_GLOBAL_AUTH); grant a principal a role instead")
-    from services.auth import store as _auth_store
     user = _auth_store.get_user_by_email(email)
     if not user:
         raise HTTPException(
@@ -827,17 +635,6 @@ async def access_revoke_token(principal_id: str, request: Request,
     return result
 
 
-@app.post("/api/auth/logout")
-async def auth_logout(request: Request, body: dict = Body(default={})):
-    project = _proj((body or {}).get("project") or request.query_params.get("project") or
-                    store.DEFAULT_PROJECT)
-    token = auth.session_from_request(request)
-    revoked = store.revoke_auth_session(token, project=project) if token else False
-    response = JSONResponse({"logged_out": True, "revoked": revoked})
-    response.delete_cookie(auth.session_cookie_name(), path="/")
-    return response
-
-
 @app.get("/health")
 async def health():
     """Liveness probe — must stay cheap so monitors/Caddy never block the event loop."""
@@ -846,13 +643,34 @@ async def health():
 
 @app.get("/health/deep")
 async def health_deep():
-    """Ops-only readiness: counts tasks/projects (can be slow; never wire to load balancers)."""
-    return {
-        "status": "ok",
+    """Readiness probe. Publicly routed under Caddy's /health*, so it must NOT expose any
+    project data (ids, task counts, names). It verifies that every configured board db is
+    accessible with the required schema, and fails CLOSED (503) if any configured project
+    could not initialize at startup or is not reachable now. BUG-48."""
+    def _probe():
+        configured = store.project_ids()
+        unready = 0
+        for pid in configured:
+            # A project skipped at startup is unready regardless of a later live probe;
+            # otherwise re-check the db + schema live so a db that went away is caught.
+            reason = _PROJECT_INIT_FAILURES.get(pid) or store.probe_project_db(pid)
+            if reason:
+                unready += 1
+                # Detail (which project, why) goes to the server log only — never the wire.
+                print(f"[readiness] project not ready: {pid}: {reason}")
+        return len(configured), unready
+
+    projects_configured, projects_unready = await asyncio.to_thread(_probe)
+    ready = projects_unready == 0
+    body = {
+        "status": "ready" if ready else "unready",
         "service": "taikun-pm",
-        "tasks": len(store.list_tasks()),
-        "projects": store.project_ids(),
+        "ready": ready,
+        "projects_configured": projects_configured,
+        "projects_ready": projects_configured - projects_unready,
+        "projects_unready": projects_unready,
     }
+    return JSONResponse(body, status_code=200 if ready else 503)
 
 
 @app.get("/health/saturation")
@@ -887,27 +705,16 @@ def api_saturation(project: str = Query(store.DEFAULT_PROJECT)):
 @app.get("/", include_in_schema=False)
 async def root(request: Request):
     index = _static / "index.html"
-    if _GLOBAL_AUTH:
-        # Global auth: a valid taikun_session JWT reaches the app; otherwise the
-        # global login page (email + password, no project).
-        from services.auth import service as _auth_service, session as _auth_session
-        if _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, "")):
-            return _shell_response(index)
-        return _shell_response(_static / "login-global.html")
-    login = _static / "login.html"
-    if auth.auth_mode() == auth.REQUIRED:
-        project = request.query_params.get("project") or _project_from_session_cookie(request) or store.DEFAULT_PROJECT
-        try:
-            auth.authenticate_request(request, _proj(project), ("read",), dev_actor="web")
-        except PermissionError:
-            if login.exists():
-                return _shell_response(login)
-    return _shell_response(index)
+    if _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, "")):
+        return _shell_response(index)
+    if auth.auth_mode() == auth.DEV_OPEN:
+        return _shell_response(index)
+    return _shell_response(_static / "login-global.html")
 
 
 @app.get("/login", include_in_schema=False)
 async def login_page():
-    login = _static / ("login-global.html" if _GLOBAL_AUTH else "login.html")
+    login = _static / "login-global.html"
     if login.exists():
         return _shell_response(login)
     raise HTTPException(404, "login page not found")
@@ -915,8 +722,6 @@ async def login_page():
 
 @app.get("/signup", include_in_schema=False)
 async def signup_page():
-    if not _GLOBAL_AUTH:
-        raise HTTPException(404, "not found")
     page = _static / "signup.html"
     if page.exists():
         return _shell_response(page)
@@ -925,11 +730,6 @@ async def signup_page():
 
 @app.get("/account", include_in_schema=False)
 async def account_page(request: Request):
-    """Account settings (self-service password change). Global-auth only; the
-    page itself re-checks the session via /api/auth/session and redirects to
-    /login if the cookie is missing."""
-    if not _GLOBAL_AUTH:
-        raise HTTPException(404, "not found")
     page = _static / "account.html"
     if page.exists():
         return _shell_response(page)
@@ -938,8 +738,6 @@ async def account_page(request: Request):
 
 @app.get("/forgot-password", include_in_schema=False)
 async def forgot_password_page():
-    if not _GLOBAL_AUTH:
-        raise HTTPException(404, "not found")
     page = _static / "forgot-password.html"
     if page.exists():
         return _shell_response(page)
@@ -948,29 +746,36 @@ async def forgot_password_page():
 
 @app.get("/reset-password", include_in_schema=False)
 async def reset_password_page():
-    """Landing page for the emailed reset link (?token=…). Public — the token in
-    the POST is what authorizes the reset."""
-    if not _GLOBAL_AUTH:
-        raise HTTPException(404, "not found")
     page = _static / "reset-password.html"
     if page.exists():
         return _shell_response(page)
     raise HTTPException(404, "reset-password page not found")
 
 
+@app.get("/api/auth/me")
+async def auth_me(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    """UI compatibility: map the global session to per-project effective scopes."""
+    user = _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, ""))
+    if user:
+        proj = _proj(project)
+        scopes = _global_user_scopes(user, proj)
+        principal = _global_principal(user, scopes)
+        principal["project_roles"] = store.principal_project_roles(proj, user["id"])
+        return {"principal": principal, "mode": auth.auth_mode(), "project": proj}
+    principal = _principal(request, project, ("read",), dev_actor="web")
+    return {"principal": auth.public_principal(principal),
+            "mode": auth.auth_mode(), "project": _proj(project)}
+
+
 @app.get("/api/projects")
 def list_projects(request: Request):
-    """The project switcher's source of truth — [{id, label, pretitle}] + the default.
-
-    Under global auth the list is filtered to the caller's accessible projects
-    (superadmin sees all); otherwise it's the full top-level set.
-    """
-    if _GLOBAL_AUTH:
-        user = _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, ""))
-        if not user:
-            raise HTTPException(401, "not authenticated")
-        return {"projects": user.get("projects", []), "default": ""}
-    return {"projects": store.projects(), "default": store.DEFAULT_PROJECT}
+    """The project switcher's source of truth — filtered to accessible projects."""
+    if auth.auth_mode() == auth.DEV_OPEN and not request.cookies.get(_auth_session.COOKIE_NAME, ""):
+        return {"projects": store.projects(), "default": store.DEFAULT_PROJECT}
+    user = _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, ""))
+    if not user:
+        raise HTTPException(401, "not authenticated")
+    return {"projects": user.get("projects", []), "default": ""}
 
 
 @app.post("/api/projects")

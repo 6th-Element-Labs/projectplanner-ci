@@ -12,6 +12,7 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "required"
+os.environ["PM_JWT_SECRET"] = "test-secret-do-not-use-in-prod"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
@@ -19,6 +20,7 @@ try:
     import auth  # noqa: E402
     import store  # noqa: E402
     from app import app  # noqa: E402
+    from services.auth import store as auth_store  # noqa: E402
 except ModuleNotFoundError as exc:
     print(f"  SKIP  ACCESS scoped-token smoke requires optional dependency: {exc.name}")
     shutil.rmtree(_TMP, ignore_errors=True)
@@ -26,6 +28,7 @@ except ModuleNotFoundError as exc:
 
 
 P = "switchboard"
+EMAIL = "admin@test.com"
 PASSWORD = "scoped-token-admin-2026"
 passed = failed = 0
 
@@ -43,11 +46,10 @@ def authz(token):
 
 try:
     client = TestClient(app)
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"project": P, "login": "admin", "password": PASSWORD},
-    )
-    ok(bootstrap.status_code == 200, "bootstrap admin succeeds")
+    auth_store.init()
+    auth_store.create_user(EMAIL, "Admin", auth.password_hash(PASSWORD), is_superadmin=True)
+    ok(client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD}).status_code == 200,
+       "global admin login succeeds")
 
     create_viewer = client.post(
         "/api/access/tokens",
