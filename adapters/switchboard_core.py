@@ -26,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -404,6 +405,44 @@ def run_executed_tests(workspace_path, work_session_id, task_id, claim_id, agent
                 "work_session_id": work_session_id, "error": str(e)}
 
 
+def _push_verification_enabled():
+    """Staged-rollout flag: when set, the managed loop pushes real refs and the
+    server verifies them; when unset, legacy behavior is preserved byte-for-byte."""
+    return os.environ.get("PM_VERIFY_COMPLETION_PUSH", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _push_and_verify(workspace_path, branch, head_sha, remote="origin", timeout_s=120):
+    """Push a managed worktree branch to origin and prove the head landed remotely.
+
+    Replaces the old fabricated ``remote_ref`` (which asserted a push that never
+    happened — the silent-failed-push leak). Returns {ok, remote_ref, pushed_at,
+    detail}. ok is True only when the branch is on the remote AND, when a head_sha
+    is known, the remote branch tip matches it.
+    """
+    if not workspace_path or not branch:
+        return {"ok": False, "detail": "missing workspace_path or branch"}
+    try:
+        push = subprocess.run(
+            ["git", "-C", workspace_path, "push", "-u", remote, branch],
+            capture_output=True, text=True, timeout=timeout_s)
+        if push.returncode != 0:
+            return {"ok": False, "detail": f"git push failed: {push.stderr.strip()[-500:]}"}
+        ls = subprocess.run(
+            ["git", "-C", workspace_path, "ls-remote", remote, f"refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=timeout_s)
+        remote_sha = (ls.stdout or "").split("\t")[0].strip() if ls.stdout.strip() else ""
+        if not remote_sha:
+            return {"ok": False, "detail": f"branch {branch} not on {remote} after push"}
+        if head_sha and remote_sha != head_sha:
+            return {"ok": False,
+                    "detail": f"remote head {remote_sha[:12]} != evidence head {head_sha[:12]}"}
+        return {"ok": True, "remote_ref": f"refs/heads/{branch}",
+                "pushed_at": time.time(), "remote_sha": remote_sha}
+    except Exception as e:
+        return {"ok": False, "detail": f"push/verify error: {e}"}
+
+
 def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
                    auto_work_session, source_path):
     """Claim the next task. If the scheduler skipped code-strict tasks only because they
@@ -520,11 +559,42 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
             evidence.setdefault("head_sha", managed.get("head_sha", ""))
             evidence.setdefault("git_diff_check", "clean")
             if not (evidence.get("pr_url") or evidence.get("remote_ref")):
-                evidence["remote_ref"] = f"refs/heads/{managed.get('branch', '')}"
-        complete_claim(project, claim_id, evidence, base=base, token=token)
+                if _push_verification_enabled():
+                    # Actually push the managed worktree branch and prove the head
+                    # landed before completing. This used to fabricate remote_ref
+                    # without pushing (the silent-failed-push leak); with
+                    # verification on, a real, verified push is required.
+                    pushed = _push_and_verify(managed.get("workspace_path", ""),
+                                              evidence.get("branch", ""),
+                                              evidence.get("head_sha", ""))
+                    if not pushed.get("ok"):
+                        abandon_claim(project, claim_id,
+                                      f"push failed for {task_id}: {pushed.get('detail')}",
+                                      base=base, token=token)
+                        archive_work_session_workspace(
+                            project, managed["work_session_id"],
+                            remove_workspace=True, base=base, token=token)
+                        return {"completed": completed,
+                                "stopped": f"push_error:{task_id}:{pushed.get('detail')}",
+                                "startup_inbox": startup_inbox}
+                    evidence["remote_ref"] = pushed.get("remote_ref")
+                    evidence.setdefault("pushed_at", pushed.get("pushed_at"))
+                else:
+                    # Legacy: assert the branch ref so the code_strict completion
+                    # gate's push-evidence presence check passes. Real push and
+                    # remote verification are enabled via PM_VERIFY_COMPLETION_PUSH.
+                    evidence["remote_ref"] = f"refs/heads/{evidence.get('branch', '')}"
+        completion = complete_claim(project, claim_id, evidence, base=base, token=token)
         if managed:
             archive_work_session_workspace(project, managed["work_session_id"],
                                            remove_workspace=True, base=base, token=token)
+        # Verify progress before claiming it: if the server fail-closed the
+        # completion (e.g. push_not_on_remote), stop loudly rather than looping on
+        # as if the task were done.
+        if isinstance(completion, dict) and completion.get("completed") is False:
+            return {"completed": completed,
+                    "stopped": f"complete_rejected:{task_id}:{completion.get('reason')}",
+                    "rejection": completion, "startup_inbox": startup_inbox}
         completed.append({"task_id": task_id, "evidence": evidence,
-                          "managed": bool(managed)})
+                          "managed": bool(managed), "completion": completion})
     return {"completed": completed, "stopped": "max_tasks", "startup_inbox": startup_inbox}

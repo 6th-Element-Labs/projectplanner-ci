@@ -14,6 +14,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import evidence_claims
+import push_verification
 
 # Module-level constants + static config live in constants.py (ARCH-2); re-exported
 # here so `import store` callers keep seeing store.DEFAULT_PROJECT, store.BUILTIN_PROJECTS, etc.
@@ -10480,7 +10481,8 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                          actor: str = "system",
                          project: str = DEFAULT_PROJECT,
                          mission_project: str = "",
-                         finalize: bool = True) -> Dict[str, Any]:
+                         finalize: bool = True,
+                         push_check: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     now = time.time()
     evidence_obj = _parse_evidence(evidence)
     requested_status = (final_status or evidence_obj.get("final_status") or evidence_obj.get("status") or "").strip()
@@ -10545,7 +10547,8 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
             "merged_sha": evidence_obj.get("merged_sha"),
             "merged_at": merged_at,
             "in_main_content": True if evidence_obj.get("merged_sha") else None,
-            "evidence": evidence_obj,
+            "evidence": ({**evidence_obj, "push_verification": push_check}
+                         if push_check else evidence_obj),
         }
         git_updates = _preserve_provider_pr_evidence(current_git, git_updates, evidence_obj)
         git_state = _upsert_git_state(c, row["task_id"], git_updates)
@@ -10647,6 +10650,13 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
     if done_gate:
         response["done_gate"] = done_gate
         response["warning"] = done_gate["message"]
+    if push_check:
+        response["push_verification"] = push_check
+        if push_check.get("status") == push_verification.UNVERIFIED:
+            response.setdefault("warnings", []).append(
+                "push_unverified: could not confirm the branch/head_sha is on the "
+                f"canonical remote ({push_check.get('reason') or 'unknown'}); "
+                "completion allowed, flagged for reconcile.")
     if not finalize:
         return response
     return _finalize_complete_claim_response(
@@ -10708,14 +10718,92 @@ def abandon_claim(claim_id: str, reason: str,
     return {"abandoned": True, "claim_id": claim_id, "task_id": row["task_id"]}
 
 
+def _verify_completion_push(evidence_obj: Dict[str, Any],
+                            project: str) -> Optional[Dict[str, Any]]:
+    """Prove agent-reported branch/head_sha is actually on the canonical remote.
+
+    Gated by ``PM_VERIFY_COMPLETION_PUSH`` (staged rollout on the live control
+    plane): when disabled this returns ``None`` and completion behaves exactly as
+    before (no network call), so dev/CI/test runs never reach GitHub.
+
+    When enabled, runs OUTSIDE the completion DB transaction: this makes a GitHub
+    API call, and network I/O must never hold the sqlite write lock on the shared
+    box (HARDEN-32 class wedge). Fail-open to 'unverified' on any error -- the
+    policy is fail-closed only on a *proven* absent ref, never on our own
+    verification plumbing failing.
+    """
+    if os.environ.get("PM_VERIFY_COMPLETION_PUSH", "").strip().lower() not in (
+            "1", "true", "yes", "on"):
+        return None
+    try:
+        repo = get_project_github_repo(project)
+    except Exception:
+        repo = ""
+    token = push_verification.github_token_from_env()
+    try:
+        return push_verification.verify_push_evidence(evidence_obj, repo, token)
+    except Exception as e:
+        return {"status": push_verification.UNVERIFIED,
+                "schema": push_verification.SCHEMA,
+                "reason": "verification_error", "detail": str(e)}
+
+
+def _completion_push_absent_response(claim_id: str, evidence_obj: Dict[str, Any],
+                                     push_check: Dict[str, Any], project: str,
+                                     actor: str) -> Dict[str, Any]:
+    """Fail-closed response when the completion branch/head_sha is provably NOT on
+    the canonical remote -- committed-but-unpushed work, the silent-failed-push
+    leak. Records an auditable ``task.complete_blocked_push`` activity row."""
+    ref = (push_check.get("ref") or evidence_obj.get("head_sha")
+           or evidence_obj.get("branch") or "")
+    message = (
+        f"Completion {push_check.get('ref_kind') or 'ref'} '{ref}' is not on the "
+        f"canonical remote ({push_check.get('repo') or 'repo'}). Push the branch "
+        "before completing the claim; committed-but-unpushed work is invisible to "
+        "the fleet and never lands on the board.")
+    response = {"completed": False,
+                "reason": "push_not_on_remote",
+                "failure_class": "stale_branch",
+                "severity": "high",
+                "message": message,
+                "claim_id": claim_id,
+                "push_verification": push_check,
+                "override_field": "completion_evidence",
+                "override_required": True}
+    try:
+        with _conn(project) as c:
+            row = c.execute("SELECT * FROM task_claims WHERE id=?", (claim_id,)).fetchone()
+            if not row:
+                return {"error": "claim not found", "claim_id": claim_id}
+            if row["status"] != "active":
+                return {"error": "claim is not active", "claim_id": claim_id,
+                        "status": row["status"]}
+            response["task_id"] = row["task_id"]
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"], actor, "task.complete_blocked_push",
+                       json.dumps({"claim_id": claim_id, "evidence": evidence_obj,
+                                   **response}, sort_keys=True), time.time()))
+    except Exception:
+        pass
+    return response
+
+
 def complete_claim(claim_id: str, evidence: str = "", final_status: str = "",
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT,
                    mission_project: str = "") -> Dict[str, Any]:
     evidence_obj = _parse_evidence(evidence)
+    # Verify the push BEFORE opening the claim transaction. A branch/head_sha that
+    # is provably absent from the canonical remote fails closed here (stale_branch);
+    # an unreachable remote is allowed through as 'unverified' and flagged.
+    push_check = _verify_completion_push(evidence_obj, project)
+    if push_check and push_check.get("status") == push_verification.ABSENT:
+        return _completion_push_absent_response(
+            claim_id, evidence_obj, push_check, project, actor)
     response = _retry_on_locked(lambda: _complete_claim_impl(
         claim_id, evidence=evidence, final_status=final_status, actor=actor,
-        project=project, mission_project=mission_project, finalize=False))
+        project=project, mission_project=mission_project, finalize=False,
+        push_check=push_check))
     if not response.get("completed"):
         return response
     return _finalize_complete_claim_response(
