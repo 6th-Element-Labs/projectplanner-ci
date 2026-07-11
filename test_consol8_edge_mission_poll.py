@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from scripts.frontend_test_source import read_frontend_source
 
 ROOT = Path(__file__).resolve().parent
 
@@ -54,7 +55,7 @@ for fn in ("mission_status_query", "deliverable_mission_status", "deliverable_de
                       app_src, re.DOTALL)
     ok(block is not None, f"{fn} returns _etag_json(..., max_age=5)")
 
-app_js = (ROOT / "static/app.js").read_text(encoding="utf-8")
+app_js = read_frontend_source(ROOT)
 ok("cache: 'no-cache'" in app_js and "mission_status" in app_js,
    "loadMissionStatus uses cache:no-cache for ETag revalidation")
 ok("dependency_graph" in app_js and app_js.count("cache: 'no-cache'") >= 2,
