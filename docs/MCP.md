@@ -35,6 +35,8 @@ Reads (open):
   clients. Compare client wall time to `server_elapsed_ms`: a large gap means the excess is outside
   Switchboard's Python/SQLite path, such as TLS/network, MCP bridge dispatch, response framing,
   payload transfer, or client-side scheduling.
+- `get_mcp_observability(tool?, slow_limit?)` — process-local per-tool p50/p99/max latency,
+  failures, SQLite lock-wait count, and bounded slow-call log; request/response content is never retained
 - `get_working_agreement(project)` — connect-time rules: definition of done, branch convention,
   merge strategy, canonical main SHA, protocol/profile envelope, and session-start sequence.
   It also publishes the `fail_fix_signal.v1` schema from
