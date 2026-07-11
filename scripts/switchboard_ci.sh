@@ -141,6 +141,7 @@ run_test test_work_session_model.py
 run_test test_work_session_claim_binding.py
 run_test test_backup_restore.py
 run_test test_uptime_probe.py
+run_test test_deploy_memory_isolation.py
 run_test test_ui13_multi_project_intake.py
 run_test test_ui14_comms_settings.py
 

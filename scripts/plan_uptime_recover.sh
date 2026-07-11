@@ -5,6 +5,7 @@ set -euo pipefail
 
 APP_UNIT="${PLAN_APP_UNIT:-projectplanner}"
 CADDY_UNIT="${PLAN_CADDY_UNIT:-caddy}"
+ROOT="${PLAN_ROOT:-/opt/projectplanner}"
 LOCAL_HEALTH="http://127.0.0.1:8110/health"
 PUBLIC_HEALTH="${PLAN_PUBLIC_HEALTH:-https://plan.taikunai.com/health}"
 
@@ -14,9 +15,13 @@ section "service state"
 systemctl is-active "$APP_UNIT" "$CADDY_UNIT" projectplanner-mcp projectplanner-gateway 2>/dev/null || true
 systemctl --no-pager --full status "$APP_UNIT" | sed -n '1,12p' || true
 
-section "memory / disk"
+section "memory / disk / swap"
 free -h || true
+swapon --show 2>/dev/null || true
 df -h / /var/lib/projectplanner /opt/projectplanner 2>/dev/null || df -h /
+if [[ -x "$ROOT/scripts/verify_memory_isolation.sh" ]]; then
+  bash "$ROOT/scripts/verify_memory_isolation.sh" || true
+fi
 
 section "local health (5s cap)"
 if curl -sS -m 5 -o /tmp/plan-health.json -w 'local_health code=%{http_code} total=%{time_total}s\n' "$LOCAL_HEALTH"; then
