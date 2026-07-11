@@ -50,7 +50,10 @@ auth_runtime_paths = [
     ROOT / "auth.py",
     *(ROOT / "src/switchboard/api/routers/auth").glob("*.py"),
     *(path for path in (ROOT / "deploy").rglob("*")
-      if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"),
+      if path.is_file() and (
+          path.suffix in {".md", ".py", ".service", ".sh", ".slice", ".timer", ".yaml"}
+          or path.name == "Caddyfile"
+      )),
 ]
 for path in auth_runtime_paths:
     text = path.read_text(encoding="utf-8")
