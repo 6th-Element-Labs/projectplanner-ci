@@ -80,6 +80,31 @@ ok(payload["slos"]["checks"]["webhook_ingest_p99_ms"]["status"] == "fail",
 ok(any(a["kind"] == "slo" for a in payload["alerts"]), "SLO violations surface as alerts")
 ok(payload["load_shed"]["should_shed"] is False, "benign fixture does not recommend shed without PSI pressure")
 
+# --- Pressure badge: alert must key off the trailing WINDOW, not the lifetime counter ---
+# Regression: a huge lifetime count with an empty window must NOT alert — the badge returns
+# to green once contention subsides, instead of sticking yellow forever after the first lock.
+_alerts_stuck = saturation_signals.build_alerts(
+    psi={"available": None},
+    mcp_obs={"sqlite_lock_waits": 9999, "sqlite_lock_waits_window": 0, "sqlite_lock_wait_window_s": 60},
+    inbox_depth={},
+    slo={"violations": []},
+    load_shed_state={},
+)
+ok(not any(a["kind"] == "sqlite_lock_wait" for a in _alerts_stuck),
+   "lifetime lock-waits with an empty window no longer pin the badge (recovers to green)")
+
+# Real, current contention above threshold still raises a warning with the windowed value.
+_alerts_hot = saturation_signals.build_alerts(
+    psi={"available": None},
+    mcp_obs={"sqlite_lock_waits": 9999, "sqlite_lock_waits_window": 999, "sqlite_lock_wait_window_s": 60},
+    inbox_depth={},
+    slo={"violations": []},
+    load_shed_state={},
+)
+_lw = [a for a in _alerts_hot if a["kind"] == "sqlite_lock_wait"]
+ok(len(_lw) == 1 and _lw[0]["value"] == 999 and _lw[0].get("lifetime") == 9999,
+   "elevated windowed lock-waits still warn, reporting the windowed value + lifetime context")
+
 try:
     from fastapi.testclient import TestClient  # noqa: E402
     from app import app  # noqa: E402
