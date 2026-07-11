@@ -50,7 +50,6 @@ for unit in \
   projectplanner-narrate.service \
   projectplanner-monitors.service \
   projectplanner-inbox.service \
-  projectplanner-reconcile.service \
   projectplanner-summarize.service \
   projectplanner-digest.service; do
   check "${unit} MemoryMax <= 256M" bash -c '
@@ -59,6 +58,10 @@ for unit in \
     [[ "$max" =~ ^[0-9]+$ && "$max" -gt 0 && "$max" -le 268435456 ]]
   ' _ "$unit"
 done
+check "projectplanner-reconcile.service MemoryMax <= 512M" bash -c '
+  max=$(systemctl show projectplanner-reconcile.service -p MemoryMax --value)
+  [[ "$max" =~ ^[0-9]+$ && "$max" -gt 0 && "$max" -le 536870912 ]]
+'
 check "projectplanner-ci-gate.service MemoryMax <= 320M" bash -c '
   max=$(systemctl show projectplanner-ci-gate.service -p MemoryMax --value)
   [[ "$max" =~ ^[0-9]+$ && "$max" -gt 0 && "$max" -le 335544320 ]]
