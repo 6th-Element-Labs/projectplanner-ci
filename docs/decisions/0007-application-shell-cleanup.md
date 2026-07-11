@@ -215,6 +215,20 @@ At the H2 post-Helm-sprint review — the judge ADR-0006 already appointed:
 
 ## Decision 7 — Direction of travel: a target shape to aim at, not a march to complete
 
+> **Updated 2026-07-11 (operator decision, board decision #7):** the compass was upgraded to a
+> **committed program.** The operator reviewed the maintainability gap — the ratchet *holds*
+> store.py at ~15k but never *shrinks* it, so compass-only meant "maintainable" never arrives —
+> and chose to scope the staged rearchitecture as the tracked deliverable
+> **`modular-monolith-rearchitecture`** (5 vertical-slice milestones, Slice 0 = the auth cutover,
+> seed task ACCESS-16). This does **not** reinstate the ADR-0005 failure: what killed ADR-0005
+> was the *schedule* (a 17-step horizontal reorder on the hot file), not the destination. The
+> program's guardrails keep it safe — **vertical slices behind a green facade; each slice
+> subtracts what it replaces; domain extraction (Slice 3) is on-touch, highest-change-first,
+> with no global reorder; and the Decision 2 ratchet is the progress meter.** The target shape
+> below is now that program's destination, not merely a compass. The "Restart the decomposition"
+> rejection in *Alternatives* stands only for a *scheduled horizontal reorder*; a
+> vertical-slice, subtract-as-you-go program is the sanctioned form.
+
 ADR-0006 refused a target tree because ADR-0005 turned one into a 17-step *schedule* that the
 dependency graph invalidated twice. The failure was the schedule, not the map. A second
 independent review re-derived essentially the same modular-monolith target as the leaf-store
@@ -284,9 +298,12 @@ fix them:
   source text* (e.g. test_mission_page.py:215) rather than exercising behavior; Vitest for
   helpers + Playwright for the core flows. (The ES-module split that enables this is the
   Decision 7 frontend shape; the tests themselves are a quality track.)
-- **Finish the two-auth cutover:** `PM_GLOBAL_AUTH` still gates a second live auth system
+- ~~**Finish the two-auth cutover:** `PM_GLOBAL_AUTH` still gates a second live auth system
   beside the legacy one — a migration state, not an architecture (already tracked as the
-  auth-strangler).
+  auth-strangler).~~ **Done (ACCESS-16 / PR #300).** The cutover shipped: `PM_GLOBAL_AUTH`,
+  the legacy per-project login path, and `static/login.html` are deleted. There is now a
+  single live auth system: the `services/auth` microservice is always mounted, backed by the
+  shared `auth.py` primitives (bearer→principal mapping + hashed, expiring session cookie).
 
 ---
 
@@ -335,7 +352,10 @@ subtraction rule.
   the regrowth refutes only the *policy-only enforcement*. Bulk moves on the fleet's hottest
   files remain maximum conflict surface for a win invisible until fully done. Decision 7
   keeps the map and drops the march: same rejection of a *scheduled* program, while giving
-  on-touch extractions a shared destination instead of ad-hoc seams.
+  on-touch extractions a shared destination instead of ad-hoc seams. **(Superseded 2026-07-11
+  — see the Decision 7 update: the operator committed to a *vertical-slice* program, deliverable
+  `modular-monolith-rearchitecture`. What stays rejected is the *horizontal, big-bang,
+  globally-scheduled* reorder — not a subtract-as-you-go slice program.)**
 - **Fold the security/ops/reproducibility findings into this ADR.** Rejected on purpose. A
   cleanup ADR that also "fixes" a live auth hole buries the urgent thing behind the tidy
   thing; the reader skims a docs-shape decision and misses that `/mcp` is open. Separate

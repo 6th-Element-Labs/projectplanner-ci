@@ -53,7 +53,11 @@ Session: httpOnly cookie. **Match ActionEngine → HS256 JWT `taikun_session`** 
 - `signup.html`: email + display name + password → `/api/auth/register` → land in an empty app that says "No projects yet — ask an owner for access."
 - App boot calls `/api/auth/session`; the project switcher is populated from the filtered `/api/projects`.
 
-## Cutover (safe, reversible)
+## Cutover (safe, reversible) — ✅ COMPLETED (ACCESS-16 / PR #300)
+> **Historical:** this cutover is finished. The `PM_GLOBAL_AUTH` feature flag and the legacy
+> per-project login path have since been removed; global auth is now the single live system.
+> The steps below are retained as the original design record.
+
 1. Ship the service + tables **alongside** the current auth (feature flag `PM_GLOBAL_AUTH`).
 2. Migrate principals → `users`; mark you superadmin.
 3. Flip the login page to global; keep the old per-project path working for one release.
