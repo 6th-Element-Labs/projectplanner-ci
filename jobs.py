@@ -14,6 +14,8 @@ import json
 import os
 import subprocess
 import sys
+import fcntl
+from contextlib import contextmanager
 from pathlib import Path
 
 # Load .env so a manual run works like the systemd EnvironmentFile path does.
@@ -28,6 +30,23 @@ if _env.exists():
 import digest  # noqa: E402
 import notify  # noqa: E402
 import store  # noqa: E402
+
+
+@contextmanager
+def _single_flight_lock(path: str):
+    """Nonblocking process lock for manual runs that bypass systemd's flock."""
+    lock_path = Path(path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def weekly_digest():
@@ -130,42 +149,50 @@ def reconcile_alerts():
     Set PM_RECON_ALERT_PROJECTS=switchboard (or a comma list) only when deliberately
     narrowing the scheduled surface.
     """
-    projects = _configured_projects("PM_RECON_ALERT_PROJECTS", "all")
-    alert_to = os.environ.get("PM_RECON_ALERT_TO", "switchboard/operator")
-    min_severity = os.environ.get("PM_RECON_ALERT_MIN_SEVERITY", "medium")
-    dedupe_s = int(os.environ.get("PM_RECON_ALERT_DEDUPE_SECONDS", "3600"))
-    sent = deduped = findings = 0
-    results = []
-    for project_id in projects:
-        store.init_db(project_id)
-        store.seed_if_empty(project_id)
-        res = store.run_reconcile_alerts(
-            project=project_id, alert_to=alert_to,
-            min_severity=min_severity, dedupe_window_s=dedupe_s)
-        # Keep the scheduled job's aggregate response bounded.  A reconcile report
-        # can contain hundreds of richly annotated findings; retaining every full
-        # report until all projects finish pushed the 1 GB production VM into its
-        # 180 MB cgroup MemoryHigh on every cycle.  The detailed report is already
-        # persisted/audited by store.run_reconcile_alerts; this coordinator needs
-        # only the small per-project outcome.
-        results.append({
-            "project": project_id,
-            "ok": bool(res.get("ok")),
-            "finding_count": int(res.get("finding_count") or 0),
-            "alert_sent": bool(res.get("alert_sent")),
-            "deduped": bool(res.get("deduped")),
-            "message_id": res.get("message_id"),
-        })
-        sent += 1 if res.get("alert_sent") else 0
-        deduped += 1 if res.get("deduped") else 0
-        findings += int(res.get("finding_count") or 0)
-        print(f"  [{project_id}] findings={res.get('finding_count', 0)} "
-              f"alert_sent={res.get('alert_sent')} deduped={res.get('deduped')} "
-              f"message_id={res.get('message_id')}")
-    print(f"reconcile_alerts: projects={len(projects)} findings={findings} "
-          f"sent={sent} deduped={deduped} alert_to={alert_to}")
-    return {"projects": projects, "findings": findings, "sent": sent,
-            "deduped": deduped, "results": results}
+    lock_path = os.environ.get("PM_RECON_ALERT_LOCK_PATH", "/tmp/projectplanner-reconcile-alerts.lock")
+    with _single_flight_lock(lock_path) as acquired:
+        if not acquired:
+            print(f"reconcile_alerts: skipped overlap lock={lock_path}")
+            return {"skipped": True, "reason": "overlap", "lock_path": lock_path}
+        projects = _configured_projects("PM_RECON_ALERT_PROJECTS", "all")
+        alert_to = os.environ.get("PM_RECON_ALERT_TO", "switchboard/operator")
+        min_severity = os.environ.get("PM_RECON_ALERT_MIN_SEVERITY", "medium")
+        dedupe_s = int(os.environ.get("PM_RECON_ALERT_DEDUPE_SECONDS", "3600"))
+        incremental = (os.environ.get("PM_RECON_INCREMENTAL", "1").strip().lower()
+                       not in ("0", "false", "no", "off"))
+        sent = deduped = findings = 0
+        results = []
+        for project_id in projects:
+            store.init_db(project_id)
+            store.seed_if_empty(project_id)
+            res = store.run_reconcile_alerts(
+                project=project_id, alert_to=alert_to,
+                min_severity=min_severity, dedupe_window_s=dedupe_s,
+                incremental=incremental)
+            # Keep the scheduled job's aggregate response bounded.  A reconcile report
+            # can contain hundreds of richly annotated findings; retaining every full
+            # report until all projects finish pushed the 1 GB production VM into its
+            # 180 MB cgroup MemoryHigh on every cycle.  The detailed report is already
+            # persisted/audited by store.run_reconcile_alerts; this coordinator needs
+            # only the small per-project outcome.
+            results.append({
+                "project": project_id,
+                "ok": bool(res.get("ok")),
+                "finding_count": int(res.get("finding_count") or 0),
+                "alert_sent": bool(res.get("alert_sent")),
+                "deduped": bool(res.get("deduped")),
+                "message_id": res.get("message_id"),
+            })
+            sent += 1 if res.get("alert_sent") else 0
+            deduped += 1 if res.get("deduped") else 0
+            findings += int(res.get("finding_count") or 0)
+            print(f"  [{project_id}] findings={res.get('finding_count', 0)} "
+                  f"alert_sent={res.get('alert_sent')} deduped={res.get('deduped')} "
+                  f"message_id={res.get('message_id')}")
+        print(f"reconcile_alerts: projects={len(projects)} findings={findings} "
+              f"sent={sent} deduped={deduped} alert_to={alert_to}")
+        return {"projects": projects, "findings": findings, "sent": sent,
+                "deduped": deduped, "incremental": incremental, "results": results}
 
 
 def ci_gate_prs():

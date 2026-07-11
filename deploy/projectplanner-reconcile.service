@@ -16,6 +16,7 @@ EnvironmentFile=/opt/projectplanner/.env
 # background scan. It opens several project/registry connections per cycle, so
 # even small per-connection maps accumulate under the one 180M service cgroup.
 Environment=PM_SQLITE_MMAP_BYTES=0
-ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py reconcile_alerts
+RuntimeDirectory=projectplanner
+ExecStart=/usr/bin/flock -n /run/projectplanner/reconcile-alerts.lock /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py reconcile_alerts
 StandardOutput=journal
 StandardError=journal
