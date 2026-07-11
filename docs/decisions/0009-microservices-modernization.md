@@ -107,7 +107,7 @@ Phase 0 does not realize the full tree. It **creates and proves** the roots:
 ```
 src/switchboard/
   settings.py             typed settings (Phase 0)
-  api/routers/            tasks.py first; auth migrates from services/auth (ARCH-MS-18)
+  api/routers/            tasks.py first; auth package lives under routers/auth (ARCH-MS-18)
   mcp/tools/              tasks.py, then board.py pattern (ARCH-MS-17, ARCH-MS-19)
   application/
     commands/             create_task, update_task, …

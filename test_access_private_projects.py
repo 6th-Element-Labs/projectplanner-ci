@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ACCESS-14: contributors can create projects that are private to them.
 
-Dependency-light — exercises store + services.auth.store directly (no fastapi/mcp), so it
+Dependency-light — exercises store + the auth repository directly (no fastapi/mcp), so it
 runs under the plain gate. Verifies: contributors have write:projects; a private project is
 visible to its creator, invitees, and org admins/owners but NOT ordinary org peers; an
 'org' project is visible to all org members; visibility persists and validates."""
@@ -20,7 +20,8 @@ os.environ["PM_AUTH_MODE"] = "required"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import store  # noqa: E402
-from services.auth import store as astore  # noqa: E402
+import scripts.switchboard_path  # noqa: E402,F401
+from switchboard.api.routers.auth import store as astore  # noqa: E402
 
 passed = failed = 0
 

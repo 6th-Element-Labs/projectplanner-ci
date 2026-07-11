@@ -24,7 +24,8 @@ os.environ["PM_JWT_SECRET"] = "test-secret-do-not-use-in-prod"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import store  # noqa: E402
-from services.auth import store as auth_store  # noqa: E402
+import scripts.switchboard_path  # noqa: E402,F401
+from switchboard.api.routers.auth import store as auth_store  # noqa: E402
 
 try:
     from fastapi.testclient import TestClient  # noqa: E402
