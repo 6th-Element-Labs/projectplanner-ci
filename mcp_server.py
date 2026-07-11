@@ -2420,12 +2420,15 @@ def get_deliverable(deliverable_id: str, project: str = "maxwell") -> str:
 
 @mcp.tool()
 def list_deliverables(project: str = "maxwell", board_id: str = "") -> str:
-    """List deliverables owned by one Project, optionally scoped to a Board/Mission id."""
+    """List slim deliverable rows owned by one Project, optionally scoped to a Board/Mission id.
+    Rows include metadata, milestones, raw task-link ids, and truthful progress counts, but omit
+    linked-task snapshots. Call get_deliverable for one full deliverable when task detail is needed."""
     if not store.has_project(project):
         return _dumps({"error": f"unknown project: {project}", "project": project})
     return _dumps({"project": project, "board_id": board_id or None,
                    "deliverables": store.list_deliverables(project=project,
-                                                            board_id=board_id)})
+                                                            board_id=board_id,
+                                                            include_task_snapshots=False)})
 
 
 @mcp.tool()
