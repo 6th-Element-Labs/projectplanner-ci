@@ -9,12 +9,12 @@ ROOT = Path(__file__).resolve().parent
 # shrinks, lower its ceiling in the same PR; if it grows, follow ADR-0007's relief order before
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
-    "store.py": 15_789,  # BUG-48/HARDEN-55 drift: probe_project_db + readiness helpers
-    "app.py": 3_273,  # ACCESS-16: global-auth cutover removed legacy login routes
-    "mcp_server.py": 3_154,
+    "store.py": 15_470,  # ARCH-MS-20 extracted runner persistence/control into runner_store.py
+    "app.py": 3_275,  # ARCH-MS-18 moved auth imports behind the package seam
+    "mcp_server.py": 3_157,  # pre-existing master drift remeasured by ARCH-MS-20 gate
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
-ROOT_PYTHON_FILE_CEILING = 197  # pre-existing drift on master (+2 root files from merged PRs, not BUG-49)
+ROOT_PYTHON_FILE_CEILING = 201  # master had 200; ARCH-MS-20 adds planned runner_store.py
 
 passed = failed = 0
 

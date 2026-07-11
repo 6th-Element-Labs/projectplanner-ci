@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Global auth service (Service #1) — register / login / session / deny-by-default access."""
+"""Global auth router — register / login / session / deny-by-default access."""
 import os
 import shutil
 import sys
@@ -16,7 +16,8 @@ os.environ["PM_JWT_SECRET"] = "test-secret-do-not-use-in-prod"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import store  # noqa: E402
-from services.auth import store as auth_store  # noqa: E402
+import scripts.switchboard_path  # noqa: E402,F401
+from switchboard.api.routers.auth import store as auth_store  # noqa: E402
 
 try:
     from fastapi.testclient import TestClient  # noqa: E402
@@ -41,6 +42,8 @@ def client():
 
 
 try:
+    ok(auth_store.__name__ == "switchboard.api.routers.auth.store",
+       "auth persistence imports through the target Switchboard router package")
     store.init_project_registry()
     auth_store.init()
     for pid in ("alpha", "beta"):
