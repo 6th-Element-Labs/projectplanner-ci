@@ -918,6 +918,36 @@ async def create_deliverable(request: Request, body: dict = Body(...),
     return result
 
 
+# These literal-path reads MUST be registered before the `/{deliverable_id}` route
+# below — otherwise Starlette matches `/api/deliverables/breakdown_proposals` against
+# `{deliverable_id}` (first-registered wins) and the list 404s as an "unknown
+# deliverable". Keep them here; do not move them back down with the other breakdown
+# routes (UI-1).
+@app.get("/api/deliverables/breakdown_proposals")
+async def list_deliverable_breakdown_proposals(deliverable_id: str = "",
+                                               project: str = Query(...),
+                                               status: str = ""):
+    project = _proj(project)
+    return {
+        "project": project,
+        "deliverable_id": deliverable_id or None,
+        "proposals": store.list_deliverable_breakdown_proposals(
+            deliverable_id=deliverable_id, project=project, status=status),
+    }
+
+
+@app.get("/api/deliverables/breakdown_proposals/{proposal_id}")
+async def get_deliverable_breakdown_proposal(proposal_id: str,
+                                             project: str = Query(...)):
+    project = _proj(project)
+    result = store.get_deliverable_breakdown_proposal(proposal_id, project=project)
+    if not result:
+        raise HTTPException(404, "proposal not found")
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.get("/api/deliverables/{deliverable_id}")
 def get_deliverable(deliverable_id: str, project: str = Query(store.DEFAULT_PROJECT)):
     # def (not async): threadpool the deliverable read so it can't block the event loop.
@@ -1107,31 +1137,6 @@ async def submit_deliverable_outcome(request: Request, deliverable_id: str,
         acceptance_criteria=payload.get("acceptance_criteria"),
         use_llm=bool(payload.get("use_llm")),
     )
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.get("/api/deliverables/breakdown_proposals")
-async def list_deliverable_breakdown_proposals(deliverable_id: str = "",
-                                               project: str = Query(...),
-                                               status: str = ""):
-    project = _proj(project)
-    return {
-        "project": project,
-        "deliverable_id": deliverable_id or None,
-        "proposals": store.list_deliverable_breakdown_proposals(
-            deliverable_id=deliverable_id, project=project, status=status),
-    }
-
-
-@app.get("/api/deliverables/breakdown_proposals/{proposal_id}")
-async def get_deliverable_breakdown_proposal(proposal_id: str,
-                                             project: str = Query(...)):
-    project = _proj(project)
-    result = store.get_deliverable_breakdown_proposal(proposal_id, project=project)
-    if not result:
-        raise HTTPException(404, "proposal not found")
     if result.get("error"):
         raise HTTPException(400, result["error"])
     return result
