@@ -168,6 +168,7 @@ const TeepPlan = {
         // visible tab via their existing render calls.
         this.renderExec();
         this.wireEvents();
+        this.loadPrincipal();   // UI-9: reveal the admin Settings tab if the caller can write:system
         this.setupGantt();
         this._wireLazyTabs();
         this.loadSignals();
@@ -1695,6 +1696,7 @@ const TeepPlan = {
         if (href === '#tab-plan-hub') this._renderPlanActive();
         else if (href === '#tab-inbox-hub') { this.initInbox(); this.renderTables(); }
         else if (href === '#tab-ask') this.initAsk();
+        else if (href === '#tab-settings') this.renderSettings();
     },
 
     // Render whichever Plan sub-view is active — called when the Plan hub top tab opens,
@@ -5139,6 +5141,278 @@ const TeepPlan = {
         finally { if (btn) btn.disabled = false; }
     },
 
+    // ---- UI-9: project & provenance admin (admin-gated Settings tab) --------
+    // Every write here maps to an existing REST endpoint that already enforces
+    // write:system server-side; the tab is only revealed to callers who have it,
+    // and each action is audited by the actor the backend resolves.
+
+    async loadPrincipal() {
+        try {
+            const res = await fetch('api/auth/me');
+            const data = await res.json();
+            this.principal = (res.ok && data.principal) ? data.principal : null;
+            this.authMode = (data && data.mode) || '';
+        } catch (e) { this.principal = null; }
+        const scopes = (this.principal && this.principal.effective_scopes) || [];
+        this.isAdmin = scopes.includes('admin') || scopes.includes('write:system');
+        const nav = document.getElementById('nav-settings');
+        if (nav) nav.style.display = this.isAdmin ? '' : 'none';
+    },
+
+    _sv(id) { return (document.getElementById(id)?.value || '').trim(); },
+    _sFlash(id, msg, cls) { const el = document.getElementById(id); if (el) { el.textContent = msg || ''; el.className = `small ${cls || 'text-secondary'}`; } },
+    async _sfetch(url) {
+        try { const r = await fetch(url, { cache: 'no-store' }); const d = await r.json().catch(() => ({})); return r.ok ? d : { error: (d && (d.detail || d.error)) || `HTTP ${r.status}` }; }
+        catch (e) { return { error: e.message }; }
+    },
+    async _sSend(url, method, body) {
+        const opt = { method };
+        if (body !== undefined) { opt.headers = { 'Content-Type': 'application/json' }; opt.body = JSON.stringify(body); }
+        const res = await fetch(url, opt);
+        let data = {}; try { data = await res.json(); } catch (e) { /* empty */ }
+        if (!res.ok) {
+            if (res.status === 403 || res.status === 401) throw new Error('Admin (write:system) access required.');
+            const d = data && (data.detail || data.error);
+            throw new Error(typeof d === 'string' ? d : (d && (d.error || d.message || d.hint)) || `HTTP ${res.status}`);
+        }
+        return data;
+    },
+
+    async renderSettings() {
+        const el = document.getElementById('settings-page');
+        if (!el) return;
+        if (!this.isAdmin) { el.innerHTML = '<div class="alert alert-warning mb-0"><i class="ti ti-lock me-1"></i>Admin access (<code>write:system</code>) is required for project &amp; provenance settings.</div>'; return; }
+        el.innerHTML = '<div class="text-secondary small">Loading settings…</div>';
+        const proj = window.PM_PROJECT || 'maxwell';
+        const [topology, projects, ciRuns, pubs] = await Promise.all([
+            this._sfetch(`api/projects/${encodeURIComponent(proj)}/repo_topology`),
+            this._sfetch('api/projects'),
+            this._sfetch(`ixp/v1/external_ci_runs?project=${encodeURIComponent(proj)}`),
+            this._sfetch(`ixp/v1/publication_evidence?project=${encodeURIComponent(proj)}`),
+        ]);
+        this._settingsProjects = (projects && projects.projects) || [];
+        el.innerHTML =
+            `<div class="mb-3"><h2 class="mb-0"><i class="ti ti-settings me-2"></i>Project &amp; provenance admin</h2>
+                <div class="text-secondary small">${this.esc(proj)} · admin-gated · every action is audited</div></div>`
+            + this._settingsRepoCard(topology)
+            + this._settingsReconcileCard()
+            + this._settingsVerifyCard()
+            + this._settingsMoveCard()
+            + this._settingsCiRunsCard(ciRuns)
+            + this._settingsPublicationCard(pubs);
+    },
+
+    _settingsErrCard(title, err) {
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title">${this.esc(title)}</h3></div><div class="card-body"><div class="alert alert-danger mb-0">${this.esc(err)}</div></div></div>`;
+    },
+    _authorityChips(list) {
+        return (list || []).map((a) => `<span class="badge bg-azure-lt me-1">${this.esc(a)}</span>`).join('') || '<span class="text-secondary small">—</span>';
+    },
+
+    _settingsRepoCard(topo) {
+        topo = topo || {};
+        if (topo.error) return this._settingsErrCard('Repository & roles', topo.error);
+        const roles = topo.roles || {};
+        const order = ['canonical', 'public_ci', 'public', 'release'];
+        const rows = order.map((k) => {
+            const r = roles[k] || {};
+            return `<tr>
+                <td><span class="fw-semibold text-capitalize">${this.esc(k.replace('_', ' '))}</span></td>
+                <td>${r.repo ? `<code>${this.esc(r.repo)}</code>` : '<span class="text-secondary">— not set —</span>'}</td>
+                <td>${this.esc(r.default_branch || '—')}</td>
+                <td>${this._authorityChips(r.authority)}</td>
+                <td>${r.configured ? '<span class="badge bg-green-lt">configured</span>' : '<span class="badge bg-secondary-lt">unset</span>'}</td>
+            </tr>`;
+        }).join('');
+        const warn = (topo.warnings || []).length ? `<div class="alert alert-warning py-2 px-3 small mt-2 mb-0">${(topo.warnings || []).map((w) => this.esc(w)).join('<br>')}</div>` : '';
+        const c = roles.canonical || {}, ci = roles.public_ci || {}, pub = roles.public || {}, rel = roles.release || {};
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-git-branch me-2"></i>Repository &amp; roles</h3>
+            <div class="card-actions btn-list"><span class="badge ${topo.valid ? 'bg-green-lt' : 'bg-red-lt'}">${topo.valid ? 'valid' : 'invalid'}</span>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="repo-edit"><i class="ti ti-pencil me-1"></i>Edit topology</button></div></div>
+            <div class="card-body">
+            <div class="text-secondary small mb-2">Topology: <code>${this.esc(topo.topology_type || '—')}</code></div>
+            <div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+                <thead><tr><th>Role</th><th>Repo</th><th>Default branch</th><th>Authority</th><th></th></tr></thead>
+                <tbody>${rows}</tbody></table></div>${warn}
+            <form id="repo-edit-form" class="mt-3" style="display:none">
+                <div class="row g-2">
+                    <div class="col-md-6"><label class="form-label">Canonical repo <span class="text-secondary">(owner/name)</span></label><input id="rt-canonical" class="form-control" value="${this.esc(c.repo || '')}" placeholder="owner/name" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Canonical default branch</label><input id="rt-branch" class="form-control" value="${this.esc(c.default_branch || '')}" placeholder="master" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Public CI repo</label><input id="rt-ci" class="form-control" value="${this.esc(ci.repo || '')}" placeholder="owner/name" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Public mirror repo</label><input id="rt-public" class="form-control" value="${this.esc(pub.repo || '')}" placeholder="owner/name" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Release repo</label><input id="rt-release" class="form-control" value="${this.esc(rel.repo || '')}" placeholder="owner/name" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Topology type</label><input id="rt-type" class="form-control" value="${this.esc(topo.topology_type || '')}" placeholder="private_canonical_public_ci" autocomplete="off"></div>
+                </div>
+                <div class="d-flex align-items-center mt-2"><span id="repo-flash" class="small text-secondary"></span>
+                <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="repo-save"><i class="ti ti-device-floppy me-1"></i>Save topology</button></div>
+            </form></div></div>`;
+    },
+
+    _settingsReconcileCard() {
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-refresh-dot me-2"></i>Reconcile &amp; provenance drift</h3>
+            <div class="card-actions btn-list">
+                <select id="rc-severity" class="form-select form-select-sm" style="width:auto"><option value="high">high only</option><option value="medium" selected>medium +</option><option value="low">low +</option></select>
+                <button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="reconcile-alerts">Send alerts</button>
+                <button class="btn btn-sm btn-primary" type="button" data-set-action="reconcile"><i class="ti ti-refresh me-1"></i>Reconcile now</button>
+            </div></div>
+            <div class="card-body"><span id="reconcile-flash" class="small text-secondary"></span>
+            <div id="reconcile-results" class="mt-2"><div class="text-secondary small">Run reconcile to surface provenance drift — orphan merges, stale branches, missing evidence.</div></div>
+            </div></div>`;
+    },
+    _reconcileFindingsHtml(rec) {
+        rec = rec || {};
+        const findings = rec.findings || [];
+        const sevColor = { high: 'red', medium: 'yellow', low: 'secondary' };
+        const stamp = rec.checked_at ? new Date(rec.checked_at * 1000).toLocaleTimeString() : '';
+        const head = `<div class="d-flex align-items-center mb-2"><span class="badge ${rec.ok ? 'bg-green-lt' : 'bg-yellow-lt'} me-2">${rec.ok ? 'clean' : `${findings.length} finding${findings.length === 1 ? '' : 's'}`}</span>
+            <span class="text-secondary small">checked ${stamp}${(rec.backfilled || []).length ? ` · backfilled ${rec.backfilled.length}` : ''}</span></div>`;
+        if (!findings.length) return head + '<div class="text-secondary small">No provenance drift detected.</div>';
+        return head + `<div class="list-group list-group-flush">${findings.map((f) => `<div class="list-group-item px-0"><div class="d-flex gap-2">
+            <span class="badge bg-${sevColor[f.severity] || 'secondary'}-lt text-uppercase">${this.esc(f.severity || '?')}</span>
+            <div><div><span class="fw-semibold">${this.esc(f.code || 'finding')}</span>${f.task_id ? ` · <code>${this.esc(f.task_id)}</code>` : ''}</div>
+            <div class="text-secondary small">${this.esc(f.detail || '')}</div></div></div></div>`).join('')}</div>`;
+    },
+
+    _settingsVerifyCard() {
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-clipboard-check me-2"></i>Verify offline completion</h3></div>
+            <div class="card-body"><div class="text-secondary small mb-3">Stamp a non-PR task Done with recorded evidence — verifier-attributed and audited.</div>
+            <div class="row g-2">
+                <div class="col-md-4"><label class="form-label">Task id</label><input id="vo-task" class="form-control text-uppercase" placeholder="e.g. HARDEN-44" autocomplete="off"></div>
+                <div class="col-md-8"><label class="form-label">Artifact / evidence URL</label><input id="vo-url" class="form-control" placeholder="https://…" autocomplete="off"></div>
+                <div class="col-md-6"><label class="form-label">Verifier <span class="text-secondary">(optional)</span></label><input id="vo-verifier" class="form-control" placeholder="defaults to you" autocomplete="off"></div>
+                <div class="col-md-6"><label class="form-label">Evidence note</label><input id="vo-note" class="form-control" placeholder="what was verified" autocomplete="off"></div>
+            </div>
+            <div class="d-flex align-items-center mt-2"><span id="vo-flash" class="small text-secondary"></span>
+            <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="verify-offline"><i class="ti ti-check me-1"></i>Verify &amp; stamp Done</button></div>
+            </div></div>`;
+    },
+
+    _settingsMoveCard() {
+        const opts = (this._settingsProjects || []).map((p) => `<option value="${this.esc(p.id)}">${this.esc(p.label || p.id)}</option>`).join('');
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-arrows-transfer-up me-2"></i>Move task <span class="badge bg-red-lt ms-2">admin</span></h3></div>
+            <div class="card-body"><div class="text-secondary small mb-3">Move a task out of <strong>${this.esc(window.PM_PROJECT || '')}</strong> into another project — cross-project and audited.</div>
+            <div class="row g-2">
+                <div class="col-md-4"><label class="form-label">Task id</label><input id="mv-task" class="form-control text-uppercase" placeholder="e.g. UI-3" autocomplete="off"></div>
+                <div class="col-md-4"><label class="form-label">Destination project</label><select id="mv-to" class="form-select">${opts}</select></div>
+                <div class="col-md-4"><label class="form-label">Cross-project deps</label><select id="mv-dep" class="form-select"><option value="fail" selected>fail if any</option><option value="clear">clear them</option></select></div>
+                <div class="col-md-8"><label class="form-label">New task id <span class="text-secondary">(optional)</span></label><input id="mv-newid" class="form-control text-uppercase" placeholder="keep same id" autocomplete="off"></div>
+            </div>
+            <div class="d-flex align-items-center mt-2"><span id="mv-flash" class="small text-secondary"></span>
+            <button class="btn btn-danger btn-sm ms-auto" type="button" data-set-action="move-task"><i class="ti ti-arrow-right me-1"></i>Move task</button></div>
+            </div></div>`;
+    },
+
+    _ciStatusColor(status, conclusion) {
+        const s = String(conclusion || status || '').toLowerCase();
+        if (['success', 'passed'].includes(s)) return 'bg-green-lt';
+        if (['failure', 'failed', 'error', 'cancelled'].includes(s)) return 'bg-red-lt';
+        if (['running', 'triggered', 'requested', 'mirrored', 'pending'].includes(s)) return 'bg-blue-lt';
+        return 'bg-secondary-lt';
+    },
+    _settingsCiRunsCard(data) {
+        data = data || {};
+        if (data.error) return this._settingsErrCard('External CI mirror runs', data.error);
+        const runs = data.runs || [];
+        const rows = runs.length ? runs.slice(0, 25).map((r) => `<tr>
+            <td>${r.task_id ? `<code>${this.esc(r.task_id)}</code>` : '—'}</td>
+            <td><span class="badge ${this._ciStatusColor(r.status, r.conclusion)}">${this.esc(r.conclusion || r.status || '?')}</span></td>
+            <td class="font-monospace small">${this.esc((r.source_sha || '').slice(0, 8) || '—')}</td>
+            <td class="small">${this.esc(r.mirror_repo || r.source_repo || '—')}</td>
+            <td>${r.run_url ? `<a href="${this.esc(r.run_url)}" target="_blank" rel="noopener">run</a>` : '—'}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="text-secondary text-center py-3">No external CI mirror runs.</td></tr>';
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-checkup-list me-2"></i>External CI mirror runs</h3>
+            <div class="card-actions"><button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="refresh"><i class="ti ti-refresh me-1"></i>Refresh</button></div></div>
+            <div class="table-responsive"><table class="table table-vcenter card-table mb-0"><thead><tr><th>Task</th><th>Result</th><th>SHA</th><th>Repo</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    },
+    _settingsPublicationCard(data) {
+        data = data || {};
+        if (data.error) return this._settingsErrCard('Publication evidence', data.error);
+        const pubs = data.publication_evidence || [];
+        const rows = pubs.length ? pubs.slice(0, 25).map((p) => `<tr>
+            <td>${p.task_id ? `<code>${this.esc(p.task_id)}</code>` : '—'}</td>
+            <td class="small">${this.esc(p.public_repo || '—')}</td>
+            <td class="small">${this.esc(p.public_ref || p.public_tag || '—')}</td>
+            <td class="font-monospace small">${this.esc((p.public_sha || '').slice(0, 8) || '—')}</td>
+            <td>${p.artifact_url ? `<a href="${this.esc(p.artifact_url)}" target="_blank" rel="noopener">artifact</a>` : '—'}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="text-secondary text-center py-3">No publication evidence recorded.</td></tr>';
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-file-certificate me-2"></i>Publication evidence</h3></div>
+            <div class="table-responsive"><table class="table table-vcenter card-table mb-0"><thead><tr><th>Task</th><th>Public repo</th><th>Ref</th><th>SHA</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    },
+
+    _settingsAction(action) {
+        switch (action) {
+            case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
+            case 'repo-save': return this.saveRepoTopology();
+            case 'reconcile': return this.reconcileNow();
+            case 'reconcile-alerts': return this.sendReconcileAlerts();
+            case 'verify-offline': return this.verifyOffline();
+            case 'move-task': return this.moveTask();
+            case 'refresh': return this.renderSettings();
+        }
+    },
+    async saveRepoTopology() {
+        const proj = window.PM_PROJECT;
+        const body = {
+            canonical_repo: this._sv('rt-canonical'), canonical_default_branch: this._sv('rt-branch'),
+            public_ci_repo: this._sv('rt-ci'), public_repo: this._sv('rt-public'),
+            release_repo: this._sv('rt-release'), topology_type: this._sv('rt-type'),
+        };
+        this._sFlash('repo-flash', 'Saving…', 'text-secondary');
+        try {
+            await this._sSend(`api/projects/${encodeURIComponent(proj)}/repo_topology`, 'POST', body);
+            this._sFlash('repo-flash', 'Saved — refreshing…', 'text-success');
+            await this.renderSettings();
+        } catch (e) { this._sFlash('repo-flash', e.message, 'text-danger'); }
+    },
+    async reconcileNow() {
+        const proj = window.PM_PROJECT;
+        this._sFlash('reconcile-flash', 'Reconciling…', 'text-secondary');
+        const res = document.getElementById('reconcile-results');
+        try {
+            const rec = await this._sSend(`ixp/v1/reconcile?project=${encodeURIComponent(proj)}`, 'GET');
+            this._sFlash('reconcile-flash', '', 'text-secondary');
+            if (res) res.innerHTML = this._reconcileFindingsHtml(rec);
+        } catch (e) { this._sFlash('reconcile-flash', e.message, 'text-danger'); }
+    },
+    async sendReconcileAlerts() {
+        const proj = window.PM_PROJECT;
+        const sev = document.getElementById('rc-severity')?.value || 'medium';
+        this._sFlash('reconcile-flash', 'Sending alerts…', 'text-secondary');
+        try {
+            const r = await this._sSend('ixp/v1/reconcile_alerts', 'POST', { project: proj, min_severity: sev });
+            const msg = r.alert_sent ? `Alert sent · ${r.finding_count} finding(s)` : (r.deduped ? 'Deduped — a recent alert already covers this' : `No alert · ${r.finding_count || 0} finding(s) ≥ ${sev}`);
+            this._sFlash('reconcile-flash', msg, r.alert_sent ? 'text-success' : 'text-secondary');
+        } catch (e) { this._sFlash('reconcile-flash', e.message, 'text-danger'); }
+    },
+    async verifyOffline() {
+        const task = this._sv('vo-task').toUpperCase();
+        if (!task) { this._sFlash('vo-flash', 'Enter a task id.', 'text-danger'); return; }
+        const body = { artifact_url: this._sv('vo-url'), verifier: this._sv('vo-verifier') };
+        const note = this._sv('vo-note');
+        if (note) body.evidence = { note };
+        this._sFlash('vo-flash', 'Verifying…', 'text-secondary');
+        try {
+            const r = await this._sSend(`api/tasks/${encodeURIComponent(task)}/verify_offline`, 'POST', body);
+            this._sFlash('vo-flash', `${task} → ${r.status || 'Done'}${r.idempotent ? ' (already Done)' : ''}`, 'text-success');
+        } catch (e) { this._sFlash('vo-flash', e.message, 'text-danger'); }
+    },
+    async moveTask() {
+        const task = this._sv('mv-task').toUpperCase();
+        const to = document.getElementById('mv-to')?.value || '';
+        if (!task || !to) { this._sFlash('mv-flash', 'Task id and destination are required.', 'text-danger'); return; }
+        if (to === window.PM_PROJECT) { this._sFlash('mv-flash', 'Destination is the current project.', 'text-danger'); return; }
+        if (!confirm(`Move ${task} from ${window.PM_PROJECT} to ${to}? This is audited.`)) return;
+        const body = { project_to: to, dependency_policy: document.getElementById('mv-dep')?.value || 'fail' };
+        const newid = this._sv('mv-newid').toUpperCase();
+        if (newid) body.new_task_id = newid;
+        this._sFlash('mv-flash', 'Moving…', 'text-secondary');
+        try {
+            const r = await this._sSend(`api/tasks/${encodeURIComponent(task)}/move`, 'POST', body);
+            // _sFlash writes via textContent, so pass raw values (esc() would double-encode).
+            this._sFlash('mv-flash', `Moved to ${r.project_to || to} as ${r.new_task_id || r.task_id || task}`, 'text-success');
+        } catch (e) { this._sFlash('mv-flash', e.message, 'text-danger'); }
+    },
+
     // ---- events ----------------------------------------------------------
     wireEvents() {
         ['f-search', 'f-ws', 'f-owner', 'f-assignee', 'f-risk', 'f-blocking', 'f-hidedone'].forEach((id) => {
@@ -5272,6 +5546,19 @@ const TeepPlan = {
         if (planTop) planTop.addEventListener('shown.bs.tab', () => this._renderPlanActive());
         const inboxTopTab = document.getElementById('toptab-inbox');
         if (inboxTopTab) inboxTopTab.addEventListener('shown.bs.tab', () => { this.initInbox(); this.renderTables(); });
+        // UI-9: admin Settings tab + its delegated action buttons.
+        const settingsTop = document.getElementById('toptab-settings');
+        if (settingsTop) settingsTop.addEventListener('shown.bs.tab', () => this.renderSettings());
+        const settingsPage = document.getElementById('settings-page');
+        if (settingsPage && !this._settingsWired) {
+            this._settingsWired = true;
+            settingsPage.addEventListener('click', (e) => {
+                const b = e.target.closest('[data-set-action]');
+                if (!b || !settingsPage.contains(b)) return;
+                e.preventDefault();
+                this._settingsAction(b.getAttribute('data-set-action'));
+            });
+        }
         const inboxTab = document.querySelector('a[href="#tab-inbox"]');
         if (inboxTab) inboxTab.addEventListener('shown.bs.tab', () => this.initInbox());
         const inboxRefresh = document.getElementById('inbox-refresh');
