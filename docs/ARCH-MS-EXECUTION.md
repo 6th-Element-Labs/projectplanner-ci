@@ -71,7 +71,7 @@ requires merge webhook or reconcile.
 | File | Ceiling (lines) | Notes |
 |---|---|---|
 | `store.py` | 15,470 | ARCH-MS-20 extracted runner persistence/control |
-| `app.py` | 3,276 | Pre-existing master drift remeasured by ARCH-MS-20 gate |
+| `app.py` | 3,275 | ARCH-MS-18 moved auth imports behind the package seam |
 | `mcp_server.py` | 3,157 | Pre-existing master drift remeasured by ARCH-MS-20 gate |
 | `static/app.js` | 6,566 | Held |
 | repo root `*.py` | 201 | Master had 200; ARCH-MS-20 adds planned `runner_store.py` leaf |
