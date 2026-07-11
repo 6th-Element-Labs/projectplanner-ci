@@ -45,7 +45,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-4** | Caddy security headers + mission poller ETag (CONSOL-8) | 0.1 | — | Not Started | ✅ | `deploy/Caddyfile` security headers + access log; `app.py` mission_status / dependency_graph `max_age=5` + ETag |
 | **ARCH-MS-5** | MCP read auth — bearer required on `/mcp` | 0.3 | — | Not Started | ⬜ | Reads still open; writes use `_require_write` only (`mcp_server.py`) |
 | **ARCH-MS-6** | `pyproject.toml` package scaffold (lockfile pending) | 0.2 | 1 | In Progress | 🔗 | **HARDEN-54** / PR #303 — `pyproject.toml`, `.python-version`, `uv.lock`; lockfile task split to ARCH-MS-13 |
-| **ARCH-MS-7** | `src/switchboard/` package skeleton | 0.2 | 1 | Not Started | ⬜ | No `src/switchboard/` on master yet |
+| **ARCH-MS-7** | `src/switchboard/` package skeleton | 0.2 | 1 | In Review | 🟡 | `src/switchboard/` package tree + `settings.py` + `scripts/switchboard_path.py` |
 | **ARCH-MS-8** | `create_task` application command + REST/MCP wire | 0.2 | 7 | Not Started | ⬜ | — |
 | **ARCH-MS-9** | `test_arch_ms0_scaffold` CI gate | 0.2 | 7, 8 | Not Started | ⬜ | — |
 | **ARCH-MS-10** | `PM_*` env flag census + delete unread flags | 0.1 | 2 | Not Started | ⬜ | 112+ flags per ADR-0007; census not complete |

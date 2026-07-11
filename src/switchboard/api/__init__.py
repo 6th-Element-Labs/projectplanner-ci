@@ -1,0 +1,1 @@
+"""REST adapters (FastAPI routers)."""
