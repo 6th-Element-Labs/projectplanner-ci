@@ -23,6 +23,10 @@ Use the `project` returned by `prepare_agent_session` on every MCP call (`switch
 - `Done` is reserved for merge/default-branch provenance recorded by webhook or reconcile.
 - Claim files / resources before editing when the board requires it.
 - If unsure about lane ownership or deliverables, call `get_project_contract(project)` — do not assume repo-local docs describe the active board.
+- Serialize Switchboard MCP writes: send one at a time. On `database is locked`, wait 5-15 seconds and retry the same write.
+- Never fan out parallel `search_tasks`, `list_deliverables`, or `board_summary` calls.
+- Prefer `get_lane_delta` for polling and use `board_summary` once per normal session.
+- Use `control_plane_probe` to separate server latency from network, MCP bridge, transfer, or client-side latency.
 
 ## Auth
 
