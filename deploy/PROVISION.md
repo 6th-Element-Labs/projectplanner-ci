@@ -92,9 +92,11 @@ sudo systemctl enable --now projectplanner-reconcile.timer
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
 sudo systemctl enable --now projectplanner-agent-host
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
-# HARDEN-40: pin cgroup resource guards so the batch/timer jobs (narrate, ci-gate)
-# can't starve the web app on this small box. Persists across reboot; idempotent.
+# PERF-3: zram compressed-RAM swap (fast) instead of disk swap (100000x slower page faults).
+sudo bash deploy/setup-zram-swap.sh
+# HARDEN-40 / PERF-3: cgroup memory reservations + batch MemoryMax caps.
 sudo bash deploy/apply-resource-guards.sh
+bash scripts/verify_memory_isolation.sh
 ```
 
 ### Off-box backups (HARDEN-43)
@@ -152,9 +154,12 @@ sudo systemctl restart caddy
 
 After deploy, `/health` stays cheap (no DB walk). Caddy uses short timeouts on `/health*` and
 active health checks on the main upstream so hung backends fail fast instead of holding clients
-for minutes. The cgroup guards from `deploy/apply-resource-guards.sh` give the web app a reserved
-memory floor + top CPU share so a batch spike (narrate/ci-gate) throttles instead of jamming the
-worker. If a batch job still wedges the box, stop the timers to recover fast:
+for minutes. PERF-3 routes swap through **zram** (`deploy/setup-zram-swap.sh`) so any spill stays
+in compressed RAM instead of thrashing disk. The cgroup guards from `deploy/apply-resource-guards.sh`
+reserve memory for web/MCP/gateway (`MemoryMin`/`MemoryLow`, `MemorySwapMax=0`) and hard-cap batch
+jobs (`MemoryMax`) so a spike OOMs the batch unit instead of paging the interactive tier. Verify
+with `bash scripts/verify_memory_isolation.sh`. If a batch job still wedges the box, stop the timers
+to recover fast:
 ```bash
 sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,summarize,ci-gate}.timer
 sudo pkill -9 -f jobs.py   # then restart the web app if needed

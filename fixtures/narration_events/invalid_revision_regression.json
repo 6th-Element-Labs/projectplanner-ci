@@ -1,0 +1,44 @@
+{
+  "expected": "revision_regression",
+  "validation_context": {
+    "expected_project": "switchboard",
+    "current_source_hash": "sha256:e2b06d0d75f9080632c827357015d5d873a94aead3bc0c0850f8c26c86f3d0a7",
+    "current_source_revision": 7,
+    "now": 1780000010
+  },
+  "event": {
+    "attempt": {
+      "available_at": 1780000001,
+      "claimed_by": null,
+      "count": 0,
+      "last_error": null,
+      "lease_expires_at": null,
+      "state": "pending"
+    },
+    "authorization": {
+      "decision_id": "authz-00000006",
+      "principal_id": "principal-codex-root",
+      "project": "switchboard",
+      "scope": "narration:request"
+    },
+    "causal_event": {
+      "actor_id": "codex-root",
+      "event_id": "activity-6",
+      "kind": "task.status_changed",
+      "occurred_at": 1780000000
+    },
+    "dedupe_key": "nrq:008dd6a88e21351e95e7e0bf1e6bfecd91928b7d71ecac7531fba2c247b01f31",
+    "entity_id": "NARRATE-7",
+    "entity_type": "task",
+    "event_id": "nr-event-00000003",
+    "event_type": "narration_requested",
+    "priority": "normal",
+    "project": "switchboard",
+    "requested_at": 1780000001,
+    "schema": "switchboard.narration_requested.v1",
+    "source_hash": "sha256:e2b06d0d75f9080632c827357015d5d873a94aead3bc0c0850f8c26c86f3d0a7",
+    "source_revision": 6,
+    "supersedes": null,
+    "trace_id": "trace-00000006"
+  }
+}
