@@ -14,7 +14,7 @@ LINE_CEILINGS = {
     "mcp_server.py": 3_185,  # NARRATE-13 adds get_narration_health/narrate_now/reactivate_narration tools
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
-ROOT_PYTHON_FILE_CEILING = 205  # NARRATE-13 adds narration_ops.py + test_narration_ops.py
+ROOT_PYTHON_FILE_CEILING = 206  # master 204 + NARRATE-13 narration_ops.py + test_narration_ops.py
 
 passed = failed = 0
 
