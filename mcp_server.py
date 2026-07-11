@@ -2456,7 +2456,8 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
                              mission_id: str = "", role: str = "",
                              blocks_deliverable: bool = False,
                              proof_required_json: str = "",
-                             metadata_json: str = "") -> str:
+                             metadata_json: str = "",
+                             include_task_snapshots: bool = False) -> str:
     """Link an existing task from an explicit project into a deliverable/mission rollup.
 
     The target task is validated in task_project. The operation does not move or mutate it.
@@ -2466,6 +2467,10 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
     groundwork) and 'parked' (frozen tracks) are context — listed under the map,
     drawn only if a flow task depends_on them. Leave empty for auto: a task
     already Done at link time becomes 'foundation', anything else 'contributes'.
+
+    By default this write returns a compact link acknowledgement and progress count.
+    Set include_task_snapshots=true only when the full decorated deliverable is needed;
+    get_deliverable remains the normal full-read tool.
     """
     principal = _require_write(ctx, project, ("write:tasks",))
     result = store.link_task_to_deliverable(
@@ -2479,6 +2484,7 @@ def link_task_to_deliverable(deliverable_id: str, task_project: str, task_id: st
         },
         actor=auth.actor(principal),
         project=project,
+        include_task_snapshots=include_task_snapshots,
     )
     return _dumps(result)
 
