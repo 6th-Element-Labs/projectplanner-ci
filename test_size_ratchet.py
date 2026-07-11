@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parent
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
     "store.py": 15_471,  # +1: create_project busts the project-map cache (registry-churn perf fix)
-    "app.py": 3_274,  # ARCH-MS-18/8 share one package bootstrap and thin create adapter
-    "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
+    "app.py": 3_278,  # ARCH-MS-15: get_task/update_task delegate to application layer (+imports, fail-loud 400)
+    "mcp_server.py": 3_148,  # ARCH-MS-15: update_task dep validation moved into application/commands
     "static/app.js": 4_888,  # ARCH-MS-21 composition root after board/mission/state extraction
     "static/js/api.js": 25,  # project-aware fetch boundary
     "static/js/state.js": 79,  # application state and UI vocabularies

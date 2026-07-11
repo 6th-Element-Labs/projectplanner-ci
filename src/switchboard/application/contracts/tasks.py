@@ -97,3 +97,93 @@ class CreateTaskCommand:
             "risk_level": self.risk_level,
             "is_blocking": self.is_blocking,
         }
+
+
+@dataclass(frozen=True)
+class GetTaskQuery:
+    """The transport-neutral input for reading one project-scoped task."""
+
+    task_id: str
+    project: str
+
+    @classmethod
+    def from_inputs(cls, task_id: Any, *, project: Any) -> "GetTaskQuery":
+        # store.get_task resolves task ids case-insensitively, so only strip
+        # surrounding whitespace here and let the store own canonical casing.
+        return cls(
+            task_id=str(task_id or "").strip(),
+            project=str(project or "").strip(),
+        )
+
+
+# The task fields the update command accepts. Mirrors store.EDITABLE minus the
+# dependency edge (handled separately so unknown ids can fail closed) and the
+# columns the write adapters never expose. Keeping it here means REST and MCP
+# agree on exactly which keys are writable.
+UPDATE_TASK_FIELDS: tuple[str, ...] = (
+    "title", "description", "owner_org", "owner_person_or_role", "assignee",
+    "phase", "status", "effort_days", "duration_days", "start_date",
+    "finish_date", "risk_level", "is_blocking", "sort_order",
+    "entry_criteria", "exit_criteria", "deliverable",
+)
+
+_CLEAR_DEPENDS_ON = ("none", "clear", "[]")
+_TRUE_TOKENS = ("1", "true", "yes", "on")
+
+
+def coerce_is_blocking(value: Any) -> bool:
+    """Coerce a REST/MCP is_blocking input to a bool the store can persist.
+
+    MCP passes 'true'/'false' strings; REST passes JSON booleans. A bare
+    ``bool(value)`` would make the string 'false' truthy, so decode string
+    tokens explicitly and fall back to truthiness for real booleans/ints.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE_TOKENS
+    return bool(value)
+
+
+def normalize_depends_on_replacement(value: Any) -> tuple[str, ...]:
+    """Return the replacement dependency edge list for an update.
+
+    The clear sentinels ('none'/'clear'/'[]') and an empty list all mean
+    "remove every dependency"; anything else is canonicalized like create.
+    """
+    if isinstance(value, str) and value.strip().lower() in _CLEAR_DEPENDS_ON:
+        return ()
+    return normalize_dependency_ids(value)
+
+
+@dataclass(frozen=True)
+class UpdateTaskCommand:
+    """The transport-neutral input for a sparse task update.
+
+    ``fields`` holds only the columns the caller wants to change (already
+    coerced), so an absent key leaves that column untouched. ``depends_on`` is
+    ``None`` when the caller did not touch the edge list, or the canonical
+    replacement tuple (possibly empty) when it did.
+    """
+
+    task_id: str
+    fields: Mapping[str, Any]
+    depends_on: tuple[str, ...] | None = None
+
+    @classmethod
+    def from_mapping(cls, task_id: Any, value: Mapping[str, Any]) -> "UpdateTaskCommand":
+        data = dict(value or {})
+        fields: dict[str, Any] = {}
+        for key in UPDATE_TASK_FIELDS:
+            if key in data:
+                fields[key] = (coerce_is_blocking(data[key])
+                               if key == "is_blocking" else data[key])
+        depends_on = (normalize_depends_on_replacement(data["depends_on"])
+                      if "depends_on" in data else None)
+        return cls(task_id=str(task_id or "").strip(), fields=fields,
+                   depends_on=depends_on)
+
+    def to_store_fields(self) -> dict[str, Any]:
+        """The full field map to hand the store, including the edge list."""
+        fields = dict(self.fields)
+        if self.depends_on is not None:
+            fields["depends_on"] = list(self.depends_on)
+        return fields

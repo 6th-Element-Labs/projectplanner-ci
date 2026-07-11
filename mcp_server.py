@@ -34,6 +34,8 @@ from mcp_http_timing import MCPServerTimingMiddleware
 from mcp_observability_http import MCPObservabilityEndpoint
 from mcp_auth import MCPAuthMiddleware
 from switchboard.application.commands import create_task as create_task_command
+from switchboard.application.commands import update_task as update_task_command
+from switchboard.application.queries import get_task as get_task_query
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -705,7 +707,7 @@ def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
 def get_task(task_id: str, project: str = "maxwell") -> str:
     """Full detail of one task: description, all fields, dependencies, and recent activity.
     project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    t = store.get_task(task_id, project=project)
+    t = get_task_query.execute_for(task_id, project=project)
     return _dumps(agent._task_brief(t, full=True)) if t else "no such task"
 
 
@@ -2903,26 +2905,20 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
     if not binding.get("ok"):
         return _dumps(binding)
     actor_name = binding["actor"]
-    fields = {}
+    data = {}
     for k, v in (("title", title), ("description", description), ("status", status),
                  ("owner_org", owner_org), ("owner_person_or_role", owner_person_or_role),
                  ("assignee", assignee), ("phase", phase), ("start_date", start_date),
-                 ("finish_date", finish_date), ("risk_level", risk_level)):
+                 ("finish_date", finish_date), ("risk_level", risk_level),
+                 ("is_blocking", is_blocking), ("depends_on", depends_on)):
         if v != "":
-            fields[k] = v
-    if is_blocking != "":
-        fields["is_blocking"] = is_blocking.strip().lower() in ("1", "true", "yes")
-    if depends_on != "":
-        new_deps = [] if depends_on.strip().lower() in ("none", "clear", "[]") else _dep_ids(depends_on)
-        unknown = _unknown_ids(new_deps, project)
-        if unknown:   # FAIL LOUD: don't write a dependency to a task that doesn't exist
-            return _dumps({"error": "unknown dependency id(s) on project '%s': %s — task NOT updated. "
-                           "Create them first or fix the id." % (project, ", ".join(unknown))})
-        fields["depends_on"] = new_deps
-    if not fields:
+            data[k] = v
+    if not data:
         return "no fields to update"
+    t = update_task_command.execute_mapping_result(task_id, data, actor=actor_name, project=project)
+    if isinstance(t, dict) and t.get("error_code"):
+        return _dumps(t)   # command validation failed (e.g. unknown deps): fail loud, no binding comment
     _write_binding_comment(task_id, binding, project)
-    t = store.update_task(task_id, fields, actor=actor_name, project=project)
     return _dumps(agent._task_brief(t)) if t else "no such task"
 
 
