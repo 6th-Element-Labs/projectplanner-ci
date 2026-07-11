@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parent
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
     "store.py": 15_471,  # +1: create_project busts the project-map cache (registry-churn perf fix)
-    "app.py": 3_274,  # ARCH-MS-18/8 share one package bootstrap and thin create adapter
-    "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
+    "app.py": 3_278,  # ARCH-MS-15: get_task/update_task delegate to application layer (+imports, fail-loud 400)
+    "mcp_server.py": 3_148,  # ARCH-MS-15: update_task dep validation moved into application/commands
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
 ROOT_PYTHON_FILE_CEILING = 204  # NARRATE-12 (+2) then ARCH-MS-4 adds test_consol8_edge_mission_poll.py (CONSOL-8 CI lock)
