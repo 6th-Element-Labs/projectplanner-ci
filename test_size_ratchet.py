@@ -10,11 +10,11 @@ ROOT = Path(__file__).resolve().parent
 # raising the value with a one-line justification visible in review.
 LINE_CEILINGS = {
     "store.py": 15_470,  # ARCH-MS-20 extracted runner persistence/control into runner_store.py
-    "app.py": 3_274,  # ARCH-MS-18/8 share one package bootstrap and thin create adapter
-    "mcp_server.py": 3_152,  # ARCH-MS-8: create_task now delegates to application/commands
+    "app.py": 3_312,  # NARRATE-13 adds /api/narration health + narrate-now + reactivate endpoints
+    "mcp_server.py": 3_185,  # NARRATE-13 adds get_narration_health/narrate_now/reactivate_narration tools
     "static/app.js": 6_566,  # pre-existing drift on master (not BUG-49); re-baselined to re-green the ratchet
 }
-ROOT_PYTHON_FILE_CEILING = 203  # NARRATE-12 adds narration_generate.py + test_narration_generate.py
+ROOT_PYTHON_FILE_CEILING = 205  # NARRATE-13 adds narration_ops.py + test_narration_ops.py
 
 passed = failed = 0
 
