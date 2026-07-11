@@ -14649,6 +14649,25 @@ def _pr_references_task(pr: Dict[str, Any], task_id: str) -> bool:
     return bool(token.search(head_ref) or token.search(title))
 
 
+def _needs_live_pr_recheck(task: Dict[str, Any], state: Dict[str, Any]) -> bool:
+    """Whether reconcile still needs GitHub's mutable PR view for this task.
+
+    A canonical merge is immutable.  Once the webhook/reconcile path has recorded
+    the merge SHA, proven it is in main, and labelled the provenance as a GitHub
+    merge, polling that same PR every 15 minutes can no longer change the task's
+    truth.  Keep live checks for every incomplete or non-terminal state so open,
+    missing, manually edited, and offline provenance still fail visibly.
+    """
+    if not state.get("pr_number"):
+        return False
+    return not (
+        task.get("status") == "Done"
+        and bool(state.get("merged_sha"))
+        and bool(state.get("in_main_content"))
+        and state.get("provenance_type") == "github_pr_merged"
+    )
+
+
 def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                  git_states: Dict[str, Dict[str, Any]],
                                  canonical_main_sha: str,
@@ -14738,7 +14757,14 @@ def _external_reconcile_findings(tasks: List[Dict[str, Any]],
                                              "detail": "Recorded merged_sha is not reachable from canonical main."})
 
     token = _github_token()
-    pr_tasks = [t for t in tasks if git_states.get(t["task_id"], {}).get("pr_number")]
+    recorded_pr_tasks = [
+        t for t in tasks if git_states.get(t["task_id"], {}).get("pr_number")
+    ]
+    pr_tasks = [
+        t for t in recorded_pr_tasks
+        if _needs_live_pr_recheck(t, git_states.get(t["task_id"], {}))
+    ]
+    checks["github_prs_skipped_immutable"] = len(recorded_pr_tasks) - len(pr_tasks)
     if repo:
         checks["github_repo"] = repo
         checks["github_prs"] = "checked" if token else "checked_unauthenticated"
