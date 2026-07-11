@@ -12,8 +12,10 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
+from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from constants import *  # noqa: F401,F403
@@ -23,6 +25,8 @@ __all__ = [
     "_sqlite_timeout_s",
     "_sqlite_busy",
     "_retry_on_locked",
+    "sqlite_lock_wait_count",
+    "sqlite_lock_waits_in_window",
     "_json_size_bytes",
     "_json_list_field",
     "_json_object_field",
@@ -83,6 +87,34 @@ def _sqlite_busy(exc: Exception) -> bool:
     )
 
 
+_sqlite_lock_wait_counter = 0
+_sqlite_lock_wait_times: deque = deque(maxlen=4096)
+_sqlite_lock_wait_lock = threading.Lock()
+
+
+def sqlite_lock_wait_count() -> int:
+    """Lifetime lock-wait retry count (dashboard/observability)."""
+    with _sqlite_lock_wait_lock:
+        return _sqlite_lock_wait_counter
+
+
+def sqlite_lock_waits_in_window(window_s: float = 60.0) -> int:
+    """Lock-wait retries inside the trailing window — used for load-shed decisions."""
+    cutoff = time.time() - max(1.0, float(window_s))
+    with _sqlite_lock_wait_lock:
+        while _sqlite_lock_wait_times and _sqlite_lock_wait_times[0] < cutoff:
+            _sqlite_lock_wait_times.popleft()
+        return len(_sqlite_lock_wait_times)
+
+
+def _record_sqlite_lock_wait() -> None:
+    global _sqlite_lock_wait_counter
+    now = time.time()
+    with _sqlite_lock_wait_lock:
+        _sqlite_lock_wait_counter += 1
+        _sqlite_lock_wait_times.append(now)
+
+
 def _retry_on_locked(thunk, attempts: int = 5, base_delay: float = 0.1):
     """Run thunk(), retrying on a transient sqlite 'database is locked' with exponential
     backoff; non-busy errors propagate immediately.
@@ -98,6 +130,7 @@ def _retry_on_locked(thunk, attempts: int = 5, base_delay: float = 0.1):
             return thunk()
         except sqlite3.OperationalError as exc:
             if _sqlite_busy(exc) and attempt < attempts - 1:
+                _record_sqlite_lock_wait()
                 time.sleep(base_delay * (2 ** attempt))
                 continue
             raise

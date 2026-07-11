@@ -748,6 +748,29 @@ def get_mcp_observability(tool: str = "", slow_limit: int = 50) -> str:
 
 
 @mcp.tool()
+def get_saturation_signals(project: str = "switchboard") -> str:
+    """Box saturation dashboard (PERF-7): PSI pressure, sqlite lock-waits, webhook inbox
+    depth, HTTP/MCP SLO status, load-shed recommendation, and alert list."""
+    import saturation_signals as sat
+
+    def _mcp_obs():
+        window_s = float(os.environ.get("PM_SQLITE_LOCK_WAIT_WINDOW_S", "60"))
+        snap = _mcp_observability.snapshot()
+        store_waits = store.sqlite_lock_wait_count()
+        store_window = store.sqlite_lock_waits_in_window(window_s)
+        snap["sqlite_lock_waits"] = max(int(snap.get("sqlite_lock_waits") or 0), store_waits)
+        snap["sqlite_lock_waits_window"] = store_window
+        snap["sqlite_lock_wait_window_s"] = window_s
+        return snap
+
+    return _dumps(sat.compute_saturation_signals(
+        project=project,
+        mcp_obs_provider=_mcp_obs,
+        request_obs_provider=lambda: {"routes": {}, "dropped_webhook_deliveries": 0},
+    ))
+
+
+@mcp.tool()
 def doc_search(query: str, project: str = "maxwell") -> str:
     """Search a project's corpus and return cited snippets: [{file, text}]. The static plan docs
     (PRD, architecture, integrations, security, the full plan) are Maxwell's, so the default

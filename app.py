@@ -48,10 +48,13 @@ import webhook_inbox  # noqa: E402
 import notify  # noqa: E402
 import ocr  # noqa: E402
 import rebrand  # noqa: E402
+import request_observability  # noqa: E402
+import saturation_signals  # noqa: E402
 import signals  # noqa: E402
 import store  # noqa: E402
 
 app = FastAPI(title="Taikun PM", version="0.1.0")
+_req_obs = request_observability.RequestObservability()
 
 # Service #1 (global auth) — strangler-migrated behind a flag. Mounted BEFORE the
 # monolith's per-project auth routes so, when on, it overrides /api/auth/login,
@@ -271,6 +274,7 @@ def _protected_read_path(path: str) -> bool:
 def _auth_exempt_path(path: str) -> bool:
     return (
         path == "/health" or
+        path == "/health/saturation" or
         path == "/api/github/webhook" or
         path == "/api/cleanup/apply" or
         path.startswith("/api/auth/")
@@ -356,6 +360,68 @@ async def _global_auth_gate(request: Request, call_next, started_at: float, path
             JSONResponse({"detail": "forbidden: no access to this project"}, status_code=403), started_at)
     request.state.principal = _global_principal(user, scopes)
     return _attach_server_timing(await call_next(request), started_at)
+
+
+def _saturation_snapshot(project: str) -> dict:
+    window_s = float(os.environ.get("PM_SQLITE_LOCK_WAIT_WINDOW_S", "60"))
+    return saturation_signals.compute_saturation_signals(
+        project=_proj(project),
+        mcp_obs_provider=lambda: {
+            "sqlite_lock_waits": store.sqlite_lock_wait_count(),
+            "sqlite_lock_waits_window": store.sqlite_lock_waits_in_window(window_s),
+            "sqlite_lock_wait_window_s": window_s,
+        },
+        request_obs_provider=_req_obs.snapshot,
+    )
+
+
+@app.middleware("http")
+async def _request_observability(request: Request, call_next):
+    """Record per-route latency for PERF-7 SLO gates (web p99, webhook ingest p99)."""
+    started_at = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    path = request.url.path
+    _req_obs.record_path(
+        path,
+        elapsed_ms,
+        response.status_code,
+        dropped_webhook=(path == "/api/github/webhook" and response.status_code >= 500),
+    )
+    return response
+
+
+@app.middleware("http")
+async def _optional_load_shed(request: Request, call_next):
+    """When PM_LOAD_SHED_ENABLED=1, shed expensive writes before pressure becomes failure."""
+    enabled = (os.environ.get("PM_LOAD_SHED_ENABLED") or "").strip().lower() in (
+        "1", "true", "on", "yes")
+    if not enabled:
+        return await call_next(request)
+    path = request.url.path
+    if path in ("/api/github/webhook", "/health", "/health/saturation", "/health/deep"):
+        return await call_next(request)
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return await call_next(request)
+    project = _request_project(request, path)
+    if not store.has_project(project):
+        return await call_next(request)
+    snap = await asyncio.to_thread(_saturation_snapshot, project)
+    shed = snap.get("load_shed") or {}
+    if not shed.get("should_shed"):
+        return await call_next(request)
+    retry = int(shed.get("retry_after_s") or 5)
+    return JSONResponse(
+        {
+            "error": "load_shed",
+            "schema": "switchboard.load_shed.v1",
+            "reasons": shed.get("reasons") or [],
+            "retry_after_s": retry,
+            "saturation_status": snap.get("status"),
+        },
+        status_code=503,
+        headers={"Retry-After": str(retry)},
+    )
 
 
 @app.middleware("http")
@@ -755,6 +821,32 @@ async def health_deep():
         "tasks": len(store.list_tasks()),
         "projects": store.project_ids(),
     }
+
+
+@app.get("/health/saturation")
+def health_saturation(project: str = Query(store.DEFAULT_PROJECT)):
+    """Cheap saturation/alerts probe for external monitors (PERF-7)."""
+    snap = _saturation_snapshot(project)
+    return {
+        "status": snap.get("status") or "healthy",
+        "as_of": snap.get("as_of"),
+        "project": snap.get("project"),
+        "alert_count": snap.get("alert_count", 0),
+        "alerts": snap.get("alerts") or [],
+        "slos_ok": (snap.get("slos") or {}).get("ok"),
+        "load_shed": (snap.get("load_shed") or {}).get("should_shed"),
+        "psi_available": (snap.get("psi") or {}).get("available"),
+        "sqlite_lock_waits": (snap.get("mcp_observability") or {}).get("sqlite_lock_waits", 0),
+        "sqlite_lock_waits_window": (snap.get("mcp_observability") or {}).get(
+            "sqlite_lock_waits_window", 0),
+        "webhook_inbox_pending": (snap.get("webhook_inbox_depth") or {}).get("pending", 0),
+    }
+
+
+@app.get("/api/saturation")
+def api_saturation(project: str = Query(store.DEFAULT_PROJECT)):
+    """Full saturation dashboard payload: PSI, lock-wait, inbox depth, SLOs, alerts."""
+    return _saturation_snapshot(project)
 
 
 @app.get("/", include_in_schema=False)
@@ -2157,6 +2249,12 @@ async def ixp_agent_hosts(project: str = Query(store.DEFAULT_PROJECT), runtime: 
 async def ixp_control_plane_probe(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
                                   include_heavy: bool = False):
     return store.control_plane_probe(project=_proj(project), lane=lane, include_heavy=include_heavy)
+
+
+@app.get("/ixp/v1/saturation_signals")
+def ixp_saturation_signals(project: str = Query(store.DEFAULT_PROJECT)):
+    """REST parity for PERF-7 saturation dashboard (PSI + lock-wait + inbox + SLOs)."""
+    return _saturation_snapshot(project)
 
 
 @app.get("/ixp/v1/host_status")
