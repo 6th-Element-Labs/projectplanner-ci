@@ -57,10 +57,15 @@ def resolve_project(payload: Dict[str, Any], requested_project: str = "") -> str
     full_name = (repo.get("full_name") or "").lower()
     name = (repo.get("name") or "").lower()
     configured_project = _project_for_repo(full_name)
-    if configured_project == "__ambiguous_repo_role__":
-        return ""
-    if configured_project:
+    ambiguous = configured_project == "__ambiguous_repo_role__"
+    if configured_project and not ambiguous:
         return configured_project
+    # Known-repo aliases resolve the canonical board deterministically even when the
+    # repo's configured role is ambiguous (canonical for >1 board, or a shared evidence
+    # repo). This keeps a bare webhook URL (no ?project=) stamping provenance to the
+    # canonical board for that repo instead of failing closed and silently dropping ALL
+    # provenance (BUG-43). An operator who wants a non-primary board still passes an
+    # explicit ?project=, which wins above.
     if full_name.endswith("/projectplanner") or full_name.endswith("/switchboard") or name in {
         "projectplanner",
         "switchboard",
@@ -68,6 +73,10 @@ def resolve_project(payload: Dict[str, Any], requested_project: str = "") -> str
         return "switchboard"
     if full_name.endswith("/helm") or name == "helm":
         return "helm"
+    # Genuinely ambiguous and unrecognized (e.g. a shared evidence repo across dynamic
+    # boards): require an explicit ?project= rather than guessing a misroute.
+    if ambiguous:
+        return ""
     return store.DEFAULT_PROJECT
 
 
