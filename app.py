@@ -340,6 +340,15 @@ def _saturation_snapshot(project: str) -> dict:
     )
 
 
+def _slow_request_log_ms() -> float:
+    """Threshold (ms) above which a request is logged with its exact path. Default 500ms
+    keeps the log to the genuinely-slow tail; PM_SLOW_REQUEST_LOG_MS=0 disables it."""
+    try:
+        return float(os.environ.get("PM_SLOW_REQUEST_LOG_MS", "500") or 0)
+    except (TypeError, ValueError):
+        return 500.0
+
+
 @app.middleware("http")
 async def _request_observability(request: Request, call_next):
     """Record per-route latency for PERF-7 SLO gates (web p99, webhook ingest p99)."""
@@ -353,6 +362,15 @@ async def _request_observability(request: Request, call_next):
         response.status_code,
         dropped_webhook=(path == "/api/github/webhook" and response.status_code >= 500),
     )
+    # Per-CLASS SLO buckets (web/webhook/health) can't tell which exact path is the p99 tail.
+    # Name the slow ones so the tail is diagnosable from logs. PM_SLOW_REQUEST_LOG_MS=0 disables.
+    _slow = _slow_request_log_ms()
+    if _slow and elapsed_ms >= _slow:
+        print(
+            f"[slow-request] {elapsed_ms:.0f}ms {request.method} {path}"
+            f"?{request.url.query} status={response.status_code}",
+            flush=True,
+        )
     return response
 
 
