@@ -1,0 +1,36 @@
+"""Deliverables domain — outcome lifecycle semantics without persistence."""
+from .lifecycle import (
+    BREAKDOWN_PROPOSAL_STATUSES,
+    CLOSURE_METADATA_KEYS,
+    DELIVERABLE_ID_RE,
+    DELIVERABLE_MILESTONE_STATUSES,
+    DELIVERABLE_STATUSES,
+    DONE_CLOSURE_GRADES,
+    PROJECT_BOARD_ID_RE,
+    PROJECT_BOARD_KINDS,
+    PROJECT_BOARD_STATUSES,
+    done_requires_closure_grade,
+    merge_deliverable_metadata,
+    normalize_deliverable_id,
+    normalize_project_board_id,
+    validate_deliverable_status,
+    validate_milestone_status,
+)
+
+__all__ = [
+    "BREAKDOWN_PROPOSAL_STATUSES",
+    "CLOSURE_METADATA_KEYS",
+    "DELIVERABLE_ID_RE",
+    "DELIVERABLE_MILESTONE_STATUSES",
+    "DELIVERABLE_STATUSES",
+    "DONE_CLOSURE_GRADES",
+    "PROJECT_BOARD_ID_RE",
+    "PROJECT_BOARD_KINDS",
+    "PROJECT_BOARD_STATUSES",
+    "done_requires_closure_grade",
+    "merge_deliverable_metadata",
+    "normalize_deliverable_id",
+    "normalize_project_board_id",
+    "validate_deliverable_status",
+    "validate_milestone_status",
+]
