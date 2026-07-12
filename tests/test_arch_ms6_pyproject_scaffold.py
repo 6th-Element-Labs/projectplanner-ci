@@ -5,9 +5,7 @@ HARDEN-54 / PR #303 landed the scaffold; this test locks the Phase 0 contract:
 abstract deps in pyproject.toml, Python 3.12 floor, non-package uv app layout,
 and generated requirements exports. uv.lock reproducibility is ARCH-MS-13 scope.
 """
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
+from path_setup import ROOT
 
 CORE_DEPS = (
     "fastapi>=",

@@ -58,7 +58,7 @@ mode.
 
 | Track | Intent |
 |---|---|
-| **0.1 Enforcement** | ADR-0007 cuts CONSOL-6…9: size ratchet + pytest discovery, dead-surface deletion, Caddy hardening + mission poll parity, H2 census for zero-call tools/flags. |
+| **0.1 Enforcement** | ADR-0007 cuts CONSOL-6…9: pytest discovery gate (the size ratchet is retired 2026-07-12), dead-surface deletion, Caddy hardening + mission poll parity, H2 census for zero-call tools/flags. |
 | **0.2 Scaffold** | `pyproject.toml` + Python 3.12 pin; `src/switchboard/` package skeleton; `create_task` / `get_task` / `update_task` as `application/` commands with REST+MCP wired through thin adapters; `test_arch_ms0_scaffold` CI gate; on-touch extractions (`api/routers/tasks.py`, `mcp/tools/*`, `runner_*` leaf store) as tasks complete. |
 | **0.3 Security P0** | MCP read auth (bearer required on `/mcp`); `/health/deep` stops leaking project identifiers. |
 
@@ -86,9 +86,15 @@ mode.
    the same PR. No lane is assigned "build all of `src/switchboard/`."
 2. **Green facade.** `store.py` remains the persistence facade until a repository extraction
    lands; callers move to `application/` first, storage second.
-3. **Ratchet is the progress meter.** Monolith line counts may only shrink or hold with visible
-   justification (ADR-0007 Decision 2 relief order). Phase 0 exit requires the ratchet lowered on
-   at least one shell monolith (ARCH-MS-24).
+3. **Redirect, not a shared counter.** New feature code does not land in `store.py` / `app.py` /
+   `mcp_server.py` — it lands in `src/switchboard/` (ADR-0007 Decision 3). In-place edits are
+   allowed only for verbatim extractions and P0 security fixes. Enforced by ARCH-MS task
+   boundaries + review, **not** by a global size counter. (The exact-match `test_size_ratchet.py`
+   was retired 2026-07-12: a single integer every concurrent PR had to CAS against a moving
+   `master` produced continuous merge wars — see ADR-0007 Decision 2 retirement banner. When the
+   fleet runs parallel again, replace it with a *per-PR diff guard* — CI fails only if a PR's own
+   diff adds net lines to a monolith without a `MONOLITH-TOUCH:` justification — which is
+   commutative and never edits a shared line.)
 4. **REST + MCP = one command.** New task mutations go through typed `application/commands/*`
    and `application/queries/*`; `api/routers/*` and `mcp/tools/*` are adapters only. This is
    the subtraction that pays for the layer (ADR-0007 Decision 7 invariant 1).
@@ -154,8 +160,11 @@ Phase 0 closes when **all** of the following hold (see tracker for per-task stat
 2. **Scaffold:** `src/switchboard/` live; `create_task` + `get_task` + `update_task` unified;
    `test_arch_ms0_scaffold` green in CI; task REST/MCP adapters extracted.
 3. **Security:** MCP reads require bearer; `/health/deep` does not leak project identifiers.
-4. **Ratchet:** At least one shell monolith ceiling **lowered** below its Phase 0 high-water mark
-   (not merely held).
+4. **Extraction proof (replaces the retired ratchet):** `store.py` is reduced by **≥500 lines via
+   verbatim moves** (e.g. ARCH-MS-20 `runner_*` → `runner_store.py`), **or** the `store.py` facade
+   is **≤14,000 lines** — measured, not asserted by a shared-counter test. Plus **no new monolith
+   growth**: zero net feature lines added to `store.py` / `app.py` / `mcp_server.py` during Phase 0
+   (operator diff audit, or the per-PR diff guard once the fleet parallelizes).
 5. **Hygiene:** `tests/` directory + shim for new tests; `PM_*` unread flags deleted; numbered
    migrations path authoritative.
 
@@ -182,8 +191,8 @@ ARCH-MS tasks move; this ADR is the stable charter and does not duplicate the li
 
 ## Consequences
 
-- Phase 0 adds package structure without immediately shrinking `store.py`; the ratchet and
-  ARCH-MS-24 exit gate prevent "scaffold only" from counting as done.
+- Phase 0 adds package structure without immediately shrinking `store.py`; the ARCH-MS-24
+  extraction-proof exit gate (Decision 5 #4) prevents "scaffold only" from counting as done.
 - Task work may land through non-ARCH-MS IDs (HARDEN-*, BUG-*, ACCESS-*); the tracker records
   repo evidence so the mission graph stays honest.
 - Agents and operators must read `ARCH-MS-EXECUTION.md` before claiming ARCH-MS-2+ work to avoid

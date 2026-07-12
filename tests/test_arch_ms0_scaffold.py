@@ -7,7 +7,7 @@ regression by asserting the three things the charter calls out:
 
   1. the ``src/switchboard/`` package and its skeleton subpackages import cleanly;
   2. the ``create_task`` application command is callable through the store facade;
-  3. both the REST (``app.py``) and MCP (``mcp_server.py``) adapters invoke the same
+  3. both the REST and MCP task adapters invoke the same
      application handler (``switchboard.application.commands.create_task``).
 
 Kept script-style and hermetic so ``scripts/switchboard_ci.sh`` discovers and runs it
@@ -131,14 +131,21 @@ try:
     )
 
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
-    mcp_source = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
+    task_router_source = (
+        ROOT / "src/switchboard/api/routers/tasks.py"
+    ).read_text(encoding="utf-8")
+    mcp_source = (ROOT / "src/switchboard/mcp/tools/tasks.py").read_text(encoding="utf-8")
     shared_import = (
         "from switchboard.application.commands import create_task as create_task_command"
     )
-    rest_wired = shared_import in app_source and "create_task_command.execute_mapping_result" in app_source
+    rest_wired = (
+        "_create_task_router" in app_source
+        and shared_import in task_router_source
+        and "create_task_command.execute_mapping_result" in task_router_source
+    )
     mcp_wired = shared_import in mcp_source and "create_task_command.execute_mapping_result" in mcp_source
-    ok(rest_wired, "REST adapter (app.py) invokes the shared create_task handler")
-    ok(mcp_wired, "MCP adapter (mcp_server.py) invokes the shared create_task handler")
+    ok(rest_wired, "REST task router invokes the shared create_task handler")
+    ok(mcp_wired, "MCP task adapter invokes the shared create_task handler")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
