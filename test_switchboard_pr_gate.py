@@ -314,4 +314,123 @@ finally:
     gate._github_request = _orig_req2
     gate._ensure_cache_repo = _orig_cache2
 
-print("\n29 passed, 0 failed")
+# ---------------------------------------------------------------------------
+# HARDEN-70 / CI-3: gate native merge-queue (gh-readonly-queue) refs so an enabled
+# merge queue doesn't hang waiting for the required status on the merge-group head SHA.
+# ---------------------------------------------------------------------------
+
+# list_merge_queue_refs parses GitHub's matching-refs response into {ref, sha} and fails open.
+_orig_req_mq = gate._github_request
+try:
+    def _mq_refs_req(method, path, *, token, body=None):
+        if method == "GET" and "matching-refs/heads/gh-readonly-queue" in path:
+            return [
+                {"ref": "refs/heads/gh-readonly-queue/master/pr-18-abc",
+                 "object": {"sha": "mgsha18"}},
+                {"ref": "refs/heads/gh-readonly-queue/master/pr-20-def",
+                 "object": {"sha": "mgsha20"}},
+                {"ref": "refs/heads/gh-readonly-queue/master/broken"},  # no object.sha -> dropped
+            ]
+        return []
+    gate._github_request = _mq_refs_req
+    refs = gate.list_merge_queue_refs("6th-Element-Labs/projectplanner", token="t")
+    ok([r["sha"] for r in refs] == ["mgsha18", "mgsha20"],
+       "list_merge_queue_refs returns each merge-group head SHA, dropping malformed rows")
+    ok(all(r["ref"].startswith("refs/heads/gh-readonly-queue/") for r in refs),
+       "list_merge_queue_refs keeps the gh-readonly-queue ref names")
+
+    def _boom_req(method, path, *, token, body=None):
+        raise gate.GateError("HTTP 404")
+    gate._github_request = _boom_req
+    ok(gate.list_merge_queue_refs("r", token="t") == [],
+       "list_merge_queue_refs fails open to [] (empty/disabled queue is not an error)")
+finally:
+    gate._github_request = _orig_req_mq
+
+# The merge-group run tag encodes the queue ref slug and the head SHA prefix.
+mq_tag = gate._run_tag_mq("refs/heads/gh-readonly-queue/master/pr-18-abcdef", "0123456789abcdef")
+ok(mq_tag.startswith("mq-pr-18-abcdef") and "0123456789ab" in mq_tag,
+   "merge-group run tag encodes the queue ref slug and head SHA prefix")
+
+_mq_names = ("latest_status", "post_status", "_ensure_cache_repo",
+             "_prepare_merge_group_worktree", "_run_suite_in_worktree", "_cleanup_worktree")
+
+# A green merge-group suite posts the required `Switchboard CI / VM gate` status to the
+# merge-group HEAD SHA — this is precisely what lets the native queue advance.
+posted_mq = []
+_saved_mq = {name: getattr(gate, name) for name in _mq_names}
+try:
+    gate.latest_status = lambda *a, **k: None
+    gate.post_status = lambda repo, sha, state, **kw: posted_mq.append((sha, state, kw.get("context")))
+    gate._ensure_cache_repo = lambda *a, **k: Path("/tmp/cache")
+    gate._prepare_merge_group_worktree = lambda *a, **k: Path("/tmp/run")
+    gate._run_suite_in_worktree = lambda *a, **k: None
+    gate._cleanup_worktree = lambda *a, **k: None
+    with tempfile.TemporaryDirectory(prefix="switchboard-mq-") as tmp:
+        res = gate.run_gate_for_merge_group(
+            "refs/heads/gh-readonly-queue/master/pr-18-abc", "mgsha18abc123",
+            repo="6th-Element-Labs/projectplanner", token="t",
+            context="Switchboard CI / VM gate", work_root=Path(tmp), source_repo=Path(tmp),
+            timeout_s=5)
+    ok(res["state"] == "success" and res["sha"] == "mgsha18abc123",
+       "merge-group gate returns success for a green suite")
+    ok(("mgsha18abc123", "success", "Switchboard CI / VM gate") in posted_mq,
+       "merge-group gate posts the required VM-gate status to the merge-group head SHA")
+    ok(any(state == "pending" for _s, state, _c in posted_mq),
+       "merge-group gate posts a pending status while the suite runs")
+finally:
+    for name, fn in _saved_mq.items():
+        setattr(gate, name, fn)
+
+# An already-gated merge-group head SHA is skipped: no suite run, no re-post (queue is decided).
+_saved_mq2 = {name: getattr(gate, name) for name in ("latest_status", "post_status", "_ensure_cache_repo")}
+try:
+    gate.latest_status = lambda *a, **k: {"state": "success", "context": "Switchboard CI / VM gate"}
+
+    def _no_post(*_a, **_k):
+        raise AssertionError("must not re-post for an already-gated merge group")
+
+    def _no_run(*_a, **_k):
+        raise AssertionError("suite must not run for an already-gated merge group")
+
+    gate.post_status = _no_post
+    gate._ensure_cache_repo = _no_run
+    res = gate.run_gate_for_merge_group(
+        "refs/heads/gh-readonly-queue/master/pr-18-abc", "mgsha18abc123",
+        repo="r", token="t", context="Switchboard CI / VM gate",
+        work_root=Path("/tmp"), source_repo=Path("/tmp"), timeout_s=5)
+    ok(res.get("skipped") == "already_gated" and res["state"] == "success",
+       "already-gated merge-group head SHA is skipped (no suite re-run, no re-post)")
+finally:
+    for name, fn in _saved_mq2.items():
+        setattr(gate, name, fn)
+
+# A red merge-group suite posts a labelled failure and returns instead of raising, so one bad
+# group never aborts the gate run (and every other queued group keeps getting gated).
+posted_fail = []
+_saved_mq3 = {name: getattr(gate, name) for name in _mq_names}
+try:
+    gate.latest_status = lambda *a, **k: None
+    gate.post_status = lambda repo, sha, state, **kw: posted_fail.append((state, kw.get("description", "")))
+    gate._ensure_cache_repo = lambda *a, **k: Path("/tmp/cache")
+    gate._prepare_merge_group_worktree = lambda *a, **k: Path("/tmp/run")
+
+    def _red_suite(*_a, **_k):
+        raise gate.GateError("2 tests failed")
+
+    gate._run_suite_in_worktree = _red_suite
+    gate._cleanup_worktree = lambda *a, **k: None
+    with tempfile.TemporaryDirectory(prefix="switchboard-mq-red-") as tmp:
+        res = gate.run_gate_for_merge_group(
+            "refs/heads/gh-readonly-queue/master/pr-9-x", "mgredsha",
+            repo="r", token="t", context="Switchboard CI / VM gate",
+            work_root=Path(tmp), source_repo=Path(tmp), timeout_s=5)
+    ok(res["state"] == "failure" and "2 tests failed" in res.get("error", ""),
+       "merge-group suite failure returns a failure result instead of raising")
+    ok(any(state == "failure" and "merge queue" in desc for state, desc in posted_fail),
+       "merge-group gate posts a red VM-gate status labelled (merge queue)")
+finally:
+    for name, fn in _saved_mq3.items():
+        setattr(gate, name, fn)
+
+print("\n39 passed, 0 failed")

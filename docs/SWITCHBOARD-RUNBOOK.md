@@ -138,6 +138,27 @@ PM_GITHUB_TOKEN=... SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python \
 
 The production gate is `projectplanner-ci-gate.timer`, which polls open non-draft PRs and posts
 the `Switchboard CI / VM gate` status from the Plan VM.
+
+### Native merge queue (HARDEN-70 / CI-3)
+
+The same timer also gates GitHub's native merge queue. When a PR enters the queue, GitHub builds a
+temporary merge group on a `refs/heads/gh-readonly-queue/<base>/pr-<n>-<sha>` branch (base + the
+queued PRs, merged) and **blocks the queue until the required status checks report on that
+branch's head SHA**. The PR-head gate never posts there, so `switchboard_pr_gate.py` has a third
+pass that lists `gh-readonly-queue/*` refs, runs the suite on each merge-group head SHA (external
+CI mirror → local fallback, same policy as the PR pass), and posts the same
+`Switchboard CI / VM gate` context to that SHA. One branch-protection required check therefore
+covers both PR and merge-group evaluation. Disable the pass with `--no-merge-queue` /
+`SWITCHBOARD_CI_NO_MERGE_QUEUE=1` (leave it on in production — it is what keeps an enabled queue
+from hanging).
+
+**Enabling the queue is a deploy-ordered operator step, not an agent action.** Turn it on only
+*after* the merge-group pass is deployed to prod (`git pull` + `systemctl restart` on the Plan VM);
+enabling it against a gate that can't post to merge-group SHAs is exactly the hang this fixes.
+Enable it via master branch protection on `6th-Element-Labs/projectplanner` (Settings → Branches →
+require merge queue, or a ruleset with a `merge_queue` rule), keeping `Switchboard CI / VM gate`
+as the required check. Confirm afterward with a canary PR: it should get the VM-gate status on both
+its PR head and its `gh-readonly-queue` merge-group commit, then fast-forward to master.
 The service pins `SWITCHBOARD_CI_PYTHON` to the project venv and every gate log records the
 selected interpreter and version. If no Python 3.10+ runtime is available, the gate posts red
 with the checked candidate list instead of silently falling back to ambient `python3`.

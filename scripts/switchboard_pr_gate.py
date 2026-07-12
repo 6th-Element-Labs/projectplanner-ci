@@ -223,6 +223,33 @@ def get_pr(repo: str, number: int, *, token: str) -> Dict[str, Any]:
     return _github_request("GET", f"repos/{repo}/pulls/{int(number)}", token=token)
 
 
+def list_merge_queue_refs(repo: str, *, token: str, base: str = "") -> List[Dict[str, str]]:
+    """Active native-merge-queue refs on the repo, each with its head SHA.
+
+    GitHub's merge queue creates a temporary branch
+    ``refs/heads/gh-readonly-queue/<base>/pr-<n>-<sha>`` per merge group (base + the queued
+    PRs, merged) and blocks the queue until the *required* status checks report on that
+    branch's HEAD commit. External (non-Actions) required checks like this VM gate must post
+    to the merge-group head SHA or the queue hangs forever — the PR-head gate never sees these
+    refs. Returns ``[{"ref": "refs/heads/gh-readonly-queue/master/pr-1-abc", "sha": "..."}]``;
+    ``[]`` when the queue is empty/disabled or the lookup errors (fail-open discovery — a
+    missing merge group simply isn't gated this pass, and the timer retries)."""
+    ref_path = "heads/gh-readonly-queue" + (f"/{base.strip('/')}" if base else "")
+    try:
+        rows = _github_request("GET", f"repos/{repo}/git/matching-refs/{ref_path}", token=token)
+    except GateError:
+        return []
+    refs: List[Dict[str, str]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        ref = str(row.get("ref") or "")
+        sha = str((row.get("object") or {}).get("sha") or "")
+        if ref and sha:
+            refs.append({"ref": ref, "sha": sha})
+    return refs
+
+
 def list_pr_files(repo: str, number: int, *, token: str) -> List[str]:
     """Changed file paths on a PR (first page) — used only for the docs-only exemption."""
     try:
@@ -319,6 +346,22 @@ def _run_tag(number: int, sha: str) -> str:
     return f"pr-{int(number)}-{sha[:12]}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
 
 
+def _run_tag_mq(ref: str, sha: str) -> str:
+    slug = (ref.rsplit("/", 1)[-1] or "mq")[:24]
+    return f"mq-{slug}-{sha[:12]}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+
+
+def _checkout_worktree_at_sha(cache: Path, root: Path, test_sha: str, run_tag: str) -> Path:
+    """Detached worktree at ``test_sha`` (already resolved to a commit in ``cache``)."""
+    run_dir = root / "runs" / run_tag
+    if run_dir.exists():
+        _run(["git", "-C", str(cache), "worktree", "remove", "--force", str(run_dir)],
+             check=False)
+        shutil.rmtree(run_dir, ignore_errors=True)
+    _run(["git", "-C", str(cache), "worktree", "add", "--detach", str(run_dir), test_sha])
+    return run_dir
+
+
 def _prepare_worktree(cache: Path, root: Path, pr: Dict[str, Any], run_tag: str) -> Path:
     number = int(pr["number"])
     merge_ref = f"refs/pull/{number}/merge"
@@ -327,14 +370,21 @@ def _prepare_worktree(cache: Path, root: Path, pr: Dict[str, Any], run_tag: str)
                            text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     if merge.returncode != 0:
         raise GateError(f"PR #{number} has no merge ref; rebase or resolve conflicts before gating.")
-    test_sha = merge.stdout.strip()
-    run_dir = root / "runs" / run_tag
-    if run_dir.exists():
-        _run(["git", "-C", str(cache), "worktree", "remove", "--force", str(run_dir)],
-             check=False)
-        shutil.rmtree(run_dir, ignore_errors=True)
-    _run(["git", "-C", str(cache), "worktree", "add", "--detach", str(run_dir), test_sha])
-    return run_dir
+    return _checkout_worktree_at_sha(cache, root, merge.stdout.strip(), run_tag)
+
+
+def _prepare_merge_group_worktree(cache: Path, root: Path, sha: str, run_tag: str) -> Path:
+    """Detached worktree at a merge-group head SHA. The gh-readonly-queue branch head is
+    already base+PRs merged (no refs/pull/*/merge to resolve), and _ensure_cache_repo fetches
+    +refs/heads/* so the merge-group head is present. Verify it explicitly: the branch is
+    ephemeral and GitHub may have retired the group between listing and fetch."""
+    verify = subprocess.run(["git", "-C", str(cache), "rev-parse", "--verify",
+                             f"{sha}^{{commit}}"],
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if verify.returncode != 0:
+        raise GateError(f"merge-group commit {sha[:12]} not in cache; the group was likely "
+                        "retired before gating — it will re-gate if still queued.")
+    return _checkout_worktree_at_sha(cache, root, sha, run_tag)
 
 
 def _cleanup_worktree(cache: Path, run_dir: Path) -> None:
@@ -415,7 +465,8 @@ def _sandbox_ci_role(project: str) -> Dict[str, Any]:
 
 
 def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: str,
-                                  number: int, token: str, timeout_s: int):
+                                  number: int, token: str, timeout_s: int,
+                                  source_branch: str = ""):
     """Verify the PR's merge commit via the first-class ``external_ci_mirror`` runner.
 
     Returns ("success", result) when the mirror ran the suite green, or
@@ -439,7 +490,10 @@ def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: st
     request = {
         "source_project": project,
         "source_sha": merge_sha,
-        "source_branch": f"pr-{int(number)}",
+        # PR head runs use pr-<n>; merge-queue runs pass an explicit mq-<sha> label so the two
+        # get distinct sandbox branches (and distinct backend-tests concurrency groups) instead
+        # of cancelling each other under cancel-in-progress.
+        "source_branch": source_branch or f"pr-{int(number)}",
         "workflow": workflow,
         "request": {"timeout_seconds": timeout_s},
     }
@@ -472,6 +526,37 @@ def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: st
     # verify is worse than one that runs on the box (ADR-0006 — evidence-only external CI is
     # not the sole source of truth).
     return "unavailable", result
+
+
+def _run_suite_in_worktree(run_dir: Path, log_path: Path, *, source_repo: Path, timeout_s: int,
+                           python_executable: str, token: str, ext_number: int,
+                           ext_source_branch: str = "",
+                           preflight: Optional[Dict[str, Any]] = None) -> None:
+    """Verify the checked-out worktree and raise on a genuine red suite.
+
+    Prefers the first-class external_ci_mirror runner when the project declares a public_ci
+    sandbox (heavy CI stays off this box), and falls back to the local strict suite when the
+    mirror can't produce a verdict. Shared by the PR-head and merge-queue gates so both honour
+    the same mirror/fallback policy. See docs/CI-STRATEGY.md."""
+    ci_role = _sandbox_ci_role(SWITCHBOARD_CI_PROJECT)
+    ran_external = False
+    if ci_role:
+        outcome, _ext = _verify_on_external_ci_mirror(
+            run_dir, log_path, project=SWITCHBOARD_CI_PROJECT,
+            number=ext_number, token=token, timeout_s=timeout_s,
+            source_branch=ext_source_branch)
+        ran_external = outcome == "success"
+        if outcome != "success":
+            # Mirror could not produce a verdict (e.g. workflow dispatch/sync error). Do not
+            # hard-fail on an evidence-only mirror outage — fall back to the local suite so
+            # work still gets real verification.
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write("\nexternal CI mirror unavailable "
+                          f"(class={_ext.get('failure_class')}); falling back to local suite.\n")
+    if not ran_external:
+        python_runtime = select_ci_python(source_repo, explicit=python_executable)
+        run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
+                             preflight=preflight, python_runtime=python_runtime)
 
 
 def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
@@ -511,27 +596,10 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
             _write_preflight_log(log_path, run_dir, preflight)
             raise GateError("Switchboard review preflight failed: " +
                             "; ".join(f.get("code", "unknown") for f in preflight.get("findings", [])))
-        ci_role = _sandbox_ci_role(SWITCHBOARD_CI_PROJECT)
-        ran_external = False
-        if ci_role:
-            # Topology declares a public_ci sandbox: verify on the first-class
-            # external_ci_mirror runner (free GitHub-hosted runners), keeping heavy CI
-            # off this box. Provenance preflight above is unchanged. See docs/CI-STRATEGY.md.
-            outcome, _ext = _verify_on_external_ci_mirror(
-                run_dir, log_path, project=SWITCHBOARD_CI_PROJECT,
-                number=number, token=token, timeout_s=timeout_s)
-            ran_external = outcome == "success"
-            if outcome != "success":
-                # Mirror could not produce a verdict (e.g. workflow dispatch/sync error).
-                # Do not hard-fail the whole gate on an evidence-only mirror outage — fall
-                # back to the local suite so PRs still get real verification.
-                with log_path.open("a", encoding="utf-8") as log:
-                    log.write("\nexternal CI mirror unavailable "
-                              f"(class={_ext.get('failure_class')}); falling back to local suite.\n")
-        if not ran_external:
-            python_runtime = select_ci_python(source_repo, explicit=python_executable)
-            run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
-                                 preflight=preflight, python_runtime=python_runtime)
+        # Provenance preflight above is unchanged; the shared runner keeps heavy CI off box.
+        _run_suite_in_worktree(run_dir, log_path, source_repo=source_repo, timeout_s=timeout_s,
+                               python_executable=python_executable, token=token,
+                               ext_number=number, preflight=preflight)
         post_status(repo, sha, "success", context=context,
                     description="Switchboard VM gate passed", target_url=pr_url,
                     token=token)
@@ -542,6 +610,56 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
                     description=f"Switchboard VM gate failed: {exc}", target_url=pr_url,
                     token=token)
         return {"pr": number, "sha": sha, "state": "failure", "log": str(log_path),
+                "error": str(exc)}
+    finally:
+        if run_dir is not None and cache is not None and not keep_worktree:
+            _cleanup_worktree(cache, run_dir)
+
+
+def run_gate_for_merge_group(ref: str, sha: str, *, repo: str, token: str, context: str,
+                             work_root: Path, source_repo: Path, timeout_s: int,
+                             python_executable: str = "",
+                             keep_worktree: bool = False) -> Dict[str, Any]:
+    """Gate one native-merge-queue group and post the required status to its head SHA.
+
+    GitHub blocks the merge queue until the required checks report on the merge-group head; the
+    PR-head gate never posts there, so without this the queue hangs. The merge-group head is
+    already base+PRs merged, so there is no refs/pull/*/merge and no PR provenance preflight to
+    run — GitHub built the group from PRs the queue already found mergeable. Idempotent (each
+    immutable head SHA is gated once) and fail-closed, mirroring run_gate_for_pr. The commit
+    status uses the same ``Switchboard CI / VM gate`` context so one branch-protection required
+    check covers both PR and merge-group evaluation."""
+    commit_url = f"https://github.com/{repo}/commits/{sha}"
+    existing = latest_status(repo, sha, context, token=token)
+    if existing and (existing.get("state") or "") in ("success", "failure"):
+        return {"merge_group": ref, "sha": sha, "state": existing.get("state"),
+                "skipped": "already_gated", "context": context}
+    run_tag = _run_tag_mq(ref, sha)
+    logs = work_root / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    log_path = logs / f"{run_tag}.log"
+    post_status(repo, sha, "pending", context=context,
+                description="Switchboard VM gate is running (merge queue)",
+                target_url=commit_url, token=token)
+    cache = None
+    run_dir = None
+    try:
+        cache = _ensure_cache_repo(work_root, source_repo, repo)
+        run_dir = _prepare_merge_group_worktree(cache, work_root, sha, run_tag)
+        # ext_number is unused here: the merge-group path always sets an explicit mq-<sha>
+        # source_branch, so the mirror never falls back to the pr-<number> label.
+        _run_suite_in_worktree(run_dir, log_path, source_repo=source_repo, timeout_s=timeout_s,
+                               python_executable=python_executable, token=token,
+                               ext_number=0, ext_source_branch=f"mq-{sha[:12]}")
+        post_status(repo, sha, "success", context=context,
+                    description="Switchboard VM gate passed (merge queue)",
+                    target_url=commit_url, token=token)
+        return {"merge_group": ref, "sha": sha, "state": "success", "log": str(log_path)}
+    except Exception as exc:
+        post_status(repo, sha, "failure", context=context,
+                    description=f"Switchboard VM gate failed (merge queue): {exc}",
+                    target_url=commit_url, token=token)
+        return {"merge_group": ref, "sha": sha, "state": "failure", "log": str(log_path),
                 "error": str(exc)}
     finally:
         if run_dir is not None and cache is not None and not keep_worktree:
@@ -576,6 +694,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=os.environ.get("SWITCHBOARD_CI_NO_CLAIM_GATE", "").lower()
                         in ("1", "true", "yes"),
                         help="Skip the registry-wide provenance/claim gate pass.")
+    parser.add_argument("--no-merge-queue", action="store_true",
+                        default=os.environ.get("SWITCHBOARD_CI_NO_MERGE_QUEUE", "").lower()
+                        in ("1", "true", "yes"),
+                        help="Skip gating native merge-queue (gh-readonly-queue) refs on the "
+                             "primary repo. The merge-group pass is what keeps an enabled queue "
+                             "from hanging, so leave it on in production.")
     parser.add_argument("--workdir", default=os.environ.get("SWITCHBOARD_CI_WORKDIR",
                                                             DEFAULT_WORKDIR))
     parser.add_argument("--source-repo", default=os.environ.get("SWITCHBOARD_CI_SOURCE_REPO",
@@ -635,6 +759,34 @@ def main(argv: Optional[List[str]] = None) -> int:
                       "error": str(exc)}
         print(json.dumps(result, sort_keys=True))
         results.append(result)
+
+    # Pass 3 — VM test gate for the native merge queue. GitHub creates a temporary
+    # gh-readonly-queue/* branch per merge group and blocks the queue until the required status
+    # checks report on that branch's head SHA. Pass 2 only ever posts to PR heads, so without
+    # this pass an enabled merge queue hangs forever. Gate each merge-group head SHA exactly once
+    # and post the same `Switchboard CI / VM gate` context. Skipped in explicit --pr mode (those
+    # are PR heads, not merge groups). Discovery is fail-open: a listing error just means no
+    # groups are gated this pass and the 5-min timer retries — it never aborts passes 1-2.
+    if not args.pr and not args.no_merge_queue:
+        try:
+            mq_refs = list_merge_queue_refs(args.repo, token=token)
+        except Exception as exc:  # pragma: no cover - defensive
+            mq_refs = []
+            print(json.dumps({"repo": args.repo, "context": args.context, "state": "error",
+                              "merge_queue": "list_failed", "error": str(exc)}, sort_keys=True))
+        for entry in mq_refs:
+            try:
+                result = run_gate_for_merge_group(
+                    entry["ref"], entry["sha"], repo=args.repo, token=token,
+                    context=args.context, work_root=root, source_repo=source_repo,
+                    timeout_s=args.timeout_s, python_executable=args.python,
+                    keep_worktree=args.keep_worktree)
+            except Exception as exc:  # pragma: no cover - defensive; one group must not abort the run
+                result = {"merge_group": entry.get("ref"), "context": args.context,
+                          "state": "error", "error": str(exc)}
+            print(json.dumps(result, sort_keys=True))
+            results.append(result)
+
     failed = [r for r in results if r.get("state") not in ("success", None)]
     return 1 if args.fail_on_red and failed else 0
 
