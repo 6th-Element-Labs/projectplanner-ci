@@ -1,0 +1,25 @@
+# /etc/systemd/system/projectplanner-narrate-events.timer
+# NARRATE-14: fires the event-driven narration recovery sweep on a SLOW cadence. This is the
+# backstop for missed/failed wakes, NOT the primary trigger — the in-process wake accelerator
+# delivers within seconds of an emit, so this timer only needs to sweep every few minutes.
+# Cutover / rollout order (see docs/runbooks/narration-event-rollout.md):
+#   1. deploy this code (wake sink registered but inert; PM_NARRATION_EVENT_PRIMARY unset)
+#   2. sudo cp projectplanner-narrate-events.{service,timer} /etc/systemd/system/
+#      sudo systemctl daemon-reload && sudo systemctl enable --now projectplanner-narrate-events.timer
+#   3. set PM_NARRATION_EVENT_PRIMARY=1 in /opt/projectplanner/.env; restart projectplanner
+#      (registers the live wake) — the event path is now primary.
+#   4. after the SLO soak passes, disable the legacy 45s timer:
+#      sudo systemctl disable --now projectplanner-narrate.timer
+# Rollback: unset PM_NARRATION_EVENT_PRIMARY (+ re-enable projectplanner-narrate.timer), restart.
+[Unit]
+Description=ProjectPlanner event-driven narration recovery sweep (every ~5min)
+
+[Timer]
+# Monotonic cadence: first run 30s after the timer starts, then 5min after each sweep completes.
+# OnUnitInactiveSec (not OnUnitActiveSec) so a long sweep never becomes immediately re-due (BUG-44).
+OnActiveSec=30s
+OnUnitInactiveSec=300s
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
