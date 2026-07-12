@@ -49,6 +49,7 @@ import webhook_inbox  # noqa: E402
 import notify  # noqa: E402
 import ocr  # noqa: E402
 import rebrand  # noqa: E402
+import narration_ops  # noqa: E402
 import request_observability  # noqa: E402
 import saturation_signals  # noqa: E402
 import signals  # noqa: E402
@@ -664,6 +665,43 @@ def health_saturation(project: str = Query(store.DEFAULT_PROJECT)):
 def api_saturation(project: str = Query(store.DEFAULT_PROJECT)):
     """Full saturation dashboard payload: PSI, lock-wait, inbox depth, SLOs, alerts."""
     return _saturation_snapshot(project)
+
+
+# ---- NARRATE-13: narration queue health + authorized operator controls ----
+
+@app.get("/api/narration/health")
+def api_narration_health(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    """Bounded narration queue + receipt/cost snapshot with alert flags (read-only)."""
+    _principal(request, project, ("read",), dev_actor="web")
+    return narration_ops.narration_health(_proj(project))
+
+
+@app.post("/api/narration/narrate-now")
+async def api_narrate_now(request: Request, body: dict = Body(...),
+                          project: str = Query(store.DEFAULT_PROJECT)):
+    """Force (re)generation of an entity's current narration revision — audited, deduped, and
+    still subject to the generation budget (no silent bypass)."""
+    principal = _principal(request, project, ("write:system",), dev_actor="web")
+    result = narration_ops.narrate_now(
+        _proj(project), (body or {}).get("entity_type") or "",
+        (body or {}).get("entity_id") or "", actor=auth.actor(principal),
+        reason=(body or {}).get("reason") or "")
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/api/narration/reactivate")
+async def api_narration_reactivate(request: Request, body: dict = Body(...),
+                                   project: str = Query(store.DEFAULT_PROJECT)):
+    """Authorized retry / dead-letter recovery on a narration request (audited)."""
+    principal = _principal(request, project, ("write:system",), dev_actor="web")
+    result = narration_ops.reactivate_request(
+        _proj(project), (body or {}).get("event_id") or "", actor=auth.actor(principal),
+        action=(body or {}).get("action") or "retry", reason=(body or {}).get("reason") or "")
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
 
 
 @app.get("/", include_in_schema=False)
