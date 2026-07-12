@@ -292,7 +292,17 @@ def _claim_gate_targets(args: argparse.Namespace, primary_repo: str, token: str)
     if args.pr:
         mode = pr_provenance_gate.resolve_mode(primary_repo, primary_repo)
         for number in args.pr:
-            yield primary_repo, get_pr(primary_repo, number, token=token), mode
+            # A stale/deleted PR number (or a transient GitHub error) must skip this PR, not
+            # abort the whole pass — a bad event-driven request marker for one PR would
+            # otherwise crash the drain and starve every other queued PR (HARDEN-74).
+            try:
+                pr = get_pr(primary_repo, number, token=token)
+            except Exception as exc:
+                print(json.dumps({"repo": primary_repo, "pr": number, "context": "claim",
+                                  "state": "error", "error": str(exc),
+                                  "skipped": "pr_lookup_failed"}, sort_keys=True))
+                continue
+            yield primary_repo, pr, mode
         return
     repos = store.list_canonical_repos()  # {repo: [project_ids]}
     ordered = [primary_repo] + [r for r in sorted(repos) if r != primary_repo]
@@ -743,7 +753,15 @@ def run_gate_for_merge_group(ref: str, sha: str, *, repo: str, token: str, conte
 def _select_prs(args: argparse.Namespace, repo: str, token: str) -> Iterable[Dict[str, Any]]:
     if args.pr:
         for number in args.pr:
-            yield get_pr(repo, number, token=token)
+            # Skip a PR whose lookup fails (stale/deleted marker, transient error) instead of
+            # aborting the whole gate run — one bad drain entry must not starve the rest.
+            try:
+                yield get_pr(repo, number, token=token)
+            except Exception as exc:
+                print(json.dumps({"repo": repo, "pr": number, "context": "select",
+                                  "state": "error", "error": str(exc),
+                                  "skipped": "pr_lookup_failed"}, sort_keys=True))
+                continue
     else:
         yield from list_open_prs(repo, token=token)
 
