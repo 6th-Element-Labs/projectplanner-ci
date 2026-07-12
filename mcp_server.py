@@ -2990,6 +2990,17 @@ def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: s
 if __name__ == "__main__":
     import uvicorn
 
+    # NARRATE-14: register the event-driven narration wake accelerator in the MCP process too.
+    # Agents mutate the board through this process, so their post-commit emits must accelerate here
+    # (otherwise their narration would only be picked up by the ~5min recovery sweep, missing the
+    # <=60s freshness SLO). Inert until PM_NARRATION_EVENT_PRIMARY is set; the durable outbox +
+    # narrate_events sweep remain the backstop, so a missed wake never loses work.
+    try:
+        import narration_cutover
+        narration_cutover.register_production_wake_sink()
+    except Exception as _e:  # never let narration wiring block the control plane from starting
+        print(f"[narration] wake sink registration skipped: {_e}")
+
     # FastMCP.run() builds this same ASGI app internally. Running it explicitly
     # lets Switchboard attach timing/reconnect headers to success and error paths.
     # Timing wraps auth so even rejected (401) requests carry timing headers; auth wraps
