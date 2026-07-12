@@ -4311,6 +4311,7 @@ const TeepPlan = {
         return `api/export.${kind}` + (qs ? `?${qs}` : '');
     },
 
+    ...window.SwitchboardClosure.methods,
     ...window.SwitchboardMission.methods,
 
     async loadPrincipal() {
