@@ -1,6 +1,6 @@
 # ADR-0009 — Microservices modernization: Phase 0 charter (ADR-007 rails + `src/switchboard/` scaffold)
 
-- **Status:** Proposed — accepted when the operator merges the PR for board task **ARCH-MS-1**.
+- **Status:** Accepted — ARCH-MS-1 merged as PR #314; Phase 0 exit is enforced by ARCH-MS-24.
 - **Date:** 2026-07-12
 - **Author:** Platform modernization lane (ARCH-MS) — charter session
 - **Relates to:** [ADR-0007](0007-application-shell-cleanup.md) (Decision 7 upgrade: compass → committed
@@ -168,8 +168,12 @@ Phase 0 closes when **all** of the following hold (see tracker for per-task stat
 5. **Hygiene:** `tests/` directory + shim for new tests; `PM_*` unread flags deleted; numbered
    migrations path authoritative.
 
-Deliverable `arch-ms-phase-0` moves to **done** only with board-recorded merge provenance on
-the canonical repo (Switchboard working agreement).
+ARCH-MS-24 implements this as `scripts/arch_ms_phase0_exit_gate.py`: a fixed-baseline,
+machine-readable audit that checks the three monoliths, AST-verifies verbatim repository moves,
+and proves the application/CI/security/hygiene artifacts. The immutable `5305090` baseline avoids
+the retired ratchet's shared-counter merge conflicts. Deliverable `arch-ms-phase-0` moves to
+**done** only with board-recorded merge provenance on the canonical repo (Switchboard working
+agreement).
 
 ---
 
@@ -191,8 +195,8 @@ ARCH-MS tasks move; this ADR is the stable charter and does not duplicate the li
 
 ## Consequences
 
-- Phase 0 adds package structure without immediately shrinking `store.py`; the ARCH-MS-24
-  extraction-proof exit gate (Decision 5 #4) prevents "scaffold only" from counting as done.
+- Phase 0 adds package structure and reduces `store.py` by more than 500 lines against the fixed
+  baseline. The ARCH-MS-24 extraction-proof gate prevents "scaffold only" from counting as done.
 - Task work may land through non-ARCH-MS IDs (HARDEN-*, BUG-*, ACCESS-*); the tracker records
   repo evidence so the mission graph stays honest.
 - Agents and operators must read `ARCH-MS-EXECUTION.md` before claiming ARCH-MS-2+ work to avoid
