@@ -30,8 +30,12 @@ DEFAULT_MAX = 20
 
 # GitHub mergeStateStatus values that mean "the head is strictly behind the base and can be
 # fast-forward-updated cleanly." DIRTY = conflicts (skip); BEHIND = behind base (update).
+# UNKNOWN = GitHub is still computing mergeability — treat as "not safe yet" and wait a cycle,
+# so we never update-branch a PR that turns out to be conflicting (behind_by is a pure
+# commit-graph distance and can't detect a conflict on its own).
 _BEHIND = "BEHIND"
 _CONFLICTING = "DIRTY"
+_UNRESOLVED = ("DIRTY", "UNKNOWN")
 
 
 def select_prs_to_update(prs: List[Dict[str, Any]], *, base_branch: str = DEFAULT_BASE,
@@ -50,8 +54,8 @@ def select_prs_to_update(prs: List[Dict[str, Any]], *, base_branch: str = DEFAUL
         if (pr.get("baseRefName") or base_branch) != base_branch:
             continue
         state = (pr.get("mergeStateStatus") or "").upper()
-        if state == _CONFLICTING or pr.get("conflicting"):
-            continue  # update-branch cannot resolve a conflict — leave it for the agent
+        if state in _UNRESOLVED or pr.get("conflicting"):
+            continue  # conflicting, or mergeability not yet known — never risk a conflicting update
         behind = int(pr.get("behind_by") or 0) > 0 or state == _BEHIND
         if not behind:
             continue  # already current — a no-op update would burn a gate run for nothing
