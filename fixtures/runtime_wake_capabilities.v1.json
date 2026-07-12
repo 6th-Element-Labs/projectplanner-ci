@@ -1,0 +1,465 @@
+{
+  "schema": "switchboard.runtime_wake_capabilities.v1",
+  "version": "2026-07-13",
+  "task": "ADAPTER-12",
+  "status_vocabularies": {
+    "delivery_status": ["active", "unreachable", "identity_unbound"],
+    "delivery_mode": [
+      "active_session",
+      "supervised_wake_available",
+      "wake_queue_available",
+      "dormant_registered_host",
+      "wake_queued",
+      "wake_claimed",
+      "mailbox_only"
+    ],
+    "wake_status": ["pending", "claimed", "completed", "failed", "cancelled"],
+    "continuity_mode": [
+      "exact_vendor_session",
+      "checkpoint_resume",
+      "reconstructed_history",
+      "fresh_switchboard_state"
+    ],
+    "continuity_policy": ["resume_required", "resume_preferred", "fresh_only"]
+  },
+  "security_invariants": [
+    "Wake payloads select registered runtime profiles; they never carry arbitrary shell commands.",
+    "Host credentials are project scoped and limited to runner and IXP operations.",
+    "Host secrets never enter Switchboard activity, snapshots, messages, or wake results.",
+    "A message stored in a mailbox is not runtime delivery proof; acknowledgement is handling proof.",
+    "A wake completes only after runtime registration or another explicit ready-state receipt.",
+    "Work-capable hosts require allow_work=true and explicit allowed_lanes; lane-less wakes are inbox-only.",
+    "Snapshot, kill, restart, and resume require a host-owned process, vendor session id, or checkpoint handle.",
+    "resume_required never falls back to a fresh conversation; resume_preferred records a typed fallback before starting fresh.",
+    "Missing registration, liveness, capacity, launcher, handle, or checkpoint denies the capability."
+  ],
+  "empirical_evidence": [
+    {
+      "task": "ADAPTER-13",
+      "proved": [
+        "active registration plus acknowledgement",
+        "mailbox-only unreachable receipt",
+        "message-only Claude Code wake through a live Agent Host"
+      ]
+    },
+    {
+      "task": "ADAPTER-14",
+      "proved": [
+        "no-host wakes report eligible_host_count=0",
+        "the original Codex wake pilot started a new managed process without exercising its available session-resume command",
+        "raw API loops can resume from an explicit persisted checkpoint"
+      ],
+      "not_proved": [
+        "Claude Code same-session resume",
+        "Cursor same-session resume",
+        "Codex same-conversation resume in the original pilot (now documented as available but not Switchboard-wired)"
+      ]
+    }
+  ],
+  "runtimes": [
+    {
+      "id": "claude-code",
+      "label": "Claude Code",
+      "adapter_setup": ["Claude Code SessionStart adapter", "P0 handshake", "startup inbox drain"],
+      "host_setup": ["live Agent Host advertising runtime=claude-code", "host-owned launcher template", "local supervisor"],
+      "security_constraints": ["CLI arguments come from a host allowlist", "vendor UI presence is not Switchboard registration"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "inbox_poll_boundary"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "no_active_registered_polling_session"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_host", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["live_host", "launcher_template", "host_capacity", "scoped_credential"],
+          "when_ready": {"result": "new_managed_process", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "host_cannot_start_claude_code"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["claude_session_id", "session_store_available", "resume_launcher"],
+          "when_ready": {"continuity_mode": "exact_vendor_session", "launcher_profile": "claude --resume <session-id>"},
+          "missing_setup": {"allowed": false, "reason": "claude_session_handle_missing_or_unreadable"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["host_owned_process", "runner_session_id", "supervisor_control"],
+          "when_ready": {"restart_semantics": "resume_when_handle_valid_else_policy_controlled_fresh"},
+          "missing_setup": {"allowed": false, "reason": "no_supervised_process_handle"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["session_start_adapter", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "SessionStart"},
+          "missing_setup": {"allowed": false, "reason": "startup_adapter_or_identity_missing"}
+        }
+      }
+    },
+    {
+      "id": "codex-cli",
+      "label": "Codex CLI",
+      "adapter_setup": ["Codex adapter handshake", "managed runner environment", "startup inbox drain"],
+      "host_setup": ["live Agent Host advertising runtime=codex", "Codex launcher template", "Codex supervisor"],
+      "security_constraints": ["runner directory is host controlled", "restart does not claim same-conversation continuity"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "inbox_poll_boundary"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "no_active_registered_polling_session"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_host", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["live_host", "launcher_template", "host_capacity", "scoped_credential"],
+          "when_ready": {"result": "new_managed_process", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "host_cannot_start_codex"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["codex_session_id", "session_store_available", "resume_launcher"],
+          "when_ready": {"continuity_mode": "exact_vendor_session", "launcher_profile": "codex resume <session-id>"},
+          "missing_setup": {"allowed": false, "reason": "codex_session_handle_missing_or_unreadable"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["host_owned_process", "runner_session_id", "supervisor_control"],
+          "when_ready": {"restart_semantics": "resume_when_handle_valid_else_policy_controlled_fresh"},
+          "missing_setup": {"allowed": false, "reason": "no_supervised_process_handle"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["codex_adapter", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "adapter_start"},
+          "missing_setup": {"allowed": false, "reason": "startup_adapter_or_identity_missing"}
+        }
+      }
+    },
+    {
+      "id": "codex-app",
+      "label": "Codex app task",
+      "adapter_setup": ["task-scoped Switchboard handshake", "explicit inbox polling in the active task"],
+      "host_setup": ["Codex App Server connection", "recorded thread_id", "authenticated host-side bridge"],
+      "security_constraints": ["Switchboard uses App Server RPC rather than arbitrary desktop UI automation", "an open app is not an active registered task"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "inbox_poll_boundary"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "no_active_registered_app_task"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending", "meaning": "intent_only"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_host", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["app_server_connection", "thread_start_capability", "scoped_credential"],
+          "when_ready": {"result": "new_app_server_thread", "continuity_mode": "fresh_switchboard_state", "rpc": "thread/start"},
+          "missing_setup": {"allowed": false, "reason": "app_server_or_thread_start_unavailable"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["app_server_connection", "codex_thread_id", "thread_resume_capability"],
+          "when_ready": {"continuity_mode": "exact_vendor_session", "rpc": "thread/resume"},
+          "missing_setup": {"allowed": false, "reason": "codex_thread_handle_missing_or_unreadable"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["app_server_connection", "codex_thread_id", "persisted_thread_log"],
+          "when_ready": {"restart_semantics": "restart_bridge_then_thread_resume", "kill_semantics": "interrupt_turn_not_desktop_process"},
+          "missing_setup": {"allowed": false, "reason": "thread_log_or_app_server_control_missing"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["task_start_instructions", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "task_start"},
+          "missing_setup": {"allowed": false, "reason": "task_start_handshake_missing"}
+        }
+      }
+    },
+    {
+      "id": "cursor-agent",
+      "label": "Cursor agent",
+      "adapter_setup": ["Cursor adapter handshake", "tool-loop inbox boundary", "stable external state"],
+      "host_setup": ["custom host registration advertising runtime=cursor-agent", "allowlisted Cursor launcher if unattended start is desired"],
+      "security_constraints": ["desktop presence is not runtime registration", "no same-chat claim without a durable Cursor session handle"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "inbox_poll_boundary"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "no_active_registered_polling_session"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_host", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["live_host", "launcher_template", "host_capacity", "scoped_credential"],
+          "when_ready": {"result": "new_agent_process", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "cursor_launcher_not_registered"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["cursor_chat_id", "cursor_cli", "resume_launcher"],
+          "when_ready": {"continuity_mode": "exact_vendor_session", "launcher_profile": "cursor-agent --resume=<chat-id>"},
+          "missing_setup": {"allowed": false, "reason": "cursor_chat_handle_missing_or_unreadable"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["host_owned_process", "runner_session_id", "supervisor_control"],
+          "when_ready": {"restart_semantics": "resume_when_handle_valid_else_policy_controlled_fresh"},
+          "missing_setup": {"allowed": false, "reason": "no_supervised_process_handle"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["cursor_adapter", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "agent_start"},
+          "missing_setup": {"allowed": false, "reason": "startup_adapter_or_identity_missing"}
+        }
+      }
+    },
+    {
+      "id": "langgraph-worker",
+      "label": "LangGraph worker",
+      "adapter_setup": ["LangGraph Switchboard nodes", "durable checkpointer", "inbox node at graph boundaries"],
+      "host_setup": ["worker scheduler or Agent Host advertising runtime=langgraph", "checkpoint store", "worker supervisor"],
+      "security_constraints": ["checkpoint keys are project and agent scoped", "graph input cannot inject launcher commands"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "graph_inbox_node"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "graph_has_no_registered_inbox_boundary"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_worker_host", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["live_host", "launcher_template", "host_capacity", "scoped_credential"],
+          "when_ready": {"result": "new_worker_process", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "worker_scheduler_or_host_missing"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["durable_checkpoint", "checkpoint_id", "compatible_graph_version"],
+          "when_ready": {"resume_semantics": "checkpoint_resume", "continuity_mode": "checkpoint_resume"},
+          "missing_setup": {"allowed": false, "reason": "checkpoint_or_graph_version_missing"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["durable_checkpoint", "runner_session_id", "supervisor_control"],
+          "when_ready": {"restart_semantics": "checkpoint_resume"},
+          "missing_setup": {"allowed": false, "reason": "checkpoint_or_supervisor_handle_missing"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["graph_start_node", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "graph_start"},
+          "missing_setup": {"allowed": false, "reason": "graph_start_inbox_node_missing"}
+        }
+      }
+    },
+    {
+      "id": "openai-responses-loop",
+      "label": "Raw OpenAI Responses API loop",
+      "adapter_setup": ["Switchboard loop wrapper", "persisted OpenAI conversation_id", "explicit inbox poll between model turns"],
+      "host_setup": ["Agent Host or worker service advertising runtime=openai-responses", "allowlisted loop entrypoint", "conversation handle store"],
+      "security_constraints": ["OpenAI credentials stay on the worker host", "conversation and response ids are task scoped and redacted from public logs"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "turn_boundary_poll"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "openai_loop_not_registered_or_not_polling"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_openai_loop_host", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["live_host", "launcher_template", "host_capacity", "scoped_credential"],
+          "when_ready": {"result": "new_loop_process", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "openai_loop_entrypoint_or_host_missing"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["openai_conversation_id", "conversation_readback", "compatible_loop_version"],
+          "when_ready": {"resume_semantics": "responses_conversation", "continuity_mode": "exact_vendor_session", "api_field": "conversation"},
+          "missing_setup": {"allowed": false, "reason": "openai_conversation_handle_missing_or_unreadable"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["openai_conversation_id", "runner_session_id", "supervisor_control"],
+          "when_ready": {"restart_semantics": "new_process_same_conversation"},
+          "missing_setup": {"allowed": false, "reason": "conversation_or_supervisor_handle_missing"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["loop_start_wrapper", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "loop_start"},
+          "missing_setup": {"allowed": false, "reason": "openai_loop_start_wrapper_missing"}
+        }
+      }
+    },
+    {
+      "id": "anthropic-messages-loop",
+      "label": "Raw Anthropic Messages API loop",
+      "adapter_setup": ["Switchboard loop wrapper", "external full-history and tool-state checkpoint", "explicit inbox poll between model turns"],
+      "host_setup": ["Agent Host or worker service advertising runtime=anthropic-messages", "allowlisted loop entrypoint", "encrypted history/checkpoint store"],
+      "security_constraints": ["Anthropic credentials stay on the worker host", "raw Messages history is stored under project retention and access policy"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "turn_boundary_poll"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "anthropic_loop_not_registered_or_not_polling"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_anthropic_loop_host", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["live_host", "launcher_template", "host_capacity", "scoped_credential"],
+          "when_ready": {"result": "new_loop_process", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "anthropic_loop_entrypoint_or_host_missing"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["external_message_history", "tool_state_checkpoint", "compatible_loop_version"],
+          "when_ready": {"resume_semantics": "client_reconstructed_history", "continuity_mode": "reconstructed_history"},
+          "missing_setup": {"allowed": false, "reason": "message_history_or_tool_state_missing"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["external_message_history", "runner_session_id", "supervisor_control"],
+          "when_ready": {"restart_semantics": "new_process_reconstructed_history"},
+          "missing_setup": {"allowed": false, "reason": "history_or_supervisor_handle_missing"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["loop_start_wrapper", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "loop_start"},
+          "missing_setup": {"allowed": false, "reason": "anthropic_loop_start_wrapper_missing"}
+        }
+      }
+    },
+    {
+      "id": "anthropic-managed-agent",
+      "label": "Anthropic Managed Agent session",
+      "adapter_setup": ["Managed Agents API adapter", "persisted session_id", "session event inbox bridge"],
+      "host_setup": ["managed agent and environment ids", "scoped vault credentials", "session event worker"],
+      "security_constraints": ["session ids and vault ids are task scoped", "sandbox retention is verified before resume"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["managed_session_id", "session_event_bridge"],
+          "when_ready": {"delivery_status": "active", "proof": "session_event_receipt"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "managed_session_or_event_bridge_missing"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "managed_session_adapter"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "managed_session_adapter_missing", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["managed_agent_id", "environment_id", "scoped_credential"],
+          "when_ready": {"result": "new_managed_session", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "agent_environment_or_credential_missing"}
+        },
+        "same_session_resume": {
+          "support": "conditional",
+          "requires": ["managed_session_id", "session_readback", "sandbox_checkpoint_available"],
+          "when_ready": {"resume_semantics": "send_user_event_to_idle_session", "continuity_mode": "exact_vendor_session"},
+          "missing_setup": {"allowed": false, "reason": "managed_session_or_sandbox_checkpoint_missing"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["managed_session_id", "session_readback", "sandbox_checkpoint_available"],
+          "when_ready": {"restart_semantics": "resume_idle_managed_session"},
+          "missing_setup": {"allowed": false, "reason": "managed_session_or_checkpoint_missing"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["session_event_bridge", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "session_event_start"},
+          "missing_setup": {"allowed": false, "reason": "managed_session_event_bridge_missing"}
+        }
+      }
+    },
+    {
+      "id": "shell-ci-runner",
+      "label": "Generic shell or CI runner",
+      "adapter_setup": ["Switchboard bootstrap script", "external artifact/state store", "explicit inbox command"],
+      "host_setup": ["Agent Host or CI provider bridge", "allowlisted job template", "job cancellation handle"],
+      "security_constraints": ["wake payloads cannot contain shell", "CI secrets and logs follow provider redaction policy"],
+      "capabilities": {
+        "active_message_delivery": {
+          "support": "conditional",
+          "requires": ["agent_registration", "inbox_poll_boundary"],
+          "when_ready": {"delivery_status": "active", "proof": "acknowledgement"},
+          "missing_setup": {"allowed": false, "delivery_status": "unreachable", "reason": "job_not_registered_or_not_polling"}
+        },
+        "wake_intent": {
+          "support": "conditional",
+          "requires": ["known_runtime_mapping", "agent_host_registration"],
+          "when_ready": {"wake_status": "pending"},
+          "missing_setup": {"allowed": false, "reason": "no_eligible_runner_bridge", "wake_status": "failed"}
+        },
+        "start_runtime": {
+          "support": "conditional",
+          "requires": ["live_host", "launcher_template", "host_capacity", "scoped_credential"],
+          "when_ready": {"result": "new_job_or_process", "continuity_mode": "fresh_switchboard_state"},
+          "missing_setup": {"allowed": false, "reason": "job_template_or_runner_bridge_missing"}
+        },
+        "same_session_resume": {
+          "support": "unsupported",
+          "requires": [],
+          "missing_setup": {"allowed": false, "reason": "process_session_not_reattachable_use_external_artifacts"}
+        },
+        "snapshot_kill_restart": {
+          "support": "conditional",
+          "requires": ["runner_session_id", "provider_control_handle", "external_artifact_state"],
+          "when_ready": {"restart_semantics": "new_job_from_external_artifacts"},
+          "missing_setup": {"allowed": false, "reason": "provider_control_or_artifact_state_missing"}
+        },
+        "startup_inbox_drain": {
+          "support": "conditional",
+          "requires": ["bootstrap_script", "scoped_credential", "stable_agent_id"],
+          "when_ready": {"boundary": "job_start"},
+          "missing_setup": {"allowed": false, "reason": "bootstrap_or_identity_missing"}
+        }
+      }
+    }
+  ]
+}
