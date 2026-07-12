@@ -53,6 +53,8 @@ SKELETON_PACKAGES = (
     "switchboard.application.commands",
     "switchboard.application.contracts",
     "switchboard.application.queries",
+    "switchboard.contracts",
+    "switchboard.contracts.tasks",
     "switchboard.domain",
     "switchboard.integrations",
     "switchboard.mcp",
