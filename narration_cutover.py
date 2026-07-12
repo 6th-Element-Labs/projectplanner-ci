@@ -80,6 +80,28 @@ def _published_revision(project: str, entity_type: str, entity_id: str) -> int:
     return int((r[0] if r else 0) or 0)
 
 
+def _visible_source_fingerprint(project: str, entity_type: str, entity_id: str,
+                                receipt: Mapping[str, Any]) -> str:
+    """Fingerprint stamped on the visible narration surface for stale detection.
+
+    The outbox ``source_hash`` is the projection hash used for coalescing and receipts; the UI
+    stale discipline (``task_narration_fingerprint`` / ``brief_source_fingerprint``) uses a
+    different contract. Publishing the projection hash made every event-driven narration look
+    perpetually stale on the deliverable header and task details tab."""
+    import mission_narrative
+    import store
+
+    if entity_type == "task":
+        task = store.get_task(entity_id, project=project)
+        if task:
+            return store.task_narration_fingerprint(task)
+    elif entity_type == "deliverable":
+        status = store.get_mission_status(project=project, deliverable_id=entity_id)
+        if not status.get("error"):
+            return mission_narrative.brief_source_fingerprint(status)
+    return receipt.get("source_hash") or ""
+
+
 def _publish(project: str, receipt: Mapping[str, Any], *, prev_revision: int) -> bool:
     """Compare-and-swap publish of the visible narration (ADR-0008 boundary 3).
 
@@ -99,7 +121,7 @@ def _publish(project: str, receipt: Mapping[str, Any], *, prev_revision: int) ->
     if not entity_id:
         return False
     import store
-    fingerprint = receipt.get("source_hash") or ""
+    fingerprint = _visible_source_fingerprint(project, entity_type, entity_id, receipt)
     model = receipt.get("model") or receipt.get("mode") or ""
     if entity_type == "task":
         store.set_task_narration(entity_id, narration, activity_cursor=revision,

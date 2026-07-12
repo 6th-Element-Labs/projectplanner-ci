@@ -157,6 +157,27 @@ def run():
     ok(delivered_count(PROJECT, out_id) >= 1,
        "provider outage: recovers to a real delivered narrative once the provider returns")
 
+    # ---- Drill 5a: deliverable header is fresh after event-driven publish -------------------
+    board = store.create_project_board(
+        {"id": "rollout-mission", "title": "Rollout Mission", "kind": "mission",
+         "status": "active", "end_state": "Deliverables show fresh CEO narration."},
+        actor="user", project=SWEEP_PROJECT)
+    deliv = store.create_deliverable(
+        {"id": "rollout-deliverable", "board_id": board["id"], "title": "Cloud execution",
+         "status": "in_progress", "end_state": "Dispatch works.", "why_it_matters": "Agents ship."},
+        actor="user", project=SWEEP_PROJECT)
+    dtask = store.create_task(
+        {"workstream_id": "NW", "title": "Wire dispatch", "status": "Not Started"},
+        actor="user", project=SWEEP_PROJECT)
+    store.link_task_to_deliverable(deliv["id"], SWEEP_PROJECT, dtask["task_id"],
+                                   actor="user", project=SWEEP_PROJECT)
+    drain_controlled(SWEEP_PROJECT, deliver_at=BASE + 12, claim_at=BASE + 12)
+    ms = store.get_mission_status(project=SWEEP_PROJECT, deliverable_id=deliv["id"])
+    ok((ms.get("ceo_narrative") or "").strip(),
+       "deliverable publish: event-driven narration is visible on mission_status")
+    ok((ms.get("ceo_narrative_state") or {}).get("stale") is False,
+       "deliverable publish: CEO header is not perpetually stale after event-driven publish")
+
     # ---- Drill 5: compare-and-swap publish -------------------------------------------------
     cas_id = mk_task(PROJECT, "cas")
     drain_controlled(PROJECT, deliver_at=BASE + 12, claim_at=BASE)
