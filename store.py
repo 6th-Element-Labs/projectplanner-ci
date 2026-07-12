@@ -15147,7 +15147,7 @@ _BOARD_LITE_DROP = ("session_health", "external_ci", "publication",
 # any lock — under the GIL a concurrent miss may rebuild twice (benign, last write
 # wins), the same trade #159 made, so a slow build never serializes other readers.
 _READ_CACHE: Dict[str, Dict[str, Any]] = {}
-_READ_CACHE_TTL = 3.0
+_READ_CACHE_TTL = float(os.environ.get("PM_READ_CACHE_TTL_S", "30") or 30)  # >poll interval so 5s mission/board polls hit the cache (was 3s → every poll missed); PM_READ_CACHE_TTL_S=3 reverts
 
 
 def ttl_read_cache(namespace: str, ident: str, stamp: Any,
