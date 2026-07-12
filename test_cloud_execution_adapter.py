@@ -30,6 +30,10 @@ contract = load_contract()
 ok(not validate_contract(contract), "checked-in cloud contract validates")
 ok({vendor["id"] for vendor in contract["vendors"]} == REQUIRED_VENDORS,
    "contract covers Claude, Codex, and Cursor cloud runtimes")
+claude_contract = next(vendor for vendor in contract["vendors"]
+                       if vendor["id"] == "claude-code-cloud")
+ok(claude_contract["launch_operation"] == "claude --cloud <dev-brief>",
+   "Claude contract uses the current cloud-launch command")
 
 dispatch = {
     "project": "switchboard",

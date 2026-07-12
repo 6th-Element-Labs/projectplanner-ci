@@ -36,15 +36,16 @@ proved remains queued or visibly failed.
 
 | Vendor adapter | Programmatic outbound trigger | App-visible receipt | V1 decision |
 |---|---|---|---|
-| `claude-code-cloud` | Conditional through the official `claude --remote` CLI bridge. Each invocation creates a new cloud session from the current GitHub repo/branch. | Claude documents a remote session ID and a `claude.ai/code/...` transcript URL. | Implement a small launcher bridge; capture/read back both values before adoption. |
+| `claude-code-cloud` | Conditional through the official `claude --cloud` CLI bridge. Each invocation creates a new cloud session from the current GitHub repo/branch. | Claude documents a remote session ID and a `claude.ai/code/...` transcript URL. | Implement a small launcher bridge; capture/read back both values before adoption. |
 | `openai-codex-cloud` | **Unsupported in this contract.** Current official Codex cloud docs describe starting work from Codex web, GitHub, Linear, or Slack, but do not document a public cloud-task creation API that returns a task ID and URL. Codex SDK/App Server run in caller-controlled compute and are not a substitute. | Codex cloud tasks are visible in Codex, but there is no documented trigger receipt for a direct Switchboard adapter. | Fail `provider_trigger_unsupported` until OpenAI publishes a suitable trigger or an approved first-party integration yields a bindable receipt. |
 | `cursor-background-agent` | Conditional through Cursor's beta Background Agents API, authenticated with a dashboard API key and backed by GitHub repository access. | The adapter must capture the returned agent ID and Cursor agent URL, then poll/read back status. | Implement the HTTP adapter behind this shared interface. |
 
 Sources checked on 2026-07-13:
 
 - [Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web) documents
-  `claude --remote`, GitHub access, cloud-session configuration, remote session IDs, transcript
-  URLs, and cloud MCP behavior.
+  `claude --cloud`, GitHub access, cloud-session configuration, remote session IDs, transcript
+  URLs, and cloud MCP behavior. The older `--remote` spelling remains a deprecated alias and is
+  not used by this contract.
 - [Codex cloud](https://developers.openai.com/codex/cloud) documents isolated cloud tasks,
   environments, review-before-merge, and web/GitHub/Linear/Slack initiation. It does not publish
   a direct create-cloud-task API on that surface.
@@ -125,7 +126,7 @@ Before any provider call, the adapter must:
 6. Send the development brief and fixed repo/branch/environment inputs through the vendor's
    supported transport.
 
-Claude's adapter is a CLI bridge because `claude --remote` is the documented launch surface. The
+Claude's adapter is a CLI bridge because `claude --cloud` is the documented launch surface. The
 bridge is a short-lived trigger process; the actual coding compute remains Anthropic-hosted.
 Cursor uses its Background Agents API. Codex fails closed until a direct supported trigger exists;
 browser automation, reverse-engineered endpoints, and the local Codex SDK/App Server are not
@@ -219,7 +220,7 @@ new wake, but the adapter never silently creates a second provider session.
 
 1. Cursor adapter: pin the beta API request/response schema, implement create/read/follow-up, and
    prove GitHub and session-URL receipts.
-2. Claude adapter: implement the authenticated `claude --remote` bridge and robust session ID/URL
+2. Claude adapter: implement the authenticated `claude --cloud` bridge and robust session ID/URL
    extraction/readback.
 3. Codex adapter: wait for a documented cloud-task trigger or implement an explicitly approved
    first-party GitHub/Linear/Slack bridge that yields a stable Codex task receipt; do not use local

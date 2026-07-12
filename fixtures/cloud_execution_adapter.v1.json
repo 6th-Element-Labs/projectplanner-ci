@@ -26,7 +26,7 @@
       "id": "claude-code-cloud",
       "trigger_support": "conditional",
       "trigger_mode": "cli_bridge",
-      "launch_operation": "claude --remote <dev-brief>",
+      "launch_operation": "claude --cloud <dev-brief>",
       "requirements": [
         "claude_subscription_auth",
         "claude_cloud_enabled",
