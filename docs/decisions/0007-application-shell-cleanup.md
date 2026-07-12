@@ -114,6 +114,9 @@ component means ignoring it."
 > **What replaces it:** Decision 3 (growth redirected to `src/switchboard/`) is the real
 > anti-growth policy, enforced by ARCH-MS task boundaries + review, not a CI counter. The
 > *progress metric* becomes **lines moved out via verbatim extraction** (ADR-0009 Decision 5).
+> The *ceiling half* is replaced by the commutative per-PR `test_monolith_diff_guard.py`
+> (HARDEN-69 / ADR-0010 Lever 1): net monolith growth needs a `MONOLITH-TOUCH:` justification,
+> but nothing edits a shared line, so concurrent PRs never collide on it.
 > **What survives:** the load-bearing *precondition* below — the CI gate runs **every** test via
 > pytest discovery (CONSOL-6 / ARCH-MS-2) — is kept; only the size-ceiling half is retired.
 > The `concurrent_load_gate` perf ratchet is a different file/concern and is unaffected.

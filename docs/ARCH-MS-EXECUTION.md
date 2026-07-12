@@ -8,8 +8,10 @@ uses `application/` commands; new feature code lands in `src/switchboard/`, not 
 > **Ratchet retired 2026-07-12.** `test_size_ratchet.py` (the exact-match size gate) was deleted —
 > it forced every concurrent PR to compare-and-swap one shared integer against a moving `master`,
 > which produced the merge wars that stalled the fleet. Growth is now redirected by ADR-0007
-> Decision 3 + review; the Phase 0 progress metric is **lines extracted**, not a ceiling. See
-> ADR-0007 Decision 2 (retired) and ADR-0009 Decision 5 #4.
+> Decision 3 + review; the Phase 0 progress metric is **lines extracted**, not a ceiling. Net
+> monolith growth is enforced commutatively by the per-PR `test_monolith_diff_guard.py`
+> (HARDEN-69 / ADR-0010 Lever 1) — no shared counter. See ADR-0007 Decision 2 (retired) and
+> ADR-0009 Decision 5 #4.
 
 **Canonical main (tracker baseline):** `5305090` (2026-07-12)  
 **View:** [`?project=switchboard&deliverable=arch-ms-phase-0#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-0#tab-mission)
