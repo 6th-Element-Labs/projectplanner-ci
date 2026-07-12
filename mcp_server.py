@@ -25,7 +25,6 @@ import external_ci_mirror
 import intake as intake_mod
 import notify as notify_mod
 import rag
-import signals
 import store
 import deliverable_closure
 import scripts.switchboard_path  # noqa: F401
@@ -34,6 +33,7 @@ from mcp_dispatch import MCPToolDispatcher
 from mcp_http_timing import MCPServerTimingMiddleware
 from mcp_observability_http import MCPObservabilityEndpoint
 from mcp_auth import MCPAuthMiddleware
+from switchboard.mcp.tools import board as board_tools
 from switchboard.mcp.tools import tasks as task_tools
 
 store.init_project_registry()
@@ -186,6 +186,12 @@ globals().update(_task_tool_functions)
 # Compatibility aliases for direct Python callers while the monolith is strangled.
 _dep_ids = task_tools.dep_ids
 _unknown_ids = task_tools.unknown_ids
+
+_board_tool_functions = board_tools.register_board_tools(
+    mcp,
+    board_tools.BoardToolServices(dumps=_dumps),
+)
+globals().update(_board_tool_functions)
 
 
 def _resolve_project_input(project: str) -> str:
@@ -510,12 +516,6 @@ def _first_calls(project: str, agent_id: str, runtime: str, model: str,
 
 # ---- read tools (open) ---------------------------------------------------
 @mcp.tool()
-def list_projects() -> str:
-    """List all routable project boards. Returns [{id,label,pretitle}] plus the default id."""
-    return _dumps({"projects": store.projects(), "default": store.DEFAULT_PROJECT})
-
-
-@mcp.tool()
 def get_project_contract(project: str = "maxwell", lane: str = "", task_id: str = "",
                        deliverable_id: str = "", board_id: str = "",
                        mission_id: str = "", milestone_id: str = "") -> str:
@@ -688,34 +688,6 @@ def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = 
 
 
 @mcp.tool()
-def board_summary(project: str = "maxwell") -> str:
-    """Full board snapshot: project name + rollups, then one line per task.
-    Use ONCE at session start for orientation. For recurring 'has anything changed?' checks
-    use get_lane_delta instead — it returns only what changed and costs ~50 tokens when nothing
-    did vs ~3000-5000 tokens here. project selects the board ('maxwell' default, 'helm',
-    or 'switchboard')."""
-    return (f"Project: {store.get_meta('project', project=project)}\n"
-            f"Rollups: {_dumps(store.board_rollups(project=project))}\n\n"
-            f"{agent.board_summary_text(project=project)}")
-
-
-@mcp.tool()
-def get_lane_delta(project: str = "maxwell", lane: str = "", since_cursor: int = 0) -> str:
-    """Efficient poll replacement — returns ONLY tasks that changed since your last call.
-    Use this instead of board_summary in any polling loop. Costs ~50 tokens when nothing
-    changed (empty updates list) vs 3000-5000 tokens for a full board_summary.
-
-    project: 'maxwell', 'helm', or 'switchboard'. lane: workstream id to filter (e.g. 'ENGINE',
-    'CHART', 'OWNSHIP', 'ADAPTER') — leave blank for all workstreams. since_cursor: the cursor value from your
-    last response; pass 0 on first call.
-
-    Returns {cursor, updates: [{task_id, status, title, workstream_id, kinds}]}.
-    Save the returned cursor and pass it on your next call. kinds lists the activity types
-    that occurred (edit, comment, create). Call get_task for full detail on any changed task."""
-    return _dumps(store.get_activity_delta(since_cursor=since_cursor, lane=lane, project=project))
-
-
-@mcp.tool()
 def control_plane_probe(project: str = "maxwell", lane: str = "",
                         include_heavy: bool = False) -> str:
     """Tiny latency probe for MCP clients. Compare your client wall time to server_elapsed_ms.
@@ -803,14 +775,6 @@ def doc_search(query: str, project: str = "maxwell") -> str:
     ingested transcripts/emails/documents. project selects the board."""
     hits = rag.search(query, top_k=5, project=project)
     return _dumps([{"file": h["file"], "text": h["text"]} for h in hits]) if hits else "no matches"
-
-
-@mcp.tool()
-def get_plan_signals(project: str = "maxwell") -> str:
-    """Derived plan health: counts + overdue/due-soon/blocked/ready tasks, critical-path slips,
-    past-due decisions, and each owner's next-best 1-2 tasks. Use for 'what's slipping?' or digests.
-    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    return _dumps(signals.compute_plan_signals(project=project))
 
 
 @mcp.tool()
