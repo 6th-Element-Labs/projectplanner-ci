@@ -1,0 +1,142 @@
+{
+  "schema": "switchboard.cloud_execution_adapter.v1",
+  "canonical_repo": "6th-Element-Labs/projectplanner",
+  "dev_statuses": ["queued", "running", "pr", "failed"],
+  "security_invariants": [
+    "Vendor-hosted agents receive a short-lived scoped MCP token reference, never a raw token in the dev brief, wake, log, or activity stream.",
+    "The canonical repository and non-default task branch are fixed by Switchboard; a provider may not redirect work to main or master.",
+    "Provider authentication and GitHub repository grants are checked before launch.",
+    "A successful provider request is only queued; running requires a read-back provider session id and app-visible session URL.",
+    "A lost, expired, or unreadable provider session becomes a visible failed state and never falls back to a self-hosted process.",
+    "Switchboard applies a lower per-vendor concurrency cap even when the provider permits more sessions.",
+    "PR/default-branch provenance remains the code-truth completion authority; vendor completion is not task Done.",
+    "Subscription spend remains reported or unknown until provider reconciliation and is never fabricated as exact per-task cost."
+  ],
+  "binding_receipt_required": [
+    "wake_id",
+    "task_id",
+    "vendor_id",
+    "provider_session_id",
+    "session_url",
+    "runner_session_id",
+    "provider_status"
+  ],
+  "vendors": [
+    {
+      "id": "claude-code-cloud",
+      "trigger_support": "conditional",
+      "trigger_mode": "cli_bridge",
+      "launch_operation": "claude --remote <dev-brief>",
+      "requirements": [
+        "claude_subscription_auth",
+        "claude_cloud_enabled",
+        "github_repo_grant",
+        "pushed_base_branch",
+        "project_mcp_config",
+        "scoped_mcp_token_ref"
+      ],
+      "concurrency": {
+        "switchboard_default_cap": 4,
+        "provider_limit": "account_rate_limit"
+      },
+      "session": {
+        "id_field": "session_id",
+        "url_field": "session_url",
+        "visibility": "claude.ai/code",
+        "continuity": "fresh_cloud_session"
+      },
+      "status_map": {
+        "queued": "queued",
+        "provisioning": "queued",
+        "running": "running",
+        "completed": "running",
+        "failed": "failed",
+        "cancelled": "failed",
+        "expired": "failed",
+        "lost": "failed"
+      },
+      "billing": {
+        "mode": "subscription",
+        "tally_source": "agent_report",
+        "confidence": "unknown",
+        "notes": "Record tokens when exposed, but do not invent per-task subscription cost."
+      },
+      "source": "https://code.claude.com/docs/en/claude-code-on-the-web"
+    },
+    {
+      "id": "openai-codex-cloud",
+      "trigger_support": "unsupported",
+      "trigger_mode": "no_public_trigger",
+      "launch_operation": null,
+      "requirements": [],
+      "unsupported_reason": "Official Codex cloud docs describe web, GitHub, Linear, and Slack initiation but do not document a public API that creates a Codex cloud task and returns a bindable task id plus URL. Codex SDK/App Server execute Codex in caller-controlled compute and must not be mislabeled vendor-hosted cloud execution.",
+      "concurrency": {
+        "switchboard_default_cap": 4,
+        "provider_limit": "workspace_usage_limit"
+      },
+      "session": {
+        "id_field": "task_id",
+        "url_field": "task_url",
+        "visibility": "chatgpt.com/codex",
+        "continuity": "unsupported_until_official_trigger"
+      },
+      "status_map": {
+        "queued": "queued",
+        "running": "running",
+        "completed": "running",
+        "failed": "failed",
+        "cancelled": "failed",
+        "expired": "failed",
+        "lost": "failed"
+      },
+      "billing": {
+        "mode": "subscription",
+        "tally_source": "agent_report",
+        "confidence": "unknown",
+        "notes": "Capture usage only when an official task receipt or provider reconciliation exposes it."
+      },
+      "source": "https://developers.openai.com/codex/cloud"
+    },
+    {
+      "id": "cursor-background-agent",
+      "trigger_support": "conditional",
+      "trigger_mode": "http_api",
+      "launch_operation": "Cursor Background Agents API create-agent operation",
+      "requirements": [
+        "cursor_api_key",
+        "cursor_background_agents_enabled",
+        "github_repo_grant",
+        "base_branch_exists",
+        "project_mcp_config",
+        "scoped_mcp_token_ref"
+      ],
+      "concurrency": {
+        "switchboard_default_cap": 8,
+        "provider_limit": "up_to_256_active_agents_per_api_key"
+      },
+      "session": {
+        "id_field": "agent_id",
+        "url_field": "agent_url",
+        "visibility": "cursor.com/agents",
+        "continuity": "fresh_background_agent_with_followups"
+      },
+      "status_map": {
+        "queued": "queued",
+        "provisioning": "queued",
+        "running": "running",
+        "completed": "running",
+        "failed": "failed",
+        "cancelled": "failed",
+        "expired": "failed",
+        "lost": "failed"
+      },
+      "billing": {
+        "mode": "api_usage",
+        "tally_source": "agent_report",
+        "confidence": "reported",
+        "notes": "Report provider-exposed tokens/cost; reconcile later if a billing export is available."
+      },
+      "source": "https://docs.cursor.com/background-agent/api/overview"
+    }
+  ]
+}
