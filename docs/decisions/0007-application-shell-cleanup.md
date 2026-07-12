@@ -104,6 +104,20 @@ component means ignoring it."
 
 ## Decision 2 — The ratchet (the promotion ADR-0006 pre-authorized)
 
+> **RETIRED 2026-07-12 — superseded by the ARCH-MS modernization program (ADR-0009 / ADR-0010).**
+> `test_size_ratchet.py` was deleted and the exact-match line/root-file ceilings are gone.
+> **Why:** the ratchet's exact-match ceilings turned an *independent* property (code size) into a
+> single global counter that **every** file-adding PR had to compare-and-swap against a moving
+> `master`. With a fleet of concurrent agents and a slow merge gate this produced continuous
+> merge conflicts and "no merge ref" failures — the exact wall NARRATE-13 hit. A shrink program
+> and a shared line-counter every agent must edit are mutually exclusive.
+> **What replaces it:** Decision 3 (growth redirected to `src/switchboard/`) is the real
+> anti-growth policy, enforced by ARCH-MS task boundaries + review, not a CI counter. The
+> *progress metric* becomes **lines moved out via verbatim extraction** (ADR-0009 Decision 5).
+> **What survives:** the load-bearing *precondition* below — the CI gate runs **every** test via
+> pytest discovery (CONSOL-6 / ARCH-MS-2) — is kept; only the size-ceiling half is retired.
+> The `concurrent_load_gate` perf ratchet is a different file/concern and is unaffected.
+
 One plain test in the standard suite — `test_size_ratchet.py`, run by
 `scripts/switchboard_ci.sh` and the sandbox full-suite like every other test — asserting
 line-count ceilings on the four shell monoliths and a file-count ceiling on the repo root.

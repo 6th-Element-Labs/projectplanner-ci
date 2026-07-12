@@ -3,7 +3,13 @@
 **Charter:** [ADR-0009](decisions/0009-microservices-modernization.md)  
 **Board:** `project=switchboard` · workstream **ARCH-MS** · deliverable **`arch-ms-phase-0`**  
 **Mission end state:** ADR-007 rails complete; `src/switchboard/` scaffold live; one REST+MCP pair
-uses `application/` commands; monolith ratchets stop growing.
+uses `application/` commands; new feature code lands in `src/switchboard/`, not the monoliths.
+
+> **Ratchet retired 2026-07-12.** `test_size_ratchet.py` (the exact-match size gate) was deleted —
+> it forced every concurrent PR to compare-and-swap one shared integer against a moving `master`,
+> which produced the merge wars that stalled the fleet. Growth is now redirected by ADR-0007
+> Decision 3 + review; the Phase 0 progress metric is **lines extracted**, not a ceiling. See
+> ADR-0007 Decision 2 (retired) and ADR-0009 Decision 5 #4.
 
 **Canonical main (tracker baseline):** `5305090` (2026-07-12)  
 **View:** [`?project=switchboard&deliverable=arch-ms-phase-0#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-0#tab-mission)
@@ -40,7 +46,7 @@ requires merge webhook or reconcile.
 | Task | Title | Milestone | Deps | Board | Tracker | Repo evidence |
 |---|---|---|---|---|---|---|
 | **ARCH-MS-1** | ADR-0009 charter + ARCH-MS-EXECUTION tracker | 0.2 | — | Done | ✅ | PR #314 — `docs/decisions/0009-microservices-modernization.md`, `docs/ARCH-MS-EXECUTION.md` |
-| **ARCH-MS-2** | Size ratchet + CI test discovery (CONSOL-6) | 0.1 | — | Not Started | 🟡 | `test_size_ratchet.py`; `scripts/switchboard_ci.sh` pytest discovery + `TEST_DENYLIST` |
+| **ARCH-MS-2** | CI test discovery (CONSOL-6); size ratchet **retired** | 0.1 | — | In Review | ✅ | `scripts/switchboard_ci.sh` runs every `test_*.py` via discovery + `TEST_DENYLIST`. `test_size_ratchet.py` **deleted 2026-07-12** — exact-match ceilings were a shared CAS counter causing fleet merge wars; growth now redirected by ADR-0007 Decision 3. |
 | **ARCH-MS-3** | Delete dead MCP/REST surfaces (CONSOL-7, CONSOL-9) | 0.1 | — | In Review | ✅ | **CONSOL-7** PR #276 + `test_consol7_dead_surfaces.py`; **CONSOL-9** PR #297 + `test_consol9_h2_census.py`. `gmail_source.py` deferred → ARCH-MS-11 |
 | **ARCH-MS-4** | Caddy security headers + mission poller ETag (CONSOL-8) | 0.1 | — | In Review | ✅ | **CONSOL-8** PR #286 + `test_consol8_edge_mission_poll.py`. `deploy/Caddyfile` security headers + access log; `app.py` mission_status / dependency_graph `max_age=5` + ETag; ack poll visibility guard |
 | **ARCH-MS-5** | MCP read auth — bearer required on `/mcp` | 0.3 | — | In Review | ✅ | **BUG-46** / PR #273 — `mcp_auth.py` + `MCPAuthMiddleware`; `test_mcp_read_auth.py`; prod `PM_AUTH_MODE=required` |
@@ -58,25 +64,21 @@ requires merge webhook or reconcile.
 | **ARCH-MS-17** | `mcp/tools/tasks.py` — extract task MCP tools | 0.2 | 15 | In Review | 🟡 | Task tools register from the package adapter; direct Python callers retain compatibility aliases |
 | **ARCH-MS-18** | Migrate `services/auth` → `api/routers/auth` | 0.2 | 7 | In Review | 🟡 | Auth package moved to `src/switchboard/api/routers/auth`; app and tests use the package seam |
 | **ARCH-MS-19** | `mcp/tools/board.py` — first MCP tool module pattern | 0.2 | 17 | Not Started | ⬜ | — |
-| **ARCH-MS-20** | `runner_*` → `runner_store.py` leaf extraction | 0.2 | 7 | Not Started | ⬜ | ADR-0007: ~445 lines, 2 external callers — headroom for ratchet relief |
-| **ARCH-MS-21** | Split `static/app.js` → `static/js/{api,state,board,mission}` | 0.2 | 2 | Not Started | ⬜ | `static/app.js` still monolith (ratchet ceiling 6,566 lines) |
+| **ARCH-MS-20** | `runner_*` → `runner_store.py` leaf extraction | 0.2 | 7 | Not Started | ⬜ | ADR-0007: ~445 lines, 2 external callers — the marquee `store.py` extraction proof for the Phase 0 exit gate |
+| **ARCH-MS-21** | Split `static/app.js` → `static/js/{api,state,board,mission}` | 0.2 | 2 | Not Started | ⬜ | `static/app.js` composition-root extraction (done: `static/js/{api,state,board,mission}.js`) |
 | **ARCH-MS-22** | `/health/deep` — stop leaking project identifiers | 0.3 | 5 | Not Started | 🔗 | **BUG-48** / PR #299 |
 | **ARCH-MS-23** | Global auth cutover — remove `PM_GLOBAL_AUTH` gate | 0.3 | 18 | In Review | 🔗 | **ACCESS-16** / PR #300 deleted the legacy login + flag; ARCH-MS-23 adds a CI regression guard against their return |
-| **ARCH-MS-24** | Phase 0 exit gate — ratchet lowered, application layer proven | 0.2 | 11,12,13,14,16,17,19,20,21,22,23 | Not Started | ⬜ | Blocked on scaffold + enforcement remainder |
+| **ARCH-MS-24** | Phase 0 exit gate — extraction proof + application layer proven | 0.2 | 11,12,13,14,16,17,19,20,21,22,23 | Not Started | ⬜ | Gate = ADR-0009 Decision 5 #4: `store.py` −≥500 lines via verbatim moves (or facade ≤14,000) **and** no net feature growth in the monoliths. Blocked on scaffold + enforcement remainder |
 
 ---
 
-## Ratchet snapshot (master @ `5305090`)
+## Extraction baseline (master @ `5305090`) — informational, not a gate
 
-| File | Ceiling (lines) | Notes |
-|---|---|---|
-| `store.py` | 15,470 | ARCH-MS-20 extracted runner persistence/control |
-| `app.py` | 3,275 | ARCH-MS-18 moved auth imports behind the package seam |
-| `mcp_server.py` | 3,018 | ARCH-MS-17 extracted task MCP tools; includes DELIVERABLES-17 verifier dispatch |
-| `static/app.js` | 6,566 | Held |
-| repo root `*.py` | 205 | ARCH-MS-4 + ARCH-MS-21 add focused root proofs; ARCH-MS-6 stays under `tests/` |
-
-Source: `test_size_ratchet.py` (CONSOL-6).
+The retired ratchet's last high-water marks, kept only as a starting point for measuring
+Phase 0 extraction progress (ADR-0009 Decision 5 #4). These are **not** enforced by any test:
+`store.py` ~15,470 · `app.py` ~3,275 · `mcp_server.py` ~3,018 · `static/app.js` ~6,566 (since
+split by ARCH-MS-21) · repo-root `*.py` ~205. The Phase 0 exit gate measures `store.py` shrinking
+≥500 lines via verbatim moves; there is no ceiling every PR must edit.
 
 ---
 
@@ -85,7 +87,7 @@ Source: `test_size_ratchet.py` (CONSOL-6).
 ```mermaid
 flowchart TD
   MS1[ARCH-MS-1 Charter]
-  MS2[ARCH-MS-2 Ratchet+CI]
+  MS2[ARCH-MS-2 CI discovery]
   MS3[ARCH-MS-3 Dead surfaces]
   MS4[ARCH-MS-4 Caddy+poll]
   MS5[ARCH-MS-5 MCP read auth]
