@@ -1,0 +1,39 @@
+# /etc/systemd/system/projectplanner-ci-gate-request.service
+# HARDEN-74: drain pending event-driven CI gate requests. Started by
+# projectplanner-ci-gate-request.path the instant a request marker appears. Runs the same
+# gate as the timer, but only for the PRs that were just requested (switchboard_pr_gate.py
+# --drain-requests), so a PR is verified seconds after it opens. Same least-privilege
+# sandbox as projectplanner-ci-gate.service.
+[Unit]
+Description=ProjectPlanner event-driven CI gate drain
+After=network.target
+
+[Service]
+Slice=projectplanner-batch.slice
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=320M
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=SWITCHBOARD_CI_WORKDIR=/var/lib/projectplanner/ci-gate
+Environment=SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python
+Environment=HOME=/var/lib/projectplanner
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py ci_gate_drain
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner

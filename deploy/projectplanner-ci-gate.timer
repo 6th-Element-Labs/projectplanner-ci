@@ -1,11 +1,14 @@
 # /etc/systemd/system/projectplanner-ci-gate.timer
-# Runs the Switchboard PR CI gate every 5 minutes while GitHub Actions is unhealthy.
+# Backstop for the event-driven gate (HARDEN-74). The PR webhook drops a request marker
+# and projectplanner-ci-gate-request.path fires the gate instantly; this timer only
+# catches PRs whose webhook was missed. Every 1 minute (was 5) — the gate skips already-
+# gated head SHAs, so frequent passes are cheap when nothing changed.
 [Unit]
-Description=ProjectPlanner Switchboard PR CI gate (every 5 minutes)
+Description=ProjectPlanner Switchboard PR CI gate (backstop, every 1 minute)
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+OnBootSec=45s
+OnUnitActiveSec=1min
 Persistent=true
 
 [Install]

@@ -232,6 +232,18 @@ def ci_gate_prs():
     subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
 
 
+def ci_gate_drain():
+    """Gate exactly the PRs with a pending event-driven request marker (HARDEN-74).
+
+    Started by projectplanner-ci-gate-request.path the instant the PR webhook drops a
+    marker, so a PR is verified seconds after it opens instead of on the 1-min backstop
+    timer. Delegates to the same gate with --drain-requests (claims + clears the markers).
+    """
+    cmd = [sys.executable, str(Path(__file__).parent / "scripts" / "switchboard_pr_gate.py"),
+           "--drain-requests"]
+    subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
+
+
 def merge_coordinator_plan():
     """Run the Switchboard merge-coordinator once (HARDEN-72 / CI-5, Lever 6).
 
@@ -264,6 +276,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
         "ci_gate_prs": ci_gate_prs,
+        "ci_gate_drain": ci_gate_drain,
         "merge_coordinator_plan": merge_coordinator_plan,
         "background_job": background_job}
 
