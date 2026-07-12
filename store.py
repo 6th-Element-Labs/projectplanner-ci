@@ -46,19 +46,60 @@ from runner_store import (
     upsert_runner_session,
 )
 from switchboard.storage.repositories.access import *  # noqa: F401,F403 — ARCH-MS-24
-from switchboard.domain.delivery import (
+from switchboard.domain.access.identity import (
+    binding_for_principal,
+    binding_for_registered_agent,
+    binding_for_system_actor,
+    is_unbound_system_actor,
+    shared_token_binding_error,
+    validate_system_actor_fields,
+    write_binding_activity_payload,
+)
+from switchboard.domain.board.tasks import (
+    EDITABLE_TASK_FIELDS,
+    READY_TASK_STATUSES,
+    TERMINAL_TASK_STATUSES,
+    apply_terminal_done_view as _apply_terminal_done_view,
+    block_done_without_provenance,
+    build_dependency_state,
+    dependency_rows_from_lookup,
+    is_terminal_done_task as _is_terminal_done_task,
+    normalize_depends_on as _normalize_depends_on,
+    rationale_state as _rationale_state,
+)
+from switchboard.domain.coordination.delivery import (
     build_message_delivery_receipt,
     classify_agent_delivery,
     infer_runtime_for_agent,
     runtime_matches_selector,
 )
+from switchboard.domain.coordination.terminal import (
+    TERMINAL_RUNNER_STATUSES,
+    TERMINAL_WAKE_STATUSES,
+)
+from switchboard.domain.deliverables.lifecycle import (
+    BREAKDOWN_PROPOSAL_STATUSES,
+    DELIVERABLE_ID_RE,
+    DELIVERABLE_MILESTONE_STATUSES,
+    DELIVERABLE_STATUSES,
+    PROJECT_BOARD_ID_RE,
+    PROJECT_BOARD_KINDS,
+    PROJECT_BOARD_STATUSES,
+    normalize_deliverable_id,
+    normalize_project_board_id,
+    validate_deliverable_status,
+)
+from switchboard.domain.provenance.git import (
+    EVIDENCE_HASH_RE,
+    has_done_provenance as _has_done_provenance,
+    offline_evidence_from_state as _offline_evidence_from_state,
+    provenance_summary as _provenance_summary,
+    valid_evidence_hash as _valid_evidence_hash,
+)
 
 
 # Fields a PATCH may change (everything an editor touches in an Asana-style board).
-EDITABLE = ["title", "description", "owner_org", "owner_person_or_role", "assignee",
-            "phase", "status", "effort_days", "duration_days", "start_date",
-            "finish_date", "risk_level", "is_blocking", "sort_order",
-            "entry_criteria", "exit_criteria", "deliverable", "depends_on"]
+EDITABLE = list(EDITABLE_TASK_FIELDS)
 
 BUG_INTAKE_POLICY = {
     "scope": "write:bug_intake",
@@ -307,166 +348,8 @@ def _dependency_state_in(c: sqlite3.Connection, task: Dict[str, Any]) -> Dict[st
             deps,
         ).fetchall()
         by_id = {r["task_id"]: {"title": r["title"], "status": r["status"]} for r in rows}
-    dependency_rows: List[Dict[str, Any]] = []
-    for dep in deps:
-        row = by_id.get(dep)
-        status = row["status"] if row else "Missing"
-        dependency_rows.append({
-            "task_id": dep,
-            "title": row["title"] if row else None,
-            "status": status,
-            "done": status == "Done",
-            "missing": row is None,
-        })
-    blocking = [d for d in dependency_rows if not d["done"]]
-    return {
-        "dependencies": dependency_rows,
-        "dependency_count": len(dependency_rows),
-        "done": [d["task_id"] for d in dependency_rows if d["done"]],
-        "blocking": blocking,
-        "blocked_by_count": len(blocking),
-        "missing": [d["task_id"] for d in dependency_rows if d["missing"]],
-        "satisfied": not blocking,
-        "ready": task.get("status") == "Not Started" and not blocking,
-    }
+    return build_dependency_state(task, dependency_rows_from_lookup(deps, by_id))
 
-
-STALE_DEPENDENCY_RATIONALE_RE = re.compile(
-    r"\b(blocked|blocking|blocked\s+on|blocked\s+by|waiting\s+on\s+dependencies)\b",
-    re.I,
-)
-DONE_STATUS_CONTRADICTION_RE = re.compile(
-    r"\b(in\s+review|not\s+started|in\s+progress|blocked)\b",
-    re.I,
-)
-EVIDENCE_HASH_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$", re.I)
-
-
-def _rationale_state(rationale: str, task: Dict[str, Any],
-                     dependency_state: Dict[str, Any]) -> Dict[str, Any]:
-    text = rationale or ""
-    lower = text.lower()
-    flags: List[str] = []
-    if (task.get("status") != "Blocked"
-            and dependency_state.get("satisfied")
-            and STALE_DEPENDENCY_RATIONALE_RE.search(text)
-            and "not blocked" not in lower):
-        flags.append("says_blocked_but_dependencies_satisfied")
-    if task.get("status") == "Done" and DONE_STATUS_CONTRADICTION_RE.search(text):
-        flags.append("mentions_pre_done_status_but_task_is_done")
-    stale = bool(flags)
-    state = {
-        "stale": stale,
-        "flags": flags,
-        "message": (
-            "Generated rationale may be stale; trust status, dependency_state, "
-            "git_state, and provenance."
-        ) if stale else None,
-    }
-    if stale:
-        detail = FAIL_FIX_FAILURE_CLASSES["missing_data"]
-        state["failure_class"] = "missing_data"
-        state["expected_signal"] = detail["expected_signal"]
-    return state
-
-
-def _is_terminal_done_task(task: Dict[str, Any]) -> bool:
-    return task.get("status") == "Done" and _has_done_provenance(task.get("git_state") or {})
-
-
-def _apply_terminal_done_view(task: Dict[str, Any]) -> None:
-    """Make task-detail reads authoritative after Done provenance lands.
-
-    Working-state blobs, live registrations, and claims are useful while a task is moving.
-    Once merge/offline provenance marks Done, those blobs become historical breadcrumbs. Keep
-    enough signal for operators to debug drift, but do not expose stale derived fields as
-    current scheduling truth.
-    """
-    if not _is_terminal_done_task(task):
-        return
-    provenance = task.get("provenance") or _provenance_summary(task.get("git_state") or {})
-    stale_agent_state = task.get("agent_state") or {}
-    stale_claims = task.get("active_claims") or []
-    identity = task.get("identity") or {}
-    suppressed: Dict[str, Any] = {}
-    if stale_agent_state:
-        suppressed["agent_state_agents"] = sorted(stale_agent_state.keys())
-    if stale_claims:
-        suppressed["active_claim_count"] = len(stale_claims)
-        suppressed["active_claim_ids"] = [
-            c.get("claim_id") for c in stale_claims if c.get("claim_id")
-        ]
-    if identity.get("active_agents"):
-        suppressed["identity_active_agents"] = list(identity.get("active_agents") or [])
-    task["terminal_state"] = {
-        "terminal": True,
-        "authority": "status_git_state_provenance",
-        "provenance_type": provenance.get("type"),
-        "message": (
-            "Task is terminal Done. Consumers should trust status, git_state, and "
-            "provenance over historical agent_state, active_claims, identity, or rationale."
-        ),
-    }
-    if suppressed:
-        task["terminal_state"]["suppressed_derived"] = suppressed
-    task["agent_state"] = {}
-    task["active_claims"] = []
-    task["identity"] = {
-        "active_agents": [],
-        "recent_unbound_activity": identity.get("recent_unbound_activity") or [],
-        "risk_window_seconds": identity.get("risk_window_seconds") or IDENTITY_RISK_WINDOW_S,
-        "takeover_safe": True,
-        "status": "terminal_done",
-        "reason": "terminal_done_with_provenance",
-        "message": (
-            "Identity and takeover risk are closed because the task is already Done "
-            "with recorded provenance."
-        ),
-    }
-
-
-DELIVERABLE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{1,127}$")
-PROJECT_BOARD_ID_RE = DELIVERABLE_ID_RE
-PROJECT_BOARD_KINDS = {"board", "mission"}
-PROJECT_BOARD_STATUSES = {"proposed", "active", "paused", "blocked", "done", "archived"}
-DELIVERABLE_STATUSES = {
-    "proposed", "approved", "in_progress", "blocked", "in_review", "done", "archived"
-}
-DELIVERABLE_MILESTONE_STATUSES = {
-    "not_started", "in_progress", "blocked", "in_review", "done", "skipped"
-}
-BREAKDOWN_PROPOSAL_STATUSES = {"proposed", "approved", "rejected", "superseded", "deferred"}
-
-
-def normalize_deliverable_id(value: str = "", title: str = "") -> str:
-    """Normalize a human outcome name into a stable mission id."""
-    raw = (value or "").strip()
-    if raw:
-        candidate = raw
-    else:
-        slug = normalize_project_id(title or "")
-        candidate = f"deliverable-{slug}" if slug else f"deliverable-{uuid.uuid4().hex[:12]}"
-    if not DELIVERABLE_ID_RE.match(candidate):
-        raise ValueError(
-            "deliverable id must be 2-128 chars and start with a letter; "
-            "letters, digits, '_', '-', '.', and ':' are allowed"
-        )
-    return candidate
-
-
-def normalize_project_board_id(value: str = "", title: str = "") -> str:
-    raw = (value or "").strip()
-    if raw:
-        candidate = raw
-    else:
-        slug = normalize_project_id(title or "")
-        candidate = f"mission-{slug}" if slug else f"mission-{uuid.uuid4().hex[:12]}"
-    if not PROJECT_BOARD_ID_RE.match(candidate):
-        raise ValueError(
-            "board id must be 2-128 chars and start with a letter; "
-            "letters, digits, '_', '-', '.', and ':' are allowed"
-        )
-    return candidate
 
 
 def _deliverable_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -695,8 +578,9 @@ def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
     except ValueError as exc:
         return {"error": str(exc)}
     status = (data.get("status") or "proposed").strip().lower()
-    if status not in DELIVERABLE_STATUSES:
-        return {"error": "invalid status", "allowed": sorted(DELIVERABLE_STATUSES)}
+    status_error = validate_deliverable_status(status)
+    if status_error:
+        return status_error
     confidence = data.get("confidence")
     if confidence in ("", None):
         confidence_value = None
@@ -3512,31 +3396,6 @@ def _bug_report_description(report: Dict[str, Any]) -> str:
     ])
 
 
-def _normalize_depends_on(value: Any) -> List[str]:
-    if value in (None, ""):
-        return []
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except Exception:
-            parsed = value
-    else:
-        parsed = value
-    if isinstance(parsed, str):
-        raw_items = parsed.replace("\n", ",").replace(" ", ",").split(",")
-    elif isinstance(parsed, list):
-        raw_items = parsed
-    else:
-        raw_items = []
-    out: List[str] = []
-    seen = set()
-    for item in raw_items:
-        dep = str(item or "").strip().upper()
-        if dep and dep not in seen:
-            seen.add(dep)
-            out.append(dep)
-    return out
-
 
 def _git_state_row(r: Optional[sqlite3.Row]) -> Dict[str, Any]:
     if not r:
@@ -3549,58 +3408,6 @@ def _git_state_row(r: Optional[sqlite3.Row]) -> Dict[str, Any]:
     d["evidence"] = json.loads(d.pop("evidence_json") or "{}")
     return d
 
-
-def _offline_evidence_from_state(git_state: Dict[str, Any]) -> Dict[str, Any]:
-    evidence = git_state.get("evidence") or {}
-    offline = evidence.get("offline_evidence") if isinstance(evidence, dict) else None
-    return offline if isinstance(offline, dict) else {}
-
-
-def _valid_evidence_hash(value: str) -> bool:
-    return bool(EVIDENCE_HASH_RE.fullmatch((value or "").strip()))
-
-
-def _has_done_provenance(git_state: Dict[str, Any]) -> bool:
-    return bool(git_state.get("merged_sha") or _offline_evidence_from_state(git_state))
-
-
-def _provenance_summary(git_state: Dict[str, Any]) -> Dict[str, Any]:
-    offline = _offline_evidence_from_state(git_state)
-    if offline:
-        return {
-            "type": "offline_evidence",
-            "terminal": True,
-            "label": "Offline evidence",
-            "verifier": offline.get("verifier"),
-            "reviewed_at": offline.get("reviewed_at"),
-            "artifact_url": offline.get("artifact_url"),
-            "evidence_hash": offline.get("evidence_hash"),
-        }
-    if git_state.get("merged_sha"):
-        return {
-            "type": "github_pr_merged" if git_state.get("pr_number") else "default_branch_commit",
-            "terminal": True,
-            "label": "Merged code",
-            "merged_sha": git_state.get("merged_sha"),
-            "pr_number": git_state.get("pr_number"),
-            "pr_url": git_state.get("pr_url"),
-        }
-    if git_state.get("pr_number") or git_state.get("pr_url"):
-        return {
-            "type": "github_pr_open",
-            "terminal": False,
-            "label": "PR evidence",
-            "pr_number": git_state.get("pr_number"),
-            "pr_url": git_state.get("pr_url"),
-        }
-    if git_state.get("head_sha"):
-        return {
-            "type": "branch_head",
-            "terminal": False,
-            "label": "Branch evidence",
-            "head_sha": git_state.get("head_sha"),
-        }
-    return {"type": None, "terminal": False, "label": "No provenance"}
 
 
 def _load_git_state(c: sqlite3.Connection, task_id: str) -> Dict[str, Any]:
@@ -4009,11 +3816,7 @@ def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
                 return None
             git_state = _load_git_state(c, task_id)
             if not _has_done_provenance(git_state):
-                payload = {
-                    "requested_status": "Done",
-                    "reason": "done_requires_merge_provenance",
-                    "message": "Status Done requires GitHub/default-branch or offline evidence provenance.",
-                }
+                payload = block_done_without_provenance()
                 c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                           (task_id, actor, "task.done_blocked",
                            json.dumps(payload, sort_keys=True), now))
@@ -4081,7 +3884,7 @@ def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
             return None
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (task_id, actor, kind, json.dumps({"text": text}), now))
-        if _is_unbound_system_actor(actor):
+        if is_unbound_system_actor(actor):
             active_agents = _active_agent_ids_for_task(c, task_id, now)
             if not active_agents:
                 payload = {
@@ -6273,13 +6076,6 @@ def _agent_delivery_state(c: sqlite3.Connection, agent_id: str,
     return delivery
 
 
-def _is_unbound_system_actor(actor: str) -> bool:
-    actor = (actor or "").strip()
-    return actor in {"env-mcp-token", "env-auth-token"} or (
-        actor.startswith("env-") and actor.endswith("-token")
-    )
-
-
 def _active_agent_presence_in(c: sqlite3.Connection, agent_id: str,
                               now: float) -> Optional[Dict[str, Any]]:
     agent_id = (agent_id or "").strip()
@@ -6312,45 +6108,24 @@ def resolve_write_actor(actor: str,
     agent_id = (agent_id or "").strip()
     system_actor = (system_actor or "").strip()
     system_reason = (system_reason or "").strip()
-    if not _is_unbound_system_actor(actor):
-        return {"ok": True, "actor": actor, "binding": "principal", "principal_id": principal_id}
+    if not is_unbound_system_actor(actor):
+        return binding_for_principal(actor, principal_id=principal_id)
 
-    base_error = {
-        "ok": False,
-        "error": "shared_token_requires_bound_actor",
-        "failure_class": "unbound_identity",
-        "expected_signal": FAIL_FIX_FAILURE_CLASSES["unbound_identity"]["expected_signal"],
-        "principal_actor": actor,
-        "principal_id": principal_id,
-        "task_id": task_id or None,
-        "remediation": [
-            "Pass agent_id for a live registered agent before mutating task state.",
-            "Or pass system_actor plus system_reason for deliberate automation/system writes.",
-            "Register/heartbeat the runtime first if this is agent work.",
-        ],
-    }
+    base_error = shared_token_binding_error(
+        actor=actor, principal_id=principal_id, task_id=task_id)
 
     if system_actor:
-        if _is_unbound_system_actor(system_actor):
-            return {
-                **base_error,
-                "error": "system_actor_must_be_explicit",
-                "message": "system_actor must name the automation, not the shared env token.",
-            }
-        if not system_reason:
-            return {
-                **base_error,
-                "error": "system_reason_required",
-                "message": "system_actor writes through a shared token require system_reason.",
-            }
-        return {
-            "ok": True,
-            "actor": system_actor,
-            "binding": "explicit_system_actor",
-            "principal_actor": actor,
-            "principal_id": principal_id,
-            "system_reason": system_reason,
-        }
+        validation_error = validate_system_actor_fields(
+            system_actor, system_reason,
+            principal_actor=actor, principal_id=principal_id, task_id=task_id)
+        if validation_error:
+            return validation_error
+        return binding_for_system_actor(
+            principal_actor=actor,
+            principal_id=principal_id,
+            system_actor=system_actor,
+            system_reason=system_reason,
+        )
 
     with _conn(project) as c:
         if agent_id:
@@ -6371,25 +6146,21 @@ def resolve_write_actor(actor: str,
                     "registered_task_id": presence_task,
                     "message": "agent_id is live but not bound to this task.",
                 }
-            return {
-                "ok": True,
-                "actor": agent_id,
-                "binding": "registered_agent",
-                "principal_actor": actor,
-                "principal_id": principal_id,
-                "agent_id": agent_id,
-            }
+            return binding_for_registered_agent(
+                agent_id=agent_id,
+                principal_actor=actor,
+                principal_id=principal_id,
+                binding="registered_agent",
+            )
         if task_id:
             active_agents = _active_agent_ids_for_task(c, task_id, now)
             if len(active_agents) == 1:
-                return {
-                    "ok": True,
-                    "actor": active_agents[0],
-                    "binding": "inferred_registered_agent",
-                    "principal_actor": actor,
-                    "principal_id": principal_id,
-                    "agent_id": active_agents[0],
-                }
+                return binding_for_registered_agent(
+                    agent_id=active_agents[0],
+                    principal_actor=actor,
+                    principal_id=principal_id,
+                    binding="inferred_registered_agent",
+                )
             if len(active_agents) > 1:
                 return {
                     **base_error,
@@ -6400,17 +6171,6 @@ def resolve_write_actor(actor: str,
     return {
         **base_error,
         "message": "shared-token writes require a bound live agent or explicit system actor/reason.",
-    }
-
-
-def write_binding_activity_payload(binding: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "binding": binding.get("binding"),
-        "actor": binding.get("actor"),
-        "agent_id": binding.get("agent_id"),
-        "principal_actor": binding.get("principal_actor"),
-        "principal_id": binding.get("principal_id"),
-        "system_reason": binding.get("system_reason"),
     }
 
 
@@ -9807,8 +9567,6 @@ def _model_recommendation(task: Dict[str, Any], score: Dict[str, Any]) -> Dict[s
                       f"capabilities={','.join(score['required_capabilities']) or 'none'}"}
 
 
-READY_TASK_STATUSES = {"Not Started", "Ready", "Todo", "Backlog"}
-
 
 def _claim_task_impl(task_id: str, agent_id: str,
                      principal_id: str = "", actor: str = "system",
@@ -12568,10 +12326,6 @@ def archive_task(task_id: str, reason: str = "", actor: str = "system",
     return {"archived": True, "archive_id": archive_id, "task_id": task_id,
             "project": project, "reason": reason or None}
 
-
-TERMINAL_TASK_STATUSES = {"Done", "Cancelled", "Canceled"}
-TERMINAL_WAKE_STATUSES = {"completed", "failed", "cancelled"}
-TERMINAL_RUNNER_STATUSES = {"exited", "killed", "failed", "completed", "expired"}
 
 
 def _cleanup_age_seconds(now: float, timestamp: Optional[float]) -> Optional[float]:
