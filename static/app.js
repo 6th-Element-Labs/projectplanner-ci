@@ -437,7 +437,11 @@ const TeepPlan = {
 
     _deliveryBadge(status) {
         const map = { delivered: 'green', mailbox_stored: 'blue', queued: 'blue',
-            unreachable_agent: 'yellow', identity_unbound: 'red' };
+            active: 'blue', unreachable: 'yellow', unreachable_agent: 'yellow',
+            identity_unbound: 'red', active_session: 'blue', wake_claimed: 'blue',
+            wake_queued: 'yellow', supervised_wake_available: 'azure',
+            wake_queue_available: 'yellow', dormant_registered_host: 'orange',
+            mailbox_only: 'yellow', acknowledged: 'green' };
         const c = map[status] || 'secondary';
         return `<span class="badge bg-${c}-lt">${this.esc((status || 'sent').replace(/_/g, ' '))}</span>`;
     },
@@ -450,9 +454,21 @@ const TeepPlan = {
             ? `<div class="mt-1">Ack: <span id="am-ack-state" class="badge bg-${acked ? 'green' : 'yellow'}-lt">${acked ? 'acknowledged' : 'awaiting ack…'}</span></div>`
             : '';
         const warn = data.warning ? `<div class="text-warning mt-1"><i class="ti ti-alert-triangle me-1"></i>${this.esc(data.warning)}</div>` : '';
+        const receipt = data.delivery_receipt || {};
+        const wake = receipt.wakeability || {};
+        const handled = !!receipt.runtime_delivery_proven;
+        const mailboxLine = receipt.mailbox
+            ? `<div class="mt-1">Mailbox: <span class="badge bg-${handled ? 'green' : 'blue'}-lt">${handled ? 'acknowledged' : 'stored — not delivered'}</span></div>`
+            : '';
+        const modeLine = receipt.delivery_mode
+            ? `<div class="mt-1">Route: ${this._deliveryBadge(receipt.delivery_mode)}</div>` : '';
+        const wakeLine = wake.status
+            ? `<div class="mt-1">Wake: <span class="badge bg-${wake.can_wake_now ? 'azure' : (wake.status === 'not_needed' ? 'secondary' : 'yellow')}-lt">${this.esc(String(wake.status).replace(/_/g, ' '))}</span>${wake.operator_action ? ` <span class="text-secondary">${this.esc(String(wake.operator_action).replace(/_/g, ' '))}</span>` : ''}</div>` : '';
+        const semantics = receipt.operator_message
+            ? `<div class="text-secondary small mt-1">${this.esc(receipt.operator_message)}</div>` : '';
         res.innerHTML = `<div class="p-2 border rounded">
             <div>Delivery: ${this._deliveryBadge(data.delivery_status || (data.delivery || {}).status)}</div>
-            ${ackLine}${warn}</div>`;
+            ${mailboxLine}${modeLine}${wakeLine}${ackLine}${warn}${semantics}</div>`;
     },
 
     async _pollMsgStatus(messageId, tries) {
@@ -461,9 +477,10 @@ const TeepPlan = {
         try {
             const proj = encodeURIComponent(window.PM_PROJECT || 'maxwell');
             const data = await (await fetch(`api/agent_messages/${messageId}/status?project=${proj}`)).json();
-            const el = document.getElementById('am-ack-state');
             if (data.acked_at) {
-                if (el) { el.className = 'badge bg-green-lt'; el.textContent = data.ack_response ? `acked: ${data.ack_response}` : 'acknowledged'; }
+                this._renderMsgResult(data);                  // receipt now proves runtime handling
+                const ackEl = document.getElementById('am-ack-state');
+                if (ackEl) { ackEl.className = 'badge bg-green-lt'; ackEl.textContent = data.ack_response ? `acked: ${data.ack_response}` : 'acknowledged'; }
                 this.loadAckInbox();
                 return;                                       // done
             }

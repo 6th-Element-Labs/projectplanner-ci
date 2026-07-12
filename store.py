@@ -46,6 +46,12 @@ from runner_store import (
     upsert_runner_session,
 )
 from switchboard.storage.repositories.access import *  # noqa: F401,F403 — ARCH-MS-24
+from switchboard.domain.delivery import (
+    build_message_delivery_receipt,
+    classify_agent_delivery,
+    infer_runtime_for_agent,
+    runtime_matches_selector,
+)
 
 
 # Fields a PATCH may change (everything an editor touches in an Asana-style board).
@@ -6224,25 +6230,25 @@ def _agent_delivery_state(c: sqlite3.Connection, agent_id: str,
             "message": "Directed messages require a target agent_id.",
         }
     row = c.execute("SELECT * FROM agent_presence WHERE agent_id=?", (agent_id,)).fetchone()
-    if not row:
-        return {
-            "agent_id": agent_id,
+    presence = _presence_row(row, now=now) if row else None
+    delivery = {"agent_id": agent_id}
+    if presence:
+        delivery.update({
+            "runtime": presence.get("runtime"),
+            "lane": presence.get("lane"),
+            "task_id": presence.get("task_id"),
+            "heartbeat_at": presence.get("heartbeat_at"),
+            "expires_at": presence.get("expires_at"),
+            "ttl_s": presence.get("ttl_s"),
+        })
+    if not presence:
+        delivery.update({
             "status": "unreachable",
             "reason": "not_registered",
             "reachable": False,
             "message": "No active or historical registration exists for this agent_id.",
-        }
-    presence = _presence_row(row, now=now)
-    delivery = {
-        "agent_id": agent_id,
-        "runtime": presence.get("runtime"),
-        "lane": presence.get("lane"),
-        "task_id": presence.get("task_id"),
-        "heartbeat_at": presence.get("heartbeat_at"),
-        "expires_at": presence.get("expires_at"),
-        "ttl_s": presence.get("ttl_s"),
-    }
-    if presence.get("stale"):
+        })
+    elif presence.get("stale"):
         delivery.update({
             "status": "unreachable",
             "reason": "stale_registration",
@@ -6256,6 +6262,14 @@ def _agent_delivery_state(c: sqlite3.Connection, agent_id: str,
             "reachable": True,
             "control": presence.get("control") or {},
         })
+    hosts = [_host_row(host, now=now) for host in c.execute(
+        "SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC"
+    ).fetchall()]
+    wakes = [_wake_row(wake) for wake in c.execute(
+        "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
+        "ORDER BY requested_at"
+    ).fetchall()]
+    delivery.update(classify_agent_delivery(agent_id, presence, hosts, wakes))
     return delivery
 
 
@@ -8662,34 +8676,11 @@ def _attach_work_session_claim_in(c: sqlite3.Connection, verdict: Dict[str, Any]
 
 
 def _selector_runtime_for_agent(agent_id: str) -> str:
-    aid = (agent_id or "").lower()
-    if aid.startswith("claude"):
-        return "claude-code"
-    if aid.startswith("codex"):
-        return "codex"
-    if aid.startswith("cursor"):
-        return "cursor"
-    if aid.startswith("langgraph"):
-        return "langgraph"
-    if aid.startswith("openai"):
-        return "openai-loop"
-    return ""
+    return infer_runtime_for_agent(agent_id)
 
 
 def _runtime_matches_selector(runtime: Dict[str, Any], selector: Dict[str, Any]) -> bool:
-    want_runtime = (selector.get("runtime") or "").strip()
-    want_lane = (selector.get("lane") or "").strip()
-    want_caps = {str(c).strip() for c in selector.get("capabilities") or [] if str(c).strip()}
-    have_runtime = (runtime.get("runtime") or "").strip()
-    if want_runtime and have_runtime != want_runtime:
-        return False
-    lanes = [str(x).strip() for x in runtime.get("lanes") or [] if str(x).strip()]
-    if want_lane and lanes and want_lane not in lanes:
-        return False
-    caps = {str(c).strip() for c in runtime.get("capabilities") or [] if str(c).strip()}
-    if want_caps and not want_caps.issubset(caps):
-        return False
-    return True
+    return runtime_matches_selector(runtime, selector)
 
 
 def _host_can_handle(host: Dict[str, Any], selector: Dict[str, Any]) -> bool:
@@ -11892,6 +11883,8 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                     "mailbox_stored": True,
                     "delivery": delivery,
                     "delivery_status": delivery["status"]}
+        response["delivery_receipt"] = build_message_delivery_receipt(
+            delivery, task_comment=(not delivery.get("reachable") and task_exists))
         if identity_state.get("status") != "clear":
             response["identity"] = identity_state
         if not delivery.get("reachable"):
@@ -12093,6 +12086,16 @@ def get_message_status(message_id: int, project: str = DEFAULT_PROJECT) -> Optio
         out["mailbox_stored"] = True
         out["delivery"] = _agent_delivery_state(c, out.get("to_agent") or "", now)
         out["delivery_status"] = out["delivery"]["status"]
+        task_exists = bool(
+            out.get("task_id") and c.execute(
+                "SELECT 1 FROM tasks WHERE task_id=?", (out["task_id"],)
+            ).fetchone()
+        )
+        out["delivery_receipt"] = build_message_delivery_receipt(
+            out["delivery"],
+            task_comment=(not out["delivery"].get("reachable") and task_exists),
+            acked_at=out.get("acked_at"),
+        )
         return out
 
 
