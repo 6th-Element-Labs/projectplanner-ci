@@ -67,6 +67,7 @@ SKELETON_PACKAGES = (
     "switchboard.storage",
     "switchboard.storage.migrations",
     "switchboard.storage.repositories",
+    "switchboard.storage.repositories.protocols",
 )
 
 import_failures = []
