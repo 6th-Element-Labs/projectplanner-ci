@@ -50,6 +50,7 @@ import notify  # noqa: E402
 import ocr  # noqa: E402
 import rebrand  # noqa: E402
 import narration_ops  # noqa: E402
+import metrics_prometheus  # noqa: E402
 import request_observability  # noqa: E402
 import saturation_signals  # noqa: E402
 import signals  # noqa: E402
@@ -691,6 +692,17 @@ def health_saturation(project: str = Query(store.DEFAULT_PROJECT)):
 def api_saturation(project: str = Query(store.DEFAULT_PROJECT)):
     """Full saturation dashboard payload: PSI, lock-wait, inbox depth, SLOs, alerts."""
     return _saturation_snapshot(project)
+
+
+@app.get("/metrics")
+def metrics(project: str = Query(store.DEFAULT_PROJECT)):
+    """Prometheus scrape surface — the same saturation snapshot in exposition format.
+
+    Read-only and unauthenticated, consistent with /health* and /api/saturation; it
+    carries only counts, gauges, and latency percentiles (no project data or tokens).
+    """
+    body, content_type = metrics_prometheus.render(_saturation_snapshot(project))
+    return Response(content=body, media_type=content_type)
 
 
 # ---- NARRATE-13: narration queue health + authorized operator controls ----
