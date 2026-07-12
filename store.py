@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import evidence_claims
+import deliverable_policy
 import narration_outbox
 import push_verification
 
@@ -1024,14 +1025,13 @@ def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
     with _conn(project) as c:
         if board_id and not _project_board_exists_in(c, board_id):
             return {"error": "unknown board", "board_id": board_id, "project_id": project}
-        # DELIVERABLES-13: require the intake contract when a deliverable MOVES INTO
-        # in_progress (new deliverable created as in_progress, or a status transition into
-        # it). Re-saving an already-in_progress deliverable is not re-validated, so legacy
-        # deliverables with empty criteria stay editable. Gated by PM_ENFORCE_DELIVERABLE_INTAKE.
+        prior, incoming_metadata, policy_error = deliverable_policy.prepare_upsert(
+            c, deliverable_id, status, data.get("metadata", data.get("metadata_json")))
+        if policy_error:
+            return policy_error
+        # DELIVERABLES-13: validate the intake contract only when entering in_progress.
         if status == "in_progress" and _enforce_deliverable_intake():
-            prior = c.execute(
-                "SELECT status FROM deliverables WHERE id=?", (deliverable_id,)).fetchone()
-            if (prior[0] if prior else None) != "in_progress":
+            if (prior["status"] if prior else None) != "in_progress":
                 intake_error = _validate_deliverable_intake(data)
                 if intake_error:
                     return intake_error
@@ -1065,7 +1065,7 @@ def _create_deliverable_impl(data: Dict[str, Any], actor: str = "user",
                 _json_object_field(data.get("policy_constraints")),
                 _json_object_field(data.get("proof_requirements")),
                 _json_list_field(data.get("kpi_links")),
-                _json_object_field(data.get("metadata", data.get("metadata_json"))),
+                json.dumps(incoming_metadata, sort_keys=True),
                 now, now,
             ),
         )
