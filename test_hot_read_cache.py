@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import store  # noqa: E402
 import signals  # noqa: E402
+import read_cache  # noqa: E402  (hot-read cache extracted from store; store re-exports it)
 
 try:
     import httpx  # noqa: E402
@@ -238,6 +239,44 @@ try:
     fresh = store.get_mission_status(project=HOME, deliverable_id=DID)
     cached = store.get_mission_status(project=HOME, deliverable_id=DID)
     ok(fresh == cached, "cached mission_status equals a freshly built one")
+
+    # === 6) SERVE-STALE-WHILE-REVALIDATE: an expired-but-unchanged-stamp hit is served
+    # instantly and refreshed in the background; a CHANGED stamp still rebuilds inline ===
+    store._READ_CACHE.clear()
+    n = {"v": 0}
+    def slow_builder():
+        n["v"] += 1
+        return {"v": n["v"]}
+
+    r1 = store.ttl_read_cache("t6", "id", "STAMP-A", slow_builder, ttl=0.05)
+    ok(n["v"] == 1 and r1 == {"v": 1}, "serve-stale: cold miss builds synchronously")
+    r2 = store.ttl_read_cache("t6", "id", "STAMP-A", slow_builder, ttl=0.05)
+    ok(n["v"] == 1 and r2 == {"v": 1}, "serve-stale: fresh hit served without a rebuild")
+
+    time.sleep(0.06)  # lapse the TTL, stamp unchanged
+    r3 = store.ttl_read_cache("t6", "id", "STAMP-A", slow_builder, ttl=0.05)
+    ok(r3 == {"v": 1}, "serve-stale: expired+same-stamp returns the STALE payload instantly")
+    deadline = time.time() + 2.0
+    while n["v"] < 2 and time.time() < deadline:
+        time.sleep(0.02)
+    ok(n["v"] == 2, "serve-stale: exactly one background refresh rebuilt the entry")
+    r4 = store.ttl_read_cache("t6", "id", "STAMP-A", slow_builder, ttl=100)
+    ok(r4 == {"v": 2} and n["v"] == 2, "serve-stale: the refreshed payload is now served")
+
+    r5 = store.ttl_read_cache("t6", "id", "STAMP-B", slow_builder, ttl=100)
+    ok(r5 == {"v": 3} and n["v"] == 3, "serve-stale: a CHANGED stamp rebuilds synchronously (never serves stale-wrong)")
+
+    store._READ_CACHE.clear()
+    n["v"] = 0
+    saved = read_cache._READ_CACHE_STALE_REVALIDATE
+    read_cache._READ_CACHE_STALE_REVALIDATE = False
+    try:
+        store.ttl_read_cache("t6b", "id", "S", slow_builder, ttl=0.05)  # cold → 1
+        time.sleep(0.06)
+        r6 = store.ttl_read_cache("t6b", "id", "S", slow_builder, ttl=0.05)  # expired → inline rebuild
+        ok(r6 == {"v": 2} and n["v"] == 2, "serve-stale kill switch: expiry rebuilds synchronously when disabled")
+    finally:
+        read_cache._READ_CACHE_STALE_REVALIDATE = saved
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
