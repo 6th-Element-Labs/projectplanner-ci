@@ -46,6 +46,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          # HARDEN-74: cache the pip download/wheel cache keyed on requirements.txt so a
+          # green run doesn't reinstall every dependency cold (~30-60s off each run). The
+          # mirror dispatches with --ref <ci-branch>, so this runs from the pushed SHA.
+          cache: "pip"
+          cache-dependency-path: requirements.txt
 
       - name: Set up Node
         uses: actions/setup-node@v4

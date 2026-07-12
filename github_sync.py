@@ -6,6 +6,7 @@ without importing the web app.
 import re
 from typing import Any, Dict, List
 
+import ci_gate_requests
 import store
 import task_id_parser
 
@@ -184,6 +185,20 @@ def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             "changed_files": len(changed_files), "notified_agents": notified}
 
 
+def _maybe_request_ci_gate(repo: str, pr_number: Any, head_sha: str) -> bool:
+    """HARDEN-74 event-driven CI: on a PR open/update, drop a request marker so the gate
+    fires immediately instead of waiting for the 5-minute timer. Best-effort — a failure
+    here must never break webhook provenance processing. Returns whether a marker was
+    written (False when the flag is off or the write failed)."""
+    if not ci_gate_requests.is_event_driven_enabled() or pr_number is None:
+        return False
+    try:
+        ci_gate_requests.request_ci_gate(int(pr_number), repo=repo, head_sha=head_sha)
+        return True
+    except Exception:
+        return False
+
+
 def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     """PR lifecycle: open -> In Review; merge -> Done with merged_sha."""
     pr = payload.get("pull_request") or {}
@@ -228,8 +243,11 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
                 skipped.append({"task_id": task_id, "reason": res["error"]})
             else:
                 touched.append(task_id)
+        # Event-driven CI: enqueue an immediate gate for this PR head (no 5-min wait).
+        ci_requested = _maybe_request_ci_gate(repo, pr_num, head_sha)
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
-                "in_review_tasks": touched, "skipped_tasks": skipped}
+                "in_review_tasks": touched, "skipped_tasks": skipped,
+                "ci_gate_requested": ci_requested}
 
     if not pr.get("merged"):
         return {"action": "ignored", "reason": "closed PR was not merged", "pr": pr_num}
