@@ -1,0 +1,67 @@
+# Rollout step 1 of docs-in-progress "Switchboard CI — Final Scoped Design":
+# throwaway PROOF that the pull model works end-to-end on THIS setup, i.e. a
+# public-repo hosted runner can (1) check out the PRIVATE canonical repo at an
+# exact SHA using a read token, and (2) post a commit status BACK onto that
+# private SHA. No test suite runs here; this only proves the transport loop the
+# real verification workflow would rely on.
+#
+# Dispatch-only. Posts the clearly NON-required context "Switchboard CI / pull-proof".
+# Requires secret PRIVATE_READ_TOKEN — set only for the proof window and then
+# deleted; the durable design replaces it with an operator-minted fine-grained
+# token (read-only contents + statuses:write on the private repo).
+name: pull-proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Private-repo commit SHA to check out and stamp"
+        required: true
+        type: string
+
+permissions: {}   # needs nothing from THIS repo's own GITHUB_TOKEN
+
+jobs:
+  prove-pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SHA: ${{ inputs.sha }}
+    steps:
+      - name: Check out the PRIVATE canonical repo at the exact SHA
+        uses: actions/checkout@v4
+        with:
+          repository: 6th-Element-Labs/projectplanner
+          ref: ${{ inputs.sha }}
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          persist-credentials: false
+          path: src
+          fetch-depth: 1
+
+      - name: Verify the checkout is real (right SHA, real tree)
+        working-directory: src
+        run: |
+          echo "HEAD: $(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$SHA"
+          echo "test files found: $(find . -name 'test_*.py' -not -path './.git/*' | wc -l)"
+          head -3 scripts/switchboard_ci.sh
+
+      - name: Post SUCCESS status back onto the private SHA
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/6th-Element-Labs/projectplanner/statuses/$SHA" \
+            -f state=success -f context='Switchboard CI / pull-proof' \
+            -f description='pull-model proof: public runner checked out private SHA + reported back' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Post FAILURE status back onto the private SHA
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/6th-Element-Labs/projectplanner/statuses/$SHA" \
+            -f state=failure -f context='Switchboard CI / pull-proof' \
+            -f description='pull-model proof FAILED — see run log' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
