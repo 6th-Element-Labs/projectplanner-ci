@@ -138,5 +138,66 @@ ok(result.get("loadedClosureId") == "deliverable-closure-gate"
 ok(result.get("failedState", {}).get("error") == "wake not created",
    "a rejected verifier wake stays visibly failed even when REST returned HTTP 200")
 
+# Dismiss behaviour: an X hides the closure card on a re-opened deliverable, the hide
+# survives the live-refresh re-render, and the card returns only when a NEW report is
+# stamped (or the operator re-clicks the header dispatch, which clears the flag).
+dismiss_proof = r"""
+const fs = require('fs');
+const store = {};
+global.window = global;
+global.window.localStorage = {
+    getItem: (k) => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: (k) => { delete store[k]; },
+};
+eval(fs.readFileSync(process.argv[1], 'utf8'));
+const methods = global.SwitchboardClosure.methods;
+const esc = (v) => String(v == null ? '' : v).replaceAll('&', '&amp;').replaceAll('<', '&lt;');
+const reportState = (rid) => ({ report: { report_id: rid, grade: 'pass', gates: {} } });
+const ctx = Object.assign({}, methods, {
+    esc,
+    _pmProject: () => 'switchboard',
+    selectedDeliverableId: 'd-1',
+    missionClosureRequest: {},
+    missionClosure: reportState('closure-A'),
+    renderMissionPage: () => {},
+});
+const before = methods._missionClosureHtml.call(ctx);
+methods.dismissClosure.call(ctx);
+const afterDismiss = methods._missionClosureHtml.call(ctx);
+// A live re-render with the SAME report is still hidden:
+const stillHidden = methods._missionClosureHtml.call(ctx);
+// A brand-new stamped report re-appears on its own:
+ctx.missionClosure = reportState('closure-B');
+const afterNewReport = methods._missionClosureHtml.call(ctx);
+// Dismiss again, then the header dispatch button clears it immediately (before any new report):
+ctx.missionClosure = reportState('closure-B');
+methods.dismissClosure.call(ctx);
+const hiddenAgain = methods._missionClosureHtml.call(ctx);
+ctx._dlSend = async () => ({ dispatched: true });
+ctx.loadClosureReport = async function () { return this.missionClosure; };
+methods._undismissClosure.call(ctx, 'd-1');
+const afterUndismiss = methods._missionClosureHtml.call(ctx);
+console.log(JSON.stringify({
+    hasDismissButton: before.includes('data-dl-action="closure-dismiss"'),
+    afterDismiss, stillHidden,
+    reappearsOnNewReport: afterNewReport.includes('data-dl-action="closure-dismiss"'),
+    hiddenAgain,
+    afterUndismiss,
+}));
+"""
+drun = subprocess.run(["node", "-e", dismiss_proof, str(CLOSURE)],
+                      cwd=ROOT, text=True, capture_output=True, check=False)
+ok(drun.returncode == 0, "closure dismiss proof executes in Node")
+dres = json.loads(drun.stdout) if drun.returncode == 0 and drun.stdout.strip() else {}
+ok(dres.get("hasDismissButton") is True,
+   "the closure card renders a dismiss (X) control")
+ok(dres.get("afterDismiss") == "" and dres.get("stillHidden") == "",
+   "dismissing hides the card and it stays hidden across live-refresh re-renders")
+ok(dres.get("reappearsOnNewReport") is True,
+   "a newly stamped report reappears on its own after a prior dismiss")
+ok(dres.get("hiddenAgain") == "" and dres.get("afterUndismiss") != "",
+   "re-dispatching (clearing the flag) brings the card back before any new report")
+
 print(f"\nDELIVERABLES-18 closure UI proof: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

@@ -925,6 +925,7 @@
             case 'reject': return this.rejectProposal(ds.proposal);
             case 'defer': return this.deferProposal(ds.proposal);
             case 'closure-request': return this.requestClosureVerification();
+            case 'closure-dismiss': return this.dismissClosure();
             // UI-2: KPIs & outcomes
             case 'kpi-new': return this.openKpiModal();
             case 'kpi-edit': return this.updateKpiValue(ds.kpi);
