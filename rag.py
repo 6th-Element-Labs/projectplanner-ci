@@ -7,10 +7,10 @@ written to the platform's shared embeddings table.
 import glob
 import hashlib
 import json
-import math
 import os
 
 import httpx
+import numpy as np
 
 import store
 
@@ -121,10 +121,11 @@ def build_index(force=False):
 
 
 def _cos(a, b):
-    s = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    return s / (na * nb) if na and nb else 0.0
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    na = float(np.linalg.norm(a))
+    nb = float(np.linalg.norm(b))
+    return float(np.dot(a, b) / (na * nb)) if na and nb else 0.0
 
 
 def _load_dyn(project=None):
@@ -190,6 +191,17 @@ def search(query, top_k=5, project=None):
     pool = static + _load_dyn(project)
     if not pool:
         return []
-    qe = _embed([_pack_query(query)])[0]
-    scored = sorted(((_cos(qe, it["embedding"]), it) for it in pool), key=lambda x: -x[0])[:top_k]
-    return [{"file": it["file"], "text": it["text"][:800], "score": round(s, 3)} for s, it in scored]
+    qe = np.asarray(_embed([_pack_query(query)])[0], dtype=np.float64)
+    mat = np.asarray([it["embedding"] for it in pool], dtype=np.float64)
+    # Vectorized cosine of the query against the whole pool in one matmul (was a
+    # per-item pure-Python loop). Guard zero-norm rows so they score 0.0 rather
+    # than divide-by-zero, matching the old _cos contract.
+    denom = np.linalg.norm(mat, axis=1) * float(np.linalg.norm(qe))
+    sims = np.zeros(len(pool), dtype=np.float64)
+    nz = denom > 0
+    sims[nz] = (mat[nz] @ qe) / denom[nz]
+    # Stable descending sort keeps the original insertion order on ties, matching
+    # Python's stable `sorted(..., key=-score)`.
+    order = np.argsort(-sims, kind="stable")[:top_k]
+    return [{"file": pool[i]["file"], "text": pool[i]["text"][:800],
+             "score": round(float(sims[i]), 3)} for i in order]
