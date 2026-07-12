@@ -232,6 +232,20 @@ def ci_gate_prs():
     subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
 
 
+def merge_coordinator_plan():
+    """Run the Switchboard merge-coordinator once (HARDEN-72 / CI-5, Lever 6).
+
+    Computes a dependency-ordered, back-pressured merge plan for open PRs and records it as a
+    `ci.merge_plan` activity. Safe by default: it only PLANS. Set
+    ``SWITCHBOARD_MERGE_COORDINATOR_ARM=1`` to also enable GitHub auto-merge on the released
+    PRs (in dependency order) — flip that on only after watching the logged plans look right.
+    """
+    cmd = [sys.executable, str(Path(__file__).parent / "merge_coordinator.py")]
+    if os.environ.get("SWITCHBOARD_MERGE_COORDINATOR_ARM", "").lower() in ("1", "true", "yes"):
+        cmd.append("--arm")
+    subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
+
+
 def background_job(job_name: str = "", project: str = ""):
     """Run a checkpointed background job from the catalog (RECON-10)."""
     import background_jobs
@@ -250,6 +264,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
         "ci_gate_prs": ci_gate_prs,
+        "merge_coordinator_plan": merge_coordinator_plan,
         "background_job": background_job}
 
 if __name__ == "__main__":
