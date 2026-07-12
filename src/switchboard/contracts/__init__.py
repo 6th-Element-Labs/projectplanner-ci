@@ -1,5 +1,5 @@
 """Versioned Pydantic contracts shared by REST, MCP, and events (ARCH-MS-25)."""
-from . import registry, tasks
+from . import projects, registry, tasks
 from .base import (
     SCHEMA_ID_PREFIX,
     VersionedModel,
@@ -7,6 +7,12 @@ from .base import (
     validation_error_message,
 )
 from .registry import get_schema, list_schemas, register
+from .projects import (
+    PROJECT_RECORD_SCHEMA,
+    PROJECT_UPDATE_COMMAND_SCHEMA,
+    ProjectRecord,
+    ProjectUpdateCommand,
+)
 from .tasks import (
     CREATE_TASK_COMMAND_SCHEMA,
     GET_TASK_QUERY_SCHEMA,
@@ -19,15 +25,20 @@ from .tasks import (
 __all__ = [
     "CREATE_TASK_COMMAND_SCHEMA",
     "GET_TASK_QUERY_SCHEMA",
+    "PROJECT_RECORD_SCHEMA",
+    "PROJECT_UPDATE_COMMAND_SCHEMA",
     "SCHEMA_ID_PREFIX",
     "UPDATE_TASK_COMMAND_SCHEMA",
     "CreateTaskCommand",
     "GetTaskQuery",
+    "ProjectRecord",
+    "ProjectUpdateCommand",
     "UpdateTaskCommand",
     "VersionedModel",
     "get_schema",
     "list_schemas",
     "normalize_dependency_ids",
+    "projects",
     "register",
     "registry",
     "tasks",

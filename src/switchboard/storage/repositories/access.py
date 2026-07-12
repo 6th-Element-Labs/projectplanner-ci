@@ -8,12 +8,18 @@ import json
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from constants import *  # noqa: F401,F403
-from db.connection import _project_map
+from db.connection import _project_map, bust_project_cache
 from db.core import _registry_conn, coerce_csv_list
 from db.schema import init_project_registry
+from switchboard.contracts.projects.v2 import ProjectRecord, ProjectUpdateCommand
+from switchboard.domain.projects.lifecycle import (
+    assert_lifecycle_mutation_allowed,
+    default_lifecycle_status,
+    normalize_lifecycle_status,
+)
 
 __all__ = [
     "normalize_project_id", "project_ids", "has_project", "is_global_project_binding",
@@ -24,6 +30,7 @@ __all__ = [
     "grant_project_role", "revoke_project_role", "list_project_role_grants",
     "principal_project_roles", "effective_principal_scopes", "project_access_model",
     "ensure_bootstrap_project_owner",
+    "get_project_record", "list_registry_projects", "update_project_metadata",
     "AccessStoreRepository", "default_access_repository",
 ]
 
@@ -52,6 +59,216 @@ def principal_registry_project(project: Optional[str]) -> str:
     return "switchboard" if is_global_project_binding(project) else (project or DEFAULT_PROJECT)
 
 
+def _row_lifecycle_status(row: Dict[str, Any]) -> str:
+    return normalize_lifecycle_status(row.get("lifecycle_status")) or default_lifecycle_status()
+
+
+def _is_active_record(row: Dict[str, Any]) -> bool:
+    return _row_lifecycle_status(row) == "active"
+
+
+def _builtin_project_record(project_id: str) -> Dict[str, Any]:
+    cfg = BUILTIN_PROJECTS[project_id]
+    access = project_access(project_id)
+    return {
+        "id": project_id,
+        "label": cfg["label"],
+        "pretitle": cfg.get("pretitle", ""),
+        "db_path": cfg["db"],
+        "seed_path": cfg.get("seed"),
+        "created_at": None,
+        "created_by": None,
+        "updated_at": access.get("updated_at"),
+        "updated_by": access.get("updated_by"),
+        "org_id": access.get("org_id") or "",
+        "owner_user_id": access.get("owner_user_id") or "",
+        "purpose": access.get("purpose") or f"{project_id} work control plane",
+        "boundary": access.get("boundary") or (
+            f"Only work belonging to project={project_id} belongs here."),
+        "visibility": access.get("visibility"),
+        "lifecycle_status": default_lifecycle_status(),
+        "archived_at": None,
+        "archived_by": None,
+        "archive_reason": None,
+        "is_protected": True,
+        "is_system": True,
+        "replacement_project_id": None,
+        "replacement_deliverable_id": None,
+        "is_builtin": True,
+    }
+
+
+def _dynamic_project_row(project_id: str) -> Optional[Dict[str, Any]]:
+    init_project_registry()
+    with _registry_conn() as c:
+        row = c.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_project_record(project_id: str) -> Dict[str, Any]:
+    """Return the unified ``switchboard.project.v2`` projection for one project id."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return {"error": "project_id required"}
+    if pid in BUILTIN_PROJECTS:
+        return ProjectRecord.from_mapping(_builtin_project_record(pid)).model_dump(by_alias=True)
+    row = _dynamic_project_row(pid)
+    if not row:
+        return {"error": f"unknown project: {pid}"}
+    access = project_access(pid)
+    merged = {
+        "id": row["id"],
+        "label": row["label"],
+        "pretitle": row.get("pretitle") or "",
+        "db_path": row.get("db_path"),
+        "seed_path": row.get("seed_path"),
+        "created_at": row.get("created_at"),
+        "created_by": row.get("created_by"),
+        "updated_at": row.get("updated_at") or access.get("updated_at"),
+        "updated_by": row.get("updated_by") or access.get("updated_by"),
+        "org_id": access.get("org_id") or "",
+        "owner_user_id": access.get("owner_user_id") or "",
+        "purpose": access.get("purpose") or "",
+        "boundary": access.get("boundary") or "",
+        "visibility": access.get("visibility"),
+        "lifecycle_status": _row_lifecycle_status(row),
+        "archived_at": row.get("archived_at"),
+        "archived_by": row.get("archived_by"),
+        "archive_reason": row.get("archive_reason"),
+        "is_protected": bool(row.get("is_protected")),
+        "is_system": bool(row.get("is_system")),
+        "replacement_project_id": row.get("replacement_project_id"),
+        "replacement_deliverable_id": row.get("replacement_deliverable_id"),
+        "is_builtin": False,
+    }
+    return ProjectRecord.from_mapping(merged).model_dump(by_alias=True)
+
+
+def list_registry_projects(*, include_archived: bool = True) -> List[Dict[str, Any]]:
+    """Return full registry projections for every known project id."""
+    records = []
+    for pid in sorted(_project_map()):
+        record = get_project_record(pid)
+        if record.get("error"):
+            continue
+        if include_archived or record.get("lifecycle_status") == "active":
+            records.append(record)
+    return records
+
+
+def update_project_metadata(command: Mapping[str, Any] | ProjectUpdateCommand,
+                            actor: str = "system") -> Dict[str, Any]:
+    """Apply editable metadata and optional lifecycle transitions."""
+    try:
+        cmd = (command if isinstance(command, ProjectUpdateCommand)
+               else ProjectUpdateCommand.from_mapping(command))
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"invalid project update command: {exc}"}
+
+    pid = cmd.project_id
+    if not has_project(pid):
+        return {"error": f"unknown project: {pid}"}
+
+    current = get_project_record(pid)
+    if current.get("error"):
+        return current
+
+    fields = cmd.editable_fields()
+    if not fields:
+        return {"error": "no editable fields supplied"}
+
+    if cmd.lifecycle_status is not None:
+        err = assert_lifecycle_mutation_allowed(current, cmd.lifecycle_status)
+        if err:
+            return err
+
+    if pid in BUILTIN_PROJECTS:
+        access_fields = {k: fields[k] for k in ("org_id", "owner_user_id", "purpose",
+                                                 "boundary", "visibility") if k in fields}
+        if any(k in fields for k in ("label", "pretitle", "lifecycle_status", "archive_reason",
+                                     "replacement_project_id", "replacement_deliverable_id")):
+            return {"error": "built-in project routing metadata is immutable", "project_id": pid}
+        if access_fields:
+            result = set_project_access(
+                pid,
+                access_fields.get("org_id") or current.get("org_id") or DEFAULT_ORG_ID,
+                owner_user_id=access_fields.get("owner_user_id", current.get("owner_user_id")),
+                purpose=access_fields.get("purpose", current.get("purpose")),
+                boundary=access_fields.get("boundary", current.get("boundary")),
+                created_by=actor,
+                visibility=access_fields.get("visibility", current.get("visibility") or ""),
+            )
+            if result.get("error"):
+                return result
+            bust_project_cache()
+        return get_project_record(pid)
+
+    row = _dynamic_project_row(pid)
+    if not row:
+        return {"error": f"unknown project: {pid}"}
+
+    now = time.time()
+    project_sets: List[str] = []
+    project_vals: List[Any] = []
+    for key in ("label", "pretitle", "replacement_project_id", "replacement_deliverable_id"):
+        if key in fields:
+            project_sets.append(f"{key}=?")
+            project_vals.append(fields[key])
+
+    if cmd.lifecycle_status is not None:
+        project_sets.append("lifecycle_status=?")
+        project_vals.append(cmd.lifecycle_status)
+        if cmd.lifecycle_status == "archived":
+            project_sets.extend(["archived_at=?", "archived_by=?", "archive_reason=?"])
+            project_vals.extend([now, actor, fields.get("archive_reason")])
+        elif cmd.lifecycle_status == "active":
+            project_sets.extend(["archived_at=?", "archived_by=?", "archive_reason=?"])
+            project_vals.extend([None, None, None])
+
+    project_sets.extend(["updated_at=?", "updated_by=?"])
+    project_vals.extend([now, cmd.updated_by or actor])
+
+    access_fields = {k: fields[k] for k in ("org_id", "owner_user_id", "purpose",
+                                           "boundary", "visibility") if k in fields}
+    init_project_registry()
+    with _registry_conn() as c:
+        if project_sets:
+            c.execute(
+                f"UPDATE projects SET {', '.join(project_sets)} WHERE id=?",
+                (*project_vals, pid),
+            )
+        if access_fields:
+            vis = access_fields.get("visibility")
+            if vis is not None and vis not in ("private", "org", ""):
+                return {"error": "visibility must be 'private' or 'org'"}
+            c.execute(
+                "INSERT INTO project_access(project_id, org_id, owner_user_id, purpose, "
+                "boundary, created_at, created_by, updated_at, visibility, updated_by) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(project_id) DO UPDATE SET "
+                "org_id=COALESCE(excluded.org_id, project_access.org_id), "
+                "owner_user_id=COALESCE(excluded.owner_user_id, project_access.owner_user_id), "
+                "purpose=COALESCE(excluded.purpose, project_access.purpose), "
+                "boundary=COALESCE(excluded.boundary, project_access.boundary), "
+                "updated_at=excluded.updated_at, "
+                "visibility=COALESCE(excluded.visibility, project_access.visibility), "
+                "updated_by=excluded.updated_by",
+                (pid,
+                 access_fields.get("org_id") or current.get("org_id") or DEFAULT_ORG_ID,
+                 access_fields.get("owner_user_id", current.get("owner_user_id")) or None,
+                 access_fields.get("purpose", current.get("purpose")) or None,
+                 access_fields.get("boundary", current.get("boundary")) or None,
+                 row.get("created_at") or now,
+                 row.get("created_by") or actor,
+                 now,
+                 (vis or None) if vis is not None else current.get("visibility"),
+                 cmd.updated_by or actor),
+            )
+
+    bust_project_cache()
+    return get_project_record(pid)
+
+
 def projects() -> List[Dict[str, Any]]:
     """The switcher's source of truth — [{id, label, pretitle}].
 
@@ -71,15 +288,19 @@ def projects() -> List[Dict[str, Any]]:
     for k, v in _project_map().items():
         if allowed is not None and k in BUILTIN_PROJECTS and k not in allowed:
             continue
-        access = project_access(k)
+        record = get_project_record(k)
+        if record.get("error"):
+            continue
+        if record.get("lifecycle_status") != "active":
+            continue
         out.append({
             "id": k,
-            "label": v["label"],
-            "pretitle": v.get("pretitle", ""),
-            "purpose": access.get("purpose") or "",
-            "boundary": access.get("boundary") or "",
-            "owner_user_id": access.get("owner_user_id") or "",
-            "org_id": access.get("org_id") or "",
+            "label": record.get("label") or v["label"],
+            "pretitle": record.get("pretitle") or v.get("pretitle", ""),
+            "purpose": record.get("purpose") or "",
+            "boundary": record.get("boundary") or "",
+            "owner_user_id": record.get("owner_user_id") or "",
+            "org_id": record.get("org_id") or "",
         })
     return sorted(out, key=lambda p: p["id"])
 
@@ -201,6 +422,7 @@ def set_project_access(project_id: str, org_id: str, owner_user_id: str = "",
         )
         row = c.execute("SELECT * FROM project_access WHERE project_id=?",
                         (project_id,)).fetchone()
+    bust_project_cache()
     return dict(row)
 
 
@@ -379,6 +601,16 @@ class AccessStoreRepository:
 
     def project_access(self, project: str) -> Dict[str, Any]:
         return project_access(project)
+
+    def get_project_record(self, project: str) -> Dict[str, Any]:
+        return get_project_record(project)
+
+    def list_registry_projects(self, *, include_archived: bool = True) -> List[Dict[str, Any]]:
+        return list_registry_projects(include_archived=include_archived)
+
+    def update_project_metadata(self, command: Mapping[str, Any] | ProjectUpdateCommand,
+                                actor: str = "system") -> Dict[str, Any]:
+        return update_project_metadata(command, actor=actor)
 
 
 def default_access_repository() -> AccessStoreRepository:

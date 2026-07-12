@@ -81,6 +81,10 @@ def init_project_registry() -> None:
         cols = [r["name"] for r in c.execute("PRAGMA table_info(project_access)").fetchall()]
         if "visibility" not in cols:
             c.execute("ALTER TABLE project_access ADD COLUMN visibility TEXT")
+        # ACCESS-18: lifecycle metadata + registry migration ledger.
+        import scripts.switchboard_path  # noqa: F401 — src/switchboard importable
+        from switchboard.storage.migrations.registry import run_registry_migrations
+        run_registry_migrations(c)
 
 
 def apply_schema(c):
