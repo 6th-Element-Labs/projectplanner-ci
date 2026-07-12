@@ -37,6 +37,11 @@ try:
        and bot.select_prs_to_update([pr(3, conflicting=True, mergeStateStatus="BEHIND")]) == [],
        "a conflicting PR is skipped (left for the agent to resolve)")
 
+    # 3b. a PR whose mergeability is still UNKNOWN is skipped this cycle — behind_by alone can't
+    #     detect a conflict, so we wait rather than risk update-branch on a conflicting PR.
+    ok(bot.select_prs_to_update([pr(31, mergeStateStatus="UNKNOWN", behind_by=3)]) == [],
+       "a PR with UNKNOWN mergeability is not updated until GitHub resolves it")
+
     # 4. drafts and non-master PRs are skipped.
     ok(bot.select_prs_to_update([pr(4, isDraft=True), pr(5, baseRefName="release")]) == [],
        "draft PRs and PRs targeting another base are skipped")
