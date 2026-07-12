@@ -35,6 +35,7 @@ import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same cont
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
 SUPERVISOR = os.path.join(_HERE, "codex", "supervisor.py")
 RUN_AGENT = os.path.join(_HERE, "run_agent.py")
+CLOSURE_VERIFIER = os.path.join(_HERE, "closure_verifier.py")
 
 # Spec operation → REST path. Centralized so Codex's published paths get pinned in ONE place.
 P_REGISTER_HOST = "/ixp/v1/register_host"
@@ -152,10 +153,15 @@ def wake_mode(wake, inventory=None):
 
     Lane-scoped wakes may enter the claim_next loop. Lane-less wakes are message-only by
     construction: they can register and read inbox, but must never ask for global work.
+    A closure_verification wake is a special case of message-only: still lane-less (never
+    a claim_next grab), but instead of the inbox-only ack stub it runs the deterministic
+    closure engine (DELIVERABLES-23) — bounded gate checks, not an open-ended agent.
     """
     policy = (wake or {}).get("policy") or {}
     selector = (wake or {}).get("selector") or {}
     explicit = (policy.get("mode") or "").strip()
+    if policy.get("kind") == "closure_verification" and policy.get("deliverable_id"):
+        return "closure_verify"
     if explicit in ("inbox_only", "message_only"):
         return "inbox_only"
     if explicit == "claim_next" and selector.get("lane"):
@@ -192,7 +198,14 @@ def launch_command(wake, inventory):
     mode = wake_mode(wake, inventory)
     if mode == "refused":
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
-    if mode == "inbox_only":
+    if mode == "closure_verify":
+        policy = wake.get("policy") or {}
+        child = ["python3", CLOSURE_VERIFIER, "--project", PROJECT,
+                 "--deliverable-id", policy.get("deliverable_id"),
+                 "--host-id", inventory.get("host_id", "")]
+        if wake.get("wake_id"):
+            child += ["--wake-id", wake.get("wake_id")]
+    elif mode == "inbox_only":
         idle = os.environ.get("PM_AGENT_HOST_INBOX_IDLE_SECONDS", "6")
         child = ["python3", RUN_AGENT, "--runtime", runtime,
                  "--inbox-only", "--idle-seconds", idle]
