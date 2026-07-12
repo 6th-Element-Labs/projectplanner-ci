@@ -29,18 +29,32 @@ from typing import Any, Dict, List, Optional, Sequence
 
 SCHEMA = "switchboard.ci_attribution.v1"
 
+# Strip terminal colour codes before parsing — the external mirror scrapes GitHub Actions /
+# pytest output, which is commonly ANSI-coloured and would otherwise defeat the anchors.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # pytest short-test-summary lines: "FAILED path::test - AssertionError: ..." /
 # "ERROR path::test - ...". The reason (after " - ") is optional.
 _PYTEST_RE = re.compile(r"^(?:FAILED|ERROR)\s+(\S+?)(?:\s+-\s+(.*))?$", re.MULTILINE)
 # Switchboard suite section header written by scripts/switchboard_ci.sh: "== test_foo.py ==".
 _SECTION_RE = re.compile(r"^==\s+(\S+\.py)\s+==\s*$", re.MULTILINE)
-# The mirror dumps its result JSON into the gate log; pull the run/logs URLs back out.
-_RUN_URL_RE = re.compile(r'"run_url"\s*:\s*"([^"]+)"')
-_LOGS_URL_RE = re.compile(r'"logs_url"\s*:\s*"([^"]+)"')
-# Signals that the script-style suite (which aborts on first failure under `set -e`)
-# blew up inside the last-printed section rather than exiting cleanly.
-_FAILURE_MARKERS = ("Traceback (most recent call last)", "AssertionError",
-                    "Error:", "FAILED", "assert ")
+# Error/exception line for the description reason (drops a loose "assert" substring match).
+_ERROR_LINE_RE = re.compile(r"^[\w.]*(?:Error|Exception)\b")
+# The mirror dumps its result JSON into the gate log; pull the run/logs URLs back out. Accept
+# both the JSON form and a plain ``run_url=<url>`` line the gate now writes ahead of the
+# (truncated) JSON dump, so the link survives even if the JSON is cut off.
+_RUN_URL_RE = re.compile(r'"run_url"\s*:\s*"([^"]+)"|^run_url=(\S+)$', re.MULTILINE)
+_LOGS_URL_RE = re.compile(r'"logs_url"\s*:\s*"([^"]+)"|^logs_url=(\S+)$', re.MULTILINE)
+# Definitive "a test actually raised" signal for the script-style suite: each test raises
+# (AssertionError -> traceback). Kept tight so benign output containing "Error:"/"assert " in a
+# PASS line can't trigger a false section attribution.
+_FAILURE_TRACEBACK = "Traceback (most recent call last)"
+
+
+def _looks_like_nodeid(token: str) -> bool:
+    """A real pytest nodeid always names a test file. Requiring ``.py`` (or ``::``) keeps a
+    passing test that merely prints ``FAILED case_7`` — or a ``FAILED 0`` summary-table cell —
+    from being misread as the failing test."""
+    return ".py" in token or "::" in token
 
 
 @dataclass
@@ -70,11 +84,14 @@ def parse_failing_tests(log_text: str, *, limit: int = 25) -> List[FailingTest]:
     no test verdict); callers fall back to a generic link then."""
     if not log_text:
         return []
+    log_text = _ANSI_RE.sub("", log_text)
     seen = set()
     out: List[FailingTest] = []
     for match in _PYTEST_RE.finditer(log_text):
         nodeid = match.group(1).strip()
-        if not nodeid or nodeid in seen:
+        # Require a test-nodeid shape so a passing test that prints "FAILED case_7" (or a
+        # "FAILED 0" summary cell) can't hijack attribution and hide the real culprit.
+        if not nodeid or nodeid in seen or not _looks_like_nodeid(nodeid):
             continue
         seen.add(nodeid)
         out.append(FailingTest(nodeid=nodeid, reason=(match.group(2) or "").strip()))
@@ -82,15 +99,15 @@ def parse_failing_tests(log_text: str, *, limit: int = 25) -> List[FailingTest]:
             return out
     if out:
         return out
-    # No pytest summary — fall back to the script-suite section that was running when
-    # the run died. Only claim a failing file if the log actually shows a failure
-    # marker, so a clean/infra log doesn't get mislabelled as a test failure.
-    if not any(marker in log_text for marker in _FAILURE_MARKERS):
+    # No pytest summary — fall back to the script-suite section that was running when the run
+    # died. Only attribute when the log carries a real Python traceback, so benign output that
+    # merely contains "Error:"/"assert " in a PASS line can't be mislabelled as a test failure.
+    if _FAILURE_TRACEBACK not in log_text:
         return []
     sections = _SECTION_RE.findall(log_text)
     # Skip the shell's own scaffolding sections (runtime/version/dep headers) — only
     # sections that name a test file are attributable to a test.
-    test_sections = [s for s in sections if s.split("/")[-1].startswith(("test_",))
+    test_sections = [s for s in sections if s.split("/")[-1].startswith("test_")
                      or s.endswith("_test.py")]
     if test_sections:
         culprit = test_sections[-1]
@@ -100,26 +117,30 @@ def parse_failing_tests(log_text: str, *, limit: int = 25) -> List[FailingTest]:
 
 
 def _first_error_line(log_text: str) -> str:
-    """The most specific error line we can quote (the assertion/exception message)."""
+    """The most specific error line we can quote (the exception message). Scans bottom-up so a
+    traceback's final ``SomeError: message`` line wins; matches an exception-class line, not a
+    loose ``assert`` substring."""
     for line in reversed(log_text.splitlines()):
         s = line.strip()
-        if s.startswith(("AssertionError", "Error", "Exception")) or ": " in s and (
-                "Error" in s or "assert" in s.lower()):
+        if _ERROR_LINE_RE.match(s):
             return s[:200]
     return ""
 
 
 def extract_run_links(log_text: str) -> Dict[str, str]:
-    """The external-CI run/logs URLs the mirror recorded into the gate log, if any."""
+    """The external-CI run/logs URLs the mirror recorded into the gate log, if any (JSON or
+    the plain ``run_url=`` line form)."""
     links: Dict[str, str] = {}
     if not log_text:
         return links
-    run = _RUN_URL_RE.search(log_text)
-    logs = _LOGS_URL_RE.search(log_text)
-    if run and run.group(1) and run.group(1) != "null":
-        links["run_url"] = run.group(1)
-    if logs and logs.group(1) and logs.group(1) != "null":
-        links["logs_url"] = logs.group(1)
+    log_text = _ANSI_RE.sub("", log_text)
+    for key, pattern in (("run_url", _RUN_URL_RE), ("logs_url", _LOGS_URL_RE)):
+        match = pattern.search(log_text)
+        if not match:
+            continue
+        value = (match.group(1) or match.group(2) or "").strip()
+        if value and value != "null":
+            links[key] = value
     return links
 
 

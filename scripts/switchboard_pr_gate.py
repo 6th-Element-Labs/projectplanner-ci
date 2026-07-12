@@ -510,6 +510,10 @@ def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: st
         result = {"error": str(exc), "failure_class": "mirror_exception"}
     with log_path.open("w", encoding="utf-8") as log:
         log.write(f"external_ci_mirror source_sha={merge_sha} workflow={workflow}\n")
+        # Write the run/logs URLs on their own lines BEFORE the (truncated) JSON dump so
+        # attribution can always scrape them even if the JSON is cut at 4000 chars.
+        log.write(f"run_url={result.get('run_url') or ''}\n")
+        log.write(f"logs_url={result.get('logs_url') or ''}\n")
         log.write(json.dumps(result, indent=2, default=str)[:4000] + "\n")
     status = (result.get("status") or "").strip().lower()
     fclass = (result.get("failure_class") or "").strip().lower()

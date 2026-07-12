@@ -1,0 +1,49 @@
+# /etc/systemd/system/projectplanner-merge-coordinator.service
+# One-shot service: run the Switchboard merge-coordinator (HARDEN-72 / CI-5, Lever 6).
+# Triggered by projectplanner-merge-coordinator.timer.
+#
+# Computes a dependency-ordered, back-pressured merge plan for open PRs and records it as a
+# `ci.merge_plan` activity. SAFE BY DEFAULT: it only PLANS (dry-run). To let it actually enable
+# GitHub auto-merge on the released PRs (in dependency order, capped by backpressure), set
+#   Environment=SWITCHBOARD_MERGE_COORDINATOR_ARM=1
+# below — do that only after watching the logged plans look right for a while.
+[Unit]
+Description=ProjectPlanner Switchboard merge-coordinator
+After=network.target
+
+[Service]
+Slice=projectplanner-batch.slice
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
+# HARDEN-55: dedicated non-login service account (not the general `ubuntu` login).
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=SWITCHBOARD_CI_PROJECT=switchboard
+# Backpressure cap: at most N PRs released into the merge pipeline per pass.
+Environment=SWITCHBOARD_MERGE_MAX_IN_FLIGHT=3
+# Observe-only by default. Flip to 1 to arm GitHub auto-merge on released PRs.
+Environment=SWITCHBOARD_MERGE_COORDINATOR_ARM=0
+# The coordinator shells out to `gh`, which needs a writable HOME for credential config.
+Environment=HOME=/var/lib/projectplanner
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py merge_coordinator_plan
+StandardOutput=journal
+StandardError=journal
+# HARDEN-55: runtime least-privilege sandbox. Code tree + venv are root-owned and
+# read-only to this service; the only writable path is the data dir (+ journal).
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner

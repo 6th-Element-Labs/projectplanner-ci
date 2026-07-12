@@ -68,6 +68,44 @@ ok(links.get("run_url") == "https://github.com/o/ci/actions/runs/42",
    "extracts the external run_url from the mirror log")
 ok(links.get("logs_url", "").endswith("/logs"), "extracts the logs_url too")
 ok(ca.extract_run_links('{"run_url": null}') == {}, "ignores null run_url")
+# Line form (survives the gate's 4000-char JSON truncation).
+ok(ca.extract_run_links("run_url=https://x/runs/7\nlogs_url=https://x/runs/7/logs\n").get(
+    "run_url") == "https://x/runs/7", "extracts run_url from the plain line form")
+
+
+# ----- HARDENING (adversarial-review findings) -------------------------------------
+# #1: a PASSING test that prints a "FAILED <token>" line must NOT hijack attribution;
+# the real culprit (the traceback'd section) must win.
+HIJACK_LOG = """\
+== test_alpha.py ==
+  PASS  emits FAILED case_7 in its own output
+FAILED case_7
+== test_zeta.py ==
+Traceback (most recent call last):
+AssertionError: the real failure
+"""
+hj = ca.parse_failing_tests(HIJACK_LOG)
+ok(len(hj) == 1 and hj[0].file == "test_zeta.py",
+   "a bare 'FAILED case_7' from a passing test does not hijack; the real culprit wins")
+ok(all("case_7" not in t.nodeid for t in hj), "the non-nodeid token is rejected")
+ok(ca.parse_failing_tests("FAILED 0\nTraceback (most recent call last):\n== test_z.py ==\n"
+                          "AssertionError: x\n")[0].file == "test_z.py",
+   "a 'FAILED 0' summary cell is not treated as a failing test")
+
+# #2: benign output containing an 'Error:'/'assert' substring but NO traceback -> no attribution.
+BENIGN = "== test_beta.py ==\n  PASS  handles the Error: prefix and assert path\n"
+ok(ca.parse_failing_tests(BENIGN) == [],
+   "no traceback -> no false section attribution even with Error:/assert substrings")
+
+# #3: _first_error_line quotes an exception line, not a loose 'assert' substring.
+ok(ca._first_error_line("checking asserts: all good\nValueError: boom") == "ValueError: boom",
+   "error-line quote picks the exception line, not a benign 'assert' substring")
+
+# #4: ANSI colour codes don't defeat the pytest parser (external mirror logs are coloured).
+ANSI_LOG = "\x1b[31mFAILED\x1b[0m \x1b[1mtest_x.py::test_y\x1b[0m - AssertionError: boom\n"
+ansi = ca.parse_failing_tests(ANSI_LOG)
+ok(ansi and ansi[0].nodeid == "test_x.py::test_y",
+   "ANSI colour codes are stripped before parsing the pytest nodeid")
 
 
 # ----- summarize_failures ----------------------------------------------------------
