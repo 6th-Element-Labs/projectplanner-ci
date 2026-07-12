@@ -25,10 +25,12 @@ from typing import Any, Dict, Iterable, List, Optional
 # cover repo-root modules; without this the systemd ci-gate unit dies on import.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import ci_attribution  # noqa: E402
 import external_ci_mirror  # noqa: E402
 import pr_provenance_gate  # noqa: E402
 import review_preflight  # noqa: E402
 import store  # noqa: E402
+import task_id_parser  # noqa: E402
 
 
 DEFAULT_REPO = "6th-Element-Labs/projectplanner"
@@ -517,9 +519,15 @@ def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: st
         # The mirror actually ran the suite and it was red — a genuine gate failure. Use the
         # mirror's own status=="failure" verdict (set only for workflow_failed) as the primary
         # signal; do NOT fall back to the local suite, which would mask the red and run the hog.
-        raise GateError(
+        # Attach the run/logs URLs so the caller can post a red status that links straight at the
+        # failing CI run (HARDEN-72 / Lever 7 — per-PR CI attribution), not back at the PR.
+        err = GateError(
             f"external CI mirror not green (status={status}, conclusion={result.get('conclusion')}, "
             f"class={fclass}) — {result.get('run_url') or ''}")
+        err.run_url = result.get("run_url") or ""
+        err.logs_url = result.get("logs_url") or ""
+        err.failure_class = fclass or "workflow_failed"
+        raise err
     # Anything else (mirror sync / workflow dispatch / poll error, or a bare error with no
     # test verdict) means the mirror could not produce a result — infra, not a test failure.
     # Return 'unavailable' so the caller falls back to the local suite: a gate that cannot
@@ -531,32 +539,65 @@ def _verify_on_external_ci_mirror(worktree: Path, log_path: Path, *, project: st
 def _run_suite_in_worktree(run_dir: Path, log_path: Path, *, source_repo: Path, timeout_s: int,
                            python_executable: str, token: str, ext_number: int,
                            ext_source_branch: str = "",
-                           preflight: Optional[Dict[str, Any]] = None) -> None:
+                           preflight: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Verify the checked-out worktree and raise on a genuine red suite.
 
     Prefers the first-class external_ci_mirror runner when the project declares a public_ci
     sandbox (heavy CI stays off this box), and falls back to the local strict suite when the
     mirror can't produce a verdict. Shared by the PR-head and merge-queue gates so both honour
-    the same mirror/fallback policy. See docs/CI-STRATEGY.md."""
+    the same mirror/fallback policy. See docs/CI-STRATEGY.md.
+
+    Returns an attribution dict — ``{"ran_external", "run_url", "logs_url"}`` — so the caller
+    can link a green status straight at the CI run that verified it (HARDEN-72 / Lever 7). A
+    genuine red raises a GateError carrying the same run/logs URLs."""
     ci_role = _sandbox_ci_role(SWITCHBOARD_CI_PROJECT)
-    ran_external = False
+    attribution: Dict[str, Any] = {"ran_external": False, "run_url": "", "logs_url": ""}
     if ci_role:
         outcome, _ext = _verify_on_external_ci_mirror(
             run_dir, log_path, project=SWITCHBOARD_CI_PROJECT,
             number=ext_number, token=token, timeout_s=timeout_s,
             source_branch=ext_source_branch)
-        ran_external = outcome == "success"
-        if outcome != "success":
-            # Mirror could not produce a verdict (e.g. workflow dispatch/sync error). Do not
-            # hard-fail on an evidence-only mirror outage — fall back to the local suite so
-            # work still gets real verification.
-            with log_path.open("a", encoding="utf-8") as log:
-                log.write("\nexternal CI mirror unavailable "
-                          f"(class={_ext.get('failure_class')}); falling back to local suite.\n")
-    if not ran_external:
-        python_runtime = select_ci_python(source_repo, explicit=python_executable)
-        run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
-                             preflight=preflight, python_runtime=python_runtime)
+        if outcome == "success":
+            attribution.update(ran_external=True,
+                               run_url=_ext.get("run_url") or "",
+                               logs_url=_ext.get("logs_url") or "")
+            return attribution
+        # Mirror could not produce a verdict (e.g. workflow dispatch/sync error). Do not
+        # hard-fail on an evidence-only mirror outage — fall back to the local suite so
+        # work still gets real verification.
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write("\nexternal CI mirror unavailable "
+                      f"(class={_ext.get('failure_class')}); falling back to local suite.\n")
+    python_runtime = select_ci_python(source_repo, explicit=python_executable)
+    run_switchboard_gate(run_dir, log_path, timeout_s=timeout_s,
+                         preflight=preflight, python_runtime=python_runtime)
+    return attribution
+
+
+def _read_log(log_path: Path) -> str:
+    """Gate log text for failing-test attribution, or '' if it can't be read."""
+    try:
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _record_gate_attribution(attribution: "ci_attribution.Attribution", *,
+                             pr: Optional[Dict[str, Any]] = None) -> None:
+    """Persist a ci.attribution activity for the outcome (best-effort). Threads the PR's
+    first claimed task id so the record hangs off the right board task."""
+    task_id = None
+    if pr is not None:
+        try:
+            task_ids = task_id_parser.task_ids_for_pr(pr)
+            task_id = task_ids[0] if task_ids else None
+        except Exception:
+            task_id = None
+    try:
+        ci_attribution.record_attribution(
+            attribution, project=SWITCHBOARD_CI_PROJECT, task_id=task_id)
+    except Exception:
+        pass
 
 
 def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
@@ -597,20 +638,35 @@ def run_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str, context: str,
             raise GateError("Switchboard review preflight failed: " +
                             "; ".join(f.get("code", "unknown") for f in preflight.get("findings", [])))
         # Provenance preflight above is unchanged; the shared runner keeps heavy CI off box.
-        _run_suite_in_worktree(run_dir, log_path, source_repo=source_repo, timeout_s=timeout_s,
-                               python_executable=python_executable, token=token,
-                               ext_number=number, preflight=preflight)
+        suite = _run_suite_in_worktree(run_dir, log_path, source_repo=source_repo,
+                                       timeout_s=timeout_s,
+                                       python_executable=python_executable, token=token,
+                                       ext_number=number, preflight=preflight) or {}
+        success = ci_attribution.build_success_attribution(
+            repo=repo, sha=sha, pr_number=number, pr_url=pr_url,
+            run_url=suite.get("run_url", ""), logs_url=suite.get("logs_url", ""))
         post_status(repo, sha, "success", context=context,
-                    description="Switchboard VM gate passed", target_url=pr_url,
+                    description=success.description, target_url=success.target_url,
                     token=token)
+        _record_gate_attribution(success, pr=pr)
         return {"pr": number, "sha": sha, "state": "success", "log": str(log_path),
-                "preflight": preflight}
+                "preflight": preflight, "target_url": success.target_url,
+                "run_url": success.run_url}
     except Exception as exc:
+        # HARDEN-72 / Lever 7: a red status links straight at the failing CI run and names the
+        # failing test(s) when we can parse them, instead of pointing back at the PR page.
+        failure = ci_attribution.build_failure_attribution(
+            repo=repo, sha=sha, pr_number=number, pr_url=pr_url,
+            log_text=_read_log(log_path), error_text=str(exc),
+            run_url=getattr(exc, "run_url", ""), logs_url=getattr(exc, "logs_url", ""),
+            failure_class=getattr(exc, "failure_class", ""))
         post_status(repo, sha, "failure", context=context,
-                    description=f"Switchboard VM gate failed: {exc}", target_url=pr_url,
+                    description=failure.description, target_url=failure.target_url,
                     token=token)
+        _record_gate_attribution(failure, pr=pr)
         return {"pr": number, "sha": sha, "state": "failure", "log": str(log_path),
-                "error": str(exc)}
+                "error": str(exc), "target_url": failure.target_url,
+                "failing_tests": [t.nodeid for t in failure.failing_tests]}
     finally:
         if run_dir is not None and cache is not None and not keep_worktree:
             _cleanup_worktree(cache, run_dir)
@@ -648,19 +704,32 @@ def run_gate_for_merge_group(ref: str, sha: str, *, repo: str, token: str, conte
         run_dir = _prepare_merge_group_worktree(cache, work_root, sha, run_tag)
         # ext_number is unused here: the merge-group path always sets an explicit mq-<sha>
         # source_branch, so the mirror never falls back to the pr-<number> label.
-        _run_suite_in_worktree(run_dir, log_path, source_repo=source_repo, timeout_s=timeout_s,
-                               python_executable=python_executable, token=token,
-                               ext_number=0, ext_source_branch=f"mq-{sha[:12]}")
+        suite = _run_suite_in_worktree(run_dir, log_path, source_repo=source_repo,
+                                       timeout_s=timeout_s,
+                                       python_executable=python_executable, token=token,
+                                       ext_number=0, ext_source_branch=f"mq-{sha[:12]}") or {}
+        success = ci_attribution.build_success_attribution(
+            repo=repo, sha=sha, pr_url=commit_url, merge_group=ref, queue=True,
+            run_url=suite.get("run_url", ""), logs_url=suite.get("logs_url", ""))
         post_status(repo, sha, "success", context=context,
-                    description="Switchboard VM gate passed (merge queue)",
-                    target_url=commit_url, token=token)
-        return {"merge_group": ref, "sha": sha, "state": "success", "log": str(log_path)}
+                    description=success.description, target_url=success.target_url,
+                    token=token)
+        _record_gate_attribution(success)
+        return {"merge_group": ref, "sha": sha, "state": "success", "log": str(log_path),
+                "target_url": success.target_url, "run_url": success.run_url}
     except Exception as exc:
+        failure = ci_attribution.build_failure_attribution(
+            repo=repo, sha=sha, pr_url=commit_url, merge_group=ref, queue=True,
+            log_text=_read_log(log_path), error_text=str(exc),
+            run_url=getattr(exc, "run_url", ""), logs_url=getattr(exc, "logs_url", ""),
+            failure_class=getattr(exc, "failure_class", ""))
         post_status(repo, sha, "failure", context=context,
-                    description=f"Switchboard VM gate failed (merge queue): {exc}",
-                    target_url=commit_url, token=token)
+                    description=failure.description, target_url=failure.target_url,
+                    token=token)
+        _record_gate_attribution(failure)
         return {"merge_group": ref, "sha": sha, "state": "failure", "log": str(log_path),
-                "error": str(exc)}
+                "error": str(exc), "target_url": failure.target_url,
+                "failing_tests": [t.nodeid for t in failure.failing_tests]}
     finally:
         if run_dir is not None and cache is not None and not keep_worktree:
             _cleanup_worktree(cache, run_dir)
