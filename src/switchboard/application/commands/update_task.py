@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 import store
+
+from switchboard.contracts import validation_error_message
 
 from ..contracts.tasks import UpdateTaskCommand
 
@@ -62,3 +66,7 @@ def execute_mapping_result(task_id: str, data: dict[str, Any], *, actor: str,
                        actor=actor, project=project)
     except UpdateTaskError as exc:
         return exc.as_dict()
+    except ValidationError as exc:
+        # Symmetric with create: contract rejections stay structured 400s.
+        return UpdateTaskError(
+            "invalid_update_task", validation_error_message(exc)).as_dict()

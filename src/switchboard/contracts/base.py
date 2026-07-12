@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Iterable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 SCHEMA_ID_PREFIX = "https://plan.taikunai.com/schemas/"
@@ -52,3 +52,16 @@ def normalize_dependency_ids(value: Any) -> tuple[str, ...]:
             seen.add(task_id)
             result.append(task_id)
     return tuple(result)
+
+
+def validation_error_message(exc: ValidationError) -> str:
+    """Render a ``ValidationError`` as one readable line for adapter error bodies.
+
+    Names the offending fields without echoing payload values back to the
+    caller.
+    """
+    parts = []
+    for err in exc.errors(include_url=False, include_context=False, include_input=False):
+        loc = ".".join(str(piece) for piece in err.get("loc", ()))
+        parts.append(f"{loc or 'payload'}: {err.get('msg') or 'invalid value'}")
+    return "; ".join(parts) or "invalid payload"

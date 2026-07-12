@@ -26,6 +26,14 @@ UPDATE_TASK_FIELDS: tuple[str, ...] = (
     "entry_criteria", "exit_criteria", "deliverable",
 )
 
+# CreateTaskCommand's optional text columns — the dataclass era mapped every
+# one with ``data.get(key) or None``, so '' from adapters persists as NULL.
+_CREATE_OPTIONAL_TEXT_FIELDS: tuple[str, ...] = (
+    "description", "workstream_name", "owner_org", "owner_person_or_role",
+    "assignee", "phase", "status", "start_date", "finish_date",
+    "entry_criteria", "exit_criteria", "deliverable", "risk_level",
+)
+
 _CLEAR_DEPENDS_ON = frozenset({"none", "clear", "[]"})
 _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 
@@ -75,6 +83,21 @@ class CreateTaskCommand(VersionedModel):
     @classmethod
     def _strip_required_text(cls, value: Any) -> str:
         return str(value or "").strip()
+
+    @field_validator(*_CREATE_OPTIONAL_TEXT_FIELDS, mode="before")
+    @classmethod
+    def _empty_optional_text_to_none(cls, value: Any) -> Any:
+        # Adapters send '' for unset optional fields (MCP passes locals());
+        # persist NULL, never '', matching the dataclass-era ``or None``.
+        return value or None
+
+    @field_validator("effort_days", "duration_days", mode="before")
+    @classmethod
+    def _blank_numeric_to_none(cls, value: Any) -> Any:
+        # A blank form/tool field means "unset", not a float parse error.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("depends_on", mode="before")
     @classmethod
