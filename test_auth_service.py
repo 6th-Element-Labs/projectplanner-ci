@@ -86,12 +86,27 @@ try:
     got = sorted(p["id"] for p in s2.get("user", {}).get("projects", []))
     ok(got == ["alpha"], "granted user sees ONLY alpha, not beta")
 
+    # ACCESS-17: PM_TOP_LEVEL_PROJECTS is a legacy built-in-home allowlist, not a
+    # second access-control system. A newly created private project must appear in
+    # both the refreshed session and the project-picker API for its owner even when
+    # its id was not present in the process environment at boot.
+    store.create_project("Gamma", project_id="gamma", owner_principal_id=new_id,
+                         visibility="private", actor="test")
+    s3 = c2.get("/api/auth/session").json()
+    got3 = sorted(p["id"] for p in s3.get("user", {}).get("projects", []))
+    ok(got3 == ["alpha", "gamma"],
+       "new private project absent from PM_TOP_LEVEL_PROJECTS appears for its owner")
+    picker = c2.get("/api/projects")
+    picker_ids = sorted(p["id"] for p in picker.json().get("projects", []))
+    ok(picker.status_code == 200 and picker_ids == ["alpha", "gamma"],
+       "/api/projects picker immediately includes the newly created accessible project")
+
     # ---- superadmin sees everything -----------------------------------------
     admin = auth_store.create_user("boss@test.com", "Boss", __import__("auth").password_hash("bosspass99"), is_superadmin=True)
     ca = client()
     ca.post("/api/auth/login", json={"email": "boss@test.com", "password": "bosspass99"})
     allp = sorted(p["id"] for p in ca.get("/api/auth/session").json().get("user", {}).get("projects", []))
-    ok(allp == ["alpha", "beta"], "superadmin sees ALL projects")
+    ok(allp == ["alpha", "beta", "gamma"], "superadmin sees ALL projects")
     ok(ca.get("/api/auth/session").json().get("user", {}).get("is_superadmin") is True, "superadmin flag surfaced")
 
     # ---- middleware: the whole app honors the global session ----------------
@@ -99,8 +114,9 @@ try:
        "granted user can READ their project via the app API")
     ok(c2.get("/api/board", params={"project": "beta"}).status_code == 403,
        "ungranted project is denied by the middleware (deny-by-default)")
-    ok(sorted(p["id"] for p in c2.get("/api/projects").json().get("projects", [])) == ["alpha"],
-       "/api/projects is now filtered to the user's grants")
+    ok(sorted(p["id"] for p in c2.get("/api/projects").json().get("projects", [])) ==
+       ["alpha", "gamma"],
+       "/api/projects is filtered to the user's grants and owned projects")
     ok(ca.get("/api/board", params={"project": "beta"}).status_code == 200,
        "superadmin can read any project via the app API")
     ok(client().get("/api/board", params={"project": "alpha"}).status_code == 401,

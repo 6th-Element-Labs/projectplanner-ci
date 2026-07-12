@@ -18,6 +18,10 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "dev-open"
+# Production uses this legacy allowlist to choose among built-in project homes.
+# Dynamically created projects must still be discoverable even when their ids were
+# not known when the process environment was configured.
+os.environ["PM_TOP_LEVEL_PROJECTS"] = "maxwell,helm,switchboard"
 os.environ.pop("PM_MCP_TOKEN", None)
 os.environ.pop("PM_PUBLIC_CI_REPO", None)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -153,7 +157,7 @@ try:
 
     listed = json.loads(mcp_server.list_projects())
     ok(any(p["id"] == "vulkan" for p in listed["projects"]),
-       "MCP list_projects includes dynamic project")
+       "MCP list_projects includes a dynamic project absent from PM_TOP_LEVEL_PROJECTS")
     mcp_created = json.loads(mcp_server.create_project(
         "Vulkan Renderer", None, project_id="vkrender",
         github_repo="StevenRidder/OpenCPN"))

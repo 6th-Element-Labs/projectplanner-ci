@@ -53,12 +53,23 @@ def principal_registry_project(project: Optional[str]) -> str:
 
 
 def projects() -> List[Dict[str, Any]]:
-    """The switcher's source of truth — [{id, label, pretitle}]."""
+    """The switcher's source of truth — [{id, label, pretitle}].
+
+    ``PM_TOP_LEVEL_PROJECTS`` is a legacy deployment selector for the static
+    built-in homes.  Dynamic projects are created at runtime, so their ids cannot
+    be present in a process environment that was fixed at boot.  Filtering those
+    projects here made ``create_project`` report success while hiding the result
+    from MCP discovery, authenticated sessions, and the UI project picker.
+
+    Dynamic visibility is enforced by ``project_access`` plus the caller's grants;
+    this registry projection must keep every dynamic project available for that
+    access-resolution step.
+    """
     visible = (os.environ.get("PM_TOP_LEVEL_PROJECTS") or "").strip()
     allowed = {p.strip() for p in visible.split(",") if p.strip()} if visible else None
     out = []
     for k, v in _project_map().items():
-        if allowed is not None and k not in allowed:
+        if allowed is not None and k in BUILTIN_PROJECTS and k not in allowed:
             continue
         access = project_access(k)
         out.append({
