@@ -116,6 +116,37 @@ try:
     ok(listed.status_code == 200 and any(
         task.get("task_id") == task_id for task in listed.json().get("tasks", [])
     ), "extracted list route preserves project-aware filtering")
+
+    missing_key = client.post(
+        "/api/tasks", params={"project": "switchboard"},
+        json={"title": "no workstream id"})
+    missing_detail = (missing_key.json() or {}).get("detail") or {}
+    ok(missing_key.status_code == 400
+       and missing_detail.get("error_code") == "invalid_create_task",
+       "BUG-55: create missing workstream_id is a structured 400, not a 500")
+
+    junk_typed = client.post(
+        "/api/tasks", params={"project": "switchboard"},
+        json={"workstream_id": "ARCH", "title": "junk effort",
+              "effort_days": "abc"})
+    junk_detail = (junk_typed.json() or {}).get("detail") or {}
+    ok(junk_typed.status_code == 400
+       and junk_detail.get("error_code") == "invalid_create_task"
+       and "effort_days" in str(junk_detail.get("message")),
+       "BUG-55: type-invalid create field is a structured 400, not a 500")
+
+    empty_optionals = client.post(
+        "/api/tasks", params={"project": "switchboard"},
+        json={"workstream_id": "ARCH", "title": "empty optionals",
+              "description": "", "owner_org": "", "effort_days": ""})
+    refetched = client.get(
+        f"/api/tasks/{empty_optionals.json().get('task_id')}",
+        params={"project": "switchboard"}).json()
+    ok(empty_optionals.status_code == 200
+       and refetched.get("description") is None
+       and refetched.get("owner_org") is None
+       and refetched.get("effort_days") is None,
+       "BUG-55: '' optional fields persist as NULL (dataclass-era parity)")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 import store
+
+from switchboard.contracts import validation_error_message
 
 from ..contracts.tasks import CreateTaskCommand
 
@@ -66,3 +70,8 @@ def execute_mapping_result(data: dict[str, Any], *, actor: str,
         return execute(CreateTaskCommand.from_mapping(data), actor=actor, project=project)
     except CreateTaskError as exc:
         return exc.as_dict()
+    except ValidationError as exc:
+        # Contract rejections (missing/mistyped fields) are caller errors —
+        # same structured shape as CreateTaskError, never a transport 500.
+        return CreateTaskError(
+            "invalid_create_task", validation_error_message(exc)).as_dict()
