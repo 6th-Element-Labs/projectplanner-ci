@@ -1,18 +1,20 @@
 """Create-task application command.
 
-`store.py` remains the green persistence facade during Phase 0.  REST and MCP
-adapters both call :func:`execute`; transport-specific authentication and response
-serialization stay at their edges.
+Application depends on :class:`TaskRepository`. ``store.task_repository`` is the
+Phase-1A implementation (SQL still behind the store facade until ARCH-MS-31+).
+REST and MCP adapters both call :func:`execute`; transport-specific auth and
+response serialization stay at their edges.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import ValidationError
 
 import store
 
 from switchboard.contracts import validation_error_message
+from switchboard.storage.repositories.protocols import TaskRepository
 
 from ..contracts.tasks import CreateTaskCommand
 
@@ -32,8 +34,14 @@ class CreateTaskError(ValueError):
                 "message": self.message, **self.details}
 
 
-def execute(command: CreateTaskCommand, *, actor: str, project: str) -> dict[str, Any]:
-    """Validate and create one project-scoped task through the store facade."""
+def execute(
+        command: CreateTaskCommand,
+        *,
+        actor: str,
+        project: str,
+        tasks: Optional[TaskRepository] = None) -> dict[str, Any]:
+    """Validate and create one project-scoped task through a TaskRepository."""
+    repo = tasks or store.task_repository
     if not command.workstream_id or not command.title:
         raise CreateTaskError(
             "invalid_create_task",
@@ -42,7 +50,7 @@ def execute(command: CreateTaskCommand, *, actor: str, project: str) -> dict[str
 
     unknown = [
         task_id for task_id in command.depends_on
-        if not store.get_task(task_id, project=project)
+        if not repo.get_task(task_id, project=project)
     ]
     if unknown:
         joined = ", ".join(unknown)
@@ -54,7 +62,7 @@ def execute(command: CreateTaskCommand, *, actor: str, project: str) -> dict[str
             dependency_ids=unknown,
         )
 
-    created = store.create_task(command.to_store_data(), actor=actor, project=project)
+    created = repo.create_task(command.to_store_data(), actor=actor, project=project)
     if not created:
         raise CreateTaskError(
             "invalid_create_task",
@@ -64,10 +72,12 @@ def execute(command: CreateTaskCommand, *, actor: str, project: str) -> dict[str
 
 
 def execute_mapping_result(data: dict[str, Any], *, actor: str,
-                           project: str) -> dict[str, Any]:
+                           project: str,
+                           tasks: Optional[TaskRepository] = None) -> dict[str, Any]:
     """Execute adapter input and return either a task or a structured command error."""
     try:
-        return execute(CreateTaskCommand.from_mapping(data), actor=actor, project=project)
+        return execute(CreateTaskCommand.from_mapping(data), actor=actor,
+                       project=project, tasks=tasks)
     except CreateTaskError as exc:
         return exc.as_dict()
     except ValidationError as exc:

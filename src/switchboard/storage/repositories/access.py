@@ -24,6 +24,7 @@ __all__ = [
     "grant_project_role", "revoke_project_role", "list_project_role_grants",
     "principal_project_roles", "effective_principal_scopes", "project_access_model",
     "ensure_bootstrap_project_owner",
+    "AccessStoreRepository", "default_access_repository",
 ]
 
 
@@ -347,3 +348,28 @@ def ensure_bootstrap_project_owner(project_id: str, principal_id: str, login: st
     grant = grant_project_role(project_id, "principal", principal_id, "admin", created_by=actor)
     return {"org": org, "user": user, "membership": membership,
             "project_access": access, "grant": grant}
+
+
+class AccessStoreRepository:
+    """Registry-backed :class:`~switchboard.storage.repositories.protocols.AccessRepository`.
+
+    Wraps the module-level SQL helpers already extracted from ``store.py`` so
+    application code can depend on the Protocol without importing SQLite details.
+    """
+
+    def normalize_project_id(self, value: str) -> str:
+        return normalize_project_id(value)
+
+    def has_project(self, project: Optional[str]) -> bool:
+        return has_project(project)
+
+    def projects(self) -> List[Dict[str, Any]]:
+        return projects()
+
+    def project_access(self, project: str) -> Dict[str, Any]:
+        return project_access(project)
+
+
+def default_access_repository() -> AccessStoreRepository:
+    """Canonical Phase-1A access repository (registry SQL in this module)."""
+    return AccessStoreRepository()

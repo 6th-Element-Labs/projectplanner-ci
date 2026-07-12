@@ -46,6 +46,10 @@ from runner_store import (
     upsert_runner_session,
 )
 from switchboard.storage.repositories.access import *  # noqa: F401,F403 — ARCH-MS-24
+from switchboard.storage.repositories.tasks import (  # ARCH-MS-27
+    StoreTaskRepository,
+    default_task_repository,
+)
 from switchboard.domain.access.identity import (
     binding_for_principal,
     binding_for_registered_agent,
@@ -100,6 +104,10 @@ from switchboard.domain.provenance.git import (
 
 # Fields a PATCH may change (everything an editor touches in an Asana-style board).
 EDITABLE = list(EDITABLE_TASK_FIELDS)
+
+# ARCH-MS-27: store.py implements the repository Protocols application depends on.
+task_repository = default_task_repository()
+access_repository = default_access_repository()
 
 BUG_INTAKE_POLICY = {
     "scope": "write:bug_intake",
