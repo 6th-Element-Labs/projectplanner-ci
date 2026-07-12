@@ -29,8 +29,6 @@ dependencies = [
     "python-pptx>=0.6",
     "python-multipart>=0.0.9",
     "numpy>=1.26",
-    "apprise>=1.7",
-    "python-slugify>=8.0",
     "prometheus-client>=0.20",
 ]
 
