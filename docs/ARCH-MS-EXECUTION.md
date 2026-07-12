@@ -61,7 +61,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-14** | `tests/` directory + path shim for new tests | 0.1 | 2 | In Review | ✅ | `tests/path_setup.py`; `tests/test_arch_ms14_test_layout.py`; new tests share the root + `src/` bootstrap |
 | **ARCH-MS-15** | `get_task` query + `update_task` application command | 0.2 | 8 | Not Started | ⬜ | — |
 | **ARCH-MS-16** | `api/routers/tasks.py` — extract task REST routes | 0.2 | 15 | Not Started | ⬜ | — |
-| **ARCH-MS-17** | `mcp/tools/tasks.py` — extract task MCP tools | 0.2 | 15 | Not Started | ⬜ | — |
+| **ARCH-MS-17** | `mcp/tools/tasks.py` — extract task MCP tools | 0.2 | 15 | In Review | 🟡 | Task tools register from the package adapter; direct Python callers retain compatibility aliases |
 | **ARCH-MS-18** | Migrate `services/auth` → `api/routers/auth` | 0.2 | 7 | In Review | 🟡 | Auth package moved to `src/switchboard/api/routers/auth`; app and tests use the package seam |
 | **ARCH-MS-19** | `mcp/tools/board.py` — first MCP tool module pattern | 0.2 | 17 | Not Started | ⬜ | — |
 | **ARCH-MS-20** | `runner_*` → `runner_store.py` leaf extraction | 0.2 | 7 | Not Started | ⬜ | ADR-0007: ~445 lines, 2 external callers — the marquee `store.py` extraction proof for the Phase 0 exit gate |
@@ -76,7 +76,7 @@ requires merge webhook or reconcile.
 
 The retired ratchet's last high-water marks, kept only as a starting point for measuring
 Phase 0 extraction progress (ADR-0009 Decision 5 #4). These are **not** enforced by any test:
-`store.py` ~15,470 · `app.py` ~3,275 · `mcp_server.py` ~3,157 · `static/app.js` ~6,566 (since
+`store.py` ~15,470 · `app.py` ~3,275 · `mcp_server.py` ~3,018 · `static/app.js` ~6,566 (since
 split by ARCH-MS-21) · repo-root `*.py` ~205. The Phase 0 exit gate measures `store.py` shrinking
 ≥500 lines via verbatim moves; there is no ceiling every PR must edit.
 
