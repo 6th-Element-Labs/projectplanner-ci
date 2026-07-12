@@ -57,7 +57,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-16** | `api/routers/tasks.py` — extract task REST routes | 0.2 | 15 | In Review | 🟡 | `src/switchboard/api/routers/tasks.py`; complete `/api/tasks...` surface; `tests/test_arch_ms16_task_router.py`; `app.py` ratchet 3,325 → 3,091 |
 | **ARCH-MS-17** | `mcp/tools/tasks.py` — extract task MCP tools | 0.2 | 15 | In Review | 🟡 | Task tools register from the package adapter; direct Python callers retain compatibility aliases |
 | **ARCH-MS-18** | Migrate `services/auth` → `api/routers/auth` | 0.2 | 7 | In Review | 🟡 | Auth package moved to `src/switchboard/api/routers/auth`; app and tests use the package seam |
-| **ARCH-MS-19** | `mcp/tools/board.py` — first MCP tool module pattern | 0.2 | 17 | Not Started | ⬜ | — |
+| **ARCH-MS-19** | `mcp/tools/board.py` — first MCP tool module pattern | 0.2 | 17 | In Review | 🟡 | Board summary, delta, project discovery, and plan signals register from the package adapter |
 | **ARCH-MS-20** | `runner_*` → `runner_store.py` leaf extraction | 0.2 | 7 | Not Started | ⬜ | ADR-0007: ~445 lines, 2 external callers — headroom for ratchet relief |
 | **ARCH-MS-21** | Split `static/app.js` → `static/js/{api,state,board,mission}` | 0.2 | 2 | Not Started | ⬜ | `static/app.js` still monolith (ratchet ceiling 6,566 lines) |
 | **ARCH-MS-22** | `/health/deep` — stop leaking project identifiers | 0.3 | 5 | Not Started | 🔗 | **BUG-48** / PR #299 |
@@ -72,7 +72,7 @@ requires merge webhook or reconcile.
 |---|---|---|
 | `store.py` | 15,470 | ARCH-MS-20 extracted runner persistence/control |
 | `app.py` | 3,091 | ARCH-MS-16 extracted the complete task REST surface; includes DELIVERABLES-17 verifier dispatch |
-| `mcp_server.py` | 3,018 | ARCH-MS-17 extracted task MCP tools; includes DELIVERABLES-17 verifier dispatch |
+| `mcp_server.py` | 2,982 | ARCH-MS-19 extracted board read tools after the task adapter seam |
 | `static/app.js` | 6,566 | Held |
 | repo root `*.py` | 205 | ARCH-MS-4 + ARCH-MS-21 add focused root proofs; ARCH-MS-6 stays under `tests/` |
 

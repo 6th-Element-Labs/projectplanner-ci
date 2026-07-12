@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent
 LINE_CEILINGS = {
     "store.py": 15_566,  # DELIVERABLES-16 closure surface (+95) atop create_project cache fix
     "app.py": 3_091,  # ARCH-MS-16 task router extraction atop DELIVERABLES-17 (+16)
-    "mcp_server.py": 3_018,  # ARCH-MS-17 extracted task tools; includes DELIVERABLES-17's +25 lines
+    "mcp_server.py": 2_982,  # ARCH-MS-19 extracted board reads after the task-tool seam
     "static/app.js": 4_888,  # ARCH-MS-21 composition root after board/mission/state extraction
     "static/js/api.js": 25,  # project-aware fetch boundary
     "static/js/state.js": 79,  # application state and UI vocabularies
