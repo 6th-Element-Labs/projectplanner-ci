@@ -12,10 +12,11 @@ LINE_CEILINGS = {
     "store.py": 15_566,  # DELIVERABLES-16 closure surface (+95) atop create_project cache fix
     "app.py": 3_091,  # ARCH-MS-16 task router extraction atop DELIVERABLES-17 (+16)
     "mcp_server.py": 3_018,  # ARCH-MS-17 extracted task tools; includes DELIVERABLES-17's +25 lines
-    "static/app.js": 4_888,  # ARCH-MS-21 composition root after board/mission/state extraction
+    "static/app.js": 4_889,  # DELIVERABLES-18 composes the closure leaf boundary
     "static/js/api.js": 25,  # project-aware fetch boundary
     "static/js/state.js": 79,  # application state and UI vocabularies
     "static/js/board.js": 227,  # board filters/cards/summary rendering
+    "static/js/closure.js": 100,  # closure verification request + graded report UI
     "static/js/mission.js": 1_379,  # deliverable mission cockpit and authoring
 }
 ROOT_PYTHON_FILE_CEILING = 205  # ARCH-MS-4 then ARCH-MS-21 add one focused regression proof each
