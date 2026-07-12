@@ -433,4 +433,44 @@ finally:
     for name, fn in _saved_mq3.items():
         setattr(gate, name, fn)
 
-print("\n39 passed, 0 failed")
+# --- token-HTTPS origin + leak-safe credential env (CI-gate SSH-trust fix) ----------
+_env_keys = ("SWITCHBOARD_CI_GIT_REMOTE", "SWITCHBOARD_CI_GITHUB_TOKEN")
+_saved_env = {k: os.environ.get(k) for k in _env_keys}
+_SECRET = "ghs_TOPSECRETtokenVALUE123"
+try:
+    os.environ.pop("SWITCHBOARD_CI_GIT_REMOTE", None)
+    os.environ["SWITCHBOARD_CI_GITHUB_TOKEN"] = _SECRET
+
+    origin = gate._origin_url(Path("/nonexistent-source"), "6th-Element-Labs/projectplanner")
+    ok(origin == "https://github.com/6th-Element-Labs/projectplanner.git",
+       "with a token set, origin is clean token-less HTTPS (no SSH host-key needed)")
+    ok(_SECRET not in origin,
+       "the token never appears in the origin URL (can't leak via argv/CalledProcessError)")
+
+    genv = gate._git_env()
+    helper = genv["GIT_CONFIG_VALUE_0"]
+    ok(genv["GIT_CONFIG_KEY_0"] == "credential.helper" and genv["GIT_CONFIG_COUNT"] == "1",
+       "git env injects a credential helper via GIT_CONFIG_* (never on the command line)")
+    ok("${SWITCHBOARD_CI_GITHUB_TOKEN}" in helper and _SECRET not in helper,
+       "the helper references the token by variable name only — the secret is never in config")
+    ok(genv.get("GIT_TERMINAL_PROMPT") == "0",
+       "git env disables interactive credential prompts so a bad token fails fast")
+
+    os.environ["SWITCHBOARD_CI_GIT_REMOTE"] = "git@example.com:custom/mirror.git"
+    ok(gate._origin_url(Path("/x"), "a/b") == "git@example.com:custom/mirror.git",
+       "an explicit SWITCHBOARD_CI_GIT_REMOTE still wins over the token default")
+
+    os.environ.pop("SWITCHBOARD_CI_GIT_REMOTE", None)
+    os.environ.pop("SWITCHBOARD_CI_GITHUB_TOKEN", None)
+    ok(gate._origin_url(Path("/nonexistent-source"), "a/b") == "git@github.com:a/b.git",
+       "with no token and an unreadable source origin, prior SSH fallback is preserved")
+    ok(gate._git_env() is None,
+       "no token -> git env is None (inherit os.environ, unchanged local/SSH behaviour)")
+finally:
+    for k, v in _saved_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+print("\n46 passed, 0 failed")

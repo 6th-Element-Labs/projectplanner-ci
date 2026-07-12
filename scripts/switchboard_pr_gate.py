@@ -326,32 +326,73 @@ def _claim_gate_targets(args: argparse.Namespace, primary_repo: str, token: str)
             yield repo, pr, mode
 
 
+# Env var that carries the GitHub token for HTTPS git auth (already set on the gate
+# service). Named once so _origin_url and _git_env agree.
+_CI_TOKEN_ENV = "SWITCHBOARD_CI_GITHUB_TOKEN"
+
+
 def _origin_url(source_repo: Path, repo: str) -> str:
     explicit = os.environ.get("SWITCHBOARD_CI_GIT_REMOTE", "").strip()
     if explicit:
         return explicit
+    # When a GitHub token is available, use a clean token-less HTTPS origin and let
+    # _git_env() supply the credential out-of-band. This is the durable fix for the
+    # fleet-wide "Host key verification failed" break: the gate runs as the hardened
+    # `projectplanner` service account, which has no github SSH trust, so the old SSH
+    # fallback (git@github.com:...) failed every fetch. HTTPS needs no known_hosts.
+    # The URL is deliberately credential-free so it can never leak the token through a
+    # CalledProcessError (which echoes argv) or a stored remote.
+    if os.environ.get(_CI_TOKEN_ENV, "").strip():
+        return f"https://github.com/{repo}.git"
     try:
         out = subprocess.check_output(["git", "remote", "get-url", "origin"],
                                       cwd=str(source_repo), text=True).strip()
         if out:
             return out
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError):
+        # Non-zero git (e.g. "dubious ownership" on a root-owned tree) or an
+        # unreadable/missing source dir — fall back rather than crash the gate.
         pass
     return f"git@github.com:{repo}.git"
+
+
+def _git_env() -> Optional[Dict[str, str]]:
+    """Environment for network git calls that supplies the GitHub token WITHOUT ever
+    placing it in argv or a stored URL.
+
+    Uses a credential.helper injected via GIT_CONFIG_* env (git >= 2.31), so it applies
+    to clone/fetch without touching the command line. The helper body references only the
+    *name* ``${SWITCHBOARD_CI_GITHUB_TOKEN}`` — the shell expands it from the environment
+    at credential time — so the actual secret never appears in the config value, argv, or
+    any CalledProcessError text. Returns None (inherit os.environ) when no token is set,
+    preserving the prior behaviour for local/SSH setups.
+    """
+    token = os.environ.get(_CI_TOKEN_ENV, "").strip()
+    if not token:
+        return None
+    env = dict(os.environ)
+    helper = ('!f() { echo username=x-access-token; '
+              'echo "password=${%s}"; }; f' % _CI_TOKEN_ENV)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "credential.helper"
+    env["GIT_CONFIG_VALUE_0"] = helper
+    return env
 
 
 def _ensure_cache_repo(root: Path, source_repo: Path, repo: str) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     cache = root / "repo.git"
     origin = _origin_url(source_repo, repo)
+    genv = _git_env()
     if not cache.exists():
-        _run(["git", "clone", "--bare", origin, str(cache)])
+        _run(["git", "clone", "--bare", origin, str(cache)], env=genv)
     else:
         _run(["git", "-C", str(cache), "remote", "set-url", "origin", origin])
     _run(["git", "-C", str(cache), "fetch", "--prune", "origin",
           "+refs/heads/*:refs/heads/*",
           "+refs/pull/*/head:refs/pull/*/head",
-          "+refs/pull/*/merge:refs/pull/*/merge"])
+          "+refs/pull/*/merge:refs/pull/*/merge"], env=genv)
     return cache
 
 
