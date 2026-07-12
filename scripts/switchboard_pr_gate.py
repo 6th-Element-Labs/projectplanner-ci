@@ -26,6 +26,7 @@ from typing import Any, Dict, Iterable, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import ci_attribution  # noqa: E402
+import ci_gate_requests  # noqa: E402
 import external_ci_mirror  # noqa: E402
 import pr_provenance_gate  # noqa: E402
 import review_preflight  # noqa: E402
@@ -788,6 +789,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--fail-on-red", action="store_true",
                         help="Return nonzero when any PR gate posts failure. Manual use only; "
                              "systemd timers should stay green when they successfully post red statuses.")
+    parser.add_argument("--drain-requests", action="store_true",
+                        help="HARDEN-74 event-driven mode: gate exactly the PRs with a pending "
+                             "request marker (dropped by the PR webhook), then clear them. This is "
+                             "what the projectplanner-ci-gate-request.path unit runs so a PR is "
+                             "gated the instant it opens instead of on the 5-min timer. Skips the "
+                             "registry-wide claim sweep and the merge-queue pass (nothing to do "
+                             "when there is no pending request).")
     args = parser.parse_args(argv)
 
     token = _token()
@@ -795,6 +803,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("ERROR: set PM_GITHUB_TOKEN, GITHUB_TOKEN, or SWITCHBOARD_CI_GITHUB_TOKEN.",
               file=sys.stderr)
         return 2
+
+    # Event-driven drain: resolve the requested PRs and run exactly like `--pr <n> ...` for
+    # them (claim gate + test gate for those PRs, no merge-queue pass). Markers are claimed
+    # (removed) by drain() before gating, so a newer webhook re-creates one and re-fires.
+    if args.drain_requests and not args.pr:
+        drained = ci_gate_requests.drain()
+        nums = sorted({int(d["pr_number"]) for d in drained if d.get("pr_number") is not None})
+        if not nums:
+            print(json.dumps({"drain_requests": True, "pending": 0}, sort_keys=True))
+            return 0
+        print(json.dumps({"drain_requests": True, "pending": len(nums), "prs": nums},
+                         sort_keys=True))
+        args.pr = nums
+
     root = Path(args.workdir)
     source_repo = Path(args.source_repo)
     results = []

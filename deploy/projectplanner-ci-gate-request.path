@@ -1,0 +1,23 @@
+# /etc/systemd/system/projectplanner-ci-gate-request.path
+# HARDEN-74 event-driven CI: fire the PR gate the INSTANT a request marker appears,
+# instead of waiting for the 1-minute backstop timer. The GitHub PR webhook (handled by
+# the web app) writes /var/lib/projectplanner/ci-gate/requests/pr-<n>.json; systemd starts
+# the drain service immediately. DirectoryNotEmpty re-triggers as long as markers remain,
+# so a marker that arrives while the drainer is mid-run is not missed.
+#
+# Install:
+#   sudo cp deploy/projectplanner-ci-gate-request.{path,service} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now projectplanner-ci-gate-request.path
+# and set SWITCHBOARD_CI_EVENT_DRIVEN=1 in /opt/projectplanner/.env (web app enqueues).
+[Unit]
+Description=ProjectPlanner event-driven CI gate request watcher
+
+[Path]
+DirectoryNotEmpty=/var/lib/projectplanner/ci-gate/requests
+Unit=projectplanner-ci-gate-request.service
+MakeDirectory=true
+DirectoryMode=0755
+
+[Install]
+WantedBy=paths.target
