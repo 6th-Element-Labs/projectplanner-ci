@@ -87,6 +87,14 @@ for _pid in store.project_ids():
             _PROJECT_INIT_FAILURES[_pid] = f"{type(_e).__name__}: {_e}"
             print(f"[projects] seed {_pid} skipped: {_e}")
 
+# NARRATE-14: register the event-driven narration wake accelerator. Inert until an operator sets
+# PM_NARRATION_EVENT_PRIMARY; the durable outbox + narrate_events recovery sweep are the backstop.
+try:
+    import narration_cutover  # noqa: E402
+    narration_cutover.register_production_wake_sink()
+except Exception as _e:  # never let narration wiring block startup
+    print(f"[narration] wake sink registration skipped: {_e}")
+
 
 ADMIN_SCOPES = ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"]
 
