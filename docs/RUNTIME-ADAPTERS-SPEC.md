@@ -16,6 +16,11 @@ Wake and continuity behavior is specified separately in
 [`RUNTIME-WAKE-CAPABILITY-MATRIX.md`](RUNTIME-WAKE-CAPABILITY-MATRIX.md): each adapter must
 distinguish a fresh start from exact vendor-session, checkpoint, or reconstructed-history resume.
 
+Vendor-hosted execution is specified in
+[`CLOUD-EXECUTION-ADAPTER-CONTRACT.md`](CLOUD-EXECUTION-ADAPTER-CONTRACT.md): cloud adapters reuse
+the wake/runner/PR/Tally lifecycle but require a provider session ID and app-visible URL before
+claiming that work is running.
+
 ---
 
 ## 1. Product thesis
