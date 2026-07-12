@@ -8,8 +8,10 @@ from .base import (
 )
 from .registry import get_schema, list_schemas, register
 from .projects import (
+    PROJECT_IMPACT_REPORT_SCHEMA,
     PROJECT_RECORD_SCHEMA,
     PROJECT_UPDATE_COMMAND_SCHEMA,
+    ProjectImpactReport,
     ProjectRecord,
     ProjectUpdateCommand,
 )
@@ -25,12 +27,14 @@ from .tasks import (
 __all__ = [
     "CREATE_TASK_COMMAND_SCHEMA",
     "GET_TASK_QUERY_SCHEMA",
+    "PROJECT_IMPACT_REPORT_SCHEMA",
     "PROJECT_RECORD_SCHEMA",
     "PROJECT_UPDATE_COMMAND_SCHEMA",
     "SCHEMA_ID_PREFIX",
     "UPDATE_TASK_COMMAND_SCHEMA",
     "CreateTaskCommand",
     "GetTaskQuery",
+    "ProjectImpactReport",
     "ProjectRecord",
     "ProjectUpdateCommand",
     "UpdateTaskCommand",

@@ -34,6 +34,7 @@ from mcp_http_timing import MCPServerTimingMiddleware
 from mcp_observability_http import MCPObservabilityEndpoint
 from mcp_auth import MCPAuthMiddleware
 from switchboard.mcp.tools import board as board_tools
+from switchboard.mcp.tools import projects as project_tools
 from switchboard.mcp.tools import tasks as task_tools
 
 store.init_project_registry()
@@ -141,6 +142,15 @@ def _require_write(ctx, project: str = "maxwell", scopes=("write:tasks",)):
     return principal
 
 
+def _require_read(ctx, project: str = "maxwell", scopes=("read",)):
+    """Gate sensitive reads through the selected project's bearer scopes."""
+    try:
+        return auth.authenticate(project, auth.bearer_from_mcp_context(ctx),
+                                 scopes, dev_actor="MCP")
+    except PermissionError as e:
+        raise ValueError(str(e))
+
+
 def _resolve_write_actor(principal, project: str = "maxwell", task_id: str = "",
                          agent_id: str = "", system_actor: str = "",
                          system_reason: str = ""):
@@ -192,6 +202,12 @@ _board_tool_functions = board_tools.register_board_tools(
     board_tools.BoardToolServices(dumps=_dumps),
 )
 globals().update(_board_tool_functions)
+
+_project_tool_functions = project_tools.register_project_tools(
+    mcp,
+    project_tools.ProjectToolServices(dumps=_dumps, require_read=_require_read),
+)
+globals().update(_project_tool_functions)
 
 
 def _resolve_project_input(project: str) -> str:

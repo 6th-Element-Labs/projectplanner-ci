@@ -64,6 +64,7 @@ _req_obs = request_observability.RequestObservability()
 import scripts.switchboard_path  # noqa: E402,F401
 from switchboard.api.routers.auth import service as _auth_service, session as _auth_session, store as _auth_store  # noqa: E402
 from switchboard.api.routers.auth.routes import router as _global_auth_router  # noqa: E402
+from switchboard.api.routers.projects import create_router as _create_project_router  # noqa: E402
 from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
 
 _auth_store.init()
@@ -159,6 +160,10 @@ def _control_plane_http(result):
 
 
 app.include_router(_create_task_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+))
+app.include_router(_create_project_router(
     resolve_project=_proj,
     resolve_principal=_principal,
 ))

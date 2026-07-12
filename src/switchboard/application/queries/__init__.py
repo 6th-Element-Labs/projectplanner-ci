@@ -1,5 +1,5 @@
-"""Read-side application queries (get_task, …)."""
+"""Read-side application queries."""
 
-from . import get_task
+from . import get_task, project_impact
 
-__all__ = ["get_task"]
+__all__ = ["get_task", "project_impact"]
