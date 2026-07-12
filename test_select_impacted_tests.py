@@ -16,61 +16,80 @@ def ok(condition, message):
     failed += 0 if condition else 1
 
 
-ALL = ["test_narration_ops.py", "test_narration_outbox.py", "test_web_write_auth.py",
-       "test_deliverables_model.py"]
-IMPORTS = {
+# Import graph over ALL .py files (modules AND tests). agent -> signals (transitive edge).
+MI = {
+    "narration_ops.py": {"narration_outbox", "store"},
+    "narration_outbox.py": {"store"},
+    "agent.py": {"signals"},                     # non-test module that re-exports a leaf
+    "signals.py": set(),
+    "orphan.py": set(),                          # changed-but-untested module
+    "widgets/parser.py": set(),
     "test_narration_ops.py": {"narration_ops", "narration_outbox", "store"},
     "test_narration_outbox.py": {"narration_outbox", "store"},
-    "test_web_write_auth.py": {"app", "auth"},
+    "test_signals.py": {"signals"},
+    "test_session_health.py": {"agent"},         # transitively reaches signals via agent
     "test_deliverables_model.py": {"store"},
+    "test_comma.py": {"os", "signals"},          # comma-import edge (import os, signals)
+    "test_widget.py": {"widgets.parser", "widgets"},
 }
+ALL = [f for f in MI if os.path.basename(f).startswith("test_")]
 
 try:
-    # 1. a broad/shared change runs the FULL suite (None sentinel) — fail-safe.
-    for broad in ["store.py", "app.py", "mcp_server.py", "db/core.py", "constants.py",
-                  "requirements.txt", "conftest.py", "scripts/switchboard_ci.sh", "tests/path_setup.py"]:
-        if sel.impacted_tests([broad], ALL, test_imports=IMPORTS) is not None:
+    # 1. broad/shared changes run the FULL suite (None), fail-safe.
+    for broad in ["store.py", "app.py", "mcp_server.py", "db/core.py", "requirements.txt",
+                  "conftest.py", "scripts/switchboard_ci.sh", "tests/path_setup.py"]:
+        if sel.impacted_tests([broad], ALL, module_imports=MI) is not None:
             ok(False, f"broad change {broad} did NOT force full suite"); break
     else:
         ok(True, "any broad/shared change forces the full suite (None)")
 
-    # 2. a leaf-module change narrows to the tests that import it + its test_<module>.
-    imp = sel.impacted_tests(["narration_ops.py"], ALL, test_imports=IMPORTS)
-    ok(imp == ["test_narration_ops.py"],
-       "a leaf module change runs only the tests that import it")
+    # 2. a leaf change narrows to the tests that (transitively) import it.
+    imp = sel.impacted_tests(["narration_ops.py"], ALL, module_imports=MI)
+    ok(imp == ["test_narration_ops.py"], "a leaf change runs only the tests that import it")
 
-    # 3. a changed test file runs itself.
-    imp = sel.impacted_tests(["test_deliverables_model.py"], ALL, test_imports=IMPORTS)
-    ok("test_deliverables_model.py" in imp, "a changed test file runs itself")
+    # 3. BUG-2 FIX — transitive imports are caught: changing a leaf that a NON-test module
+    #    re-exports pulls in tests that reach it only through that module.
+    imp = sel.impacted_tests(["signals.py"], ALL, module_imports=MI)
+    ok("test_session_health.py" in imp and "test_signals.py" in imp and "test_comma.py" in imp,
+       "a transitively-dependent test (test -> agent -> signals) is selected")
 
-    # 4. fail-safe: a changed module with NO covering test → full suite.
-    imp = sel.impacted_tests(["some_uncovered_helper.py"], ALL, test_imports=IMPORTS)
-    ok(imp is None, "a changed module with no covering test forces the full suite")
+    # 4. BUG-1 FIX — a non-Python change (data/fixture/SQL/template) forces the full suite.
+    ok(sel.impacted_tests(["seed_plan.json"], ALL, module_imports=MI) is None
+       and sel.impacted_tests(["static/index.html"], ALL, module_imports=MI) is None
+       and sel.impacted_tests(["db/migrations/003.sql"], ALL, module_imports=MI) is None,
+       "any non-Python (non-doc) change forces the full suite — no silent empty selection")
 
-    # 5. test_<module>.py convention picks up the sibling test even without an import edge.
-    imp = sel.impacted_tests(["narration_outbox.py"], ALL, test_imports=IMPORTS)
-    ok("test_narration_outbox.py" in imp,
-       "test_<module>.py is selected for a changed module")
+    # 5. docs-only changes can't affect tests → select nothing (not the full suite).
+    ok(sel.impacted_tests(["docs/x.md", "README.md"], ALL, module_imports=MI) == [],
+       "a docs-only change selects no tests (docs can't change a test outcome)")
 
-    # 6. package-file change maps to importers of the package and dotted module.
-    imports2 = dict(IMPORTS, **{"test_db_thing.py": {"db.core", "db"}})
-    all2 = ALL + ["test_db_thing.py", "test_core.py"]
-    # db/ is broad, so use a non-broad package to prove the alias mapping:
-    imports3 = {"test_widget.py": {"widgets.parser", "widgets"}}
-    imp = sel.impacted_tests(["widgets/parser.py"], ["test_widget.py"], test_imports=imports3)
-    ok(imp == ["test_widget.py"], "a package-file change maps to tests importing the dotted module")
+    # 6. fail-safe: a changed module with NO covering test → full suite.
+    ok(sel.impacted_tests(["orphan.py"], ALL, module_imports=MI) is None,
+       "a changed module reached by no test forces the full suite")
 
-    # 7. sharding is deterministic, balanced, and partitions exactly (no loss, no overlap).
+    # 7. a changed test file runs itself.
+    ok("test_deliverables_model.py" in sel.impacted_tests(
+        ["test_deliverables_model.py"], ALL, module_imports=MI),
+       "a changed test file runs itself")
+
+    # 8. BUG-3 FIX — comma multi-import + relative imports are parsed.
+    ok("signals" in sel._parse_imports("import os, signals\n")
+       and "sib" in sel._parse_imports("from . import sib\n")
+       and "a.b" in sel._parse_imports("from a.b import c\n")
+       and sel._parse_imports("import saturation_signals  # noqa: E402\n") == {"saturation_signals"}
+       and sel._parse_imports("from store import x  # noqa\n") == {"store"},
+       "import parser handles comma/relative imports AND strips inline # comments")
+
+    # 9. sharding partitions exactly, balanced within 1, deterministic.
     items = [f"t{n}.py" for n in range(23)]
     N = 4
     shards = [sel.shard(items, N, i) for i in range(N)]
     union = sorted(x for s in shards for x in s)
     sizes = sorted(len(s) for s in shards)
     ok(union == sorted(items)
-       and all(len(set(shards[i]) & set(shards[j])) == 0 for i in range(N) for j in range(i + 1, N))
+       and all(not (set(shards[i]) & set(shards[j])) for i in range(N) for j in range(i + 1, N))
        and sizes[-1] - sizes[0] <= 1,
        "shard partitions all items exactly once, balanced within 1, deterministic")
-
     ok(sel.shard(items, 1, 0) == sorted(items), "shards=1 returns the whole sorted set")
 
 except Exception as exc:  # pragma: no cover
