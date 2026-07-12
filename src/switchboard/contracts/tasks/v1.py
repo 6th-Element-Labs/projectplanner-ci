@@ -12,6 +12,13 @@ CREATE_TASK_COMMAND_SCHEMA = "switchboard.task.create_command.v1"
 UPDATE_TASK_COMMAND_SCHEMA = "switchboard.task.update_command.v1"
 GET_TASK_QUERY_SCHEMA = "switchboard.task.get_query.v1"
 
+CREATE_TASK_FIELDS: tuple[str, ...] = (
+    "workstream_id", "title", "description", "workstream_name", "owner_org",
+    "owner_person_or_role", "assignee", "phase", "status", "effort_days",
+    "duration_days", "start_date", "finish_date", "depends_on", "entry_criteria",
+    "exit_criteria", "deliverable", "risk_level", "is_blocking",
+)
+
 UPDATE_TASK_FIELDS: tuple[str, ...] = (
     "title", "description", "owner_org", "owner_person_or_role", "assignee",
     "phase", "status", "effort_days", "duration_days", "start_date",
@@ -77,8 +84,10 @@ class CreateTaskCommand(VersionedModel):
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> CreateTaskCommand:
         data = dict(value or {})
-        data.pop("schema", None)
-        return cls.model_validate(data)
+        # MCP passes ``locals()``; REST may include write-binding fields. Keep
+        # only the task columns the command owns, matching the dataclass era.
+        filtered = {key: data[key] for key in CREATE_TASK_FIELDS if key in data}
+        return cls.model_validate(filtered)
 
     def to_store_data(self) -> dict[str, Any]:
         return {

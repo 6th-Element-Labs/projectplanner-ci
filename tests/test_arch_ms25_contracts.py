@@ -90,5 +90,17 @@ query = GetTaskQuery.from_inputs(" arch-ms-25 ", project=" switchboard ")
 ok(query.task_id == "arch-ms-25" and query.project == "switchboard",
    "GetTaskQuery strips task_id and project")
 
+mcp_locals = CreateTaskCommand.from_mapping({
+    "workstream_id": "SUBJ",
+    "title": "with deps",
+    "ctx": None,
+    "depends_on": "DEP-1, DEP-2",
+    "project": "helm",
+    "agent_id": "",
+    "services": object(),
+})
+ok(mcp_locals.depends_on == ("DEP-1", "DEP-2"),
+   "CreateTaskCommand ignores MCP adapter locals beyond task fields")
+
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)
