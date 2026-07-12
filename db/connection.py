@@ -111,12 +111,23 @@ def _resolve(project: Optional[str]) -> Dict[str, str]:
     return p
 
 
+# journal_mode=WAL is PERSISTENT — it lives in the database header, so once a db is WAL
+# every new connection opens in WAL automatically without re-running the PRAGMA. Re-issuing
+# `PRAGMA journal_mode=WAL` on every connection is therefore redundant, and it was the single
+# hottest line on the live web worker (~45% of its CPU — the statement briefly locks the db /
+# touches the WAL). Set it once per db-path per process; skip it on every subsequent open.
+# (The other PRAGMAs below are per-connection state and MUST be re-applied on each open.)
+_wal_confirmed_paths: set = set()
+
+
 def _open_sqlite(db_path: str, timeout_s: float) -> sqlite3.Connection:
     c = sqlite3.connect(db_path, timeout=timeout_s)
     c.row_factory = sqlite3.Row
     try:
         c.execute(f"PRAGMA busy_timeout={int(timeout_s * 1000)}")
-        c.execute("PRAGMA journal_mode=WAL")
+        if db_path not in _wal_confirmed_paths:
+            c.execute("PRAGMA journal_mode=WAL")
+            _wal_confirmed_paths.add(db_path)
         # NORMAL avoids a second fsync for each WAL transaction.  SQLite still
         # syncs the WAL at checkpoints, preserving database consistency while
         # substantially shortening the writer lock window.  A power or OS crash
