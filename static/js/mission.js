@@ -294,7 +294,7 @@
                 this.loadMissionStatus(this.selectedDeliverableId),
                 this.loadDependencyGraph(this.selectedDeliverableId),
                 this.loadBreakdownProposals(this.selectedDeliverableId),
-                this.loadKpisAndOutcomes(),
+                this.loadKpisAndOutcomes(), this.loadClosureReport(this.selectedDeliverableId),
             ]);
             this._setMissionDeliverableInUrl(this.selectedDeliverableId);
             this.renderMissionPage();
@@ -614,7 +614,7 @@
         const nodeSig = (g.nodes || []).map((n) => `${n.id}:${n.state}`).sort();
         const active = (s.active_work || []).map((w) => `${w.task_id}:${w.status}:${(w.active_claims || []).length}`).sort();
         const blockers = (s.blockers || []).map((b) => `${b.kind || ''}:${b.task_id || ''}`).sort();
-        return JSON.stringify([nodeSig, active, blockers, s.progress || {}, g.stats || {}, (s.deliverable || {}).status]);
+        return JSON.stringify([nodeSig, active, blockers, s.progress || {}, g.stats || {}, (s.deliverable || {}).status, ((this.missionClosure || {}).report || {}).report_id, ((this.missionClosure || {}).report || {}).grade]);
     },
 
     _missionLiveStamp(changed) {
@@ -633,7 +633,7 @@
         if (!id || this._missionLiveBusy) return;
         this._missionLiveBusy = true;
         try {
-            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id)]);
+            await Promise.all([this.loadMissionStatus(id), this.loadDependencyGraph(id), this.loadClosureReport(id)]);
         } catch (e) {
             this._missionLiveBusy = false;
             return;   // transient (agent mid-write, network blip) — try again next tick
@@ -712,7 +712,7 @@
             <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
             <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)}</div>
         </div>
-        <div class="text-end">
+        <div class="text-end"><div class="mb-2">${this._missionClosureActionHtml()}</div>
             <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
             <div id="mission-live-stamp" class="text-secondary small mt-1"></div>
         </div></div>
@@ -760,7 +760,7 @@
         this._missionDetailOpen = detailOpen;
         // Lead with the story: headline → plain-English → what's blocked → the map →
         // breakdown/outcomes review → next action.
-        const essentials = header + this._missionCeoHeaderHtml(s) + blockerHtml
+        const essentials = header + this._missionClosureHtml() + this._missionCeoHeaderHtml(s) + blockerHtml
             + this._missionDependencyGraphHtml() + this._missionBreakdownHtml() + nextActions;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
@@ -924,6 +924,7 @@
             case 'approve': return this.approveProposal(ds.proposal);
             case 'reject': return this.rejectProposal(ds.proposal);
             case 'defer': return this.deferProposal(ds.proposal);
+            case 'closure-request': return this.requestClosureVerification();
             // UI-2: KPIs & outcomes
             case 'kpi-new': return this.openKpiModal();
             case 'kpi-edit': return this.updateKpiValue(ds.kpi);
@@ -933,7 +934,6 @@
             case 'outcome-link': return this.openKpiLinkModal(ds.outcome);
         }
     },
-
     // ---- small modal + fetch helpers ----
     _dlShow(id) { window.bootstrap.Modal.getOrCreateInstance(document.getElementById(id)).show(); },
     _dlHide(id) { const m = document.getElementById(id); const inst = m && window.bootstrap.Modal.getInstance(m); if (inst) inst.hide(); },
