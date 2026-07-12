@@ -33,14 +33,18 @@ verification fast and attributable, and serialize only the *final merge* via a q
 
 No single change suffices; each lever removes one class of contention. Status as of this ADR:
 
-### Lever 1 — Kill shared hot files (commutative CI config) · *started*
+### Lever 1 — Kill shared hot files (commutative CI config) · *in place*
 CI config a PR must edit is a global counter. Make every such check per-diff or per-file.
 - **Done:** retire the exact-match size ratchet (ADR-0007 Decision 2; `test_size_ratchet.py`
   deleted). Growth is redirected by ADR-0007 Decision 3 + review, not a counter.
-- **Next:** a **per-PR diff guard** — CI fails only if *this PR's own diff* adds net lines to a
-  monolith (`store.py` / `app.py` / `mcp_server.py`) without a `MONOLITH-TOUCH:` justification in
-  the PR body. Extractions that move lines out always pass. Two PRs touching different files never
-  conflict because neither edits a shared line.
+- **Done:** a **per-PR diff guard** — `test_monolith_diff_guard.py` (HARDEN-69), a plain
+  discovered test in the standard suite. It fails CI only if *this PR's own diff* adds net lines to
+  a monolith (`store.py` / `app.py` / `mcp_server.py`) without a `MONOLITH-TOUCH:` justification (a
+  `MONOLITH-TOUCH: <reason>` line in a commit message — the source visible inside the off-box CI
+  mirror — or in the PR body via `$PR_BODY`, or `$MONOLITH_TOUCH_JUSTIFICATION`). It diffs against
+  the merge base (the mirror's `refs/pull/N/merge` first parent, `HEAD^1`), so extractions that
+  move lines out always pass and two PRs touching different files never conflict — neither edits a
+  shared line. On `master` or any checkout with no PR diff the guard is a visible no-op.
 - **Rule:** append-y artifacts (changelogs, ledgers, snapshots) use one-file-per-PR *changeset
   fragments* merged by a bot, never a single shared doc. Lockfiles regenerate deterministically.
 
@@ -93,9 +97,9 @@ The board already partitions work and has `claim_files` advisory locks — most 
 of work; 5–7 make it durable at scale.**
 
 ```
-DONE: ratchet retired (L1) · auto-merge on (L2)
+DONE: ratchet retired + diff-guard in place (L1) · auto-merge on (L2)
 1. Auto-rebase bot (L4)              — kills the manual re-merge loop; pairs with auto-merge
-2. Diff-guard replaces the ratchet (L1) — commutative growth check for when the fleet parallelizes
+2. Diff-guard replaces the ratchet (L1) — DONE: test_monolith_diff_guard.py (HARDEN-69)
 3. merge_group gate wiring → native merge queue (L2) — the durable serialization
 4. Off-box parallel runners + test-impact analysis (L3) — throughput multiplier
 5. Continue ARCH-MS extraction (L5)  — structurally fewer conflicts over time

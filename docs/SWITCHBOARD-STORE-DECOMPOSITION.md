@@ -3,8 +3,9 @@
 > **⚠️ SUPERSEDED (ADR-0006, 2026-07-08).** This 37-module decomposition (ARCH-6…17) is no
 > longer the plan of record. [ADR-0006](decisions/0006-control-plane-done-enough.md) retired
 > the remaining decomposition program: the foundation cuts (ARCH-1…5) shipped, and the rest
-> was replaced by a growth moratorium — now the `test_size_ratchet.py` ceiling
-> ([ADR-0007](decisions/0007-application-shell-cleanup.md), Decision 2). The module map below
+> was replaced by a growth moratorium — now the per-PR `test_monolith_diff_guard.py`
+> ([ADR-0010](decisions/0010-ci-concurrency.md) Lever 1; the `test_size_ratchet.py` ceiling of
+> [ADR-0007](decisions/0007-application-shell-cleanup.md) Decision 2 was retired 2026-07-12). The module map below
 > is kept for historical reference and as an on-touch extraction compass **only** — nothing
 > here is scheduled or assigned. Do not treat this document as a backlog.
 

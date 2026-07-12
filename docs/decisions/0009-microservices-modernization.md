@@ -91,9 +91,9 @@ mode.
    allowed only for verbatim extractions and P0 security fixes. Enforced by ARCH-MS task
    boundaries + review, **not** by a global size counter. (The exact-match `test_size_ratchet.py`
    was retired 2026-07-12: a single integer every concurrent PR had to CAS against a moving
-   `master` produced continuous merge wars — see ADR-0007 Decision 2 retirement banner. When the
-   fleet runs parallel again, replace it with a *per-PR diff guard* — CI fails only if a PR's own
-   diff adds net lines to a monolith without a `MONOLITH-TOUCH:` justification — which is
+   `master` produced continuous merge wars — see ADR-0007 Decision 2 retirement banner. It is
+   replaced by a *per-PR diff guard* — `test_monolith_diff_guard.py` (HARDEN-69): CI fails only if
+   a PR's own diff adds net lines to a monolith without a `MONOLITH-TOUCH:` justification — which is
    commutative and never edits a shared line.)
 4. **REST + MCP = one command.** New task mutations go through typed `application/commands/*`
    and `application/queries/*`; `api/routers/*` and `mcp/tools/*` are adapters only. This is
@@ -164,7 +164,7 @@ Phase 0 closes when **all** of the following hold (see tracker for per-task stat
    verbatim moves** (e.g. ARCH-MS-20 `runner_*` → `runner_store.py`), **or** the `store.py` facade
    is **≤14,000 lines** — measured, not asserted by a shared-counter test. Plus **no new monolith
    growth**: zero net feature lines added to `store.py` / `app.py` / `mcp_server.py` during Phase 0
-   (operator diff audit, or the per-PR diff guard once the fleet parallelizes).
+   (enforced by the per-PR diff guard `test_monolith_diff_guard.py`, HARDEN-69).
 5. **Hygiene:** `tests/` directory + shim for new tests; `PM_*` unread flags deleted; numbered
    migrations path authoritative.
 
