@@ -110,10 +110,15 @@ try:
 
     # ---- both adapters invoke the shared application handlers -----------------
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    task_router_source = (
+        ROOT / "src/switchboard/api/routers/tasks.py"
+    ).read_text(encoding="utf-8")
     mcp_source = (ROOT / "src/switchboard/mcp/tools/tasks.py").read_text(encoding="utf-8")
-    ok("get_task_query.execute_for" in app_source and "get_task_query.execute_for" in mcp_source,
+    ok("_create_task_router" in app_source
+       and "get_task_query.execute_for" in task_router_source
+       and "get_task_query.execute_for" in mcp_source,
        "REST and MCP read paths invoke the same get-task query")
-    ok("update_task_command.execute_mapping_result" in app_source
+    ok("update_task_command.execute_mapping_result" in task_router_source
        and "update_task_command.execute_mapping_result" in mcp_source,
        "REST and MCP write paths invoke the same update-task command")
 finally:

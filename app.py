@@ -61,11 +61,9 @@ _req_obs = request_observability.RequestObservability()
 # Global auth router — always mounted. Browser users authenticate via
 # taikun_session JWT; agents/API callers keep bearer-token principals.
 import scripts.switchboard_path  # noqa: E402,F401
-from switchboard.application.commands import create_task as create_task_command  # noqa: E402
-from switchboard.application.commands import update_task as update_task_command  # noqa: E402
-from switchboard.application.queries import get_task as get_task_query  # noqa: E402
 from switchboard.api.routers.auth import service as _auth_service, session as _auth_session, store as _auth_store  # noqa: E402
 from switchboard.api.routers.auth.routes import router as _global_auth_router  # noqa: E402
+from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
 
 _auth_store.init()
 app.include_router(_global_auth_router)
@@ -151,47 +149,10 @@ def _control_plane_http(result):
     return result
 
 
-def _actor_from_request(request: Request, fallback: str = "user") -> str:
-    p = getattr(request.state, "principal", None)
-    return auth.actor(p) if p else fallback
-
-
-def _resolve_public_write_actor(request: Request, project: str, body: dict,
-                                task_id: str = "", scopes=("write:tasks",)):
-    principal = _principal(request, project, scopes, dev_actor="web")
-    binding = store.resolve_write_actor(
-        auth.actor(principal),
-        project=project,
-        task_id=task_id,
-        agent_id=(body or {}).get("agent_id") or "",
-        system_actor=(body or {}).get("system_actor") or "",
-        system_reason=(body or {}).get("system_reason") or "",
-        principal_id=principal.get("id") or "",
-    )
-    if not binding.get("ok"):
-        raise HTTPException(409, binding)
-    return binding
-
-
-def _record_public_write_binding(task_id: str, binding: dict, project: str) -> None:
-    if not task_id or not isinstance(binding, dict):
-        return
-    if binding.get("binding") in ("principal", None):
-        return
-    store.append_activity(
-        "principal.write_bound",
-        "switchboard/identity",
-        store.write_binding_activity_payload(binding),
-        task_id=task_id,
-        project=project,
-    )
-
-
-def _without_write_binding_fields(body: dict) -> dict:
-    clean = dict(body or {})
-    for key in ("agent_id", "system_actor", "system_reason"):
-        clean.pop(key, None)
-    return clean
+app.include_router(_create_task_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+))
 
 
 def _attach_server_timing(response: Response, started_at: float) -> Response:
@@ -1385,205 +1346,10 @@ async def people(project: str = Query(store.DEFAULT_PROJECT)):
     return {"people": store.get_meta("people", store.DEFAULT_PEOPLE, project=_proj(project))}
 
 
-@app.get("/api/tasks")
-async def list_tasks(workstream: str = None, status: str = None, assignee: str = None,
-                     project: str = Query(store.DEFAULT_PROJECT)):
-    return {"tasks": store.list_tasks(workstream, status, assignee, project=_proj(project))}
-
-
-@app.get("/api/tasks/{task_id}")
-async def get_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    t = get_task_query.execute_for(task_id, project=_proj(project))
-    if not t:
-        raise HTTPException(404, "task not found")
-    return t
-
-
-@app.post("/api/tasks")
-async def create_task(request: Request, body: dict = Body(...), project: str = Query(...)):
-    project = _proj(project)
-    binding = _resolve_public_write_actor(request, project, body)
-    t = create_task_command.execute_mapping_result(_without_write_binding_fields(body), actor=binding["actor"], project=project)
-    if t.get("error"):
-        raise HTTPException(400, t)
-    _record_public_write_binding(t.get("task_id") or "", binding, project)
-    return t
-
-
-@app.patch("/api/tasks/{task_id}")
-async def patch_task(request: Request, task_id: str, body: dict = Body(...), project: str = Query(...)):
-    project = _proj(project)
-    body = dict(body or {})
-    binding = _resolve_public_write_actor(request, project, body, task_id=task_id)
-    actor = binding["actor"]
-    t = update_task_command.execute_mapping_result(
-        task_id, _without_write_binding_fields(body), actor=actor, project=project)
-    if not t:
-        raise HTTPException(404, "task not found")
-    if t.get("error") == "done_requires_merge_provenance":
-        raise HTTPException(409, t.get("message") or "Done requires merge provenance")
-    if t.get("error"):
-        raise HTTPException(400, t)
-    _record_public_write_binding(task_id, binding, project)
-    return t
-
-
-@app.post("/api/tasks/{task_id}/verify_offline")
-async def verify_task_offline(request: Request, task_id: str, body: dict = Body(default={}),
-                              project: str = Query(...)):
-    project = _proj(project)
-    body = dict(body or {})
-    binding = _resolve_public_write_actor(request, project, body, task_id=task_id)
-    actor = binding["actor"]
-    result = store.mark_task_offline_done(
-        task_id,
-        evidence=body.get("evidence") or body.get("evidence_json") or {},
-        artifact_url=body.get("artifact_url") or "",
-        evidence_hash=body.get("evidence_hash") or body.get("hash") or "",
-        verifier=body.get("verifier") or actor,
-        reviewed_at=body.get("reviewed_at"),
-        actor=actor,
-        project=project,
-    )
-    if result.get("error") == "task not found":
-        raise HTTPException(404, result)
-    if result.get("error"):
-        raise HTTPException(409, result)
-    _record_public_write_binding(task_id, binding, project)
-    return result
-
-
-@app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str, project: str = Query(...)):
-    if not store.delete_task(task_id, project=_proj(project)):
-        raise HTTPException(404, "task not found")
-    return {"deleted": task_id}
-
-
-@app.post("/api/tasks/{task_id}/archive")
-async def archive_task(request: Request, task_id: str, body: dict = Body(default={}),
-                       project: str = Query(...)):
-    project = _proj(project)
-    principal = _principal(request, "switchboard", ("write:system",), dev_actor="web")
-    result = store.archive_task(
-        task_id, reason=(body or {}).get("reason") or "",
-        actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/api/tasks/{task_id}/move")
-async def move_task(request: Request, task_id: str, body: dict = Body(...),
-                    project: str = Query(...)):
-    project_from = _proj(project)
-    project_to = _proj((body or {}).get("project_to") or (body or {}).get("destination_project") or "")
-    principal = _principal(request, "switchboard", ("write:system",), dev_actor="web")
-    result = store.move_task(
-        task_id, project_from=project_from, project_to=project_to,
-        reason=(body or {}).get("reason") or "",
-        actor=auth.actor(principal),
-        new_task_id=(body or {}).get("new_task_id") or "",
-        dependency_policy=(body or {}).get("dependency_policy") or "fail",
-    )
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/api/tasks/{task_id}/claims/{claim_id}/revoke")
-async def api_revoke_claim(request: Request, task_id: str, claim_id: str,
-                           body: dict = Body(default={}), project: str = Query(...)):
-    project = _proj(project)
-    body = body or {}
-    actor = _actor_from_request(request, "switchboard/operator")
-    sort_order = body.get("sort_order")
-    try:
-        sort_order_value = int(sort_order) if sort_order not in (None, "") else None
-    except (TypeError, ValueError):
-        raise HTTPException(400, "sort_order must be an integer")
-    result = store.revoke_claim(
-        claim_id,
-        reason=body.get("reason") or "operator override",
-        reassign_to=body.get("reassign_to") or body.get("reassigned_to") or "",
-        sort_order=sort_order_value,
-        partial_evidence=body.get("partial_evidence") or body.get("evidence") or {},
-        notify=body.get("notify") is not False,
-        ack_deadline_minutes=float(body.get("ack_deadline_minutes") or 5),
-        expected_task_id=task_id,
-        actor=actor,
-        project=project,
-    )
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/api/tasks/{task_id}/comment")
-async def comment(request: Request, task_id: str, body: dict = Body(...), project: str = Query(...)):
-    project = _proj(project)
-    body = dict(body or {})
-    text = (body.get("text") or "").strip()
-    if not text:
-        raise HTTPException(400, "text required")
-    binding = _resolve_public_write_actor(request, project, body, task_id=task_id)
-    _record_public_write_binding(task_id, binding, project)
-    t = store.add_comment(task_id, binding["actor"], text, project=project)
-    if not t:
-        raise HTTPException(404, "task not found")
-    return t
-
-
 @app.get("/api/dispatch/status")
 async def dispatch_status(project: str = Query(store.DEFAULT_PROJECT)):
     """Is dispatch wired, and is a work-capable agent host online for this project?"""
     return await asyncio.to_thread(dispatch.status, _proj(project))
-
-
-@app.post("/api/tasks/{task_id}/dispatch")
-async def dispatch_task(task_id: str, body: dict = Body(default={})):
-    """Queue a lane-scoped work-session wake for this task (→ a work-capable agent host claims it
-    and opens a PR on a claude/ branch — never main). The human-triggered entry."""
-    project = _body_project(body)
-    res = await asyncio.to_thread(dispatch.dispatch, task_id, (body or {}).get("actor", "user"), project)
-    if res.get("error") == "task not found":
-        raise HTTPException(404, "task not found")
-    return res
-
-
-@app.get("/api/tasks/{task_id}/dispatch/latest")
-async def task_dispatch_latest(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    """The current dispatch state for a task (none|queued|claiming|running|pr) for the Dev-tab panel."""
-    return await asyncio.to_thread(dispatch.latest, task_id, _proj(project))
-
-
-@app.post("/api/tasks/{task_id}/chat")
-async def chat(task_id: str, body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
-    """Per-task Ask Taikun agent: RAG over the plan docs + propose-then-confirm task edits."""
-    project = _proj(project)
-    assistant = {"helm": "Helm", "switchboard": "Switchboard"}.get(project, "Maxwell")
-    task = store.get_task(task_id, project=project)
-    if not task:
-        raise HTTPException(404, "task not found")
-    msg = (body.get("message") or "").strip()
-    if not msg:
-        raise HTTPException(400, "message required")
-    history = []
-    for a in task.get("activity", []):
-        if a.get("kind") == "chat":
-            text = (a.get("payload") or {}).get("text", "")
-            if text:
-                history.append({"role": "user" if a.get("actor") == "user" else "assistant", "content": text})
-    history = history[-8:]
-    store.add_comment(task_id, "user", msg, kind="chat", project=project)
-    try:
-        result = await asyncio.to_thread(agent.run, task, msg, history, project=project)
-    except Exception as e:
-        store.add_comment(task_id, assistant, f"(agent error: {e})", kind="chat", project=project)
-        raise HTTPException(502, f"agent error: {e}")
-    answer = result.get("answer") or ""
-    store.add_comment(task_id, assistant, answer, kind="chat", project=project)
-    return {"answer": answer, "proposal": result.get("proposal"), "sources": result.get("sources", [])}
 
 
 @app.post("/api/chat")
