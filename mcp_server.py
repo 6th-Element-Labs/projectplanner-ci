@@ -34,9 +34,7 @@ from mcp_dispatch import MCPToolDispatcher
 from mcp_http_timing import MCPServerTimingMiddleware
 from mcp_observability_http import MCPObservabilityEndpoint
 from mcp_auth import MCPAuthMiddleware
-from switchboard.application.commands import create_task as create_task_command
-from switchboard.application.commands import update_task as update_task_command
-from switchboard.application.queries import get_task as get_task_query
+from switchboard.mcp.tools import tasks as task_tools
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -174,22 +172,20 @@ def _write_binding_comment(task_id: str, binding, project: str = "maxwell") -> N
     )
 
 
-def _dep_ids(s):
-    """Parse a comma/space/newline-separated list of task ids into a deduped, upper-cased list."""
-    out, seen = [], set()
-    for tok in (s or "").replace("\n", ",").replace(" ", ",").split(","):
-        t = tok.strip().upper()
-        if t and t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out
+_task_tool_functions = task_tools.register_task_tools(
+    mcp,
+    task_tools.TaskToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+        resolve_write_actor=_resolve_write_actor,
+        write_binding_comment=_write_binding_comment,
+    ),
+)
+globals().update(_task_tool_functions)
 
-
-def _unknown_ids(ids, project):
-    """Task ids that don't exist on the project. A dependency to a non-existent task is a broken
-    graph edge (invalid input) — callers REJECT it rather than write a dangling reference that would
-    spread into every audit that traverses the graph."""
-    return [d for d in ids if not store.get_task(d, project=project)]
+# Compatibility aliases for direct Python callers while the monolith is strangled.
+_dep_ids = task_tools.dep_ids
+_unknown_ids = task_tools.unknown_ids
 
 
 def _resolve_project_input(project: str) -> str:
@@ -689,27 +685,6 @@ def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = 
             deliverable_id=deliverable_id, board_id=board_id,
             mission_id=mission_id, milestone_id=milestone_id),
     })
-
-
-@mcp.tool()
-def search_tasks(workstream: str = "", status: str = "", owner_person: str = "",
-                 blocking: bool = False, query: str = "", project: str = "maxwell") -> str:
-    """Filter a plan's tasks. project selects the board ('maxwell' default, 'helm', or
-    'switchboard'). All other args optional: workstream id (SSO/SEN/... for Maxwell;
-    ENGINE/CHART/... for Helm; PROTO/ADAPTER/ENFORCE/... for Switchboard), status
-    (Not Started|In Progress|In Review|Blocked|Done), owner_person substring, blocking, free-text query.
-    Returns a JSON list of {task_id,title,status,owner_person_or_role,workstream,...}."""
-    return _dumps(agent._search_tasks({
-        "workstream": workstream, "status": status, "owner_person": owner_person,
-        "blocking": blocking, "query": query}, project=project))
-
-
-@mcp.tool()
-def get_task(task_id: str, project: str = "maxwell") -> str:
-    """Full detail of one task: description, all fields, dependencies, and recent activity.
-    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    t = get_task_query.execute_for(task_id, project=project)
-    return _dumps(agent._task_brief(t, full=True)) if t else "no such task"
 
 
 @mcp.tool()
@@ -2949,68 +2924,6 @@ def revoke_scoped_token(principal_id: str, ctx: Context, project: str = "maxwell
 
 
 @mcp.tool()
-def update_task(task_id: str, ctx: Context, title: str = "", description: str = "", status: str = "",
-                owner_org: str = "", owner_person_or_role: str = "", assignee: str = "",
-                phase: str = "", start_date: str = "", finish_date: str = "",
-                risk_level: str = "", is_blocking: str = "", depends_on: str = "",
-                project: str = "maxwell", agent_id: str = "",
-                system_actor: str = "", system_reason: str = "") -> str:
-    """Update only the fields you pass on a task. status: Not Started|In Progress|In Review|Blocked|Done;
-    Done fails closed unless merge/default-branch provenance is already recorded for the task;
-    dates: YYYY-MM-DD; is_blocking: 'true'/'false'. depends_on: comma/space-separated task ids that
-    REPLACE this task's dependency list (e.g. 'TOOLS-7, SHELL-1'); pass 'none' to clear it (for an
-    incremental edge use add_dependency/remove_dependency). Audited as the authenticated actor.
-    project selects the board ('maxwell' default, 'helm', or 'switchboard') — writes go ONLY to that board."""
-    principal = _require_write(ctx, project)
-    binding = _resolve_write_actor(
-        principal, project=project, task_id=task_id, agent_id=agent_id,
-        system_actor=system_actor, system_reason=system_reason)
-    if not binding.get("ok"):
-        return _dumps(binding)
-    actor_name = binding["actor"]
-    data = {}
-    for k, v in (("title", title), ("description", description), ("status", status),
-                 ("owner_org", owner_org), ("owner_person_or_role", owner_person_or_role),
-                 ("assignee", assignee), ("phase", phase), ("start_date", start_date),
-                 ("finish_date", finish_date), ("risk_level", risk_level),
-                 ("is_blocking", is_blocking), ("depends_on", depends_on)):
-        if v != "":
-            data[k] = v
-    if not data:
-        return "no fields to update"
-    t = update_task_command.execute_mapping_result(task_id, data, actor=actor_name, project=project)
-    if isinstance(t, dict) and t.get("error_code"):
-        return _dumps(t)   # command validation failed (e.g. unknown deps): fail loud, no binding comment
-    _write_binding_comment(task_id, binding, project)
-    return _dumps(agent._task_brief(t)) if t else "no such task"
-
-
-@mcp.tool()
-def create_task(workstream_id: str, title: str, ctx: Context, description: str = "",
-                owner_org: str = "", owner_person_or_role: str = "", status: str = "",
-                phase: str = "", risk_level: str = "", depends_on: str = "",
-                project: str = "maxwell", agent_id: str = "",
-                system_actor: str = "", system_reason: str = "") -> str:
-    """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm;
-    PROTO/ADAPTER/ENFORCE/... for Switchboard). depends_on:
-    comma/space-separated task ids this task dependsOn (e.g. 'BOAT-1, WX-10'). Returns the created task.
-    Actor 'MCP'. project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    principal = _require_write(ctx, project)
-    binding = _resolve_write_actor(
-        principal, project=project, agent_id=agent_id,
-        system_actor=system_actor, system_reason=system_reason)
-    if not binding.get("ok"):
-        return _dumps(binding)
-    actor_name = binding["actor"]
-    t = create_task_command.execute_mapping_result(locals(), actor=actor_name, project=project)
-    if t.get("error"):
-        return _dumps(t)
-    if t:
-        _write_binding_comment(t.get("task_id") or "", binding, project)
-    return _dumps(agent._task_brief(t))
-
-
-@mcp.tool()
 def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
                repro_steps: str, evidence: str, severity_hint: str,
                affected_surface: str, ctx: Context, project: str = "maxwell",
@@ -3038,112 +2951,6 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
         "title": title,
     }, actor=actor_name, project=project)
     return _dumps(result)
-
-
-@mcp.tool()
-def add_comment(task_id: str, text: str, ctx: Context, project: str = "maxwell",
-                agent_id: str = "", system_actor: str = "",
-                system_reason: str = "") -> str:
-    """Add a note to a task's activity log (audited as actor 'MCP').
-    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    principal = _require_write(ctx, project)
-    binding = _resolve_write_actor(
-        principal, project=project, task_id=task_id, agent_id=agent_id,
-        system_actor=system_actor, system_reason=system_reason)
-    if not binding.get("ok"):
-        return _dumps(binding)
-    _write_binding_comment(task_id, binding, project)
-    t = store.add_comment(
-        task_id, binding["actor"], text, project=project, hydrate_task=False)
-    return "ok" if t else "no such task"
-
-
-@mcp.tool()
-def archive_task(task_id: str, ctx: Context, project: str = "maxwell",
-                 reason: str = "") -> str:
-    """Archive a task instead of raw-deleting it.
-
-    Requires the system write scope because this removes the active task row. The archived
-    snapshot preserves task fields, activity, git/provenance, Tally rows, claims/leases, and
-    related decision records where possible. Fails if the task has active claims or leases.
-    project selects the board ('maxwell' default, 'helm', 'switchboard', or dynamic projects).
-    """
-    principal = _require_write(ctx, "switchboard", ("write:system",))
-    result = store.archive_task(task_id, reason=reason, actor=auth.actor(principal),
-                                project=project)
-    return _dumps(result)
-
-
-@mcp.tool()
-def move_task(task_id: str, project_from: str, project_to: str, ctx: Context,
-              reason: str = "", new_task_id: str = "",
-              dependency_policy: str = "fail") -> str:
-    """Move one task between isolated project boards with an audit trail.
-
-    This is for cleanup of project-boundary mistakes. It fails closed on unknown projects,
-    refuses active claims/leases, and refuses destination task-id conflicts. By default it
-    also refuses dangling dependencies in the destination; pass dependency_policy='clear'
-    only when intentionally cleaning up leaked tasks and the missing dependency edges should
-    be removed during the move.
-    """
-    principal = _require_write(ctx, "switchboard", ("write:system",))
-    result = store.move_task(
-        task_id, project_from=project_from, project_to=project_to,
-        reason=reason, actor=auth.actor(principal), new_task_id=new_task_id,
-        dependency_policy=dependency_policy)
-    return _dumps(result)
-
-
-@mcp.tool()
-def add_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "maxwell") -> str:
-    """Add one or more dependency EDGES to a task (task_id dependsOn each id in depends_on,
-    comma/space-separated, e.g. 'TOOLS-7, SHELL-1'). APPENDS without clobbering existing deps
-    (idempotent, deduped) — use this to wire cross-epic edges. FAIL-FAST: if ANY id is not a real
-    task the whole call is REJECTED with an error and nothing is written (a dependency to a
-    non-existent task is a broken graph edge) — fix the id or create the target first, then retry.
-    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    principal = _require_write(ctx, project)
-    actor_name = auth.actor(principal)
-    add = _dep_ids(depends_on)
-    if not add:
-        return "no dependency ids given"
-    t = store.get_task(task_id, project=project)
-    if not t:
-        return "no such task: " + task_id
-    unknown = _unknown_ids(add, project)
-    if unknown:   # FAIL LOUD: reject the whole batch — never write a dangling edge
-        return _dumps({"error": "unknown task id(s) on project '%s': %s — NO edge added. "
-                       "Create the target task(s) first or fix the id." % (project, ", ".join(unknown))})
-    merged = list(t.get("depends_on") or [])
-    for d in add:
-        if d not in merged:
-            merged.append(d)
-    store.update_task(task_id, {"depends_on": merged}, actor=actor_name, project=project)
-    return _dumps({"task_id": task_id, "depends_on": merged})
-
-
-@mcp.tool()
-def remove_dependency(task_id: str, depends_on: str, ctx: Context, project: str = "maxwell") -> str:
-    """Remove one or more dependency edges from a task (comma/space-separated ids). Reports which ids
-    were actually removed vs not present — a no-op removal is SURFACED, not silently swallowed.
-    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    principal = _require_write(ctx, project)
-    actor_name = auth.actor(principal)
-    rm = _dep_ids(depends_on)
-    if not rm:
-        return "no dependency ids given"
-    t = store.get_task(task_id, project=project)
-    if not t:
-        return "no such task: " + task_id
-    cur = list(t.get("depends_on") or [])
-    rmset = set(rm)
-    merged = [d for d in cur if d not in rmset]
-    store.update_task(task_id, {"depends_on": merged}, actor=actor_name, project=project)
-    res = {"task_id": task_id, "depends_on": merged, "removed": [d for d in cur if d in rmset]}
-    not_present = [d for d in rm if d not in cur]
-    if not_present:   # surface the no-op rather than pretend it did something
-        res["note"] = "not present (nothing to remove): " + ", ".join(not_present)
-    return _dumps(res)
 
 
 @mcp.tool()
