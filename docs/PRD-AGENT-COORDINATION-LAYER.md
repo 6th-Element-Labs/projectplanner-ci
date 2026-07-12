@@ -844,6 +844,7 @@ adoptable: cost is the *why they'll pull.*
 - [`RUNTIME-ADAPTERS-SPEC.md`](RUNTIME-ADAPTERS-SPEC.md) — runtime packs that automate the agent handshake
 - [`INTERRUPT-TIERS-SPEC.md`](INTERRUPT-TIERS-SPEC.md) — visible stop/redirect/kill guarantees by runtime
 - [`AGENT-HOST-SPEC.md`](AGENT-HOST-SPEC.md) — always-on host registration and wake intents for absent runtimes
+- [`COORDINATOR-CONTRACT.md`](COORDINATOR-CONTRACT.md) — the Coordinator Agent role: T0–T4 risk tiers, permission model, escalation classes, and the non-bypassable floor (COORD-1)
 - [`CLAIM-NEXT-SPEC.md`](CLAIM-NEXT-SPEC.md) — `+TXP` dispatch profile: active scheduler semantics
 - [`TALLY-SPEC.md`](TALLY-SPEC.md) — `+OXP` cost-to-outcome and KPI ledger
 - [`SWITCHBOARD-MANIFESTO.md`](SWITCHBOARD-MANIFESTO.md) — north-star statement for open protocols and the hosted operations brain
