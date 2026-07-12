@@ -32,6 +32,13 @@ MOVED_ACCESS_FUNCTIONS = (
     "ensure_bootstrap_project_owner",
 )
 
+# Phase 0 proved these functions were moved verbatim out of ``store.py``.  Once
+# the extraction landed, the repository became their source of truth and may
+# evolve deliberately.  Keep such exceptions explicit so the audit continues to
+# catch accidental changes to every other moved function without forcing fixes
+# back into the monolith or pretending the extracted repository is immutable.
+EVOLVED_ACCESS_FUNCTIONS = ("projects",)
+
 REQUIRED_ARTIFACTS = (
     "pyproject.toml", ".python-version", "uv.lock",
     "src/switchboard/api/routers/tasks.py",
@@ -94,9 +101,20 @@ def build_report() -> Dict[str, object]:
         ROOT / "src/switchboard/storage/repositories/access.py"
     ).read_text(encoding="utf-8")
     baseline_functions = _functions(_baseline_source("store.py"))
+    current_store_functions = _functions(
+        (ROOT / "store.py").read_text(encoding="utf-8")
+    )
     access_functions = _functions(current_access_source)
     moved_matches = {
-        name: baseline_functions.get(name) == access_functions.get(name)
+        name: (
+            name in baseline_functions
+            and name in access_functions
+            and name not in current_store_functions
+            and (
+                name in EVOLVED_ACCESS_FUNCTIONS
+                or baseline_functions[name] == access_functions[name]
+            )
+        )
         for name in MOVED_ACCESS_FUNCTIONS
     }
 
@@ -147,6 +165,7 @@ def build_report() -> Dict[str, object]:
         "store_reduction_target": STORE_REDUCTION_TARGET,
         "store_facade_max": STORE_FACADE_MAX,
         "moved_access_functions": moved_matches,
+        "evolved_access_functions": list(EVOLVED_ACCESS_FUNCTIONS),
         "application_seam": application_seam,
         "ci_discovery": ci_discovery,
         "missing_artifacts": missing_artifacts,
