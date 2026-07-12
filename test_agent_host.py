@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Self-contained tests for the Agent Host wake consumer safety rules."""
 import importlib.util
+import json
 import os
+import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -169,6 +173,44 @@ malformed_closure_wake = {
 ok(agent_host.wake_mode(malformed_closure_wake) == "inbox_only",
    "a closure_verification wake missing deliverable_id falls back to the safe inbox-only stub")
 
+# confirm_closure_verified: closure_verify jobs are deterministic and routinely exit
+# well within the liveness grace window on success, unlike a long-lived LLM session
+# (a fast exit there usually means it crashed). Bare process-liveness would wrongly
+# call that launch_failed, so a finished job's own last-line JSON verdict is trusted
+# instead of raw os.kill(pid, 0) liveness.
+_tmp_log_dir = tempfile.mkdtemp(prefix="agent-host-test-")
+
+
+def _exited_pid_with_log(payload):
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait(timeout=5)
+    log_path = os.path.join(_tmp_log_dir, f"{proc.pid}-{time.time_ns()}.log")
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload) + "\n")
+    return proc.pid, log_path
+
+
+pid_ok, log_ok = _exited_pid_with_log({"deliverable_id": "d", "ok": True, "grade": "pass"})
+ok(agent_host.confirm_closure_verified({"pid": pid_ok, "log_path": log_ok}) is True,
+   "an exited closure_verify job with no 'error' in its last JSON line counts as started")
+
+pid_err, log_err = _exited_pid_with_log({"deliverable_id": "d", "error": "not found"})
+ok(agent_host.confirm_closure_verified({"pid": pid_err, "log_path": log_err}) is False,
+   "an exited closure_verify job whose own JSON reports 'error' is not treated as started")
+
+pid_missing, _ = _exited_pid_with_log({"ignored": True})
+ok(agent_host.confirm_closure_verified({"pid": pid_missing, "log_path": "/no/such/file"}) is False,
+   "an exited closure_verify job with no readable log is not treated as started")
+
+still_alive = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+try:
+    ok(agent_host.confirm_closure_verified({"pid": still_alive.pid, "log_path": "/no/such/file"},
+                                           grace_s=0.5) is True,
+       "a closure_verify job still alive at the deadline counts as started (matches confirm_started)")
+finally:
+    still_alive.kill()
+    still_alive.wait(timeout=5)
+
 calls = []
 
 
@@ -222,6 +264,40 @@ ok(len(claim_calls) == 1 and claim_calls[0][2]["wake_id"] == "wake-lane",
    "run_once claims only the eligible lane-scoped wake")
 ok(summary["acted"] and summary["acted"][0]["wake_mode"] == "claim_next",
    "run_once reports claim_next mode for lane-scoped wake")
+
+# run_once end-to-end for a closure_verify wake: a fast, already-exited "job" must
+# still be reported started=True (the bug this whole block guards against — before
+# the confirm_closure_verified wiring, run_once used bare os.kill liveness for every
+# mode and logged launch_failed for jobs that had already succeeded and exited).
+calls = []
+_closure_pid, _closure_log = _exited_pid_with_log(
+    {"deliverable_id": "some-deliverable", "ok": True, "grade": "pass"})
+
+
+def fake_try_closure(method, path, body=None):
+    calls.append((method, path, body or {}))
+    if path.startswith(agent_host.P_LIST_WAKES):
+        return {"wake_intents": [closure_wake]}
+    if path == agent_host.P_CLAIM_WAKE:
+        return {"claimed": True}
+    if path == agent_host.P_COMPLETE_WAKE:
+        return {"ok": True}
+    return {"ok": True}
+
+
+agent_host._try = fake_try_closure
+agent_host.launch = lambda wake, inv: {
+    "runner_session_id": "run_closure_test", "pid": _closure_pid, "log_path": _closure_log,
+    "wake_mode": agent_host.wake_mode(wake),
+}
+summary = agent_host.run_once(message_only_inventory)
+complete_calls = [c for c in calls if c[1] == agent_host.P_COMPLETE_WAKE]
+ok(summary["acted"] and summary["acted"][0]["wake_mode"] == "closure_verify",
+   "run_once reports closure_verify mode for a closure wake")
+ok(summary["acted"] and summary["acted"][0]["started"] is True,
+   "run_once reports started=True for a fast-but-successful closure_verify job (the fix)")
+ok(complete_calls and complete_calls[0][2]["result"]["reason"] == "started",
+   "complete_wake records 'started', not a misleading 'launch_failed', for that job")
 
 calls = []
 runner_actions = []

@@ -261,6 +261,48 @@ def confirm_started(rec, grace_s=4.0):
     return True
 
 
+def _tail_json_result(log_path):
+    """Best-effort parse of a launched job's own last JSON line from its log. Returns
+    the parsed dict, or None if the file is missing/empty/unparsable."""
+    if not log_path:
+        return None
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return None
+    if not lines:
+        return None
+    try:
+        result = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def confirm_closure_verified(rec, grace_s=4.0):
+    """Like confirm_started, but for the closure_verify job: it is deterministic and
+    often finishes within confirm_started's own liveness window on success (a
+    scope-only gate resolves in well under a second) — 'no longer alive' must not be
+    conflated with 'crashed', or the daemon logs launch_failed for jobs that actually
+    ran fine and persisted a report. Still-alive at the deadline is success (matches
+    confirm_started). Once it has exited, trust its own last-line JSON verdict
+    (adapters/closure_verifier.py always prints one) rather than raw process liveness.
+    """
+    pid = (rec or {}).get("pid")
+    if not pid:
+        return False
+    deadline = time.time() + grace_s
+    while time.time() < deadline:
+        try:
+            os.kill(int(pid), 0)
+        except (OSError, ValueError):
+            result = _tail_json_result((rec or {}).get("log_path"))
+            return bool(result) and not result.get("error")
+        time.sleep(0.5)
+    return True
+
+
 def register_runner_session(rec, wake, inventory):
     """Publish the supervisor session to Switchboard's central runner registry."""
     if not rec or not rec.get("runner_session_id"):
@@ -383,7 +425,9 @@ def run_once(inventory):
         if not claimed or not (claimed.get("claimed", True)):
             continue  # another host won it (atomic claim)
         rec = launch(w, inventory)
-        started = confirm_started(rec)
+        rec_mode = (rec or {}).get("wake_mode") or wake_mode(w, inventory)
+        started = (confirm_closure_verified(rec) if rec_mode == "closure_verify"
+                  else confirm_started(rec))
         runner_registration = register_runner_session(rec, w, inventory) if started else None
         result = {"started": started, "runner_session_id": (rec or {}).get("runner_session_id"),
                   "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
