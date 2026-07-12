@@ -70,7 +70,7 @@ try:
        "unknown dependencies fail closed before task creation")
 
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
-    mcp_source = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
+    mcp_source = (ROOT / "src/switchboard/mcp/tools/tasks.py").read_text(encoding="utf-8")
     ok("create_task_command.execute_mapping_result" in app_source and
        "create_task_command.execute_mapping_result" in mcp_source,
        "REST and MCP adapters invoke the same application handler")
