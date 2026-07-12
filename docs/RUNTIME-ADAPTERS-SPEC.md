@@ -12,6 +12,10 @@
 > poll deltas, honor stop/redirect, report usage, and release on exit. Runtime adapters are
 > the small pieces of glue that make that lifecycle the default path.
 
+Wake and continuity behavior is specified separately in
+[`RUNTIME-WAKE-CAPABILITY-MATRIX.md`](RUNTIME-WAKE-CAPABILITY-MATRIX.md): each adapter must
+distinguish a fresh start from exact vendor-session, checkpoint, or reconstructed-history resume.
+
 ---
 
 ## 1. Product thesis

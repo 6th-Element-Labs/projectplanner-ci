@@ -22,6 +22,12 @@ This spec defines the missing layer between the always-on substrate and the runt
 an **Agent Host** that can keep suitable agent sessions alive, start one when work or a message
 needs attention, and truthfully report when no eligible runtime is reachable.
 
+The runtime-specific distinction between a fresh process, exact vendor conversation resume,
+checkpoint resume, and reconstructed history is defined in
+[`RUNTIME-WAKE-CAPABILITY-MATRIX.md`](RUNTIME-WAKE-CAPABILITY-MATRIX.md). Agent Hosts must report
+which continuity mode actually occurred; a successful process spawn is not proof of conversation
+resume.
+
 The product guarantee is not "the bus pushes into an absent model." The guarantee is:
 
 > Switchboard can route work or a handoff to a registered agent host; the host either starts or
