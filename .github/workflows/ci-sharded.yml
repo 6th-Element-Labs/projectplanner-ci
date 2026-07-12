@@ -1,0 +1,68 @@
+# HARDEN-71 (CI-4) — off-box parallel ephemeral runners + test-impact selection (ADR-0010 L3).
+# Runs the impacted test subset (or the full suite when the diff is broad) across N ephemeral
+# ubuntu runners in parallel, then a single gate job aggregates the result. This moves gating
+# off the contended prod box and cuts wall-clock — shrinking the window in which master moves
+# under an open PR.
+#
+# Wiring: today's required check is the on-box `Switchboard CI / VM gate`. To adopt this, point
+# branch protection at the `sharded-gate` job below (or have switchboard_pr_gate.py dispatch it),
+# and set SHARDS to the runner budget.
+name: ci-sharded
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Base ref to diff against for test-impact selection"
+        default: "origin/master"
+
+env:
+  SHARDS: 4
+
+permissions:
+  contents: read
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        index: [0, 1, 2, 3]   # keep in sync with SHARDS
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # need history for git diff base...HEAD
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Select impacted tests for this shard
+        id: select
+        run: |
+          git fetch origin master --quiet || true
+          mapfile -t TESTS < <(python3 scripts/select_impacted_tests.py \
+            --base "${{ github.event.inputs.base || 'origin/master' }}" \
+            --shards "${SHARDS}" --index "${{ matrix.index }}")
+          printf 'shard %s: %d test file(s)\n' "${{ matrix.index }}" "${#TESTS[@]}"
+          printf '%s\n' "${TESTS[@]}" > /tmp/shard_tests.txt
+      - name: Run this shard's tests
+        run: |
+          rc=0
+          while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            echo "== $t =="
+            python3 "$t" || rc=1
+          done < /tmp/shard_tests.txt
+          exit $rc
+
+  sharded-gate:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate shard results
+        run: |
+          if [ "${{ needs.shard.result }}" != "success" ]; then
+            echo "One or more shards failed: ${{ needs.shard.result }}"; exit 1
+          fi
+          echo "All shards passed."
