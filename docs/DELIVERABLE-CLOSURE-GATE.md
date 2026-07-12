@@ -223,6 +223,18 @@ Persisted as deliverable activity `deliverable.closure_verified` and surfaced on
 **Policy:** `status=done` upsert rejected unless latest closure grade is `pass` or `waive`
 (DELIVERABLES-19). `archived` allowed only from `done` (existing UI-11 rule).
 
+The grade must come from the latest report persisted by `verify_deliverable_closure`; callers
+cannot supply or overwrite the verifier-owned `last_closure_*` / `closure_reports` metadata in a
+general deliverable upsert. A missing grade or `hold` fails closed and leaves the current status
+unchanged.
+
+For a cancelled or deliberately removed linked task, the operator records an explicit waiver
+while requesting/running closure verification, for example
+`waivers_json=[{"task_id":"ARCH-21","reason":"cancelled as redundant","approved_by":"operator"}]`.
+The verifier audits that exception in the closure report and emits grade `waive` only when every
+remaining required gate passes. The operator may then perform a separate `status=done` upsert;
+neither cancellation nor the waiver request marks the deliverable Done by itself.
+
 ---
 
 ## Dogfood target (DELIVERABLES-20)
