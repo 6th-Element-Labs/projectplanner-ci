@@ -114,6 +114,18 @@ We run **A across our own fleet** so the tooling, agent flow, provenance, and UI
 - **Self-hosted (B) is standard GitHub Actions on a *separate* machine** — never the prod web box (that was the HARDEN-32 mistake).
 - **Free macOS only exists on public runners**, so macOS-heavy private repos either accept Route A or pay for Mac hardware under B.
 
+## Native merge queue (Lever 2 — HARDEN-70 / CI-3)
+
+The native merge queue lets many agents land PRs without serializing on a hand-run merge: GitHub
+batches queued PRs into a merge group, tests base+PRs together, and fast-forwards master when the
+required checks pass. The catch: those checks run against the merge group's `gh-readonly-queue/*`
+branch head, **not** the PR head. Our required check is an external commit status, so
+`switchboard_pr_gate.py` must post `Switchboard CI / VM gate` to the merge-group head SHA or the
+queue hangs forever. Pass 3 of the gate does exactly that (same external-mirror → local-fallback
+policy as the PR pass; idempotent per immutable SHA). Enabling the queue is a **deploy-ordered
+operator step** — flip master branch protection *after* the Pass-3 gate is live on the Plan VM, or
+the queue hangs on day one. See `docs/SWITCHBOARD-RUNBOOK.md` → "Native merge queue".
+
 ## Non-goals
 
 - Open-sourcing the products (Route A publishes test-only, ephemerally — not a release).
