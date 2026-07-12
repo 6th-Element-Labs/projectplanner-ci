@@ -182,20 +182,83 @@ class _SerializedWriteProxy:
         return self._conn.__exit__(exc_type, exc, tb)
 
 
+_conn_pool = threading.local()
+
+
+def _conn_reuse_enabled() -> bool:
+    return (os.environ.get("PM_SQLITE_CONN_REUSE", "1") or "1").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _conn_pool_state() -> Dict[str, Any]:
+    state = getattr(_conn_pool, "state", None)
+    if state is None:
+        state = {"cache": {}, "active": set()}
+        _conn_pool.state = state
+    return state
+
+
+def _close_pooled_conns() -> None:
+    """Close and drop this thread's cached connections (lifecycle / tests)."""
+    state = getattr(_conn_pool, "state", None)
+    if not state:
+        return
+    for c in list(state["cache"].values()):
+        try:
+            c.close()
+        except Exception:
+            pass
+    state["cache"].clear()
+    state["active"].clear()
+
+
 @contextmanager
 def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
     timeout = _sqlite_timeout_s("PM_SQLITE_TIMEOUT_S", 5.0) if timeout_s is None else timeout_s
     db_path = _resolve(project)["db"]
-    c = _open_sqlite(db_path, timeout)
+    # Reuse a per-thread connection to skip the ~1.2ms lazy DB-open (WAL attach + shared lock)
+    # every fresh connection pays. A re-entrant _conn on the same thread+db falls back to a
+    # fresh, uncached connection so nested `with c:` transactions never collide on one
+    # connection — preserving the exact pre-reuse behavior. PM_SQLITE_CONN_REUSE=0 disables it.
+    state = _conn_pool_state() if _conn_reuse_enabled() else None
+    reuse = state is not None and db_path not in state["active"]
+    if reuse:
+        c = state["cache"].get(db_path)
+        if c is None:
+            c = _open_sqlite(db_path, timeout)
+            state["cache"][db_path] = c
+        else:
+            # Re-apply the settings that vary per call (busy_timeout) or per env
+            # (mmap_size, e.g. a background job opting into a bounded map). These are pure
+            # connection settings — no DB access, ~0.01ms total — while the ~1.2ms lazy open
+            # is what reuse skips. The fixed PRAGMAs (synchronous/cache/wal) persist from open.
+            c.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
+            c.execute(f"PRAGMA mmap_size={_sqlite_mmap_bytes()}")
+        state["active"].add(db_path)
+    else:
+        c = _open_sqlite(db_path, timeout)
     try:
         with c:
             if single_writer_enabled() and not in_write_worker():
                 yield _SerializedWriteProxy(db_path, timeout, c)
             else:
                 yield c
+    except sqlite3.OperationalError:
+        # A locked/broken connection must not stay cached — drop it so the next use reopens.
+        if reuse:
+            state["cache"].pop(db_path, None)
+            try:
+                c.close()
+            except Exception:
+                pass
+        raise
     finally:
-        if c:
-            c.close()
+        if reuse:
+            state["active"].discard(db_path)
+        else:
+            try:
+                c.close()
+            except Exception:
+                pass
 
 
 def _write_through(project: str, thunk, timeout_s: Optional[float] = None):
