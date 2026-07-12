@@ -283,6 +283,9 @@ the runtime registered presence or the supervised entrypoint reached a known rea
 
 | State | Product wording |
 |---|---|
+| Active registered session | "Mailbox stored for an active session; delivery occurs at its next inbox boundary. Await ack for handling proof." |
+| Supervised wakeable runtime | "Mailbox stored; a live eligible Agent Host can start or reuse this runtime if a wake is requested." |
+| Dormant registered host | "Mailbox stored; the matching Agent Host registration is stale, so a wake can queue but cannot start now." |
 | No host registered | "Message stored; no eligible agent host is online." |
 | Host registered, wake pending | "Wake requested; waiting for host claim." |
 | Host claimed wake | "Host is starting or reusing a runtime." |
@@ -293,6 +296,20 @@ the runtime registered presence or the supervised entrypoint reached a known rea
 Switchboard must never claim a message was delivered because it was inserted into the inbox.
 Inbox insertion is durable storage. Delivery requires runtime registration plus ack/handling
 evidence.
+
+Every send/status response exposes `switchboard.message_delivery_receipt.v1` with four separate
+facts: `mailbox.stored`, `session_status`, `wakeability`, and
+`runtime_delivery_proven`. `delivery_mode` distinguishes `active_session`,
+`supervised_wake_available`, `wake_queue_available`, `dormant_registered_host`,
+`wake_queued`, `wake_claimed`, and `mailbox_only`. A task comment is a visible fallback only; it
+does not change `runtime_delivery_proven`.
+
+For Claude Code, wake/restart requires an Agent Host registration whose runtime inventory contains
+`{"runtime":"claude-code"}`. The host heartbeat must be current, the host must have available
+session capacity, and its daemon must claim the wake and launch/reuse Claude Code through the local
+supervisor. A Claude Code process that is visible in a vendor UI but has not registered its agent
+session is still unreachable to Switchboard. A stale host registration is dormant inventory, not
+wake capacity; a pending wake remains queued until an eligible host heartbeats again.
 
 ## 11. Escalation Policy
 
