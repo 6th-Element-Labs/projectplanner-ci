@@ -13,6 +13,8 @@ WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
 # Production web writes must fail closed even if .env is missing PM_AUTH_MODE.
 Environment=PM_AUTH_MODE=required
+# DELIVERABLES-22: every REST-created deliverable must carry its closure contract.
+Environment=PM_ENFORCE_DELIVERABLE_INTAKE=1
 # Code tree is read-only; don't try to write .pyc back into it.
 Environment=PYTHONDONTWRITEBYTECODE=1
 # BUG-29: archive+delete merged PR head branches on webhook (needs token in .env).

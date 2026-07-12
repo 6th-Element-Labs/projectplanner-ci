@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import evidence_claims
+import deliverable_gates
 import deliverable_policy
 import narration_outbox
 import push_verification
@@ -937,12 +938,7 @@ def _enforce_deliverable_intake() -> bool:
 
 
 def _validate_proof_requirements(proof: Any) -> List[str]:
-    """Structural validation of a proof_requirements object and its gate refs.
-
-    Registry existence of each gate id (harness:*, store_check, ...) is validated separately
-    once the gate registry (DELIVERABLES-14) lands; here we only prove the refs are
-    well-formed: a non-empty gates list, each gate a {id:str, required:bool} with unique ids.
-    """
+    """Validate proof contract shape and resolve every declared gate fail-closed."""
     if not isinstance(proof, dict) or not proof:
         return ["proof_requirements must be an object with a non-empty gates list"]
     errors: List[str] = []
@@ -968,6 +964,11 @@ def _validate_proof_requirements(proof: Any) -> List[str]:
             seen.add(gid)
         if not isinstance(gate.get("required"), bool):
             errors.append(f"proof_requirements.gates[{i}].required must be true or false")
+    if not errors:
+        try:
+            deliverable_gates.resolve_gates(proof)
+        except deliverable_gates.GateResolutionError as exc:
+            errors.append(str(exc))
     return errors
 
 
@@ -979,8 +980,6 @@ def _validate_deliverable_intake(data: Dict[str, Any]) -> Optional[Dict[str, Any
     details: List[str] = []
     if not (data.get("end_state") or "").strip():
         details.append("end_state is required: a plain-English success statement")
-    # acceptance_criteria / proof_requirements may arrive as lists/dicts (store API) or as
-    # JSON/CSV strings (MCP tool args); normalize through the same coercion used for storage.
     criteria = json.loads(_json_list_field(data.get("acceptance_criteria")))
     if not [c for c in criteria if str(c).strip()]:
         details.append("acceptance_criteria must be a non-empty list of success statements")

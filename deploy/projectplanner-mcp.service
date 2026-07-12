@@ -14,6 +14,8 @@ WorkingDirectory=/opt/projectplanner
 EnvironmentFile=/opt/projectplanner/.env
 # Production MCP reads and writes must fail closed even if .env is missing PM_AUTH_MODE.
 Environment=PM_AUTH_MODE=required
+# DELIVERABLES-22: every MCP-created deliverable must carry its closure contract.
+Environment=PM_ENFORCE_DELIVERABLE_INTAKE=1
 # Code tree is read-only; don't try to write .pyc back into it.
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/mcp_server.py

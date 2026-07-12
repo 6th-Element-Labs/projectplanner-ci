@@ -1,6 +1,6 @@
 # Deliverable closure gate — verify, grade, and stamp before archive
 
-- **Status:** Scoped (DELIVERABLES-12 … DELIVERABLES-22)
+- **Status:** Shipped (DELIVERABLES-12 … DELIVERABLES-22)
 - **Date:** 2026-07-12
 - **Product:** Switchboard
 - **Deliverable:** `deliverable-closure-gate` on `project=switchboard`
@@ -128,8 +128,8 @@ legacy deliverables with empty criteria stay editable. A rejection returns
 on the REST route) naming each missing field. It validates: non-empty `end_state`, non-empty
 `acceptance_criteria`, and a well-formed `proof_requirements` — a non-empty `gates` list where
 each gate is `{id: str, required: bool}` with unique ids and (if present) the correct `schema`.
-Registry-existence of each gate id is validated once the gate registry lands (DELIVERABLES-14);
-until then only structural well-formedness of the refs is checked.
+Each id must resolve to the Gate 1 `scope` built-in, the DELIVERABLES-14 registry, or a valid
+inline gate definition; dangling references fail at intake instead of surfacing at closure.
 
 Gated by **`PM_ENFORCE_DELIVERABLE_INTAKE`** (default **off**, mirroring the
 `PM_VERIFY_COMPLETION_PUSH` rollout style) so existing deliverables and legacy flows are
@@ -280,6 +280,81 @@ First successful **Verify & stamp** produces the closure report that makes archi
 Seed: `scripts/seed_deliverable_closure_gate.py` (idempotent).
 
 View: `?project=switchboard&deliverable=deliverable-closure-gate#tab-mission`
+
+---
+
+## Operator rollout and closeout runbook (DELIVERABLES-22)
+
+### 1. Audit before changing lifecycle state
+
+Run the intake inventory against each project that owns deliverables:
+
+```bash
+.venv/bin/python scripts/audit_deliverable_intake.py --project switchboard
+```
+
+The report separates:
+
+- `compliant`: a deliverable already has `end_state`, non-empty `acceptance_criteria`, and
+  structurally valid `proof_requirements.gates`;
+- `pending_contract`: a proposed/approved deliverable that must receive that contract before it
+  can enter `in_progress`;
+- `grandfathered`: an already-active legacy deliverable missing part of the contract.
+
+The rollout is forward-only: an existing `in_progress`/`in_review` row remains editable, but it
+must be backfilled before closure verification can make a meaningful product claim. Use
+`--require-clean` when the project owner wants legacy debt to fail the audit. Do not manufacture a
+generic passing gate to clear the report. The owner must choose proof that actually establishes the
+deliverable's acceptance criteria; use an explicit operator waiver when proof is intentionally out
+of scope.
+
+### 2. Enable intake enforcement
+
+Production web and MCP systemd units pin `PM_ENFORCE_DELIVERABLE_INTAKE=1`; `.env.example` carries
+the same default for non-systemd installations. After deploying:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart projectplanner projectplanner-mcp
+sudo systemctl show projectplanner projectplanner-mcp -p Environment \
+  | grep PM_ENFORCE_DELIVERABLE_INTAKE=1
+```
+
+This covers both public write surfaces at their shared store boundary. A proposed deliverable may
+still be drafted incrementally, but its transition to `in_progress` fails closed until the complete
+contract is supplied.
+
+### 3. Smoke both sides of the gate
+
+In a disposable project, confirm that an incomplete `status=in_progress` upsert returns
+`deliverable intake incomplete` and writes no row. Then repeat with an explicit success statement,
+acceptance criteria, and at least the scope gate:
+
+```json
+{
+  "schema": "switchboard.deliverable_proof_requirements.v1",
+  "gates": [{"id": "scope", "required": true}]
+}
+```
+
+Run `python3 test_deliverable_intake_gate.py` for the hermetic negative/positive proof.
+
+### 4. Close a shipped deliverable
+
+1. Confirm every linked implementation task is terminal with merge/offline provenance; do not
+   manually rewrite task status. For this rollout, DELIVERABLES-12 through DELIVERABLES-21 must be
+   Done before DELIVERABLES-22 is merged.
+2. Run **Verify & stamp closure** (or `verify_deliverable_closure`) and inspect every required gate.
+3. Stop on `hold`. On `pass` or audited `waive`, perform a separate `status=done` upsert while
+   preserving the full current deliverable fields.
+4. Read the deliverable back and verify `status=done`, `metadata.last_closure_grade`, the exact
+   closure report id, and the `deliverable.closure_verified` activity stamp.
+5. Archive only through the later typed-confirm archive control; Done is the shipped state and is
+   not itself an instruction to delete history.
+
+For `deliverable-closure-gate`, the final verifier run happens after DELIVERABLES-22 reaches Done,
+because the exit-gate task is itself linked to the deliverable. That ordering avoids waiving the
+very runbook and production rollout being certified.
 
 ---
 

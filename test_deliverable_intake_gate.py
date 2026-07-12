@@ -127,6 +127,10 @@ try:
     badschema = reject_reason({"schema": "wrong.v9", "gates": [{"id": "scope", "required": True}]})
     ok(badschema is not None and any("schema" in d for d in badschema),
        "gate ON: wrong proof_requirements.schema is rejected")
+    dangling = reject_reason({"schema": "switchboard.deliverable_proof_requirements.v1",
+                              "gates": [{"id": "harness:not-registered", "required": True}]})
+    ok(dangling is not None and any("unknown gate id" in d for d in dangling),
+       "gate ON: a dangling gate-registry reference is rejected at intake")
 
     # acceptance_criteria present but effectively empty (whitespace) -> rejected
     res = create(id="d-blankac", title="Blank AC", status="in_progress",
