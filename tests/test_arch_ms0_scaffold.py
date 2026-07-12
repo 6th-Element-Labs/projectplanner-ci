@@ -131,13 +131,20 @@ try:
     )
 
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    task_router_source = (
+        ROOT / "src/switchboard/api/routers/tasks.py"
+    ).read_text(encoding="utf-8")
     mcp_source = (ROOT / "src/switchboard/mcp/tools/tasks.py").read_text(encoding="utf-8")
     shared_import = (
         "from switchboard.application.commands import create_task as create_task_command"
     )
-    rest_wired = shared_import in app_source and "create_task_command.execute_mapping_result" in app_source
+    rest_wired = (
+        "_create_task_router" in app_source
+        and shared_import in task_router_source
+        and "create_task_command.execute_mapping_result" in task_router_source
+    )
     mcp_wired = shared_import in mcp_source and "create_task_command.execute_mapping_result" in mcp_source
-    ok(rest_wired, "REST adapter (app.py) invokes the shared create_task handler")
+    ok(rest_wired, "REST task router invokes the shared create_task handler")
     ok(mcp_wired, "MCP task adapter invokes the shared create_task handler")
 finally:
     shutil.rmtree(TMP, ignore_errors=True)

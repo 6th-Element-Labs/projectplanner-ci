@@ -54,7 +54,7 @@ requires merge webhook or reconcile.
 | **ARCH-MS-13** | Lockfile + Python 3.12 pin (reproducible builds) | 0.1 | 6 | In Review | ✅ | **HARDEN-54** PR #303 + `tests/test_arch_ms13_reproducible_builds.py` — lock metadata, artifact hashes, Python floor, and generated exports fail closed in CI |
 | **ARCH-MS-14** | `tests/` directory + path shim for new tests | 0.1 | 2 | In Review | ✅ | `tests/path_setup.py`; `tests/test_arch_ms14_test_layout.py`; new tests share the root + `src/` bootstrap |
 | **ARCH-MS-15** | `get_task` query + `update_task` application command | 0.2 | 8 | Not Started | ⬜ | — |
-| **ARCH-MS-16** | `api/routers/tasks.py` — extract task REST routes | 0.2 | 15 | Not Started | ⬜ | — |
+| **ARCH-MS-16** | `api/routers/tasks.py` — extract task REST routes | 0.2 | 15 | In Review | 🟡 | `src/switchboard/api/routers/tasks.py`; complete `/api/tasks...` surface; `tests/test_arch_ms16_task_router.py`; `app.py` ratchet 3,325 → 3,091 |
 | **ARCH-MS-17** | `mcp/tools/tasks.py` — extract task MCP tools | 0.2 | 15 | In Review | 🟡 | Task tools register from the package adapter; direct Python callers retain compatibility aliases |
 | **ARCH-MS-18** | Migrate `services/auth` → `api/routers/auth` | 0.2 | 7 | In Review | 🟡 | Auth package moved to `src/switchboard/api/routers/auth`; app and tests use the package seam |
 | **ARCH-MS-19** | `mcp/tools/board.py` — first MCP tool module pattern | 0.2 | 17 | Not Started | ⬜ | — |
@@ -71,7 +71,7 @@ requires merge webhook or reconcile.
 | File | Ceiling (lines) | Notes |
 |---|---|---|
 | `store.py` | 15,470 | ARCH-MS-20 extracted runner persistence/control |
-| `app.py` | 3,275 | ARCH-MS-18 moved auth imports behind the package seam |
+| `app.py` | 3,091 | ARCH-MS-16 extracted the complete task REST surface; includes DELIVERABLES-17 verifier dispatch |
 | `mcp_server.py` | 3,018 | ARCH-MS-17 extracted task MCP tools; includes DELIVERABLES-17 verifier dispatch |
 | `static/app.js` | 6,566 | Held |
 | repo root `*.py` | 205 | ARCH-MS-4 + ARCH-MS-21 add focused root proofs; ARCH-MS-6 stays under `tests/` |
