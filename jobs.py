@@ -86,6 +86,12 @@ def narrate_pending():
     ~PM_NARRATE_INTERVAL). Separate from summarize_pending: different store, audience, and
     trigger (status transitions via pending_narrations, not any-activity). The fingerprint
     guard means idle cycles make zero LLM calls. See docs/CEO-NARRATOR-CONTRACT.md."""
+    import narration_cutover
+    if narration_cutover.event_primary_enabled():
+        # NARRATE-14: the event-driven path is primary and owns publishing. The legacy queue must
+        # not publish from the second path during/after cutover ("do not publish from both paths").
+        print("narrate_pending: skipped (PM_NARRATION_EVENT_PRIMARY on; event path is primary)")
+        return 0
     import narrate as narrate_mod
     total = deliverables = 0
     for project_id in store.project_ids():
@@ -108,6 +114,25 @@ def narrate_pending():
         deliverables += len(deliv)
     print(f"narrate_pending: {total} task(s), {deliverables} deliverable(s)")
     return total
+
+
+def narrate_events():
+    """NARRATE-14 event-driven narration recovery sweep — the SLOW backstop timer.
+
+    Drains every project's durable narration outbox through the NARRATE-9 worker and the
+    compare-and-swap publish boundary. In production the post-commit wake accelerator (registered in
+    the web process) is the primary, near-real-time trigger; this timer only catches missed/failed
+    wakes, so it runs on a slow cadence and is idempotent. No-op unless PM_NARRATION_EVENT_PRIMARY is
+    enabled, so the timer is safe to install before the operator flips the cutover on."""
+    import narration_cutover
+    result = narration_cutover.run_recovery_sweep()
+    if not result.get("enabled"):
+        print("narrate_events: skipped (PM_NARRATION_EVENT_PRIMARY off; legacy path is primary)")
+        return result
+    for project_id, tally in (result.get("projects") or {}).items():
+        print(f"  [{project_id}] {json.dumps(tally, sort_keys=True)}")
+    print(f"narrate_events: swept {len(result.get('projects') or {})} project(s)")
+    return result
 
 
 def sweep_monitors():
@@ -221,6 +246,7 @@ def background_job(job_name: str = "", project: str = ""):
 
 JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "summarize_pending": summarize_pending, "narrate_pending": narrate_pending,
+        "narrate_events": narrate_events,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
         "ci_gate_prs": ci_gate_prs,

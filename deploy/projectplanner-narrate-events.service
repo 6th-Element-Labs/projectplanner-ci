@@ -1,0 +1,39 @@
+# /etc/systemd/system/projectplanner-narrate-events.service
+# NARRATE-14: event-driven narration recovery sweep — the SLOW backstop.
+# Drains the durable narration outbox through the worker + compare-and-swap publish boundary
+# (jobs.py narrate_events). In production the in-process wake accelerator is the primary trigger;
+# this sweep only catches missed/failed wakes, so it runs on a slow cadence (see the .timer).
+# No-op unless PM_NARRATION_EVENT_PRIMARY is enabled — safe to install before the cutover.
+[Unit]
+Description=ProjectPlanner event-driven narration recovery sweep (NARRATE-14 backstop)
+After=network.target
+
+[Service]
+# Same batch cgroup slice + least-privilege sandbox as the legacy narrate drain, so the sweep
+# yields CPU/I/O to the interactive web/MCP paths on the small box (HARDEN-32/55).
+Slice=projectplanner-batch.slice
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py narrate_events
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=5min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner
