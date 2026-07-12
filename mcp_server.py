@@ -1958,8 +1958,11 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
     ack_deadline_minutes: how long the sender will wait for an ack (0 = no deadline).
     ack_timeout_seconds: equivalent seconds-based alias; used when minutes is 0.
 
-    Returns the message record including its id. Pass the id to get_message_status to
-    check whether the recipient has acked."""
+    Returns the message record including its id and a versioned delivery_receipt. A true
+    mailbox_stored value means durable storage only, never runtime delivery. The receipt
+    separately reports active-session reachability, Agent Host wakeability/queue state,
+    visible task-comment fallback, and whether an ack proves handling. Pass the id to
+    get_message_status to check whether the recipient has acked."""
     principal = _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.send_agent_message(
         from_agent, to_agent, message,
