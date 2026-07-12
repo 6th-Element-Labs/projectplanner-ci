@@ -71,5 +71,45 @@ check("a WAL-confirmed path skips the journal_mode PRAGMA (fresh db stays non-WA
       _skip_mode != "wal")
 
 
+# --- per-thread connection REUSE skips the ~1.2ms lazy DB-open; re-entrancy stays fresh ---
+os.environ["PM_SQLITE_CONN_REUSE"] = "1"
+_dbc._close_pooled_conns()
+_pm = _dbc._resolve("maxwell")["db"]
+
+with _dbc._conn("maxwell"):
+    pass
+_c_first = _dbc._conn_pool_state()["cache"].get(_pm)
+with _dbc._conn("maxwell"):
+    pass
+_c_second = _dbc._conn_pool_state()["cache"].get(_pm)
+check("connection is cached and reused across non-nested _conn calls",
+      _c_first is not None and _c_first is _c_second)
+
+with _dbc._conn("maxwell"):
+    _active_during = _pm in _dbc._conn_pool_state()["active"]
+    with _dbc._conn("maxwell"):   # nested on same thread+db: must open fresh, not collide
+        pass
+check("nested _conn is re-entrancy-safe (path is marked active while in use)", _active_during)
+check("active set is released after the block", _pm not in _dbc._conn_pool_state()["active"])
+
+store.init_db("maxwell")  # this test file never seeded the db; needed for a real write+read
+store.set_meta("reuse_probe", "v1", project="maxwell")
+check("write-then-read is correct over reused connections",
+      store.get_meta("reuse_probe", project="maxwell") == "v1")
+
+# honoring per-call timeout on a reused connection
+with store._conn("maxwell", timeout_s=2.5) as _tc:
+    check("reused connection honors the per-call busy_timeout",
+          _tc.execute("PRAGMA busy_timeout").fetchone()[0] == 2_500)
+
+os.environ["PM_SQLITE_CONN_REUSE"] = "0"
+_dbc._close_pooled_conns()
+with _dbc._conn("maxwell"):
+    pass
+check("PM_SQLITE_CONN_REUSE=0 kill switch disables caching (fresh conn per op)",
+      not _dbc._conn_pool_state()["cache"])
+os.environ["PM_SQLITE_CONN_REUSE"] = "1"
+_dbc._close_pooled_conns()
+
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)
