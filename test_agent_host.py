@@ -137,6 +137,38 @@ ok(refused_launch, "launch_command refuses ineligible global claim wake")
 ok(agent_host.eligible_runtime(lane_wake, message_only_inventory) is None,
    "message-only host refuses lane-scoped work wakes")
 
+# DELIVERABLES-23: closure_verification wakes are still lane-less/message-only by
+# policy.mode (never a claim_next grab), but they run the deterministic closure
+# engine instead of the old ack-only inbox stub.
+closure_wake = {
+    "wake_id": "wake-closure",
+    "selector": {"runtime": "claude-code", "agent_id": "verifier/closure/some-deliverable"},
+    "policy": {"mode": "message_only", "kind": "closure_verification",
+              "deliverable_id": "some-deliverable", "gate_ids": ["scope"]},
+}
+ok(agent_host.wake_mode(closure_wake) == "closure_verify",
+   "closure_verification wake selects closure_verify mode, not inbox_only")
+ok(agent_host.eligible_runtime(closure_wake, message_only_inventory) is not None,
+   "the safe-default message-only host is eligible for closure_verification wakes")
+cmd, mode = agent_host.launch_command(closure_wake, message_only_inventory)
+ok(mode == "closure_verify", "launch_command selects closure_verify mode for a closure wake")
+ok(agent_host.CLOSURE_VERIFIER in cmd,
+   "closure_verify command runs the deterministic verifier script")
+ok("run_agent.py" not in " ".join(cmd),
+   "closure_verify command does not fall through to the ack-only inbox stub")
+ok("--deliverable-id" in cmd and "some-deliverable" in cmd,
+   "closure_verify command carries the target deliverable id")
+ok("--wake-id" in cmd and "wake-closure" in cmd,
+   "closure_verify command carries the wake id for logging/correlation")
+
+malformed_closure_wake = {
+    "wake_id": "wake-closure-bad",
+    "selector": {"runtime": "claude-code"},
+    "policy": {"mode": "message_only", "kind": "closure_verification"},  # no deliverable_id
+}
+ok(agent_host.wake_mode(malformed_closure_wake) == "inbox_only",
+   "a closure_verification wake missing deliverable_id falls back to the safe inbox-only stub")
+
 calls = []
 
 

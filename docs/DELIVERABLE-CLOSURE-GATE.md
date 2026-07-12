@@ -276,6 +276,7 @@ First successful **Verify & stamp** produces the closure report that makes archi
 | DELIVERABLES-20 | Dogfood closure on mcp-agent-path-performance | 4 — Dogfood |
 | DELIVERABLES-21 | test_deliverable_closure_gate.py + CI registration | 4 |
 | DELIVERABLES-22 | Exit gate review + runbook for new deliverables | 4 |
+| DELIVERABLES-23 | Agent Host: bounded automated closure-verifier dispatch | 5 — Automation |
 
 Seed: `scripts/seed_deliverable_closure_gate.py` (idempotent).
 
@@ -355,6 +356,41 @@ Run `python3 test_deliverable_intake_gate.py` for the hermetic negative/positive
 For `deliverable-closure-gate`, the final verifier run happens after DELIVERABLES-22 reaches Done,
 because the exit-gate task is itself linked to the deliverable. That ordering avoids waiving the
 very runbook and production rollout being certified.
+
+---
+
+## Automated verifier dispatch (DELIVERABLES-23)
+
+The dispatch described above (`request_deliverable_closure_verification`) drops a
+lane-less, `mode: message_only` wake in the target agent's inbox. Before DELIVERABLES-23,
+every host that could see that wake ran it through the generic inbox-only adapter
+(`adapters/run_agent.py --inbox-only`), which only proves connectivity — it acks the
+message with *"received by inbox-only adapter; no model/action completion performed"*
+and does nothing else. Closure requests queued forever unless a human manually ran
+`deliverable_closure.verify_and_record_closure` server-side (the DELIVERABLES-20
+dogfood pattern).
+
+DELIVERABLES-23 gives `closure_verification`-kind wakes a real, but still bounded,
+execution path: `adapters/agent_host.py` recognizes `policy.kind == "closure_verification"`
+(`wake_mode()` returns `"closure_verify"`) and launches `adapters/closure_verifier.py`
+instead of the ack-only stub. That script calls the same engine used for manual/dogfood
+runs — `deliverable_closure.verify_and_record_closure(..., run_scripts=True)` — so scope
+and cheap functional gates (`store_check`, `offline_evidence`, short `script`/`pytest`
+commands) resolve and persist a real graded report automatically.
+
+**This is not an autonomous LLM agent** — deliberately. It is a deterministic check
+runner: store queries plus subprocess execution bounded by each gate's own
+`timeout_s`/`env_allowlist` from the registry. No model runs; nothing is invoked outside
+the wake's own resolved gate list. `PM_AGENT_HOST_ALLOW_WORK` stays `0` on the safe-default
+host — this grants no `claim_next`/global work, only this one bounded action for wakes
+that were already exclusively targeting deliverable closure.
+
+**Shared-box safety ceiling.** A gate whose declared `timeout_s` exceeds
+`PM_CLOSURE_VERIFIER_AUTO_TIMEOUT_CEILING_S` (default 120s) is left `not_run` rather than
+auto-executed — mirroring the dogfood's own choice to run the 8-agent concurrent-load
+harness off-box rather than inline on the 2GB VM. A required-but-heavy gate holds the
+grade closed (never fabricated as a pass) with a note naming the gate; submit its result
+manually (`submitted_functional`) or run verification from a bigger host instead.
 
 ---
 

@@ -2,6 +2,11 @@
 # Safe default Agent Host: consumes message-only wake intents for Switchboard.
 # It intentionally advertises a sentinel lane so lane-scoped work wakes do not
 # dispatch into this service until a separate work-capable host is configured.
+# DELIVERABLES-23: one exception — closure_verification wakes ("Verify & stamp
+# closure") run adapters/closure_verifier.py, a deterministic, bounded check
+# runner (store queries + short subprocess gates under a timeout ceiling), NOT
+# an LLM/agent loop. It is still lane-less and PM_AGENT_HOST_ALLOW_WORK stays 0
+# — this does not grant claim_next/global work, only this one bounded action.
 [Unit]
 Description=ProjectPlanner Switchboard Agent Host (message-only wakes)
 After=network-online.target projectplanner.service projectplanner-mcp.service
