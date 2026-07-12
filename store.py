@@ -8,6 +8,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 import urllib.request
 import uuid
@@ -15135,37 +15136,12 @@ def activity_since(ts: float) -> List[Dict[str, Any]]:
 _BOARD_LITE_DROP = ("session_health", "external_ci", "publication",
                     "entry_criteria", "exit_criteria", "deliverable", "agent_state")
 
-# Short-TTL in-memory read cache for the hot polled dashboard reads — the lite
-# board, plan signals, and the mission cockpit's status/dependency-graph views
-# (HARDEN-36, extending #159's board-only cache). These are the endpoints a live
-# dashboard hammers on a timer; every one runs SQLite in the request thread, so a
-# burst of viewers used to rebuild the same payload N times. Each entry is keyed
-# by a content STAMP (usually the involved project(s) MAX(updated_at)): any write
-# bumps the stamp and invalidates immediately, while the TTL bounds staleness for
-# the few signals a stamp can't see (claim expiry, presence heartbeats,
-# rarely-changing board meta) to at most _READ_CACHE_TTL. The builder runs OUTSIDE
-# any lock — under the GIL a concurrent miss may rebuild twice (benign, last write
-# wins), the same trade #159 made, so a slow build never serializes other readers.
-_READ_CACHE: Dict[str, Dict[str, Any]] = {}
-_READ_CACHE_TTL = float(os.environ.get("PM_READ_CACHE_TTL_S", "30") or 30)  # >poll interval so 5s mission/board polls hit the cache (was 3s → every poll missed); PM_READ_CACHE_TTL_S=3 reverts
-
-
-def ttl_read_cache(namespace: str, ident: str, stamp: Any,
-                   builder: Callable[[], Any], ttl: float = _READ_CACHE_TTL) -> Any:
-    """Serve `builder()` from a short-TTL cache keyed by (namespace, ident, stamp).
-
-    A changed stamp (or an expired TTL) forces a rebuild; otherwise the cached
-    payload is returned. This is the single hot-read cache mechanism — see
-    _READ_CACHE for the invalidation/staleness contract.
-    """
-    key = f"{namespace}\x00{ident}"
-    now = time.time()
-    hit = _READ_CACHE.get(key)
-    if hit is not None and hit["stamp"] == stamp and (now - hit["at"]) < ttl:
-        return hit["payload"]
-    payload = builder()
-    _READ_CACHE[key] = {"stamp": stamp, "at": now, "payload": payload}
-    return payload
+# Hot-read cache (lite board, plan signals, mission status/dependency-graph) extracted to
+# read_cache.py per ADR-0006 — it's a self-contained leaf (only runs a builder callback,
+# no store dependency). Serve-stale-while-revalidate + the stamp/TTL invalidation contract
+# live there. Re-exported so store.ttl_read_cache / store._READ_CACHE keep working for the
+# callers below (and signals.py, the perf tests).
+from read_cache import _READ_CACHE, ttl_read_cache  # noqa: E402,F401
 
 
 def project_task_stamp(project: str) -> Any:
