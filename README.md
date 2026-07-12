@@ -76,6 +76,7 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/IXP-PUBLIC-PACKAGE.md`](docs/IXP-PUBLIC-PACKAGE.md) | Public protocol package boundary: open specs/adapters/conformance, license posture, governance, and hosted/commercial line |
 | [`docs/IXP-CONFORMANCE.md`](docs/IXP-CONFORMANCE.md) | Conformance badge language, required evidence, non-claims, and current reference fixture status |
 | [`docs/RUNTIME-ADAPTERS-SPEC.md`](docs/RUNTIME-ADAPTERS-SPEC.md) | Runtime adapter packs for Claude Code, Codex, Cursor, LangGraph, raw OpenAI loops, and generic REST clients |
+| [`docs/RUNTIME-WAKE-CAPABILITY-MATRIX.md`](docs/RUNTIME-WAKE-CAPABILITY-MATRIX.md) | Researched fresh-start vs exact-conversation/checkpoint resume matrix, host contracts, continuity receipts, and fail-closed rules |
 | [`docs/INTERRUPT-TIERS-SPEC.md`](docs/INTERRUPT-TIERS-SPEC.md) | Visible stop/redirect guarantees: advisory poll, hook-level deny, runner kill, and managed control |
 | [`docs/CLAIM-NEXT-SPEC.md`](docs/CLAIM-NEXT-SPEC.md) | `claim_next` / `+TXP` dispatch profile: atomic task assignment, task claims, budget/model guidance |
 | [`docs/BUG-INTAKE-CONTRACT.md`](docs/BUG-INTAKE-CONTRACT.md) | Bug Intake Agent contract: report schema, severity, dedupe, human gate, and conversion policy |
