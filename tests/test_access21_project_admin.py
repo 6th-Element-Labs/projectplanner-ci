@@ -176,8 +176,19 @@ try:
         "Impact preview", "blocking_findings", "impact_report_receipt",
         "data-archive-allowed", "Protected project", "Lifecycle receipts",
         "Archiving against the displayed receipt", "Validating access and topology",
+        "Archive is available", "Add a reason before archiving",
+        "Confirm that you reviewed the current impact receipt",
+        'role="status" aria-live="polite"', "Archived project (admin view)",
     ):
         ok(needle in ui, f"project administration UI exposes {needle}")
+    ok("${canArchive ? '' : ' disabled'}" in ui
+       and "${canRestore ? '' : ' disabled'}" in ui,
+       "eligible lifecycle actions render enabled before confirmation")
+    ok("element.checked && archive.dataset.archiveAllowed" not in ui
+       and "element.checked && restore.dataset.restoreAllowed" not in ui,
+       "confirmation no longer makes an available action look permanently disabled")
+    ok("this._projectAdminSyncSwitcher();" in app_js,
+       "lifecycle refresh synchronizes the active-only project switcher")
     ok("await this._sSend" in ui and "catch (e)" in ui,
        "destructive-looking UI actions wait for server success and preserve visible failures")
 

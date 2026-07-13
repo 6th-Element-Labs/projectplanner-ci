@@ -1,6 +1,19 @@
 /* ACCESS-21: scoped Project Administration UI boundary. */
 (function () {
     const methods = {
+        _projectAdminSyncSwitcher() {
+            const switcher = document.getElementById('project-switcher');
+            if (!switcher) return;
+            const active = this._settingsProjects || [];
+            const current = window.PM_PROJECT || '';
+            const currentActive = active.some((project) => project.id === current);
+            const archivedContext = current && !currentActive
+                ? '<option value="" selected disabled>Archived project (admin view)</option>'
+                : '';
+            switcher.innerHTML = archivedContext + active.map((project) =>
+                `<option value="${this.esc(project.id)}"${project.id === current ? ' selected' : ''}>${this.esc(project.label || project.id)}</option>`).join('');
+        },
+
         _paProjectsForFilter() {
             const filter = this._settingsProjectFilter || 'all';
             return (this._settingsAdminProjects || []).filter((p) =>
@@ -35,6 +48,17 @@
             const receipt = (impact && impact.receipt) || {};
             const canArchive = selectedSystem && !archived && !protectedProject && archiveGate.eligible === true && !!receipt.report_hash;
             const canRestore = selectedSystem && archived;
+            const lifecycleHint = protectedProject
+                ? 'Protected projects cannot be archived.'
+                : archived
+                    ? (canRestore ? 'Restore is available. Add a reason and confirm the reviewed lifecycle state.' : 'You do not have permission to restore this project.')
+                    : canArchive
+                        ? 'Archive is available. Add a reason, review the current impact receipt, and confirm before continuing.'
+                        : !selectedSystem
+                            ? 'You need project lifecycle administration permission to archive this project.'
+                            : !receipt.report_hash
+                                ? 'Refresh impact to obtain the current archive receipt.'
+                                : `Archive is blocked by ${blockers.length} current condition${blockers.length === 1 ? '' : 's'}. Resolve them and refresh impact.`;
             const topo = detail.repo_topology || {};
             const canonical = ((topo.roles || {}).canonical || {});
             const access = (detail.access_summary || {}).access || {};
@@ -72,8 +96,8 @@
                     </div>
                     <hr><div class="d-flex align-items-center"><h4 class="mb-0">Impact preview</h4><button class="btn btn-sm btn-outline-secondary ms-auto" data-set-action="project-impact">Refresh impact</button></div>
                     <div class="mt-2"><span class="badge ${archiveGate.eligible ? 'bg-green-lt' : 'bg-yellow-lt'}">${this.esc(((impact || {}).recommendation || {}).action || 'unavailable')}</span> <span class="small text-secondary">receipt <code>${this.esc((receipt.report_hash || '').slice(0, 28) || 'unavailable')}</code></span></div>${blockerHtml}
-                    <hr><h4>Lifecycle action</h4><div class="row g-2 align-items-end"><div class="col-md-7"><label class="form-label">Reason</label><input id="pa-reason" class="form-control" placeholder="Why this transition is necessary"></div><div class="col-md-5"><label class="form-check mb-2"><input id="pa-confirm" type="checkbox" class="form-check-input"${(!canArchive && !canRestore) ? ' disabled' : ''}><span class="form-check-label">I reviewed the exact blockers and receipt</span></label></div></div>
-                    <div class="d-flex align-items-center mt-2"><span id="pa-life-flash" class="small text-secondary"></span><div class="btn-list ms-auto"><button class="btn btn-outline-primary btn-sm" data-set-action="project-restore" data-restore-allowed="${canRestore ? '1' : '0'}" disabled><i class="ti ti-restore me-1"></i>Restore</button><button class="btn btn-danger btn-sm" data-set-action="project-archive" data-archive-allowed="${canArchive ? '1' : '0'}" disabled><i class="ti ti-archive me-1"></i>Archive</button></div></div>
+                    <hr><h4>Lifecycle action</h4><div id="pa-life-hint" class="alert ${canArchive || canRestore ? 'alert-info' : 'alert-warning'} py-2 px-3 small">${this.esc(lifecycleHint)}</div><div class="row g-2 align-items-end"><div class="col-md-7"><label class="form-label">Reason</label><input id="pa-reason" class="form-control" placeholder="Why this transition is necessary"${(!canArchive && !canRestore) ? ' disabled' : ''}></div><div class="col-md-5"><label class="form-check mb-2"><input id="pa-confirm" type="checkbox" class="form-check-input"${(!canArchive && !canRestore) ? ' disabled' : ''}><span class="form-check-label">I reviewed the current impact receipt</span></label></div></div>
+                    <div class="d-flex align-items-center mt-2"><span id="pa-life-flash" class="small text-secondary" role="status" aria-live="polite"></span><div class="btn-list ms-auto"><button class="btn btn-outline-primary btn-sm" data-set-action="project-restore" data-restore-allowed="${canRestore ? '1' : '0'}"${canRestore ? '' : ' disabled'} title="${this.esc(canRestore ? 'Restore this archived project' : lifecycleHint)}"><i class="ti ti-restore me-1"></i>Restore</button><button class="btn btn-danger btn-sm" data-set-action="project-archive" data-archive-allowed="${canArchive ? '1' : '0'}"${canArchive ? '' : ' disabled'} title="${this.esc(canArchive ? 'Archive this project after reviewing the receipt' : lifecycleHint)}"><i class="ti ti-archive me-1"></i>Archive</button></div></div>
                     <hr><h4>Lifecycle receipts</h4><div class="table-responsive"><table class="table table-sm table-vcenter"><thead><tr><th>Event</th><th>Transition</th><th>Actor</th><th>Reason</th><th>Impact hash</th></tr></thead><tbody>${eventRows}</tbody></table></div>
                 </div></div>`;
         },
@@ -91,10 +115,7 @@
                 return this.renderSettings();
             }
             if (element.id === 'pa-confirm') {
-                const archive = document.querySelector('[data-set-action="project-archive"]');
-                const restore = document.querySelector('[data-set-action="project-restore"]');
-                if (archive) archive.disabled = !(element.checked && archive.dataset.archiveAllowed === '1');
-                if (restore) restore.disabled = !(element.checked && restore.dataset.restoreAllowed === '1');
+                this._sFlash('pa-life-flash', element.checked ? 'Receipt review confirmed.' : 'Confirm the receipt review before continuing.', element.checked ? 'text-success' : 'text-secondary');
             }
         },
 
@@ -125,7 +146,10 @@
         async _projectAdminArchive() {
             const id = this._settingsProjectId, reason = this._sv('pa-reason');
             const receipt = (this._settingsImpact || {}).receipt;
-            if (!reason || !receipt) return this._sFlash('pa-life-flash', 'A reason and current impact receipt are required.', 'text-danger');
+            const confirmed = !!(document.getElementById('pa-confirm') || {}).checked;
+            if (!reason) return this._sFlash('pa-life-flash', 'Add a reason before archiving.', 'text-danger');
+            if (!confirmed) return this._sFlash('pa-life-flash', 'Confirm that you reviewed the current impact receipt.', 'text-danger');
+            if (!receipt || !receipt.report_hash) return this._sFlash('pa-life-flash', 'Refresh impact to obtain a current archive receipt.', 'text-danger');
             this._sFlash('pa-life-flash', 'Archiving against the displayed receipt…', 'text-secondary');
             try {
                 await this._sSend(`api/projects/${encodeURIComponent(id)}/archive`, 'POST', { reason, impact_report_receipt: receipt });
@@ -136,7 +160,9 @@
 
         async _projectAdminRestore() {
             const id = this._settingsProjectId, reason = this._sv('pa-reason');
-            if (!reason) return this._sFlash('pa-life-flash', 'A restore reason is required.', 'text-danger');
+            const confirmed = !!(document.getElementById('pa-confirm') || {}).checked;
+            if (!reason) return this._sFlash('pa-life-flash', 'Add a reason before restoring.', 'text-danger');
+            if (!confirmed) return this._sFlash('pa-life-flash', 'Confirm that you reviewed the current lifecycle state.', 'text-danger');
             this._sFlash('pa-life-flash', 'Validating access and topology…', 'text-secondary');
             try {
                 await this._sSend(`api/projects/${encodeURIComponent(id)}/restore`, 'POST', { reason });

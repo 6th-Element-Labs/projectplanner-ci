@@ -4359,6 +4359,7 @@ const TeepPlan = {
             this._sfetch(`api/projects/${encodeURIComponent(selected)}/impact`),
         ]) : [{ error: 'No accessible projects match this lifecycle filter.' }, {}];
         this._settingsProjects = this._settingsAdminProjects.filter((p) => p.lifecycle_status !== 'archived');
+        this._projectAdminSyncSwitcher();
         let adminHtml = '<div class="alert alert-secondary"><i class="ti ti-lock me-1"></i>Repository topology, reconcile, offline verification, task moves, and publication controls require <code>write:system</code>.</div>';
         if (this.isAdmin) {
             const [topology, ciRuns, pubs] = await Promise.all([
