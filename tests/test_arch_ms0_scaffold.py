@@ -44,7 +44,10 @@ def ok(condition, message):
 # --- Assertion 1: the package skeleton imports -------------------------------
 # The ADR-0009 target tree. `settings` is a module; the rest are packages that must
 # ship an __init__.py so extractions can land on-touch without re-scaffolding.
-SKELETON_MODULES = ("switchboard.settings",)
+SKELETON_MODULES = (
+    "switchboard.settings",
+    "switchboard.storage.migrations.runner",
+)
 SKELETON_PACKAGES = (
     "switchboard",
     "switchboard.api",
