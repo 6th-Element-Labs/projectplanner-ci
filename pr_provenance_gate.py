@@ -42,45 +42,9 @@ def _csv_env(name: str, default: Sequence[str]) -> List[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def gate_mode() -> str:
-    """Mode for the primary/home repo (the one the CI runner is centered on)."""
-    mode = (os.environ.get("SWITCHBOARD_CI_CLAIM_GATE_MODE") or "warn").strip().lower()
-    return mode if mode in _MODES else "warn"
-
-
-def _default_other_repo_mode() -> str:
-    """Mode for canonical repos other than the primary one — warn by default so a
-    newly-onboarded repo (Helm, any future project) is observed before it goes red."""
-    mode = (os.environ.get("SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT") or "warn").strip().lower()
-    return mode if mode in _MODES else "warn"
-
-
-def _repo_mode_overrides() -> Dict[str, str]:
-    """Per-repo mode overrides from SWITCHBOARD_CI_CLAIM_GATE_MODES='owner/repo=enforce,...'."""
-    out: Dict[str, str] = {}
-    raw = (os.environ.get("SWITCHBOARD_CI_CLAIM_GATE_MODES") or "").strip()
-    for item in raw.split(","):
-        item = item.strip()
-        if "=" not in item:
-            continue
-        repo, _, mode = item.partition("=")
-        repo = repo.strip().lower()
-        mode = mode.strip().lower()
-        if repo and mode in _MODES:
-            out[repo] = mode
-    return out
-
-
 def resolve_mode(repo: str, primary_repo: str = "") -> str:
-    """Per-repo claim-gate mode: explicit override wins, else the primary repo uses the
-    configured gate_mode() and every other canonical repo uses the (warn) default."""
-    repo_l = (repo or "").strip().lower()
-    overrides = _repo_mode_overrides()
-    if repo_l in overrides:
-        return overrides[repo_l]
-    if primary_repo and repo_l == primary_repo.strip().lower():
-        return gate_mode()
-    return _default_other_repo_mode()
+    """Per-repo claim-gate mode from project repo_topology.roles.canonical.claim_gate."""
+    return store.resolve_claim_gate_mode(repo, primary_repo)
 
 
 def _is_docs_only(changed_paths: Optional[Sequence[str]]) -> Optional[bool]:
@@ -180,7 +144,7 @@ def evaluate_pr_provenance(
     to post ('success' or 'failure'); in warn mode it is always 'success' and a
     would-be block is surfaced only in the description + activity log.
     """
-    mode = (mode or gate_mode()).strip().lower()
+    mode = (mode or resolve_mode(repo)).strip().lower()
     if mode not in _MODES:
         mode = "warn"
     prefixes = list(fleet_branch_prefixes) if fleet_branch_prefixes is not None else \

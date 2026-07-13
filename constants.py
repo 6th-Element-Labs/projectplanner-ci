@@ -49,6 +49,8 @@ BUILTIN_GITHUB_REPOS = {
 }
 DEFAULT_PUBLIC_CI_REPO = (os.environ.get("PM_PUBLIC_CI_REPO") or "").strip()
 REPO_TOPOLOGY_SCHEMA = "switchboard.project_repo_topology.v1"
+CLAIM_GATE_MODES = frozenset({"off", "warn", "enforce"})
+DEFAULT_CLAIM_GATE_MODE = "warn"
 BUILTIN_REPO_TOPOLOGIES = {
     "helm": {
         "schema": REPO_TOPOLOGY_SCHEMA,
@@ -57,6 +59,7 @@ BUILTIN_REPO_TOPOLOGIES = {
             "canonical": {
                 "repo": "StevenRidder/Helm",
                 "default_branch": "main",
+                "claim_gate": DEFAULT_CLAIM_GATE_MODE,
                 "authority": ["done", "merge_provenance", "code_truth"],
                 "description": "Private canonical Helm repo. Only this role can satisfy code Done.",
             },
@@ -87,6 +90,7 @@ BUILTIN_REPO_TOPOLOGIES = {
             "canonical": {
                 "repo": "6th-Element-Labs/projectplanner",
                 "default_branch": "master",
+                "claim_gate": DEFAULT_CLAIM_GATE_MODE,
                 "authority": ["done", "merge_provenance", "code_truth"],
                 "description": "Canonical Switchboard/projectplanner repo.",
             },

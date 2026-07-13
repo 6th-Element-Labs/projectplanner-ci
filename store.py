@@ -12941,6 +12941,34 @@ def list_canonical_repos(projects: Optional[List[str]] = None) -> Dict[str, List
     return out
 
 
+def resolve_claim_gate_mode(repo: str, primary_repo: str = "",
+                            primary_project: str = "switchboard") -> str:
+    """Resolve claim-gate mode for a canonical GitHub repo from project repo_topology.
+
+    Each project's ``roles.canonical.claim_gate`` declares off|warn|enforce for fleet
+    PR provenance on that repo. The primary repo prefers the CI-home project's mode;
+    other canonical repos use the owning project's declaration (default warn).
+    """
+    repo_norm = _normalize_repo_slug(repo)
+    if not repo_norm:
+        return DEFAULT_CLAIM_GATE_MODE
+    primary_norm = _normalize_repo_slug(primary_repo)
+    project_ids: List[str] = []
+    for canonical_repo, pids in list_canonical_repos().items():
+        if _normalize_repo_slug(canonical_repo) == repo_norm:
+            project_ids.extend(pids)
+    if not project_ids:
+        return DEFAULT_CLAIM_GATE_MODE
+    by_project: Dict[str, str] = {}
+    for pid in project_ids:
+        canonical = ((get_project_repo_topology(project=pid).get("roles") or {})
+                     .get("canonical") or {})
+        by_project[pid] = _normalize_claim_gate(canonical.get("claim_gate"))
+    if primary_norm and repo_norm == primary_norm and primary_project in by_project:
+        return by_project[primary_project]
+    return next(iter(by_project.values()))
+
+
 def get_project_repo_role(repo: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Classify one GitHub repo against a project's repo_topology roles."""
     repo_norm = _normalize_repo_slug(repo)
@@ -13102,6 +13130,11 @@ def _repo_role_template(role: str) -> Dict[str, Any]:
     }
 
 
+def _normalize_claim_gate(mode: Any) -> str:
+    normalized = (str(mode or "") or DEFAULT_CLAIM_GATE_MODE).strip().lower()
+    return normalized if normalized in CLAIM_GATE_MODES else DEFAULT_CLAIM_GATE_MODE
+
+
 def _merge_repo_role(roles: Dict[str, Dict[str, Any]], role: str, data) -> None:
     if not isinstance(data, dict):
         return
@@ -13112,6 +13145,8 @@ def _merge_repo_role(roles: Dict[str, Dict[str, Any]], role: str, data) -> None:
             merged = _coerce_str_list(value)
             if merged:
                 target[key] = merged
+        elif key == "claim_gate":
+            target[key] = _normalize_claim_gate(value)
         elif value is not None:
             target[key] = value
 
@@ -13154,6 +13189,8 @@ def get_project_repo_topology(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "private_repo": ("canonical", "repo"),
         "canonical_default_branch": ("canonical", "default_branch"),
         "default_branch": ("canonical", "default_branch"),
+        "canonical_claim_gate": ("canonical", "claim_gate"),
+        "claim_gate": ("canonical", "claim_gate"),
         "public_ci_repo": ("public_ci", "repo"),
         "ci_repo": ("public_ci", "repo"),
         "public_ci_default_branch": ("public_ci", "default_branch"),
@@ -13191,6 +13228,8 @@ def get_project_repo_topology(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     for role, data in roles.items():
         for field in ("required_status_contexts", "sync_scripts", "publish_scripts"):
             data[field] = _coerce_str_list(data.get(field))
+        if role == "canonical":
+            data["claim_gate"] = _normalize_claim_gate(data.get("claim_gate"))
         repo, error = _validate_github_repo(data.get("repo", ""))
         data["repo"] = repo
         data["configured"] = bool(repo)
@@ -13309,6 +13348,7 @@ def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: st
                               public_ci_repo: str = "", public_repo: str = "",
                               release_repo: str = "", topology_type: str = "",
                               canonical_default_branch: str = "",
+                              canonical_claim_gate: str = "",
                               public_ci_required_status_contexts=None,
                               public_ci_sync_scripts=None,
                               public_publish_scripts=None,
@@ -13323,7 +13363,8 @@ def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: st
         public_ci_sync_scripts = ci_sync_scripts
 
     updates = {
-        "canonical": {"repo": canonical_repo, "default_branch": canonical_default_branch},
+        "canonical": {"repo": canonical_repo, "default_branch": canonical_default_branch,
+                      "claim_gate": canonical_claim_gate},
         "public_ci": {"repo": public_ci_repo,
                       "required_status_contexts": public_ci_required_status_contexts,
                       "sync_scripts": public_ci_sync_scripts},
@@ -13352,6 +13393,9 @@ def set_project_repo_topology(project: str = DEFAULT_PROJECT, canonical_repo: st
         default_branch = (data.get("default_branch") or "").strip()
         if default_branch:
             target["default_branch"] = default_branch
+        claim_gate = (data.get("claim_gate") or "").strip()
+        if claim_gate and role == "canonical":
+            target["claim_gate"] = _normalize_claim_gate(claim_gate)
         for field in ("required_status_contexts", "sync_scripts", "publish_scripts"):
             values = _coerce_str_list(data.get(field))
             if values:

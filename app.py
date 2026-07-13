@@ -905,6 +905,7 @@ async def set_project_repo_topology(request: Request, project: str, body: dict =
         release_repo=body.get("release_repo") or "",
         topology_type=body.get("topology_type") or "",
         canonical_default_branch=body.get("canonical_default_branch") or body.get("default_branch") or "",
+        canonical_claim_gate=body.get("canonical_claim_gate") or body.get("claim_gate") or "",
         public_ci_required_status_contexts=(
             body.get("public_ci_required_status_contexts") or
             body.get("ci_required_status_contexts") or

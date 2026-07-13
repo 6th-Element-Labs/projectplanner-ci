@@ -2257,6 +2257,7 @@ def set_project_repo_topology(ctx: Context, project: str = "maxwell",
                               public_repo: str = "", release_repo: str = "",
                               topology_type: str = "",
                               canonical_default_branch: str = "",
+                              canonical_claim_gate: str = "",
                               public_ci_required_status_contexts: str = "",
                               public_ci_sync_scripts: str = "",
                               public_publish_scripts: str = "",
@@ -2267,8 +2268,9 @@ def set_project_repo_topology(ctx: Context, project: str = "maxwell",
 
     canonical_repo is the only code-truth / Done authority. public_ci_repo is a
     shared public CI sandbox for verification evidence only. public_repo and
-    release_repo are publication/release evidence roles only. ci_* arguments are
-    accepted as aliases for public_ci_* during migration.
+    release_repo are publication/release evidence roles only. canonical_claim_gate
+    sets off|warn|enforce for the SESSION-12 fleet PR provenance gate on that repo.
+    ci_* arguments are accepted as aliases for public_ci_* during migration.
     """
     principal = _require_write(ctx, "switchboard", ("write:system",))
     result = store.set_project_repo_topology(
@@ -2279,6 +2281,7 @@ def set_project_repo_topology(ctx: Context, project: str = "maxwell",
         release_repo=release_repo,
         topology_type=topology_type,
         canonical_default_branch=canonical_default_branch,
+        canonical_claim_gate=canonical_claim_gate,
         public_ci_required_status_contexts=public_ci_required_status_contexts,
         public_ci_sync_scripts=public_ci_sync_scripts,
         public_publish_scripts=public_publish_scripts,

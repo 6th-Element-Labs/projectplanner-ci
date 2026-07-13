@@ -268,7 +268,7 @@ def run_claim_gate_for_pr(pr: Dict[str, Any], *, repo: str, token: str,
     """SESSION-12 provenance gate: post a second, independent commit status that
     checks whether a fleet PR is backed by a claimed task / Work Session. Reads the
     production board (this process' store), never the PR worktree. mode is resolved
-    per-repo by the caller (primary repo uses gate_mode(); others default to warn)."""
+    per-repo by the caller (from repo_topology.roles.canonical.claim_gate)."""
     if mode == "off":
         return None
     number = int(pr["number"])
@@ -820,9 +820,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=os.environ.get("SWITCHBOARD_CI_CLAIM_STATUS_CONTEXT",
                                                DEFAULT_CLAIM_CONTEXT),
                         help="Commit-status context for the SESSION-12 provenance/claim gate. "
-                             "Primary-repo mode via SWITCHBOARD_CI_CLAIM_GATE_MODE (default warn); "
-                             "other canonical repos via SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT "
-                             "(default warn) or per-repo SWITCHBOARD_CI_CLAIM_GATE_MODES.")
+                             "Per-repo mode comes from project repo_topology.roles.canonical.claim_gate "
+                             "(off|warn|enforce; default warn).")
     parser.add_argument("--no-claim-gate", action="store_true",
                         default=os.environ.get("SWITCHBOARD_CI_NO_CLAIM_GATE", "").lower()
                         in ("1", "true", "yes"),

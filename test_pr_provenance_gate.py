@@ -17,8 +17,7 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(_TMP, "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = os.path.join(_TMP, "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = _TMP
 os.environ["PM_AUTH_MODE"] = "dev-open"
-for _k in ("SWITCHBOARD_CI_CLAIM_GATE_MODE", "SWITCHBOARD_CI_FLEET_BRANCH_PREFIXES",
-           "SWITCHBOARD_CI_FLEET_AUTHORS"):
+for _k in ("SWITCHBOARD_CI_FLEET_BRANCH_PREFIXES", "SWITCHBOARD_CI_FLEET_AUTHORS"):
     os.environ.pop(_k, None)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -176,25 +175,33 @@ try:
                  fleet_branch_prefixes=["wip/"], mode="enforce")
     ok(not r["ok"] and r["fleet"], "custom fleet branch prefix is honored")
 
-    # 12. per-repo mode resolution (primary enforce, others warn) --------------
+    # 12. per-repo mode resolution from repo_topology claim_gate ---------------
     PRIMARY = "example/primary-repo"
-    for _k in ("SWITCHBOARD_CI_CLAIM_GATE_MODE", "SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT",
-               "SWITCHBOARD_CI_CLAIM_GATE_MODES"):
-        os.environ.pop(_k, None)
-    os.environ["SWITCHBOARD_CI_CLAIM_GATE_MODE"] = "enforce"
+    store.create_project("Prov Primary", project_id="qa-prov-primary", actor="test")
+    store.init_db("qa-prov-primary")
+    store.set_project_repo_topology(project="qa-prov-primary", canonical_repo=PRIMARY,
+                                    canonical_claim_gate="enforce")
     ok(pr_provenance_gate.resolve_mode(PRIMARY, PRIMARY) == "enforce",
-       "primary repo uses the configured enforce mode")
+       "primary repo uses configured enforce mode from repo_topology")
     ok(pr_provenance_gate.resolve_mode("other/repo", PRIMARY) == "warn",
-       "a non-primary canonical repo defaults to warn")
-    os.environ["SWITCHBOARD_CI_CLAIM_GATE_MODES"] = "Other/Repo=enforce"
+       "a repo with no topology entry defaults to warn")
+    store.create_project("Prov Other Gate", project_id="qa-prov-other-gate", actor="test")
+    store.init_db("qa-prov-other-gate")
+    store.set_project_repo_topology(project="qa-prov-other-gate",
+                                    canonical_repo="Other/Repo",
+                                    canonical_claim_gate="enforce")
     ok(pr_provenance_gate.resolve_mode("other/repo", PRIMARY) == "enforce",
-       "per-repo override (case-insensitive) wins over the default")
-    os.environ["SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT"] = "off"
-    ok(pr_provenance_gate.resolve_mode("third/repo", PRIMARY) == "off",
-       "SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT tunes non-primary repos")
-    for _k in ("SWITCHBOARD_CI_CLAIM_GATE_MODE", "SWITCHBOARD_CI_CLAIM_GATE_MODE_DEFAULT",
-               "SWITCHBOARD_CI_CLAIM_GATE_MODES"):
-        os.environ.pop(_k, None)
+       "per-project claim_gate (case-insensitive repo match) wins over default")
+    store.create_project("Prov Third Gate", project_id="qa-prov-third-gate", actor="test")
+    store.init_db("qa-prov-third-gate")
+    store.set_project_repo_topology(project="qa-prov-third-gate",
+                                    canonical_repo="example/third-repo",
+                                    canonical_claim_gate="off")
+    ok(pr_provenance_gate.resolve_mode("example/third-repo", PRIMARY) == "off",
+       "repo_topology claim_gate tunes non-primary repos")
+    topo = store.get_project_repo_topology(project="qa-prov-primary")
+    ok(topo["roles"]["canonical"].get("claim_gate") == "enforce",
+       "get_project_repo_topology surfaces canonical claim_gate")
 
     # 13. registry-driven repo discovery (auto-covers new projects) -----------
     store.create_project("Prov Sibling", project_id="qa-prov-sib", actor="test")
