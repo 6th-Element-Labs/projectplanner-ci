@@ -186,8 +186,15 @@ def evaluate_trigger(
                          (session_contract["url_field"], session_url),
                      ) if not value])
     provider_state = str(provider_result.get("status") or "running").lower()
+    mapped_status = (vendor.get("status_map") or {}).get(provider_state)
+    if not mapped_status:
+        return _deny("provider_status_unknown", "invalid_input", vendor_id=vendor_id,
+                     provider_status=provider_state)
     if provider_state in {"expired", "lost"}:
         return _deny(f"vendor_session_{provider_state}", "unreachable_agent",
+                     vendor_id=vendor_id, provider_session_id=session_id)
+    if mapped_status == "failed":
+        return _deny(f"vendor_session_{provider_state}", "failed_gate",
                      vendor_id=vendor_id, provider_session_id=session_id)
     return {
         "allowed": True,
@@ -199,7 +206,7 @@ def evaluate_trigger(
         "wake_id": dispatch["wake_id"],
         "task_id": dispatch["task_id"],
         "claim_id": dispatch.get("claim_id"),
-        "dev_status": "running",
+        "dev_status": mapped_status,
         "provider_status": provider_state,
         "receipt_schema": "switchboard.cloud_session_binding.v1",
     }

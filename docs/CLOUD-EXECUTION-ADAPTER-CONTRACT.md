@@ -38,7 +38,7 @@ proved remains queued or visibly failed.
 |---|---|---|---|
 | `claude-code-cloud` | Conditional through the official `claude --cloud` CLI bridge. Each invocation creates a new cloud session from the current GitHub repo/branch. | Claude documents a remote session ID and a `claude.ai/code/...` transcript URL. | Implement a small launcher bridge; capture/read back both values before adoption. |
 | `openai-codex-cloud` | **Unsupported in this contract.** Current official Codex cloud docs describe starting work from Codex web, GitHub, Linear, or Slack, but do not document a public cloud-task creation API that returns a task ID and URL. Codex SDK/App Server run in caller-controlled compute and are not a substitute. | Codex cloud tasks are visible in Codex, but there is no documented trigger receipt for a direct Switchboard adapter. | Fail `provider_trigger_unsupported` until OpenAI publishes a suitable trigger or an approved first-party integration yields a bindable receipt. |
-| `cursor-background-agent` | Conditional through Cursor's beta Background Agents API, authenticated with a dashboard API key and backed by GitHub repository access. | The adapter must capture the returned agent ID and Cursor agent URL, then poll/read back status. | Implement the HTTP adapter behind this shared interface. |
+| `cursor-background-agent` | Implemented through Cursor's beta Cloud Agents v1 API (`POST /v1/agents`), authenticated with a Cloud Agents API key and backed by an explicit GitHub repository grant. | The adapter captures and reads back the durable `bc-...` agent ID, `cursor.com/agents/...` URL, and latest run status. | Use `adapters/cursor/cloud_execution.py`; exact same-run resume fails closed, while a new run on the same durable agent is labeled a follow-up. |
 
 Sources checked on 2026-07-13:
 
@@ -49,9 +49,13 @@ Sources checked on 2026-07-13:
 - [Codex cloud](https://developers.openai.com/codex/cloud) documents isolated cloud tasks,
   environments, review-before-merge, and web/GitHub/Linear/Slack initiation. It does not publish
   a direct create-cloud-task API on that surface.
-- [Cursor Background Agents API](https://docs.cursor.com/background-agent/api/overview) documents
-  programmatic agent creation/management, bearer API keys, GitHub integration, usage-based
-  pricing, and up to 256 active agents per API key. Switchboard intentionally sets a lower cap.
+- [Cursor Cloud Agents API](https://cursor.com/docs/cloud-agent/api/endpoints) documents the
+  current run-based v1 create/read/follow-up/usage endpoints, API-key authentication, inline
+  remote MCP servers, encrypted session environment variables, GitHub repositories, app-visible
+  agent URLs, and explicit run statuses. The legacy v0 API is not used by ADAPTER-20.
+- [Cursor pricing](https://docs.cursor.com/account/pricing) states that Cloud/Background Agents
+  consume selected-model inference at API pricing. Cursor documents a provider ceiling of up to
+  256 active agents per key; Switchboard deliberately keeps its cap at eight.
 
 Vendor capabilities change. Each per-vendor implementation must pin a tested API/CLI version and
 refresh its source links; the shared fixture records capability semantics, not an eternal endpoint
@@ -106,8 +110,10 @@ an especially short-lived single-task token, never a reusable production `PM_MCP
 revoke it as soon as adoption fails or the provider session becomes terminal. Cursor documents
 KMS-backed environment secrets, but receives the same least-privilege token shape.
 
-V1 creates fresh cloud sessions. Provider-specific follow-ups may continue an adopted session, but
-an adapter must not relabel a follow-up, fork, reconstructed context, or new task as exact resume.
+V1 creates fresh cloud sessions. Cursor v1 can create another run on the same durable agent, which
+retains conversation and workspace state. That is a **same-agent follow-up**, not an exact same-run
+resume: terminal/cancelled runs are not resumed in place. An adapter must not relabel a follow-up,
+fork, reconstructed context, or new task as exact resume.
 The continuity vocabulary remains defined by
 [`RUNTIME-WAKE-CAPABILITY-MATRIX.md`](RUNTIME-WAKE-CAPABILITY-MATRIX.md).
 
@@ -128,9 +134,15 @@ Before any provider call, the adapter must:
 
 Claude's adapter is a CLI bridge because `claude --cloud` is the documented launch surface. The
 bridge is a short-lived trigger process; the actual coding compute remains Anthropic-hosted.
-Cursor uses its Background Agents API. Codex fails closed until a direct supported trigger exists;
+Cursor uses `POST /v1/agents`. Codex fails closed until a direct supported trigger exists;
 browser automation, reverse-engineered endpoints, and the local Codex SDK/App Server are not
 acceptable hidden substitutes.
+
+For Cursor, Switchboard first proves that the task branch is already pushed, then supplies it as
+`repos[].startingRef` with `workOnCurrentBranch=true` and `autoCreatePR=true`. A deterministic
+agent ID derived from project/task/wake makes a retry safe: Cursor's `409 agent_id_conflict`
+causes readback of that exact agent rather than a second launch. The scoped Switchboard token is
+resolved outside the dispatch envelope and injected only into the inline `taikun-plan` MCP header.
 
 ## 5. Adoption and binding receipt
 
@@ -218,8 +230,10 @@ new wake, but the adapter never silently creates a second provider session.
 
 ## 9. Implementation slices
 
-1. Cursor adapter: pin the beta API request/response schema, implement create/read/follow-up, and
-   prove GitHub and session-URL receipts.
+1. Cursor adapter: **implemented by ADAPTER-20** against the run-based v1 API with account/repo/
+   branch preflight, idempotent create, authoritative readback, explicit follow-up semantics, and
+   token-usage receipts. A live launch still requires an operator-owned Cloud Agents API key,
+   repository grant, pushed task branch, and scoped Switchboard token resolver.
 2. Claude adapter: implement the authenticated `claude --cloud` bridge and robust session ID/URL
    extraction/readback.
 3. Codex adapter: wait for a documented cloud-task trigger or implement an explicitly approved

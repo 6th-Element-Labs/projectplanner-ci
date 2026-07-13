@@ -30,3 +30,31 @@ Switchboard owns the process. Set the `control` block accordingly at `register_a
 
 > Same `<runtime>/<scope>` id convention as the rest (IXP §2). One core, four runtimes
 > (Claude Code, Codex, raw OpenAI loop, Cursor) — all on the identical contract.
+
+## Cursor Cloud Agents (ADAPTER-20)
+
+[`cloud_execution.py`](cloud_execution.py) implements the vendor-hosted Cursor path against the
+current [Cloud Agents v1 API](https://cursor.com/docs/cloud-agent/api/endpoints). It:
+
+1. validates the shared `switchboard.cloud_dispatch.v1` envelope;
+2. verifies the Cloud Agents API key, canonical GitHub repository grant, scoped MCP token
+   resolution, pushed task branch, and Switchboard's lower concurrency cap;
+3. creates a deterministic `bc-...` agent with `POST /v1/agents`, the canonical repo/task branch,
+   `workOnCurrentBranch=true`, `autoCreatePR=true`, and inline `taikun-plan` MCP access;
+4. reads back the durable agent ID, app-visible `cursor.com/agents/...` URL, and latest run before
+   returning a `switchboard.cloud_session_binding.v1` receipt; and
+5. projects `/usage` token counts into a reported Tally receipt without inventing dollar cost.
+
+The launch secret boundary is deliberate: `CURSOR_API_KEY` and the resolved short-lived MCP token
+are constructor/host inputs, never dispatch-envelope fields or receipt fields. The adapter accepts
+a token resolver so production can map the opaque `token_ref` to its secret store without logging
+the credential.
+
+Continuity is honest and typed: exact same-run resume is unsupported and fails closed. Cursor v1
+does support `POST /v1/agents/{id}/runs`, which creates a **same-agent follow-up** with retained
+conversation/workspace state; the adapter never labels that operation an exact resume.
+
+Hermetic coverage lives in [`../../test_cursor_cloud_execution.py`](../../test_cursor_cloud_execution.py).
+A real launch additionally requires an operator-owned Cursor Cloud Agents API key, the canonical
+repository grant, and a pushed `cursor/<task>` or `codex/<task>` branch. Cloud Agent model usage is
+billed at selected-model API pricing; provider dollar cost remains unknown until reconciliation.

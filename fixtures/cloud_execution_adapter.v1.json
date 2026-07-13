@@ -101,12 +101,12 @@
       "id": "cursor-background-agent",
       "trigger_support": "conditional",
       "trigger_mode": "http_api",
-      "launch_operation": "Cursor Background Agents API create-agent operation",
+      "launch_operation": "POST https://api.cursor.com/v1/agents",
       "requirements": [
         "cursor_api_key",
         "cursor_background_agents_enabled",
         "github_repo_grant",
-        "base_branch_exists",
+        "pushed_task_branch",
         "project_mcp_config",
         "scoped_mcp_token_ref"
       ],
@@ -118,13 +118,15 @@
         "id_field": "agent_id",
         "url_field": "agent_url",
         "visibility": "cursor.com/agents",
-        "continuity": "fresh_background_agent_with_followups"
+        "continuity": "fresh_agent; same-agent follow-up run supported; exact same-run resume unsupported"
       },
       "status_map": {
         "queued": "queued",
         "provisioning": "queued",
         "running": "running",
         "completed": "running",
+        "finished": "running",
+        "error": "failed",
         "failed": "failed",
         "cancelled": "failed",
         "expired": "failed",
@@ -136,7 +138,7 @@
         "confidence": "reported",
         "notes": "Report provider-exposed tokens/cost; reconcile later if a billing export is available."
       },
-      "source": "https://docs.cursor.com/background-agent/api/overview"
+      "source": "https://cursor.com/docs/cloud-agent/api/endpoints"
     }
   ]
 }

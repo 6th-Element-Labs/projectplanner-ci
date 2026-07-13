@@ -129,6 +129,19 @@ for vendor in contract["vendors"]:
        and adopted["wake_id"] == "wake-17"
        and adopted["runner_session_id"].endswith("/session-17"),
        f"{vendor_id} binds complete session receipt to wake and runner session")
+    queued_receipt = evaluate_trigger(
+        vendor_id, dispatch, requirements, 0,
+        provider_result={
+            "ok": True,
+            session["id_field"]: "session-queued",
+            session["url_field"]: "https://vendor.example/session-queued",
+            "status": "provisioning" if "provisioning" in vendor["status_map"] else "queued",
+        },
+        contract=contract,
+    )
+    ok(queued_receipt["allowed"] is True and queued_receipt["adopted"] is True
+       and queued_receipt["dev_status"] == "queued",
+       f"{vendor_id} keeps adopted provisioning session queued until it runs")
     expired = evaluate_trigger(
         vendor_id, dispatch, requirements, 0,
         provider_result={
