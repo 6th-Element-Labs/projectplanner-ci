@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+import ci_scratchpad_dispatch
 import ci_verify_dispatch
 import store
 import task_id_parser
@@ -217,14 +218,48 @@ def _maybe_refresh_claim_gate(repo: str, pr_number: Any, project: str = "") -> D
         return {"claim_gate_refreshed": False, "claim_gate_error": str(exc)}
 
 
+def _maybe_dispatch_scratchpad_ci(
+    repo: str, pr_number: Any, head_sha: str, project: str = ""
+) -> Dict[str, Any]:
+    """CI-12 scratchpad relay: push ci/** on projectplanner-ci (push-triggered verify)."""
+    if pr_number is None:
+        return {"dispatched": False, "skip_reason": "missing_pr_number"}
+    proj = (project or store.DEFAULT_PROJECT).strip()
+    return ci_scratchpad_dispatch.try_dispatch_scratchpad(
+        int(pr_number),
+        head_sha=head_sha or "",
+        repo=repo,
+        project=proj,
+    )
+
+
 def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "") -> Dict[str, Any]:
-    """Trigger pull-model CI + claim gate for one PR update (CI-6/CI-7/CI-11)."""
-    dispatch = _maybe_dispatch_pull_model_ci(repo, pr_number, head_sha)
+    """Trigger scratchpad or pull-model CI + claim gate for one PR update."""
+    if ci_scratchpad_dispatch.is_scratchpad_enabled():
+        dispatch = _maybe_dispatch_scratchpad_ci(repo, pr_number, head_sha, project=project)
+        verification = {
+            "scratchpad_dispatched": bool(dispatch.get("dispatched")),
+            "scratchpad_skip_reason": dispatch.get("skip_reason"),
+            "scratchpad_head_sha": dispatch.get("head_sha"),
+            "scratchpad_run_id": dispatch.get("run_id"),
+            "pull_model_dispatched": False,
+            "pull_model_skip_reason": "scratchpad_primary",
+            "pull_model_head_sha": None,
+        }
+    else:
+        dispatch = _maybe_dispatch_pull_model_ci(repo, pr_number, head_sha)
+        verification = {
+            "scratchpad_dispatched": False,
+            "scratchpad_skip_reason": "scratchpad_disabled",
+            "scratchpad_head_sha": None,
+            "scratchpad_run_id": None,
+            "pull_model_dispatched": bool(dispatch.get("dispatched")),
+            "pull_model_skip_reason": dispatch.get("skip_reason"),
+            "pull_model_head_sha": dispatch.get("head_sha"),
+        }
     claim = _maybe_refresh_claim_gate(repo, pr_number, project=project)
     return {
-        "pull_model_dispatched": bool(dispatch.get("dispatched")),
-        "pull_model_skip_reason": dispatch.get("skip_reason"),
-        "pull_model_head_sha": dispatch.get("head_sha"),
+        **verification,
         "claim_gate_refreshed": bool(claim.get("claim_gate_refreshed")),
         "claim_gate_skip_reason": claim.get("skip_reason") or claim.get("claim_gate_error"),
     }
@@ -278,6 +313,10 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         ci = _maybe_trigger_ci(repo, pr_num, head_sha, project)
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
                 "in_review_tasks": touched, "skipped_tasks": skipped,
+                "scratchpad_dispatched": ci.get("scratchpad_dispatched"),
+                "scratchpad_skip_reason": ci.get("scratchpad_skip_reason"),
+                "scratchpad_head_sha": ci.get("scratchpad_head_sha"),
+                "scratchpad_run_id": ci.get("scratchpad_run_id"),
                 "pull_model_dispatched": ci.get("pull_model_dispatched"),
                 "pull_model_skip_reason": ci.get("pull_model_skip_reason"),
                 "pull_model_head_sha": ci.get("pull_model_head_sha"),

@@ -2,7 +2,9 @@
 """Guard the current Switchboard CI policy.
 
 VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
-pull-model verify workflow. The Plan VM posts only the SESSION-12 claim gate.
+scratchpad push workflow (CI-12/CI-14) by default. Pull-model dispatch remains as
+fallback when ``SWITCHBOARD_CI_SCRATCHPAD=0``. The Plan VM posts only the SESSION-12
+claim gate.
 """
 from pathlib import Path
 
@@ -55,7 +57,9 @@ ok("projectplanner-claim-gate.timer" in provision and "switchboard_ci.sh" in pro
    "Provisioning docs install the claim-gate timer and strict local suite")
 ok("Switchboard CI / VM gate" in runbook
    and "projectplanner-ci" in runbook,
-   "Runbook names pull-model VM verification on projectplanner-ci")
+   "Runbook names VM verification on projectplanner-ci")
+ok("ci_scratchpad_dispatch" in Path("github_sync.py").read_text(encoding="utf-8"),
+   "github_sync routes canonical PR verification through scratchpad dispatch")
 ok("fail-on-red" in pr_gate,
    "Manual gate can fail closed when requested")
 ok("Environment=PM_AUTH_MODE=required" in web_unit,

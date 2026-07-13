@@ -238,6 +238,13 @@ def dispatch_ci():
     raise SystemExit(ci_verify_dispatch.main(args))
 
 
+def dispatch_scratchpad():
+    """Operator CLI: validate/dispatch scratchpad CI for one PR (see ci_scratchpad_dispatch.py)."""
+    import ci_scratchpad_dispatch
+    args = sys.argv[2:] if len(sys.argv) > 2 else ["--help"]
+    raise SystemExit(ci_scratchpad_dispatch.main(args))
+
+
 def merge_coordinator_plan():
     """Run the Switchboard merge-coordinator once (HARDEN-72 / CI-5, Lever 6).
 
@@ -271,6 +278,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "reconcile_alerts": reconcile_alerts,
         "claim_gate_prs": claim_gate_prs,
         "dispatch_ci": dispatch_ci,
+        "dispatch_scratchpad": dispatch_scratchpad,
         "merge_coordinator_plan": merge_coordinator_plan,
         "background_job": background_job}
 

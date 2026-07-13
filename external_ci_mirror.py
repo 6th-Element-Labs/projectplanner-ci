@@ -264,6 +264,28 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
             project=project,
         )
 
+    push_triggered = bool(request.get("push_triggered"))
+    poll_after_push = request.get("poll_after_push")
+    if poll_after_push is None:
+        poll_after_push = not push_triggered
+    result_payload = {**(mirrored.get("result") or {})}
+    if push_triggered:
+        result_payload["push_triggered"] = True
+        result_payload["workflow_dispatch"] = "skipped_push_triggered"
+        updated = store.update_external_ci_run(
+            run["run_id"],
+            {"status": "triggered", "result": result_payload},
+            actor=actor,
+            project=project,
+        )
+        if not poll_after_push:
+            updated["ok"] = True
+            return updated
+        return _poll_run({**run, "status": "triggered"}, source_path, actor, project,
+                         runner, sleep_fn, now_fn,
+                         float(request.get("poll_interval_seconds") or 15),
+                         float(request.get("timeout_seconds") or 1800))
+
     trigger_args = ["gh", "workflow", "run", workflow, "--repo", mirror_repo, "--ref", mirror_branch]
     trigger_args.extend(_workflow_inputs_args(_workflow_inputs_for_run(run, request)))
     trigger = _check(trigger_args, source_path, "workflow_trigger_failed",
@@ -273,7 +295,7 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
         {
             "status": "triggered",
             "result": {
-                **(mirrored.get("result") or {}),
+                **result_payload,
                 "workflow_dispatch_stdout": (trigger.stdout or "").strip(),
                 "workflow_dispatch_stderr": (trigger.stderr or "").strip(),
             },
