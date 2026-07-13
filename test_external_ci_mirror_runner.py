@@ -53,6 +53,8 @@ class FakeRunner:
         if args[:3] == ["git", "rev-parse", "--verify"]:
             return subprocess.CompletedProcess(
                 args, 0, "abcdef1234567890abcdef1234567890abcdef12\n", "")
+        if args[:3] == ["git", "fetch", "--no-tags"]:
+            return subprocess.CompletedProcess(args, 0, "", "fetched")
         if args[:2] == ["git", "push"]:
             if self.mode == "push_fail":
                 return subprocess.CompletedProcess(args, 1, "", "permission denied")
@@ -146,6 +148,30 @@ try:
        "source_sha=abcdef1234567890abcdef1234567890abcdef12" in workflow_runs[0] and
        "status_context=public-ci/full-suite" in workflow_runs[0],
        "workflow dispatch receives canonical source SHA and status context")
+
+    push_task = store.create_task({"workstream_id": "CIQA", "title": "push trigger"},
+                                  actor="test", project=P)
+    push_request = make_request(push_task["task_id"])
+    push_request["push_triggered"] = True
+    push_request["poll_after_push"] = True
+    push_request["cleanup_mirror_branch"] = True
+    push_request["source_fetch_ref"] = "refs/pull/42/head"
+    push_runner = FakeRunner()
+    push_success = external_ci_mirror.request_external_ci_mirror_run(
+        push_request, source_path, actor="test", project=P,
+        runner=push_runner, sleep_fn=clock.sleep, now_fn=clock.time)
+    ok(push_success["ok"] is True and
+       not any(cmd[:3] == ["gh", "workflow", "run"] for cmd in push_runner.commands),
+       "push trigger mode relies on the mirror push and skips workflow_dispatch")
+    ok(any(cmd[:3] == ["gh", "run", "list"] for cmd in push_runner.commands),
+       "push trigger mode still polls and records the provider run")
+    ok(any(cmd[:3] == ["git", "fetch", "--no-tags"] and
+           cmd[-1] == "refs/pull/42/head" for cmd in push_runner.commands),
+       "push trigger mode fetches the canonical PR head before mirroring its exact SHA")
+    ok(any(cmd[:2] == ["git", "push"] and "--delete" in cmd
+           for cmd in push_runner.commands) and
+       push_success["result"]["branch_cleanup"]["status"] == "deleted",
+       "terminal scratchpad run deletes its disposable mirror branch")
 
     duplicate_runner = FakeRunner()
     duplicate = external_ci_mirror.request_external_ci_mirror_run(

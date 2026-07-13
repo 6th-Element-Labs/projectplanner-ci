@@ -16,6 +16,8 @@ SERVICE_USER="${PM_SERVICE_USER:-projectplanner}"
 SERVICE_GROUP="${PM_SERVICE_GROUP:-$SERVICE_USER}"
 CODE_ROOT="${PM_CODE_ROOT:-/opt/projectplanner}"
 DATA_ROOT="${PM_DATA_ROOT:-/var/lib/projectplanner}"
+CI_SOURCE_ROOT="${SWITCHBOARD_CI_SOURCE_PATH:-$DATA_ROOT/ci-source}"
+CI_SOURCE_REMOTE="${SWITCHBOARD_CI_SOURCE_REMOTE:-https://github.com/6th-Element-Labs/projectplanner.git}"
 
 if [ "$(id -u)" != "0" ]; then
   echo "apply-least-privilege.sh must run as root (use sudo)." >&2
@@ -31,7 +33,16 @@ getent passwd "$SERVICE_USER" >/dev/null || \
 
 # 2. Data dir is the ONLY tree the runtime may write (matches ReadWritePaths=).
 mkdir -p "$DATA_ROOT" "$DATA_ROOT/runner" "$DATA_ROOT/repo-hygiene-archive" \
-         "$DATA_ROOT/ci-gate" "$DATA_ROOT/workspaces"
+         "$DATA_ROOT/workspaces"
+# CI-12 needs a writable coordination checkout because ProtectSystem=strict keeps
+# /opt/projectplanner read-only. Seed from the already-provisioned code clone so
+# setup needs no second private fetch; runtime fetches exact PR refs using GH_TOKEN
+# (promoted from the normal Switchboard token variables by external_ci_mirror).
+if [ ! -d "$CI_SOURCE_ROOT/.git" ]; then
+  git clone --no-checkout "$CODE_ROOT" "$CI_SOURCE_ROOT"
+fi
+git -C "$CI_SOURCE_ROOT" remote set-url origin "$CI_SOURCE_REMOTE"
+git -C "$CI_SOURCE_ROOT" config credential.helper '!gh auth git-credential'
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_ROOT"
 chmod 750 "$DATA_ROOT"
 
@@ -52,6 +63,7 @@ echo "HARDEN-55 least-privilege applied:"
 echo "  service account : $SERVICE_USER (nologin, home=$DATA_ROOT)"
 echo "  code tree       : root-owned, not group/other-writable ($CODE_ROOT)"
 echo "  writable data   : $DATA_ROOT"
+echo "  CI source clone : $CI_SOURCE_ROOT -> $CI_SOURCE_REMOTE"
 echo ""
 echo "Restart units so User=$SERVICE_USER + the systemd sandbox take effect:"
 echo "  sudo systemctl restart projectplanner projectplanner-mcp projectplanner-gateway projectplanner-agent-host"

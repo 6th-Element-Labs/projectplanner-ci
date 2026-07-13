@@ -128,9 +128,9 @@ and/or evidence hash, and a verifier identity. Reconcile accepts that explicit
 nor offline evidence.
 
 Runner bootstrap exception: if `Switchboard CI / VM gate` is missing on a PR, check the
-projectplanner-ci `verify` workflow run (pull model) — do not treat a missing status as a pass.
-Re-dispatch with `workflow_dispatch` on projectplanner-ci or re-open/sync the PR to trigger
-`repository_dispatch` from the Plan VM webhook (`SWITCHBOARD_CI_PULL_MODEL=1`).
+projectplanner-ci `verify` workflow run and the corresponding Switchboard `external_ci_run` —
+do not treat a missing status as a pass. Re-open or synchronize the PR to request a fresh
+exact-SHA scratchpad branch through the Plan VM webhook.
 
 The Plan VM posts only the SESSION-12 **`Switchboard / claim gate`** via
 `projectplanner-claim-gate.timer`:
@@ -145,22 +145,21 @@ Manual claim-gate for one PR:
 PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
 ```
 
-### Pull-model CI (CI-6) + box teardown (CI-7)
+### Scratchpad CI (CI-12) + box teardown (CI-7)
 
 **Required VM verification** runs on `6th-Element-Labs/projectplanner-ci` (`verify.yml`), posting
-`Switchboard CI / VM gate`. The Plan VM webhook relay fires `repository_dispatch` when
-`SWITCHBOARD_CI_PULL_MODEL=1`:
+`Switchboard CI / VM gate`. Canonical PR open/sync webhooks call `external_ci_mirror`, fetch the
+exact `refs/pull/<n>/head` SHA, and push it to a disposable `ci/**` branch. That push triggers
+the workflow. The Plan VM coordinates the mirror from the service-owned
+`/var/lib/projectplanner/ci-source` clone but never runs the test suite. If mirroring fails,
+verify that path is a Git checkout owned by `projectplanner` and that the service token can
+fetch the canonical repo, push to `projectplanner-ci`, and poll Actions.
 
-```bash
-# /opt/projectplanner/.env
-SWITCHBOARD_CI_PULL_MODEL=1
-SWITCHBOARD_CI_DISPATCH_TOKEN=<PAT with dispatch on projectplanner-ci>
-sudo systemctl restart projectplanner
-```
+Confirm the service account can fetch the private canonical repo, push to projectplanner-ci,
+and poll Actions with `gh`. Confirm `PRIVATE_READ_TOKEN` is installed on projectplanner-ci for
+canonical commit-status writeback only; scratchpad checkout does not use it.
 
-Confirm `PRIVATE_READ_TOKEN` is installed on projectplanner-ci (CI-1).
-
-**Retire on-box VM CI** after pull-model holds (operator script — reversible via
+**Retire on-box VM CI** after scratchpad verification holds (operator script — reversible via
 `deploy/retired/*.bak` for one week):
 
 ```bash
@@ -176,9 +175,10 @@ re-enable the old timers, and disable `projectplanner-claim-gate.timer`.
 
 ### Native merge queue
 
-Merge-queue gating is **not** handled on the Plan VM after CI-7. If you enable GitHub's native
-merge queue, ensure `verify.yml` also posts `Switchboard CI / VM gate` to merge-group head SHAs
-(projectplanner-ci responsibility). The disabled ruleset 18821466 was dead config removed in CI-7.
+Merge-queue gating is not yet covered by the PR-head scratchpad trigger. If you enable GitHub's
+native merge queue, add a mirror trigger for merge-group head SHAs and ensure `verify.yml` posts
+`Switchboard CI / VM gate` to those SHAs. The disabled ruleset 18821466 was dead config removed
+in CI-7.
 
 Verifier resume rule: review/audit workflows that spawn skeptic verifier agents should write a
 `switchboard.review_verifier_run.v1` checkpoint with one deterministic job per

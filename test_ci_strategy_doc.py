@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI-9 — guard docs/CI-STRATEGY.md pull-model narrative."""
+"""CI-12 — guard docs/CI-STRATEGY.md scratchpad routing narrative."""
 from pathlib import Path
 
 passed = failed = 0
@@ -24,20 +24,22 @@ This is why Route A is safe for private code: the public mirror is a disposable 
 """
 
 ok(INVARIANT in doc, "provenance invariant section is preserved verbatim")
-ok("A-pull" in doc and "verify.yml" in doc and "PRIVATE_READ_TOKEN" in doc,
-   "projectplanner pull-model route is documented")
+ok("push-triggered scratchpad" in doc and "verify.yml" in doc and "PRIVATE_READ_TOKEN" in doc,
+   "projectplanner scratchpad route is documented")
 ok("Helm routing is **unchanged**" in doc or "Helm keeps Route A-push unchanged" in doc,
    "Helm push-path routing called out as unchanged")
 ok("0010-ci-concurrency.md" in doc and "2026-07-12" in doc and "bare-mirror" in doc.lower(),
    "2026-07-12 post-mortem context cross-linked")
-ok("repository_dispatch" in doc and "Cron backstop" in doc and "Heartbeat" in doc,
-   "trigger decision records dispatch-primary, cron backstop, and heartbeat")
+ok("push_triggered=True" in doc and "Rollback bridge" in doc and "Heartbeat" in doc,
+   "trigger decision records push-primary, rollback bridge, and heartbeat")
 ok("bare mirror" not in doc.lower() or "retired" in doc.lower(),
    "push-path/bare-mirror is retired narrative, not active instructions")
 ok("switchboard_pr_gate.py` is claim-gate-only" in doc or "claim-gate-only" in doc,
    "box gate retired; claim gate only on Plan VM")
 ok("external_ci_mirror` (Helm" in doc or "A-push" in doc,
    "push-path engine retained for Helm")
+ok("SWITCHBOARD_CI_PULL_MODEL` is no longer the primary route" in doc,
+   "pull-model feature flag is explicitly retired as projectplanner primary")
 
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

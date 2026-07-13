@@ -61,7 +61,7 @@ fi
 section "systemd units"
 sudo cp deploy/*.service deploy/*.timer /etc/systemd/system/
 # HARDEN-55: re-assert the least-privilege posture (dedicated service account, root-owned
-# read-only code tree, service-owned data dir incl. the ci-gate state dir). Idempotent.
+# read-only code tree, service-owned data dir incl. the CI-12 source clone). Idempotent.
 sudo bash deploy/apply-least-privilege.sh
 sudo systemctl daemon-reload
 

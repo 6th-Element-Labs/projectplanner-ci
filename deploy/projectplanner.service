@@ -19,6 +19,8 @@ Environment=PM_ENFORCE_DELIVERABLE_INTAKE=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 # BUG-29: archive+delete merged PR head branches on webhook (needs token in .env).
 Environment=PM_RETIRE_MERGED_BRANCHES=1
+# CI-12: writable coordination-only clone used to fetch and mirror exact PR heads.
+Environment=SWITCHBOARD_CI_SOURCE_PATH=/var/lib/projectplanner/ci-source
 ExecStart=/opt/projectplanner/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8110
 Restart=always
 RestartSec=3

@@ -89,15 +89,20 @@ def dispatch_scratchpad(
         "source_project": project,
         "source_repo": source_repo,
         "source_sha": sha,
+        "source_fetch_ref": f"refs/pull/{pr}/head",
         "mirror_repo": cvd.ci_repo(),
         "mirror_branch": mirror_branch,
         "workflow": DEFAULT_WORKFLOW,
         "push_triggered": True,
-        "poll_after_push": False,
+        # A terminal external_ci_run is the durable evidence/cleanup handoff.
+        "poll_after_push": True,
+        "cleanup_mirror_branch": True,
         "request": {
             "pr": pr,
             "schema": SCHEMA,
             "push_triggered": True,
+            "cleanup_mirror_branch": True,
+            "source_fetch_ref": f"refs/pull/{pr}/head",
         },
     }
     mirror = external_ci_mirror.request_external_ci_mirror_run(

@@ -224,7 +224,7 @@ def claim_gate_prs():
     """Post SESSION-12 claim-gate commit statuses for open fleet PRs (CI-7).
 
     VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
-    pull-model verify workflow; this job is claim-gate-only (no git/checkout).
+    scratchpad verify workflow; this job is claim-gate-only (no git/checkout).
     """
     cmd = [sys.executable, str(Path(__file__).parent / "scripts" / "switchboard_pr_gate.py"),
            "--once-open-prs"]
@@ -232,7 +232,7 @@ def claim_gate_prs():
 
 
 def dispatch_ci():
-    """Operator CLI: validate/dispatch pull-model CI for one PR (see ci_verify_dispatch.py)."""
+    """Rollback-only operator CLI for the retired primary pull route."""
     import ci_verify_dispatch
     args = sys.argv[2:] if len(sys.argv) > 2 else ["--help"]
     raise SystemExit(ci_verify_dispatch.main(args))

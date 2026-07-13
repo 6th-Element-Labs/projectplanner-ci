@@ -71,6 +71,12 @@ ok(result["dispatched"] and result["mirror_branch"].startswith("ci/pr-412/"),
    "dispatch_scratchpad records a disposable ci/pr-* branch run")
 ok(mirror_calls and mirror_calls[0].get("push_triggered") is True,
    "scratchpad mirror request is push-triggered (no workflow_dispatch)")
+ok(mirror_calls[0].get("poll_after_push") is True,
+   "scratchpad waits for a terminal external_ci_run instead of leaving triggered evidence")
+ok(mirror_calls[0].get("source_fetch_ref") == "refs/pull/412/head",
+   "scratchpad fetches the canonical PR ref before resolving the exact SHA locally")
+ok(mirror_calls[0].get("cleanup_mirror_branch") is True,
+   "scratchpad requests terminal disposable-branch cleanup")
 
 csd.cvd.resolve_head_sha = orig_resolve
 csd.cvd.verify_commit_exists = orig_verify

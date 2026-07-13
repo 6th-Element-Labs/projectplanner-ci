@@ -28,7 +28,13 @@ class ExternalCiError(Exception):
 
 
 def _default_run(args: List[str], cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=60)
+    env = os.environ.copy()
+    if not env.get("GH_TOKEN"):
+        for name in ("SWITCHBOARD_CI_GITHUB_TOKEN", "PM_GITHUB_TOKEN", "GITHUB_TOKEN"):
+            if env.get(name):
+                env["GH_TOKEN"] = env[name]
+                break
+    return subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=60, env=env)
 
 
 def _run(args: List[str], cwd: str, runner: Optional[CommandRunner] = None) -> subprocess.CompletedProcess:
@@ -159,6 +165,48 @@ def _update_failure(run: Dict[str, Any], failure_class: str, reason: str,
     return updated
 
 
+def _cleanup_terminal_mirror_branch(run: Dict[str, Any], source_path: str,
+                                    request: Dict[str, Any], actor: str, project: str,
+                                    runner: Optional[CommandRunner]) -> Dict[str, Any]:
+    """Best-effort CI-11 cleanup without changing the workflow verdict."""
+    branch = run.get("mirror_branch") or ""
+    mirror_repo = run.get("mirror_repo") or ""
+    cleanup: Dict[str, Any] = {
+        "attempted": True,
+        "mirror_repo": mirror_repo,
+        "mirror_branch": branch,
+    }
+    try:
+        deleted = _check(
+            ["git", "push", _mirror_url(mirror_repo, request.get("mirror_remote_url") or ""),
+             "--delete", branch],
+            source_path, "mirror_cleanup_failed", "terminal mirror branch cleanup", runner)
+        cleanup.update({
+            "status": "deleted",
+            "stdout": (deleted.stdout or "").strip(),
+            "stderr": (deleted.stderr or "").strip(),
+        })
+    except ExternalCiError as exc:
+        cleanup.update({"status": "failed", "error": exc.message, "detail": exc.result})
+    store.append_activity(
+        "external_ci.branch_cleanup",
+        actor,
+        {"run_id": run.get("run_id"), **cleanup},
+        task_id=run.get("task_id"),
+        project=project,
+    )
+    was_ok = run.get("ok")
+    updated = store.update_external_ci_run(
+        run["run_id"],
+        {"result": {**(run.get("result") or {}), "branch_cleanup": cleanup}},
+        actor=actor,
+        project=project,
+    )
+    if was_ok is not None:
+        updated["ok"] = was_ok
+    return updated
+
+
 def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
                                    actor: str = "system",
                                    project: str = store.DEFAULT_PROJECT,
@@ -176,11 +224,16 @@ def request_external_ci_mirror_run(request: Dict[str, Any], source_path: str,
         run["resumed_terminal"] = True
         return run
     try:
-        return _execute_run(run, source_path, actor, project, runner, sleep_fn, now_fn,
-                            request or {})
+        result = _execute_run(run, source_path, actor, project, runner, sleep_fn, now_fn,
+                              request or {})
     except ExternalCiError as e:
-        return _update_failure(run, e.failure_class, e.message, e.result,
-                               actor=actor, project=project)
+        result = _update_failure(run, e.failure_class, e.message, e.result,
+                                 actor=actor, project=project)
+    if (request or {}).get("cleanup_mirror_branch") and \
+            result.get("status") in store.EXTERNAL_CI_TERMINAL_STATUSES:
+        result = _cleanup_terminal_mirror_branch(
+            result, source_path, request or {}, actor, project, runner)
+    return result
 
 
 def poll_external_ci_mirror_run(run_id: str, source_path: str,
@@ -222,6 +275,11 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
 
     _check(["git", "rev-parse", "--is-inside-work-tree"], source_path,
            "mirror_sync_failed", "source checkout validation", runner)
+    source_fetch_ref = str(request.get("source_fetch_ref") or "").strip()
+    if source_fetch_ref:
+        source_remote = str(request.get("source_remote") or "origin").strip()
+        _check(["git", "fetch", "--no-tags", source_remote, source_fetch_ref],
+               source_path, "mirror_sync_failed", "source SHA fetch", runner)
     resolved = _check(["git", "rev-parse", "--verify", f"{source_sha}^{{commit}}"],
                       source_path, "mirror_sync_failed", "source SHA validation", runner)
     resolved_sha = (resolved.stdout or "").strip() or source_sha
@@ -237,6 +295,7 @@ def _execute_run(run: Dict[str, Any], source_path: str, actor: str,
                 "source_repo": run.get("source_repo"),
                 "source_sha": source_sha,
                 "resolved_source_sha": resolved_sha,
+                "source_fetch_ref": source_fetch_ref or None,
                 "ci_repo": mirror_repo,
                 "mirror_remote_url": mirror_remote_url,
                 "mirror_branch": mirror_branch,

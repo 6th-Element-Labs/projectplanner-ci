@@ -26,6 +26,7 @@ ci_suite = Path("scripts/switchboard_ci.sh").read_text(encoding="utf-8")
 runbook = Path("docs/SWITCHBOARD-RUNBOOK.md").read_text(encoding="utf-8")
 provision = Path("deploy/PROVISION.md").read_text(encoding="utf-8")
 web_unit = Path("deploy/projectplanner.service").read_text(encoding="utf-8")
+least_privilege = Path("deploy/apply-least-privilege.sh").read_text(encoding="utf-8")
 mcp_unit = Path("deploy/projectplanner-mcp.service").read_text(encoding="utf-8")
 
 backend_tests = actions_dir / "backend-tests.yml"
@@ -68,6 +69,10 @@ ok("Environment=PM_AUTH_MODE=required" in mcp_unit,
    "Production MCP unit forces PM_AUTH_MODE=required")
 ok("PM_AUTH_MODE=required" in provision,
    "Provisioning docs make production auth mode explicit")
+ok("SWITCHBOARD_CI_SOURCE_PATH=/var/lib/projectplanner/ci-source" in web_unit
+   and "git clone --no-checkout" in least_privilege
+   and "credential.helper" in least_privilege,
+   "production webhook has a writable authenticated coordination clone for scratchpad mirroring")
 ok("claim_gate_prs" in Path("jobs.py").read_text(encoding="utf-8")
    and "Environment=HOME=/var/lib/projectplanner" in
    Path("deploy/projectplanner-claim-gate.service").read_text(encoding="utf-8"),

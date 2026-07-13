@@ -248,15 +248,19 @@ journalctl -u projectplanner-narrate.service -n 40 --no-pager
 cd /opt/projectplanner && sudo -u projectplanner .venv/bin/python jobs.py narrate_pending
 ```
 
-## Pull-model VM verification (CI-6) + claim gate (CI-7)
+## Scratchpad VM verification (CI-12) + claim gate (CI-7)
 
 **VM verification** (`Switchboard CI / VM gate`) runs on `6th-Element-Labs/projectplanner-ci`
-via the pull-model `verify.yml` workflow — not on the Plan VM. Enable webhook relay:
+via the push-triggered scratchpad `verify.yml` workflow — not on the Plan VM. The canonical
+PR webhook uses a service-owned coordination checkout to fetch the exact PR head and mirror it
+to `ci/**`.
+Because `/opt/projectplanner` is root-owned and read-only, `apply-least-privilege.sh` seeds a
+writable coordination clone at `/var/lib/projectplanner/ci-source` and configures its GitHub
+credential helper. Ensure `PM_GITHUB_TOKEN`, `SWITCHBOARD_CI_GITHUB_TOKEN`, or `GITHUB_TOKEN`
+can fetch canonical PR refs, push to `projectplanner-ci`, and poll Actions. The runner promotes
+that token to `GH_TOKEN` for `git`/`gh` subprocesses. The old pull relay flag is not primary:
 
 ```bash
-# /opt/projectplanner/.env
-SWITCHBOARD_CI_PULL_MODEL=1
-SWITCHBOARD_CI_DISPATCH_TOKEN=<PAT with repository_dispatch on projectplanner-ci>
 sudo systemctl restart projectplanner
 ```
 
@@ -271,12 +275,13 @@ The on-box **self-hosted Actions runner is decommissioned** — keep it off:
 sudo systemctl disable --now actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
 ```
 
-After pull-model holds, retire the old on-box VM gate with `sudo bash deploy/ci7-teardown-box-ci.sh`.
+After scratchpad verification holds, retire the old on-box VM gate with
+`sudo bash deploy/ci7-teardown-box-ci.sh`.
 
 ## PR claim-gate timer (CI-7)
 
-VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the pull-model
-`verify.yml` workflow. The Plan VM posts only the SESSION-12 claim gate:
+VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the scratchpad
+`verify.yml` workflow. The Plan VM posts only the SESSION-12 claim gate separately:
 
 ```bash
 /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py claim_gate_prs
@@ -289,7 +294,8 @@ write in `PM_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN`.
 VM verification on projectplanner-ci runs `scripts/switchboard_ci.sh` inside `verify.yml` (see
 [`docs/CI-STRATEGY.md`](../docs/CI-STRATEGY.md)).
 
-After pull-model CI holds, run `sudo bash deploy/ci7-teardown-box-ci.sh` to retire the old
+The old CI-6 `SWITCHBOARD_CI_PULL_MODEL` dispatch remains a manual rollback bridge only.
+After scratchpad CI holds, run `sudo bash deploy/ci7-teardown-box-ci.sh` to retire the old
 on-box VM gate units and `/var/lib/projectplanner/ci-gate` state. Rollback copies live under
 `deploy/retired/` for one week.
 
