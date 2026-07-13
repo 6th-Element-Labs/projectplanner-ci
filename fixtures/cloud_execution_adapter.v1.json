@@ -65,11 +65,16 @@
     },
     {
       "id": "openai-codex-cloud",
-      "trigger_support": "unsupported",
-      "trigger_mode": "no_public_trigger",
-      "launch_operation": null,
-      "requirements": [],
-      "unsupported_reason": "Official Codex cloud docs describe web, GitHub, Linear, and Slack initiation but do not document a public API that creates a Codex cloud task and returns a bindable task id plus URL. Codex SDK/App Server execute Codex in caller-controlled compute and must not be mislabeled vendor-hosted cloud execution.",
+      "trigger_support": "conditional",
+      "trigger_mode": "cli_bridge",
+      "launch_operation": "codex cloud exec --env <ENV_ID> --branch <task-branch> <dev-brief>",
+      "requirements": [
+        "codex_cli_authenticated",
+        "codex_cloud_environment_id",
+        "github_repo_grant",
+        "scoped_mcp_environment_bridge",
+        "agent_internet_plan_taikunai_com"
+      ],
       "concurrency": {
         "switchboard_default_cap": 4,
         "provider_limit": "workspace_usage_limit"
@@ -78,12 +83,16 @@
         "id_field": "task_id",
         "url_field": "task_url",
         "visibility": "chatgpt.com/codex",
-        "continuity": "unsupported_until_official_trigger"
+        "continuity": "fresh_only"
       },
       "status_map": {
         "queued": "queued",
+        "pending": "running",
         "running": "running",
+        "ready": "running",
+        "applied": "running",
         "completed": "running",
+        "error": "failed",
         "failed": "failed",
         "cancelled": "failed",
         "expired": "failed",
@@ -93,9 +102,9 @@
         "mode": "subscription",
         "tally_source": "agent_report",
         "confidence": "unknown",
-        "notes": "Capture usage only when an official task receipt or provider reconciliation exposes it."
+        "notes": "The cloud CLI receipt exposes no task-level tokens or exact cost. Record zero/unknown until a provider usage export supplies a reconciled amount."
       },
-      "source": "https://developers.openai.com/codex/cloud"
+      "source": "https://learn.chatgpt.com/docs/developer-commands#codex-cloud"
     },
     {
       "id": "cursor-background-agent",

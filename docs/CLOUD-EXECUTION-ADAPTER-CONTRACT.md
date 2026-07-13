@@ -36,8 +36,8 @@ proved remains queued or visibly failed.
 
 | Vendor adapter | Programmatic outbound trigger | App-visible receipt | V1 decision |
 |---|---|---|---|
-| `claude-code-cloud` | Conditional through the official `claude --cloud` CLI bridge. Each invocation creates a new cloud session from the current GitHub repo/branch. | Claude documents a remote session ID and a `claude.ai/code/...` transcript URL. | Implemented by `adapters/claude_cloud.py` and the trigger-only `adapters/claude_cloud_host.py`; adoption still fails closed until live auth/GitHub/provider-secret preflight passes. |
-| `openai-codex-cloud` | **Unsupported in this contract.** Current official Codex cloud docs describe starting work from Codex web, GitHub, Linear, or Slack, but do not document a public cloud-task creation API that returns a task ID and URL. Codex SDK/App Server run in caller-controlled compute and are not a substitute. | Codex cloud tasks are visible in Codex, but there is no documented trigger receipt for a direct Switchboard adapter. | Fail `provider_trigger_unsupported` until OpenAI publishes a suitable trigger or an approved first-party integration yields a bindable receipt. |
+| `claude-code-cloud` | Conditional through the official `claude --cloud` CLI bridge. Each invocation creates a new cloud session from the current GitHub repo/branch. | Claude documents a remote session ID and a `claude.ai/code/...` transcript URL. | Implement a small launcher bridge; capture/read back both values before adoption. |
+| `openai-codex-cloud` | Conditional through the official `codex cloud exec --env <ENV_ID> --branch <branch> <prompt>` CLI bridge. | The command returns `https://chatgpt.com/codex/tasks/<task-id>`; `codex cloud list --env ... --json` provides authoritative status readback. | Implemented by ADAPTER-19. Fail closed unless CLI auth, a repo-bound cloud environment, the canonical repo grant, scoped MCP bridge, and agent internet allowlist are all proven. |
 | `cursor-background-agent` | Implemented through Cursor's beta Cloud Agents v1 API (`POST /v1/agents`), authenticated with a Cloud Agents API key and backed by an explicit GitHub repository grant. | The adapter captures and reads back the durable `bc-...` agent ID, `cursor.com/agents/...` URL, and latest run status. | Use `adapters/cursor/cloud_execution.py`; exact same-run resume fails closed, while a new run on the same durable agent is labeled a follow-up. |
 
 Sources checked on 2026-07-13:
@@ -46,9 +46,14 @@ Sources checked on 2026-07-13:
   `claude --cloud`, GitHub access, cloud-session configuration, remote session IDs, transcript
   URLs, and cloud MCP behavior. The older `--remote` spelling remains a deprecated alias and is
   not used by this contract.
-- [Codex cloud](https://developers.openai.com/codex/cloud) documents isolated cloud tasks,
-  environments, review-before-merge, and web/GitHub/Linear/Slack initiation. It does not publish
-  a direct create-cloud-task API on that surface.
+- [Codex developer commands](https://learn.chatgpt.com/docs/developer-commands#codex-cloud)
+  documents `codex cloud exec`, `--env`, `--branch`, and `--attempts`; the current OpenAI CLI
+  source prints the app-visible task URL on successful creation. Environment discovery remains
+  interactive, so automation must be configured with an environment ID.
+- [Codex cloud environments](https://learn.chatgpt.com/docs/environments/cloud-environment)
+  documents the two-phase runtime: secrets exist only during setup and agent internet is off by
+  default. ADAPTER-19 therefore requires an explicit scoped-MCP environment bridge plus access to
+  `plan.taikunai.com`; it never puts a raw token in the prompt.
 - [Cursor Cloud Agents API](https://cursor.com/docs/cloud-agent/api/endpoints) documents the
   current run-based v1 create/read/follow-up/usage endpoints, API-key authentication, inline
   remote MCP servers, encrypted session environment variables, GitHub repositories, app-visible
@@ -133,10 +138,10 @@ Before any provider call, the adapter must:
    supported transport.
 
 Claude's adapter is a CLI bridge because `claude --cloud` is the documented launch surface. The
-bridge is a short-lived trigger process; the actual coding compute remains Anthropic-hosted.
-Cursor uses `POST /v1/agents`. Codex fails closed until a direct supported trigger exists;
-browser automation, reverse-engineered endpoints, and the local Codex SDK/App Server are not
-acceptable hidden substitutes.
+Codex adapter likewise uses the official `codex cloud exec` bridge. In both cases the bridge is a
+short-lived trigger process and the coding compute remains vendor-hosted. Cursor uses
+`POST /v1/agents`. Browser automation, reverse-engineered endpoints, local `codex exec`, and
+Codex App Server are not acceptable hidden substitutes for cloud execution.
 
 For Cursor, Switchboard first proves that the task branch is already pushed, then supplies it as
 `repos[].startingRef` with `workOnCurrentBranch=true` and `autoCreatePR=true`. A deterministic
@@ -173,7 +178,7 @@ Concurrency is enforced on bound non-terminal sessions plus in-flight reservatio
 | Vendor | Switchboard default | Provider signal |
 |---|---:|---|
 | Claude Code cloud | 4 | Account/workspace rate limit; no stronger fixed limit is assumed. |
-| Codex cloud | 4 reserved for future support | Workspace usage limit; direct trigger currently unsupported. |
+| Codex cloud | 4 | Workspace usage limit; environment ID and repo access must already be configured. |
 | Cursor Background Agents | 8 | Cursor documents up to 256 active agents per API key. |
 
 Configuration uses a normalized variable such as
@@ -223,7 +228,7 @@ mode, tokens when available, and the evidence/readback timestamp.
 | Trigger accepted but session ID/URL absent | stay queued while bounded polling continues, then `failed/adoption_receipt_incomplete`. |
 | Session unreadable/lost/expired | `failed/vendor_session_lost|expired`; revoke token and release capacity. |
 | Unknown provider status | `failed/provider_status_unknown`; no optimistic mapping. |
-| Codex direct cloud trigger requested today | `failed/provider_trigger_unsupported`. |
+| Codex CLI auth/environment/repo/MCP/network setup absent | `failed/missing_provider_setup`; include the missing requirement and provider-safe error. |
 
 Retries reuse the same idempotency key. An operator may explicitly retry a terminal failure with a
 new wake, but the adapter never silently creates a second provider session.
@@ -237,9 +242,9 @@ new wake, but the adapter never silently creates a second provider session.
 2. Claude adapter: **implemented in ADAPTER-18** with PTY launch, exact-push/auth/MCP preflight,
    idempotent session ID/URL adoption, runner/wake binding, Dev-tab link, and honest subscription
    Tally receipt. See [`CLAUDE-CLOUD-EXECUTION.md`](CLAUDE-CLOUD-EXECUTION.md).
-3. Codex adapter: wait for a documented cloud-task trigger or implement an explicitly approved
-   first-party GitHub/Linear/Slack bridge that yields a stable Codex task receipt; do not use local
-   App Server/SDK under the cloud label.
+3. Codex adapter: **implemented by ADAPTER-19** via `adapters/codex/cloud_adapter.py`; configure a repo-bound environment ID,
+   scoped MCP bridge, and agent internet allowlist; use the returned task URL plus JSON list
+   readback as the adoption receipt. Do not use local App Server/SDK under the cloud label.
 4. Add a cloud-session persistence surface and Dev-tab open action by extending runner-session
    metadata rather than creating a second session registry.
 5. Add provider polling/webhook workers, capacity reservations, scoped-token revocation, and Tally

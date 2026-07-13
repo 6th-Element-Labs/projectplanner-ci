@@ -23,6 +23,15 @@ The Codex-specific surface is now a stable JSON stdin/stdout shim. A native Code
 or launcher can call it without reimplementing Switchboard logic. The remaining unknown is only
 whether a given Codex runtime can invoke this shim before every tool call and honor a deny.
 
+## Vendor-hosted Codex cloud (ADAPTER-19)
+
+[`cloud_adapter.py`](cloud_adapter.py) is a separate execution backend for OpenAI-hosted Codex
+cloud tasks. It uses the official `codex cloud exec` CLI bridge, reads the returned
+`chatgpt.com/codex/tasks/...` URL back through `codex cloud list --json`, and binds that receipt to
+the Switchboard wake/runner session. It never relabels local `codex exec` or App Server work as
+cloud execution. Setup, failure semantics, pricing, and the current live repo-access blocker are
+documented in [`../../docs/CODEX-CLOUD-ADAPTER.md`](../../docs/CODEX-CLOUD-ADAPTER.md).
+
 ## The adapter contract (ADR-0004 — same for every runtime)
 1. **Session start:** surface the working agreement as first-turn context + `register_agent`.
 2. **Per tool call:** call `evaluate_tool(...)`; on `deny` block the tool and surface the reason

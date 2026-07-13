@@ -132,7 +132,36 @@ ok((bound_runner.get("metadata") or {}).get("vendor_id") == "claude-code-cloud"
    and bound_runner.get("heartbeat_ttl_s") == 86400,
    "cloud runner keeps provider metadata/lifetime and does not advertise a fake local kill")
 
-# 8. latest() returns the NEWEST wake, not the oldest. Two distinct wakes for one
+# 8. Explicit runtime=codex is a distinct cloud-execution wake.
+codex_host = store.register_host(
+    {"host_id": "host/codex-cloud", "hostname": "codex-cloud",
+     "runtimes": [{"runtime": "codex", "policy": {"allow_work": True, "mode": "lane_scoped"},
+                   "lanes": ["HARDEN"],
+                   "capabilities": ["python", "github", "cloud_execution"]}],
+     "limits": {"max_sessions": 2}, "heartbeat_ttl_s": 60},
+    project="switchboard")
+ok(not codex_host.get("error"), "registered a Codex cloud bridge host")
+codex_res = dispatch.dispatch(TID, actor="tester", project="switchboard", runtime="codex")
+ok(codex_res.get("dispatched") is True and codex_res.get("runtime") == "codex"
+   and codex_res.get("work_hosts_online") == 1,
+   "runtime=codex dispatch targets the online cloud bridge")
+codex_wake = next((w for w in store.list_wake_intents(project="switchboard")
+                   if w.get("wake_id") == codex_res.get("wake_id")), {})
+codex_selector = codex_wake.get("selector") or {}
+codex_policy = codex_wake.get("policy") or {}
+codex_cloud = codex_policy.get("cloud_execution") or {}
+ok(codex_selector.get("runtime") == "codex"
+   and "cloud_execution" in set(codex_selector.get("capabilities") or []),
+   "Codex wake advertises the cloud_execution capability")
+ok(codex_policy.get("mode") == "cloud_execution"
+   and codex_cloud.get("branch", "").startswith("codex/"),
+   "Codex wake selects explicit cloud mode and a task branch")
+codex_mcp = codex_cloud.get("mcp_access") or {}
+ok(str(codex_mcp.get("token_ref") or "").startswith("switchboard://scoped-token/")
+   and not codex_mcp.get("token"),
+   "Codex wake stores an opaque MCP token reference, not the raw credential")
+
+# 9. latest() returns the NEWEST wake, not the oldest. Two distinct wakes for one
 #    task: list_wake_intents returns them oldest-first, so a created_at (absent on
 #    wake rows) sort key would wrongly pin latest() to the first/oldest.
 store.request_wake(selector={"runtime": "claude-code", "lane": "HARDEN"},

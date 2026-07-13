@@ -217,7 +217,8 @@ def create_router(*, resolve_project: ProjectResolver,
     async def dispatch_task(task_id: str, body: dict = Body(default={})):
         project = resolve_project((body or {}).get("project") or store.DEFAULT_PROJECT)
         result = await asyncio.to_thread(
-            dispatch.dispatch, task_id, (body or {}).get("actor", "user"), project)
+            dispatch.dispatch, task_id, (body or {}).get("actor", "user"), project,
+            (body or {}).get("runtime") or "claude-code")
         if result.get("error") == "task not found":
             raise HTTPException(404, "task not found")
         return result

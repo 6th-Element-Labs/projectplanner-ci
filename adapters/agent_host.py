@@ -31,6 +31,7 @@ import time
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same contract)
+from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
 SUPERVISOR = os.path.join(_HERE, "codex", "supervisor.py")
@@ -47,6 +48,8 @@ P_REGISTER_RUNNER = "/ixp/v1/register_runner_session"
 P_LIST_RUNNER_CONTROLS = "/ixp/v1/runner_controls"
 P_CLAIM_RUNNER_CONTROL = "/ixp/v1/claim_runner_control"
 P_COMPLETE_RUNNER_CONTROL = "/ixp/v1/complete_runner_control"
+P_LIST_RUNNERS = "/ixp/v1/runner_sessions"
+P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
 
 
@@ -95,17 +98,25 @@ def default_inventory():
     env_lanes = _csv(os.environ.get("PM_HOST_LANES", ""))
     policy = host_policy_from_env(env_lanes)
     runtime_lanes = env_lanes or ([MESSAGE_ONLY_LANE] if not policy["allow_work"] else [])
+    runtime = os.environ.get("PM_RUNTIME", "claude-code")
+    cloud_enabled = runtime == "codex" and bool(os.environ.get("PM_CODEX_CLOUD_ENVIRONMENT_ID"))
+    profiles = ["ixp.v1", "txp.dispatch.v0"]
+    capabilities = ["docs", "python", "github", "tests"]
+    if cloud_enabled:
+        profiles.append("cloud_execution")
+        capabilities.append("cloud_execution")
     return {
         "project": PROJECT, "host_id": host_id, "hostname": socket.gethostname(),
         "agent_host_version": "0.1.0", "repo_root": repo,
         "policy": policy,
         "runtimes": [{
-            "runtime": os.environ.get("PM_RUNTIME", "claude-code"),
-            "launcher": "python3", "profiles": ["ixp.v1", "txp.dispatch.v0"],
+            "runtime": runtime,
+            "launcher": "codex cloud exec" if cloud_enabled else "python3",
+            "profiles": profiles,
             "control": {"mode": "hook_deny", "runner_kill": True, "host_policy": policy["mode"]},
             "policy": policy,
             "lanes": runtime_lanes,
-            "capabilities": ["docs", "python", "github", "tests"],
+            "capabilities": capabilities,
         }],
         "limits": {"max_sessions": int(os.environ.get("PM_HOST_MAX_SESSIONS", "2"))},
         "heartbeat_ttl_s": 60,
@@ -160,6 +171,8 @@ def wake_mode(wake, inventory=None):
     policy = (wake or {}).get("policy") or {}
     selector = (wake or {}).get("selector") or {}
     explicit = (policy.get("mode") or "").strip()
+    if explicit == "cloud_execution" or policy.get("kind") == "cloud_execution":
+        return "cloud_execution"
     if policy.get("kind") == "closure_verification" and policy.get("deliverable_id"):
         return "closure_verify"
     if explicit in ("inbox_only", "message_only"):
@@ -183,6 +196,29 @@ def active_session_count(inventory):
         return sum(1 for s in sessions if s.get("status") == "running")
     except Exception:
         return 0
+
+
+def active_codex_cloud_session_count():
+    """Count centrally bound non-terminal Codex cloud sessions; None fails capacity closed."""
+    result = _try(
+        "GET",
+        f"{P_LIST_RUNNERS}?project={PROJECT}&runtime=codex&include_stale=false",
+    )
+    if result is None:
+        return None
+    sessions = result.get("sessions") if isinstance(result, dict) else result
+    if not isinstance(sessions, list):
+        return None
+    active = 0
+    for session in sessions:
+        metadata = session.get("metadata") or {}
+        if metadata.get("vendor_id") != "openai-codex-cloud" or session.get("stale"):
+            continue
+        if str(session.get("status") or "").lower() not in {
+            "completed", "failed", "cancelled", "expired", "lost", "killed", "exited"
+        }:
+            active += 1
+    return active
 
 
 def launch_command(wake, inventory):
@@ -231,6 +267,20 @@ def launch_command(wake, inventory):
 def launch(wake, inventory):
     """Spawn a supervised run_agent for this wake via supervisor.py (the proven CLI). Returns the
     supervisor session record (with runner_session_id, pid) or None on failure."""
+    mode = wake_mode(wake, inventory)
+    if mode == "cloud_execution":
+        selector = wake.get("selector") or {}
+        if selector.get("runtime") != "codex":
+            return {"started": False, "cloud_session": True, "wake_mode": mode,
+                    "reason": "cloud_runtime_unsupported", "failure_class": "invalid_input"}
+        count = active_codex_cloud_session_count()
+        if count is None:
+            return {"started": False, "cloud_session": True, "wake_mode": mode,
+                    "reason": "cloud_capacity_readback_unavailable",
+                    "failure_class": "broken_connection"}
+        rec = launch_codex_cloud_wake(wake, inventory, active_sessions=count)
+        rec["host_id"] = inventory.get("host_id")
+        return rec
     cmd, mode = launch_command(wake, inventory)
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
@@ -248,6 +298,8 @@ def launch(wake, inventory):
 
 def confirm_started(rec, grace_s=4.0):
     """Confirm the launched process is alive after a short grace (proxy for 'runtime came up')."""
+    if (rec or {}).get("cloud_session"):
+        return bool(rec.get("started") and rec.get("provider_session_id") and rec.get("session_url"))
     pid = (rec or {}).get("pid")
     if not pid:
         return False
@@ -325,10 +377,33 @@ def register_runner_session(rec, wake, inventory):
             "wake_mode": rec.get("wake_mode"),
             "log_path": rec.get("log_path"),
             "command": rec.get("command"),
+            **(rec.get("metadata") or {}),
         },
-        "heartbeat_ttl_s": 60,
+        "heartbeat_ttl_s": 3600 if rec.get("cloud_session") else 60,
     }
     return _try("POST", P_REGISTER_RUNNER, body)
+
+
+def report_cloud_usage(rec, wake):
+    receipt = (rec or {}).get("usage_receipt") or {}
+    if not receipt:
+        return None
+    return _try("POST", P_TALLY_SPEND, {
+        "project": PROJECT,
+        "source": receipt.get("source") or "agent_report",
+        "confidence": receipt.get("confidence") or "unknown",
+        "task_id": receipt.get("task_id") or wake.get("task_id"),
+        "claim_id": rec.get("claim_id") or "",
+        "agent_id": rec.get("agent_id") or (wake.get("selector") or {}).get("agent_id"),
+        "runtime": "codex",
+        "provider": "openai",
+        "call_site": "cloud_execution",
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "status": "unknown",
+        "request_id": f"codex-cloud:{receipt.get('provider_session_id')}",
+        "metadata": receipt,
+    })
 
 
 def supervisor_action(action, runner_session_id, options=None):
@@ -429,6 +504,7 @@ def run_once(inventory):
         started = (confirm_closure_verified(rec) if rec_mode == "closure_verify"
                   else confirm_started(rec))
         runner_registration = register_runner_session(rec, w, inventory) if started else None
+        usage_registration = report_cloud_usage(rec, w) if started and rec.get("cloud_session") else None
         result = {"started": started, "runner_session_id": (rec or {}).get("runner_session_id"),
                   "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
                   "reason": "started" if started else "launch_failed",
@@ -436,7 +512,12 @@ def run_once(inventory):
                   "cwd": (rec or {}).get("cwd"),
                   "task_id": (rec or {}).get("task_id") or w.get("task_id"),
                   "control": (rec or {}).get("control") or {},
-                  "runner_registered": bool(runner_registration and not runner_registration.get("error"))}
+                  "session_url": (rec or {}).get("session_url"),
+                  "provider_session_id": (rec or {}).get("provider_session_id"),
+                  "failure_class": (rec or {}).get("failure_class"),
+                  "provider_error": (rec or {}).get("provider_error"),
+                  "runner_registered": bool(runner_registration and not runner_registration.get("error")),
+                  "usage_registered": bool(usage_registration and not usage_registration.get("error"))}
         _try("POST", P_COMPLETE_WAKE, {"project": PROJECT, "wake_id": wake_id,
                                        "runner_session_id": result["runner_session_id"],
                                        "agent_id": (w.get("selector") or {}).get("agent_id"),
