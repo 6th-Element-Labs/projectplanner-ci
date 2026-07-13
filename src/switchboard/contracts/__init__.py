@@ -43,9 +43,11 @@ from .projects import (
 from .tasks import (
     CREATE_TASK_COMMAND_SCHEMA,
     GET_TASK_QUERY_SCHEMA,
+    MOVE_TASK_COMMAND_SCHEMA,
     UPDATE_TASK_COMMAND_SCHEMA,
     CreateTaskCommand,
     GetTaskQuery,
+    MoveTaskCommand,
     UpdateTaskCommand,
 )
 
@@ -58,6 +60,7 @@ __all__ = [
     "PROJECT_CONSOLIDATION_ROLLBACK_COMMAND_SCHEMA",
     "CREATE_TASK_COMMAND_SCHEMA",
     "GET_TASK_QUERY_SCHEMA",
+    "MOVE_TASK_COMMAND_SCHEMA",
     "PROJECT_IMPACT_REPORT_SCHEMA",
     "PROJECT_IMPACT_RECEIPT_SCHEMA",
     "PROJECT_RECORD_SCHEMA",
@@ -75,6 +78,7 @@ __all__ = [
     "PlanProjectConsolidationCommand",
     "CreateTaskCommand",
     "GetTaskQuery",
+    "MoveTaskCommand",
     "ProjectImpactReport",
     "ProjectImpactReceipt",
     "ProjectRecord",

@@ -10,7 +10,10 @@ from ..registry import register
 
 CREATE_TASK_COMMAND_SCHEMA = "switchboard.task.create_command.v1"
 UPDATE_TASK_COMMAND_SCHEMA = "switchboard.task.update_command.v1"
+MOVE_TASK_COMMAND_SCHEMA = "switchboard.task.move_command.v1"
 GET_TASK_QUERY_SCHEMA = "switchboard.task.get_query.v1"
+
+_MOVE_DEPENDENCY_POLICIES = frozenset({"fail", "clear"})
 
 CREATE_TASK_FIELDS: tuple[str, ...] = (
     "workstream_id", "title", "description", "workstream_name", "owner_org",
@@ -193,6 +196,57 @@ class UpdateTaskCommand(VersionedModel):
         return fields
 
 
+class MoveTaskCommand(VersionedModel):
+    """Transport-neutral input for moving one task between project boards."""
+
+    SCHEMA: ClassVar[str] = MOVE_TASK_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(default=MOVE_TASK_COMMAND_SCHEMA, alias="schema")
+    task_id: str
+    project_from: str
+    project_to: str
+    reason: str = ""
+    new_task_id: str = ""
+    dependency_policy: str = "fail"
+
+    @field_validator("task_id", "project_from", "project_to", mode="before")
+    @classmethod
+    def _strip_required_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("reason", "new_task_id", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("dependency_policy", mode="before")
+    @classmethod
+    def _normalize_dependency_policy(cls, value: Any) -> str:
+        policy = str(value or "fail").strip().lower() or "fail"
+        if policy not in _MOVE_DEPENDENCY_POLICIES:
+            raise ValueError("dependency_policy must be 'fail' or 'clear'")
+        return policy
+
+    @classmethod
+    def from_mapping(cls, task_id: Any, value: Mapping[str, Any]) -> MoveTaskCommand:
+        data = dict(value or {})
+        # REST may send destination_project; MCP uses project_to. Prefer
+        # explicit project_to, then destination_project, then empty.
+        project_to = data.get("project_to")
+        if project_to in (None, ""):
+            project_to = data.get("destination_project") or ""
+        return cls(
+            task_id=task_id,
+            project_from=data.get("project_from") or "",
+            project_to=project_to,
+            reason=data.get("reason") or "",
+            new_task_id=data.get("new_task_id") or "",
+            dependency_policy=data.get("dependency_policy") or "fail",
+        )
+
+
 register(CreateTaskCommand)
 register(UpdateTaskCommand)
+register(MoveTaskCommand)
 register(GetTaskQuery)

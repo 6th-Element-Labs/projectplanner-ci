@@ -15,6 +15,7 @@ import agent
 import auth
 import store
 from switchboard.application.commands import create_task as create_task_command
+from switchboard.application.commands import move_task as move_task_command
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
 
@@ -183,10 +184,17 @@ def move_task(task_id: str, project_from: str, project_to: str, ctx: Context,
     """
     services = _services()
     principal = services.require_write(ctx, "switchboard", ("write:system",))
-    return services.dumps(store.move_task(
-        task_id, project_from=project_from, project_to=project_to,
-        reason=reason, actor=auth.actor(principal), new_task_id=new_task_id,
-        dependency_policy=dependency_policy))
+    return services.dumps(move_task_command.execute_mapping_result(
+        task_id,
+        {
+            "project_from": project_from,
+            "project_to": project_to,
+            "reason": reason,
+            "new_task_id": new_task_id,
+            "dependency_policy": dependency_policy,
+        },
+        actor=auth.actor(principal),
+    ))
 
 
 def add_dependency(task_id: str, depends_on: str, ctx: Context,

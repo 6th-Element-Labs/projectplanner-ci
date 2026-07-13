@@ -16,6 +16,7 @@ import auth
 import dispatch
 import store
 from switchboard.application.commands import create_task as create_task_command
+from switchboard.application.commands import move_task as move_task_command
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
 
@@ -155,17 +156,16 @@ def create_router(*, resolve_project: ProjectResolver,
     async def move_task(request: Request, task_id: str, body: dict = Body(...),
                         project: str = Query(...)):
         project_from = resolve_project(project)
-        project_to = resolve_project(
-            (body or {}).get("project_to") or (body or {}).get("destination_project") or "")
+        body = dict(body or {})
+        # Resolve destination through the same project gate as the query arg,
+        # then hand a transport-neutral payload to the shared command.
+        destination = body.get("project_to") or body.get("destination_project") or ""
+        body["project_from"] = project_from
+        body["project_to"] = resolve_project(destination) if destination else ""
         principal = resolve_principal(
             request, "switchboard", ("write:system",), dev_actor="web")
-        result = store.move_task(
-            task_id, project_from=project_from, project_to=project_to,
-            reason=(body or {}).get("reason") or "",
-            actor=auth.actor(principal),
-            new_task_id=(body or {}).get("new_task_id") or "",
-            dependency_policy=(body or {}).get("dependency_policy") or "fail",
-        )
+        result = move_task_command.execute_mapping_result(
+            task_id, body, actor=auth.actor(principal))
         if result.get("error"):
             raise HTTPException(400, result["error"])
         return result
