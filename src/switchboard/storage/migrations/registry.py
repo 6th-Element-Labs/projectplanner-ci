@@ -10,6 +10,8 @@ import sqlite3
 import time
 from typing import List, Tuple
 
+from constants import BUILTIN_PROJECTS
+
 # (name, table, column, ddl, backfill_sql)
 REGISTRY_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str, str]] = [
     ("access18_projects_lifecycle_status", "projects", "lifecycle_status",
@@ -66,6 +68,72 @@ def _record(c: sqlite3.Connection, name: str) -> None:
               (name, time.time()))
 
 
+def _backfill_protected_system_projects(
+        c: sqlite3.Connection, *, enforce_protection: bool) -> None:
+    """Project configured system homes into the registry without clobbering edits.
+
+    ``BUILTIN_PROJECTS`` remains the deployment/bootstrap compatibility input for
+    database and seed paths.  Lifecycle reads and mutations use the registry rows
+    created here, so no downstream operation needs to compare customer project ids.
+
+    Path reconciliation intentionally runs on every registry initialization: env
+    overrides may change between deployments.  Protection and active-state repair
+    run only when the migration is first applied, so a later separately governed
+    migration can deliberately remove protection without bootstrap undoing it.
+    Editable label/pretitle and audit metadata are always preserved.
+    """
+    now = time.time()
+    migration_actor = "migration:access22-protected-system-projects"
+    for project_id, config in BUILTIN_PROJECTS.items():
+        row = c.execute(
+            "SELECT db_path, seed_path, lifecycle_status, archived_at, archived_by, "
+            "archive_reason, is_protected, is_system FROM projects WHERE id=?",
+            (project_id,),
+        ).fetchone()
+        if row is None:
+            c.execute(
+                "INSERT OR IGNORE INTO projects("
+                "id, label, pretitle, db_path, seed_path, created_at, created_by, "
+                "lifecycle_status, is_protected, is_system, updated_at, updated_by"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (project_id, config["label"], config.get("pretitle") or "",
+                 config["db"], config.get("seed"), now, migration_actor,
+                 "active", 1, 1, now, migration_actor),
+            )
+            row = c.execute(
+                "SELECT db_path, seed_path, lifecycle_status, archived_at, archived_by, "
+                "archive_reason, is_protected, is_system FROM projects WHERE id=?",
+                (project_id,),
+            ).fetchone()
+
+        expected = {"db_path": config["db"], "seed_path": config.get("seed")}
+        if enforce_protection:
+            expected.update({
+                "lifecycle_status": "active",
+                "archived_at": None,
+                "archived_by": None,
+                "archive_reason": None,
+                "is_protected": 1,
+                "is_system": 1,
+            })
+        current = dict(row)
+        if all(current.get(key) == value for key, value in expected.items()):
+            continue
+        if enforce_protection:
+            c.execute(
+                "UPDATE projects SET db_path=?, seed_path=?, lifecycle_status='active', "
+                "archived_at=NULL, archived_by=NULL, archive_reason=NULL, "
+                "is_protected=1, is_system=1, updated_at=?, updated_by=? WHERE id=?",
+                (config["db"], config.get("seed"), now, migration_actor, project_id),
+            )
+        else:
+            c.execute(
+                "UPDATE projects SET db_path=?, seed_path=?, updated_at=?, updated_by=? "
+                "WHERE id=?",
+                (config["db"], config.get("seed"), now, migration_actor, project_id),
+            )
+
+
 def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
     """Apply pending registry migrations once; return names newly applied."""
     _ensure_ledger(c)
@@ -107,5 +175,12 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         )
         _record(c, event_migration)
         newly.append(event_migration)
+
+    protected_records_migration = "access22_protected_system_project_records"
+    first_protected_backfill = protected_records_migration not in done
+    _backfill_protected_system_projects(c, enforce_protection=first_protected_backfill)
+    if first_protected_backfill:
+        _record(c, protected_records_migration)
+        newly.append(protected_records_migration)
 
     return newly

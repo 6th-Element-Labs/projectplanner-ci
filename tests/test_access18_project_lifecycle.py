@@ -174,12 +174,14 @@ try:
     ok(protected_archive.get("error") and "protected" in protected_archive["error"],
        "protected built-in archive attempt fails closed")
 
-    immutable_builtin = store.update_project_metadata({
+    updated_builtin = store.update_project_metadata({
         "project_id": "helm",
-        "label": "Renamed",
+        "label": "Helm Updated",
+        "updated_by": "tester",
     }, actor="tester")
-    ok(immutable_builtin.get("error") and "immutable" in immutable_builtin["error"],
-       "built-in routing metadata remains immutable")
+    ok(updated_builtin.get("label") == "Helm Updated"
+       and updated_builtin.get("updated_by") == "tester",
+       "protected system project metadata is registry-backed and auditable")
 
     # --- upgraded legacy registry compatibility --------------------------------
     _legacy_registry_without_lifecycle()
