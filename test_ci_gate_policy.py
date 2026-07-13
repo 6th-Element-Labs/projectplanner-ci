@@ -28,10 +28,25 @@ mcp_unit = Path("deploy/projectplanner-mcp.service").read_text(encoding="utf-8")
 
 backend_tests = actions_dir / "backend-tests.yml"
 _bt = backend_tests.read_text(encoding="utf-8") if backend_tests.exists() else ""
+verify = actions_dir / "verify.yml"
+_verify = verify.read_text(encoding="utf-8") if verify.exists() else ""
 ok(backend_tests.exists()
    and "workflow_dispatch" in _bt
    and "scripts/switchboard_ci.sh" in _bt,
    "backend-tests workflow runs the full suite on the public projectplanner-ci sandbox")
+ok(verify.exists()
+   and 'branches:' in _verify
+   and '"ci/**"' in _verify
+   and "scripts/switchboard_ci.sh" in _verify,
+   "scratchpad verify workflow runs the full suite on pushed ci/** branches")
+ok("PRIVATE_READ_TOKEN" in _verify
+   and "repository:" not in _verify
+   and "refs/pull/" not in _verify,
+   "scratchpad workflow uses the private token only for status, not checkout")
+ok("Switchboard CI / VM gate" in _verify
+   and "infra:" in _verify
+   and "tests:" in _verify,
+   "scratchpad workflow posts the required context with legible failure classes")
 ok('DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"' in pr_gate,
    "claim gate posts a stable PR-visible commit status context")
 ok("import subprocess" not in pr_gate and "import external_ci_mirror" not in pr_gate,

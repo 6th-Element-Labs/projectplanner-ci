@@ -1,0 +1,125 @@
+# CI-14 — push-triggered scratchpad verification.
+#
+# external_ci_mirror pushes an exact canonical projectplanner SHA to a disposable
+# ci/** branch in the public projectplanner-ci repository. This workflow runs the
+# mirrored checkout directly, reports the required status to that same canonical
+# SHA, and leaves branch deletion to the CI-11 terminal cleanup path.
+name: verify
+
+on:
+  push:
+    branches:
+      - "ci/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CANONICAL_REPO: 6th-Element-Labs/projectplanner
+  STATUS_CONTEXT: Switchboard CI / VM gate
+  TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Assert private status callback token is configured
+        env:
+          TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "infra: private status callback token is not configured on projectplanner-ci." >&2
+            exit 1
+          fi
+
+      - name: Post pending required status
+        env:
+          # Existing secret retained only for statuses:write callback compatibility.
+          # Scratchpad checkout below does not use it.
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+            -f state=pending \
+            -f context="$STATUS_CONTEXT" \
+            -f description='scratchpad: running full suite' \
+            -f target_url="$TARGET_URL"
+
+      - name: Check out scratchpad branch
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run Switchboard CI suite
+        id: suite
+        env:
+          SWITCHBOARD_CI_STRICT: "1"
+          SWITCHBOARD_CI_REQUIRE_NODE: "1"
+          CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
+        run: |
+          unset GITHUB_REPOSITORY
+          bash scripts/switchboard_ci.sh
+
+      - name: Upload concurrent-load SLO report
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrent-load-${{ github.sha }}
+          path: .artifacts/concurrent-load-report.json
+          if-no-files-found: warn
+
+      - name: Post required success status
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+            -f state=success \
+            -f context="$STATUS_CONTEXT" \
+            -f description='tests: full suite passed (scratchpad)' \
+            -f target_url="$TARGET_URL"
+
+      - name: Post tests failure status
+        if: failure() && steps.checkout.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+            -f state=failure \
+            -f context="$STATUS_CONTEXT" \
+            -f description='tests: switchboard_ci.sh failed — see run log' \
+            -f target_url="$TARGET_URL" || true
+
+      - name: Post infra failure status
+        if: failure() && steps.checkout.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+            -f state=failure \
+            -f context="$STATUS_CONTEXT" \
+            -f description='infra: scratchpad checkout/setup failed — see run log' \
+            -f target_url="$TARGET_URL" || true
