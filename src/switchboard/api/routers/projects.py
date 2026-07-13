@@ -7,7 +7,11 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
 import store
-from switchboard.application.commands import project_lifecycle, project_metadata
+from switchboard.application.commands import (
+    project_consolidation,
+    project_lifecycle,
+    project_metadata,
+)
 from switchboard.application.queries import project_admin, project_impact
 
 
@@ -112,6 +116,80 @@ def create_router(*, resolve_project: ProjectResolver,
             if str(result.get("error")).startswith("invalid_restore"):
                 code = 400
             raise HTTPException(code, result)
+        return result
+
+    @router.post("/api/projects/{project}/consolidation/plan")
+    def plan_project_consolidation(request: Request, project: str,
+                                   body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:system",), dev_actor="web")
+        result = project_consolidation.plan_project_consolidation(
+            {**dict(body or {}), "source_project_id": project_id,
+             "actor": auth.actor(principal)},
+            access_repository=store.access_repository,
+            project_configs=store._project_map(),
+            registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+            repo_topology_provider=store.get_project_repo_topology,
+        )
+        if result.get("error"):
+            code = 404 if str(result.get("error")).startswith("unknown project") else 409
+            if str(result.get("error")).startswith("invalid_project_consolidation"):
+                code = 400
+            raise HTTPException(code, result)
+        return result
+
+    @router.post("/api/projects/{project}/consolidation/apply")
+    def apply_project_consolidation(request: Request, project: str,
+                                    body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:system",), dev_actor="web")
+        plan = dict((body or {}).get("plan") or {})
+        if plan.get("source_project_id") != project_id:
+            raise HTTPException(400, {"error": "plan source does not match route project"})
+        result = project_consolidation.apply_project_consolidation(
+            {**dict(body or {}), "actor": auth.actor(principal)},
+            access_repository=store.access_repository,
+            project_configs=store._project_map(),
+            registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+            repo_topology_provider=store.get_project_repo_topology,
+        )
+        if result.get("error"):
+            raise HTTPException(409, result)
+        return result
+
+    @router.get("/api/projects/{project}/consolidation/{consolidation_id}/verify")
+    def verify_project_consolidation(request: Request, project: str,
+                                     consolidation_id: str):
+        project_id = resolve_project(project)
+        resolve_principal(request, project_id, ("read",), dev_actor="web")
+        result = project_consolidation.verify_project_consolidation(
+            project_id, consolidation_id,
+            access_repository=store.access_repository,
+            project_configs=store._project_map(),
+            registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+            repo_topology_provider=store.get_project_repo_topology,
+        )
+        if result.get("error"):
+            raise HTTPException(404, result)
+        return result
+
+    @router.post("/api/projects/{project}/consolidation/{consolidation_id}/rollback")
+    def rollback_project_consolidation(request: Request, project: str,
+                                       consolidation_id: str,
+                                       body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:system",), dev_actor="web")
+        result = project_consolidation.rollback_project_consolidation(
+            {**dict(body or {}), "source_project_id": project_id,
+             "consolidation_id": consolidation_id, "actor": auth.actor(principal)},
+            access_repository=store.access_repository,
+            project_configs=store._project_map(),
+        )
+        if result.get("error"):
+            raise HTTPException(409, result)
         return result
 
     return router

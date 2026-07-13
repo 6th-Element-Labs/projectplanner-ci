@@ -59,7 +59,10 @@ class ProjectRecord(VersionedModel):
     is_protected: bool = False
     is_system: bool = False
     replacement_project_id: str | None = None
+    replacement_board_id: str | None = None
+    replacement_mission_id: str | None = None
     replacement_deliverable_id: str | None = None
+    replacement_consolidation_id: str | None = None
     is_builtin: bool = False
 
     @field_validator("id", "label", mode="before")
@@ -78,7 +81,9 @@ class ProjectRecord(VersionedModel):
         return str(value or "").strip()
 
     @field_validator("archived_by", "archive_reason", "replacement_project_id",
-                     "replacement_deliverable_id", "updated_by", "created_by",
+                     "replacement_board_id", "replacement_mission_id",
+                     "replacement_deliverable_id", "replacement_consolidation_id",
+                     "updated_by", "created_by",
                      mode="before")
     @classmethod
     def _blank_optional_text(cls, value: Any) -> str | None:
@@ -131,7 +136,10 @@ class ProjectUpdateCommand(VersionedModel):
     lifecycle_status: str | None = None
     archive_reason: str | None = None
     replacement_project_id: str | None = None
+    replacement_board_id: str | None = None
+    replacement_mission_id: str | None = None
     replacement_deliverable_id: str | None = None
+    replacement_consolidation_id: str | None = None
     updated_by: str | None = None
 
     @field_validator("project_id", mode="before")
@@ -163,7 +171,8 @@ class ProjectUpdateCommand(VersionedModel):
         allowed = {
             "project_id", *_EDITABLE_PROJECT_FIELDS, *_EDITABLE_ACCESS_FIELDS,
             "lifecycle_status", "archive_reason", "replacement_project_id",
-            "replacement_deliverable_id", "updated_by",
+            "replacement_board_id", "replacement_mission_id",
+            "replacement_deliverable_id", "replacement_consolidation_id", "updated_by",
         }
         filtered = {key: data[key] for key in allowed if key in data}
         if "project_id" not in filtered and data.get("id"):
@@ -174,7 +183,9 @@ class ProjectUpdateCommand(VersionedModel):
         payload: dict[str, Any] = {}
         for key in (*_EDITABLE_PROJECT_FIELDS, *_EDITABLE_ACCESS_FIELDS,
                     "lifecycle_status", "archive_reason",
-                    "replacement_project_id", "replacement_deliverable_id"):
+                    "replacement_project_id", "replacement_board_id",
+                    "replacement_mission_id", "replacement_deliverable_id",
+                    "replacement_consolidation_id"):
             value = getattr(self, key)
             if value is not None:
                 payload[key] = value

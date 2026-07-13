@@ -217,7 +217,8 @@ def execute_for(project: str, *, access_repository: AccessRepository,
         "id", "label", "pretitle", "org_id", "owner_user_id", "purpose", "boundary",
         "visibility", "lifecycle_status", "archived_at", "archived_by", "archive_reason",
         "is_protected", "is_system", "is_builtin", "replacement_project_id",
-        "replacement_deliverable_id",
+        "replacement_board_id", "replacement_mission_id", "replacement_deliverable_id",
+        "replacement_consolidation_id",
     )}
     findings = _findings(safe_project, snapshot)
     report_payload = {

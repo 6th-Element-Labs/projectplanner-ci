@@ -8,7 +8,11 @@ from typing import Any, Callable
 from mcp.server.fastmcp import Context
 
 import store
-from switchboard.application.commands import project_lifecycle, project_metadata
+from switchboard.application.commands import (
+    project_consolidation,
+    project_lifecycle,
+    project_metadata,
+)
 from switchboard.application.queries import project_admin, project_impact
 
 
@@ -127,9 +131,97 @@ def restore_project(ctx: Context, project: str, reason: str) -> str:
     return services.dumps(result)
 
 
+def plan_project_consolidation(ctx: Context, project: str,
+                               replacement_project: str, reason: str,
+                               approval_json: str,
+                               replacement_board: str = "",
+                               replacement_mission: str = "",
+                               replacement_deliverable: str = "",
+                               safe_routing_keys_json: str = "[]") -> str:
+    """Dry-run an operator-approved project consolidation; no state is mutated."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    try:
+        approval = json.loads(approval_json or "")
+        routing_keys = json.loads(safe_routing_keys_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return services.dumps({"error": "approval and routing keys must be valid JSON"})
+    result = project_consolidation.plan_project_consolidation(
+        {
+            "source_project_id": project,
+            "replacement_project_id": replacement_project,
+            "replacement_board_id": replacement_board or None,
+            "replacement_mission_id": replacement_mission or None,
+            "replacement_deliverable_id": replacement_deliverable or None,
+            "safe_routing_keys": routing_keys,
+            "reason": reason,
+            "actor": services.principal_actor(principal),
+            "approval": approval,
+        },
+        access_repository=store.access_repository,
+        project_configs=store._project_map(),
+        registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+        repo_topology_provider=store.get_project_repo_topology,
+    )
+    return services.dumps(result)
+
+
+def apply_project_consolidation(ctx: Context, project: str,
+                                plan_json: str, confirmation: str) -> str:
+    """Apply an exact current consolidation plan and immediately verify it."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    try:
+        plan = json.loads(plan_json or "")
+    except (TypeError, json.JSONDecodeError):
+        return services.dumps({"error": "plan_json must be valid JSON"})
+    if not isinstance(plan, dict) or plan.get("source_project_id") != project:
+        return services.dumps({"error": "plan source does not match project"})
+    result = project_consolidation.apply_project_consolidation(
+        {"plan": plan, "confirmation": confirmation,
+         "actor": services.principal_actor(principal)},
+        access_repository=store.access_repository,
+        project_configs=store._project_map(),
+        registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+        repo_topology_provider=store.get_project_repo_topology,
+    )
+    return services.dumps(result)
+
+
+def verify_project_consolidation(ctx: Context, project: str,
+                                 consolidation_id: str) -> str:
+    """Verify archived source history, pointers, routes, and cross-project graph reads."""
+    services = _services()
+    services.require_read(ctx, project, ("read",))
+    result = project_consolidation.verify_project_consolidation(
+        project, consolidation_id,
+        access_repository=store.access_repository,
+        project_configs=store._project_map(),
+        registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+        repo_topology_provider=store.get_project_repo_topology,
+    )
+    return services.dumps(result)
+
+
+def rollback_project_consolidation(ctx: Context, project: str,
+                                   consolidation_id: str, reason: str) -> str:
+    """Rollback a consolidation before purge and restore exact routing state."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    result = project_consolidation.rollback_project_consolidation(
+        {"source_project_id": project, "consolidation_id": consolidation_id,
+         "reason": reason, "actor": services.principal_actor(principal)},
+        access_repository=store.access_repository,
+        project_configs=store._project_map(),
+    )
+    return services.dumps(result)
+
+
 PROJECT_TOOL_NAMES = (
     "get_project", "update_project", "get_project_impact_report",
     "archive_project", "restore_project",
+    "plan_project_consolidation", "apply_project_consolidation",
+    "verify_project_consolidation", "rollback_project_consolidation",
 )
 
 

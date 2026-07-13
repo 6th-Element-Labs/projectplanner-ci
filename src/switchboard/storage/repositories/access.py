@@ -109,7 +109,10 @@ def get_project_record(project_id: str) -> Dict[str, Any]:
         "is_protected": bool(row.get("is_protected")),
         "is_system": bool(row.get("is_system")),
         "replacement_project_id": row.get("replacement_project_id"),
+        "replacement_board_id": row.get("replacement_board_id"),
+        "replacement_mission_id": row.get("replacement_mission_id"),
         "replacement_deliverable_id": row.get("replacement_deliverable_id"),
+        "replacement_consolidation_id": row.get("replacement_consolidation_id"),
         # Compatibility field for older consumers.  Lifecycle behavior is driven
         # exclusively by the registry flags, never by this label or an id check.
         "is_builtin": bool(row.get("is_system")),
@@ -266,7 +269,10 @@ def update_project_metadata(command: Mapping[str, Any] | ProjectUpdateCommand,
     now = time.time()
     project_sets: List[str] = []
     project_vals: List[Any] = []
-    for key in ("label", "pretitle", "replacement_project_id", "replacement_deliverable_id"):
+    for key in (
+            "label", "pretitle", "replacement_project_id", "replacement_board_id",
+            "replacement_mission_id", "replacement_deliverable_id",
+            "replacement_consolidation_id"):
         if key in fields:
             project_sets.append(f"{key}=?")
             project_vals.append(fields[key])

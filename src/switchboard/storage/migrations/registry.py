@@ -33,6 +33,13 @@ REGISTRY_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str, str]] = [
      "ALTER TABLE projects ADD COLUMN replacement_project_id TEXT", ""),
     ("access18_projects_replacement_deliverable_id", "projects", "replacement_deliverable_id",
      "ALTER TABLE projects ADD COLUMN replacement_deliverable_id TEXT", ""),
+    ("access23_projects_replacement_board_id", "projects", "replacement_board_id",
+     "ALTER TABLE projects ADD COLUMN replacement_board_id TEXT", ""),
+    ("access23_projects_replacement_mission_id", "projects", "replacement_mission_id",
+     "ALTER TABLE projects ADD COLUMN replacement_mission_id TEXT", ""),
+    ("access23_projects_replacement_consolidation_id", "projects",
+     "replacement_consolidation_id",
+     "ALTER TABLE projects ADD COLUMN replacement_consolidation_id TEXT", ""),
     ("access18_projects_updated_at", "projects", "updated_at",
      "ALTER TABLE projects ADD COLUMN updated_at REAL", ""),
     ("access18_projects_updated_by", "projects", "updated_by",
@@ -175,6 +182,44 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         )
         _record(c, event_migration)
         newly.append(event_migration)
+
+    consolidation_migration = "access23_project_consolidations"
+    if consolidation_migration not in done:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS project_consolidations (
+                consolidation_id          TEXT PRIMARY KEY,
+                source_project_id         TEXT NOT NULL,
+                replacement_project_id    TEXT NOT NULL,
+                replacement_board_id      TEXT,
+                replacement_mission_id    TEXT,
+                replacement_deliverable_id TEXT,
+                status                    TEXT NOT NULL,
+                plan_hash                 TEXT NOT NULL UNIQUE,
+                impact_report_hash        TEXT NOT NULL,
+                plan_json                 TEXT NOT NULL,
+                history_json              TEXT NOT NULL,
+                routing_json              TEXT NOT NULL,
+                rollback_json             TEXT NOT NULL,
+                actor                     TEXT NOT NULL,
+                reason                    TEXT NOT NULL,
+                approved_by               TEXT NOT NULL,
+                approved_at               REAL NOT NULL,
+                created_at                REAL NOT NULL,
+                applied_at                REAL,
+                verified_at               REAL,
+                rolled_back_at            REAL,
+                rollback_reason           TEXT,
+                rollback_actor            TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_project_consolidations_source
+                ON project_consolidations(source_project_id, created_at, consolidation_id);
+            CREATE INDEX IF NOT EXISTS ix_project_consolidations_replacement
+                ON project_consolidations(replacement_project_id, created_at, consolidation_id);
+            """
+        )
+        _record(c, consolidation_migration)
+        newly.append(consolidation_migration)
 
     protected_records_migration = "access22_protected_system_project_records"
     first_protected_backfill = protected_records_migration not in done
