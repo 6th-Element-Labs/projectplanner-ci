@@ -1,0 +1,13 @@
+# /etc/systemd/system/projectplanner-coordinator-dispatch.timer
+[Unit]
+Description=Run Switchboard T1 coordinator dispatch on an interval
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=projectplanner-coordinator-dispatch.service
+
+[Install]
+WantedBy=timers.target

@@ -1911,6 +1911,45 @@ async def api_coordinator_decisions(
     }
 
 
+@app.get("/api/coordinator_dispatch/plan")
+async def api_coordinator_dispatch_plan(
+    request: Request,
+    project: str = Query(store.DEFAULT_PROJECT),
+    max_dispatches: int = 3,
+    max_nudges: int = 3,
+):
+    """COORD-4 dry plan preview — what T1 would wake/nudge without acting."""
+    import coordinator_dispatch as coord_dispatch
+    proj = _proj(project)
+    _principal(request, proj, ("read",), dev_actor="web")
+    db_path = str(store._resolve(proj)["db"])
+    snapshot = __import__("coordinator_audit").collect_snapshot(db_path, proj)
+    plan = coord_dispatch.build_dispatch_plan(
+        snapshot,
+        policy={"dry_run": True, "max_dispatches_per_tick": max_dispatches,
+                "max_nudges_per_tick": max_nudges},
+    )
+    return {"project": proj, "plan": plan}
+
+
+@app.post("/api/coordinator_dispatch")
+async def api_coordinator_dispatch(request: Request, body: dict = Body(default={})):
+    """COORD-4 T1 dispatch tick. Defaults to dry_run=true; set dry_run=false to act."""
+    import coordinator_dispatch as coord_dispatch
+    proj = _proj(body.get("project") or request.query_params.get("project")
+                 or store.DEFAULT_PROJECT)
+    principal = _principal(request, proj, ("write:ixp",), dev_actor="web")
+    policy = dict(body.get("policy") or {})
+    if "dry_run" in body:
+        policy["dry_run"] = bool(body.get("dry_run"))
+    else:
+        policy.setdefault("dry_run", True)
+    tick = coord_dispatch.run_dispatch_tick(
+        proj, policy=policy, actor=auth.actor(principal),
+    )
+    return tick
+
+
 # ---- UI-7: operator-facing directed messaging + ack inbox ----
 # The /ixp/v1/* message bus authenticates agents by write:ixp bearer; these /api/*
 # twins let a browser operator steer a live agent from a task's chip (send, with an
