@@ -1,16 +1,20 @@
-# CI-2/CI-6 pull-model verification for projectplanner (Plane A).
+# CI-2 — Plane A shadow verification (pull model).
 #
 # Public hosted runners check out the PRIVATE canonical repo at refs/pull/N/merge
-# (will-it-merge-cleanly coverage), run scripts/switchboard_ci.sh, and post commit
-# statuses back onto the PR head SHA.
-#
-# CI-6 flip: posts the REQUIRED context "Switchboard CI / VM gate" — the same string
-# the on-box VM gate used, so branch protection is untouched (enforce_admins stays on).
+# (will-it-merge-cleanly coverage), run scripts/switchboard_ci.sh, and post a
+# NON-required shadow commit status on the PR head SHA during soak.
 #
 # Triggers:
-#   repository_dispatch (primary — fired by the Plan VM PR webhook relay, CI-3)
-#   workflow_dispatch   (manual / backstop operator drill)
-#   schedule            (cron backstop when dispatch is down)
+#   repository_dispatch type verify-pr (primary — Plan VM PR webhook relay, CI-3)
+#   workflow_dispatch (manual / acceptance drill)
+#   schedule (cron backstop when dispatch is delayed or disabled)
+#
+# Failure legibility (2026-07-12 lesson): checkout/ref/auth failures post
+# "infra: ..."; suite failures post "tests: ...".
+#
+# Shadow context during soak: projectplanner-ci/full-suite
+# CI-6 flips STATUS_CONTEXT to "Switchboard CI / VM gate" (same string as the
+# on-box gate) so branch protection is untouched when the required check moves.
 #
 # Requires secret PRIVATE_READ_TOKEN on this repo (CI-1): read private contents +
 # write commit statuses on 6th-Element-Labs/projectplanner.
@@ -20,8 +24,8 @@ on:
   repository_dispatch:
     types: [verify-pr]
   schedule:
-    # Every 6h: re-verify open PR heads that lack a recent green required check.
-    - cron: "17 */6 * * *"
+    # Backstop: re-verify the oldest open PR head missing a recent green shadow check.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       pr:
@@ -41,8 +45,8 @@ concurrency:
 
 env:
   CANONICAL_REPO: 6th-Element-Labs/projectplanner
-  # CI-6: required branch-protection context (NOT the shadow soak context).
-  STATUS_CONTEXT: Switchboard CI / VM gate
+  # CI-2 shadow soak context (non-required). CI-6 flips to Switchboard CI / VM gate.
+  STATUS_CONTEXT: projectplanner-ci/full-suite
 
 jobs:
   verify:
@@ -69,9 +73,10 @@ jobs:
             PR="$INPUT_PR"
             SHA="$INPUT_SHA"
           elif [ "$EVENT_NAME" = "schedule" ]; then
-            # Pick the oldest open PR head missing a green required check.
+            # Pick the oldest open PR head missing a green shadow check.
             mapfile -t rows < <(gh pr list -R "$CANONICAL_REPO" --state open \
-              --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"')
+              --json number,headRefOid,isDraft \
+              --jq '.[] | select(.isDraft | not) | "\(.number) \(.headRefOid)"')
             for row in "${rows[@]}"; do
               pr="${row%% *}"
               sha="${row#* }"
@@ -95,7 +100,7 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "Verifying PR #$PR at head $SHA"
 
-      - name: Post pending status
+      - name: Post pending shadow status
         if: steps.coords.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
@@ -104,7 +109,7 @@ jobs:
           gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
             -f state=pending \
             -f context="$STATUS_CONTEXT" \
-            -f description='pull-model verify: running full suite' \
+            -f description='pull-model shadow verify: running full suite' \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
       - name: Check out private merge ref
@@ -152,7 +157,15 @@ jobs:
           unset GITHUB_REPOSITORY
           bash scripts/switchboard_ci.sh
 
-      - name: Post success status
+      - name: Upload concurrent-load SLO report
+        if: always() && steps.coords.outputs.skip != 'true' && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrent-load-pr-${{ steps.coords.outputs.pr }}
+          path: src/.artifacts/concurrent-load-report.json
+          if-no-files-found: warn
+
+      - name: Post shadow success status
         if: steps.coords.outputs.skip != 'true' && success()
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
@@ -162,7 +175,7 @@ jobs:
           gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
             -f state=success \
             -f context="$STATUS_CONTEXT" \
-            -f description="pull-model verify passed (PR #$PR)" \
+            -f description="tests: full suite passed (pull-model shadow, PR #$PR)" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
       - name: Post tests failure status
@@ -174,7 +187,7 @@ jobs:
           gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
             -f state=failure \
             -f context="$STATUS_CONTEXT" \
-            -f description='tests: Switchboard CI suite failed — see run log' \
+            -f description='tests: switchboard_ci.sh failed — see run log' \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
 
       - name: Post infra failure status
@@ -182,9 +195,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
           HEAD_SHA: ${{ steps.coords.outputs.head_sha }}
+          PR: ${{ steps.coords.outputs.pr }}
         run: |
           gh api "repos/$CANONICAL_REPO/statuses/$HEAD_SHA" \
             -f state=failure \
             -f context="$STATUS_CONTEXT" \
-            -f description='infra: private merge-ref checkout failed — see run log' \
+            -f description="infra: unable to checkout refs/pull/${PR}/merge — see run log" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
