@@ -13569,14 +13569,14 @@ def create_project(name: str, project_id: str = "", label: str = "", pretitle: s
     if not PROJECT_ID_VALID_RE.match(pid):
         return {"error": "invalid project id; use 2-63 chars: lowercase letters, digits, '-' or '_'",
                 "project_id": pid}
-    if pid in BUILTIN_PROJECTS:
-        return {"error": f"reserved built-in project id: {pid}", "project_id": pid}
     repo, repo_error = _validate_github_repo(github_repo)
     if repo_error:
         return {"error": repo_error, "repo": repo, "project_id": pid}
 
     existing = _dynamic_projects().get(pid)
     if existing:
+        if get_project_record(pid).get("is_protected"):
+            return {"error": f"reserved protected project id: {pid}", "project_id": pid}
         init_db(pid)
         seed_if_empty(pid)
         if repo:

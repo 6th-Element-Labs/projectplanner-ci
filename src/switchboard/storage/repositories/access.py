@@ -71,37 +71,6 @@ def _is_active_record(row: Dict[str, Any]) -> bool:
     return _row_lifecycle_status(row) == "active"
 
 
-def _builtin_project_record(project_id: str) -> Dict[str, Any]:
-    cfg = BUILTIN_PROJECTS[project_id]
-    access = project_access(project_id)
-    return {
-        "id": project_id,
-        "label": cfg["label"],
-        "pretitle": cfg.get("pretitle", ""),
-        "db_path": cfg["db"],
-        "seed_path": cfg.get("seed"),
-        "created_at": None,
-        "created_by": None,
-        "updated_at": access.get("updated_at"),
-        "updated_by": access.get("updated_by"),
-        "org_id": access.get("org_id") or "",
-        "owner_user_id": access.get("owner_user_id") or "",
-        "purpose": access.get("purpose") or f"{project_id} work control plane",
-        "boundary": access.get("boundary") or (
-            f"Only work belonging to project={project_id} belongs here."),
-        "visibility": access.get("visibility"),
-        "lifecycle_status": default_lifecycle_status(),
-        "archived_at": None,
-        "archived_by": None,
-        "archive_reason": None,
-        "is_protected": True,
-        "is_system": True,
-        "replacement_project_id": None,
-        "replacement_deliverable_id": None,
-        "is_builtin": True,
-    }
-
-
 def _dynamic_project_row(project_id: str) -> Optional[Dict[str, Any]]:
     init_project_registry()
     with _registry_conn() as c:
@@ -114,8 +83,6 @@ def get_project_record(project_id: str) -> Dict[str, Any]:
     pid = (project_id or "").strip()
     if not pid:
         return {"error": "project_id required"}
-    if pid in BUILTIN_PROJECTS:
-        return ProjectRecord.from_mapping(_builtin_project_record(pid)).model_dump(by_alias=True)
     row = _dynamic_project_row(pid)
     if not row:
         return {"error": f"unknown project: {pid}"}
@@ -143,7 +110,9 @@ def get_project_record(project_id: str) -> Dict[str, Any]:
         "is_system": bool(row.get("is_system")),
         "replacement_project_id": row.get("replacement_project_id"),
         "replacement_deliverable_id": row.get("replacement_deliverable_id"),
-        "is_builtin": False,
+        # Compatibility field for older consumers.  Lifecycle behavior is driven
+        # exclusively by the registry flags, never by this label or an id check.
+        "is_builtin": bool(row.get("is_system")),
     }
     return ProjectRecord.from_mapping(merged).model_dump(by_alias=True)
 
@@ -207,9 +176,6 @@ def transition_project_lifecycle(project_id: str, requested: str, *, actor: str,
             "from_status": prior,
             "to_status": requested_status,
         }
-    if pid in BUILTIN_PROJECTS:
-        return {"error": "built-in project routing metadata is immutable", "project_id": pid}
-
     now = time.time()
     event_id = f"project-lifecycle-{uuid.uuid4().hex[:16]}"
     validation_json = json.dumps(dict(validation or {}), sort_keys=True)
@@ -292,27 +258,6 @@ def update_project_metadata(command: Mapping[str, Any] | ProjectUpdateCommand,
     blocked = project_write_block(pid, "update_project_metadata")
     if blocked:
         return blocked
-
-    if pid in BUILTIN_PROJECTS:
-        access_fields = {k: fields[k] for k in ("org_id", "owner_user_id", "purpose",
-                                                 "boundary", "visibility") if k in fields}
-        if any(k in fields for k in ("label", "pretitle", "lifecycle_status", "archive_reason",
-                                     "replacement_project_id", "replacement_deliverable_id")):
-            return {"error": "built-in project routing metadata is immutable", "project_id": pid}
-        if access_fields:
-            result = set_project_access(
-                pid,
-                access_fields.get("org_id") or current.get("org_id") or DEFAULT_ORG_ID,
-                owner_user_id=access_fields.get("owner_user_id", current.get("owner_user_id")),
-                purpose=access_fields.get("purpose", current.get("purpose")),
-                boundary=access_fields.get("boundary", current.get("boundary")),
-                created_by=actor,
-                visibility=access_fields.get("visibility", current.get("visibility") or ""),
-            )
-            if result.get("error"):
-                return result
-            bust_project_cache()
-        return get_project_record(pid)
 
     row = _dynamic_project_row(pid)
     if not row:
@@ -397,10 +342,10 @@ def projects() -> List[Dict[str, Any]]:
     allowed = {p.strip() for p in visible.split(",") if p.strip()} if visible else None
     out = []
     for k, v in _project_map().items():
-        if allowed is not None and k in BUILTIN_PROJECTS and k not in allowed:
-            continue
         record = get_project_record(k)
         if record.get("error"):
+            continue
+        if allowed is not None and record.get("is_system") and k not in allowed:
             continue
         if record.get("lifecycle_status") != "active":
             continue

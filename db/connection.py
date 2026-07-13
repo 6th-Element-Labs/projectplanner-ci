@@ -89,6 +89,12 @@ def _registry_cache_signature() -> tuple:
 
 
 def _load_dynamic_projects() -> Dict[str, Dict[str, str]]:
+    """Load the single registry projection used for all project routing.
+
+    The historical function name is retained for adapter/test compatibility.
+    ACCESS-22 backfills configured system projects into this same table, so this
+    now returns both protected system records and operator-created projects.
+    """
     init_project_registry()
     with _registry_conn() as c:
         rows = c.execute("SELECT * FROM projects ORDER BY id").fetchall()
@@ -124,11 +130,7 @@ def _dynamic_projects() -> Dict[str, Dict[str, str]]:
 
 
 def _project_map() -> Dict[str, Dict[str, str]]:
-    builtins = {
-        key: {**value, "lifecycle_status": "active"}
-        for key, value in BUILTIN_PROJECTS.items()
-    }
-    return {**_dynamic_projects(), **builtins}
+    return dict(_dynamic_projects())
 
 
 def _resolve(project: Optional[str]) -> Dict[str, str]:
