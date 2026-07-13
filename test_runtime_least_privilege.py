@@ -19,7 +19,7 @@ UNITS = (
     "deploy/projectplanner-inbox.service",
     "deploy/projectplanner-summarize.service",
     "deploy/projectplanner-digest.service",
-    "deploy/projectplanner-ci-gate.service",
+    "deploy/projectplanner-claim-gate.service",
     "deploy/projectplanner-backup.service",
 )
 

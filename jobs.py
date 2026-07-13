@@ -220,27 +220,14 @@ def reconcile_alerts():
                 "deduped": deduped, "incremental": incremental, "results": results}
 
 
-def ci_gate_prs():
-    """Run the VM-backed Switchboard PR CI gate once.
+def claim_gate_prs():
+    """Post SESSION-12 claim-gate commit statuses for open fleet PRs (CI-7).
 
-    This is the Actions-equivalent fallback for cases where GitHub records
-    `startup_failure` before any workflow job exists. It posts a commit status
-    to each open PR head SHA, so the PR still carries a visible pass/fail gate.
+    VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
+    pull-model verify workflow; this job is claim-gate-only (no git/checkout).
     """
     cmd = [sys.executable, str(Path(__file__).parent / "scripts" / "switchboard_pr_gate.py"),
            "--once-open-prs"]
-    subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
-
-
-def ci_gate_drain():
-    """Gate exactly the PRs with a pending event-driven request marker (HARDEN-74).
-
-    Started by projectplanner-ci-gate-request.path the instant the PR webhook drops a
-    marker, so a PR is verified seconds after it opens instead of on the 1-min backstop
-    timer. Delegates to the same gate with --drain-requests (claims + clears the markers).
-    """
-    cmd = [sys.executable, str(Path(__file__).parent / "scripts" / "switchboard_pr_gate.py"),
-           "--drain-requests"]
     subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
 
 
@@ -275,8 +262,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "narrate_events": narrate_events,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
-        "ci_gate_prs": ci_gate_prs,
-        "ci_gate_drain": ci_gate_drain,
+        "claim_gate_prs": claim_gate_prs,
         "merge_coordinator_plan": merge_coordinator_plan,
         "background_job": background_job}
 

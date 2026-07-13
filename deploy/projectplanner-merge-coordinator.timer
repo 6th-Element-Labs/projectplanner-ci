@@ -1,6 +1,5 @@
 # /etc/systemd/system/projectplanner-merge-coordinator.timer
-# Runs the Switchboard merge-coordinator every 5 minutes (offset from the CI gate so the
-# plan reflects the gate statuses the previous ci-gate pass posted).
+# Runs the Switchboard merge-coordinator every 5 minutes (offset from claim-gate polling).
 [Unit]
 Description=ProjectPlanner Switchboard merge-coordinator (every 5 minutes)
 

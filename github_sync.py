@@ -6,7 +6,6 @@ without importing the web app.
 import re
 from typing import Any, Dict, List
 
-import ci_gate_requests
 import ci_verify_dispatch
 import store
 import task_id_parser
@@ -198,26 +197,10 @@ def _maybe_dispatch_pull_model_ci(repo: str, pr_number: Any, head_sha: str) -> b
         return False
 
 
-def _maybe_request_ci_gate(repo: str, pr_number: Any, head_sha: str) -> bool:
-    """HARDEN-74 event-driven CI: on a PR open/update, drop a request marker so the gate
-    fires immediately instead of waiting for the 5-minute timer. Best-effort — a failure
-    here must never break webhook provenance processing. Returns whether a marker was
-    written (False when the flag is off or the write failed)."""
-    if not ci_gate_requests.is_event_driven_enabled() or pr_number is None:
-        return False
-    try:
-        ci_gate_requests.request_ci_gate(int(pr_number), repo=repo, head_sha=head_sha)
-        return True
-    except Exception:
-        return False
-
-
 def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str) -> Dict[str, bool]:
-    """Trigger CI for one PR update. During CI-6 flip both engines may run until the
-    operator stops the box gate units; each path is independent and best-effort."""
+    """Trigger pull-model CI for one PR update (CI-6/CI-7). Best-effort."""
     return {
         "pull_model_dispatched": _maybe_dispatch_pull_model_ci(repo, pr_number, head_sha),
-        "box_gate_requested": _maybe_request_ci_gate(repo, pr_number, head_sha),
     }
 
 
@@ -269,7 +252,6 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         ci = _maybe_trigger_ci(repo, pr_num, head_sha)
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
                 "in_review_tasks": touched, "skipped_tasks": skipped,
-                "ci_gate_requested": ci.get("box_gate_requested"),
                 "pull_model_dispatched": ci.get("pull_model_dispatched")}
 
     if not pr.get("merged"):

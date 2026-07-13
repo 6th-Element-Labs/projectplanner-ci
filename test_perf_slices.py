@@ -15,7 +15,7 @@ INTERACTIVE = (
 BATCH = (
     "deploy/projectplanner-narrate.service",
     "deploy/projectplanner-reconcile.service",
-    "deploy/projectplanner-ci-gate.service",
+    "deploy/projectplanner-claim-gate.service",
     "deploy/projectplanner-monitors.service",
     "deploy/projectplanner-inbox.service",
     "deploy/projectplanner-summarize.service",
@@ -60,9 +60,9 @@ for path in BATCH:
        f"{path} joins batch slice")
     ok("Nice=10" in text, f"{path} runs at Nice=10")
 
-ci_gate = read("deploy/projectplanner-ci-gate.service")
+claim_gate = read("deploy/projectplanner-claim-gate.service")
 reconcile = read("deploy/projectplanner-reconcile.service")
-ok("MemoryMax=320M" in ci_gate, "ci-gate keeps strict 320M MemoryMax")
+ok("MemoryMax=128M" in claim_gate, "claim-gate keeps strict 128M MemoryMax")
 ok("MemoryMax=512M" in reconcile, "reconcile keeps production-validated 512M MemoryMax")
 
 ok("projectplanner-interactive.slice" in guards and "projectplanner-batch.slice" in guards,

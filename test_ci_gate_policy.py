@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Guard the current Switchboard CI policy.
 
-GitHub Actions currently fails before creating jobs for this private repo, so a
-checked-in Actions workflow creates false red checks. Until Actions is proven
-available again, the VM-backed commit-status gate is the canonical PR signal.
+VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the
+pull-model verify workflow. The Plan VM posts only the SESSION-12 claim gate.
 """
 from pathlib import Path
 
@@ -33,14 +32,15 @@ ok(backend_tests.exists()
    and "workflow_dispatch" in _bt
    and "scripts/switchboard_ci.sh" in _bt,
    "backend-tests workflow runs the full suite on the public projectplanner-ci sandbox")
-ok("DEFAULT_CONTEXT = \"Switchboard CI / VM gate\"" in pr_gate,
-   "VM gate posts a stable PR-visible commit status context")
-ok("projectplanner-ci-gate.timer" in provision and "scripts/switchboard_ci.sh" in provision,
-   "Provisioning docs install the VM gate timer and strict local suite")
+ok('DEFAULT_CLAIM_CONTEXT = "Switchboard / claim gate"' in pr_gate,
+   "claim gate posts a stable PR-visible commit status context")
+ok("import subprocess" not in pr_gate and "import external_ci_mirror" not in pr_gate,
+   "switchboard_pr_gate.py is claim-only (no git/subprocess/external_ci_mirror imports)")
+ok("projectplanner-claim-gate.timer" in provision and "switchboard_ci.sh" in provision,
+   "Provisioning docs install the claim-gate timer and strict local suite")
 ok("Switchboard CI / VM gate" in runbook
-   and "GitHub Actions" in runbook
-   and "startup_failure" in runbook,
-   "Runbook names the canonical VM gate and the GitHub Actions startup-failure exception")
+   and "projectplanner-ci" in runbook,
+   "Runbook names pull-model VM verification on projectplanner-ci")
 ok("fail-on-red" in pr_gate,
    "Manual gate can fail closed when requested")
 ok("Environment=PM_AUTH_MODE=required" in web_unit,
@@ -49,10 +49,10 @@ ok("Environment=PM_AUTH_MODE=required" in mcp_unit,
    "Production MCP unit forces PM_AUTH_MODE=required")
 ok("PM_AUTH_MODE=required" in provision,
    "Provisioning docs make production auth mode explicit")
-ok("SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python" in provision
-   and "Environment=SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python" in
-   Path("deploy/projectplanner-ci-gate.service").read_text(encoding="utf-8"),
-   "VM gate pins an explicit Python 3.10+ runtime")
+ok("claim_gate_prs" in Path("jobs.py").read_text(encoding="utf-8")
+   and "Environment=HOME=/var/lib/projectplanner" in
+   Path("deploy/projectplanner-claim-gate.service").read_text(encoding="utf-8"),
+   "claim-gate job and service are wired for the Plan VM")
 ok("run_discovered_tests" in ci_suite and "TEST_DENYLIST" in ci_suite
    and "find ." in ci_suite,
    "CI gate discovers every Python test unless the documented denylist excludes it")

@@ -127,81 +127,58 @@ and/or evidence hash, and a verifier identity. Reconcile accepts that explicit
 `offline_evidence` provenance, and still flags naked `Done` task rows with neither git provenance
 nor offline evidence.
 
-Runner bootstrap exception: if the VM gate status is missing, do not treat that as a product pass.
-Confirm `projectplanner-ci-gate.timer` is active, run the strict gate on the Plan VM or another
-Python 3.10+ environment, and record the risk before merge. The manual command is:
+Runner bootstrap exception: if `Switchboard CI / VM gate` is missing on a PR, check the
+projectplanner-ci `verify` workflow run (pull model) — do not treat a missing status as a pass.
+Re-dispatch with `workflow_dispatch` on projectplanner-ci or re-open/sync the PR to trigger
+`repository_dispatch` from the Plan VM webhook (`SWITCHBOARD_CI_PULL_MODEL=1`).
+
+The Plan VM posts only the SESSION-12 **`Switchboard / claim gate`** via
+`projectplanner-claim-gate.timer`:
 
 ```bash
-PM_GITHUB_TOKEN=... SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python \
-  scripts/switchboard_pr_gate.py --pr 18
+/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py claim_gate_prs
 ```
 
-The production gate is `projectplanner-ci-gate.timer`, which polls open non-draft PRs and posts
-the `Switchboard CI / VM gate` status from the Plan VM.
+Manual claim-gate for one PR:
 
-### Pull-model CI flip (CI-6)
+```bash
+PM_GITHUB_TOKEN=... scripts/switchboard_pr_gate.py --pr 18
+```
 
-After CI-2 shadow soak (CI-5) agrees, the public `verify.yml` workflow on
-`6th-Element-Labs/projectplanner-ci` posts the **required** context
-`Switchboard CI / VM gate` (same string as the on-box gate — branch protection
-is untouched). The Plan VM webhook relay (`SWITCHBOARD_CI_PULL_MODEL=1`) fires
-`repository_dispatch` to projectplanner-ci; the box gate units keep running until
-two PRs go green through the pull-model engine, then the operator stops them.
+### Pull-model CI (CI-6) + box teardown (CI-7)
 
-**Enable pull-model dispatch on the Plan VM** (after merging the canonical-repo PR):
+**Required VM verification** runs on `6th-Element-Labs/projectplanner-ci` (`verify.yml`), posting
+`Switchboard CI / VM gate`. The Plan VM webhook relay fires `repository_dispatch` when
+`SWITCHBOARD_CI_PULL_MODEL=1`:
 
 ```bash
 # /opt/projectplanner/.env
 SWITCHBOARD_CI_PULL_MODEL=1
-# Token needs repo dispatch on projectplanner-ci + status read on projectplanner
-SWITCHBOARD_CI_DISPATCH_TOKEN=<fine-grained or classic PAT>
+SWITCHBOARD_CI_DISPATCH_TOKEN=<PAT with dispatch on projectplanner-ci>
 sudo systemctl restart projectplanner
 ```
 
-**Merge `verify.yml` on projectplanner-ci** and confirm `PRIVATE_READ_TOKEN` is
-installed (CI-1). Watch two open PRs receive a green `Switchboard CI / VM gate`
-from a `verify` workflow run (not the box timer).
+Confirm `PRIVATE_READ_TOKEN` is installed on projectplanner-ci (CI-1).
 
-**Stop box posting** (reversible — rollback = `systemctl start` the units):
+**Retire on-box VM CI** after pull-model holds (operator script — reversible via
+`deploy/retired/*.bak` for one week):
 
 ```bash
-sudo systemctl stop projectplanner-ci-gate.timer projectplanner-ci-gate-request.path
-sudo systemctl disable projectplanner-ci-gate.timer projectplanner-ci-gate-request.path
-# optional backstop timer stays disabled until CI-7 teardown
+cd /opt/projectplanner && sudo bash deploy/ci7-teardown-box-ci.sh
 ```
 
-Rollback at any point: `sudo systemctl enable --now projectplanner-ci-gate.timer
-projectplanner-ci-gate-request.path`.
+This stops `projectplanner-ci-gate.{timer,service}` and `projectplanner-ci-gate-request.{path,service}`,
+removes `/var/lib/projectplanner/ci-gate`, enables `projectplanner-claim-gate.timer`, and deletes
+disabled merge-queue ruleset **18821466**.
 
-### Native merge queue (HARDEN-70 / CI-3)
+Rollback (within one week): restore units from `deploy/retired/` or `/etc/systemd/system/*.bak-ci7`,
+re-enable the old timers, and disable `projectplanner-claim-gate.timer`.
 
-The same timer also gates GitHub's native merge queue. When a PR enters the queue, GitHub builds a
-temporary merge group on a `refs/heads/gh-readonly-queue/<base>/pr-<n>-<sha>` branch (base + the
-queued PRs, merged) and **blocks the queue until the required status checks report on that
-branch's head SHA**. The PR-head gate never posts there, so `switchboard_pr_gate.py` has a third
-pass that lists `gh-readonly-queue/*` refs, runs the suite on each merge-group head SHA (external
-CI mirror → local fallback, same policy as the PR pass), and posts the same
-`Switchboard CI / VM gate` context to that SHA. One branch-protection required check therefore
-covers both PR and merge-group evaluation. Disable the pass with `--no-merge-queue` /
-`SWITCHBOARD_CI_NO_MERGE_QUEUE=1` (leave it on in production — it is what keeps an enabled queue
-from hanging).
+### Native merge queue
 
-**Enabling the queue is a deploy-ordered operator step, not an agent action.** Turn it on only
-*after* the merge-group pass is deployed to prod (`git pull` + `systemctl restart` on the Plan VM);
-enabling it against a gate that can't post to merge-group SHAs is exactly the hang this fixes.
-Enable it via master branch protection on `6th-Element-Labs/projectplanner` (Settings → Branches →
-require merge queue, or a ruleset with a `merge_queue` rule), keeping `Switchboard CI / VM gate`
-as the required check. Confirm afterward with a canary PR: it should get the VM-gate status on both
-its PR head and its `gh-readonly-queue` merge-group commit, then fast-forward to master.
-The service pins `SWITCHBOARD_CI_PYTHON` to the project venv and every gate log records the
-selected interpreter and version. If no Python 3.10+ runtime is available, the gate posts red
-with the checked candidate list instead of silently falling back to ambient `python3`.
-
-Review/audit preflight: the VM gate now writes a `Switchboard review git preflight` header before
-running tests. That header records project, intended branch, target SHA, upstream SHA, branch
-distance, and dirty-worktree state. A red preflight, such as target branch behind upstream or dirty
-worktree, fails before reviewer/check agents run. A yellow preflight is allowed only with an
-explicit operator override and must remain visible in the report or task comment.
+Merge-queue gating is **not** handled on the Plan VM after CI-7. If you enable GitHub's native
+merge queue, ensure `verify.yml` also posts `Switchboard CI / VM gate` to merge-group head SHAs
+(projectplanner-ci responsibility). The disabled ruleset 18821466 was dead config removed in CI-7.
 
 Verifier resume rule: review/audit workflows that spawn skeptic verifier agents should write a
 `switchboard.review_verifier_run.v1` checkpoint with one deterministic job per

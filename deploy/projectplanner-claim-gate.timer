@@ -1,0 +1,12 @@
+# /etc/systemd/system/projectplanner-claim-gate.timer
+# Poll open fleet PRs and refresh claim-gate commit statuses (SESSION-12).
+[Unit]
+Description=ProjectPlanner Switchboard claim gate (every 2 minutes)
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

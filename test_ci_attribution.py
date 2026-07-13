@@ -1,9 +1,7 @@
 """HARDEN-72 / Lever 7 — per-PR CI attribution.
 
 Script-style test (run directly: ``python test_ci_attribution.py``; exits nonzero on
-failure) matching the Switchboard suite convention. Covers the pure attribution
-builders and the switchboard_pr_gate wiring seam that posts them."""
-import importlib.util
+failure) matching the Switchboard suite convention. Covers the pure attribution builders."""
 import sys
 from pathlib import Path
 
@@ -216,67 +214,6 @@ try:
 finally:
     store._conn = orig_conn
     store.append_activity = orig_append
-
-
-# ----- gate wiring seam: switchboard_pr_gate posts the attributed link -------------
-SPEC = importlib.util.spec_from_file_location(
-    "switchboard_pr_gate", ROOT / "scripts" / "switchboard_pr_gate.py")
-gate = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(gate)
-
-fake_pr = {"number": 7, "head": {"sha": "deadbeef"},
-           "html_url": "https://github.com/o/r/pull/7",
-           "base": {"ref": "master", "sha": "base"}}
-posts = []
-
-
-def _install_gate_stubs():
-    gate.latest_status = lambda *a, **k: None
-    gate._ensure_cache_repo = lambda *a, **k: Path("/tmp")
-    gate._prepare_worktree = lambda *a, **k: Path("/tmp")
-    gate._pr_preflight = lambda *a, **k: {"status": "pass"}
-    gate._cleanup_worktree = lambda *a, **k: None
-    gate._record_gate_attribution = lambda *a, **k: None
-    gate._read_log = lambda log_path: PYTEST_LOG
-    gate.post_status = lambda repo, sha, state, *, context, description, target_url="", token: (
-        posts.append({"state": state, "description": description, "target_url": target_url}))
-
-
-# Failure path: enriched GateError -> red status links the run, not the PR.
-def _boom(*a, **k):
-    err = gate.GateError("external CI mirror not green")
-    err.run_url = "https://github.com/o/ci/actions/runs/500"
-    err.logs_url = ""
-    err.failure_class = "workflow_failed"
-    raise err
-
-
-_install_gate_stubs()
-posts.clear()
-gate._run_suite_in_worktree = _boom
-res = gate.run_gate_for_pr(fake_pr, repo="o/r", token="t", context="ctx",
-                           work_root=Path("/tmp"), source_repo=Path("/tmp"), timeout_s=5)
-red = [p for p in posts if p["state"] == "failure"]
-ok(len(red) == 1, "gate posts exactly one red status on suite failure")
-ok(red[0]["target_url"] == "https://github.com/o/ci/actions/runs/500",
-   "gate red status links the failing CI run (not the PR)")
-ok("test_merge_gate.py::test_blocks_uncovered" in red[0]["description"],
-   "gate red status names the failing test")
-ok(res["state"] == "failure" and res["target_url"].endswith("/runs/500"),
-   "gate result carries the attributed target_url")
-
-
-# Success path: external run -> green status links the run.
-_install_gate_stubs()
-posts.clear()
-gate._run_suite_in_worktree = lambda *a, **k: {
-    "ran_external": True, "run_url": "https://github.com/o/ci/actions/runs/501", "logs_url": ""}
-res2 = gate.run_gate_for_pr(fake_pr, repo="o/r", token="t", context="ctx",
-                            work_root=Path("/tmp"), source_repo=Path("/tmp"), timeout_s=5)
-green = [p for p in posts if p["state"] == "success"]
-ok(len(green) == 1, "gate posts exactly one green status on suite success")
-ok(green[0]["target_url"] == "https://github.com/o/ci/actions/runs/501",
-   "gate green status links the verifying CI run")
 
 
 print("\nAll ci_attribution tests passed.")

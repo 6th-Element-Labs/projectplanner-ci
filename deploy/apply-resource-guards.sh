@@ -6,7 +6,7 @@
 #
 # Slice hierarchy (declarative in deploy/*.slice + Slice= on each unit):
 #   projectplanner-interactive.slice — web, MCP, gateway, agent host
-#   projectplanner-batch.slice       — reconcile, narrate, ci-gate, timers
+#   projectplanner-batch.slice       — reconcile, narrate, claim-gate, timers
 #
 # Run once on a fresh box AFTER the units are installed and enabled (see
 # PROVISION.md). Idempotent — re-running re-copies slices and clears legacy
@@ -22,7 +22,7 @@ systemctl daemon-reload
 INTERACTIVE_UNITS=(projectplanner projectplanner-mcp projectplanner-gateway projectplanner-agent-host)
 BATCH_UNITS=(projectplanner-narrate projectplanner-monitors projectplanner-inbox
              projectplanner-reconcile projectplanner-summarize projectplanner-digest
-             projectplanner-ci-gate projectplanner-backup)
+             projectplanner-claim-gate projectplanner-backup)
 LEGACY_PROPS=(CPUWeight MemoryLow MemoryHigh MemoryMax MemoryMin CPUQuota IOWeight MemorySwapMax)
 
 for unit in "${INTERACTIVE_UNITS[@]}" "${BATCH_UNITS[@]}"; do

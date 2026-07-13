@@ -66,14 +66,14 @@ for unit in \
   projectplanner-reconcile.service \
   projectplanner-summarize.service \
   projectplanner-digest.service \
-  projectplanner-ci-gate.service \
+  projectplanner-claim-gate.service \
   projectplanner-backup.service; do
   check "${unit} Slice=projectplanner-batch.slice" \
     prop_eq "$unit" Slice projectplanner-batch.slice
 done
-check "projectplanner-ci-gate.service MemoryMax <= 320M" bash -c '
-  max=$(systemctl show projectplanner-ci-gate.service -p MemoryMax --value)
-  [[ "$max" =~ ^[0-9]+$ && "$max" -le 335544320 ]]
+check "projectplanner-claim-gate.service MemoryMax <= 128M" bash -c '
+  max=$(systemctl show projectplanner-claim-gate.service -p MemoryMax --value)
+  [[ "$max" =~ ^[0-9]+$ && "$max" -le 134217728 ]]
 '
 
 if (( failures > 0 )); then

@@ -88,7 +88,7 @@ We run **A across our own fleet** so the tooling, agent flow, provenance, and UI
 **Built + shipped:**
 - `repo_topology` schema — roles, authority, `required_status_contexts`; MCP tools (`set_project_repo_topology`, …); agent session-prompt guidance ("public_ci = verification evidence only").
 - **`external_ci_mirror` engine** — push/dispatch/poll/record, topology-resolved, structured failure classes + evidence + tests.
-- **Phase 1 (this):** `switchboard` topology configured (`public_ci = 6th-Element-Labs/projectplanner-ci`); the on-box PR gate (`switchboard_pr_gate.py`) now calls `external_ci_mirror` when `public_ci` is configured instead of building a venv + running the suite locally; provenance preflight + SESSION-12 claim gate unchanged; the venv path remains as the fallback for repos without a `public_ci` role. The HARDEN-32 CPU hog (per-PR venv+suite) is retired.
+- **Phase 1 (DONE) + CI-7 (DONE):** `switchboard` topology configured (`public_ci = 6th-Element-Labs/projectplanner-ci`); VM verification runs via pull-model `verify.yml` on projectplanner-ci; the Plan VM `switchboard_pr_gate.py` is **claim-gate-only** (SESSION-12); on-box git checkout, venv suite, `external_ci_mirror` push path, and ci-gate systemd units are retired.
 
 **To build (turns the capability into a one-click product):**
 1. **Provision-on-opt-in** — create/register the mirror repo, seed it, install the workflow, set branch protection, all from the topology (today it's manual).

@@ -27,7 +27,7 @@ APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp)
 # timers halted during a HARDEN-32 wedge). A brand-new unit still needs a one-time
 # `sudo systemctl enable --now <unit>` — this is a redeploy, not first-time provisioning.
 AUX_UNITS=(projectplanner-agent-host.service
-    projectplanner-monitors.timer projectplanner-reconcile.timer projectplanner-ci-gate.timer
+    projectplanner-monitors.timer projectplanner-reconcile.timer projectplanner-claim-gate.timer
     projectplanner-narrate.timer projectplanner-digest.timer projectplanner-inbox.timer
     projectplanner-summarize.timer projectplanner-backup.timer)
 

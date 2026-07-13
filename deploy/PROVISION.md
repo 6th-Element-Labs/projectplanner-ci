@@ -91,14 +91,15 @@ sudo bash deploy/apply-least-privilege.sh
 sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-mcp.service deploy/projectplanner-monitors.service \
   deploy/projectplanner-monitors.timer deploy/projectplanner-reconcile.service \
-  deploy/projectplanner-reconcile.timer deploy/projectplanner-ci-gate.service \
-  deploy/projectplanner-ci-gate.timer deploy/projectplanner-agent-host.service \
+  deploy/projectplanner-reconcile.timer deploy/projectplanner-claim-gate.service \
+  deploy/projectplanner-claim-gate.timer deploy/projectplanner-agent-host.service \
   deploy/projectplanner-interactive.slice deploy/projectplanner-batch.slice \
   /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp
 sudo systemctl enable --now projectplanner-monitors.timer
 sudo systemctl enable --now projectplanner-reconcile.timer
+sudo systemctl enable --now projectplanner-claim-gate.timer
 # Optional but recommended for Switchboard dogfood: consumes message-only wake intents.
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
 sudo systemctl enable --now projectplanner-agent-host
@@ -136,7 +137,7 @@ curl -s http://127.0.0.1:8110/health/deep      # ops readiness: task + project c
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
-systemctl list-timers projectplanner-ci-gate.timer
+systemctl list-timers projectplanner-claim-gate.timer
 systemctl list-timers projectplanner-backup.timer     # HARDEN-43: daily off-box snapshot
 systemctl is-active projectplanner-agent-host
 gh --version                                    # off-box CI mirror needs gh >= 2.6 (see step 6)
@@ -198,12 +199,12 @@ active health checks on the main upstream so hung backends fail fast instead of 
 for minutes. PERF-3 routes swap through **zram** (`deploy/setup-zram-swap.sh`) so any spill stays
 in compressed RAM instead of thrashing disk. PERF-4 splits services into
 `projectplanner-interactive.slice` (web/MCP/gateway: high CPUWeight, memory reservations, no swap)
-and `projectplanner-batch.slice` (reconcile/narrate/ci-gate: CPUQuota~40%, Nice=10, low IOWeight,
+and `projectplanner-batch.slice` (reconcile/narrate/claim-gate: CPUQuota~40%, Nice=10, low IOWeight,
 memory-capped). Install with `deploy/apply-resource-guards.sh`; verify with
 `bash scripts/verify_cgroup_slices.sh` and `bash scripts/verify_memory_isolation.sh`. If a batch
 job still wedges the box, stop the timers to recover fast:
 ```bash
-sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,summarize,ci-gate}.timer
+sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,summarize,claim-gate}.timer
 sudo pkill -9 -f jobs.py   # then restart the web app if needed
 ```
 If wedges recur, bump the instance to `t4g.small` (2 GB) and/or move the GitHub Actions runner +
@@ -247,68 +248,50 @@ journalctl -u projectplanner-narrate.service -n 40 --no-pager
 cd /opt/projectplanner && sudo -u projectplanner .venv/bin/python jobs.py narrate_pending
 ```
 
-## VM-backed GitHub PR gate
+## Pull-model VM verification (CI-6) + claim gate (CI-7)
 
-Switchboard's canonical PR gate posts a GitHub commit status named `Switchboard CI / VM gate`.
-GitHub-hosted Actions on the *private* canonical repo record `startup_failure` before creating
-jobs, and would spend the org's private minutes anyway, so **CI runs off-box on a public sandbox**
-— Route A of [`docs/CI-STRATEGY.md`](../docs/CI-STRATEGY.md). When `repo_topology.roles.public_ci`
-is configured, the gate calls `external_ci_mirror` to push the exact merge SHA to the public
-sandbox, dispatch the workflow on free GitHub-hosted runners, poll, and record an `external_ci_run`;
-it falls back to the local `switchboard_ci.sh` venv suite only when `public_ci` is unset or the
-mirror cannot dispatch. Either way the box runs no heavy test execution.
-
-Provision the off-box path once (after step 3 installed `gh`):
+**VM verification** (`Switchboard CI / VM gate`) runs on `6th-Element-Labs/projectplanner-ci`
+via the pull-model `verify.yml` workflow — not on the Plan VM. Enable webhook relay:
 
 ```bash
-# 1. Let git authenticate github.com HTTPS via gh + the CI token, so external_ci_mirror can
-#    `git push` to the public sandbox. HARDEN-55: the ci-gate service runs as the dedicated
-#    `projectplanner` account with HOME=/var/lib/projectplanner, so the credential helper must
-#    be written into THAT home. .env is now root-only, so read the token with sudo:
-GH_TOKEN=$(sudo grep -E '^(SWITCHBOARD_CI_GITHUB_TOKEN|PM_GITHUB_TOKEN)=' /opt/projectplanner/.env | head -1 | cut -d= -f2-)
-sudo -u projectplanner env HOME=/var/lib/projectplanner GH_TOKEN="$GH_TOKEN" \
-  gh auth setup-git   # sets credential.https://github.com.helper = !gh auth git-credential
-
-# 2. Declare the repo roles so the gate routes to the sandbox (MCP set_project_repo_topology or
-#    POST /api/projects/switchboard/repo_topology):
-#    canonical_repo=6th-Element-Labs/projectplanner  (the ONLY Done / code-truth authority)
-#    public_ci_repo=6th-Element-Labs/projectplanner-ci  (verification-only, public)
-#    public_ci_required_status_contexts=projectplanner-ci/full-suite
+# /opt/projectplanner/.env
+SWITCHBOARD_CI_PULL_MODEL=1
+SWITCHBOARD_CI_DISPATCH_TOKEN=<PAT with repository_dispatch on projectplanner-ci>
+sudo systemctl restart projectplanner
 ```
 
-`.github/workflows/backend-tests.yml` on the canonical repo is **dispatch-only** (no `on:push`,
-which would self-cancel under `cancel-in-progress`) and declares `source_sha`/`status_context`
-inputs — both required by `external_ci_mirror`.
+Declare repo roles (`set_project_repo_topology` or POST `/api/projects/switchboard/repo_topology`):
 
-The on-box **self-hosted Actions runner is decommissioned** — CI runs on GitHub-hosted runners in
-the sandbox, Actions are disabled on the canonical repo, so nothing dispatches to it and leaving it
-running is a redundant idle drain. Keep it off; do NOT re-enable:
+- `canonical_repo=6th-Element-Labs/projectplanner` (Done / code-truth authority)
+- `public_ci_repo=6th-Element-Labs/projectplanner-ci` (verification-only, public)
+
+The on-box **self-hosted Actions runner is decommissioned** — keep it off:
 
 ```bash
 sudo systemctl disable --now actions.runner.6th-Element-Labs-projectplanner.plan-vm-switchboard-ci.service
 ```
 
-## PR gate timer
+After pull-model holds, retire the old on-box VM gate with `sudo bash deploy/ci7-teardown-box-ci.sh`.
 
-The Plan VM keeps PR checks visible with `projectplanner-ci-gate.timer`. It runs:
+## PR claim-gate timer (CI-7)
+
+VM verification (`Switchboard CI / VM gate`) runs on projectplanner-ci via the pull-model
+`verify.yml` workflow. The Plan VM posts only the SESSION-12 claim gate:
 
 ```bash
-/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py ci_gate_prs
+/opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py claim_gate_prs
 ```
 
-The job checks out open non-draft PRs into `/var/lib/projectplanner/ci-gate`, runs the provenance
-preflight, then verifies the suite **off-box via `external_ci_mirror`** (the public sandbox) when
-`public_ci` is configured — falling back to `scripts/switchboard_ci.sh` in a local venv otherwise —
-and posts a commit status named `Switchboard CI / VM gate` to each PR head SHA. It needs a token
-with commit-status write **and push access to the public sandbox** in `PM_GITHUB_TOKEN`,
-`GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN` (the gate exports it as `GH_TOKEN` for `gh`).
+`projectplanner-claim-gate.timer` polls open non-draft PRs across every configured canonical repo
+and posts `Switchboard / claim gate` to each PR head SHA. It needs a token with commit-status
+write in `PM_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `SWITCHBOARD_CI_GITHUB_TOKEN`.
 
-The gate must create its test venv with **Python 3.12** — the pinned `requirements.txt` resolves
-3.12-only wheels, so its local-fallback suite fails `pip install` on 3.10 (HARDEN-66).
-`projectplanner-ci-gate.service` pins `SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python`
-(now a 3.12 interpreter);
-if that interpreter is missing or unsupported, the gate posts a red status with the checked
-candidate list instead of silently falling back to ambient `python3`.
+VM verification on projectplanner-ci runs `scripts/switchboard_ci.sh` inside `verify.yml` (see
+[`docs/CI-STRATEGY.md`](../docs/CI-STRATEGY.md)).
+
+After pull-model CI holds, run `sudo bash deploy/ci7-teardown-box-ci.sh` to retire the old
+on-box VM gate units and `/var/lib/projectplanner/ci-gate` state. Rollback copies live under
+`deploy/retired/` for one week.
 
 ## Rename safety
 

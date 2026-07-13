@@ -1,16 +1,9 @@
 # Full Switchboard suite. Runs for free on the PUBLIC projectplanner-ci sandbox
 # (unlimited GitHub-hosted Actions minutes). On the private canonical repo this
 # file is inert because Actions are disabled there; the canonical merge gate is
-# driven by the prod projectplanner-ci-gate systemd timer, which runs
-# scripts/switchboard_pr_gate.py. That uses external_ci_mirror to mirror the
-# exact PR merge SHA to the 6th-Element-Labs/projectplanner-ci sandbox, dispatch
-# this suite there, poll it, and post the `Switchboard CI / VM gate` commit
-# status back to the canonical PR head. That status is the single required
-# check on master branch protection (strict:false). See docs/CI-STRATEGY.md and
-# docs/EXTERNAL-CI-MIRROR-SPEC.md.
-#
-# Mirrors exactly what the on-box VM gate did: hermetic venv, install
-# requirements.txt, run scripts/switchboard_ci.sh with STRICT + REQUIRE_NODE.
+# the pull-model `verify.yml` workflow on projectplanner-ci, triggered by
+# repository_dispatch from the Plan VM webhook. It posts `Switchboard CI / VM gate`
+# to the canonical PR head. See docs/CI-STRATEGY.md.
 name: backend-tests
 
 on:

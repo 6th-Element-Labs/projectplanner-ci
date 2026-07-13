@@ -62,9 +62,9 @@ check "projectplanner-reconcile.service MemoryMax <= 512M" bash -c '
   max=$(systemctl show projectplanner-reconcile.service -p MemoryMax --value)
   [[ "$max" =~ ^[0-9]+$ && "$max" -gt 0 && "$max" -le 536870912 ]]
 '
-check "projectplanner-ci-gate.service MemoryMax <= 320M" bash -c '
-  max=$(systemctl show projectplanner-ci-gate.service -p MemoryMax --value)
-  [[ "$max" =~ ^[0-9]+$ && "$max" -gt 0 && "$max" -le 335544320 ]]
+check "projectplanner-claim-gate.service MemoryMax <= 128M" bash -c '
+  max=$(systemctl show projectplanner-claim-gate.service -p MemoryMax --value)
+  [[ "$max" =~ ^[0-9]+$ && "$max" -gt 0 && "$max" -le 134217728 ]]
 '
 
 section "memory pressure snapshot"
