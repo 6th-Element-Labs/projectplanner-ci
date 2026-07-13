@@ -31,3 +31,11 @@ class AccessRepository(Protocol):
     def update_project_metadata(self, command: Mapping[str, Any] | ProjectUpdateCommand,
                                 actor: str = "system") -> dict[str, Any]:
         """Apply editable metadata and lifecycle transitions."""
+
+    def transition_project_lifecycle(self, project_id: str, requested: str, *, actor: str,
+                                     reason: str, impact_report_hash: str = "",
+                                     validation: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+        """Atomically transition one project and persist its audit event."""
+
+    def list_project_lifecycle_events(self, project_id: str) -> list[dict[str, Any]]:
+        """Return durable registry audit events for project lifecycle transitions."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Callable, Mapping
 
-from switchboard.contracts.projects import ProjectImpactReport
+from switchboard.contracts.projects import ProjectImpactReport, build_impact_receipt
 from switchboard.storage.repositories.project_impact import (
     ProjectImpactRepository,
     default_project_impact_repository,
@@ -220,17 +220,19 @@ def execute_for(project: str, *, access_repository: AccessRepository,
         "replacement_deliverable_id",
     )}
     findings = _findings(safe_project, snapshot)
-    report = ProjectImpactReport(
-        project_id=project_id,
-        project=safe_project,
-        bounds={
+    report_payload = {
+        "project_id": project_id,
+        "project": safe_project,
+        "bounds": {
             "sample_limit": bounded_limit,
             "maximum_sample_limit": MAX_SAMPLE_LIMIT,
             "ordering": "stable_lexicographic",
             "time_basis": "persisted_state_only",
         },
-        blocking_findings=findings,
-        recommendation=_recommendation(findings),
+        "blocking_findings": findings,
+        "recommendation": _recommendation(findings),
         **snapshot,
-    )
+    }
+    report_payload["receipt"] = build_impact_receipt(report_payload)
+    report = ProjectImpactReport(**report_payload)
     return report.model_dump(by_alias=True)

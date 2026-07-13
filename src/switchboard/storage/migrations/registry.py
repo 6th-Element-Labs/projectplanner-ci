@@ -86,4 +86,26 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         _record(c, name)
         newly.append(name)
 
+    event_migration = "access20_project_lifecycle_events"
+    if event_migration not in done:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS project_lifecycle_events (
+                event_id           TEXT PRIMARY KEY,
+                project_id         TEXT NOT NULL,
+                from_status        TEXT NOT NULL,
+                to_status          TEXT NOT NULL,
+                actor              TEXT NOT NULL,
+                reason             TEXT,
+                impact_report_hash TEXT,
+                validation_json    TEXT NOT NULL DEFAULT '{}',
+                created_at         REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_project_lifecycle_events_project
+                ON project_lifecycle_events(project_id, created_at, event_id);
+            """
+        )
+        _record(c, event_migration)
+        newly.append(event_migration)
+
     return newly

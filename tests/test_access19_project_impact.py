@@ -29,6 +29,7 @@ import db.connection as db_connection  # noqa: E402
 from switchboard.application.queries import project_impact  # noqa: E402
 from switchboard.contracts import (  # noqa: E402
     PROJECT_IMPACT_REPORT_SCHEMA,
+    PROJECT_IMPACT_RECEIPT_SCHEMA,
     get_schema,
 )
 from switchboard.storage.repositories.project_impact import ReadOnlyDatabase  # noqa: E402
@@ -90,6 +91,10 @@ try:
     after_registry = logical_dump(store.PROJECT_REGISTRY_DB_PATH)
     ok(empty.get("schema") == PROJECT_IMPACT_REPORT_SCHEMA,
        "empty fixture returns versioned impact contract")
+    ok(empty.get("receipt", {}).get("schema") == PROJECT_IMPACT_RECEIPT_SCHEMA
+       and empty["receipt"].get("project_id") == "empty-audit"
+       and empty["receipt"].get("report_hash", "").startswith("sha256:"),
+       "impact report carries a content-addressed archive receipt")
     ok(empty["tasks"]["total"] == 0 and empty["recommendation"]["action"] == "archive",
        "empty fixture is an archive candidate")
     ok(before_empty_db == after_empty_db and before_registry == after_registry,
@@ -178,6 +183,8 @@ try:
        "unknown project fails closed")
     ok(get_schema(PROJECT_IMPACT_REPORT_SCHEMA) is not None,
        "impact report schema is registered")
+    ok(get_schema(PROJECT_IMPACT_RECEIPT_SCHEMA) is not None,
+       "impact receipt schema is registered")
 
     # REST and MCP share the same application query and enforce read access.
     from app import app  # noqa: E402

@@ -8,6 +8,8 @@ import json
 import os
 import re
 import time
+import uuid
+from functools import wraps
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from constants import *  # noqa: F401,F403
@@ -18,6 +20,7 @@ from switchboard.contracts.projects.v2 import ProjectRecord, ProjectUpdateComman
 from switchboard.domain.projects.lifecycle import (
     assert_lifecycle_mutation_allowed,
     default_lifecycle_status,
+    lifecycle_write_block,
     normalize_lifecycle_status,
 )
 
@@ -31,6 +34,7 @@ __all__ = [
     "principal_project_roles", "effective_principal_scopes", "project_access_model",
     "ensure_bootstrap_project_owner",
     "get_project_record", "list_registry_projects", "update_project_metadata",
+    "project_write_block",
     "AccessStoreRepository", "default_access_repository",
 ]
 
@@ -156,6 +160,107 @@ def list_registry_projects(*, include_archived: bool = True) -> List[Dict[str, A
     return records
 
 
+def project_write_block(project_id: str, operation: str = "write") -> Optional[Dict[str, Any]]:
+    """Shared registry-side guard for writes that do not touch the board database."""
+    record = get_project_record(project_id)
+    if record.get("error"):
+        return record
+    return lifecycle_write_block(
+        project_id, str(record.get("lifecycle_status") or "active"), operation)
+
+
+def _guard_project_write(operation: str):
+    """Wrap legacy registry entry points without rewriting their extracted bodies."""
+    def decorate(function):
+        @wraps(function)
+        def guarded(project_id, *args, **kwargs):
+            blocked = project_write_block(project_id, operation)
+            if blocked:
+                return blocked
+            return function(project_id, *args, **kwargs)
+        return guarded
+    return decorate
+
+
+def transition_project_lifecycle(project_id: str, requested: str, *, actor: str,
+                                 reason: str, impact_report_hash: str = "",
+                                 validation: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """Atomically persist one lifecycle transition and its registry audit event."""
+    pid = str(project_id or "").strip()
+    actor_name = str(actor or "").strip()
+    reason_text = str(reason or "").strip()
+    if not pid or not actor_name or not reason_text:
+        return {"error": "project_id, actor, and reason are required"}
+    current = get_project_record(pid)
+    if current.get("error"):
+        return current
+    requested_status = normalize_lifecycle_status(requested)
+    err = assert_lifecycle_mutation_allowed(current, requested_status)
+    if err:
+        return err
+    prior = str(current.get("lifecycle_status") or "active")
+    if prior == requested_status:
+        return {
+            "project": current,
+            "transitioned": False,
+            "idempotent": True,
+            "from_status": prior,
+            "to_status": requested_status,
+        }
+    if pid in BUILTIN_PROJECTS:
+        return {"error": "built-in project routing metadata is immutable", "project_id": pid}
+
+    now = time.time()
+    event_id = f"project-lifecycle-{uuid.uuid4().hex[:16]}"
+    validation_json = json.dumps(dict(validation or {}), sort_keys=True)
+    init_project_registry()
+    with _registry_conn() as c:
+        if requested_status == "archived":
+            c.execute(
+                "UPDATE projects SET lifecycle_status=?, archived_at=?, archived_by=?, "
+                "archive_reason=?, updated_at=?, updated_by=? WHERE id=?",
+                ("archived", now, actor_name, reason_text, now, actor_name, pid),
+            )
+        else:
+            c.execute(
+                "UPDATE projects SET lifecycle_status=?, archived_at=NULL, archived_by=NULL, "
+                "archive_reason=NULL, updated_at=?, updated_by=? WHERE id=?",
+                ("active", now, actor_name, pid),
+            )
+        c.execute(
+            "INSERT INTO project_lifecycle_events(event_id, project_id, from_status, to_status, "
+            "actor, reason, impact_report_hash, validation_json, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (event_id, pid, prior, requested_status, actor_name, reason_text,
+             impact_report_hash or None, validation_json, now),
+        )
+    bust_project_cache()
+    return {
+        "project": get_project_record(pid),
+        "transitioned": True,
+        "idempotent": False,
+        "event_id": event_id,
+        "from_status": prior,
+        "to_status": requested_status,
+        "created_at": now,
+    }
+
+
+def list_project_lifecycle_events(project_id: str) -> List[Dict[str, Any]]:
+    init_project_registry()
+    with _registry_conn() as c:
+        rows = c.execute(
+            "SELECT * FROM project_lifecycle_events WHERE project_id=? "
+            "ORDER BY created_at, event_id", (project_id,),
+        ).fetchall()
+    events = []
+    for row in rows:
+        item = dict(row)
+        item["validation"] = json.loads(item.pop("validation_json") or "{}")
+        events.append(item)
+    return events
+
+
 def update_project_metadata(command: Mapping[str, Any] | ProjectUpdateCommand,
                             actor: str = "system") -> Dict[str, Any]:
     """Apply editable metadata and optional lifecycle transitions."""
@@ -177,10 +282,16 @@ def update_project_metadata(command: Mapping[str, Any] | ProjectUpdateCommand,
     if not fields:
         return {"error": "no editable fields supplied"}
 
-    if cmd.lifecycle_status is not None:
-        err = assert_lifecycle_mutation_allowed(current, cmd.lifecycle_status)
-        if err:
-            return err
+    if cmd.lifecycle_status is not None and cmd.lifecycle_status != current.get("lifecycle_status"):
+        return {
+            "error": "lifecycle_command_required",
+            "message": "use archive_project or restore_project for lifecycle transitions",
+            "project_id": pid,
+            "requested": cmd.lifecycle_status,
+        }
+    blocked = project_write_block(pid, "update_project_metadata")
+    if blocked:
+        return blocked
 
     if pid in BUILTIN_PROJECTS:
         access_fields = {k: fields[k] for k in ("org_id", "owner_user_id", "purpose",
@@ -402,6 +513,9 @@ def set_project_access(project_id: str, org_id: str, owner_user_id: str = "",
     init_project_registry()
     if not has_project(project_id):
         return {"error": f"unknown project: {project_id}"}
+    blocked = project_write_block(project_id, "set_project_access")
+    if blocked:
+        return blocked
     if not org_id:
         return {"error": "org_id required"}
     vis = (visibility or "").strip().lower()
@@ -583,6 +697,12 @@ def ensure_bootstrap_project_owner(project_id: str, principal_id: str, login: st
             "project_access": access, "grant": grant}
 
 
+grant_project_role = _guard_project_write("grant_project_role")(grant_project_role)
+revoke_project_role = _guard_project_write("revoke_project_role")(revoke_project_role)
+ensure_bootstrap_project_owner = _guard_project_write(
+    "ensure_bootstrap_project_owner")(ensure_bootstrap_project_owner)
+
+
 class AccessStoreRepository:
     """Registry-backed :class:`~switchboard.storage.repositories.protocols.AccessRepository`.
 
@@ -611,6 +731,16 @@ class AccessStoreRepository:
     def update_project_metadata(self, command: Mapping[str, Any] | ProjectUpdateCommand,
                                 actor: str = "system") -> Dict[str, Any]:
         return update_project_metadata(command, actor=actor)
+
+    def transition_project_lifecycle(self, project_id: str, requested: str, *, actor: str,
+                                     reason: str, impact_report_hash: str = "",
+                                     validation: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        return transition_project_lifecycle(
+            project_id, requested, actor=actor, reason=reason,
+            impact_report_hash=impact_report_hash, validation=validation)
+
+    def list_project_lifecycle_events(self, project_id: str) -> List[Dict[str, Any]]:
+        return list_project_lifecycle_events(project_id)
 
 
 def default_access_repository() -> AccessStoreRepository:

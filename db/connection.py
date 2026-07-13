@@ -20,6 +20,10 @@ from db.write_queue import (
     sql_mutates,
     write_through,
 )
+from switchboard.domain.projects.lifecycle import (
+    ProjectLifecycleWriteBlocked,
+    assert_project_write_allowed,
+)
 
 __all__ = [
     "_dynamic_projects",
@@ -29,6 +33,8 @@ __all__ = [
     "_write_through",
     "_sqlite_write_queue_stats",
     "bust_project_cache",
+    "project_lifecycle_status",
+    "ProjectLifecycleWriteBlocked",
 ]
 
 
@@ -60,13 +66,26 @@ def _sqlite_mmap_bytes() -> int:
 # read-your-write, and the TTL bounds cross-process staleness (a project created by the
 # MCP process appears to the web process within the TTL).
 _PROJECT_MAP_TTL_S = float(os.environ.get("PM_PROJECT_MAP_TTL_S", "10") or 10)
-_project_map_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+_project_map_cache: Dict[str, Any] = {"at": 0.0, "data": None, "signature": None}
 _project_map_lock = threading.Lock()
 
 
 def bust_project_cache() -> None:
     """Invalidate the cached project map (call after writing the project registry)."""
     _project_map_cache["data"] = None
+    _project_map_cache["signature"] = None
+
+
+def _registry_cache_signature() -> tuple:
+    """Cheap cross-process invalidation signal, including SQLite's WAL sidecar."""
+    values = []
+    for path in (PROJECT_REGISTRY_DB_PATH, PROJECT_REGISTRY_DB_PATH + "-wal"):
+        try:
+            stat = os.stat(path)
+            values.append((path, stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            values.append((path, 0, 0))
+    return tuple(values)
 
 
 def _load_dynamic_projects() -> Dict[str, Dict[str, str]]:
@@ -79,27 +98,37 @@ def _load_dynamic_projects() -> Dict[str, Dict[str, str]]:
             "seed": r["seed_path"],
             "label": r["label"],
             "pretitle": r["pretitle"] or "",
+            "lifecycle_status": (r["lifecycle_status"] or "active").strip().lower(),
         }
         for r in rows
     }
 
 
 def _dynamic_projects() -> Dict[str, Dict[str, str]]:
+    signature = _registry_cache_signature()
     data = _project_map_cache["data"]
-    if data is not None and (time.monotonic() - _project_map_cache["at"]) < _PROJECT_MAP_TTL_S:
+    if (data is not None and _project_map_cache.get("signature") == signature and
+            (time.monotonic() - _project_map_cache["at"]) < _PROJECT_MAP_TTL_S):
         return data
     with _project_map_lock:
+        signature = _registry_cache_signature()
         data = _project_map_cache["data"]
-        if data is not None and (time.monotonic() - _project_map_cache["at"]) < _PROJECT_MAP_TTL_S:
+        if (data is not None and _project_map_cache.get("signature") == signature and
+                (time.monotonic() - _project_map_cache["at"]) < _PROJECT_MAP_TTL_S):
             return data
         data = _load_dynamic_projects()
         _project_map_cache["data"] = data
         _project_map_cache["at"] = time.monotonic()
+        _project_map_cache["signature"] = _registry_cache_signature()
         return data
 
 
 def _project_map() -> Dict[str, Dict[str, str]]:
-    return {**_dynamic_projects(), **BUILTIN_PROJECTS}
+    builtins = {
+        key: {**value, "lifecycle_status": "active"}
+        for key, value in BUILTIN_PROJECTS.items()
+    }
+    return {**_dynamic_projects(), **builtins}
 
 
 def _resolve(project: Optional[str]) -> Dict[str, str]:
@@ -109,6 +138,11 @@ def _resolve(project: Optional[str]) -> Dict[str, str]:
     if not p:
         raise ValueError(f"unknown project: {project!r}")
     return p
+
+
+def project_lifecycle_status(project: str) -> str:
+    """Current lifecycle state used by the central read/write connection boundary."""
+    return str(_resolve(project).get("lifecycle_status") or "active").strip().lower()
 
 
 # journal_mode=WAL is PERSISTENT — it lives in the database header, so once a db is WAL
@@ -182,6 +216,126 @@ class _SerializedWriteProxy:
         return self._conn.__exit__(exc_type, exc, tb)
 
 
+class _LifecycleGuardedCursor:
+    """Keep cursor-based and chained execution inside the lifecycle boundary."""
+
+    def __init__(self, connection, cursor):
+        self._connection = connection
+        self._cursor = cursor
+
+    @property
+    def connection(self):
+        return self._connection
+
+    def execute(self, sql, parameters=()):
+        self._connection._guard_sql(sql)
+        self._cursor.execute(sql, parameters)
+        return self
+
+    def executemany(self, sql, seq_of_parameters):
+        self._connection._guard_sql(sql)
+        self._cursor.executemany(sql, seq_of_parameters)
+        return self
+
+    def executescript(self, sql_script):
+        self._connection._guard_script(sql_script)
+        self._cursor.executescript(sql_script)
+        return self
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def __next__(self):
+        return next(self._cursor)
+
+    def __getattr__(self, name: str):
+        return getattr(self._cursor, name)
+
+
+class _LifecycleGuardedConnection:
+    """Allow reads on archived boards while rejecting every mutating SQL path."""
+
+    def __init__(self, project: str, conn):
+        self._project = project
+        self._conn = conn
+
+    def _guard(self, operation: str) -> None:
+        # Re-read through the cross-process-coherent project map at execution time.
+        # A connection opened while active must not stay writable after another
+        # process archives the project.
+        assert_project_write_allowed(
+            self._project, project_lifecycle_status(self._project), operation)
+
+    @staticmethod
+    def _mutates(sql: str) -> bool:
+        statement = re.sub(
+            r"\A(?:\s|--[^\n]*(?:\n|\Z)|/\*.*?\*/)*", "", str(sql or ""),
+            flags=re.DOTALL,
+        )
+        if sql_mutates(statement):
+            return True
+        upper = statement.upper()
+        if upper.startswith("WITH"):
+            return bool(re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE)\b", upper))
+        if upper.startswith("ANALYZE"):
+            return True
+        if upper.startswith("PRAGMA"):
+            # Fail closed: bare pragmas such as optimize, wal_checkpoint, and
+            # incremental_vacuum mutate state too. Only known query pragmas remain
+            # available to historical diagnostics.
+            if "=" in statement:
+                return True
+            match = re.match(r"^PRAGMA\s+(?:[\w\"]+\.)?([\w]+)", upper)
+            pragma_name = match.group(1) if match else ""
+            read_only = {
+                "APPLICATION_ID", "COLLATION_LIST", "COMPILE_OPTIONS", "DATABASE_LIST",
+                "DATA_VERSION", "ENCODING", "FOREIGN_KEYS", "FOREIGN_KEY_CHECK",
+                "TABLE_INFO", "TABLE_XINFO", "INDEX_INFO", "INDEX_XINFO", "INDEX_LIST",
+                "FOREIGN_KEY_LIST", "INTEGRITY_CHECK", "JOURNAL_MODE", "PAGE_COUNT",
+                "FREELIST_COUNT", "PRAGMA_LIST", "QUICK_CHECK", "SCHEMA_VERSION",
+                "TABLE_LIST", "THREADSAFE", "USER_VERSION",
+            }
+            return pragma_name not in read_only
+        return False
+
+    def _guard_sql(self, sql) -> None:
+        if self._mutates(sql):
+            operation = str(sql or "").lstrip().split(None, 1)[0].lower() or "write"
+            self._guard(operation)
+
+    def _guard_script(self, sql_script) -> None:
+        statements = [part.strip() for part in str(sql_script or "").split(";") if part.strip()]
+        if any(self._mutates(statement) for statement in statements):
+            self._guard("executescript")
+
+    def _wrap_cursor(self, cursor):
+        return _LifecycleGuardedCursor(self, cursor)
+
+    def execute(self, sql, parameters=()):
+        self._guard_sql(sql)
+        return self._wrap_cursor(self._conn.execute(sql, parameters))
+
+    def executemany(self, sql, seq_of_parameters):
+        self._guard_sql(sql)
+        return self._wrap_cursor(self._conn.executemany(sql, seq_of_parameters))
+
+    def executescript(self, sql_script):
+        self._guard_script(sql_script)
+        return self._wrap_cursor(self._conn.executescript(sql_script))
+
+    def cursor(self, *args, **kwargs):
+        return self._wrap_cursor(self._conn.cursor(*args, **kwargs))
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return self._conn.__exit__(exc_type, exc, tb)
+
+
 _conn_pool = threading.local()
 
 
@@ -214,7 +368,8 @@ def _close_pooled_conns() -> None:
 @contextmanager
 def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
     timeout = _sqlite_timeout_s("PM_SQLITE_TIMEOUT_S", 5.0) if timeout_s is None else timeout_s
-    db_path = _resolve(project)["db"]
+    project_config = _resolve(project)
+    db_path = project_config["db"]
     # Reuse a per-thread connection to skip the ~1.2ms lazy DB-open (WAL attach + shared lock)
     # every fresh connection pays. A re-entrant _conn on the same thread+db falls back to a
     # fresh, uncached connection so nested `with c:` transactions never collide on one
@@ -239,9 +394,10 @@ def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
     try:
         with c:
             if single_writer_enabled() and not in_write_worker():
-                yield _SerializedWriteProxy(db_path, timeout, c)
+                exposed = _SerializedWriteProxy(db_path, timeout, c)
             else:
-                yield c
+                exposed = c
+            yield _LifecycleGuardedConnection(project, exposed)
     except sqlite3.OperationalError:
         # A locked/broken connection must not stay cached — drop it so the next use reopens.
         if reuse:
@@ -263,7 +419,10 @@ def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
 
 def _write_through(project: str, thunk, timeout_s: Optional[float] = None):
     """Serialize a multi-statement write transaction on the project's writer thread."""
-    return write_through(_resolve(project)["db"], thunk, timeout_s=timeout_s)
+    config = _resolve(project)
+    assert_project_write_allowed(
+        project, str(config.get("lifecycle_status") or "active"), "write_through")
+    return write_through(config["db"], thunk, timeout_s=timeout_s)
 
 
 def _sqlite_write_queue_stats() -> Dict[str, Any]:

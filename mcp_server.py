@@ -205,7 +205,12 @@ globals().update(_board_tool_functions)
 
 _project_tool_functions = project_tools.register_project_tools(
     mcp,
-    project_tools.ProjectToolServices(dumps=_dumps, require_read=_require_read),
+    project_tools.ProjectToolServices(
+        dumps=_dumps,
+        require_read=_require_read,
+        require_write=_require_write,
+        principal_actor=auth.actor,
+    ),
 )
 globals().update(_project_tool_functions)
 

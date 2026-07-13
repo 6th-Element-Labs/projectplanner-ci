@@ -296,11 +296,16 @@ def _activity_cursor(project: str = DEFAULT_PROJECT) -> int:
 
 
 def init_db(project: str = DEFAULT_PROJECT):
+    if project_lifecycle_status(project) == "archived":
+        return False
     with _conn(project) as c:
         apply_schema(c)
+    return True
 
 
 def seed_if_empty(project: str = DEFAULT_PROJECT):
+    if project_lifecycle_status(project) == "archived":
+        return False
     with _conn(project) as c:
         return seed_from_plan(c, _resolve(project)["seed"])
 
@@ -11278,6 +11283,10 @@ def _audit_registry_scope(project: str) -> Dict[str, Any]:
             "ORDER BY created_at, subject_kind, subject_id, role",
             (project,),
         ).fetchall()
+        lifecycle_events = c.execute(
+            "SELECT * FROM project_lifecycle_events WHERE project_id=? "
+            "ORDER BY created_at, event_id", (project,),
+        ).fetchall()
         orgs = []
         users = []
         memberships = []
@@ -11295,9 +11304,15 @@ def _audit_registry_scope(project: str) -> Dict[str, Any]:
                     f"SELECT * FROM users WHERE id IN ({placeholders}) ORDER BY id",
                     user_ids,
                 ).fetchall()
+    lifecycle_event_records = []
+    for row in lifecycle_events:
+        item = dict(row)
+        item["validation"] = _json_payload(item.pop("validation_json", ""))
+        lifecycle_event_records.append(item)
     return _audit_redact({
         "project_access": dict(project_access) if project_access else None,
         "project_role_grants": [dict(r) for r in role_grants],
+        "project_lifecycle_events": lifecycle_event_records,
         "orgs": [dict(r) for r in orgs],
         "users": [dict(r) for r in users],
         "org_memberships": [dict(r) for r in memberships],

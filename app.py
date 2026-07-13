@@ -66,9 +66,16 @@ from switchboard.api.routers.auth import service as _auth_service, session as _a
 from switchboard.api.routers.auth.routes import router as _global_auth_router  # noqa: E402
 from switchboard.api.routers.projects import create_router as _create_project_router  # noqa: E402
 from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
+from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
 _auth_store.init()
 app.include_router(_global_auth_router)
+
+
+@app.exception_handler(ProjectLifecycleWriteBlocked)
+async def _project_lifecycle_write_blocked(_request: Request,
+                                           exc: ProjectLifecycleWriteBlocked):
+    return JSONResponse(status_code=423, content={"detail": exc.detail})
 
 store.init_project_registry()
 store.init_db()

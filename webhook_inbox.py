@@ -75,6 +75,11 @@ def _ensure(project: str) -> None:
     """Idempotent, amortized-once-per-process schema guard for the inbox table."""
     if project in _ENSURED:
         return
+    if store.project_lifecycle_status(project) == "archived":
+        # Archive happens only after a complete impact snapshot, so the board schema
+        # already exists. Historical inbox reads must not attempt DDL on a locked board.
+        _ENSURED.add(project)
+        return
     with store._conn(project) as c:
         c.executescript(_DDL)
     _ENSURED.add(project)

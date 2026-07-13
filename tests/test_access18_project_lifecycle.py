@@ -142,11 +142,18 @@ try:
        "access metadata round-trips through repository")
 
     # --- archive hides from discovery but remains routable ---------------------
-    archived = store.update_project_metadata({
+    direct_archive = store.update_project_metadata({
         "project_id": "atlas-qa",
         "lifecycle_status": "archived",
         "archive_reason": "qa archive",
     }, actor="tester")
+    ok(direct_archive.get("error") == "lifecycle_command_required",
+       "direct metadata writes cannot bypass receipt-gated lifecycle commands")
+    archived_transition = store.access_repository.transition_project_lifecycle(
+        "atlas-qa", "archived", actor="tester", reason="qa archive",
+        impact_report_hash="sha256:access18-contract",
+        validation={"source": "ACCESS-18 storage contract"})
+    archived = archived_transition.get("project") or {}
     ok(archived.get("lifecycle_status") == "archived" and archived.get("archive_reason") == "qa archive",
        "archive metadata round-trips")
     ok("atlas-qa" not in {p["id"] for p in store.projects()},
@@ -162,10 +169,8 @@ try:
     builtin = store.get_project_record("switchboard")
     ok(builtin.get("is_protected") is True and builtin.get("is_system") is True,
        "built-in projects surface as protected/system records")
-    protected_archive = store.update_project_metadata({
-        "project_id": "switchboard",
-        "lifecycle_status": "archived",
-    }, actor="tester")
+    protected_archive = store.access_repository.transition_project_lifecycle(
+        "switchboard", "archived", actor="tester", reason="fixture")
     ok(protected_archive.get("error") and "protected" in protected_archive["error"],
        "protected built-in archive attempt fails closed")
 

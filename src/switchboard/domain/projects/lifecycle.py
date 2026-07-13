@@ -4,6 +4,45 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 PROJECT_LIFECYCLE_STATUSES = frozenset({"active", "archived"})
+PROJECT_LIFECYCLE_WRITE_BLOCK_SCHEMA = "switchboard.project_lifecycle_write_block.v1"
+
+
+class ProjectLifecycleWriteBlocked(PermissionError):
+    """Raised by the central store boundary when an archived project is mutated."""
+
+    def __init__(self, project_id: str, operation: str = "write") -> None:
+        self.project_id = str(project_id or "").strip()
+        self.operation = str(operation or "write").strip() or "write"
+        self.detail = lifecycle_write_block(self.project_id, "archived", self.operation)
+        super().__init__(self.detail["message"])
+
+
+def lifecycle_write_block(project_id: str, lifecycle_status: str,
+                          operation: str = "write") -> dict[str, Any] | None:
+    """Return the stable denial contract for an archived project, else ``None``."""
+    status = normalize_lifecycle_status(lifecycle_status)
+    if status != "archived":
+        return None
+    pid = str(project_id or "").strip()
+    op = str(operation or "write").strip() or "write"
+    return {
+        "schema": PROJECT_LIFECYCLE_WRITE_BLOCK_SCHEMA,
+        "error": "project_archived",
+        "failure_class": "failed_gate",
+        "project_id": pid,
+        "lifecycle_status": "archived",
+        "operation": op,
+        "message": (
+            f"project '{pid}' is archived; '{op}' is read-only until restore_project succeeds"
+        ),
+    }
+
+
+def assert_project_write_allowed(project_id: str, lifecycle_status: str,
+                                 operation: str = "write") -> None:
+    """Raise the typed denial used by REST, MCP, schedulers, and store entry points."""
+    if lifecycle_write_block(project_id, lifecycle_status, operation):
+        raise ProjectLifecycleWriteBlocked(project_id, operation)
 
 
 def default_lifecycle_status() -> str:
