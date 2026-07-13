@@ -3,6 +3,11 @@
 COORD-3: every tick persists an explainable coordinator decision
 (``switchboard.coordinator_decision.v1``) so operators can see why an action was
 chosen or skipped without reading chat transcripts.
+
+COORD-6: when the tick requires a human exception, deliver a structured
+operator notification (task + failed condition + choices + minimum decision)
+via ``coordinator_escalation`` — normal claim/wake/monitor progress stays
+agent-to-agent.
 """
 from __future__ import annotations
 
@@ -230,6 +235,7 @@ def _record_tick_decision(
                 "escalations": result.get("escalations") or [],
                 "monitors": result.get("monitors") or [],
                 "dispatch": result.get("dispatch"),
+                "human_notifications": result.get("human_notifications") or [],
                 "retry_after_seconds": result.get("retry_after_seconds"),
             },
             project=mission_project,
@@ -304,6 +310,7 @@ def run_coordinator_tick(
         "dispatch": None,
         "retry_after_seconds": plan.get("retry_after_seconds", 120),
         "decision": None,
+        "human_notifications": [],
     }
 
     status = plan.get("status")
@@ -372,6 +379,50 @@ def run_coordinator_tick(
             result["status"] = "dispatch_ready"
             result["dispatch"] = dispatch
             result["retry_after_seconds"] = 60
+
+    # COORD-6: deliver exception-only human notifications (never for agent-lane progress).
+    try:
+        import coordinator_escalation
+        coord_actor = (coordinator_agent_id or actor or "switchboard/coordinator").strip()
+        if result.get("status") == "human_required":
+            result["human_notifications"] = coordinator_escalation.deliver_mission_escalations(
+                result.get("escalations") or [],
+                store_mod=store_mod,
+                project=mission_project,
+                deliverable_id=deliverable_id,
+                actor=coord_actor,
+                now=now,
+            )
+        elif result.get("status") == "dispatch_blocked":
+            blocked_plan = coordinator_escalation.classify_dispatch_blocked(
+                result.get("dispatch") or {},
+                project=mission_project,
+                deliverable_id=deliverable_id,
+                task_id=str((plan.get("dispatch") or {}).get("task_id") or ""),
+            )
+            if blocked_plan:
+                result["human_notifications"] = [
+                    coordinator_escalation.deliver_human_escalation(
+                        blocked_plan,
+                        store_mod=store_mod,
+                        actor=coord_actor,
+                        now=now,
+                    )
+                ]
+                result["escalations"] = [{
+                    "action": "dispatch_blocked",
+                    "task_id": blocked_plan.get("task_id"),
+                    "reason": blocked_plan.get("failed_condition"),
+                    "escalation_class": blocked_plan.get("escalation_class"),
+                    "attention": True,
+                }]
+    except Exception as exc:  # noqa: BLE001 — escalation delivery must not fail the tick
+        result["human_notifications"] = [{
+            "ok": False,
+            "delivered": False,
+            "error": "escalation_delivery_failed",
+            "message": str(exc),
+        }]
 
     decision = _record_tick_decision(
         store_mod,
