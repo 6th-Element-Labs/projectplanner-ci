@@ -37,6 +37,7 @@ from switchboard.mcp.tools import board as board_tools
 from switchboard.mcp.tools import decisions as decision_tools
 from switchboard.mcp.tools import projects as project_tools
 from switchboard.mcp.tools import tasks as task_tools
+from switchboard.mcp.tools import claims as claim_tools  # noqa: E402
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -193,6 +194,17 @@ _task_tool_functions = task_tools.register_task_tools(
     ),
 )
 globals().update(_task_tool_functions)
+
+_claim_tool_functions = claim_tools.register_claim_tools(
+    mcp,
+    claim_tools.ClaimToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+        resolve_write_actor=_resolve_write_actor,
+        write_binding_comment=_write_binding_comment,
+    ),
+)
+globals().update(_claim_tool_functions)
 
 # Compatibility aliases for direct Python callers while the monolith is strangled.
 _dep_ids = task_tools.dep_ids
@@ -1623,106 +1635,6 @@ def list_active_resource_leases(project: str = "maxwell") -> str:
     """All active generic IXP resource leases."""
     return _dumps(store.list_active_resource_leases(project=project))
 
-
-@mcp.tool()
-def claim_next(agent_id: str, ctx: Context, lanes: str = "", capabilities: str = "",
-               max_risk: str = "", max_budget_usd: float = 0.0,
-               ttl_seconds: int = 1800, idem_key: str = "",
-               override_identity_risk: bool = False,
-               work_session_id: str = "", work_session_json: str = "",
-               session_policy_profile: str = "",
-               require_work_session: bool = False,
-               project: str = "maxwell", deliverable_id: str = "",
-               board_id: str = "", mission_id: str = "",
-               milestone_id: str = "") -> str:
-    """Atomically claim the next unblocked task for this agent. This is the first +TXP
-    scheduler primitive: dependency-aware, idempotent, constraint-scored, and returns
-    dispatch_reason plus budget/model guidance.
-
-    When deliverable_id or board_id/mission_id is set, only tasks linked to that mission
-    deliverable are eligible. milestone_id optionally narrows to one milestone."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    lane_list = [x.strip().upper() for x in lanes.replace("\n", ",").split(",") if x.strip()]
-    cap_list = [x.strip() for x in capabilities.replace("\n", ",").split(",") if x.strip()]
-    work_session = {}
-    if work_session_json.strip():
-        try:
-            work_session = json.loads(work_session_json)
-        except json.JSONDecodeError:
-            return _dumps({"error": "work_session_json must be valid JSON"})
-    return _dumps(store.claim_next(
-        agent_id=agent_id, lanes=lane_list, capabilities=cap_list,
-        max_risk=max_risk, max_budget_usd=max_budget_usd or None,
-        principal_id=principal["id"], actor=auth.actor(principal),
-        ttl_seconds=ttl_seconds, idem_key=idem_key,
-        override_identity_risk=override_identity_risk,
-        work_session_id=work_session_id, work_session=work_session,
-        session_policy_profile=session_policy_profile,
-        require_work_session=require_work_session,
-        project=project, deliverable_id=deliverable_id,
-        board_id=board_id, mission_id=mission_id, milestone_id=milestone_id))
-
-
-@mcp.tool()
-def claim_task(task_id: str, agent_id: str, ctx: Context,
-               ttl_seconds: int = 1800, idem_key: str = "",
-               override_identity_risk: bool = False,
-               work_session_id: str = "", work_session_json: str = "",
-               session_policy_profile: str = "",
-               require_work_session: bool = False,
-               project: str = "maxwell") -> str:
-    """Atomically claim one exact ready, unblocked task.
-
-    Use this when a human/operator has selected a specific task. Unlike claim_next,
-    this never substitutes a different scheduler-preferred task.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    work_session = {}
-    if work_session_json.strip():
-        try:
-            work_session = json.loads(work_session_json)
-        except json.JSONDecodeError:
-            return _dumps({"error": "work_session_json must be valid JSON"})
-    return _dumps(store.claim_task(
-        task_id=task_id, agent_id=agent_id,
-        principal_id=principal["id"], actor=auth.actor(principal),
-        ttl_seconds=ttl_seconds, idem_key=idem_key,
-        override_identity_risk=override_identity_risk,
-        work_session_id=work_session_id, work_session=work_session,
-        session_policy_profile=session_policy_profile,
-        require_work_session=require_work_session,
-        project=project))
-
-
-@mcp.tool()
-def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status: str = "",
-                   project: str = "maxwell", agent_id: str = "",
-                   system_actor: str = "", system_reason: str = "",
-                   mission_project: str = "") -> str:
-    """Mark a task claim completed, release its task lease, and record completion evidence.
-
-    This moves the task to In Review. Done is reserved for GitHub/default-branch merge
-    provenance; if final_status='Done' is passed, Switchboard records the request but keeps
-    the task In Review until merged_sha/default-branch SHA is stamped. evidence should be
-    a JSON object string with branch, head_sha, pr_url/pr_number, or a verification note.
-    Optional deliverable_id, milestone_id, and mission_project in evidence refresh mission
-    progress without counting agent completion as Done."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    target = store.claim_binding_target(claim_id, project=project)
-    binding = _resolve_write_actor(
-        principal,
-        project=project,
-        task_id=target.get("task_id") or "",
-        agent_id=agent_id or target.get("agent_id") or "",
-        system_actor=system_actor,
-        system_reason=system_reason,
-    )
-    if not binding.get("ok"):
-        return _dumps(binding)
-    _write_binding_comment(target.get("task_id") or "", binding, project)
-    return _dumps(store.complete_claim(claim_id, evidence=evidence, final_status=final_status,
-                                      actor=binding["actor"], project=project,
-                                      mission_project=mission_project))
 
 
 @mcp.tool()

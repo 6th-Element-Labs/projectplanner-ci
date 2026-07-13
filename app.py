@@ -66,6 +66,7 @@ from switchboard.api.routers.auth.routes import router as _global_auth_router  #
 from switchboard.api.routers.plan_chat import create_router as _create_plan_chat_router  # noqa: E402
 from switchboard.api.routers.projects import create_router as _create_project_router  # noqa: E402
 from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
+from switchboard.api.routers.claims import create_router as _create_claims_router  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
 _auth_store.init()
@@ -157,6 +158,10 @@ def _principal(request: Request, project: str, scopes=("write:ixp",), dev_actor:
         raise HTTPException(status, str(e))
 
 
+def _body_project(body: dict) -> str:
+    return _proj((body or {}).get("project") or store.DEFAULT_PROJECT)
+
+
 def _control_plane_http(result):
     if isinstance(result, dict) and result.get("error") == "control_plane_unavailable":
         raise HTTPException(503, result)
@@ -169,6 +174,11 @@ def _control_plane_http(result):
 app.include_router(_create_task_router(
     resolve_project=_proj,
     resolve_principal=_principal,
+))
+app.include_router(_create_claims_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
 ))
 app.include_router(_create_project_router(
     resolve_project=_proj,
@@ -1829,10 +1839,6 @@ async def ocr_pdf(file: UploadFile = File(...)):
 
 # ---- Switchboard runtime protocol (IXP core + first TXP/OXP slices) ---------
 
-def _body_project(body: dict) -> str:
-    return _proj((body or {}).get("project") or store.DEFAULT_PROJECT)
-
-
 @app.post("/ixp/v1/register_agent")
 async def ixp_register_agent(request: Request, body: dict = Body(...)):
     project = _body_project(body)
@@ -2748,51 +2754,6 @@ async def ixp_submit_bug(request: Request, body: dict = Body(...)):
     return result
 
 
-@app.post("/txp/v1/claim_next")
-async def txp_claim_next(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor=body.get("agent_id") or "agent")
-    lanes = store.coerce_csv_list(body.get("lanes"))
-    if not lanes:
-        lanes = store.coerce_csv_list(body.get("lane"))
-    return store.claim_next(
-        agent_id=body.get("agent_id") or auth.actor(principal),
-        lanes=lanes,
-        capabilities=store.coerce_csv_list(body.get("capabilities")),
-        max_risk=body.get("max_risk") or "",
-        max_budget_usd=body.get("max_budget_usd"),
-        principal_id=principal["id"], actor=auth.actor(principal),
-        ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
-        idem_key=body.get("idem_key") or "",
-        override_identity_risk=bool(body.get("override_identity_risk")),
-        work_session_id=body.get("work_session_id") or "",
-        work_session=body.get("work_session") or {},
-        session_policy_profile=body.get("session_policy_profile") or body.get("policy_profile") or "",
-        require_work_session=bool(body.get("require_work_session")),
-        project=project,
-        deliverable_id=body.get("deliverable_id") or "",
-        board_id=body.get("board_id") or "",
-        mission_id=body.get("mission_id") or "",
-        milestone_id=body.get("milestone_id") or "")
-
-
-@app.post("/txp/v1/claim_task")
-async def txp_claim_task(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor=body.get("agent_id") or "agent")
-    return store.claim_task(
-        task_id=body.get("task_id") or body.get("task") or "",
-        agent_id=body.get("agent_id") or auth.actor(principal),
-        principal_id=principal["id"], actor=auth.actor(principal),
-        ttl_seconds=int(body.get("ttl_s") or body.get("ttl_seconds") or 1800),
-        idem_key=body.get("idem_key") or "",
-        override_identity_risk=bool(body.get("override_identity_risk")),
-        work_session_id=body.get("work_session_id") or "",
-        work_session=body.get("work_session") or {},
-        session_policy_profile=body.get("session_policy_profile") or body.get("policy_profile") or "",
-        require_work_session=bool(body.get("require_work_session")),
-        project=project)
-
 
 @app.post("/txp/v1/request_wake")
 async def txp_request_wake(request: Request, body: dict = Body(...)):
@@ -2852,15 +2813,6 @@ async def txp_cancel_wake(request: Request, body: dict = Body(...)):
         reason=body.get("reason") or "cancelled",
         actor=auth.actor(principal), project=project))
 
-
-@app.post("/txp/v1/complete_claim")
-async def txp_complete_claim(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    return store.complete_claim(body.get("claim_id") or "", evidence=body.get("evidence") or {},
-                                final_status=body.get("final_status") or "",
-                                actor=auth.actor(principal), project=project,
-                                mission_project=body.get("mission_project") or "")
 
 
 @app.post("/txp/v1/abandon_claim")

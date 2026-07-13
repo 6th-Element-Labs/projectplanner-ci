@@ -1,5 +1,5 @@
 """Versioned Pydantic contracts shared by REST, MCP, and events (ARCH-MS-25)."""
-from . import projects, registry, tasks
+from . import claims, projects, registry, tasks
 from .base import (
     SCHEMA_ID_PREFIX,
     VersionedModel,
@@ -50,6 +50,14 @@ from .tasks import (
     MoveTaskCommand,
     UpdateTaskCommand,
 )
+from .claims import (
+    CLAIM_NEXT_COMMAND_SCHEMA,
+    CLAIM_TASK_COMMAND_SCHEMA,
+    COMPLETE_CLAIM_COMMAND_SCHEMA,
+    ClaimNextCommand,
+    ClaimTaskCommand,
+    CompleteClaimCommand,
+)
 
 __all__ = [
     "ARCHIVE_PROJECT_COMMAND_SCHEMA",
@@ -58,6 +66,9 @@ __all__ = [
     "PROJECT_CONSOLIDATION_PLAN_RECEIPT_SCHEMA",
     "PROJECT_CONSOLIDATION_PLAN_SCHEMA",
     "PROJECT_CONSOLIDATION_ROLLBACK_COMMAND_SCHEMA",
+    "CLAIM_NEXT_COMMAND_SCHEMA",
+    "CLAIM_TASK_COMMAND_SCHEMA",
+    "COMPLETE_CLAIM_COMMAND_SCHEMA",
     "CREATE_TASK_COMMAND_SCHEMA",
     "GET_TASK_QUERY_SCHEMA",
     "MOVE_TASK_COMMAND_SCHEMA",
@@ -76,6 +87,9 @@ __all__ = [
     "ApplyProjectConsolidationCommand",
     "ConsolidationApproval",
     "PlanProjectConsolidationCommand",
+    "ClaimNextCommand",
+    "ClaimTaskCommand",
+    "CompleteClaimCommand",
     "CreateTaskCommand",
     "GetTaskQuery",
     "MoveTaskCommand",
@@ -96,6 +110,7 @@ __all__ = [
     "get_schema",
     "list_schemas",
     "normalize_dependency_ids",
+    "claims",
     "projects",
     "register",
     "registry",
