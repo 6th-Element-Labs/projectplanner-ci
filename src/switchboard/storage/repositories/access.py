@@ -1,22 +1,32 @@
-"""Project registry, organization, and role-grant persistence repository.
+"""Access, project registry, and principal persistence repository (ARCH-MS-30).
 
-Extracted verbatim from ``store.py`` for the ARCH-MS-24 Phase 0 exit proof.
-The monolith continues to re-export this public facade, so callers keep the
-same API while project/access persistence has an explicit ownership boundary.
+Org/role/project-access helpers were extracted in ARCH-MS-24. This module now
+also owns principal/session/password SQL plus ``resolve_write_actor`` and
+identity-risk helpers previously planned for ``auth_store.py``. ``store.py``
+re-exports the public facade; root ``auth_store.py`` remains a compatibility shim.
 """
 import json
 import os
 import re
+import sqlite3
 import time
 import uuid
 from functools import wraps
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from constants import *  # noqa: F401,F403
-from db.connection import _project_map, bust_project_cache
-from db.core import _registry_conn, coerce_csv_list
+from db.connection import _conn, _project_map, bust_project_cache
+from db.core import _json_payload, _registry_conn, coerce_csv_list, hash_token
 from db.schema import init_project_registry
 from switchboard.contracts.projects.v2 import ProjectRecord, ProjectUpdateCommand
+from switchboard.domain.access.identity import (
+    binding_for_principal,
+    binding_for_registered_agent,
+    binding_for_system_actor,
+    is_unbound_system_actor,
+    shared_token_binding_error,
+    validate_system_actor_fields,
+)
 from switchboard.domain.projects.lifecycle import (
     assert_lifecycle_mutation_allowed,
     default_lifecycle_status,
@@ -35,6 +45,15 @@ __all__ = [
     "ensure_bootstrap_project_owner",
     "get_project_record", "list_registry_projects", "update_project_metadata",
     "project_write_block",
+    "create_principal", "public_principal_record", "list_principals",
+    "get_principal_by_id", "get_principal_by_token", "get_principal_by_token_any_project",
+    "password_login_count", "set_principal_password", "get_password_login",
+    "create_password_principal", "create_auth_session", "get_principal_by_session",
+    "get_principal_by_session_any_project", "revoke_auth_session",
+    "revoke_principal_sessions", "revoke_principal", "revoke_principal_token",
+    "resolve_write_actor", "IDENTITY_RISK_WINDOW_S",
+    "_principal_from_row", "_identity_risk_window_s", "_task_identity_state_in",
+    "_identity_takeover_risk_in",
     "AccessStoreRepository", "default_access_repository",
 ]
 
@@ -662,6 +681,469 @@ revoke_project_role = _guard_project_write("revoke_project_role")(revoke_project
 ensure_bootstrap_project_owner = _guard_project_write(
     "ensure_bootstrap_project_owner")(ensure_bootstrap_project_owner)
 
+
+# --- Principal / session / identity (ARCH-MS-30 auth_store move) ---
+
+def _store_facade():
+    """Resolve transitional store helpers after store.py is initialized."""
+    import store
+
+    return store
+
+
+def create_principal(kind: str, display_name: str, token: str, scopes: List[str],
+                     principal_id: Optional[str] = None,
+                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    kind = validate_principal_kind(kind)
+    if not kind:
+        return {"error": "kind must be one of: " + ", ".join(sorted(VALID_PRINCIPAL_KINDS))}
+    scopes, unknown = validate_principal_scopes(scopes)
+    if unknown:
+        return {"error": "unknown scope(s): " + ", ".join(unknown)}
+    if not token:
+        return {"error": "token required"}
+    binding = (project or DEFAULT_PROJECT).strip()
+    registry = principal_registry_project(binding)
+    principal_id = principal_id or f"{kind}-{uuid.uuid4().hex[:12]}"
+    display_name = (display_name or principal_id).strip()
+    now = time.time()
+    scopes_json = json.dumps(scopes, sort_keys=True)
+    with _conn(registry) as c:
+        c.execute(
+            "INSERT INTO principals(id, kind, display_name, project, scopes, token_hash, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (principal_id, kind, display_name, binding, scopes_json, hash_token(token), now),
+        )
+    return {"id": principal_id, "kind": kind, "display_name": display_name,
+            "project": binding, "scopes": scopes, "created_at": now}
+
+
+def _principal_from_row(row: sqlite3.Row) -> Dict[str, Any]:
+    out = dict(row)
+    out["scopes"] = json.loads(out.get("scopes") or "[]")
+    return out
+
+
+def public_principal_record(principal: Dict[str, Any], project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    out = {
+        "id": principal.get("id"),
+        "kind": principal.get("kind"),
+        "display_name": principal.get("display_name"),
+        "project": principal.get("project"),
+        "scopes": list(principal.get("scopes") or []),
+        "created_at": principal.get("created_at"),
+        "revoked_at": principal.get("revoked_at"),
+    }
+    pid = principal.get("id") or ""
+    if pid:
+        out["effective_scopes"] = effective_principal_scopes(
+            project, pid, list(principal.get("scopes") or []))
+        out["project_roles"] = principal_project_roles(project, pid)
+    else:
+        out["effective_scopes"] = list(principal.get("scopes") or [])
+        out["project_roles"] = []
+    return out
+
+
+def list_principals(project: str = DEFAULT_PROJECT, include_revoked: bool = False,
+                    kind: str = "") -> List[Dict[str, Any]]:
+    filters = []
+    args: List[Any] = []
+    if not include_revoked:
+        filters.append("revoked_at IS NULL")
+    normalized_kind = validate_principal_kind(kind) if kind else ""
+    if kind and not normalized_kind:
+        return []
+    if normalized_kind:
+        filters.append("kind=?")
+        args.append(normalized_kind)
+    q = "SELECT * FROM principals"
+    if filters:
+        q += " WHERE " + " AND ".join(filters)
+    q += " ORDER BY created_at DESC, id"
+    with _conn(project) as c:
+        rows = c.execute(q, args).fetchall()
+    return [public_principal_record(_principal_from_row(row), project=project) for row in rows]
+
+
+def get_principal_by_id(principal_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    if not principal_id:
+        return None
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM principals WHERE id=?", (principal_id,)).fetchone()
+    return _principal_from_row(row) if row else None
+
+
+def get_principal_by_token(project: str, token: str) -> Optional[Dict[str, Any]]:
+    if not token:
+        return None
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM principals WHERE token_hash=?",
+                        (hash_token(token),)).fetchone()
+    return _principal_from_row(row) if row else None
+
+
+def get_principal_by_token_any_project(token: str) -> Optional[Dict[str, Any]]:
+    """Find a bearer principal by token hash across all project DBs."""
+    if not token:
+        return None
+    token_hash = hash_token(token)
+    for project_id in project_ids():
+        with _conn(project_id) as c:
+            row = c.execute("SELECT * FROM principals WHERE token_hash=?",
+                            (token_hash,)).fetchone()
+        if row:
+            return _principal_from_row(row)
+    return None
+
+
+def password_login_count(project: str = DEFAULT_PROJECT) -> int:
+    with _conn(project) as c:
+        return int(c.execute("SELECT COUNT(*) FROM principal_passwords").fetchone()[0] or 0)
+
+
+def set_principal_password(principal_id: str, login: str, password_hash: str,
+                           must_rotate: bool = False,
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    login = (login or "").strip().lower()
+    if not login:
+        return {"error": "login required"}
+    if not principal_id:
+        return {"error": "principal_id required"}
+    principal = get_principal_by_id(principal_id, project=project)
+    if not principal:
+        return {"error": "principal not found"}
+    now = time.time()
+    with _conn(project) as c:
+        c.execute(
+            "INSERT INTO principal_passwords(login, principal_id, password_hash, "
+            "password_updated_at, must_rotate, created_at) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(login) DO UPDATE SET principal_id=excluded.principal_id, "
+            "password_hash=excluded.password_hash, password_updated_at=excluded.password_updated_at, "
+            "must_rotate=excluded.must_rotate",
+            (login, principal_id, password_hash, now, 1 if must_rotate else 0, now),
+        )
+    return {"login": login, "principal_id": principal_id,
+            "password_updated_at": now, "must_rotate": bool(must_rotate)}
+
+
+def get_password_login(login: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
+    login = (login or "").strip().lower()
+    if not login:
+        return None
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT pp.*, p.kind, p.display_name, p.project, p.scopes, p.revoked_at "
+            "FROM principal_passwords pp JOIN principals p ON p.id=pp.principal_id "
+            "WHERE pp.login=?",
+            (login,),
+        ).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    out["scopes"] = json.loads(out.get("scopes") or "[]")
+    out["must_rotate"] = bool(out.get("must_rotate"))
+    return out
+
+
+def create_password_principal(login: str, display_name: str, password_hash: str,
+                              scopes: List[str], principal_id: Optional[str] = None,
+                              kind: str = "user",
+                              project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    token_seed = f"password-principal:{uuid.uuid4().hex}"
+    principal = create_principal(
+        kind=kind,
+        display_name=display_name or login,
+        token=token_seed,
+        scopes=scopes,
+        principal_id=principal_id,
+        project=project,
+    )
+    password_row = set_principal_password(
+        principal["id"], login, password_hash, project=project)
+    principal["login"] = password_row.get("login")
+    return principal
+
+
+def create_auth_session(principal_id: str, session_token: str, ttl_seconds: int,
+                        user_agent: str = "", ip: str = "",
+                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    if not principal_id:
+        return {"error": "principal_id required"}
+    if not session_token:
+        return {"error": "session_token required"}
+    now = time.time()
+    ttl = max(60, int(ttl_seconds or 0))
+    session_id = f"sess-{uuid.uuid4().hex}"
+    expires_at = now + ttl
+    with _conn(project) as c:
+        c.execute(
+            "INSERT INTO auth_sessions(session_id, principal_id, project, session_hash, "
+            "created_at, expires_at, last_seen_at, user_agent, ip) VALUES (?,?,?,?,?,?,?,?,?)",
+            (session_id, principal_id, project, hash_token(session_token), now,
+             expires_at, now, user_agent or None, ip or None),
+        )
+    return {"session_id": session_id, "principal_id": principal_id,
+            "project": project, "created_at": now, "expires_at": expires_at}
+
+
+def get_principal_by_session(project: str, session_token: str) -> Optional[Dict[str, Any]]:
+    if not session_token:
+        return None
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT p.*, s.session_id, s.expires_at, s.revoked_at AS session_revoked_at "
+            "FROM auth_sessions s JOIN principals p ON p.id=s.principal_id "
+            "WHERE s.session_hash=? AND s.project=?",
+            (hash_token(session_token), project),
+        ).fetchone()
+        if not row:
+            return None
+        if row["session_revoked_at"] or row["revoked_at"] or float(row["expires_at"] or 0) <= now:
+            return None
+        c.execute("UPDATE auth_sessions SET last_seen_at=? WHERE session_id=?",
+                  (now, row["session_id"]))
+    out = _principal_from_row(row)
+    out["session_id"] = row["session_id"]
+    out["session_expires_at"] = row["expires_at"]
+    return out
+
+
+def get_principal_by_session_any_project(session_token: str) -> Optional[Dict[str, Any]]:
+    """Resolve a human session across projects for explicit cross-project role grants.
+
+    Sessions are stored in the project where the human logged in. Project role grants live in
+    the central registry, so a project owner can be granted into a newly-created project without
+    forcing a second login.
+    """
+    if not session_token:
+        return None
+    for project in project_ids():
+        principal = get_principal_by_session(project, session_token)
+        if principal:
+            principal["home_project"] = project
+            return principal
+    return None
+
+
+def revoke_auth_session(session_token: str, project: str = DEFAULT_PROJECT) -> bool:
+    if not session_token:
+        return False
+    with _conn(project) as c:
+        cur = c.execute(
+            "UPDATE auth_sessions SET revoked_at=? "
+            "WHERE session_hash=? AND project=? AND revoked_at IS NULL",
+            (time.time(), hash_token(session_token), project),
+        )
+        return cur.rowcount > 0
+
+
+def revoke_principal_sessions(principal_id: str, project: str = DEFAULT_PROJECT) -> int:
+    with _conn(project) as c:
+        cur = c.execute(
+            "UPDATE auth_sessions SET revoked_at=? "
+            "WHERE principal_id=? AND project=? AND revoked_at IS NULL",
+            (time.time(), principal_id, project),
+        )
+        return cur.rowcount
+
+
+def revoke_principal(principal_id: str, project: str = DEFAULT_PROJECT) -> bool:
+    with _conn(project) as c:
+        cur = c.execute("UPDATE principals SET revoked_at=? WHERE id=?",
+                        (time.time(), principal_id))
+        return cur.rowcount > 0
+
+
+def revoke_principal_token(principal_id: str, project: str = DEFAULT_PROJECT,
+                           actor: str = "system") -> Dict[str, Any]:
+    principal = get_principal_by_id(principal_id, project=project)
+    if not principal:
+        return {"error": "principal not found"}
+    if principal.get("project") not in (project, "*"):
+        return {"error": "principal is not valid for this project"}
+    already_revoked = bool(principal.get("revoked_at"))
+    revoked = revoke_principal(principal_id, project=project)
+    session_count = revoke_principal_sessions(principal_id, project=project)
+    updated = get_principal_by_id(principal_id, project=project) or principal
+    public = public_principal_record(updated, project=project)
+    _store_facade().append_activity(
+        "access.token_revoked",
+        actor,
+        {"principal": public, "sessions_revoked": session_count,
+         "already_revoked": already_revoked},
+        task_id=None,
+        project=project,
+    )
+    return {"revoked": bool(revoked), "already_revoked": already_revoked,
+            "sessions_revoked": session_count, "principal": public}
+
+def resolve_write_actor(actor: str,
+                        project: str = DEFAULT_PROJECT,
+                        task_id: str = "",
+                        agent_id: str = "",
+                        system_actor: str = "",
+                        system_reason: str = "",
+                        principal_id: str = "") -> Dict[str, Any]:
+    """Resolve a public write actor, binding shared env tokens before mutation.
+
+    Compatibility env tokens are intentionally broad system principals. They
+    must not leave task/activity rows authored as a naked `env-*-token`: callers
+    either bind them to a live registered agent, or declare an explicit system
+    actor and reason that remains audit-visible.
+    """
+    now = time.time()
+    actor = (actor or "").strip() or "unknown"
+    task_id = (task_id or "").strip()
+    agent_id = (agent_id or "").strip()
+    system_actor = (system_actor or "").strip()
+    system_reason = (system_reason or "").strip()
+    if not is_unbound_system_actor(actor):
+        return binding_for_principal(actor, principal_id=principal_id)
+
+    base_error = shared_token_binding_error(
+        actor=actor, principal_id=principal_id, task_id=task_id)
+
+    if system_actor:
+        validation_error = validate_system_actor_fields(
+            system_actor, system_reason,
+            principal_actor=actor, principal_id=principal_id, task_id=task_id)
+        if validation_error:
+            return validation_error
+        return binding_for_system_actor(
+            principal_actor=actor,
+            principal_id=principal_id,
+            system_actor=system_actor,
+            system_reason=system_reason,
+        )
+
+    with _conn(project) as c:
+        if agent_id:
+            presence = _store_facade()._active_agent_presence_in(c, agent_id, now)
+            if not presence:
+                return {
+                    **base_error,
+                    "error": "agent_not_registered",
+                    "agent_id": agent_id,
+                    "message": "agent_id is not currently registered/heartbeat-active.",
+                }
+            presence_task = (presence.get("task_id") or "").strip()
+            if task_id and presence_task and presence_task != task_id:
+                return {
+                    **base_error,
+                    "error": "agent_registered_on_different_task",
+                    "agent_id": agent_id,
+                    "registered_task_id": presence_task,
+                    "message": "agent_id is live but not bound to this task.",
+                }
+            return binding_for_registered_agent(
+                agent_id=agent_id,
+                principal_actor=actor,
+                principal_id=principal_id,
+                binding="registered_agent",
+            )
+        if task_id:
+            active_agents = _store_facade()._active_agent_ids_for_task(c, task_id, now)
+            if len(active_agents) == 1:
+                return binding_for_registered_agent(
+                    agent_id=active_agents[0],
+                    principal_actor=actor,
+                    principal_id=principal_id,
+                    binding="inferred_registered_agent",
+                )
+            if len(active_agents) > 1:
+                return {
+                    **base_error,
+                    "error": "agent_id_required",
+                    "active_agents": active_agents,
+                    "message": "multiple live agents are bound to this task; pass agent_id.",
+                }
+    return {
+        **base_error,
+        "message": "shared-token writes require a bound live agent or explicit system actor/reason.",
+    }
+
+def _identity_risk_window_s() -> int:
+    try:
+        return max(60, int(os.environ.get("PM_IDENTITY_RISK_WINDOW_S", "1800")))
+    except (TypeError, ValueError):
+        return 1800
+
+
+IDENTITY_RISK_WINDOW_S = _identity_risk_window_s()
+
+
+def _task_identity_state_in(c: sqlite3.Connection, task_id: str,
+                            now: float, window_s: int = IDENTITY_RISK_WINDOW_S) -> Dict[str, Any]:
+    """Summarize whether a task has recent unbound runtime activity.
+
+    Registered heartbeats are a liveness signal, not the only evidence of work.
+    A shared-token write without a bound live agent means another runtime may be
+    visibly active to the human while invisible to Switchboard coordination.
+    """
+    active_agents = _store_facade()._active_agent_ids_for_task(c, task_id, now)
+    cutoff = now - max(60, int(window_s or IDENTITY_RISK_WINDOW_S))
+    rows = c.execute(
+        "SELECT id, actor, payload, created_at FROM activity "
+        "WHERE task_id=? AND kind='principal.unbound_write' AND created_at>=? "
+        "ORDER BY created_at DESC LIMIT 5",
+        (task_id, cutoff),
+    ).fetchall()
+    recent = []
+    for row in rows:
+        payload = _json_payload(row["payload"])
+        recent.append({
+            "activity_id": row["id"],
+            "actor": (payload or {}).get("actor") or row["actor"],
+            "created_at": row["created_at"],
+            "reason": (payload or {}).get("reason") or "principal.unbound_write",
+        })
+    state = {
+        "active_agents": active_agents,
+        "recent_unbound_activity": recent,
+        "risk_window_seconds": max(60, int(window_s or IDENTITY_RISK_WINDOW_S)),
+        "takeover_safe": True,
+        "status": "clear",
+    }
+    if recent and not active_agents:
+        state.update({
+            "status": "unbound_live_runtime_possible",
+            "takeover_safe": False,
+            "reason": "recent_unbound_activity_without_active_registration",
+            "message": (
+                "Recent task activity came from a shared system principal, but no "
+                "live agent session is registered on this task. Another runtime may "
+                "be active outside Switchboard identity binding."
+            ),
+            "remediation": [
+                "Ask the visible runtime to run register_agent and drain its inbox.",
+                "Bind/re-register the runtime under its intended agent_id.",
+                "Use an explicit human override only after confirming takeover is safe.",
+            ],
+        })
+    elif recent:
+        state.update({
+            "status": "bound_after_unbound_activity",
+            "reason": "recent_unbound_activity_with_active_registration",
+        })
+    return state
+
+
+def _identity_takeover_risk_in(c: sqlite3.Connection, task_id: str,
+                               now: float) -> Optional[Dict[str, Any]]:
+    state = _task_identity_state_in(c, task_id, now)
+    if state.get("takeover_safe"):
+        return None
+    return {
+        "reason": "identity_unknown_recent_activity",
+        "task_id": task_id,
+        "identity": state,
+        "message": (
+            "Recent unbound activity exists on this task, but no active registered "
+            "agent is bound to it. Refusing takeover without explicit override."
+        ),
+    }
 
 class AccessStoreRepository:
     """Registry-backed :class:`~switchboard.storage.repositories.protocols.AccessRepository`.
