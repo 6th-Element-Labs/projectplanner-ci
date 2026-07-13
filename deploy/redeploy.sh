@@ -15,6 +15,8 @@
 #   PLAN_CADDY_UNIT   caddy systemd unit (default caddy)
 #   RUN_CI=1      run the local switchboard CI gate before restarting (CI normally runs off-box)
 #   SKIP_CADDY=1  don't touch the Caddyfile / caddy this run
+#   HEALTH_TIMEOUT_SECONDS=30  bounded post-restart health window
+#   HEALTH_INTERVAL_SECONDS=1  delay between health probes
 set -euo pipefail
 
 ROOT="${PLAN_ROOT:-/opt/projectplanner}"
@@ -93,10 +95,7 @@ done
 
 # 7. Prove the box is serving; fail the deploy loudly if it isn't.
 section "health"
-sleep 2
-code="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8110/health || echo 000)"
-echo "local /health: $code"
-if [ "$code" != "200" ]; then
+if ! bash "$ROOT/deploy/wait-for-health.sh"; then
     echo "!! /health is not 200 after restart — inspect: journalctl -u projectplanner -n 60 --no-pager" >&2
     exit 1
 fi

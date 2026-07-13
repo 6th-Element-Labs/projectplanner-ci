@@ -229,7 +229,9 @@ Caddyfile drifted from the repo). It copies every `deploy/*.service`/`*.timer`, 
 Caddyfile (validating it first — a broken edge is never reloaded), restarts
 `projectplanner{,-gateway,-mcp}`, and restarts any auxiliary timer/service that is currently
 active. Flags: `RUN_CI=1` runs the on-box strict CI gate first (CI otherwise runs off-box);
-`SKIP_CADDY=1` leaves the edge untouched.
+`SKIP_CADDY=1` leaves the edge untouched. The post-restart health gate retries for a bounded
+30-second window by default; set `HEALTH_TIMEOUT_SECONDS` and `HEALTH_INTERVAL_SECONDS` to tune
+that window without replacing the fail-closed final result.
 
 It restarts only units that are **already active**, so it won't fight timers you stopped during
 a HARDEN-32 wedge. A brand-new unit still needs its one-time
