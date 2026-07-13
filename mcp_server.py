@@ -1962,12 +1962,18 @@ def reconcile(project: str = "maxwell") -> str:
 @mcp.tool()
 def reconcile_alerts(ctx: Context, project: str = "maxwell",
                      alert_to: str = "switchboard/operator",
-                     min_severity: str = "medium") -> str:
+                     min_severity: str = "medium",
+                     requires_ack: bool = False) -> str:
     """Run the scheduled reconcile alert path now: reconcile, filter actionable findings,
-    dedupe inside the configured window, and emit a directed agent message when needed."""
+    dedupe inside the configured window, and emit a directed agent message when needed.
+
+    Reconcile alerts are fire-and-forget by default (requires_ack=false) so the ack inbox
+    stays reserved for coordinator/agent handoffs. Legacy reconcile_alert backlog is
+    auto-closed on each run."""
     _require_write(ctx, project, ("write:ixp",))
     return _dumps(store.run_reconcile_alerts(
-        project=project, alert_to=alert_to, min_severity=min_severity))
+        project=project, alert_to=alert_to, min_severity=min_severity,
+        requires_ack=requires_ack))
 
 
 # ---- directed agent IM (IXP write-authenticated) -----------------------

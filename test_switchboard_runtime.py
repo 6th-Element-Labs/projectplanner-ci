@@ -1223,16 +1223,48 @@ try:
         dedupe_window_s=3600, now=123456)
     ok(alert["alert_sent"] and alert["finding_count"] >= 1,
        "reconcile_alerts sends an actionable alert when drift exists")
-    alert_msgs = [m for m in store.list_unacked_messages("codex/test", project=P)
+    ok(not alert.get("requires_ack"),
+       "reconcile_alerts are fire-and-forget by default (no ack inbox noise)")
+    alert_msgs = [m for m in store.list_agent_messages(project=P)
                   if m.get("signal") == "reconcile_alert"]
     ok(any(bad["task_id"] in m["message"] and "done_without_merged_sha" in m["message"] and
            "hidden_fallback" in m["message"]
            for m in alert_msgs), "reconcile_alert message names the drifting task")
+    pending_reconcile = [m for m in store.list_pending_acks("codex/test", project=P)
+                         if m.get("signal") == "reconcile_alert"]
+    ok(not pending_reconcile,
+       "reconcile_alert does not pollute list_pending_acks")
+    unacked_reconcile = [m for m in store.list_unacked_messages("codex/test", project=P)
+                         if m.get("signal") == "reconcile_alert"]
+    ok(not unacked_reconcile,
+       "reconcile_alert does not pollute list_unacked_messages")
     duplicate_alert = store.run_reconcile_alerts(
         project=P, alert_to="codex/test", actor="test/reconcile",
         dedupe_window_s=3600, now=123456)
     ok(duplicate_alert["deduped"] and not duplicate_alert["alert_sent"],
        "reconcile_alerts dedupes repeat findings inside the window")
+    # Legacy requires_ack reconcile_alert backlog is auto-closed with audit trail.
+    legacy = store.send_agent_message(
+        "switchboard/reconcile", "codex/test", "legacy reconcile alert",
+        requires_ack=True, signal="reconcile_alert", project=P)
+    closed = store.close_stale_reconcile_alert_inbox(project=P, actor="test/reconcile")
+    ok(closed["closed_count"] >= 1 and legacy["id"] in closed["message_ids"],
+       "close_stale_reconcile_alert_inbox bulk-closes legacy reconcile_alert ack backlog")
+    legacy_status = store.get_message_status(legacy["id"], project=P)
+    ok(legacy_status["acked_at"] is not None,
+       "bulk-closed reconcile_alert is auto-acked")
+    with store._conn(P) as c:
+        audit_kinds = [r["kind"] for r in c.execute(
+            "SELECT kind FROM activity WHERE kind='reconcile.alert_inbox_closed'").fetchall()]
+    ok(audit_kinds,
+       "bulk close records reconcile.alert_inbox_closed audit activity")
+    # Coordinator/agent ack traffic remains visible after reconcile noise is removed.
+    coord_msg = store.send_agent_message(
+        "cursor/coordinator", "codex/test", "please review COORD-5",
+        requires_ack=True, ack_deadline_minutes=30, project=P)
+    pending_coord = store.list_pending_acks("codex/test", project=P)
+    ok(any(m["id"] == coord_msg["id"] for m in pending_coord),
+       "coordinator requires_ack traffic is visible in list_pending_acks")
     fixed = store.mark_task_merged(bad["task_id"], "legacyfix", actor="github-webhook", project=P)
     ok(fixed["git_state"]["merged_sha"] == "legacyfix",
        "merge webhook can stamp provenance onto a legacy Done task")

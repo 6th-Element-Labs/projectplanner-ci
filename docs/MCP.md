@@ -226,6 +226,9 @@ Safe merge rule:
 Scheduled reconcile alert rule:
 - `jobs.py reconcile_alerts` runs `reconcile` and emits a directed `reconcile_alert` IXP message
   when findings at or above `PM_RECON_ALERT_MIN_SEVERITY` exist.
+- Reconcile alerts are **fire-and-forget** by default (`requires_ack=false`). Findings also land in
+  activity (`reconcile.alert`) and the operator reconcile panel; legacy `reconcile_alert` ack backlog
+  is auto-closed on each run (`reconcile.alert_inbox_closed` audit).
 - The job defaults to `PM_RECON_ALERT_PROJECTS=all` so GitHub merge provenance is hydrated for
   Helm, Vulkan, Switchboard, and dynamic boards even when a repo webhook is missing or delayed.
   Set a comma-separated list such as `switchboard` only when deliberately narrowing the timer.

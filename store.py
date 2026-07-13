@@ -14786,14 +14786,86 @@ def reconcile(project: str = DEFAULT_PROJECT, incremental: bool = False) -> Dict
             "external_checks": external_checks, "backfilled": backfilled}
 
 
+def close_stale_reconcile_alert_inbox(project: str = DEFAULT_PROJECT,
+                                      actor: str = "switchboard/reconcile",
+                                      reason: str = "bus_hygiene_auto_close",
+                                      now: Optional[float] = None) -> Dict[str, Any]:
+    """Bulk-close unacked reconcile_alert messages that still require ack.
+
+    Reconcile drift is informational: it is recorded in activity and the operator
+    reconcile panel, not the ack-required agent inbox. This migration path auto-acks
+    legacy reconcile_alert backlog entries and resolves their ack_deadline monitors.
+    """
+    now = time.time() if now is None else float(now)
+    closed_ids: List[int] = []
+    monitor_ids: List[str] = []
+    with _conn(project) as c:
+        rows = c.execute(
+            "SELECT id FROM agent_messages WHERE requires_ack=1 AND acked_at IS NULL "
+            "AND signal='reconcile_alert' ORDER BY id",
+        ).fetchall()
+        for row in rows:
+            message_id = int(row["id"])
+            ack_response = f"auto-closed ({reason})"
+            cur = c.execute(
+                "UPDATE agent_messages SET acked_at=?, ack_response=? "
+                "WHERE id=? AND acked_at IS NULL",
+                (now, ack_response, message_id),
+            )
+            if cur.rowcount == 0:
+                continue
+            closed_ids.append(message_id)
+            mon = _load_monitor_for_message(c, message_id)
+            if mon and mon.get("status") in ("pending", "fired"):
+                monitor_ids.append(mon["id"])
+                c.execute(
+                    "UPDATE coordination_monitors SET status='resolved', resolved_at=?, "
+                    "updated_at=?, last_checked_at=?, result_json=? WHERE id=?",
+                    (now, now, now,
+                     json.dumps({"acked_at": now, "ack_response": ack_response,
+                                 "reason": reason, "auto_closed": True},
+                                sort_keys=True),
+                     mon["id"]),
+                )
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (None, actor, "message.acked",
+                 json.dumps({"message_id": message_id, "response": ack_response,
+                             "signal": "reconcile_alert", "auto_closed": True,
+                             "reason": reason}, sort_keys=True),
+                 now),
+            )
+        if closed_ids:
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (None, actor, "reconcile.alert_inbox_closed",
+                 json.dumps({"closed_count": len(closed_ids),
+                             "message_ids": closed_ids,
+                             "monitor_ids": monitor_ids,
+                             "reason": reason}, sort_keys=True),
+                 now),
+            )
+    return {"project": project, "closed_count": len(closed_ids),
+            "message_ids": closed_ids, "monitor_ids": monitor_ids,
+            "reason": reason}
+
+
 def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
                          alert_to: str = "switchboard/operator",
                          actor: str = "switchboard/reconcile",
                          min_severity: str = "medium",
                          dedupe_window_s: int = 3600,
                          now: Optional[float] = None,
-                         incremental: bool = False) -> Dict[str, Any]:
+                         incremental: bool = False,
+                         requires_ack: bool = False,
+                         close_stale_inbox: bool = True) -> Dict[str, Any]:
     """Run reconcile and send a deduped directed alert for actionable findings.
+
+    Reconcile drift surfaces through activity (`reconcile.alert`) and the operator
+    reconcile panel. By default alerts are fire-and-forget (requires_ack=false) so
+    coordinator/agent ack traffic stays visible in list_pending_acks.
 
     The dedupe key is project + severity floor + finding signature + time bucket, so a
     persistent unresolved issue alerts at most once per bucket while a new drift shape alerts
@@ -14807,12 +14879,17 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
         min_severity = "medium"
         floor = _severity_value(min_severity)
     dedupe_window_s = max(60, int(dedupe_window_s or 3600))
+    inbox_closed = (close_stale_reconcile_alert_inbox(project=project, actor=actor, now=now)
+                    if close_stale_inbox else
+                    {"closed_count": 0, "message_ids": [], "monitor_ids": []})
     report = reconcile(project=project, incremental=incremental)
     findings = [f for f in report["findings"]
                 if _severity_value(str(f.get("severity") or "")) >= floor]
     if not findings:
         return {"project": project, "ok": True, "alert_sent": False, "deduped": False,
                 "finding_count": 0, "min_severity": min_severity,
+                "requires_ack": requires_ack,
+                "inbox_closed": inbox_closed,
                 "checked_at": report["checked_at"], "external_checks": report["external_checks"]}
 
     signature = _reconcile_signature(findings)
@@ -14837,7 +14914,7 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
         to_agent=alert_to,
         task_id=None,
         message=message,
-        requires_ack=True,
+        requires_ack=requires_ack,
         signal="reconcile_alert",
         priority=90,
         idem_key=f"{idem_key}:message",
@@ -14846,6 +14923,8 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
     response = {"project": project, "ok": False, "alert_sent": True,
                 "deduped": False, "message_id": msg["id"],
                 "finding_count": len(findings), "min_severity": min_severity,
+                "requires_ack": requires_ack,
+                "inbox_closed": inbox_closed,
                 "signature": signature, "dedupe_window_s": dedupe_window_s,
                 "checked_at": report["checked_at"],
                 "external_checks": report["external_checks"],
