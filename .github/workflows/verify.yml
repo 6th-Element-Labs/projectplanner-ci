@@ -1,0 +1,190 @@
+# CI-2 — Plane A shadow verification (pull model).
+# Public hosted runners check out the PRIVATE canonical repo at refs/pull/N/merge
+# (will-it-merge-cleanly coverage), run scripts/switchboard_ci.sh, and post a
+# NON-required shadow commit status on the PR head SHA during soak.
+#
+# Triggers:
+#   - repository_dispatch type verify-pr (CI-3 relay from the Plan VM webhook)
+#   - schedule cron backstop when dispatch is delayed or disabled
+#   - workflow_dispatch for manual / acceptance runs
+#
+# Failure legibility (2026-07-12 lesson): checkout/ref/auth failures post
+# "infra: ..."; suite failures post "tests: ...".
+#
+# Shadow context during soak: projectplanner-ci/full-suite
+# (CI-6 flips this workflow to post Switchboard CI / VM gate as the required check.)
+name: verify
+
+on:
+  repository_dispatch:
+    types: [verify-pr]
+  schedule:
+    # Backstop if dispatch delivery is delayed or GitHub disables scheduled workflows
+    # on the relay path. Off the :00/:30 marks to avoid stampeding other cron jobs.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Open PR number on 6th-Element-Labs/projectplanner"
+        required: true
+        type: string
+      head_sha:
+        description: "PR head SHA to stamp (commit status target)"
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  CANONICAL_REPO: 6th-Element-Labs/projectplanner
+  SHADOW_CONTEXT: projectplanner-ci/full-suite
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.resolve.outputs.targets }}
+    steps:
+      - name: Resolve verification targets
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            repository_dispatch)
+              PR='${{ github.event.client_payload.pr }}'
+              SHA='${{ github.event.client_payload.head_sha }}'
+              if [ -z "$PR" ] || [ -z "$SHA" ]; then
+                echo "repository_dispatch missing pr or head_sha in client_payload" >&2
+                exit 1
+              fi
+              TARGETS="$(jq -nc --argjson pr "$PR" --arg sha "$SHA" \
+                '[{pr:$pr, head_sha:$sha}]')"
+              ;;
+            workflow_dispatch)
+              PR='${{ inputs.pr }}'
+              SHA='${{ inputs.head_sha }}'
+              if [ -z "$PR" ] || [ -z "$SHA" ]; then
+                echo "workflow_dispatch requires pr and head_sha inputs" >&2
+                exit 1
+              fi
+              TARGETS="$(jq -nc --argjson pr "$PR" --arg sha "$SHA" \
+                '[{pr:$pr, head_sha:$sha}]')"
+              ;;
+            schedule)
+              TARGETS="$(gh pr list --repo "$CANONICAL_REPO" --state open --limit 50 \
+                --json number,headRefOid,isDraft \
+                --jq '[.[] | select(.isDraft | not) | {pr: .number, head_sha: .headRefOid}]')"
+              ;;
+            *)
+              echo "unsupported event: ${{ github.event_name }}" >&2
+              exit 1
+              ;;
+          esac
+          COUNT="$(echo "$TARGETS" | jq 'length')"
+          echo "Resolved $COUNT verification target(s)"
+          echo "targets=$(echo "$TARGETS" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: resolve
+    if: needs.resolve.outputs.targets != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: verify-pr-${{ matrix.target.pr }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.resolve.outputs.targets) }}
+    env:
+      PR_NUMBER: ${{ matrix.target.pr }}
+      HEAD_SHA: ${{ matrix.target.head_sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Check out private merge ref (will-it-merge-cleanly)
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CANONICAL_REPO }}
+          ref: refs/pull/${{ matrix.target.pr }}/merge
+          token: ${{ secrets.PRIVATE_READ_TOKEN }}
+          persist-credentials: false
+          path: src
+          fetch-depth: 0
+
+      - name: Set up Python
+        if: steps.checkout.outcome == 'success'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: src/requirements.txt
+
+      - name: Set up Node
+        if: steps.checkout.outcome == 'success'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        if: steps.checkout.outcome == 'success'
+        working-directory: src
+        run: |
+          python -m pip install --upgrade pip
+          pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run Switchboard CI suite
+        id: suite
+        if: steps.checkout.outcome == 'success'
+        working-directory: src
+        env:
+          SWITCHBOARD_CI_STRICT: "1"
+          SWITCHBOARD_CI_REQUIRE_NODE: "1"
+          CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
+        run: |
+          unset GITHUB_REPOSITORY
+          bash scripts/switchboard_ci.sh
+
+      - name: Upload concurrent-load SLO report
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrent-load-pr-${{ matrix.target.pr }}
+          path: src/.artifacts/concurrent-load-report.json
+          if-no-files-found: warn
+
+      - name: Post shadow SUCCESS on PR head
+        if: steps.checkout.outcome == 'success' && steps.suite.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/${CANONICAL_REPO}/statuses/${HEAD_SHA}" \
+            -f state=success \
+            -f context="${SHADOW_CONTEXT}" \
+            -f description='tests: full suite passed (pull-model shadow)' \
+            -f target_url="${RUN_URL}"
+
+      - name: Post shadow infra FAILURE on PR head
+        if: steps.checkout.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/${CANONICAL_REPO}/statuses/${HEAD_SHA}" \
+            -f state=failure \
+            -f context="${SHADOW_CONTEXT}" \
+            -f description="infra: unable to checkout refs/pull/${PR_NUMBER}/merge — see run log" \
+            -f target_url="${RUN_URL}" || true
+
+      - name: Post shadow tests FAILURE on PR head
+        if: steps.checkout.outcome == 'success' && steps.suite.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          gh api "repos/${CANONICAL_REPO}/statuses/${HEAD_SHA}" \
+            -f state=failure \
+            -f context="${SHADOW_CONTEXT}" \
+            -f description='tests: switchboard_ci.sh failed — see run log' \
+            -f target_url="${RUN_URL}" || true
