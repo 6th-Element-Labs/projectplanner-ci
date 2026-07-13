@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 
 _TMP = tempfile.mkdtemp(prefix="coord3-decisions-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -33,10 +34,14 @@ try:
     # Schema columns exist after additive migrations.
     with store._conn("switchboard") as c:
         cols = {r["name"] for r in c.execute("PRAGMA table_info(decisions)").fetchall()}
+        indexes = {r["name"] for r in c.execute("PRAGMA index_list(decisions)").fetchall()}
     for col in ("decision_key", "decision_kind", "deliverable_id", "coordinator_agent_id",
                 "inputs_json", "policy_rule", "chosen_action_json",
                 "skipped_alternatives_json", "result_json"):
         ok(col in cols, f"decisions.{col} present")
+    ok({"ux_decisions_key", "ix_decisions_deliverable", "ix_decisions_kind"}.issubset(
+           indexes),
+       "fresh schema creates coordinator decision indexes after columns")
 
     first = store.record_coordinator_decision(
         author="agent/coordinator",
@@ -141,6 +146,12 @@ try:
         project="switchboard",
     )
     ok(bad.get("error") == "policy_rule_required", "missing policy_rule fails closed")
+
+    cockpit = Path(__file__).with_name("static").joinpath("coordination.html").read_text()
+    ok("inputs snapshot" in cockpit and "pretty(d.inputs_snapshot" in cockpit and
+       "pretty(chosen" in cockpit and "pretty(skipped" in cockpit and
+       "pretty(d.result" in cockpit,
+       "cockpit renders inputs, chosen action, skipped alternatives, and result")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

@@ -164,9 +164,6 @@ def apply_schema(c):
             result_json TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_decisions_task ON decisions(task_id);
-        CREATE INDEX IF NOT EXISTS ix_decisions_deliverable ON decisions(deliverable_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_decisions_key
-            ON decisions(decision_key) WHERE decision_key IS NOT NULL;
         CREATE TABLE IF NOT EXISTS agent_messages (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             from_agent    TEXT NOT NULL,

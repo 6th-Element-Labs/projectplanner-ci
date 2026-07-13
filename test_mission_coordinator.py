@@ -66,6 +66,18 @@ try:
     ok(plan.get("status") == "dispatch_ready" and
        plan.get("dispatch", {}).get("action") == "claim_task",
        "coordinator plan selects claim_task for ready linked work")
+    skipped = mission_coordinator._skipped_alternatives(
+        {"next_actions": [
+            {"action": "claim_task", "task_id": "RENDER-2", "reason": "ready"},
+            {"action": "claim_task", "task_id": "RENDER-1", "reason": "ready"},
+            {"action": "resume_or_claim", "task_id": "RENDER-3"},
+        ]},
+        {"action": "claim_task", "task_id": "RENDER-1"},
+        plan_status="dispatch_ready",
+    )
+    ok({item.get("reason") for item in skipped} ==
+       {"task_id_tiebreak", "lower_action_priority"},
+       "skipped alternatives explain the planner priority and task-id tiebreak")
 
     tick = store.run_mission_coordinator_tick(
         project="qa-coord-home",
@@ -88,6 +100,13 @@ try:
        and str(tick.get("decision_id") or tick["decision"].get("decision_id", "")).startswith(
            "coorddec-"),
        "coordinator tick records explainable decision_id")
+    expected_tick_id = store.coordinator_decision_id(
+        project="qa-coord-home", task_id="RENDER-1",
+        deliverable_id="coord-mission", coordinator_agent_id="agent/coordinator",
+        decision_kind="dispatch", inputs_snapshot={}, policy_rule="",
+        chosen_action={}, stable_key="tick-1")
+    ok(tick.get("decision_id") == expected_tick_id,
+       "caller idem_key is the durable coordinator decision identity")
     ok(tick["decision"].get("policy_rule")
        and tick["decision"].get("chosen_action")
        and "skipped_alternatives" in tick["decision"]
@@ -106,6 +125,21 @@ try:
     store.abandon_claim(tick["dispatch"]["claim_id"], "test reset", project="qa-coord-target")
     store.update_task("RENDER-1", {"status": "Not Started", "assignee": None},
                       actor="test", project="qa-coord-target")
+
+    wake_tick = store.run_mission_coordinator_tick(
+        project="qa-coord-home",
+        deliverable_id="coord-mission",
+        coordinator_agent_id="agent/coordinator",
+        actor="test",
+        policy={"auto_claim": False, "auto_wake": True,
+                "worker_wake_selector": {"runtime": "codex"}},
+        idem_key="tick-wake",
+    )
+    wake_decision = wake_tick.get("decision") or {}
+    ok(wake_tick.get("status") == "wake_requested" and
+       wake_decision.get("decision_kind") == "nudge" and
+       wake_decision.get("result", {}).get("dispatch", {}).get("wake_id"),
+       "agent wake persists the selected task and observed nudge result")
 
     store.set_agent_state("RENDER-1", "human_gate", {
         "required": True,
@@ -143,6 +177,18 @@ try:
     ok(review_plan.get("status") == "monitor" and
        review_plan.get("monitors", [{}])[0].get("action") == "verify_merge_provenance",
        "In Review tasks monitor merge provenance instead of claiming Done")
+    review_tick = store.run_mission_coordinator_tick(
+        project="qa-coord-home",
+        deliverable_id="coord-mission",
+        coordinator_agent_id="agent/coordinator",
+        actor="test",
+        idem_key="tick-review",
+    )
+    review_decision = review_tick.get("decision") or {}
+    ok(review_tick.get("status") == "monitor" and
+       review_decision.get("decision_kind") == "monitor" and
+       review_decision.get("result", {}).get("monitors"),
+       "unmerged PR monitoring persists its merge-provenance result")
 
     idem_repeat = store.run_mission_coordinator_tick(
         project="qa-coord-home",
@@ -155,6 +201,14 @@ try:
     )
     ok(idem_repeat.get("status") == "claimed" and idem_repeat.get("dispatch", {}).get("claimed"),
        "coordinator tick is idempotent by idem_key")
+    ok(idem_repeat.get("decision_id") == tick.get("decision_id"),
+       "idempotent tick returns the same durable decision id")
+    complete_trail = store.list_coordinator_decisions(
+        deliverable_id="coord-mission", project="qa-coord-home")
+    ok(len(complete_trail) == 4 and
+       {item.get("decision_kind") for item in complete_trail} ==
+       {"dispatch", "nudge", "human_escalation", "monitor"},
+       "decision trail stores claim, wake, escalation, and monitor without replay duplicates")
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 

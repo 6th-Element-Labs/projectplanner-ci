@@ -117,9 +117,11 @@ def coordinator_tick_plan(mission_status: Dict[str, Any],
 
 
 def _skipped_alternatives(mission_status: Dict[str, Any],
-                          selected: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                          selected: Optional[Dict[str, Any]],
+                          plan_status: str = "") -> List[Dict[str, Any]]:
     selected_action = (selected or {}).get("action")
     selected_task = (selected or {}).get("task_id")
+    selected_priority = ACTION_PRIORITY.get(selected_action or "", 99)
     skipped: List[Dict[str, Any]] = []
     for action in mission_status.get("next_actions") or []:
         if not isinstance(action, dict):
@@ -127,11 +129,22 @@ def _skipped_alternatives(mission_status: Dict[str, Any],
         if (action.get("action") == selected_action
                 and action.get("task_id") == selected_task):
             continue
+        priority = ACTION_PRIORITY.get(action.get("action") or "", 99)
+        if plan_status == "mission_complete":
+            reason = "mission_already_complete"
+        elif priority > selected_priority:
+            reason = "lower_action_priority"
+        elif priority == selected_priority:
+            reason = "task_id_tiebreak"
+        else:
+            reason = "not_selected_by_planner"
         skipped.append({
             "action": action.get("action"),
             "task_id": action.get("task_id"),
-            "reason": action.get("reason") or action.get("detail") or "lower_priority",
-            "priority": ACTION_PRIORITY.get(action.get("action") or "", 99),
+            "reason": reason,
+            "priority": priority,
+            "candidate": dict(action),
+            "candidate_reason": action.get("reason") or action.get("detail"),
         })
     return skipped
 
@@ -170,13 +183,20 @@ def _record_tick_decision(
         "deliverable_id": deliverable_id,
         "progress": mission_status.get("progress") or {},
         "next_actions": mission_status.get("next_actions") or [],
+        "blockers": mission_status.get("blockers") or [],
+        "action_priority": dict(ACTION_PRIORITY),
+        "selection_tiebreak": ["task_id"],
         "policy": {
             "auto_claim": bool(policy.get("auto_claim")),
             "auto_wake": bool(policy.get("auto_wake")),
             "auto_refresh_brief": bool(policy.get("auto_refresh_brief")),
             "monitor_in_review": bool(policy.get("monitor_in_review")),
             "worker_agent_id": policy.get("worker_agent_id") or "",
+            "worker_wake_selector": policy.get("worker_wake_selector") or {},
         },
+        "narrative_source_fingerprint": (
+            (mission_status.get("mission_brief") or {}).get("source_fingerprint")
+        ),
         "plan_status": plan.get("status"),
         "plan_reason": plan.get("reason"),
     }
@@ -199,8 +219,11 @@ def _record_tick_decision(
             inputs_snapshot=inputs_snapshot,
             policy_rule=policy_rule,
             chosen_action=chosen_action,
-            skipped_alternatives=_skipped_alternatives(mission_status, selected
-                                                       if isinstance(selected, dict) else None),
+            skipped_alternatives=_skipped_alternatives(
+                mission_status,
+                selected if isinstance(selected, dict) else None,
+                plan_status=plan.get("status") or "",
+            ),
             result={
                 "status": status,
                 "executed": result.get("executed") or [],

@@ -123,18 +123,30 @@ def record_decision(task_id: Optional[str], author: str, title: str,
                 record = _decision_record(existing)
                 record.update({"created": False, "idempotent": True})
                 return record
-        cur = c.execute(
-            "INSERT INTO decisions(task_id, author, title, context, decision, rationale, "
-            "supersedes, created_at, decision_key, decision_kind, deliverable_id, "
-            "coordinator_agent_id, inputs_json, policy_rule, chosen_action_json, "
-            "skipped_alternatives_json, result_json) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (task_id, author, title, context, decision, rationale, supersedes, now,
-             decision_key or None, decision_kind or None, deliverable_id or None,
-             coordinator_agent_id or None, json.dumps(inputs, sort_keys=True),
-             policy_rule or None, json.dumps(chosen, sort_keys=True),
-             json.dumps(skipped, sort_keys=True), json.dumps(outcome, sort_keys=True)),
-        )
+        try:
+            cur = c.execute(
+                "INSERT INTO decisions(task_id, author, title, context, decision, rationale, "
+                "supersedes, created_at, decision_key, decision_kind, deliverable_id, "
+                "coordinator_agent_id, inputs_json, policy_rule, chosen_action_json, "
+                "skipped_alternatives_json, result_json) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (task_id, author, title, context, decision, rationale, supersedes, now,
+                 decision_key or None, decision_kind or None, deliverable_id or None,
+                 coordinator_agent_id or None, json.dumps(inputs, sort_keys=True),
+                 policy_rule or None, json.dumps(chosen, sort_keys=True),
+                 json.dumps(skipped, sort_keys=True), json.dumps(outcome, sort_keys=True)),
+            )
+        except sqlite3.IntegrityError:
+            # A concurrent retry can win after the read above. Only the stable-key
+            # collision is idempotent; preserve every other integrity error.
+            existing = c.execute(
+                "SELECT * FROM decisions WHERE decision_key=?", (decision_key,)
+            ).fetchone() if decision_key else None
+            if not existing:
+                raise
+            record = _decision_record(existing)
+            record.update({"created": False, "idempotent": True})
+            return record
         decision_pk = cur.lastrowid
         if supersedes:
             c.execute("UPDATE decisions SET status='superseded' WHERE id=?", (supersedes,))

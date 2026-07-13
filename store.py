@@ -2728,6 +2728,7 @@ def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id:
             coordinator_agent_id=coordinator_agent_id,
             actor=actor,
             policy=policy_obj,
+            idem_key=idem_key,
         )
         now = time.time()
         c.execute(
@@ -2746,6 +2747,7 @@ def run_mission_coordinator_tick(project: str = DEFAULT_PROJECT, deliverable_id:
                      "claim_id": (result.get("dispatch") or {}).get("claim_id"),
                      "task_id": ((result.get("dispatch") or {}).get("task") or {}).get("task_id"),
                  } if result.get("dispatch") else None,
+                 "decision_id": result.get("decision_id"),
              }, sort_keys=True), now))
         result["mission_status"] = get_mission_status(
             project=project, deliverable_id=resolved_id)
@@ -11564,5 +11566,4 @@ def _mission_cache_stamp(project: str, deliverable: Dict[str, Any]) -> str:
     for proj in sorted(involved):
         parts.append(f"{proj}:{project_task_stamp(proj)}")
     return "|".join(parts)
-
 

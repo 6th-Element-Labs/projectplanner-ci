@@ -112,6 +112,8 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0030_ux_decisions_key",
      "CREATE UNIQUE INDEX IF NOT EXISTS ux_decisions_key "
      "ON decisions(decision_key) WHERE decision_key IS NOT NULL"),
+    ("0031_ix_decisions_kind",
+     "CREATE INDEX IF NOT EXISTS ix_decisions_kind ON decisions(decision_kind)"),
 ]
 
 

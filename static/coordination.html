@@ -72,6 +72,8 @@
   .kv{margin:6px 0 0;font-size:13px}
   .kv .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px}
   .kv .v{white-space:pre-wrap;word-break:break-word}
+  .json{margin:2px 0 0;white-space:pre-wrap;word-break:break-word;
+    font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cbd3e5}
   .supx{font-size:11.5px;color:var(--muted);margin-top:7px;padding-top:7px;border-top:1px dashed var(--line)}
   .tag{font-size:11px;color:var(--muted);background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:1px 7px}
   details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-top:6px;outline:none}
@@ -138,6 +140,7 @@ function fmt(ts){
   return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})+' · '+rel;
 }
 function chip(agent){ return `<span class="swatch" style="background:${colorFor(agent)}"></span><span class="mono">${esc(agent)}</span>`; }
+function pretty(value){ try{return JSON.stringify(value??{},null,2)}catch(_){return String(value??'')} }
 
 // A message is "system/drift" (automated monitor) rather than peer collaboration.
 function isSystem(m){ return m.signal==='reconcile_alert' || /^switchboard\//.test(m.from_agent||''); }
@@ -208,9 +211,10 @@ function renderConversation(peer, decisions){
       const chosen = d.chosen_action && typeof d.chosen_action==='object'?d.chosen_action:null;
       const trail = coord?`<details open><summary>explainable trail</summary>
           <div class="kv"><div class="k">Policy</div><div class="v mono">${esc(d.policy_rule||'—')}</div></div>
-          <div class="kv"><div class="k">Chosen</div><div class="v">${esc(chosen?(chosen.action||chosen.status||JSON.stringify(chosen)):d.decision)}</div></div>
-          <div class="kv"><div class="k">Skipped</div><div class="v">${skipped.length?esc(skipped.map(s=>s.action||s.reason||JSON.stringify(s)).join(' · ')):'(none)'}</div></div>
-          <div class="kv"><div class="k">Result</div><div class="v mono">${esc((d.result&&d.result.status)||JSON.stringify(d.result||{}))}</div></div>
+          <div class="kv"><div class="k">Chosen</div><pre class="json">${esc(pretty(chosen||{action:d.decision}))}</pre></div>
+          <div class="kv"><div class="k">Skipped</div><pre class="json">${esc(pretty(skipped))}</pre></div>
+          <div class="kv"><div class="k">Result</div><pre class="json">${esc(pretty(d.result||{}))}</pre></div>
+          <details><summary>inputs snapshot</summary><pre class="json">${esc(pretty(d.inputs_snapshot||{}))}</pre></details>
         </details>`:`<details><summary>rationale &amp; context</summary><div class="kv"><div class="k">Rationale</div><div class="v">${esc(d.rationale)}</div></div><div class="kv"><div class="k">Context</div><div class="v">${esc(d.context)}</div></div></details>`;
       h.push(`<div class="item decide"><div class="meta"><span class="who">${chip(d.coordinator_agent_id||d.author)}</span><span class="badge b-${esc(st)}">${esc(st)}</span>${kind}${task}<span style="margin-left:auto">${esc(fmt(d.created_at))} · ${did}</span></div>
         <div class="card"><div class="dtitle">${esc(d.title)}</div>

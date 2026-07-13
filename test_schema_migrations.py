@@ -101,5 +101,30 @@ check("corruption is NOT classified benign",
 names = [m[0] for m in ADDITIVE_COLUMN_MIGRATIONS] + [m[0] for m in DDL_MIGRATIONS]
 check("migration names are unique", len(names) == len(set(names)))
 
+# 7. Legacy decisions table: COORD-3 columns must be added before their indexes.
+# Creating those indexes in base DDL fails startup before the additive runner can repair
+# a real pre-COORD-3 database.
+c5 = mem()
+apply_schema(c5)
+c5.execute("DROP TABLE decisions")
+c5.execute("""
+    CREATE TABLE decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT, author TEXT NOT NULL, title TEXT NOT NULL, context TEXT NOT NULL,
+        decision TEXT NOT NULL, rationale TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'accepted', supersedes INTEGER, created_at REAL NOT NULL
+    )
+""")
+c5.execute("DELETE FROM schema_migrations WHERE name >= '0020'")
+apply_schema(c5)
+check("legacy decisions table gains structured coordinator columns",
+      {"decision_key", "decision_kind", "deliverable_id", "inputs_json",
+       "chosen_action_json", "skipped_alternatives_json", "result_json"}.issubset(
+           cols(c5, "decisions")))
+check("legacy decisions indexes are created after columns",
+      {"ux_decisions_key", "ix_decisions_deliverable", "ix_decisions_kind"}.issubset({
+          row["name"] for row in c5.execute("PRAGMA index_list(decisions)").fetchall()
+      }))
+
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)
