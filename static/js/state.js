@@ -22,6 +22,10 @@
     _fleetLiveTimer: null,
     _fleetSig: null,
     _fleetLoadBusy: false,
+    _boardPollMs: 10000,   // live board (kanban) refresh interval while the tab is visible
+    _boardLiveTimer: null,
+    _boardSig: null,
+    _boardLiveBusy: false,
     wsMeta: {},         // workstream_id -> {name, lead_org}
     gantt: null,        // ApexCharts instance
     ganttMode: 'task',  // default 'task' (per-task detail) · 'workstream' = 12-bar overview

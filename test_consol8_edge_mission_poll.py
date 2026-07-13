@@ -60,8 +60,8 @@ ok("cache: 'no-cache'" in app_js and "mission_status" in app_js,
    "loadMissionStatus uses cache:no-cache for ETag revalidation")
 ok("dependency_graph" in app_js and app_js.count("cache: 'no-cache'") >= 2,
    "loadDependencyGraph uses cache:no-cache for ETag revalidation")
-ok("document.hidden" in app_js and "_ackPoll" in app_js,
-   "ack inbox poll skips ticks while the tab is hidden")
+ok("_pollDueWhileHidden('_ackHiddenAt')" in app_js and "_ackPoll" in app_js,
+   "ack inbox poll stays live in a backgrounded tab (throttled via _pollDueWhileHidden, not paused)")
 ok("visibilitychange" in app_js and "loadAckInbox" in app_js,
    "ack inbox refreshes on tab refocus")
 

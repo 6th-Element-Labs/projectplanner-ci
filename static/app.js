@@ -1282,6 +1282,43 @@ const TeepPlan = {
             this._fleetLiveTimer = null;
         }
     },
+    // Live board (kanban): keep every open board tab current. Refetch api/board on an interval,
+    // re-render ONLY when a board-visible field changed (never disturb the view mid-look), and
+    // preserve the board's horizontal scroll across the re-render. One always-on timer that
+    // self-gates on the board tab being active + throttles hidden tabs, so it covers deep-linked
+    // and freshly-opened tabs without hooking every tab-activation path.
+    _boardSignature() {
+        return (this.tasks || []).map((t) =>
+            [t.task_id, t.status, t.phase, t.is_blocking ? 1 : 0, t.assignee || '', t.effort_days || 0, t.risk_level || ''].join(':')
+        ).sort().join('|');
+    },
+    async _boardLiveTick() {
+        const pane = document.getElementById('tab-board');
+        if (!pane || !pane.classList.contains('active')) return;   // only while the board tab is showing
+        if (!this._pollDueWhileHidden('_boardHiddenAt')) return;    // keep hidden tabs live, just slower
+        if (this._boardLiveBusy) return;
+        this._boardLiveBusy = true;
+        try {
+            this.plan = await (await fetch('api/board', { cache: 'no-store' })).json();
+            this.flatten();
+        } catch (e) { this._boardLiveBusy = false; return; }   // transient (network blip / agent mid-write) — retry next tick
+        this._boardLiveBusy = false;
+        const sig = this._boardSignature();
+        if (sig === this._boardSig) return;   // nothing board-visible changed -> don't disturb the view
+        this._boardSig = sig;
+        const board = document.getElementById('board');
+        const sl = board ? board.scrollLeft : 0, st = board ? board.scrollTop : 0;
+        this.renderBoard();
+        const b2 = document.getElementById('board');
+        if (b2) { b2.scrollLeft = sl; b2.scrollTop = st; }   // keep the user's scroll across the re-render
+    },
+    _startBoardLive() {
+        if (this._boardLiveTimer) return;   // one always-on timer; the tick self-gates on the active tab + hidden throttle
+        this._boardLiveTimer = window.setInterval(() => this._boardLiveTick(), this._boardPollMs || 10000);
+    },
+    _stopBoardLive() {
+        if (this._boardLiveTimer) { window.clearInterval(this._boardLiveTimer); this._boardLiveTimer = null; }
+    },
     // ---- Attention model: the mission action queue, grouped by owner ------------
     _ownerBadge(owner) {
         const m = {
@@ -4639,13 +4676,17 @@ const TeepPlan = {
         if (ackRefresh) ackRefresh.addEventListener('click', () => this.loadAckInbox(true));
         // Prime the bell badge and keep it fresh (unacked required messages the operator sent).
         this.loadAckInbox();
-        // CONSOL-8: skip the tick while the tab is hidden (matches the mission/fleet pollers)
-        // so a backgrounded tab stops hitting the box every 30s; refresh on refocus below.
-        if (!this._ackPoll) this._ackPoll = setInterval(() => { if (!document.hidden) this.loadAckInbox(); }, 30000);
+        // Keep the bell fresh even in a backgrounded tab (throttled for hidden tabs via
+        // _pollDueWhileHidden; 30s interval already >= the hidden gap, so it effectively stays 30s);
+        // refresh immediately on refocus below.
+        if (!this._ackPoll) this._ackPoll = setInterval(() => { if (this._pollDueWhileHidden('_ackHiddenAt')) this.loadAckInbox(); }, 30000);
         if (!this._ackVisSync) {
             this._ackVisSync = true;
             document.addEventListener('visibilitychange', () => { if (!document.hidden) this.loadAckInbox(); });
         }
+        // Live board: one always-on timer (the tick self-gates on the board tab being active),
+        // so the kanban stays current in every open/background tab without a per-tab hook.
+        this._startBoardLive();
         // UI-4: API keys settings (create / list / revoke scoped tokens).
         const apikeysBtn = document.getElementById('btn-project-apikeys');
         if (apikeysBtn) apikeysBtn.addEventListener('click', () => this.openApiKeys(window.PM_PROJECT));
@@ -4852,6 +4893,8 @@ const TeepPlan = {
                 this._startFleetLive();
                 this._loadFleetDock(false);
                 if (tab && tab.classList.contains('active')) { this._startMissionLive(); this._missionLiveTick(); }
+                const bpane = document.getElementById('tab-board');
+                if (bpane && bpane.classList.contains('active')) { this._startBoardLive(); this._boardLiveTick(); }
             });
         }
     },
