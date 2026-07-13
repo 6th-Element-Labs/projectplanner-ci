@@ -637,6 +637,56 @@ def deliver_human_escalation(
     return receipt
 
 
+def classify_merge_gate_result(gate: Dict[str, Any], *, project: str,
+                               task_id: str = "",
+                               deliverable_id: str = "") -> Optional[Dict[str, Any]]:
+    """Map a blocked ``merge_gate`` receipt to a COORD-6 escalation plan (COORD-7)."""
+    if not isinstance(gate, dict):
+        return None
+    if gate.get("ok") is True or str(gate.get("status") or "").strip().lower() == "passed":
+        return None
+    findings = gate.get("findings") if isinstance(gate.get("findings"), list) else []
+    codes = " ".join(str((f or {}).get("code") or "") for f in findings).lower()
+    classes = " ".join(str((f or {}).get("failure_class") or "") for f in findings).lower()
+    detail = "; ".join(
+        str((f or {}).get("detail") or (f or {}).get("message") or (f or {}).get("code") or "")
+        for f in findings
+    ) or str(gate.get("message") or gate.get("error") or "merge_gate blocked")
+
+    blob = f"{codes} {classes}"
+    if any(tok in blob for tok in (
+            "stale_branch", "stale_head", "conflict", "not_mergeable", "pr_not_mergeable")):
+        klass = "stale_branch_conflict"
+    elif any(tok in blob for tok in (
+            "missing_provenance", "task_not_backed", "no_provenance", "missing_pr")):
+        klass = "missing_provenance"
+    elif any(tok in blob for tok in (
+            "absent_permission", "permission", "unauthorized", "authority")):
+        klass = "absent_permission"
+    elif "human_gate" in blob:
+        klass = "human_gate_required"
+    elif any(tok in blob for tok in (
+            "required_status", "external_ci", "failed_gate", "red_ci", "checks")):
+        klass = "failed_gate"
+    else:
+        klass = "failed_gate"
+
+    return build_escalation_plan(
+        escalation_class=klass,
+        project=project,
+        task_id=task_id,
+        deliverable_id=deliverable_id,
+        failed_condition=detail,
+        source={"kind": "merge_gate", "gate": {
+            "status": gate.get("status"),
+            "ok": gate.get("ok"),
+            "findings": findings[:8],
+        }},
+        blocks=["merge"],
+        severity="high",
+    )
+
+
 def deliver_mission_escalations(
     escalations: Sequence[Dict[str, Any]],
     *,

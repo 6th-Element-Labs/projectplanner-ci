@@ -287,6 +287,44 @@ def coordinator_review():
     return result
 
 
+def coordinator_merge():
+    """Run the COORD-7 T3 merge steward across selected projects.
+
+    Default is dry-run: plan + COORD-3 decisions + activity artifact, no GitHub arm.
+    Acting requires ``PM_COORDINATOR_MERGE_ACT=1`` plus policy enabled/authority env
+    flags. Never sets Done — post-arm reconcile only.
+    """
+    import merge_steward as merge_mod
+
+    projects = _configured_projects("PM_COORDINATOR_MERGE_PROJECTS", "switchboard")
+    persist = merge_mod.enabled_from_env("PM_COORDINATOR_MERGE_LOG", True)
+    dry_run = not merge_mod.enabled_from_env("PM_COORDINATOR_MERGE_ACT", False)
+    actor = (os.environ.get("PM_COORDINATOR_MERGE_ACTOR") or
+             "switchboard/coordinator-t3").strip()
+    operator = (os.environ.get("PM_COORDINATOR_MERGE_OPERATOR") or
+                "switchboard/operator").strip()
+    saturated = merge_mod.enabled_from_env("PM_COORDINATOR_MERGE_SATURATED", False)
+    try:
+        in_flight = int(os.environ.get("PM_COORDINATOR_MERGE_IN_FLIGHT", "0") or 0)
+    except ValueError:
+        in_flight = 0
+    policy = merge_mod.load_merge_policy()
+    result = merge_mod.steward_projects(
+        projects,
+        actor=actor,
+        dry_run=dry_run,
+        persist=persist,
+        policy=policy,
+        saturated=saturated,
+        in_flight=in_flight,
+        operator_agent=operator,
+    )
+    print(json.dumps(result, sort_keys=True))
+    if not result.get("ok"):
+        raise RuntimeError("coordinator merge steward failed closed; inspect the receipt")
+    return result
+
+
 def claim_gate_prs():
     """Post SESSION-12 claim-gate commit statuses for open fleet PRs (CI-7).
 
@@ -345,6 +383,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "reconcile_alerts": reconcile_alerts,
         "coordinator_audit": coordinator_audit,
         "coordinator_review": coordinator_review,
+        "coordinator_merge": coordinator_merge,
         "claim_gate_prs": claim_gate_prs,
         "dispatch_ci": dispatch_ci,
         "dispatch_scratchpad": dispatch_scratchpad,
