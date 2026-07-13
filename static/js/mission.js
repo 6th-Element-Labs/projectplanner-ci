@@ -466,14 +466,18 @@
                 <div class="card-body text-secondary small">No dependency graph yet — <a href="#" data-dl-action="link">link a task</a> to start the strategic map.</div></div>`;
         }
         const stats = g.stats || {};
+        // Logical workflow order: an external dep is upstream of everything; then the
+        // lifecycle a linked task actually moves through (not started → ... → done);
+        // Blocker is appended last (below) since it's an overlay on any of these states,
+        // not a stage of its own.
         const legend = [
-            ['done', 'Done ✓ proof', '#a3d9b7', '#1e7e34'],
-            ['done_unproven', 'Done (no proof)', '#a6e3d0', '#12b886'],
+            ['external', 'External dep', '#f8f9fa', '#adb5bd'],
+            ['todo', 'Not started', '#e9ecef', '#6c757d'],
             ['in_progress', 'In progress', '#8fb8fd', '#0b5ed7'],
             ['in_review', 'In review', '#ffe083', '#e0a800'],
             ['blocked', 'Blocked', '#f5a3a9', '#c82333'],
-            ['todo', 'Not started', '#e9ecef', '#6c757d'],
-            ['external', 'External dep', '#f8f9fa', '#adb5bd'],
+            ['done_unproven', 'Done (no proof)', '#a6e3d0', '#12b886'],
+            ['done', 'Done ✓ proof', '#a3d9b7', '#1e7e34'],
         ].map(([key, label, fill, stroke]) =>
             `<span class="badge me-2 mb-1" style="background:${fill};color:#333;border:1px solid ${stroke}">${this.esc(label)}</span>`).join('') +
             `<span class="badge me-2 mb-1" style="background:#fff;color:#842029;border:3px solid #842029;font-weight:600" title="Unfinished tasks that other work depends on — what's holding the flow up">Blocker</span>`;
