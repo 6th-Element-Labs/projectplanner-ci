@@ -11,6 +11,7 @@ from switchboard.application.commands import (
     project_consolidation,
     project_lifecycle,
     project_metadata,
+    project_purge,
 )
 from switchboard.application.queries import project_admin, project_impact
 
@@ -187,6 +188,80 @@ def create_router(*, resolve_project: ProjectResolver,
              "consolidation_id": consolidation_id, "actor": auth.actor(principal)},
             access_repository=store.access_repository,
             project_configs=store._project_map(),
+        )
+        if result.get("error"):
+            raise HTTPException(409, result)
+        return result
+
+    @router.post("/api/projects/{project}/purge/intents")
+    def create_project_purge_intent(request: Request, project: str,
+                                    body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:system",), dev_actor="web")
+        result = project_purge.create_purge_intent(
+            {**dict(body or {}), "project_id": project_id,
+             "actor": auth.actor(principal)},
+            access_repository=store.access_repository,
+            project_configs=store._project_map(),
+            registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+            repo_topology_provider=store.get_project_repo_topology,
+        )
+        if result.get("error"):
+            raise HTTPException(409 if not str(result["error"]).startswith("invalid_") else 400,
+                                result)
+        return result
+
+    @router.post("/api/projects/{project}/purge/intents/{intent_id}/verify")
+    def verify_project_purge_intent(request: Request, project: str, intent_id: str,
+                                    body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:system",), dev_actor="web")
+        result = project_purge.verify_purge_intent(
+            {**dict(body or {}), "project_id": project_id, "intent_id": intent_id,
+             "verifier": auth.actor(principal)},
+            access_repository=store.access_repository,
+            project_configs=store._project_map(),
+            registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+            repo_topology_provider=store.get_project_repo_topology,
+        )
+        if result.get("error"):
+            raise HTTPException(409, result)
+        return result
+
+    @router.post("/api/projects/{project}/purge/intents/{intent_id}/execute")
+    def execute_project_purge(request: Request, project: str, intent_id: str,
+                              body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:system",), dev_actor="web")
+        result = project_purge.execute_purge(
+            {**dict(body or {}), "project_id": project_id, "intent_id": intent_id,
+             "actor": auth.actor(principal)},
+            access_repository=store.access_repository,
+            project_configs=store._project_map(),
+            registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+            repo_topology_provider=store.get_project_repo_topology,
+        )
+        if result.get("error"):
+            raise HTTPException(409, result)
+        return result
+
+    @router.post("/api/projects/{project}/cleanup-review")
+    def record_project_cleanup_review(request: Request, project: str,
+                                      body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:system",), dev_actor="web")
+        actor_name = auth.actor(principal)
+        result = project_purge.record_cleanup_review(
+            {**dict(body or {}), "project_id": project_id,
+             "approved_by": actor_name},
+            access_repository=store.access_repository,
+            project_configs=store._project_map(),
+            registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+            repo_topology_provider=store.get_project_repo_topology,
         )
         if result.get("error"):
             raise HTTPException(409, result)

@@ -172,6 +172,13 @@ def restore_project(
     current = access_repository.get_project_record(project_id)
     if current.get("error"):
         return current
+    if current.get("lifecycle_status") == "purged":
+        return {
+            "schema": TRANSITION_RESULT_SCHEMA,
+            "error": "project_purged",
+            "project_id": project_id,
+            "message": "purged projects cannot be restored",
+        }
     access = access_repository.project_access(project_id) or {}
     access_valid = bool(access.get("project_id") == project_id and access.get("org_id"))
     try:

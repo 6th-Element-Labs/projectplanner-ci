@@ -196,9 +196,18 @@ def execute_for(project: str, *, access_repository: AccessRepository,
     project_record = access_repository.get_project_record(project_id)
     if project_record.get("error"):
         return project_record
+    # A purged project deliberately retains registry/audit state after its isolated
+    # SQLite files are removed.  Exclude those tombstones from cross-project database
+    # scans so one successful purge cannot make every later impact audit incomplete.
+    scan_configs = {}
+    for candidate_id, config in project_configs.items():
+        candidate = access_repository.get_project_record(candidate_id)
+        if (candidate_id == project_id or candidate.get("error") or
+                candidate.get("lifecycle_status") != "purged"):
+            scan_configs[candidate_id] = config
     snapshot = impact_repository.collect(
         project_id,
-        project_configs=project_configs,
+        project_configs=scan_configs,
         registry_db_path=registry_db_path,
         limit=bounded_limit,
     )

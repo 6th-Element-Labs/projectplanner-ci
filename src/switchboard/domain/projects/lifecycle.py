@@ -3,17 +3,18 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-PROJECT_LIFECYCLE_STATUSES = frozenset({"active", "archived"})
+PROJECT_LIFECYCLE_STATUSES = frozenset({"active", "archived", "purged"})
 PROJECT_LIFECYCLE_WRITE_BLOCK_SCHEMA = "switchboard.project_lifecycle_write_block.v1"
 
 
 class ProjectLifecycleWriteBlocked(PermissionError):
     """Raised by the central store boundary when an archived project is mutated."""
 
-    def __init__(self, project_id: str, operation: str = "write") -> None:
+    def __init__(self, project_id: str, operation: str = "write",
+                 lifecycle_status: str = "archived") -> None:
         self.project_id = str(project_id or "").strip()
         self.operation = str(operation or "write").strip() or "write"
-        self.detail = lifecycle_write_block(self.project_id, "archived", self.operation)
+        self.detail = lifecycle_write_block(self.project_id, lifecycle_status, self.operation)
         super().__init__(self.detail["message"])
 
 
@@ -21,19 +22,21 @@ def lifecycle_write_block(project_id: str, lifecycle_status: str,
                           operation: str = "write") -> dict[str, Any] | None:
     """Return the stable denial contract for an archived project, else ``None``."""
     status = normalize_lifecycle_status(lifecycle_status)
-    if status != "archived":
+    if status not in {"archived", "purged"}:
         return None
     pid = str(project_id or "").strip()
     op = str(operation or "write").strip() or "write"
     return {
         "schema": PROJECT_LIFECYCLE_WRITE_BLOCK_SCHEMA,
-        "error": "project_archived",
+        "error": "project_purged" if status == "purged" else "project_archived",
         "failure_class": "failed_gate",
         "project_id": pid,
-        "lifecycle_status": "archived",
+        "lifecycle_status": status,
         "operation": op,
         "message": (
-            f"project '{pid}' is archived; '{op}' is read-only until restore_project succeeds"
+            (f"project '{pid}' is purged; '{op}' is permanently unavailable"
+             if status == "purged" else
+             f"project '{pid}' is archived; '{op}' is read-only until restore_project succeeds")
         ),
     }
 
@@ -42,7 +45,7 @@ def assert_project_write_allowed(project_id: str, lifecycle_status: str,
                                  operation: str = "write") -> None:
     """Raise the typed denial used by REST, MCP, schedulers, and store entry points."""
     if lifecycle_write_block(project_id, lifecycle_status, operation):
-        raise ProjectLifecycleWriteBlocked(project_id, operation)
+        raise ProjectLifecycleWriteBlocked(project_id, operation, lifecycle_status)
 
 
 def default_lifecycle_status() -> str:
@@ -76,7 +79,7 @@ def validate_lifecycle_transition(
             "lifecycle_status": cur,
             "requested": nxt,
         }
-    allowed = {("active", "archived"), ("archived", "active")}
+    allowed = {("active", "archived"), ("archived", "active"), ("archived", "purged")}
     if (cur, nxt) not in allowed:
         return {
             "error": "invalid lifecycle transition",

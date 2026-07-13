@@ -44,6 +44,10 @@ REGISTRY_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str, str]] = [
      "ALTER TABLE projects ADD COLUMN updated_at REAL", ""),
     ("access18_projects_updated_by", "projects", "updated_by",
      "ALTER TABLE projects ADD COLUMN updated_by TEXT", ""),
+    ("access24_projects_purged_at", "projects", "purged_at",
+     "ALTER TABLE projects ADD COLUMN purged_at REAL", ""),
+    ("access24_projects_purge_intent_id", "projects", "purge_intent_id",
+     "ALTER TABLE projects ADD COLUMN purge_intent_id TEXT", ""),
     ("access18_project_access_updated_by", "project_access", "updated_by",
      "ALTER TABLE project_access ADD COLUMN updated_by TEXT", ""),
 ]
@@ -227,5 +231,60 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
     if first_protected_backfill:
         _record(c, protected_records_migration)
         newly.append(protected_records_migration)
+
+    purge_migration = "access24_project_purge"
+    if purge_migration not in done:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS project_purge_intents (
+                intent_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                intent_hash TEXT NOT NULL UNIQUE,
+                impact_report_hash TEXT NOT NULL,
+                export_uri TEXT NOT NULL,
+                export_hash TEXT NOT NULL,
+                export_created_at REAL NOT NULL,
+                retention_days INTEGER NOT NULL,
+                intent_json TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                verified_by TEXT,
+                verified_at REAL,
+                executed_by TEXT,
+                executed_at REAL,
+                failure_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_project_purge_intents_project
+                ON project_purge_intents(project_id, created_at, intent_id);
+            CREATE TABLE IF NOT EXISTS project_purge_tombstones (
+                tombstone_id TEXT PRIMARY KEY,
+                intent_id TEXT NOT NULL UNIQUE,
+                project_id TEXT NOT NULL,
+                registry_record_json TEXT NOT NULL,
+                audit_receipt_json TEXT NOT NULL,
+                database_path_hash TEXT NOT NULL,
+                database_removed INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS project_cleanup_reviews (
+                review_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                impact_report_hash TEXT NOT NULL,
+                impact_receipt_json TEXT NOT NULL,
+                approved_by TEXT NOT NULL,
+                approved_at REAL NOT NULL,
+                rationale TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(project_id, impact_report_hash)
+            );
+            CREATE INDEX IF NOT EXISTS ix_project_cleanup_reviews_project
+                ON project_cleanup_reviews(project_id, created_at, review_id);
+            """
+        )
+        _record(c, purge_migration)
+        newly.append(purge_migration)
 
     return newly

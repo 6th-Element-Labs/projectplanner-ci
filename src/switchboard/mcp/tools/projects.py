@@ -12,6 +12,7 @@ from switchboard.application.commands import (
     project_consolidation,
     project_lifecycle,
     project_metadata,
+    project_purge,
 )
 from switchboard.application.queries import project_admin, project_impact
 
@@ -217,11 +218,80 @@ def rollback_project_consolidation(ctx: Context, project: str,
     return services.dumps(result)
 
 
+def create_project_purge_intent(ctx: Context, project: str, reason: str,
+                                retention_days: int, export_evidence_json: str,
+                                typed_confirmation: str) -> str:
+    """Prepare a guarded purge intent; this never deletes project data."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    try:
+        evidence = json.loads(export_evidence_json or "")
+    except (TypeError, json.JSONDecodeError):
+        return services.dumps({"error": "export_evidence_json must be valid JSON"})
+    return services.dumps(project_purge.create_purge_intent(
+        {"project_id": project, "reason": reason, "retention_days": retention_days,
+         "export": evidence, "typed_confirmation": typed_confirmation,
+         "actor": services.principal_actor(principal)},
+        access_repository=store.access_repository, project_configs=store._project_map(),
+        registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+        repo_topology_provider=store.get_project_repo_topology))
+
+
+def verify_project_purge_intent(ctx: Context, project: str, intent_id: str,
+                                typed_confirmation: str) -> str:
+    """Perform the required second, current-state verification for a purge intent."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    return services.dumps(project_purge.verify_purge_intent(
+        {"project_id": project, "intent_id": intent_id,
+         "typed_confirmation": typed_confirmation,
+         "verifier": services.principal_actor(principal)},
+        access_repository=store.access_repository, project_configs=store._project_map(),
+        registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+        repo_topology_provider=store.get_project_repo_topology))
+
+
+def execute_project_purge(ctx: Context, project: str, intent_id: str,
+                          explicit_authorization: str) -> str:
+    """Execute an independently authorized, verified purge and retain its tombstone."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    return services.dumps(project_purge.execute_purge(
+        {"project_id": project, "intent_id": intent_id,
+         "explicit_authorization": explicit_authorization,
+         "actor": services.principal_actor(principal)},
+        access_repository=store.access_repository, project_configs=store._project_map(),
+        registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+        repo_topology_provider=store.get_project_repo_topology))
+
+
+def record_project_cleanup_review(ctx: Context, project: str, decision: str,
+                                  impact_report_receipt_json: str, approved_at: float,
+                                  rationale: str) -> str:
+    """Persist an operator-reviewed keep/consolidate/archive recommendation only."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    try:
+        receipt = json.loads(impact_report_receipt_json or "")
+    except (TypeError, json.JSONDecodeError):
+        return services.dumps({"error": "impact_report_receipt_json must be valid JSON"})
+    actor = services.principal_actor(principal)
+    return services.dumps(project_purge.record_cleanup_review(
+        {"project_id": project, "decision": decision,
+         "impact_report_receipt": receipt, "approved_by": actor,
+         "approved_at": approved_at, "rationale": rationale},
+        access_repository=store.access_repository, project_configs=store._project_map(),
+        registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
+        repo_topology_provider=store.get_project_repo_topology))
+
+
 PROJECT_TOOL_NAMES = (
     "get_project", "update_project", "get_project_impact_report",
     "archive_project", "restore_project",
     "plan_project_consolidation", "apply_project_consolidation",
     "verify_project_consolidation", "rollback_project_consolidation",
+    "create_project_purge_intent", "verify_project_purge_intent",
+    "execute_project_purge", "record_project_cleanup_review",
 )
 
 

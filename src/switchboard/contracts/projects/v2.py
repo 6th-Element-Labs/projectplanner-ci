@@ -56,6 +56,8 @@ class ProjectRecord(VersionedModel):
     archived_at: float | None = None
     archived_by: str | None = None
     archive_reason: str | None = None
+    purged_at: float | None = None
+    purge_intent_id: str | None = None
     is_protected: bool = False
     is_system: bool = False
     replacement_project_id: str | None = None
@@ -80,7 +82,7 @@ class ProjectRecord(VersionedModel):
     def _blank_access_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("archived_by", "archive_reason", "replacement_project_id",
+    @field_validator("archived_by", "archive_reason", "purge_intent_id", "replacement_project_id",
                      "replacement_board_id", "replacement_mission_id",
                      "replacement_deliverable_id", "replacement_consolidation_id",
                      "updated_by", "created_by",

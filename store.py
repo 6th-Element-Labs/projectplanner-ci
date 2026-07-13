@@ -11292,6 +11292,15 @@ def _audit_registry_scope(project: str) -> Dict[str, Any]:
             "SELECT * FROM project_lifecycle_events WHERE project_id=? "
             "ORDER BY created_at, event_id", (project,),
         ).fetchall()
+        purge_intents = c.execute(
+            "SELECT * FROM project_purge_intents WHERE project_id=? "
+            "ORDER BY created_at, intent_id", (project,)).fetchall()
+        purge_tombstones = c.execute(
+            "SELECT * FROM project_purge_tombstones WHERE project_id=? "
+            "ORDER BY created_at, tombstone_id", (project,)).fetchall()
+        cleanup_reviews = c.execute(
+            "SELECT * FROM project_cleanup_reviews WHERE project_id=? "
+            "ORDER BY created_at, review_id", (project,)).fetchall()
         orgs = []
         users = []
         memberships = []
@@ -11314,10 +11323,30 @@ def _audit_registry_scope(project: str) -> Dict[str, Any]:
         item = dict(row)
         item["validation"] = _json_payload(item.pop("validation_json", ""))
         lifecycle_event_records.append(item)
+    purge_intent_records = []
+    for row in purge_intents:
+        item = dict(row)
+        item["intent"] = _json_payload(item.pop("intent_json", ""))
+        item["failure"] = _json_payload(item.pop("failure_json", ""))
+        purge_intent_records.append(item)
+    purge_tombstone_records = []
+    for row in purge_tombstones:
+        item = dict(row)
+        item["registry_record"] = _json_payload(item.pop("registry_record_json", ""))
+        item["audit_receipt"] = _json_payload(item.pop("audit_receipt_json", ""))
+        purge_tombstone_records.append(item)
+    cleanup_review_records = []
+    for row in cleanup_reviews:
+        item = dict(row)
+        item["impact_report_receipt"] = _json_payload(item.pop("impact_receipt_json", ""))
+        cleanup_review_records.append(item)
     return _audit_redact({
         "project_access": dict(project_access) if project_access else None,
         "project_role_grants": [dict(r) for r in role_grants],
         "project_lifecycle_events": lifecycle_event_records,
+        "project_purge_intents": purge_intent_records,
+        "project_purge_tombstones": purge_tombstone_records,
+        "project_cleanup_reviews": cleanup_review_records,
         "orgs": [dict(r) for r in orgs],
         "users": [dict(r) for r in users],
         "org_memberships": [dict(r) for r in memberships],

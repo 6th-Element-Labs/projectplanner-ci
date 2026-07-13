@@ -106,6 +106,8 @@ def get_project_record(project_id: str) -> Dict[str, Any]:
         "archived_at": row.get("archived_at"),
         "archived_by": row.get("archived_by"),
         "archive_reason": row.get("archive_reason"),
+        "purged_at": row.get("purged_at"),
+        "purge_intent_id": row.get("purge_intent_id"),
         "is_protected": bool(row.get("is_protected")),
         "is_system": bool(row.get("is_system")),
         "replacement_project_id": row.get("replacement_project_id"),
@@ -190,11 +192,18 @@ def transition_project_lifecycle(project_id: str, requested: str, *, actor: str,
                 "archive_reason=?, updated_at=?, updated_by=? WHERE id=?",
                 ("archived", now, actor_name, reason_text, now, actor_name, pid),
             )
-        else:
+        elif requested_status == "active":
             c.execute(
                 "UPDATE projects SET lifecycle_status=?, archived_at=NULL, archived_by=NULL, "
                 "archive_reason=NULL, updated_at=?, updated_by=? WHERE id=?",
                 ("active", now, actor_name, pid),
+            )
+        else:
+            c.execute(
+                "UPDATE projects SET lifecycle_status='purged', purged_at=?, "
+                "purge_intent_id=?, updated_at=?, updated_by=? WHERE id=?",
+                (now, str((validation or {}).get("purge_intent_id") or "") or None,
+                 now, actor_name, pid),
             )
         c.execute(
             "INSERT INTO project_lifecycle_events(event_id, project_id, from_status, to_status, "

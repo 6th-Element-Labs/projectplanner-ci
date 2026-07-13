@@ -267,7 +267,9 @@ def _write_required_scopes(path: str) -> tuple:
     if re.fullmatch(r"/api/projects/[^/]+", path):
         return ("write:projects",)
     if ((path.startswith("/api/projects/") and
-         (path.endswith(("/archive", "/restore", "/repo_topology", "/github_repo")) or "/consolidation/" in path)) or
+         (path.endswith(("/archive", "/restore", "/repo_topology", "/github_repo",
+                         "/cleanup-review")) or
+          "/consolidation/" in path or "/purge/" in path)) or
             path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))):
         return ("write:system",)
     return ("write:tasks",)

@@ -24,6 +24,16 @@ from .lifecycle import (
     ArchiveProjectCommand,
     RestoreProjectCommand,
 )
+from .purge import (
+    CLEANUP_REVIEW_COMMAND_SCHEMA,
+    PURGE_EXECUTE_COMMAND_SCHEMA,
+    PURGE_INTENT_COMMAND_SCHEMA,
+    PURGE_VERIFY_COMMAND_SCHEMA,
+    CreatePurgeIntentCommand,
+    ExecutePurgeCommand,
+    RecordCleanupReviewCommand,
+    VerifyPurgeIntentCommand,
+)
 from .v2 import (
     PROJECT_RECORD_SCHEMA,
     PROJECT_UPDATE_COMMAND_SCHEMA,
@@ -43,6 +53,10 @@ __all__ = [
     "PROJECT_RECORD_SCHEMA",
     "PROJECT_UPDATE_COMMAND_SCHEMA",
     "RESTORE_PROJECT_COMMAND_SCHEMA",
+    "CLEANUP_REVIEW_COMMAND_SCHEMA",
+    "PURGE_EXECUTE_COMMAND_SCHEMA",
+    "PURGE_INTENT_COMMAND_SCHEMA",
+    "PURGE_VERIFY_COMMAND_SCHEMA",
     "ArchiveProjectCommand",
     "ApplyProjectConsolidationCommand",
     "ConsolidationApproval",
@@ -52,6 +66,10 @@ __all__ = [
     "ProjectRecord",
     "ProjectUpdateCommand",
     "RestoreProjectCommand",
+    "CreatePurgeIntentCommand",
+    "ExecutePurgeCommand",
+    "RecordCleanupReviewCommand",
+    "VerifyPurgeIntentCommand",
     "RollbackProjectConsolidationCommand",
     "build_consolidation_plan_receipt",
     "build_impact_receipt",
