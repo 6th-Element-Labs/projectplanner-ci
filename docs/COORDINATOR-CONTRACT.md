@@ -1,8 +1,8 @@
 # Coordinator Agent — Operating Contract & Escalation Policy
 
-- **Status:** Draft v1 (COORD-1). First-class role definition; implementation gated behind this contract.
+- **Status:** Draft v1 (COORD-1). First-class role definition; T0 observer implemented by COORD-2, higher tiers remain gated behind this contract.
 - **Owner:** Product / Control Plane
-- **Relates to:** [PRD §6, §18, FR-23–29](PRD-AGENT-COORDINATION-LAYER.md) · [AGENT-HOST-SPEC](AGENT-HOST-SPEC.md) · [ADR-0003 work provenance](decisions/0003-work-provenance-and-reconciliation.md) · `mission_coordinator.py` · `dispatch.py` · `merge_coordinator.py`
+- **Relates to:** [PRD §6, §18, FR-23–29](PRD-AGENT-COORDINATION-LAYER.md) · [AGENT-HOST-SPEC](AGENT-HOST-SPEC.md) · [ADR-0003 work provenance](decisions/0003-work-provenance-and-reconciliation.md) · [T0 audit loop](COORDINATOR-AUDIT-LOOP.md) · `mission_coordinator.py` · `dispatch.py` · `merge_coordinator.py`
 - **One line:** The Coordinator is a first-class Switchboard role that orchestrates **plan + dispatch** across a fleet — it decides *what work is ready, who should do it, and when* — and **never executes a task's steps, never merges outside the safe path, and never sets Done.** It holds *less* authority than a coding agent, not more, and every capability is opt-in per project at a named risk tier.
 
 ---
@@ -43,7 +43,7 @@ Tiers are cumulative: each includes the ones below it. **Default for a newly-reg
 
 ### T0 — Observer (read-only) · default
 - **Mandate:** See the whole fleet and tell the truth about it.
-- **May:** read board/health/economics/dispatch state (`board_summary`, `get_plan_signals`, `get_lane_delta`, `get_mission_status`, `list_active_agents`, `host_status`, `get_mcp_observability`, Tally rollups); produce digests, dependency analyses, and *recommended* plans as output only.
+- **May:** read board/health/economics/dispatch state (`board_summary`, `get_plan_signals`, `get_lane_delta`, `get_mission_status`, `list_active_agents`, `host_status`, `get_mcp_observability`, Tally rollups); produce digests, dependency analyses, and *recommended* plans as output only. The shipped [COORD-2 audit loop](COORDINATOR-AUDIT-LOOP.md) uses a query-only local projection and may append only its own bounded plan artifact.
 - **May NOT:** perform any write that changes work state — no wake, no claim, no comment-as-instruction, no merge, no task edits.
 - **Scopes:** `read` only.
 - **Escalate when:** it observes anything in §5 (surfacing is its whole job at T0).

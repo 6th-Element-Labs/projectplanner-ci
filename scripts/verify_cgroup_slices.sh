@@ -64,6 +64,7 @@ for unit in \
   projectplanner-monitors.service \
   projectplanner-inbox.service \
   projectplanner-reconcile.service \
+  projectplanner-coordinator-audit.service \
   projectplanner-summarize.service \
   projectplanner-digest.service \
   projectplanner-claim-gate.service \

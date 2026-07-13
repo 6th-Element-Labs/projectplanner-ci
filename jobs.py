@@ -5,6 +5,8 @@ workflow engine. Each job is a plain function; the timer invokes this module.
   python jobs.py weekly_digest    # generate the digest + deliver via notify (Slack+Email)
   python jobs.py sweep_monitors   # evaluate Switchboard durable coordination monitors
   python jobs.py reconcile_alerts # run reconcile and send deduped drift alerts
+  python jobs.py coordinator_audit
+                                  # emit T0 read-only ranked coordinator plans
   python jobs.py background_job <job_name>
                                    # run a checkpointed background job (RECON-10)
 
@@ -220,6 +222,35 @@ def reconcile_alerts():
                 "deduped": deduped, "incremental": incremental, "results": results}
 
 
+def coordinator_audit():
+    """Run the COORD-2 T0 observer across explicitly selected projects.
+
+    The observation/planning core opens every board with SQLite mode=ro + query_only.
+    Its only persistent effect is one bounded ``coordinator.audit.plan`` activity per
+    selected project when PM_COORDINATOR_AUDIT_LOG is enabled (the default).
+    """
+    import coordinator_audit as audit_mod
+
+    projects = _configured_projects("PM_COORDINATOR_AUDIT_PROJECTS", "switchboard")
+    persist = audit_mod.enabled_from_env("PM_COORDINATOR_AUDIT_LOG", True)
+    max_recommendations = int(os.environ.get("PM_COORDINATOR_AUDIT_MAX_RECOMMENDATIONS", "100"))
+    reconcile_stale_seconds = int(
+        os.environ.get("PM_COORDINATOR_AUDIT_RECONCILE_STALE_SECONDS", "900"))
+    actor = (os.environ.get("PM_COORDINATOR_AUDIT_ACTOR") or
+             "switchboard/coordinator-t0").strip()
+    result = audit_mod.audit_projects(
+        projects,
+        actor=actor,
+        persist=persist,
+        max_recommendations=max_recommendations,
+        reconcile_stale_seconds=reconcile_stale_seconds,
+    )
+    print(json.dumps(result, sort_keys=True))
+    if not result.get("ok"):
+        raise RuntimeError("coordinator audit failed closed; inspect the emitted receipt")
+    return result
+
+
 def claim_gate_prs():
     """Post SESSION-12 claim-gate commit statuses for open fleet PRs (CI-7).
 
@@ -276,6 +307,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "narrate_events": narrate_events,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
+        "coordinator_audit": coordinator_audit,
         "claim_gate_prs": claim_gate_prs,
         "dispatch_ci": dispatch_ci,
         "dispatch_scratchpad": dispatch_scratchpad,

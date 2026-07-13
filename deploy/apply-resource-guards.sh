@@ -22,7 +22,7 @@ systemctl daemon-reload
 INTERACTIVE_UNITS=(projectplanner projectplanner-mcp projectplanner-gateway projectplanner-agent-host)
 BATCH_UNITS=(projectplanner-narrate projectplanner-monitors projectplanner-inbox
              projectplanner-reconcile projectplanner-summarize projectplanner-digest
-             projectplanner-claim-gate projectplanner-backup)
+             projectplanner-coordinator-audit projectplanner-claim-gate projectplanner-backup)
 LEGACY_PROPS=(CPUWeight MemoryLow MemoryHigh MemoryMax MemoryMin CPUQuota IOWeight MemorySwapMax)
 
 for unit in "${INTERACTIVE_UNITS[@]}" "${BATCH_UNITS[@]}"; do

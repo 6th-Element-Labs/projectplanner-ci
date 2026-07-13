@@ -50,6 +50,7 @@ for unit in \
   projectplanner-narrate.service \
   projectplanner-monitors.service \
   projectplanner-inbox.service \
+  projectplanner-coordinator-audit.service \
   projectplanner-summarize.service \
   projectplanner-digest.service; do
   check "${unit} MemoryMax <= 256M" bash -c '

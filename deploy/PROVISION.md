@@ -91,7 +91,8 @@ sudo bash deploy/apply-least-privilege.sh
 sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-mcp.service deploy/projectplanner-monitors.service \
   deploy/projectplanner-monitors.timer deploy/projectplanner-reconcile.service \
-  deploy/projectplanner-reconcile.timer deploy/projectplanner-claim-gate.service \
+  deploy/projectplanner-reconcile.timer deploy/projectplanner-coordinator-audit.service \
+  deploy/projectplanner-coordinator-audit.timer deploy/projectplanner-claim-gate.service \
   deploy/projectplanner-claim-gate.timer deploy/projectplanner-agent-host.service \
   deploy/projectplanner-interactive.slice deploy/projectplanner-batch.slice \
   /etc/systemd/system/
@@ -99,6 +100,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp
 sudo systemctl enable --now projectplanner-monitors.timer
 sudo systemctl enable --now projectplanner-reconcile.timer
+sudo systemctl enable --now projectplanner-coordinator-audit.timer
 sudo systemctl enable --now projectplanner-claim-gate.timer
 # Optional but recommended for Switchboard dogfood: consumes message-only wake intents.
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
@@ -137,6 +139,7 @@ curl -s http://127.0.0.1:8110/health/deep      # ops readiness: task + project c
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
+systemctl list-timers projectplanner-coordinator-audit.timer
 systemctl list-timers projectplanner-claim-gate.timer
 systemctl list-timers projectplanner-backup.timer     # HARDEN-43: daily off-box snapshot
 systemctl is-active projectplanner-agent-host
@@ -204,7 +207,7 @@ memory-capped). Install with `deploy/apply-resource-guards.sh`; verify with
 `bash scripts/verify_cgroup_slices.sh` and `bash scripts/verify_memory_isolation.sh`. If a batch
 job still wedges the box, stop the timers to recover fast:
 ```bash
-sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,summarize,claim-gate}.timer
+sudo systemctl stop projectplanner-{narrate,monitors,inbox,reconcile,coordinator-audit,summarize,claim-gate}.timer
 sudo pkill -9 -f jobs.py   # then restart the web app if needed
 ```
 If wedges recur, bump the instance to `t4g.small` (2 GB) and/or move the GitHub Actions runner +
@@ -363,6 +366,25 @@ all registered boards, not only `switchboard`, so project-scoped boards such as 
 GitHub merge provenance from PR evidence even if their repo webhook is missing or delayed. To narrow
 the scheduled surface deliberately, set `PM_RECON_ALERT_PROJECTS=switchboard` or a comma-separated
 project list in `/opt/projectplanner/.env`, then restart `projectplanner-reconcile.timer`.
+
+## T0 coordinator audit loop (COORD-2)
+
+`projectplanner-coordinator-audit.timer` runs `jobs.py coordinator_audit` every five minutes.
+The job reads each selected board through SQLite `mode=ro` + `query_only`, ranks assignment,
+review, merge-gate, reconcile, stale-claim, and escalation recommendations, and appends one
+bounded `coordinator.audit.plan` artifact. It never executes those recommendations and its
+service has no network address family. See
+[`docs/COORDINATOR-AUDIT-LOOP.md`](../docs/COORDINATOR-AUDIT-LOOP.md).
+
+The default surface is only `switchboard`. Set `PM_COORDINATOR_AUDIT_PROJECTS` to a comma list
+or `all` to change it; set `PM_COORDINATOR_AUDIT_LOG=0` for a no-persistence preview.
+
+```bash
+systemctl list-timers projectplanner-coordinator-audit.timer
+journalctl -u projectplanner-coordinator-audit.service -n 50 --no-pager
+cd /opt/projectplanner && sudo -u projectplanner env PM_COORDINATOR_AUDIT_LOG=0 \
+  .venv/bin/python jobs.py coordinator_audit
+```
 
 ## Rebase timeline
 ```bash

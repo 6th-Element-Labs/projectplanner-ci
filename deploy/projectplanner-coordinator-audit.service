@@ -1,0 +1,36 @@
+# /etc/systemd/system/projectplanner-coordinator-audit.service
+# COORD-2 T0 observer: read board state and append a ranked plan artifact only.
+# Triggered by projectplanner-coordinator-audit.timer.
+[Unit]
+Description=ProjectPlanner Switchboard T0 coordinator audit
+After=local-fs.target
+
+[Service]
+Slice=projectplanner-batch.slice
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=128M
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=PM_SQLITE_MMAP_BYTES=0
+Environment=PYTHONDONTWRITEBYTECODE=1
+RuntimeDirectory=projectplanner
+ExecStart=/usr/bin/flock -n /run/projectplanner/coordinator-audit.lock /opt/projectplanner/.venv/bin/python /opt/projectplanner/jobs.py coordinator_audit
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# The T0 loop consumes only local SQLite state and must not query GitHub or other providers.
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/projectplanner
