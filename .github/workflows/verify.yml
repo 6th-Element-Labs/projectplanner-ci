@@ -100,6 +100,16 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "Verifying PR #$PR at head $SHA"
 
+      - name: Assert PRIVATE_READ_TOKEN is configured
+        if: steps.coords.outputs.skip != 'true'
+        env:
+          TOKEN: ${{ secrets.PRIVATE_READ_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "infra: PRIVATE_READ_TOKEN is not configured on projectplanner-ci (CI-1 operator step)." >&2
+            exit 1
+          fi
+
       - name: Post pending shadow status
         if: steps.coords.outputs.skip != 'true'
         env:
