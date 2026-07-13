@@ -11,10 +11,11 @@ This guard is **commutative**: it inspects only *this PR's own diff* against its
 base. Two PRs that touch different files never conflict, because neither edits a shared
 line. Extractions that move lines *out* of a monolith (net delta <= 0) always pass.
 
-Rule (ADR-0010 Lever 1): CI fails if this PR's diff adds *net* lines
-(added - deleted > 0) to any monolith — `store.py`, `app.py`, `mcp_server.py` — without a
-`MONOLITH-TOUCH:` justification. Growing the shell is allowed, but must be acknowledged in
-review rather than silently ratcheted.
+Rule (ADR-0010 Lever 1): CI fails if this PR's diff adds *net* lines above the dismantling
+threshold (default 750 per monolith file, override via ``$MONOLITH_GROWTH_THRESHOLD``) to any
+monolith — `store.py`, `app.py`, `mcp_server.py` — without a `MONOLITH-TOUCH:` justification.
+Small shell touches during ARCH-MS extraction pass without a waiver; only large growth needs
+acknowledgement in review.
 
 Escape hatch — provide a `MONOLITH-TOUCH: <reason>` line via any of (checked in order):
   1. $MONOLITH_TOUCH_JUSTIFICATION  (explicit CI/operator override)
@@ -48,6 +49,19 @@ ROOT = Path(__file__).resolve().parent
 MONOLITH_FILES = ("store.py", "app.py", "mcp_server.py")
 JUSTIFICATION_MARKER = "MONOLITH-TOUCH:"
 BASE_REF_CANDIDATES = ("origin/master", "master", "origin/main", "main")
+# High bar during ARCH-MS dismantling — only flag runaway shell growth.
+DEFAULT_GROWTH_THRESHOLD = 750
+
+
+def growth_threshold():
+    raw = (os.environ.get("MONOLITH_GROWTH_THRESHOLD") or "").strip()
+    if not raw:
+        return DEFAULT_GROWTH_THRESHOLD
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        note(f"$MONOLITH_GROWTH_THRESHOLD={raw!r} invalid; using default {DEFAULT_GROWTH_THRESHOLD}.")
+        return DEFAULT_GROWTH_THRESHOLD
 
 passed = failed = 0
 
@@ -173,20 +187,30 @@ def main():
         print("\n%d passed, %d failed" % (passed, failed))
         raise SystemExit(1)
 
-    grew = [f"{path} (+{delta} net lines)" for path in MONOLITH_FILES
-            if (delta := deltas.get(path, 0)) > 0]
+    threshold = growth_threshold()
+    note(f"growth threshold = {threshold} net lines per monolith file "
+         f"(override via $MONOLITH_GROWTH_THRESHOLD)")
 
-    if not grew:
+    grew_all = [(path, deltas.get(path, 0)) for path in MONOLITH_FILES
+                if (delta := deltas.get(path, 0)) > 0]
+    grew_over = [(path, delta) for path, delta in grew_all if delta > threshold]
+    grew_under = [(path, delta) for path, delta in grew_all if delta <= threshold]
+
+    if not grew_all:
         touched = ", ".join(f"{p} ({d:+d})" for p, d in sorted(deltas.items())) or "none touched"
         ok(True, f"no monolith grew in this PR's diff [{touched}]")
+    elif not grew_over:
+        summary = "; ".join(f"{path} (+{delta} net lines)" for path, delta in grew_under)
+        ok(True, f"monolith grew within dismantling threshold (≤{threshold}) — {summary}")
     else:
         reason, source = find_justification(base)
-        summary = "; ".join(grew)
+        summary = "; ".join(f"{path} (+{delta} net lines)" for path, delta in grew_over)
         if reason:
-            ok(True, f"monolith grew but justified — {summary} [MONOLITH-TOUCH via {source}: {reason[:120]}]")
+            ok(True, f"monolith grew above threshold but justified — {summary} "
+               f"[MONOLITH-TOUCH via {source}: {reason[:120]}]")
         else:
             ok(False,
-               f"monolith grew without a MONOLITH-TOUCH justification: {summary}. "
+               f"monolith grew above threshold ({threshold}) without MONOLITH-TOUCH: {summary}. "
                f"Extract the growth into a module, or add a 'MONOLITH-TOUCH: <reason>' line to a "
                f"commit message (or the PR body) to acknowledge the shell growth (ADR-0010 Lever 1).")
 

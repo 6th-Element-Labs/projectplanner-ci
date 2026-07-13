@@ -185,22 +185,21 @@ def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             "changed_files": len(changed_files), "notified_agents": notified}
 
 
-def _maybe_dispatch_pull_model_ci(repo: str, pr_number: Any, head_sha: str) -> bool:
+def _maybe_dispatch_pull_model_ci(repo: str, pr_number: Any, head_sha: str) -> Dict[str, Any]:
     """CI-3/CI-6 pull-model relay: ``repository_dispatch`` to projectplanner-ci so
     verify.yml runs on free hosted runners. Best-effort — must never break provenance."""
-    if not ci_verify_dispatch.is_pull_model_enabled() or pr_number is None:
-        return False
-    try:
-        ci_verify_dispatch.dispatch_verify(int(pr_number), repo=repo, head_sha=head_sha)
-        return True
-    except Exception:
-        return False
+    if pr_number is None:
+        return {"dispatched": False, "skip_reason": "missing_pr_number"}
+    return ci_verify_dispatch.try_dispatch_verify(int(pr_number), repo=repo, head_sha=head_sha)
 
 
-def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str) -> Dict[str, bool]:
+def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str) -> Dict[str, Any]:
     """Trigger pull-model CI for one PR update (CI-6/CI-7). Best-effort."""
+    dispatch = _maybe_dispatch_pull_model_ci(repo, pr_number, head_sha)
     return {
-        "pull_model_dispatched": _maybe_dispatch_pull_model_ci(repo, pr_number, head_sha),
+        "pull_model_dispatched": bool(dispatch.get("dispatched")),
+        "pull_model_skip_reason": dispatch.get("skip_reason"),
+        "pull_model_head_sha": dispatch.get("head_sha"),
     }
 
 
@@ -252,7 +251,9 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
         ci = _maybe_trigger_ci(repo, pr_num, head_sha)
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
                 "in_review_tasks": touched, "skipped_tasks": skipped,
-                "pull_model_dispatched": ci.get("pull_model_dispatched")}
+                "pull_model_dispatched": ci.get("pull_model_dispatched"),
+                "pull_model_skip_reason": ci.get("pull_model_skip_reason"),
+                "pull_model_head_sha": ci.get("pull_model_head_sha")}
 
     if not pr.get("merged"):
         return {"action": "ignored", "reason": "closed PR was not merged", "pr": pr_num}

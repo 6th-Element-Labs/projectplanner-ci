@@ -231,6 +231,13 @@ def claim_gate_prs():
     subprocess.run(cmd, check=True, cwd=Path(__file__).parent)
 
 
+def dispatch_ci():
+    """Operator CLI: validate/dispatch pull-model CI for one PR (see ci_verify_dispatch.py)."""
+    import ci_verify_dispatch
+    args = sys.argv[2:] if len(sys.argv) > 2 else ["--help"]
+    raise SystemExit(ci_verify_dispatch.main(args))
+
+
 def merge_coordinator_plan():
     """Run the Switchboard merge-coordinator once (HARDEN-72 / CI-5, Lever 6).
 
@@ -263,6 +270,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
         "claim_gate_prs": claim_gate_prs,
+        "dispatch_ci": dispatch_ci,
         "merge_coordinator_plan": merge_coordinator_plan,
         "background_job": background_job}
 
