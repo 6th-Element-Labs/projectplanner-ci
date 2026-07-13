@@ -152,9 +152,21 @@ def apply_schema(c):
             rationale   TEXT NOT NULL,
             status      TEXT NOT NULL DEFAULT 'accepted',
             supersedes  INTEGER,
-            created_at  REAL NOT NULL
+            created_at  REAL NOT NULL,
+            decision_key TEXT,
+            decision_kind TEXT,
+            deliverable_id TEXT,
+            coordinator_agent_id TEXT,
+            inputs_json TEXT,
+            policy_rule TEXT,
+            chosen_action_json TEXT,
+            skipped_alternatives_json TEXT,
+            result_json TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_decisions_task ON decisions(task_id);
+        CREATE INDEX IF NOT EXISTS ix_decisions_deliverable ON decisions(deliverable_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_decisions_key
+            ON decisions(decision_key) WHERE decision_key IS NOT NULL;
         CREATE TABLE IF NOT EXISTS agent_messages (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             from_agent    TEXT NOT NULL,

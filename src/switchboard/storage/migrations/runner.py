@@ -80,6 +80,25 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "ALTER TABLE deliverables ADD COLUMN narration_source_revision INTEGER NOT NULL DEFAULT 0"),
     ("0018_deliverables_narration_source_hash", "deliverables", "narration_source_hash",
      "ALTER TABLE deliverables ADD COLUMN narration_source_hash TEXT"),
+    # COORD-3 — structured coordinator decision trail (explainable planner).
+    ("0020_decisions_decision_key", "decisions", "decision_key",
+     "ALTER TABLE decisions ADD COLUMN decision_key TEXT"),
+    ("0021_decisions_decision_kind", "decisions", "decision_kind",
+     "ALTER TABLE decisions ADD COLUMN decision_kind TEXT"),
+    ("0022_decisions_deliverable_id", "decisions", "deliverable_id",
+     "ALTER TABLE decisions ADD COLUMN deliverable_id TEXT"),
+    ("0023_decisions_coordinator_agent_id", "decisions", "coordinator_agent_id",
+     "ALTER TABLE decisions ADD COLUMN coordinator_agent_id TEXT"),
+    ("0024_decisions_inputs_json", "decisions", "inputs_json",
+     "ALTER TABLE decisions ADD COLUMN inputs_json TEXT"),
+    ("0025_decisions_policy_rule", "decisions", "policy_rule",
+     "ALTER TABLE decisions ADD COLUMN policy_rule TEXT"),
+    ("0026_decisions_chosen_action_json", "decisions", "chosen_action_json",
+     "ALTER TABLE decisions ADD COLUMN chosen_action_json TEXT"),
+    ("0027_decisions_skipped_alternatives_json", "decisions", "skipped_alternatives_json",
+     "ALTER TABLE decisions ADD COLUMN skipped_alternatives_json TEXT"),
+    ("0028_decisions_result_json", "decisions", "result_json",
+     "ALTER TABLE decisions ADD COLUMN result_json TEXT"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
@@ -88,6 +107,11 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0019_ux_messages_idem",
      "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_idem "
      "ON agent_messages(idem_key) WHERE idem_key IS NOT NULL"),
+    ("0029_ix_decisions_deliverable",
+     "CREATE INDEX IF NOT EXISTS ix_decisions_deliverable ON decisions(deliverable_id)"),
+    ("0030_ux_decisions_key",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_decisions_key "
+     "ON decisions(decision_key) WHERE decision_key IS NOT NULL"),
 ]
 
 

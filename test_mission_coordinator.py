@@ -84,6 +84,19 @@ try:
        "coordinator dispatch records cross-project task_project")
     ok(tick.get("deliverable_id") == "coord-mission",
        "coordinator tick is scoped to deliverable_id")
+    ok(isinstance(tick.get("decision"), dict)
+       and str(tick.get("decision_id") or tick["decision"].get("decision_id", "")).startswith(
+           "coorddec-"),
+       "coordinator tick records explainable decision_id")
+    ok(tick["decision"].get("policy_rule")
+       and tick["decision"].get("chosen_action")
+       and "skipped_alternatives" in tick["decision"]
+       and tick["decision"].get("inputs_snapshot"),
+       "decision has inputs, policy, chosen action, skipped alternatives")
+    trail = store.list_coordinator_decisions(
+        deliverable_id="coord-mission", project="qa-coord-home")
+    ok(any(d.get("decision_id") == tick.get("decision_id") for d in trail),
+       "decision trail is listable without chat transcripts")
 
     audit = store.audit_export(project="qa-coord-home")
     ok(any(a.get("kind") == "deliverable.coordinator_tick"
@@ -113,6 +126,8 @@ try:
     )
     ok(gated_tick.get("status") == "human_required" and gated_tick.get("escalations"),
        "coordinator tick returns human_required for approval gates")
+    ok(gated_tick.get("decision", {}).get("decision_kind") == "human_escalation",
+       "human escalation is recorded as decision_kind=human_escalation")
 
     store.set_agent_state("RENDER-1", "human_gate", {
         "required": True,

@@ -34,6 +34,7 @@ from mcp_http_timing import MCPServerTimingMiddleware
 from mcp_observability_http import MCPObservabilityEndpoint
 from mcp_auth import MCPAuthMiddleware
 from switchboard.mcp.tools import board as board_tools
+from switchboard.mcp.tools import decisions as decision_tools
 from switchboard.mcp.tools import projects as project_tools
 from switchboard.mcp.tools import tasks as task_tools
 
@@ -202,6 +203,15 @@ _board_tool_functions = board_tools.register_board_tools(
     board_tools.BoardToolServices(dumps=_dumps),
 )
 globals().update(_board_tool_functions)
+
+_decision_tool_functions = decision_tools.register_decision_tools(
+    mcp,
+    decision_tools.DecisionToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_decision_tool_functions)
 
 _project_tool_functions = project_tools.register_project_tools(
     mcp,
@@ -2161,57 +2171,6 @@ def get_agent_state(task_id: str, project: str = "maxwell") -> str:
     it plans next — complements list_unacked_messages for live coordination.
     project: 'maxwell' (default), 'helm', or 'switchboard'."""
     return _dumps(store.get_agent_state(task_id, project=project))
-
-
-# ---- decisions log (open — append-only ADR-lite for multi-agent alignment) --
-@mcp.tool()
-def record_decision(title: str, context: str, decision: str, rationale: str,
-                    author: str, ctx: Context, project: str = "maxwell",
-                    task_id: str = "", supersedes: int = 0) -> str:
-    """Append an immutable architectural decision record so all agents share settled
-    conclusions without re-litigating them. Use this when you've just chosen an
-    approach — especially a non-obvious one that another agent might reverse.
-    Examples: choosing a library, fixing an interface contract, deciding NOT to do X.
-
-    Fields:
-      title:     short (≤80 chars) — 'Use advisory leases, not hard file locks'
-      context:   why the decision was needed (1-3 sentences)
-      decision:  exactly what was decided (1-3 sentences, present tense)
-      rationale: why this option was chosen over the alternatives
-      author:    your agent-session id (e.g. 'claude/ENGINE-11')
-      task_id:   related task (optional)
-      supersedes: id of an earlier decision this replaces (optional, set to 0 if none)
-
-    Decisions are append-only. To reverse one, record a new decision with the old id
-    in 'supersedes' — the old record is marked 'superseded' automatically.
-    project: 'maxwell' (default), 'helm', or 'switchboard'."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.record_decision(
-        task_id=task_id or None, author=author or auth.actor(principal), title=title,
-        context=context, decision=decision, rationale=rationale,
-        supersedes=supersedes or None, project=project,
-    ))
-
-
-@mcp.tool()
-def list_decisions(project: str = "maxwell", task_id: str = "",
-                   status: str = "") -> str:
-    """List architectural decisions recorded by any agent.
-    Filter by task_id (decisions about that task) and/or status ('accepted',
-    'superseded', 'proposed'). Returns newest-first.
-    Check this at session start to know what's already been decided before
-    choosing an approach. project: 'maxwell' (default), 'helm', or 'switchboard'."""
-    return _dumps(store.list_decisions(task_id=task_id or None,
-                                      status=status, project=project))
-
-
-@mcp.tool()
-def get_decision(decision_id: int, project: str = "maxwell") -> str:
-    """Fetch a single decision record by id. Use when list_decisions refers to a
-    decision you want to read in full (context + rationale).
-    project: 'maxwell' (default), 'helm', or 'switchboard'."""
-    r = store.get_decision(decision_id, project=project)
-    return _dumps(r) if r else "decision not found"
 
 
 # ---- task write tools (Switchboard bearer-principal authenticated) -------

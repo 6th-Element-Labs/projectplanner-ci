@@ -1,9 +1,13 @@
-"""Mission coordinator tick — deliverable-scoped dispatch loop (DELIVERABLES-7)."""
+"""Mission coordinator tick — deliverable-scoped dispatch loop (DELIVERABLES-7).
+
+COORD-3: every tick persists an explainable coordinator decision
+(``switchboard.coordinator_decision.v1``) so operators can see why an action was
+chosen or skipped without reading chat transcripts.
+"""
 from __future__ import annotations
 
-import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 ACTION_PRIORITY: Dict[str, int] = {
     "request_human_approval": 0,
@@ -23,6 +27,18 @@ HUMAN_ESCALATION = frozenset({
 })
 
 AUTO_CLAIM = frozenset({"claim_task", "resume_or_claim"})
+
+POLICY_RULES = {
+    "mission_complete": "coord.tick.mission_complete",
+    "idle": "coord.tick.idle_no_actions",
+    "human_required": "coord.tick.human_escalation",
+    "monitor": "coord.tick.monitor_in_review",
+    "dispatch_ready": "coord.tick.dispatch_priority",
+    "unknown_action": "coord.tick.unknown_action",
+    "claimed": "coord.tick.dispatch_claim",
+    "dispatch_blocked": "coord.tick.dispatch_blocked",
+    "wake_requested": "coord.tick.dispatch_wake",
+}
 
 
 def _normalize_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -100,6 +116,115 @@ def coordinator_tick_plan(mission_status: Dict[str, Any],
     return plan
 
 
+def _skipped_alternatives(mission_status: Dict[str, Any],
+                          selected: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    selected_action = (selected or {}).get("action")
+    selected_task = (selected or {}).get("task_id")
+    skipped: List[Dict[str, Any]] = []
+    for action in mission_status.get("next_actions") or []:
+        if not isinstance(action, dict):
+            continue
+        if (action.get("action") == selected_action
+                and action.get("task_id") == selected_task):
+            continue
+        skipped.append({
+            "action": action.get("action"),
+            "task_id": action.get("task_id"),
+            "reason": action.get("reason") or action.get("detail") or "lower_priority",
+            "priority": ACTION_PRIORITY.get(action.get("action") or "", 99),
+        })
+    return skipped
+
+
+def _record_tick_decision(
+    store_mod: Any,
+    *,
+    mission_project: str,
+    mission_status: Dict[str, Any],
+    plan: Dict[str, Any],
+    result: Dict[str, Any],
+    policy: Dict[str, Any],
+    coordinator_agent_id: str,
+    actor: str,
+    idem_key: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Persist one explainable decision for this tick; never raise into the tick path."""
+    deliverable_id = (mission_status.get("deliverable_id")
+                      or plan.get("deliverable_id")
+                      or result.get("deliverable_id")
+                      or "")
+    selected = (plan.get("selected_action")
+                or plan.get("dispatch")
+                or ((plan.get("escalations") or [None])[0])
+                or ((plan.get("monitors") or [None])[0]))
+    status = result.get("status") or plan.get("status") or "unknown"
+    policy_rule = POLICY_RULES.get(status, f"coord.tick.{status}")
+    chosen_action = {
+        "action": (selected or {}).get("action") or status,
+        "status": status,
+        "task_id": (selected or {}).get("task_id"),
+        "dispatch": result.get("dispatch"),
+        "retry_after_seconds": result.get("retry_after_seconds"),
+    }
+    inputs_snapshot = {
+        "deliverable_id": deliverable_id,
+        "progress": mission_status.get("progress") or {},
+        "next_actions": mission_status.get("next_actions") or [],
+        "policy": {
+            "auto_claim": bool(policy.get("auto_claim")),
+            "auto_wake": bool(policy.get("auto_wake")),
+            "auto_refresh_brief": bool(policy.get("auto_refresh_brief")),
+            "monitor_in_review": bool(policy.get("monitor_in_review")),
+            "worker_agent_id": policy.get("worker_agent_id") or "",
+        },
+        "plan_status": plan.get("status"),
+        "plan_reason": plan.get("reason"),
+    }
+    decision_kind = {
+        "human_required": "human_escalation",
+        "monitor": "monitor",
+        "claimed": "dispatch",
+        "wake_requested": "nudge",
+        "dispatch_ready": "recommendation",
+        "dispatch_blocked": "skip",
+        "idle": "skip",
+        "mission_complete": "recommendation",
+        "unknown_action": "skip",
+    }.get(status, "recommendation")
+    task_id = (selected or {}).get("task_id") or ""
+    try:
+        decision = store_mod.record_coordinator_decision(
+            author=coordinator_agent_id or actor or "coordinator",
+            title=f"Coordinator tick: {chosen_action['action']}",
+            inputs_snapshot=inputs_snapshot,
+            policy_rule=policy_rule,
+            chosen_action=chosen_action,
+            skipped_alternatives=_skipped_alternatives(mission_status, selected
+                                                       if isinstance(selected, dict) else None),
+            result={
+                "status": status,
+                "executed": result.get("executed") or [],
+                "escalations": result.get("escalations") or [],
+                "monitors": result.get("monitors") or [],
+                "dispatch": result.get("dispatch"),
+                "retry_after_seconds": result.get("retry_after_seconds"),
+            },
+            project=mission_project,
+            task_id=task_id,
+            deliverable_id=deliverable_id,
+            coordinator_agent_id=coordinator_agent_id or actor,
+            decision_kind=decision_kind,
+            stable_key=idem_key or f"{deliverable_id}:{status}:{task_id}:{int(time.time() // 60)}",
+            context=(plan.get("reason")
+                     or f"Mission coordinator tick on {deliverable_id or mission_project}"),
+            rationale=f"Policy {policy_rule} selected {chosen_action['action']} "
+                      f"({len(inputs_snapshot['next_actions'])} candidate action(s)).",
+        )
+    except Exception as exc:  # noqa: BLE001 — decision log must not fail the tick
+        return {"error": "decision_log_failed", "message": str(exc)}
+    return decision
+
+
 def run_coordinator_tick(
     mission_status: Dict[str, Any],
     *,
@@ -108,6 +233,7 @@ def run_coordinator_tick(
     actor: str = "system",
     policy: Optional[Dict[str, Any]] = None,
     store_mod: Any = None,
+    idem_key: str = "",
 ) -> Dict[str, Any]:
     """Execute one deliverable-scoped coordinator tick with auditing."""
     import mission_narrative
@@ -154,80 +280,88 @@ def run_coordinator_tick(
         "monitors": [],
         "dispatch": None,
         "retry_after_seconds": plan.get("retry_after_seconds", 120),
+        "decision": None,
     }
 
     status = plan.get("status")
     if status == "mission_complete":
         result["status"] = "mission_complete"
         result["retry_after_seconds"] = 3600
-        return result
-    if status == "human_required":
+    elif status == "human_required":
         result["status"] = "human_required"
         result["escalations"] = plan.get("escalations") or []
-        return result
-    if status == "monitor":
+    elif status == "monitor":
         result["status"] = "monitor"
         result["monitors"] = plan.get("monitors") or []
-        return result
-    if status == "idle":
+    elif status == "idle":
         result["status"] = "idle"
-        return result
-    if status != "dispatch_ready":
+    elif status != "dispatch_ready":
         result["status"] = status
-        return result
+    else:
+        dispatch = plan.get("dispatch") or {}
+        worker = pol["worker_agent_id"] or (coordinator_agent_id or actor or "").strip()
+        if pol["auto_claim"] and worker:
+            claim = store_mod.claim_next(
+                agent_id=worker,
+                project=mission_project,
+                deliverable_id=deliverable_id,
+                actor=actor,
+                idem_key=f"coord-{deliverable_id}-{dispatch.get('task_id')}-{int(now // 60)}",
+            )
+            executed.append({
+                "kind": "claim_next",
+                "deliverable_id": deliverable_id,
+                "worker_agent_id": worker,
+                "claimed": bool(claim.get("claimed")),
+                "claim_id": claim.get("claim_id"),
+                "task_id": (claim.get("task") or {}).get("task_id"),
+                "task_project": claim.get("task_project"),
+                "reason": claim.get("reason"),
+            })
+            result["dispatch"] = claim
+            result["status"] = "claimed" if claim.get("claimed") else "dispatch_blocked"
+            if not claim.get("claimed"):
+                result["retry_after_seconds"] = int(claim.get("retry_after_seconds") or 120)
+        elif pol["auto_wake"] and pol["worker_wake_selector"]:
+            selector = dict(pol["worker_wake_selector"])
+            selector.setdefault("deliverable_id", deliverable_id)
+            selector.setdefault("task_id", dispatch.get("task_id"))
+            selector.setdefault("project_id", dispatch.get("project_id"))
+            wake = store_mod.request_wake(
+                selector,
+                reason=f"Mission coordinator dispatch for {deliverable_id}",
+                source=actor,
+                task_id=dispatch.get("task_id") or "",
+                actor=actor,
+                project=mission_project,
+                idem_key=f"coord-wake-{deliverable_id}-{dispatch.get('task_id')}",
+            )
+            executed.append({
+                "kind": "request_wake",
+                "deliverable_id": deliverable_id,
+                "requested": bool(wake.get("requested", wake.get("wake_id"))),
+                "wake_id": wake.get("wake_id"),
+                "reason": wake.get("reason"),
+            })
+            result["dispatch"] = wake
+            result["status"] = "wake_requested" if wake.get("wake_id") else "dispatch_blocked"
+        else:
+            result["status"] = "dispatch_ready"
+            result["dispatch"] = dispatch
+            result["retry_after_seconds"] = 60
 
-    dispatch = plan.get("dispatch") or {}
-    worker = pol["worker_agent_id"] or (coordinator_agent_id or actor or "").strip()
-    if pol["auto_claim"] and worker:
-        claim = store_mod.claim_next(
-            agent_id=worker,
-            project=mission_project,
-            deliverable_id=deliverable_id,
-            actor=actor,
-            idem_key=f"coord-{deliverable_id}-{dispatch.get('task_id')}-{int(now // 60)}",
-        )
-        executed.append({
-            "kind": "claim_next",
-            "deliverable_id": deliverable_id,
-            "worker_agent_id": worker,
-            "claimed": bool(claim.get("claimed")),
-            "claim_id": claim.get("claim_id"),
-            "task_id": (claim.get("task") or {}).get("task_id"),
-            "task_project": claim.get("task_project"),
-            "reason": claim.get("reason"),
-        })
-        result["dispatch"] = claim
-        result["status"] = "claimed" if claim.get("claimed") else "dispatch_blocked"
-        if not claim.get("claimed"):
-            result["retry_after_seconds"] = int(claim.get("retry_after_seconds") or 120)
-        return result
-
-    if pol["auto_wake"] and pol["worker_wake_selector"]:
-        selector = dict(pol["worker_wake_selector"])
-        selector.setdefault("deliverable_id", deliverable_id)
-        selector.setdefault("task_id", dispatch.get("task_id"))
-        selector.setdefault("project_id", dispatch.get("project_id"))
-        wake = store_mod.request_wake(
-            selector,
-            reason=f"Mission coordinator dispatch for {deliverable_id}",
-            source=actor,
-            task_id=dispatch.get("task_id") or "",
-            actor=actor,
-            project=mission_project,
-            idem_key=f"coord-wake-{deliverable_id}-{dispatch.get('task_id')}",
-        )
-        executed.append({
-            "kind": "request_wake",
-            "deliverable_id": deliverable_id,
-            "requested": bool(wake.get("requested", wake.get("wake_id"))),
-            "wake_id": wake.get("wake_id"),
-            "reason": wake.get("reason"),
-        })
-        result["dispatch"] = wake
-        result["status"] = "wake_requested" if wake.get("wake_id") else "dispatch_blocked"
-        return result
-
-    result["status"] = "dispatch_ready"
-    result["dispatch"] = dispatch
-    result["retry_after_seconds"] = 60
+    decision = _record_tick_decision(
+        store_mod,
+        mission_project=mission_project,
+        mission_status=mission_status,
+        plan=plan,
+        result=result,
+        policy=pol,
+        coordinator_agent_id=(coordinator_agent_id or actor or "").strip(),
+        actor=actor,
+        idem_key=idem_key,
+    )
+    result["decision"] = decision
+    if isinstance(decision, dict) and decision.get("decision_id"):
+        result["decision_id"] = decision.get("decision_id")
     return result

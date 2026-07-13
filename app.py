@@ -1884,7 +1884,30 @@ async def api_coordination(project: str = Query(store.DEFAULT_PROJECT), limit: i
         "project": proj,
         "agents": store.list_active_agents(project=proj),
         "messages": store.list_agent_messages(project=proj, limit=limit),
-        "decisions": store.list_decisions(project=proj),
+        "decisions": store.list_decisions(project=proj, limit=limit),
+        "coordinator_decisions": store.list_coordinator_decisions(
+            project=proj, limit=min(limit, 200)),
+    }
+
+
+@app.get("/api/coordinator_decisions")
+async def api_coordinator_decisions(
+    project: str = Query(store.DEFAULT_PROJECT),
+    task_id: str = "",
+    deliverable_id: str = "",
+    decision_kind: str = "",
+    limit: int = 100,
+):
+    """COORD-3 explainable planner trail for cockpit/UI — structured decision records
+    without reading chat transcripts."""
+    proj = _proj(project)
+    return {
+        "project": proj,
+        "schema": "switchboard.coordinator_decision.v1",
+        "decisions": store.list_coordinator_decisions(
+            task_id=task_id, deliverable_id=deliverable_id,
+            decision_kind=decision_kind, limit=limit, project=proj,
+        ),
     }
 
 

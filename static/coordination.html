@@ -201,10 +201,21 @@ function renderConversation(peer, decisions){
         <div class="card"><div class="msgtext">${esc(m.message)}</div>${m.ack_response?`<div class="supx"><b>ack:</b> ${esc(m.ack_response)}</div>`:''}</div></div>`);
     } else {
       const d=it.d, st=(d.status||'accepted').toLowerCase(), supd=supBy[d.id], task=d.task_id?`<span class="tag">${esc(d.task_id)}</span>`:'';
-      h.push(`<div class="item decide"><div class="meta"><span class="who">${chip(d.author)}</span><span class="badge b-${esc(st)}">${esc(st)}</span>${task}<span style="margin-left:auto">${esc(fmt(d.created_at))} · decision #${d.id}</span></div>
+      const coord = d.decision_kind || d.schema==='switchboard.coordinator_decision.v1';
+      const kind = coord?`<span class="badge b-signal">${esc(d.decision_kind||'coordinator')}</span>`:'';
+      const did = d.decision_id?`<span class="tag mono">${esc(d.decision_id)}</span>`:`#${d.id}`;
+      const skipped = Array.isArray(d.skipped_alternatives)?d.skipped_alternatives:[];
+      const chosen = d.chosen_action && typeof d.chosen_action==='object'?d.chosen_action:null;
+      const trail = coord?`<details open><summary>explainable trail</summary>
+          <div class="kv"><div class="k">Policy</div><div class="v mono">${esc(d.policy_rule||'—')}</div></div>
+          <div class="kv"><div class="k">Chosen</div><div class="v">${esc(chosen?(chosen.action||chosen.status||JSON.stringify(chosen)):d.decision)}</div></div>
+          <div class="kv"><div class="k">Skipped</div><div class="v">${skipped.length?esc(skipped.map(s=>s.action||s.reason||JSON.stringify(s)).join(' · ')):'(none)'}</div></div>
+          <div class="kv"><div class="k">Result</div><div class="v mono">${esc((d.result&&d.result.status)||JSON.stringify(d.result||{}))}</div></div>
+        </details>`:`<details><summary>rationale &amp; context</summary><div class="kv"><div class="k">Rationale</div><div class="v">${esc(d.rationale)}</div></div><div class="kv"><div class="k">Context</div><div class="v">${esc(d.context)}</div></div></details>`;
+      h.push(`<div class="item decide"><div class="meta"><span class="who">${chip(d.coordinator_agent_id||d.author)}</span><span class="badge b-${esc(st)}">${esc(st)}</span>${kind}${task}<span style="margin-left:auto">${esc(fmt(d.created_at))} · ${did}</span></div>
         <div class="card"><div class="dtitle">${esc(d.title)}</div>
           <div class="kv"><div class="k">Decision</div><div class="v">${esc(d.decision)}</div></div>
-          <details><summary>rationale &amp; context</summary><div class="kv"><div class="k">Rationale</div><div class="v">${esc(d.rationale)}</div></div><div class="kv"><div class="k">Context</div><div class="v">${esc(d.context)}</div></div></details>
+          ${trail}
           ${d.supersedes?`<div class="supx">↩ supersedes decision #${d.supersedes}</div>`:''}${supd?`<div class="supx">⤴ superseded by decision #${supd}</div>`:''}</div></div>`);
     }
   }
