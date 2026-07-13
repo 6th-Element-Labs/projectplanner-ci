@@ -2941,9 +2941,10 @@ const TeepPlan = {
             return '<div class="tk-msg tk-msg-bot"><span class="avatar avatar-sm rounded-circle bg-red-lt text-red"><i class="ti ti-alert-triangle"></i></span><div class="tk-bubble tk-bubble-error">' + html + '</div></div>';
         return '<div class="tk-msg tk-msg-bot"><span class="avatar avatar-sm rounded-circle bg-primary-lt text-primary"><i class="ti ti-sparkles"></i></span><div class="tk-bubble">' + html + (sourcesHtml || '') + '</div></div>';
     },
-    _thinking(id) {
+    _thinking(id, text) {
         return '<div id="' + id + '" class="tk-msg tk-msg-bot"><span class="avatar avatar-sm rounded-circle bg-primary-lt text-primary"><i class="ti ti-sparkles"></i></span>'
-            + '<div class="tk-bubble text-secondary d-flex align-items-center"><span class="spinner-border spinner-border-sm me-2"></span>Maxwell is reading the plan…</div></div>';
+            + '<div class="tk-bubble text-secondary d-flex align-items-center"><span class="spinner-border spinner-border-sm me-2"></span>'
+            + this.esc(text || 'Taikun is working with this project…') + '</div></div>';
     },
 
     openCreate() {
@@ -3059,81 +3060,7 @@ const TeepPlan = {
     },
 
     // ---- Ask Taikun (plan-wide agent) -----------------------------------
-    async initAsk() {
-        if (this._askLoaded) return;
-        this._askLoaded = true;
-        try {
-            const data = await (await fetch('api/chat/history?session=plan')).json();
-            if ((data.messages || []).length) {
-                const empty = document.getElementById('ask-empty');
-                if (empty) empty.remove();
-                this.renderAskMessages(data.messages);
-                this._askScroll();
-            }
-        } catch (e) { /* leave the empty hint */ }
-    },
-
-    renderAskMessages(messages) {
-        const log = document.getElementById('ask-log');
-        if (!log) return;
-        log.innerHTML = messages.map((m) => {
-            if (m.role === 'user')
-                return this._bubble('user', this.esc(m.content));
-            const sources = (m.payload && m.payload.sources) || [];
-            const src = sources.length
-                ? `<div class="tk-sources">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
-            return this._bubble('assistant', this.md(m.content), src);
-        }).join('');
-    },
-
-    _askScroll() {
-        const log = document.getElementById('ask-log');
-        if (log && log.lastElementChild) log.lastElementChild.scrollIntoView({ block: 'nearest' });
-    },
-
-    async clearAsk() {
-        try { await fetch('api/chat?session=plan', { method: 'DELETE' }); } catch (e) { /* noop */ }
-        const log = document.getElementById('ask-log');
-        if (log) log.innerHTML = '<div class="text-secondary small">Cleared. Ask about the whole plan below.</div>';
-    },
-
-    async sendAsk() {
-        const input = document.getElementById('ask-input');
-        const log = document.getElementById('ask-log');
-        const msg = (input.value || '').trim();
-        if (!msg) return;
-        input.value = '';
-        const empty = document.getElementById('ask-empty');
-        if (empty) empty.remove();
-        log.insertAdjacentHTML('beforeend', this._bubble('user', this.esc(msg)));
-        log.insertAdjacentHTML('beforeend', this._thinking('ask-thinking'));
-        this._askScroll();
-        try {
-            const res = await fetch('api/chat', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: msg, session: 'plan' }),
-            });
-            const data = await res.json().catch(() => ({}));
-            const think = document.getElementById('ask-thinking');
-            if (think) think.remove();
-            if (!res.ok) {
-                log.insertAdjacentHTML('beforeend', this._bubble('error', this.esc(data.detail || ('HTTP ' + res.status))));
-                return;
-            }
-            const sources = data.sources || [];
-            const src = sources.length
-                ? `<div class="tk-sources">sources: ${sources.map((s) => this.esc(s)).join(', ')}</div>` : '';
-            log.insertAdjacentHTML('beforeend', this._bubble('assistant', this.md(data.answer), src));
-            const props = (data.proposals && data.proposals.length) ? data.proposals : (data.proposal ? [data.proposal] : []);
-            if (props.length === 1) this.renderAskProposal(props[0]);
-            else if (props.length > 1) this.renderAskProposals(props);
-            this._askScroll();
-        } catch (e) {
-            const think = document.getElementById('ask-thinking');
-            if (think) think.remove();
-            log.insertAdjacentHTML('beforeend', this._bubble('error', this.esc(e.message)));
-        }
-    },
+    ...window.SwitchboardPlanChat.methods,
 
     renderAskProposal(p) {
         const log = document.getElementById('ask-log');
@@ -4773,6 +4700,8 @@ const TeepPlan = {
         // Ask Taikun (plan-wide chat)
         const askSend = document.getElementById('ask-send');
         if (askSend) askSend.addEventListener('click', () => this.sendAsk());
+        const askBuildPlan = document.getElementById('ask-build-plan');
+        if (askBuildPlan) askBuildPlan.addEventListener('click', () => this.buildProjectPlan());
         const askInput = document.getElementById('ask-input');
         if (askInput) askInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.sendAsk(); });
         const askTab = document.querySelector('a[href="#tab-ask"]');

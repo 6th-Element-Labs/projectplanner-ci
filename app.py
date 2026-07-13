@@ -32,7 +32,6 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, Up
 from fastapi.responses import HTMLResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-import agent  # noqa: E402
 import attachments  # noqa: E402
 import auth  # noqa: E402
 import comms  # noqa: E402
@@ -64,6 +63,7 @@ _req_obs = request_observability.RequestObservability()
 import scripts.switchboard_path  # noqa: E402,F401
 from switchboard.api.routers.auth import service as _auth_service, session as _auth_session, store as _auth_store  # noqa: E402
 from switchboard.api.routers.auth.routes import router as _global_auth_router  # noqa: E402
+from switchboard.api.routers.plan_chat import create_router as _create_plan_chat_router  # noqa: E402
 from switchboard.api.routers.projects import create_router as _create_project_router  # noqa: E402
 from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
@@ -174,6 +174,7 @@ app.include_router(_create_project_router(
     resolve_project=_proj,
     resolve_principal=_principal,
 ))
+app.include_router(_create_plan_chat_router(resolve_project=_proj))
 
 
 def _attach_server_timing(response: Response, started_at: float) -> Response:
@@ -1426,41 +1427,6 @@ async def people(project: str = Query(store.DEFAULT_PROJECT)):
 async def dispatch_status(project: str = Query(store.DEFAULT_PROJECT)):
     """Is dispatch wired, and is a work-capable agent host online for this project?"""
     return await asyncio.to_thread(dispatch.status, _proj(project))
-
-
-@app.post("/api/chat")
-async def plan_chat(body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
-    """Plan-wide Ask Taikun: the global agent sees the whole board + docs; propose-to-confirm."""
-    project = _proj(project)
-    msg = (body.get("message") or "").strip()
-    if not msg:
-        raise HTTPException(400, "message required")
-    session = body.get("session") or "plan"
-    history = [{"role": m["role"], "content": m["content"]}
-               for m in store.recent_chat(session, 16, project=project) if m.get("content")]
-    store.add_chat(session, "user", msg, project=project)
-    try:
-        result = await asyncio.to_thread(agent.run, None, msg, history, project=project)
-    except Exception as e:
-        store.add_chat(session, "assistant", f"(agent error: {e})", project=project)
-        raise HTTPException(502, f"agent error: {e}")
-    answer = result.get("answer") or ""
-    store.add_chat(session, "assistant", answer,
-                   {"proposals": result.get("proposals", []), "sources": result.get("sources", [])},
-                   project=project)
-    return {"answer": answer, "proposal": result.get("proposal"),
-            "proposals": result.get("proposals", []), "sources": result.get("sources", [])}
-
-
-@app.get("/api/chat/history")
-async def plan_chat_history(session: str = "plan", project: str = Query(store.DEFAULT_PROJECT)):
-    return {"messages": store.recent_chat(session, 100, project=_proj(project))}
-
-
-@app.delete("/api/chat")
-async def clear_plan_chat(session: str = "plan", project: str = Query(store.DEFAULT_PROJECT)):
-    store.clear_chat(session, project=_proj(project))
-    return {"cleared": session}
 
 
 def _queue_triage(res, source, subject, project=None):

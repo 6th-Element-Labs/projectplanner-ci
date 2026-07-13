@@ -1,8 +1,9 @@
 """Slim per-task ReAct agent (ADR 0007) — runs inside the satellite, calls the
-shared LLM gateway. Tools: doc_search (RAG over plan docs) + propose_task_update
-(propose-then-confirm; never applies a change directly). Synchronous; the app
-calls it via asyncio.to_thread so it doesn't block the event loop.
+shared LLM gateway. Its tools are derived from the selected project's corpus,
+contract, and live board. Web and MCP callers run it through the persisted
+background-job adapter; proposals are never applied without confirmation.
 """
+import copy
 import datetime
 import json
 import os
@@ -11,6 +12,7 @@ import time
 import httpx
 
 import rag
+import project_contract
 import signals
 import store
 
@@ -26,16 +28,15 @@ TRIAGE_ITERS = int(os.environ.get("PM_TRIAGE_ITERS", "14"))
 TOOLS = [
     {"type": "function", "function": {
         "name": "doc_search",
-        "description": "Search the TEEP Barnett plan docs (PRD, architecture, system-integrations, "
-                       "security, asset-binding, the full project plan) for grounding. Use this before "
-                       "asserting any fact about the project, dependencies, owners, or approach.",
+        "description": "Search the selected project's segmented corpus for grounding before asserting "
+                       "facts about scope, dependencies, owners, decisions, or approach.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {
         "name": "search_tasks",
         "description": "Filter the LIVE plan's tasks. Returns id/title/status/owner/workstream/dates for "
                        "matches. Use to find tasks by workstream, status, owner person, blocking flag, or text.",
         "parameters": {"type": "object", "properties": {
-            "workstream": {"type": "string", "description": "workstream id, e.g. SSO, SEN, BEDROCK, GW"},
+            "workstream": {"type": "string", "description": "workstream id on the selected project"},
             "status": {"type": "string", "enum": ["Not Started", "In Progress", "In Review", "Blocked", "Done"]},
             "owner_person": {"type": "string", "description": "substring match on owner_person_or_role"},
             "blocking": {"type": "boolean"},
@@ -61,9 +62,9 @@ TOOLS = [
             "description": {"type": "string"},
             "status": {"type": "string", "enum": ["Not Started", "In Progress", "In Review", "Blocked", "Done"]},
             "assignee": {"type": "string"},
-            "owner_org": {"type": "string", "enum": ["Taikun", "TEEP", "Sensirion/Nubo", "IFS Merrick", "Joint"]},
+            "owner_org": {"type": "string"},
             "owner_person_or_role": {"type": "string"},
-            "phase": {"type": "string", "enum": ["Kickoff", "Bootstrap", "Build", "Cutover", "Operate"]},
+            "phase": {"type": "string"},
             "effort_days": {"type": "number"},
             "start_date": {"type": "string", "description": "YYYY-MM-DD"},
             "finish_date": {"type": "string", "description": "YYYY-MM-DD"},
@@ -82,10 +83,10 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "task_ids": {"type": "array", "items": {"type": "string"}},
             "status": {"type": "string", "enum": ["Not Started", "In Progress", "In Review", "Blocked", "Done"]},
-            "owner_org": {"type": "string", "enum": ["Taikun", "TEEP", "Sensirion/Nubo", "IFS Merrick", "Joint"]},
+            "owner_org": {"type": "string"},
             "owner_person_or_role": {"type": "string"},
             "assignee": {"type": "string"},
-            "phase": {"type": "string", "enum": ["Kickoff", "Bootstrap", "Build", "Cutover", "Operate"]},
+            "phase": {"type": "string"},
             "risk_level": {"type": "string", "enum": ["Low", "Medium", "High"]},
             "is_blocking": {"type": "boolean"},
             "rationale": {"type": "string", "description": "one short line on why"}},
@@ -102,16 +103,15 @@ TOOLS = [
             "required": ["task_ids", "days", "rationale"]}}},
     {"type": "function", "function": {
         "name": "propose_new_task",
-        "description": "Propose creating a NEW task (e.g. an email/transcript asks for work not yet on the "
-                       "plan). Does NOT create it — the user confirms. workstream_id must be an existing "
-                       "workstream (SSO, SEN, BEDROCK, GW, SCADA, IFS, REG, AGENT, REPORT, DATA, CUTOVER, FMP).",
+        "description": "Propose creating a NEW task. Does NOT create it — the user confirms. "
+                       "workstream_id must be an existing workstream on the selected project.",
         "parameters": {"type": "object", "properties": {
             "workstream_id": {"type": "string"},
             "title": {"type": "string"},
             "description": {"type": "string"},
-            "owner_org": {"type": "string", "enum": ["Taikun", "TEEP", "Sensirion/Nubo", "IFS Merrick", "Joint"]},
+            "owner_org": {"type": "string"},
             "owner_person_or_role": {"type": "string"},
-            "phase": {"type": "string", "enum": ["Kickoff", "Bootstrap", "Build", "Cutover", "Operate"]},
+            "phase": {"type": "string"},
             "risk_level": {"type": "string", "enum": ["Low", "Medium", "High"]},
             "rationale": {"type": "string", "description": "one short line on why"}},
             "required": ["workstream_id", "title", "rationale"]}}},
@@ -143,6 +143,61 @@ TOOLS = [
             "required": []}}},
 ]
 
+
+def _tool(tools, name):
+    return next(item for item in tools if item["function"]["name"] == name)
+
+
+def tools_for_project(project="maxwell"):
+    """Build the model tool catalog from the selected project's live board."""
+    tools = copy.deepcopy(TOOLS)
+    tasks = store.list_tasks_for_board(project=project)
+    project_item = next((item for item in store.projects() if item["id"] == project), {})
+    label = project_item.get("label") or project
+    workstreams = sorted({item.get("_wsId") for item in tasks if item.get("_wsId")})
+    owners = sorted({item.get("owner_org") for item in tasks if item.get("owner_org")})
+    phases = sorted({item.get("phase") for item in tasks if item.get("phase")})
+
+    _tool(tools, "doc_search")["function"]["description"] = (
+        f"Search the segmented corpus for {label}. Use this before asserting project facts, "
+        "decisions, dependencies, owners, scope, milestones, or approach."
+    )
+    search_properties = _tool(tools, "search_tasks")["function"]["parameters"]["properties"]
+    search_properties["workstream"]["description"] = (
+        "workstream id" + (f"; current values: {', '.join(workstreams)}" if workstreams else "")
+    )
+    if workstreams:
+        search_properties["workstream"]["enum"] = workstreams
+
+    for tool_name in ("propose_task_update", "propose_bulk_update", "propose_new_task"):
+        properties = _tool(tools, tool_name)["function"]["parameters"]["properties"]
+        if owners and "owner_org" in properties:
+            properties["owner_org"]["enum"] = owners
+        elif "owner_org" in properties:
+            properties["owner_org"].pop("enum", None)
+        if phases and "phase" in properties:
+            properties["phase"]["enum"] = phases
+        elif "phase" in properties:
+            properties["phase"].pop("enum", None)
+    create_tool = _tool(tools, "propose_new_task")["function"]
+    create_tool["description"] = (
+        "Propose creating a NEW task. It is not created until the user confirms. "
+        "workstream_id must identify an existing workstream"
+        + (f": {', '.join(workstreams)}." if workstreams else ".")
+    )
+    if workstreams:
+        create_tool["parameters"]["properties"]["workstream_id"]["enum"] = workstreams
+
+    tools.insert(0, {"type": "function", "function": {
+        "name": "get_project_contract",
+        "description": (
+            f"Read the canonical Switchboard project boundary and operating contract for {label}: "
+            "purpose, repository roles, policies, boards, and work-session rules."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    }})
+    return tools
+
 # Editable fields the agent may propose (mirrors store.EDITABLE minus internal ones).
 _PROPOSABLE = ["title", "description", "status", "assignee", "owner_org", "owner_person_or_role",
                "phase", "effort_days", "start_date", "finish_date", "risk_level", "is_blocking",
@@ -150,34 +205,43 @@ _PROPOSABLE = ["title", "description", "status", "assignee", "owner_org", "owner
 
 
 def _project_voice(project: str):
+    project_item = next((item for item in store.projects() if item["id"] == project), {})
+    label = project_item.get("label") or project
+    purpose = project_item.get("purpose") or store.project_access(project).get("purpose") or "its project outcomes"
     if project == "helm":
         return {
             "who": "the Helm assistant",
             "board": "the Helm marine-chartplotter board",
-            "ground": ("Ground claims in this task's description + activity (its code-audit comments "
-                       "carry file-level evidence — read them via get_task). doc_search covers the "
-                       "MAXWELL plan's docs only, so do NOT use it for Helm."),
+            "ground": ("Ground claims in this task's description + activity and the Helm corpus; "
+                       "read file-level evidence via get_task and use doc_search for Helm artifacts."),
             "global_ground": ("Ground every answer in the BOARD above — it carries code-audit comments "
-                              "with file-level evidence (read them via get_task). doc_search covers the "
-                              "MAXWELL plan's docs only, so do NOT use it for Helm. Helm tasks have no "
-                              "dates, so ignore overdue/schedule questions."),
+                              "with file-level evidence (read them via get_task) — and the Helm corpus. "
+                              "Helm tasks have no dates, so ignore overdue/schedule questions."),
         }
     if project == "switchboard":
         return {
             "who": "Switchboard",
             "board": "the Switchboard dogfood board for the agent coordination layer",
-            "ground": ("Ground claims in this task's description + activity and the live board state. "
-                       "doc_search covers the MAXWELL plan's docs only, so do NOT use it for Switchboard."),
+            "ground": ("Ground claims in this task's description, activity, live board state, and the "
+                       "Switchboard corpus."),
             "global_ground": ("Ground every answer in the BOARD above and task activity (read full tasks "
-                              "via get_task). doc_search covers the MAXWELL plan's docs only, so do NOT "
-                              "use it for Switchboard."),
+                              "via get_task), the project contract, and the Switchboard corpus."),
+        }
+    if project == "maxwell":
+        return {
+            "who": "Maxwell",
+            "board": "the TEEP Barnett project board",
+            "ground": "Ground project claims in the Maxwell corpus before stating them.",
+            "global_ground": ("Ground project claims in the Maxwell corpus and project contract. "
+                              "Overdue = finish_date before today and status not Done."),
         }
     return {
-        "who": "Maxwell",
-        "board": "the TEEP Barnett project board",
-        "ground": "ALWAYS ground claims about the project in the plan via doc_search before stating them.",
-        "global_ground": ("ALWAYS ground project claims in the plan docs via doc_search before asserting them. "
-                          "Overdue = finish_date before today and status not Done."),
+        "who": f"the {label} project agent",
+        "board": f"the {label} project board",
+        "ground": (f"Ground claims in this project's corpus, live task evidence, and project contract. "
+                   f"The project purpose is: {purpose}."),
+        "global_ground": ("Ground every answer in the selected project's corpus, live board/task activity, "
+                          "and project contract. Never import assumptions from another project."),
     }
 
 
@@ -196,10 +260,11 @@ def _system(task, project="maxwell"):
     )
 
 
-def _chat(messages, tool_choice="auto", meta=None):
+def _chat(messages, tool_choice="auto", meta=None, tools=None):
     # No temperature: gpt-5.x only supports the default (1). Add back only for models that allow it.
     # tool_choice="none" forces a tool-free turn (used to flush a final summary when out of steps).
-    body = {"model": CHAT_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": tool_choice}
+    body = {"model": CHAT_MODEL, "messages": messages, "tools": tools or TOOLS,
+            "tool_choice": tool_choice}
     if meta:
         # UI-12: attribute this gateway call's spend (source=agent, + task/project when scoped).
         body["metadata"] = meta
@@ -232,7 +297,8 @@ def _system_global(project="maxwell"):
         "CURRENT BOARD — one line per task: ID [workstream] status :: title (owner; start..finish; flags):\n"
         f"{board_summary_text(project=project)}\n\n"
         "Answer questions about the whole plan (blockers, owners, what's ready vs blocked, what changed). "
-        f"{voice['global_ground']} Use get_task for a task's full description + activity, and search_tasks to filter. To "
+        f"{voice['global_ground']} Use get_project_contract for project boundaries and policies, get_task for a "
+        "task's full description + activity, and search_tasks to filter. To "
         "change a task, call propose_task_update WITH its task_id — the user must Confirm; NEVER say a "
         "change was applied. Be concise and operator-friendly."
     )
@@ -302,6 +368,7 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
     'helm', or 'switchboard')."""
     if system is None:
         system = _system(task, project) if task else _system_global(project)
+    project_tools = tools_for_project(project)
     iters = max_iters or MAX_ITERS
     msgs = [{"role": "system", "content": system}]
     for h in (history or []):
@@ -327,7 +394,7 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
                          "search_tasks/get_task/plan_signals) again. Make any remaining propose_* "
                          "(and set_recipients/dispatch_to_dev) calls the message clearly implies, "
                          "then write your final summary."})
-        m = _chat(msgs, meta=chat_meta)
+        m = _chat(msgs, meta=chat_meta, tools=project_tools)
         last = m
         tcs = m.get("tool_calls")
         if not tcs:
@@ -339,7 +406,9 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except Exception:
                 args = {}
-            if name == "doc_search":
+            if name == "get_project_contract":
+                content = json.dumps(project_contract.build(project))
+            elif name == "doc_search":
                 hits = rag.search(args.get("query", ""), top_k=5, project=project)
                 sources += [h["file"] for h in hits]
                 content = "\n\n".join(f"[{h['file']}] {h['text']}" for h in hits) or "no matches"
@@ -429,7 +498,8 @@ def run(task, message, history=None, system=None, max_iters=None, project="maxwe
     # the old "(reached step limit)" dead-end that surfaced as "No task changes detected".
     answer = ""
     try:
-        answer = (_chat(msgs, tool_choice="none", meta=chat_meta).get("content") or "").strip()
+        answer = (_chat(msgs, tool_choice="none", meta=chat_meta,
+                        tools=project_tools).get("content") or "").strip()
     except Exception:
         pass
     if not answer:
@@ -450,10 +520,12 @@ def _result(answer, proposals, new_tasks, sources, recipients=None, dispatch_tar
             "sources": list(dict.fromkeys(sources))}
 
 
-def _system_triage(applied_mode=False, headers=None):
+def _system_triage(applied_mode=False, headers=None, project="maxwell"):
     today = time.strftime("%Y-%m-%d")
-    proj = store.get_meta("project") or "Project Maxwell"
-    contacts = store.get_contacts()
+    proj = store.get_meta("project", project=project) or project
+    voice = _project_voice(project)
+    contacts = (store.get_contacts() if project == "maxwell" else
+                (store.get_meta("contacts", {}, project=project) or {}))
     contacts_text = ", ".join(f"{n} <{e}>" for e, n in
                               sorted(contacts.items(), key=lambda kv: (kv[1] or kv[0]))) or "(none)"
     h = headers or {}
@@ -464,10 +536,10 @@ def _system_triage(applied_mode=False, headers=None):
              if applied_mode else
              "These are PROPOSALS the user confirms; do not say a change was applied.\n")
     return (
-        f"You are Maxwell, the autonomous PM agent for {proj} (TEEP Barnett), handling an INBOUND MESSAGE "
+        f"You are {voice['who']}, the autonomous PM agent for {proj}, handling an INBOUND MESSAGE "
         f"(an email, forwarded thread, transcript, or document). Today is {today}.\n\n"
         "CURRENT BOARD — one line per task: ID [workstream] status :: title (owner; start..finish; flags):\n"
-        f"{board_summary_text()}\n\n"
+        f"{board_summary_text(project)}\n\n"
         "Do BOTH, as warranted:\n"
         "1) ANSWER any question or request for info the message contains — directly and specifically, grounded "
         "in the board + docs (doc_search; the message itself is already indexed). \n"
@@ -507,5 +579,5 @@ def triage(kind, title, text, applied_mode=False, headers=None, project="maxwell
     recipients, sources}. headers={from,to,cc,date} lets the agent reply-all / route to named people.
     project scopes the grounding tools (doc_search / search_tasks / get_task) to that board."""
     artifact = f"INBOUND {kind.upper()}" + (f" — {title}" if title else "") + ":\n\n" + (text or "")
-    return run(None, artifact, system=_system_triage(applied_mode, headers), max_iters=TRIAGE_ITERS,
+    return run(None, artifact, system=_system_triage(applied_mode, headers, project), max_iters=TRIAGE_ITERS,
                project=project)

@@ -11,9 +11,11 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import time
+import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import store
 
@@ -41,6 +43,8 @@ FORBIDDEN_HOT_PATH_OPERATIONS = frozenset({
 COMPLETED_STEP_STATUSES = frozenset({"completed", "skipped"})
 RUNNING_STATUSES = frozenset({"pending", "running"})
 TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled"})
+_WORKERS: Dict[str, threading.Thread] = {}
+_WORKERS_LOCK = threading.Lock()
 
 
 class JobBoundaryError(ValueError):
@@ -57,6 +61,13 @@ class JobSpec:
 
 
 JOB_CATALOG: Dict[str, JobSpec] = {
+    "plan_agent_run": JobSpec(
+        job_name="plan_agent_run",
+        title="Project-native plan agent run",
+        dbos_eligible=True,
+        task_anchors=("BUG-60", "UI-16"),
+        description="Run Ask Taikun outside the HTTP/MCP request with a persisted checkpoint.",
+    ),
     "replay_verify_batch": JobSpec(
         job_name="replay_verify_batch",
         title="Replay verify across projects",
@@ -325,6 +336,7 @@ def list_job_runs(project: str, *, job_name: str = "", limit: int = 20) -> Dict[
 
 def _step_handler(job_name: str) -> Callable[[str, Mapping[str, Any]], Dict[str, Any]]:
     handlers = {
+        "plan_agent_run": _step_plan_agent,
         "replay_verify_batch": _step_replay_verify,
         "audit_export_batch": _step_audit_export,
         "receipt_projection_batch": _step_receipt_projection,
@@ -335,6 +347,42 @@ def _step_handler(job_name: str) -> Callable[[str, Mapping[str, Any]], Dict[str,
     if not handler:
         raise JobBoundaryError(f"no step handler for job: {job_name}")
     return handler
+
+
+def _step_plan_agent(project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:
+    import agent
+
+    question = str(params.get("question") or "").strip()
+    if not question:
+        raise ValueError("question required")
+    history = params.get("history") if isinstance(params.get("history"), list) else []
+    result = agent.run(None, question, history=history, project=project_id)
+    answer = result.get("answer") or ""
+    payload = {
+        "run_id": params.get("run_id"),
+        "proposals": result.get("proposals") or [],
+        "new_tasks": result.get("new_tasks") or [],
+        "sources": result.get("sources") or [],
+    }
+    if params.get("record_chat"):
+        session = str(params.get("session") or "plan")
+        prior = store.recent_chat(session, 100, project=project_id)
+        already_recorded = any(
+            item.get("role") == "assistant"
+            and (item.get("payload") or {}).get("run_id") == params.get("run_id")
+            for item in prior
+        )
+        if not already_recorded:
+            store.add_chat(session, "assistant", answer, payload, project=project_id)
+    return {
+        "answer": answer,
+        "proposal": result.get("proposal"),
+        "proposals": payload["proposals"],
+        "new_tasks": payload["new_tasks"],
+        "sources": payload["sources"],
+        "recipients": result.get("recipients"),
+        "dispatch_targets": result.get("dispatch_targets") or [],
+    }
 
 
 def _step_replay_verify(project_id: str, params: Mapping[str, Any]) -> Dict[str, Any]:
@@ -396,6 +444,29 @@ def _step_drain_webhook_inbox(project_id: str, params: Mapping[str, Any]) -> Dic
     return webhook_inbox.drain(project_id, limit=int(params.get("limit") or 500))
 
 
+def _record_plan_chat_failure(manifest: Mapping[str, Any], error: str) -> None:
+    params = manifest.get("params") or {}
+    if manifest.get("job_name") != "plan_agent_run" or not params.get("record_chat"):
+        return
+    project = str(manifest.get("project") or store.DEFAULT_PROJECT)
+    session = str(params.get("session") or "plan")
+    run_id = str(params.get("run_id") or manifest.get("run_id") or "")
+    prior = store.recent_chat(session, 100, project=project)
+    already_recorded = any(
+        item.get("role") == "assistant"
+        and (item.get("payload") or {}).get("run_id") == run_id
+        for item in prior
+    )
+    if not already_recorded:
+        store.add_chat(
+            session,
+            "assistant",
+            f"(agent error: {error})",
+            {"run_id": run_id, "status": "failed", "error": error},
+            project=project,
+        )
+
+
 def _execute_step(manifest: Dict[str, Any], step: Dict[str, Any]) -> Dict[str, Any]:
     handler = _step_handler(manifest["job_name"])
     step = dict(step)
@@ -411,6 +482,10 @@ def _execute_step(manifest: Dict[str, Any], step: Dict[str, Any]) -> Dict[str, A
         step["status"] = "failed"
         step["error"] = str(exc)
         step["result"] = None
+        try:
+            _record_plan_chat_failure(manifest, str(exc))
+        except Exception as chat_exc:
+            step["chat_error"] = str(chat_exc)
     return step
 
 
@@ -493,4 +568,79 @@ def run_background_job(project: str, job_name: str, *,
                 now,
             ),
         )
+    return manifest
+
+
+def _start_worker(project: str, job_name: str, run_id: str,
+                  params: Mapping[str, Any], actor: str) -> bool:
+    with _WORKERS_LOCK:
+        if run_id in _WORKERS:
+            return False
+
+        def work() -> None:
+            try:
+                run_background_job(
+                    project,
+                    job_name,
+                    run_id=run_id,
+                    resume=True,
+                    params=params,
+                    actor=actor,
+                )
+            finally:
+                with _WORKERS_LOCK:
+                    _WORKERS.pop(run_id, None)
+
+        worker = threading.Thread(
+            target=work,
+            name=f"switchboard-{job_name}-{run_id[-8:]}",
+            daemon=True,
+        )
+        _WORKERS[run_id] = worker
+        worker.start()
+    return True
+
+
+def ensure_background_job_running(project: str, run_id: str,
+                                  actor: str = "background_job/resume") -> Dict[str, Any]:
+    """Restart a persisted non-terminal run after a process/UI reconnect."""
+    manifest = load_run(project, run_id)
+    if manifest.get("error") or manifest.get("status") in TERMINAL_RUN_STATUSES:
+        return manifest
+    _start_worker(
+        project,
+        manifest["job_name"],
+        run_id,
+        manifest.get("params") or {},
+        actor,
+    )
+    return manifest
+
+
+def enqueue_background_job(project: str, job_name: str, *,
+                           params: Optional[Mapping[str, Any]] = None,
+                           actor: str = "background_job",
+                           start_worker: bool = True) -> Dict[str, Any]:
+    """Persist a pending run, then execute it outside the request thread."""
+    assert_job_boundary(job_name)
+    params_dict = dict(params or {})
+    run_id = f"bgjob-{job_name}-{uuid.uuid4().hex}"
+    params_dict["run_id"] = run_id
+    manifest = _create_run_manifest(job_name, project, params_dict, run_id=run_id)
+    store.init_db(project)
+    with store._conn(project) as connection:
+        _persist_run(connection, manifest)
+        connection.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (None, actor, "background_job.queued", json.dumps({
+                "run_id": run_id,
+                "job_name": job_name,
+                "status": "pending",
+            }, sort_keys=True), time.time()),
+        )
+
+    if not start_worker:
+        return manifest
+
+    _start_worker(project, job_name, run_id, params_dict, actor)
     return manifest

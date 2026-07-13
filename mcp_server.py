@@ -18,12 +18,12 @@ import re
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-import agent
 import auth
 import digest as digest_mod
 import external_ci_mirror
 import intake as intake_mod
 import notify as notify_mod
+import project_contract as project_contract_service
 import rag
 import store
 import deliverable_closure
@@ -436,10 +436,7 @@ def _suggest_agent_id(runtime: str, agent_id: str, task_id: str, lane: str, task
 
 
 def _project_label(project: str) -> str:
-    for p in store.projects():
-        if p["id"] == project:
-            return p.get("label") or project
-    return project
+    return project_contract_service.project_label(project)
 
 
 def _agent_bootstrap_prompt(project: str, agent_id: str, task_id: str, lane: str,
@@ -549,7 +546,7 @@ def get_project_contract(project: str = "maxwell", lane: str = "", task_id: str 
     mission_context from get_mission_status. Use it at boot and whenever a repo contains
     docs for a different project.
     """
-    return _dumps(_project_contract(
+    return _dumps(project_contract_service.build(
         project=project, lane=lane, task_id=task_id,
         deliverable_id=deliverable_id, board_id=board_id,
         mission_id=mission_id, milestone_id=milestone_id))
@@ -672,7 +669,7 @@ def prepare_agent_session(runtime: str = "", agent_id: str = "", project: str = 
 
     agreement = store.get_working_agreement(project=selected)
     chosen_agent_id = _suggest_agent_id(runtime, agent_id, tid, ws, task)
-    contract = _project_contract(
+    contract = project_contract_service.build(
         selected, lane=ws, task_id=tid,
         deliverable_id=deliverable_id, board_id=board_id,
         mission_id=mission_id, milestone_id=milestone_id)
@@ -790,10 +787,7 @@ def reactivate_narration(event_id: str, ctx: Context, project: str = "switchboar
 
 @mcp.tool()
 def doc_search(query: str, project: str = "maxwell") -> str:
-    """Search a project's corpus and return cited snippets: [{file, text}]. The static plan docs
-    (PRD, architecture, integrations, security, the full plan) are Maxwell's, so the default
-    project searches those plus its ingested artifacts; every other project searches only its own
-    ingested transcripts/emails/documents. project selects the board."""
+    """Search the selected project's segmented corpus and return cited snippets: [{file, text}]."""
     hits = rag.search(query, top_k=5, project=project)
     return _dumps([{"file": h["file"], "text": h["text"]} for h in hits]) if hits else "no matches"
 
@@ -807,13 +801,26 @@ def get_working_agreement(project: str = "maxwell") -> str:
 
 @mcp.tool()
 def ask_plan(question: str, project: str = "maxwell") -> str:
-    """Ask the plan-wide agent a question about a board. project selects it ('maxwell' default,
-    'helm', or 'switchboard'). Helm and Switchboard answers are grounded in the live board; Maxwell
-    also grounds in the plan docs via RAG. Returns a reasoned answer (+ sources) and, when relevant,
-    a proposed task change (NOT applied — call update_task to apply it)."""
-    r = agent.run(None, question, project=project)
-    return _dumps({"answer": r.get("answer"), "sources": r.get("sources"),
-                   "proposed_change": r.get("proposal")})
+    """Queue a project-native plan-agent run and return immediately.
+
+    Poll get_background_job_run(project, run_id) until status is completed or failed.
+    The completed step result contains answer, sources, and confirmable task proposals.
+    """
+    selected = project_contract_service.resolve_project_input(project) or store.DEFAULT_PROJECT
+    if not store.has_project(selected):
+        return _dumps({"error": "unknown_project", "project": project})
+    run = store.enqueue_background_job(
+        project=selected,
+        job_name="plan_agent_run",
+        params={"question": question, "history": [], "record_chat": False},
+        actor="mcp/ask_plan",
+    )
+    return _dumps({
+        "run_id": run["run_id"],
+        "project": selected,
+        "status": "pending",
+        "poll_with": "get_background_job_run",
+    })
 
 
 # ---- file lease tools (open — advisory, no token required) ---------------
@@ -1927,9 +1934,13 @@ def run_background_job(ctx: Context, job_name: str, project: str = "maxwell",
 
 @mcp.tool()
 def get_background_job_run(ctx: Context, run_id: str, project: str = "maxwell") -> str:
-    """Fetch one persisted background job run manifest by run_id."""
+    """Fetch one persisted run; reconnecting resumes a non-terminal checkpoint."""
     project = _resolve_project_input(project)
-    return _dumps(store.get_background_job_run(project=project, run_id=run_id))
+    manifest = store.get_background_job_run(project=project, run_id=run_id)
+    if manifest.get("status") in ("pending", "running"):
+        store.ensure_background_job_running(
+            project=project, run_id=run_id, actor="mcp/background_job/resume")
+    return _dumps(manifest)
 
 
 @mcp.tool()

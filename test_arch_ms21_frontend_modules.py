@@ -18,20 +18,27 @@ def ok(condition, message):
     failed += int(not condition)
 
 
-modules = ("api", "state", "board", "closure", "mission")
-positions = [INDEX.find(f'src="js/{name}.js?v=') for name in modules]
+modules = (
+    ("api", "SwitchboardApi"),
+    ("state", "SwitchboardState"),
+    ("board", "SwitchboardBoard"),
+    ("plan-chat", "SwitchboardPlanChat"),
+    ("closure", "SwitchboardClosure"),
+    ("mission", "SwitchboardMission"),
+)
+positions = [INDEX.find(f'src="js/{name}.js?v=') for name, _ in modules]
 app_position = INDEX.find('src="app.js?v=')
 ok(all(pos >= 0 for pos in positions), "index loads all frontend modules")
 ok(positions == sorted(positions) and positions[-1] < app_position,
    "frontend modules load in dependency order before app.js")
 
-for name in modules:
+for name, namespace in modules:
     path = STATIC / "js" / f"{name}.js"
     source = path.read_text(encoding="utf-8")
     ok(path.is_file() and len(source.splitlines()) > 10, f"{name}.js is a substantive boundary")
-    ok(f"Switchboard{name.title()}" in source, f"{name}.js publishes its explicit namespace")
+    ok(namespace in source, f"{name}.js publishes its explicit namespace")
 
-for namespace in ("SwitchboardState", "SwitchboardBoard", "SwitchboardClosure", "SwitchboardMission"):
+for _, namespace in modules[1:]:
     ok(f"window.{namespace}" in APP, f"app.js composes {namespace}")
 ok(len(APP.splitlines()) < 5_000, "app.js composition root stays below 5,000 lines")
 ok("    _missionDeliverableFromUrl() {" not in APP and "    renderBoard() {" not in APP,
