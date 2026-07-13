@@ -49,6 +49,7 @@ SKELETON_MODULES = (
     "switchboard.storage.migrations.runner",
     "switchboard.storage.repositories.access",
     "switchboard.storage.repositories.runner",
+    "switchboard.storage.repositories.tasks",
 )
 SKELETON_PACKAGES = (
     "switchboard",
