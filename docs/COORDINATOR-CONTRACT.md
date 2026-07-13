@@ -1,8 +1,8 @@
 # Coordinator Agent — Operating Contract & Escalation Policy
 
-- **Status:** Draft v1 (COORD-1). First-class role definition; T0 observer implemented by COORD-2, higher tiers remain gated behind this contract.
+- **Status:** Draft v1 (COORD-1). T0 observer shipped by COORD-2; T2 review steward shipped by COORD-5 (dry-run default); higher acting tiers remain gated behind this contract.
 - **Owner:** Product / Control Plane
-- **Relates to:** [PRD §6, §18, FR-23–29](PRD-AGENT-COORDINATION-LAYER.md) · [AGENT-HOST-SPEC](AGENT-HOST-SPEC.md) · [ADR-0003 work provenance](decisions/0003-work-provenance-and-reconciliation.md) · [T0 audit loop](COORDINATOR-AUDIT-LOOP.md) · `mission_coordinator.py` · `dispatch.py` · `merge_coordinator.py`
+- **Relates to:** [PRD §6, §18, FR-23–29](PRD-AGENT-COORDINATION-LAYER.md) · [AGENT-HOST-SPEC](AGENT-HOST-SPEC.md) · [ADR-0003 work provenance](decisions/0003-work-provenance-and-reconciliation.md) · [T0 audit loop](COORDINATOR-AUDIT-LOOP.md) · [T2 review steward](COORDINATOR-REVIEW-STEWARD.md) · `mission_coordinator.py` · `dispatch.py` · `merge_coordinator.py` · `review_steward.py`
 - **One line:** The Coordinator is a first-class Switchboard role that orchestrates **plan + dispatch** across a fleet — it decides *what work is ready, who should do it, and when* — and **never executes a task's steps, never merges outside the safe path, and never sets Done.** It holds *less* authority than a coding agent, not more, and every capability is opt-in per project at a named risk tier.
 
 ---
@@ -57,10 +57,11 @@ Tiers are cumulative: each includes the ones below it. **Default for a newly-reg
 
 ### T2 — Review steward
 - **Mandate:** Keep In-Review work moving toward a *trustworthy* green, without deciding merge.
-- **May:** trigger/rerun CI gates (`request_external_ci_mirror_run`), request the right human/SME reviewers, surface per-PR failing-test attribution (`ci_attribution`), nudge stale PRs, request auto-rebase; monitor In-Review via `monitor_in_review`.
+- **May:** trigger/rerun CI gates (`request_external_ci_mirror_run` / scratchpad dispatch), request the right human/SME reviewers, surface per-PR failing-test attribution (`ci_attribution`), nudge stale PRs, request auto-rebase; monitor In-Review via `monitor_in_review`; dispatch a `review_merge` agent for green In-Review work.
 - **May NOT:** merge, mark Done, or waive a red/required check.
 - **Scopes:** T1 + (no new write scope — CI/mirror runs and review requests are `write:ixp` coordination actions).
 - **Escalate when:** a required gate is red after bounded retries; a PR is conflicted/stale; review is required but unavailable; a flake pattern is detected (surface it, don't retry-until-green).
+- **Shipped by COORD-5:** [`COORDINATOR-REVIEW-STEWARD.md`](COORDINATOR-REVIEW-STEWARD.md) / `review_steward.py` / `jobs.py coordinator_review` (dry-run default).
 
 ### T3 — Merge steward
 - **Mandate:** Land PRs that already satisfy *every* safe-merge condition, in dependency order with backpressure.

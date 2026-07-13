@@ -7,6 +7,8 @@ workflow engine. Each job is a plain function; the timer invokes this module.
   python jobs.py reconcile_alerts # run reconcile and send deduped drift alerts
   python jobs.py coordinator_audit
                                   # emit T0 read-only ranked coordinator plans
+  python jobs.py coordinator_review
+                                  # T2 review steward (dry-run by default; COORD-5)
   python jobs.py background_job <job_name>
                                    # run a checkpointed background job (RECON-10)
 
@@ -251,6 +253,40 @@ def coordinator_audit():
     return result
 
 
+def coordinator_review():
+    """Run the COORD-5 T2 review steward across selected projects.
+
+    Default is dry-run: plan + COORD-3 decisions + activity artifact, no CI/wake
+    side effects. Set ``PM_COORDINATOR_REVIEW_ACT=1`` only after dry-run receipts look
+    right. Never merges (COORD-7 / T3 only).
+    """
+    import review_steward as review_mod
+
+    projects = _configured_projects("PM_COORDINATOR_REVIEW_PROJECTS", "switchboard")
+    persist = review_mod.enabled_from_env("PM_COORDINATOR_REVIEW_LOG", True)
+    dry_run = not review_mod.enabled_from_env("PM_COORDINATOR_REVIEW_ACT", False)
+    max_ci_reruns = int(os.environ.get("PM_COORDINATOR_REVIEW_MAX_CI_RERUNS", "2"))
+    actor = (os.environ.get("PM_COORDINATOR_REVIEW_ACTOR") or
+             "switchboard/coordinator-t2").strip()
+    operator = (os.environ.get("PM_COORDINATOR_REVIEW_OPERATOR") or
+                "switchboard/operator").strip()
+    review_runtime = (os.environ.get("PM_COORDINATOR_REVIEW_RUNTIME") or
+                      "cursor").strip()
+    result = review_mod.steward_projects(
+        projects,
+        actor=actor,
+        dry_run=dry_run,
+        persist=persist,
+        max_ci_reruns=max_ci_reruns,
+        operator_agent=operator,
+        review_runtime=review_runtime,
+    )
+    print(json.dumps(result, sort_keys=True))
+    if not result.get("ok"):
+        raise RuntimeError("coordinator review steward failed closed; inspect the receipt")
+    return result
+
+
 def claim_gate_prs():
     """Post SESSION-12 claim-gate commit statuses for open fleet PRs (CI-7).
 
@@ -308,6 +344,7 @@ JOBS = {"weekly_digest": weekly_digest, "poll_inbox": poll_inbox,
         "sweep_monitors": sweep_monitors,
         "reconcile_alerts": reconcile_alerts,
         "coordinator_audit": coordinator_audit,
+        "coordinator_review": coordinator_review,
         "claim_gate_prs": claim_gate_prs,
         "dispatch_ci": dispatch_ci,
         "dispatch_scratchpad": dispatch_scratchpad,

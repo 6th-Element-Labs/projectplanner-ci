@@ -1,0 +1,13 @@
+# /etc/systemd/system/projectplanner-coordinator-review.timer
+[Unit]
+Description=Run the Switchboard T2 review steward every five minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
