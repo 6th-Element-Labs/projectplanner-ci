@@ -7,6 +7,10 @@ from switchboard.storage.repositories.claims import (
     StoreClaimsRepository,
     default_claims_repository,
 )
+from switchboard.storage.repositories.coordination import (
+    StoreCoordinationRepository,
+    default_coordination_repository,
+)
 from switchboard.storage.repositories.protocols import (
     AccessRepository,
     ClaimsRepository,
@@ -22,9 +26,11 @@ __all__ = [
     "AccessStoreRepository",
     "ClaimsRepository",
     "StoreClaimsRepository",
+    "StoreCoordinationRepository",
     "StoreTaskRepository",
     "TaskRepository",
     "default_access_repository",
     "default_claims_repository",
+    "default_coordination_repository",
     "default_task_repository",
 ]

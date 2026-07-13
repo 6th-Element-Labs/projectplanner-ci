@@ -1,0 +1,48 @@
+"""Backward-compatible shim — prefer ``switchboard.storage.repositories.coordination``."""
+import scripts.switchboard_path  # noqa: F401 — make src/switchboard importable
+
+from switchboard.storage.repositories.coordination import (  # noqa: E402
+    StoreCoordinationRepository,
+    ack_message,
+    cancel_monitor,
+    cancel_wake,
+    claim_wake,
+    complete_wake,
+    default_coordination_repository,
+    get_message_status,
+    list_agent_messages,
+    list_coordination_monitors,
+    list_pending_acks,
+    list_unacked_messages,
+    list_unblock_requests,
+    list_wake_intents,
+    request_unblock,
+    request_wake,
+    resolve_monitor,
+    send_agent_message,
+    sweep_coordination_monitors,
+    sweep_wake_intents,
+)
+
+__all__ = [
+    "StoreCoordinationRepository",
+    "default_coordination_repository",
+    "request_wake",
+    "list_wake_intents",
+    "claim_wake",
+    "complete_wake",
+    "cancel_wake",
+    "sweep_wake_intents",
+    "request_unblock",
+    "list_unblock_requests",
+    "send_agent_message",
+    "ack_message",
+    "list_unacked_messages",
+    "list_agent_messages",
+    "get_message_status",
+    "list_pending_acks",
+    "list_coordination_monitors",
+    "resolve_monitor",
+    "cancel_monitor",
+    "sweep_coordination_monitors",
+]
