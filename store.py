@@ -8869,6 +8869,11 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                                    "result": result}, sort_keys=True), now))
             if status == "completed" and runner_session_id:
                 selector = wake.get("selector") or {}
+                runner_metadata = {"wake_id": wake_id, "wake_result": result}
+                for key in ("vendor_id", "provider_session_id", "session_url", "branch",
+                            "head_sha", "billing_mode"):
+                    if result.get(key) is not None:
+                        runner_metadata[key] = result.get(key)
                 _upsert_runner_session_in(
                     c,
                     {
@@ -8883,7 +8888,7 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                         "cwd": result.get("cwd") or "",
                         "control": result.get("control") or {"managed_process": True,
                                                               "runner_kill": bool(runner_session_id)},
-                        "metadata": {"wake_id": wake_id, "wake_result": result},
+                        "metadata": runner_metadata,
                         "heartbeat_ttl_s": result.get("heartbeat_ttl_s") or 60,
                     },
                     principal_id=actor,

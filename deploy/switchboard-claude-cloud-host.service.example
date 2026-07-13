@@ -1,0 +1,36 @@
+# Install as /etc/systemd/system/switchboard-claude-cloud-host@.service, then
+# enable switchboard-claude-cloud-host@<authenticated-user>.service.
+# Trigger-only host: Claude performs coding on Anthropic infrastructure.
+[Unit]
+Description=Switchboard Claude Code cloud trigger host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/path/to/projectplanner
+EnvironmentFile=/path/to/projectplanner/.env
+Environment=PM_BASE=https://plan.taikunai.com
+Environment=PM_PROJECT=switchboard
+Environment=PM_HOST_ID=host/%H-claude-cloud
+Environment=PM_HOST_LANES=ADAPTER,HARDEN,DISPATCH,RECON
+Environment=PM_HOST_MAX_SESSIONS=4
+Environment=PM_REPO_ROOT=/path/to/projectplanner
+Environment=PM_CLAUDE_CLOUD_RECEIPTS=/var/lib/projectplanner/claude-cloud/receipts
+Environment=PM_CLAUDE_CLOUD_CLONE_ROOT=/var/lib/projectplanner/claude-cloud/clones
+# Claude CLI must be authenticated with a claude.ai subscription on this host.
+# The selected Claude cloud environment must define SWITCHBOARD_TOKEN. Never put
+# the raw token in this file, the repository, the process arguments, or the wake.
+ExecStart=/path/to/projectplanner/.venv/bin/python /path/to/projectplanner/adapters/claude_cloud_host.py --interval 10
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Trigger coordination needs git/CLI config but not local coding compute.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

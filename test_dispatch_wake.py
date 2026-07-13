@@ -44,9 +44,12 @@ ok(res.get("lane") == "HARDEN", "dispatch(): wake carries the task's lane")
 sw_wakes = [w for w in store.list_wake_intents(project="switchboard") if w.get("task_id") == TID]
 ok(len(sw_wakes) == 1, "wake is recorded on the switchboard board")
 sel = (sw_wakes[0].get("selector") or {}) if sw_wakes else {}
-ok(sel.get("runtime") == "claude-code" and sel.get("lane") == "HARDEN", "wake selector = claude-code + HARDEN lane")
+ok(sel.get("runtime") == "claude-code" and sel.get("lane") == "HARDEN"
+   and "vendor_cloud" in (sel.get("capabilities") or []),
+   "wake selector = claude-code vendor cloud + HARDEN lane")
 pol = (sw_wakes[0].get("policy") or {}) if sw_wakes else {}
-ok(pol.get("mode") == "claim_next", "wake policy asks for claim_next (spawns a work session)")
+ok(pol.get("mode") == "vendor_cloud" and pol.get("provider") == "anthropic",
+   "wake policy asks for Anthropic-hosted execution")
 
 # 4. A non-existent task fails cleanly as 'task not found' (no silent no-op, no wrong-board hit).
 miss = dispatch.dispatch("NOPE-999", actor="tester", project="switchboard")
@@ -81,13 +84,55 @@ work_host = store.register_host(
 ok(not work_host.get("error"), "registered a work-capable host")
 ok(dispatch._host_is_work_capable(work_host) is True,
    "_host_is_work_capable() reads runtimes[].policy.allow_work")
+ok(dispatch.status(project="switchboard").get("work_hosts_online") == 0,
+   "local work host is not mislabeled as a cloud trigger host")
+cloud_host = store.register_host(
+    {"host_id": "host/cloud", "hostname": "cloud-trigger",
+     "runtimes": [{"runtime": "claude-code",
+                   "policy": {"allow_work": True, "mode": "vendor_cloud_trigger"},
+                   "lanes": ["HARDEN"],
+                   "capabilities": ["vendor_cloud", "github", "mcp"]}],
+     "limits": {"max_sessions": 4}, "heartbeat_ttl_s": 60},
+    project="switchboard")
+ok(not cloud_host.get("error"), "registered a Claude cloud trigger host")
 ok(dispatch.status(project="switchboard").get("work_hosts_online") == 1,
-   "work_hosts_online = 1 once a work-capable host is online (not a false 0)")
+   "work_hosts_online counts only the vendor-cloud trigger host")
 # and the dispatch note no longer warns about a missing host
 res2 = dispatch.dispatch(TID, actor="tester", project="switchboard")
 ok(res2.get("work_hosts_online") == 1, "dispatch() reports the online work host")
 
-# 7. latest() returns the NEWEST wake, not the oldest. Two distinct wakes for one
+# 7. An adopted provider session exposes its app URL in the Dev-tab projection.
+wake_id = res.get("wake_id")
+runner_id = "cloud/claude-code-cloud/cse_dispatch18"
+store.complete_wake(
+    wake_id,
+    runner_session_id=runner_id,
+    agent_id=f"claude/{TID}",
+    result={
+        "started": True,
+        "vendor_id": "claude-code-cloud",
+        "provider_session_id": "cse_dispatch18",
+        "session_url": "https://claude.ai/code/session_dispatch18",
+        "billing_mode": "subscription",
+        "heartbeat_ttl_s": 86400,
+        "control": {"provider_app": True, "runner_kill": False,
+                    "managed_process": False},
+    },
+    actor="test",
+    project="switchboard",
+)
+bound = dispatch.latest(TID, project="switchboard")
+ok(bound.get("session_url") == "https://claude.ai/code/session_dispatch18"
+   and bound.get("provider_session_id") == "cse_dispatch18",
+   "latest() exposes the app-visible Claude session binding")
+bound_runner = store.get_runner_session(runner_id, project="switchboard")
+ok((bound_runner.get("metadata") or {}).get("vendor_id") == "claude-code-cloud"
+   and (bound_runner.get("metadata") or {}).get("billing_mode") == "subscription"
+   and (bound_runner.get("control") or {}).get("runner_kill") is False
+   and bound_runner.get("heartbeat_ttl_s") == 86400,
+   "cloud runner keeps provider metadata/lifetime and does not advertise a fake local kill")
+
+# 8. latest() returns the NEWEST wake, not the oldest. Two distinct wakes for one
 #    task: list_wake_intents returns them oldest-first, so a created_at (absent on
 #    wake rows) sort key would wrongly pin latest() to the first/oldest.
 store.request_wake(selector={"runtime": "claude-code", "lane": "HARDEN"},

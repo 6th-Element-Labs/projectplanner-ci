@@ -2393,7 +2393,7 @@ const TeepPlan = {
                     </div>
                 </div>
                 <div class="tab-pane fade" id="m-dev" role="tabpanel">
-                    <p class="text-secondary">Dispatch queues this task for the agent fleet: a work-capable agent host claims it, works it in an isolated worktree, and opens a PR on a <code>claude/</code> branch — it never merges or writes to your systems on its own. If no work host is online yet, it stays queued until one is.</p>
+                    <p class="text-secondary">Dispatch starts a vendor-hosted Claude Code cloud session through a trigger-only host. Claude works from a pushed <code>claude/</code> task branch in Anthropic's sandbox, the app-visible session is bound here, and the resulting PR returns through Switchboard. It never merges or writes to main/master on its own.</p>
                     ${t.is_blocking ? `<div class="alert alert-warning d-flex" role="alert"><i class="ti ti-shield-lock me-2 mt-1"></i><div><span class="fw-bold">Human-gated.</span> This task is blocking — a maintainer must approve both the dispatch and the resulting PR before anything merges.</div></div>` : ''}
                     ${this.controlTruthHtml(t)}
                     ${this.workSessionsPanelHtml(t)}
@@ -2588,16 +2588,16 @@ const TeepPlan = {
     async dispatchTask(id) {
         const flash = (msg, cls) => { const el = document.getElementById('edit-flash-dev'); if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary'); } };
         const proj = window.PM_PROJECT || 'maxwell';
-        if (!window.confirm(`Dispatch ${id} to the fleet? A work-capable agent host claims it, works it on a claude/ branch, and posts a PR link here — it never touches main.`)) return;
-        flash('Queuing a work session…');
+        if (!window.confirm(`Dispatch ${id} to Claude Code cloud? Anthropic hosts the coding session on a claude/ task branch and the session/PR links return here — it never touches main/master.`)) return;
+        flash('Queuing a Claude cloud session…');
         let data;
         try {
             const res = await fetch(`api/tasks/${encodeURIComponent(id)}/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: proj }) });
             data = await res.json();
         } catch (e) { return flash('Dispatch failed: ' + e.message, 'danger'); }
         if (!data.dispatched) return flash('Dispatch failed: ' + (data.error || data.detail || 'unknown'), 'danger');
-        if (!data.work_hosts_online) flash(`Queued (wake ${data.wake_id}) — no work host is online yet, so it waits until one is.`, 'warning');
-        else flash(`Queued (wake ${data.wake_id}) — a work host will claim it and open a PR.`, 'green');
+        if (!data.work_hosts_online) flash(`Queued (wake ${data.wake_id}) — no authenticated Claude cloud trigger host is online yet.`, 'warning');
+        else flash(`Queued (wake ${data.wake_id}) — the trigger host will bind an app-visible Claude session.`, 'green');
         this._loadDispatch(id);   // render the live panel (queued → running → Open PR); it self-refreshes
     },
 
@@ -2792,26 +2792,27 @@ const TeepPlan = {
         const st = d && d.status;
         if (!st || st === 'none') { el.innerHTML = ''; return; }
         const M = {
-            queued: ['Queued for the fleet', 'yellow'],
-            claiming: ['Claimed — starting…', 'azure'],
-            running: ['Working…', 'azure'],
+            queued: ['Queued for Claude cloud', 'yellow'],
+            claiming: ['Claimed — provisioning…', 'azure'],
+            running: ['Claude cloud running', 'azure'],
             pr: ['PR ready', 'green'],
         };
         const [label, color] = M[st] || [st, 'secondary'];
         const active = st === 'queued' || st === 'claiming' || st === 'running';
         const pr = d.pr_url ? `<a href="${this.esc(d.pr_url)}" target="_blank" class="btn btn-success btn-sm"><i class="ti ti-git-pull-request me-1"></i>Open PR ↗</a>` : '';
+        const session = d.session_url ? `<a href="${this.esc(d.session_url)}" target="_blank" rel="noopener" class="btn btn-azure btn-sm"><i class="ti ti-external-link me-1"></i>Open Claude session ↗</a>` : '';
         const who = d.agent_id ? ` <span class="text-secondary small">${this.esc(d.agent_id)}</span>` : '';
         el.innerHTML = `
             <div class="card"><div class="card-body py-2">
                 <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <i class="ti ti-robot text-azure"></i><strong>Fleet dispatch</strong>${who}
+                    <i class="ti ti-cloud text-azure"></i><strong>Claude cloud dispatch</strong>${who}
                     <span class="badge bg-${color}-lt">${this.esc(label)}</span>
                     ${st === 'running' || st === 'claiming' ? '<span class="spinner-border spinner-border-sm text-azure"></span>' : ''}
-                    <span class="ms-auto"></span>${pr}
+                    <span class="ms-auto"></span>${session}${pr}
                 </div>
-                ${st === 'queued' ? '<div class="small text-secondary mt-1">Queued — a work-capable agent host will claim it. If nothing picks it up, no work host is online for this lane yet.</div>' : ''}
-                ${st === 'claiming' ? '<div class="small text-secondary mt-1">A host claimed the wake and is starting the session.</div>' : ''}
-                ${st === 'running' ? '<div class="small text-secondary mt-1">Working now — the Open PR button appears here when it opens a PR.</div>' : ''}
+                ${st === 'queued' ? '<div class="small text-secondary mt-1">Queued — waiting for an authenticated trigger host with the vendor_cloud capability.</div>' : ''}
+                ${st === 'claiming' ? '<div class="small text-secondary mt-1">The trigger host claimed the wake and is provisioning an Anthropic-hosted session.</div>' : ''}
+                ${st === 'running' ? '<div class="small text-secondary mt-1">Working in Claude cloud. Open the session to watch or steer it; the PR button appears after provenance lands.</div>' : ''}
                 ${st === 'pr' ? '<div class="small text-secondary mt-1">Next: open the PR, review the diff, and merge it on GitHub (or comment back here).</div>' : ''}
             </div></div>`;
         if (active) setTimeout(() => { if (this._dispatchPollId === id) this._loadDispatch(id); }, 7000);

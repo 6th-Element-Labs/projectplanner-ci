@@ -4,7 +4,7 @@
       "type": "http",
       "url": "https://plan.taikunai.com/mcp",
       "headers": {
-        "Authorization": "Bearer e511820b1574b2cd0a41e01d64e1fd405b22bf37069ee27e"
+        "Authorization": "Bearer ${SWITCHBOARD_TOKEN}"
       }
     }
   }

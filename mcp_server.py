@@ -3011,11 +3011,14 @@ def notify(subject: str, text: str, ctx: Context) -> str:
 
 @mcp.tool()
 def dispatch_to_claude_code(task_id: str, ctx: Context, project: str = "maxwell") -> str:
-    """Queue a task for autonomous development via the fleet. Enqueues a lane-scoped claim_next
-    wake intent that a work-capable Agent Host claims and runs in an isolated worktree, opening a
-    PR on a `claude/<task>` branch — never main. Returns {dispatched, wake_id, work_hosts_online, …}.
-    If no work-capable host is online for the task's project/lane, the wake queues until one is
-    (deploy/switchboard-agent-host-work.service.example). project selects the board."""
+    """Queue a task for Anthropic-hosted Claude Code cloud execution.
+
+    Enqueues a lane-scoped wake requiring the vendor_cloud capability. A trigger-only host creates
+    and pushes `claude/<task>-cloud`, invokes the official `claude --cloud` PTY bridge, and binds
+    the app-visible session URL plus later PR provenance back to Switchboard. It never merges or
+    pushes main/master, and provider failures never fall back to self-hosted compute. Returns
+    {dispatched, wake_id, branch, execution_mode, work_hosts_online, …}. project selects the board.
+    """
     principal = _require_write(ctx, project)
     import dispatch as dispatch_mod
     return _dumps(dispatch_mod.dispatch(task_id, actor=auth.actor(principal), project=project))

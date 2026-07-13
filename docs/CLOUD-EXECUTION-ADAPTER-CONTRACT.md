@@ -36,7 +36,7 @@ proved remains queued or visibly failed.
 
 | Vendor adapter | Programmatic outbound trigger | App-visible receipt | V1 decision |
 |---|---|---|---|
-| `claude-code-cloud` | Conditional through the official `claude --cloud` CLI bridge. Each invocation creates a new cloud session from the current GitHub repo/branch. | Claude documents a remote session ID and a `claude.ai/code/...` transcript URL. | Implement a small launcher bridge; capture/read back both values before adoption. |
+| `claude-code-cloud` | Conditional through the official `claude --cloud` CLI bridge. Each invocation creates a new cloud session from the current GitHub repo/branch. | Claude documents a remote session ID and a `claude.ai/code/...` transcript URL. | Implemented by `adapters/claude_cloud.py` and the trigger-only `adapters/claude_cloud_host.py`; adoption still fails closed until live auth/GitHub/provider-secret preflight passes. |
 | `openai-codex-cloud` | **Unsupported in this contract.** Current official Codex cloud docs describe starting work from Codex web, GitHub, Linear, or Slack, but do not document a public cloud-task creation API that returns a task ID and URL. Codex SDK/App Server run in caller-controlled compute and are not a substitute. | Codex cloud tasks are visible in Codex, but there is no documented trigger receipt for a direct Switchboard adapter. | Fail `provider_trigger_unsupported` until OpenAI publishes a suitable trigger or an approved first-party integration yields a bindable receipt. |
 | `cursor-background-agent` | Implemented through Cursor's beta Cloud Agents v1 API (`POST /v1/agents`), authenticated with a Cloud Agents API key and backed by an explicit GitHub repository grant. | The adapter captures and reads back the durable `bc-...` agent ID, `cursor.com/agents/...` URL, and latest run status. | Use `adapters/cursor/cloud_execution.py`; exact same-run resume fails closed, while a new run on the same durable agent is labeled a follow-up. |
 
@@ -234,8 +234,9 @@ new wake, but the adapter never silently creates a second provider session.
    branch preflight, idempotent create, authoritative readback, explicit follow-up semantics, and
    token-usage receipts. A live launch still requires an operator-owned Cloud Agents API key,
    repository grant, pushed task branch, and scoped Switchboard token resolver.
-2. Claude adapter: implement the authenticated `claude --cloud` bridge and robust session ID/URL
-   extraction/readback.
+2. Claude adapter: **implemented in ADAPTER-18** with PTY launch, exact-push/auth/MCP preflight,
+   idempotent session ID/URL adoption, runner/wake binding, Dev-tab link, and honest subscription
+   Tally receipt. See [`CLAUDE-CLOUD-EXECUTION.md`](CLAUDE-CLOUD-EXECUTION.md).
 3. Codex adapter: wait for a documented cloud-task trigger or implement an explicitly approved
    first-party GitHub/Linear/Slack bridge that yields a stable Codex task receipt; do not use local
    App Server/SDK under the cloud label.
