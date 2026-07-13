@@ -22,7 +22,7 @@ os.environ["PM_AUTH_MODE"] = "required"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import store  # noqa: E402
-import runner_store  # noqa: E402
+from switchboard.storage.repositories import runner as runner_repo  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 P = "switchboard"
@@ -45,12 +45,12 @@ def _load(name, path):
 
 
 try:
-    ok(store.upsert_runner_session is runner_store.upsert_runner_session and
-       store.request_runner_control is runner_store.request_runner_control,
-       "store facade re-exports runner_store operations")
-    ok(store.upsert_runner_session.__module__ == "runner_store" and
-       store.complete_runner_control_request.__module__ == "runner_store",
-       "runner persistence and control implementations live in runner_store")
+    ok(store.upsert_runner_session is runner_repo.upsert_runner_session and
+       store.request_runner_control is runner_repo.request_runner_control,
+       "store facade re-exports runner repository operations")
+    ok(store.upsert_runner_session.__module__ == "switchboard.storage.repositories.runner" and
+       store.complete_runner_control_request.__module__ == "switchboard.storage.repositories.runner",
+       "runner persistence and control implementations live in storage.repositories.runner")
     store.init_project_registry()
     store.init_db(P)
     now = time.time()

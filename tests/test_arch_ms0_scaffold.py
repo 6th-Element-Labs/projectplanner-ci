@@ -47,6 +47,7 @@ def ok(condition, message):
 SKELETON_MODULES = (
     "switchboard.settings",
     "switchboard.storage.migrations.runner",
+    "switchboard.storage.repositories.runner",
 )
 SKELETON_PACKAGES = (
     "switchboard",

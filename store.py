@@ -34,7 +34,7 @@ from inbox_store import *      # noqa: F401,F403
 from summaries_store import *  # noqa: F401,F403
 from decisions_store import *  # noqa: F401,F403
 from jobs_store import *       # noqa: F401,F403
-from runner_store import (
+from switchboard.storage.repositories.runner import (
     _runner_session_row,
     _upsert_runner_session_in,
     claim_runner_control_request,
