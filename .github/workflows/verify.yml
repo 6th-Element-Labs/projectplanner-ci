@@ -39,6 +39,8 @@ on:
 
 permissions: {}
 
+# cancel-in-progress: duplicate dispatches for the same PR supersede in-flight
+# runs; the latest dispatch wins and posts the authoritative status.
 concurrency:
   group: verify-pr-${{ github.event.client_payload.pr || inputs.pr || 'cron' }}
   cancel-in-progress: true
@@ -146,7 +148,7 @@ jobs:
         if: steps.coords.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install Python dependencies
         if: steps.coords.outputs.skip != 'true'
