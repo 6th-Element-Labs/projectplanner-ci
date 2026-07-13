@@ -4,6 +4,9 @@ This module is intentionally FastAPI-free so replay/idempotency behavior can be 
 without importing the web app.
 """
 import re
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any, Dict, List
 
 import ci_verify_dispatch
@@ -193,13 +196,37 @@ def _maybe_dispatch_pull_model_ci(repo: str, pr_number: Any, head_sha: str) -> D
     return ci_verify_dispatch.try_dispatch_verify(int(pr_number), repo=repo, head_sha=head_sha)
 
 
-def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str) -> Dict[str, Any]:
-    """Trigger pull-model CI for one PR update (CI-6/CI-7). Best-effort."""
+def _maybe_refresh_claim_gate(repo: str, pr_number: Any, project: str = "") -> Dict[str, Any]:
+    """Post claim-gate status for one PR immediately (CI-11 — no 2-min timer wait)."""
+    if pr_number is None:
+        return {"claim_gate_refreshed": False, "skip_reason": "missing_pr_number"}
+    proj = (project or store.DEFAULT_PROJECT).strip()
+    role = store.get_project_repo_role(repo, project=proj)
+    if not role.get("canonical"):
+        return {"claim_gate_refreshed": False, "skip_reason": "non_canonical_repo"}
+    script = Path(__file__).resolve().parent / "scripts" / "switchboard_pr_gate.py"
+    try:
+        subprocess.run(
+            [sys.executable, str(script), "--pr", str(int(pr_number)), "--once-open-prs"],
+            cwd=str(script.parent.parent),
+            check=True,
+            timeout=120,
+        )
+        return {"claim_gate_refreshed": True}
+    except Exception as exc:
+        return {"claim_gate_refreshed": False, "claim_gate_error": str(exc)}
+
+
+def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "") -> Dict[str, Any]:
+    """Trigger pull-model CI + claim gate for one PR update (CI-6/CI-7/CI-11)."""
     dispatch = _maybe_dispatch_pull_model_ci(repo, pr_number, head_sha)
+    claim = _maybe_refresh_claim_gate(repo, pr_number, project=project)
     return {
         "pull_model_dispatched": bool(dispatch.get("dispatched")),
         "pull_model_skip_reason": dispatch.get("skip_reason"),
         "pull_model_head_sha": dispatch.get("head_sha"),
+        "claim_gate_refreshed": bool(claim.get("claim_gate_refreshed")),
+        "claim_gate_skip_reason": claim.get("skip_reason") or claim.get("claim_gate_error"),
     }
 
 
@@ -248,12 +275,14 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             else:
                 touched.append(task_id)
         # Event-driven CI: pull-model dispatch and/or on-box gate marker (no 5-min wait).
-        ci = _maybe_trigger_ci(repo, pr_num, head_sha)
+        ci = _maybe_trigger_ci(repo, pr_num, head_sha, project)
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
                 "in_review_tasks": touched, "skipped_tasks": skipped,
                 "pull_model_dispatched": ci.get("pull_model_dispatched"),
                 "pull_model_skip_reason": ci.get("pull_model_skip_reason"),
-                "pull_model_head_sha": ci.get("pull_model_head_sha")}
+                "pull_model_head_sha": ci.get("pull_model_head_sha"),
+                "claim_gate_refreshed": ci.get("claim_gate_refreshed"),
+                "claim_gate_skip_reason": ci.get("claim_gate_skip_reason")}
 
     if not pr.get("merged"):
         return {"action": "ignored", "reason": "closed PR was not merged", "pr": pr_num}
