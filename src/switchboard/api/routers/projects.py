@@ -7,8 +7,8 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
 import store
-from switchboard.application.commands import project_lifecycle
-from switchboard.application.queries import project_impact
+from switchboard.application.commands import project_lifecycle, project_metadata
+from switchboard.application.queries import project_admin, project_impact
 
 
 ProjectResolver = Callable[[str], str]
@@ -18,6 +18,44 @@ PrincipalResolver = Callable[..., dict]
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/api/projects/{project}")
+    def get_project(request: Request, project: str):
+        project_id = resolve_project(project)
+        principal = resolve_principal(request, project_id, ("read",), dev_actor="web")
+        result = project_admin.execute_for(
+            project_id,
+            access_repository=store.access_repository,
+            repo_topology_provider=store.get_project_repo_topology,
+            access_model_provider=store.project_access_model,
+            principal_id=str(principal.get("id") or ""),
+            principal_scopes=list(
+                principal.get("effective_scopes") or principal.get("scopes") or []),
+        )
+        if result.get("error"):
+            raise HTTPException(404, result)
+        return result
+
+    @router.patch("/api/projects/{project}")
+    def update_project(request: Request, project: str,
+                       body: dict = Body(...)):
+        project_id = resolve_project(project)
+        trust_boundary = bool({"boundary", "visibility"}.intersection(body or {}))
+        principal = resolve_principal(
+            request, project_id,
+            (("write:system",) if trust_boundary else ("write:projects",)),
+            dev_actor="web")
+        result = project_metadata.execute(
+            {**dict(body or {}), "project_id": project_id},
+            actor=auth.actor(principal),
+            access_repository=store.access_repository,
+        )
+        if result.get("error"):
+            code = 423 if result.get("error") == "project_archived" else 400
+            if str(result.get("error")).startswith("unknown project"):
+                code = 404
+            raise HTTPException(code, result)
+        return result
 
     @router.get("/api/projects/{project}/impact")
     def project_impact_report(request: Request, project: str,

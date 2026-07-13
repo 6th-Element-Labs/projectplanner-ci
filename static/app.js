@@ -4269,18 +4269,20 @@ const TeepPlan = {
 
     ...window.SwitchboardClosure.methods,
     ...window.SwitchboardMission.methods,
+    ...window.SwitchboardProjectAdmin.methods,
 
     async loadPrincipal() {
         try {
-            const res = await fetch('api/auth/me');
+            const res = await fetch(`api/auth/me?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`);
             const data = await res.json();
             this.principal = (res.ok && data.principal) ? data.principal : null;
             this.authMode = (data && data.mode) || '';
         } catch (e) { this.principal = null; }
         const scopes = (this.principal && this.principal.effective_scopes) || [];
         this.isAdmin = scopes.includes('admin') || scopes.includes('write:system');
+        this.canWriteProjects = this.isAdmin || scopes.includes('write:projects');
         const nav = document.getElementById('nav-settings');
-        if (nav) nav.style.display = this.isAdmin ? '' : 'none';
+        if (nav) nav.style.display = this.canWriteProjects ? '' : 'none';
     },
 
     _sv(id) { return (document.getElementById(id)?.value || '').trim(); },
@@ -4305,25 +4307,34 @@ const TeepPlan = {
     async renderSettings() {
         const el = document.getElementById('settings-page');
         if (!el) return;
-        if (!this.isAdmin) { el.innerHTML = '<div class="alert alert-warning mb-0"><i class="ti ti-lock me-1"></i>Admin access (<code>write:system</code>) is required for project &amp; provenance settings.</div>'; return; }
+        if (!this.canWriteProjects) { el.innerHTML = '<div class="alert alert-warning mb-0"><i class="ti ti-lock me-1"></i>Project editor access (<code>write:projects</code>) is required.</div>'; return; }
         el.innerHTML = '<div class="text-secondary small">Loading settings…</div>';
         const proj = window.PM_PROJECT || 'maxwell';
-        const [topology, projects, ciRuns, pubs] = await Promise.all([
-            this._sfetch(`api/projects/${encodeURIComponent(proj)}/repo_topology`),
-            this._sfetch('api/projects'),
-            this._sfetch(`ixp/v1/external_ci_runs?project=${encodeURIComponent(proj)}`),
-            this._sfetch(`ixp/v1/publication_evidence?project=${encodeURIComponent(proj)}`),
-        ]);
-        this._settingsProjects = (projects && projects.projects) || [];
+        const projects = await this._sfetch('api/projects?include_archived=1');
+        this._settingsAdminProjects = (projects && projects.projects) || [];
+        this._settingsProjectFilter = this._settingsProjectFilter || 'all';
+        const candidates = this._paProjectsForFilter();
+        this._settingsProjectId = this._settingsProjectId || (candidates.some((p) => p.id === proj) ? proj : (candidates[0]?.id || ''));
+        const selected = this._settingsProjectId;
+        const [detail, impact] = selected ? await Promise.all([
+            this._sfetch(`api/projects/${encodeURIComponent(selected)}`),
+            this._sfetch(`api/projects/${encodeURIComponent(selected)}/impact`),
+        ]) : [{ error: 'No accessible projects match this lifecycle filter.' }, {}];
+        this._settingsProjects = this._settingsAdminProjects.filter((p) => p.lifecycle_status !== 'archived');
+        let adminHtml = '<div class="alert alert-secondary"><i class="ti ti-lock me-1"></i>Repository topology, reconcile, offline verification, task moves, and publication controls require <code>write:system</code>.</div>';
+        if (this.isAdmin) {
+            const [topology, ciRuns, pubs] = await Promise.all([
+                this._sfetch(`api/projects/${encodeURIComponent(proj)}/repo_topology`),
+                this._sfetch(`ixp/v1/external_ci_runs?project=${encodeURIComponent(proj)}`),
+                this._sfetch(`ixp/v1/publication_evidence?project=${encodeURIComponent(proj)}`),
+            ]);
+            adminHtml = this._settingsRepoCard(topology) + this._settingsReconcileCard()
+                + this._settingsVerifyCard() + this._settingsMoveCard()
+                + this._settingsCiRunsCard(ciRuns) + this._settingsPublicationCard(pubs);
+        }
         el.innerHTML =
-            `<div class="mb-3"><h2 class="mb-0"><i class="ti ti-settings me-2"></i>Project &amp; provenance admin</h2>
-                <div class="text-secondary small">${this.esc(proj)} · admin-gated · every action is audited</div></div>`
-            + this._settingsRepoCard(topology)
-            + this._settingsReconcileCard()
-            + this._settingsVerifyCard()
-            + this._settingsMoveCard()
-            + this._settingsCiRunsCard(ciRuns)
-            + this._settingsPublicationCard(pubs);
+            `<div class="mb-3"><h2 class="mb-0"><i class="ti ti-settings me-2"></i>Project &amp; provenance administration</h2><div class="text-secondary small">Scoped, fail-closed, and audited</div></div>`
+            + this._projectAdminCard(detail, impact) + adminHtml;
     },
 
     _settingsErrCard(title, err) {
@@ -4464,6 +4475,7 @@ const TeepPlan = {
     },
 
     _settingsAction(action) {
+        if (String(action || '').startsWith('project-')) return this._projectAdminAction(action);
         switch (action) {
             case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'repo-save': return this.saveRepoTopology();
@@ -4755,6 +4767,7 @@ const TeepPlan = {
                 e.preventDefault();
                 this._settingsAction(b.getAttribute('data-set-action'));
             });
+            settingsPage.addEventListener('change', (e) => this._projectAdminChange(e.target));
         }
         const inboxTab = document.querySelector('a[href="#tab-inbox"]');
         if (inboxTab) inboxTab.addEventListener('shown.bs.tab', () => this.initInbox());

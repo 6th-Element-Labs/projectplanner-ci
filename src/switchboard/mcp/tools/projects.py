@@ -8,8 +8,8 @@ from typing import Any, Callable
 from mcp.server.fastmcp import Context
 
 import store
-from switchboard.application.commands import project_lifecycle
-from switchboard.application.queries import project_impact
+from switchboard.application.commands import project_lifecycle, project_metadata
+from switchboard.application.queries import project_admin, project_impact
 
 
 @dataclass(frozen=True)
@@ -46,6 +46,45 @@ def get_project_impact_report(ctx: Context, project: str = "maxwell",
         registry_db_path=store.PROJECT_REGISTRY_DB_PATH,
         repo_topology_provider=store.get_project_repo_topology,
         limit=limit,
+    )
+    return services.dumps(result)
+
+
+def get_project(ctx: Context, project: str = "maxwell") -> str:
+    """Return the shared project administration record, access summary, and receipts."""
+    services = _services()
+    principal = services.require_read(ctx, project, ("read",))
+    result = project_admin.execute_for(
+        project,
+        access_repository=store.access_repository,
+        repo_topology_provider=store.get_project_repo_topology,
+        access_model_provider=store.project_access_model,
+        principal_id=str(principal.get("id") or ""),
+        principal_scopes=list(
+            principal.get("effective_scopes") or principal.get("scopes") or []),
+    )
+    return services.dumps(result)
+
+
+def update_project(ctx: Context, project: str, metadata_json: str) -> str:
+    """Update safe ordinary metadata; lifecycle and ownership fields are rejected."""
+    services = _services()
+    if not str(project or "").strip():
+        return services.dumps({"error": "project is required"})
+    try:
+        metadata = json.loads(metadata_json or "")
+    except (TypeError, json.JSONDecodeError):
+        return services.dumps({"error": "metadata_json must be valid JSON"})
+    if not isinstance(metadata, dict):
+        return services.dumps({"error": "metadata_json must decode to an object"})
+    required = (("write:system",)
+                if {"boundary", "visibility"}.intersection(metadata)
+                else ("write:projects",))
+    principal = services.require_write(ctx, project, required)
+    result = project_metadata.execute(
+        {**metadata, "project_id": project},
+        actor=services.principal_actor(principal),
+        access_repository=store.access_repository,
     )
     return services.dumps(result)
 
@@ -88,7 +127,10 @@ def restore_project(ctx: Context, project: str, reason: str) -> str:
     return services.dumps(result)
 
 
-PROJECT_TOOL_NAMES = ("get_project_impact_report", "archive_project", "restore_project")
+PROJECT_TOOL_NAMES = (
+    "get_project", "update_project", "get_project_impact_report",
+    "archive_project", "restore_project",
+)
 
 
 def register_project_tools(mcp: Any,

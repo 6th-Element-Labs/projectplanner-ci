@@ -262,7 +262,12 @@ def _write_required_scopes(path: str) -> tuple:
     # ACCESS-14: creating a project needs write:projects (contributors and up), not write:system.
     if path == "/api/projects":
         return ("write:projects",)
-    if ((path.startswith("/api/projects/") and path.endswith(("/repo_topology", "/github_repo"))) or
+    # ACCESS-21: ordinary metadata is project-editor work. Lifecycle and repo/trust
+    # boundary mutations remain system-only even though they share the projects prefix.
+    if re.fullmatch(r"/api/projects/[^/]+", path):
+        return ("write:projects",)
+    if ((path.startswith("/api/projects/") and
+         path.endswith(("/archive", "/restore", "/repo_topology", "/github_repo"))) or
             path.startswith(("/api/access/", "/api/audit/", "/api/cleanup/"))):
         return ("write:system",)
     return ("write:tasks",)
@@ -279,7 +284,10 @@ def _global_user_scopes(user: dict, project: str) -> list:
     # membership — including the private→org-admin/owner rule from ACCESS-14), they can at
     # least READ it. Aligns the read gate with the project list so "visible" means "openable";
     # writes still require an explicit role grant.
-    if project in {p.get("id") for p in (user.get("projects") or [])}:
+    accessible = {p.get("id") for p in (user.get("projects") or [])}
+    accessible.update(_auth_store.accessible_project_ids(
+        user["id"], bool(user.get("is_superadmin"))))
+    if project in accessible:
         scopes.add("read")
     return sorted(scopes)
 
@@ -809,14 +817,26 @@ async def auth_me(request: Request, project: str = Query(store.DEFAULT_PROJECT))
 
 
 @app.get("/api/projects")
-def list_projects(request: Request):
-    """The project switcher's source of truth — filtered to accessible projects."""
+def list_projects(request: Request, include_archived: bool = Query(False)):
+    """Active picker by default; explicit admin discovery may include archived records."""
     if auth.auth_mode() == auth.DEV_OPEN and not request.cookies.get(_auth_session.COOKIE_NAME, ""):
-        return {"projects": store.projects(), "default": store.DEFAULT_PROJECT}
+        projects = (store.list_registry_projects(include_archived=True)
+                    if include_archived else store.projects())
+        return {"projects": projects, "default": store.DEFAULT_PROJECT,
+                "include_archived": include_archived}
     user = _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, ""))
     if not user:
         raise HTTPException(401, "not authenticated")
-    return {"projects": user.get("projects", []), "default": ""}
+    if not include_archived:
+        return {"projects": user.get("projects", []), "default": "",
+                "include_archived": False}
+    accessible = set(_auth_store.accessible_project_ids(
+        user["id"], bool(user.get("is_superadmin"))))
+    projects = [
+        record for record in store.list_registry_projects(include_archived=True)
+        if record.get("id") in accessible
+    ]
+    return {"projects": projects, "default": "", "include_archived": True}
 
 
 @app.post("/api/projects")
