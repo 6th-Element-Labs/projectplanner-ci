@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, List
 
 import ci_gate_requests
+import ci_verify_dispatch
 import store
 import task_id_parser
 
@@ -185,6 +186,18 @@ def handle_push(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
             "changed_files": len(changed_files), "notified_agents": notified}
 
 
+def _maybe_dispatch_pull_model_ci(repo: str, pr_number: Any, head_sha: str) -> bool:
+    """CI-3/CI-6 pull-model relay: ``repository_dispatch`` to projectplanner-ci so
+    verify.yml runs on free hosted runners. Best-effort — must never break provenance."""
+    if not ci_verify_dispatch.is_pull_model_enabled() or pr_number is None:
+        return False
+    try:
+        ci_verify_dispatch.dispatch_verify(int(pr_number), repo=repo, head_sha=head_sha)
+        return True
+    except Exception:
+        return False
+
+
 def _maybe_request_ci_gate(repo: str, pr_number: Any, head_sha: str) -> bool:
     """HARDEN-74 event-driven CI: on a PR open/update, drop a request marker so the gate
     fires immediately instead of waiting for the 5-minute timer. Best-effort — a failure
@@ -197,6 +210,15 @@ def _maybe_request_ci_gate(repo: str, pr_number: Any, head_sha: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str) -> Dict[str, bool]:
+    """Trigger CI for one PR update. During CI-6 flip both engines may run until the
+    operator stops the box gate units; each path is independent and best-effort."""
+    return {
+        "pull_model_dispatched": _maybe_dispatch_pull_model_ci(repo, pr_number, head_sha),
+        "box_gate_requested": _maybe_request_ci_gate(repo, pr_number, head_sha),
+    }
 
 
 def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
@@ -243,11 +265,12 @@ def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
                 skipped.append({"task_id": task_id, "reason": res["error"]})
             else:
                 touched.append(task_id)
-        # Event-driven CI: enqueue an immediate gate for this PR head (no 5-min wait).
-        ci_requested = _maybe_request_ci_gate(repo, pr_num, head_sha)
+        # Event-driven CI: pull-model dispatch and/or on-box gate marker (no 5-min wait).
+        ci = _maybe_trigger_ci(repo, pr_num, head_sha)
         return {"action": "pr_review_recorded", "repo": repo, "pr": pr_num,
                 "in_review_tasks": touched, "skipped_tasks": skipped,
-                "ci_gate_requested": ci_requested}
+                "ci_gate_requested": ci.get("box_gate_requested"),
+                "pull_model_dispatched": ci.get("pull_model_dispatched")}
 
     if not pr.get("merged"):
         return {"action": "ignored", "reason": "closed PR was not merged", "pr": pr_num}

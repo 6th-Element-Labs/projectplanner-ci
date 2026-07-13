@@ -139,6 +139,40 @@ PM_GITHUB_TOKEN=... SWITCHBOARD_CI_PYTHON=/opt/projectplanner/.venv/bin/python \
 The production gate is `projectplanner-ci-gate.timer`, which polls open non-draft PRs and posts
 the `Switchboard CI / VM gate` status from the Plan VM.
 
+### Pull-model CI flip (CI-6)
+
+After CI-2 shadow soak (CI-5) agrees, the public `verify.yml` workflow on
+`6th-Element-Labs/projectplanner-ci` posts the **required** context
+`Switchboard CI / VM gate` (same string as the on-box gate — branch protection
+is untouched). The Plan VM webhook relay (`SWITCHBOARD_CI_PULL_MODEL=1`) fires
+`repository_dispatch` to projectplanner-ci; the box gate units keep running until
+two PRs go green through the pull-model engine, then the operator stops them.
+
+**Enable pull-model dispatch on the Plan VM** (after merging the canonical-repo PR):
+
+```bash
+# /opt/projectplanner/.env
+SWITCHBOARD_CI_PULL_MODEL=1
+# Token needs repo dispatch on projectplanner-ci + status read on projectplanner
+SWITCHBOARD_CI_DISPATCH_TOKEN=<fine-grained or classic PAT>
+sudo systemctl restart projectplanner
+```
+
+**Merge `verify.yml` on projectplanner-ci** and confirm `PRIVATE_READ_TOKEN` is
+installed (CI-1). Watch two open PRs receive a green `Switchboard CI / VM gate`
+from a `verify` workflow run (not the box timer).
+
+**Stop box posting** (reversible — rollback = `systemctl start` the units):
+
+```bash
+sudo systemctl stop projectplanner-ci-gate.timer projectplanner-ci-gate-request.path
+sudo systemctl disable projectplanner-ci-gate.timer projectplanner-ci-gate-request.path
+# optional backstop timer stays disabled until CI-7 teardown
+```
+
+Rollback at any point: `sudo systemctl enable --now projectplanner-ci-gate.timer
+projectplanner-ci-gate-request.path`.
+
 ### Native merge queue (HARDEN-70 / CI-3)
 
 The same timer also gates GitHub's native merge queue. When a PR enters the queue, GitHub builds a
