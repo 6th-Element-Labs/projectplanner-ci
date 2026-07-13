@@ -1255,12 +1255,24 @@ const TeepPlan = {
             this._renderFleetDock(sessions);
         }
     },
+    // A backgrounded tab should keep every open deliverable/fleet view live, but poll
+    // less often than a focused tab so many open tabs don't hammer the server. Returns
+    // true if a tick is due: always when visible; throttled to _hiddenPollMs when hidden.
+    // (Browsers also throttle background timers, so this is a floor, not the exact rate.)
+    _pollDueWhileHidden(key) {
+        if (!document.hidden) return true;
+        const now = Date.now();
+        const gap = this._hiddenPollMs || 20000;
+        if (this[key] && (now - this[key]) < gap) return false;
+        this[key] = now;
+        return true;
+    },
     _fleetLiveTick() {
-        if (document.hidden) return;
+        if (!this._pollDueWhileHidden('_fleetHiddenAt')) return;
         this._loadFleetDock(false);
     },
     _startFleetLive() {
-        if (document.hidden || this._fleetLiveTimer) return;
+        if (this._fleetLiveTimer) return;   // keep running even when hidden (the tick self-throttles)
         this._fleetLiveTimer = window.setInterval(
             () => this._fleetLiveTick(), this._fleetPollMs || 10000);
     },
@@ -4890,14 +4902,14 @@ const TeepPlan = {
             });
             document.addEventListener('visibilitychange', () => {
                 const tab = document.querySelector('#toptab-mission');
-                if (document.hidden) {
-                    this._stopMissionLive();
-                    this._stopFleetLive();
-                } else {
-                    this._startFleetLive();
-                    this._loadFleetDock(false);
-                    if (tab && tab.classList.contains('active')) this._startMissionLive();
-                }
+                // Keep the live pollers RUNNING while backgrounded so every open deliverable/
+                // fleet tab stays current (each tick self-throttles for hidden tabs). Do NOT stop them.
+                if (document.hidden) return;
+                // Back in view: make sure the pollers are running and refresh immediately so the
+                // page is current at a glance — no waiting for the next tick.
+                this._startFleetLive();
+                this._loadFleetDock(false);
+                if (tab && tab.classList.contains('active')) { this._startMissionLive(); this._missionLiveTick(); }
             });
         }
     },

@@ -14,7 +14,8 @@
     missionOutcomes: [],    // UI-2: outcomes-to-verify queue
     missionGraph: null,
     _missionDagRenderId: 0,
-    _missionPollMs: 5000,   // live cockpit poll interval (ms) — snappy now the graph is ~0.2s
+    _missionPollMs: 5000,   // live cockpit poll interval (ms) while the tab is visible
+    _hiddenPollMs: 20000,   // slower cadence for BACKGROUNDED tabs — stays live without hammering the server when many tabs are open
     _missionLiveTimer: null,
     _missionSig: null,
     _fleetPollMs: 10000,

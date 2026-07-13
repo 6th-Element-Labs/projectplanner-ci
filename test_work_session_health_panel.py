@@ -158,8 +158,8 @@ try:
     ok("s.work_session_id" in app_js and "(s.health || {}).status" in app_js and
        "s.updated_at" in app_js,
        "fleet signature tracks session identity, lifecycle, health, and updates")
-    ok("if (document.hidden) return" in app_js and "_stopFleetLive();" in app_js,
-       "fleet polling pauses while the browser tab is hidden")
+    ok("_pollDueWhileHidden('_fleetHiddenAt')" in app_js,
+       "fleet polling stays live in a backgrounded tab (throttled via _pollDueWhileHidden, not paused)")
     ok("cache: 'no-store'" in app_js,
        "fleet polling bypasses browser response caches")
 

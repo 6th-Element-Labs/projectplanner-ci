@@ -563,6 +563,10 @@
             const renderId = `mission-dag-${this._missionDagRenderId}`;
             const { svg } = await window.mermaid.render(renderId, g.mermaid);
             host.innerHTML = svg;
+            // Setting innerHTML resets the scroller to 0,0 — put the chart back where the user
+            // had it (captured in renderMissionPage before the re-render).
+            const _sc = this._missionDagScroll;
+            if (_sc) { host.scrollLeft = _sc.left; host.scrollTop = _sc.top; }
             this._wireMissionGraphClicks(host);
         } catch (e) {
             host.innerHTML = `<div class="alert alert-warning mb-2">Could not render graph: ${this.esc(e.message)}</div>
@@ -626,9 +630,12 @@
     },
 
     async _missionLiveTick() {
-        if (document.hidden) return;
         const tab = document.querySelector('#toptab-mission');
-        if (!tab || !tab.classList.contains('active')) return;   // only when the tab is showing
+        if (!tab || !tab.classList.contains('active')) return;   // only when the mission tab is showing
+        // Keep every open deliverable tab live even when the browser tab is backgrounded (the
+        // user runs many tabs and wants them all current) — just poll hidden tabs less often.
+        // Immediate refresh on refocus is wired in app.js's visibilitychange handler.
+        if (!this._pollDueWhileHidden('_missionHiddenAt')) return;
         const id = (this.selectedDeliverableId || '').trim();
         if (!id || this._missionLiveBusy) return;
         this._missionLiveBusy = true;
@@ -755,6 +762,11 @@
         // Keep the currently-rendered graph so a live re-render can show it until the new
         // SVG is ready (no blank/flash while colours update in place).
         const _prevGraphSvg = el.querySelector('#mission-dag-graph svg');
+        // Preserve the dependency-graph scroll offset across the re-render so a live colour
+        // update doesn't yank a scrolled-in chart back to the top-left. Restored onto the new
+        // container below and again by _renderMissionMermaid once the fresh SVG mounts.
+        const _prevGraphEl = el.querySelector('#mission-dag-graph');
+        this._missionDagScroll = _prevGraphEl ? { left: _prevGraphEl.scrollLeft, top: _prevGraphEl.scrollTop } : null;
         const _prevDetail = el.querySelector('#mission-detail');
         const detailOpen = _prevDetail ? _prevDetail.open : !!this._missionDetailOpen;
         this._missionDetailOpen = detailOpen;
@@ -778,6 +790,7 @@
             </details>`;
         const _gh = el.querySelector('#mission-dag-graph');
         if (_prevGraphSvg && _gh && !_gh.querySelector('svg')) _gh.appendChild(_prevGraphSvg);
+        if (_gh && this._missionDagScroll) { _gh.scrollLeft = this._missionDagScroll.left; _gh.scrollTop = this._missionDagScroll.top; }
         this._renderMissionMermaid();
         // Re-baseline the live signature so the poller only re-renders on the NEXT
         // real change, and stamp the freshly-rendered "updated" time.
