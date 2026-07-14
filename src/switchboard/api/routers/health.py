@@ -6,7 +6,9 @@ composition root supplies project/principal boundaries and readiness inputs.
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Dict
+import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -22,12 +24,60 @@ SaturationSnapshot = Callable[[str], dict]
 InitFailures = Callable[[], Dict[str, str]]
 
 
+# Deep readiness must not queue behind the default executor used by normal request
+# handlers. One worker is enough because probes are cheap, and the router shares one
+# in-flight task so repeated monitor polls cannot fan out when a probe stalls.
+_READINESS_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="health-deep")
+_DEFAULT_READINESS_TIMEOUT_SECONDS = 2.0
+_MAX_READINESS_TIMEOUT_SECONDS = 4.0  # Caddy's /health* response-header timeout is 5s.
+
+
+def _readiness_timeout_seconds() -> float:
+    raw = (os.environ.get("PM_HEALTH_DEEP_TIMEOUT_SECONDS") or "").strip()
+    try:
+        configured = float(raw) if raw else _DEFAULT_READINESS_TIMEOUT_SECONDS
+    except ValueError:
+        configured = _DEFAULT_READINESS_TIMEOUT_SECONDS
+    return min(_MAX_READINESS_TIMEOUT_SECONDS, max(0.05, configured))
+
+
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver,
                   saturation_snapshot: SaturationSnapshot,
                   project_init_failures: InitFailures) -> APIRouter:
     """Build health/narration router against shared trust boundaries."""
     router = APIRouter()
+    readiness_task: Optional[asyncio.Task[Tuple[int, int]]] = None
+    readiness_task_lock = asyncio.Lock()
+    last_projects_configured: Optional[int] = None
+
+    def _probe_readiness() -> Tuple[int, int]:
+        configured = store.project_ids()
+        init_failures = project_init_failures()
+        unready = 0
+        for pid in configured:
+            # A project skipped at startup is unready regardless of a later live probe;
+            # otherwise re-check the db + schema live so a db that went away is caught.
+            reason = init_failures.get(pid) or store.probe_project_db(pid)
+            if reason:
+                unready += 1
+                # Detail (which project, why) goes to the server log only — never the wire.
+                print(f"[readiness] project not ready: {pid}: {reason}", flush=True)
+        return len(configured), unready
+
+    async def _run_readiness_probe() -> Tuple[int, int]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_READINESS_EXECUTOR, _probe_readiness)
+
+    async def _shared_readiness_task() -> asyncio.Task[Tuple[int, int]]:
+        nonlocal readiness_task
+        async with readiness_task_lock:
+            if readiness_task is None or readiness_task.done():
+                # Consume an exception from a timed-out background task before replacing it.
+                if readiness_task is not None and not readiness_task.cancelled():
+                    readiness_task.exception()
+                readiness_task = asyncio.create_task(_run_readiness_probe())
+            return readiness_task
 
     @router.get("/health")
     async def health():
@@ -41,20 +91,43 @@ def create_router(*, resolve_project: ProjectResolver,
         project data (ids, task counts, names). It verifies that every configured board db is
         accessible with the required schema, and fails CLOSED (503) if any configured project
         could not initialize at startup or is not reachable now. BUG-48."""
-        def _probe():
-            configured = store.project_ids()
-            unready = 0
-            for pid in configured:
-                # A project skipped at startup is unready regardless of a later live probe;
-                # otherwise re-check the db + schema live so a db that went away is caught.
-                reason = project_init_failures().get(pid) or store.probe_project_db(pid)
-                if reason:
-                    unready += 1
-                    # Detail (which project, why) goes to the server log only — never the wire.
-                    print(f"[readiness] project not ready: {pid}: {reason}")
-            return len(configured), unready
+        nonlocal last_projects_configured
+        timeout_seconds = _readiness_timeout_seconds()
+        probe_task = await _shared_readiness_task()
+        try:
+            projects_configured, projects_unready = await asyncio.wait_for(
+                asyncio.shield(probe_task), timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            # Shield leaves the single probe running for a later request to reuse. This is
+            # deliberately fail-closed and bounded below Caddy's timeout.
+            configured = last_projects_configured or 0
+            return JSONResponse({
+                "status": "unready",
+                "service": "taikun-pm",
+                "ready": False,
+                "reason": "probe_timeout",
+                "timeout_seconds": timeout_seconds,
+                "counts_available": last_projects_configured is not None,
+                "projects_configured": configured,
+                "projects_ready": 0,
+                "projects_unready": configured,
+            }, status_code=503, headers={"Retry-After": "1"})
+        except Exception as exc:
+            print(f"[readiness] probe failed: {type(exc).__name__}", flush=True)
+            configured = last_projects_configured or 0
+            return JSONResponse({
+                "status": "unready",
+                "service": "taikun-pm",
+                "ready": False,
+                "reason": "probe_error",
+                "counts_available": last_projects_configured is not None,
+                "projects_configured": configured,
+                "projects_ready": 0,
+                "projects_unready": configured,
+            }, status_code=503, headers={"Retry-After": "1"})
 
-        projects_configured, projects_unready = await asyncio.to_thread(_probe)
+        last_projects_configured = projects_configured
         ready = projects_unready == 0
         body = {
             "status": "ready" if ready else "unready",
