@@ -1,0 +1,46 @@
+{
+  "$id": "switchboard.task.move_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for moving one task between project boards.",
+  "properties": {
+    "dependency_policy": {
+      "default": "fail",
+      "title": "Dependency Policy",
+      "type": "string"
+    },
+    "new_task_id": {
+      "default": "",
+      "title": "New Task Id",
+      "type": "string"
+    },
+    "project_from": {
+      "title": "Project From",
+      "type": "string"
+    },
+    "project_to": {
+      "title": "Project To",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.task.move_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "project_from",
+    "project_to"
+  ],
+  "title": "MoveTaskCommand",
+  "type": "object"
+}

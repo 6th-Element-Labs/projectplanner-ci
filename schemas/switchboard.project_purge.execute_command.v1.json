@@ -1,0 +1,35 @@
+{
+  "$id": "switchboard.project_purge.execute_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "explicit_authorization": {
+      "title": "Explicit Authorization",
+      "type": "string"
+    },
+    "intent_id": {
+      "title": "Intent Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.project_purge.execute_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "intent_id",
+    "actor",
+    "explicit_authorization"
+  ],
+  "title": "ExecutePurgeCommand",
+  "type": "object"
+}

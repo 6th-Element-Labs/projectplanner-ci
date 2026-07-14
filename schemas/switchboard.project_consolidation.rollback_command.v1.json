@@ -1,0 +1,35 @@
+{
+  "$id": "switchboard.project_consolidation.rollback_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "actor": {
+      "default": "system",
+      "title": "Actor",
+      "type": "string"
+    },
+    "consolidation_id": {
+      "title": "Consolidation Id",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.project_consolidation.rollback_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "source_project_id": {
+      "title": "Source Project Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_project_id",
+    "consolidation_id",
+    "reason"
+  ],
+  "title": "RollbackProjectConsolidationCommand",
+  "type": "object"
+}

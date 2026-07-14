@@ -1,0 +1,35 @@
+{
+  "$id": "switchboard.project_purge.verify_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "intent_id": {
+      "title": "Intent Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.project_purge.verify_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "typed_confirmation": {
+      "title": "Typed Confirmation",
+      "type": "string"
+    },
+    "verifier": {
+      "title": "Verifier",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "intent_id",
+    "verifier",
+    "typed_confirmation"
+  ],
+  "title": "VerifyPurgeIntentCommand",
+  "type": "object"
+}

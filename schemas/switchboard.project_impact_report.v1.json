@@ -1,0 +1,120 @@
+{
+  "$id": "switchboard.project_impact_report.v1",
+  "additionalProperties": false,
+  "description": "Deterministic, bounded, read-only project lifecycle impact report.",
+  "properties": {
+    "access": {
+      "additionalProperties": true,
+      "title": "Access",
+      "type": "object"
+    },
+    "activity": {
+      "additionalProperties": true,
+      "title": "Activity",
+      "type": "object"
+    },
+    "automation": {
+      "additionalProperties": true,
+      "title": "Automation",
+      "type": "object"
+    },
+    "blocking_findings": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Blocking Findings",
+      "type": "array"
+    },
+    "bounds": {
+      "additionalProperties": true,
+      "title": "Bounds",
+      "type": "object"
+    },
+    "communications": {
+      "additionalProperties": true,
+      "title": "Communications",
+      "type": "object"
+    },
+    "coordination": {
+      "additionalProperties": true,
+      "title": "Coordination",
+      "type": "object"
+    },
+    "cross_project_links": {
+      "additionalProperties": true,
+      "title": "Cross Project Links",
+      "type": "object"
+    },
+    "hosted_outcomes": {
+      "additionalProperties": true,
+      "title": "Hosted Outcomes",
+      "type": "object"
+    },
+    "project": {
+      "additionalProperties": true,
+      "title": "Project",
+      "type": "object"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "provenance": {
+      "additionalProperties": true,
+      "title": "Provenance",
+      "type": "object"
+    },
+    "receipt": {
+      "additionalProperties": true,
+      "title": "Receipt",
+      "type": "object"
+    },
+    "recommendation": {
+      "additionalProperties": true,
+      "title": "Recommendation",
+      "type": "object"
+    },
+    "repo_ci_webhooks": {
+      "additionalProperties": true,
+      "title": "Repo Ci Webhooks",
+      "type": "object"
+    },
+    "schema": {
+      "default": "switchboard.project_impact_report.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "storage": {
+      "additionalProperties": true,
+      "title": "Storage",
+      "type": "object"
+    },
+    "tasks": {
+      "additionalProperties": true,
+      "title": "Tasks",
+      "type": "object"
+    }
+  },
+  "required": [
+    "project_id",
+    "project",
+    "bounds",
+    "tasks",
+    "provenance",
+    "coordination",
+    "hosted_outcomes",
+    "cross_project_links",
+    "repo_ci_webhooks",
+    "access",
+    "communications",
+    "automation",
+    "activity",
+    "storage",
+    "blocking_findings",
+    "recommendation",
+    "receipt"
+  ],
+  "title": "ProjectImpactReport",
+  "type": "object"
+}

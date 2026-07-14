@@ -1,0 +1,40 @@
+{
+  "$id": "switchboard.claim.complete_claim_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for completing one claim.",
+  "properties": {
+    "claim_id": {
+      "title": "Claim Id",
+      "type": "string"
+    },
+    "evidence": {
+      "default": "",
+      "title": "Evidence"
+    },
+    "final_status": {
+      "default": "",
+      "title": "Final Status",
+      "type": "string"
+    },
+    "mission_project": {
+      "default": "",
+      "title": "Mission Project",
+      "type": "string"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.claim.complete_claim_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "claim_id"
+  ],
+  "title": "CompleteClaimCommand",
+  "type": "object"
+}

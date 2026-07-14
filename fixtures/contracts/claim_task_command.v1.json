@@ -1,0 +1,8 @@
+{
+  "schema": "switchboard.claim.claim_task_command.v1",
+  "task_id": "ARCH-MS-42",
+  "agent_id": "cursor/ARCH-MS-42",
+  "project": "switchboard",
+  "ttl_seconds": 1800,
+  "require_work_session": false
+}

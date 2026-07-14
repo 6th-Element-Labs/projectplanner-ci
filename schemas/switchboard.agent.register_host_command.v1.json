@@ -1,0 +1,72 @@
+{
+  "$id": "switchboard.agent.register_host_command.v1",
+  "description": "Transport-neutral input for registering an Agent Host inventory record.",
+  "properties": {
+    "active_sessions": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Active Sessions"
+    },
+    "agent_host_version": {
+      "default": "0.1.0",
+      "title": "Agent Host Version",
+      "type": "string"
+    },
+    "capacity": {
+      "additionalProperties": true,
+      "title": "Capacity",
+      "type": "object"
+    },
+    "heartbeat_ttl_s": {
+      "default": 60,
+      "title": "Heartbeat Ttl S",
+      "type": "integer"
+    },
+    "host_id": {
+      "title": "Host Id",
+      "type": "string"
+    },
+    "hostname": {
+      "default": "",
+      "title": "Hostname",
+      "type": "string"
+    },
+    "limits": {
+      "additionalProperties": true,
+      "title": "Limits",
+      "type": "object"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "repo_root": {
+      "default": "",
+      "title": "Repo Root",
+      "type": "string"
+    },
+    "runtimes": {
+      "items": {},
+      "title": "Runtimes",
+      "type": "array"
+    },
+    "schema": {
+      "default": "switchboard.agent.register_host_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "host_id"
+  ],
+  "title": "RegisterHostCommand",
+  "type": "object"
+}

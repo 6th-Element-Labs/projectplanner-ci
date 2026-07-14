@@ -1,0 +1,26 @@
+{
+  "$id": "switchboard.task.get_query.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for reading one project-scoped task.",
+  "properties": {
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.task.get_query.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "project"
+  ],
+  "title": "GetTaskQuery",
+  "type": "object"
+}

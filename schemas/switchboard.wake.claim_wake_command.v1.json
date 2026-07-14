@@ -1,0 +1,31 @@
+{
+  "$id": "switchboard.wake.claim_wake_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for claiming one pending wake intent.",
+  "properties": {
+    "host_id": {
+      "title": "Host Id",
+      "type": "string"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.wake.claim_wake_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "wake_id": {
+      "title": "Wake Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "host_id",
+    "wake_id"
+  ],
+  "title": "ClaimWakeCommand",
+  "type": "object"
+}

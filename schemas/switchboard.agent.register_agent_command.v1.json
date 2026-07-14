@@ -1,0 +1,61 @@
+{
+  "$id": "switchboard.agent.register_agent_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for registering a live agent session.",
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "control": {
+      "additionalProperties": true,
+      "title": "Control",
+      "type": "object"
+    },
+    "lane": {
+      "default": "",
+      "title": "Lane",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "protocol": {
+      "additionalProperties": true,
+      "title": "Protocol",
+      "type": "object"
+    },
+    "runtime": {
+      "title": "Runtime",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.register_agent_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "task_id": {
+      "default": "",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "ttl_s": {
+      "default": 120,
+      "title": "Ttl S",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "agent_id",
+    "runtime"
+  ],
+  "title": "RegisterAgentCommand",
+  "type": "object"
+}

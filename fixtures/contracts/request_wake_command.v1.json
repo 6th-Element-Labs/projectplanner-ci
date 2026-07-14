@@ -1,0 +1,8 @@
+{
+  "schema": "switchboard.wake.request_wake_command.v1",
+  "selector": {"agent_id": "cursor/ARCH-MS-42"},
+  "reason": "schema registry compatibility proof",
+  "source": "arch-ms-42-fixture",
+  "task_id": "ARCH-MS-42",
+  "project": "switchboard"
+}

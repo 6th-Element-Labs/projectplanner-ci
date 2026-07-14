@@ -1,0 +1,41 @@
+{
+  "$id": "switchboard.wake.complete_wake_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for completing a claimed wake intent.",
+  "properties": {
+    "agent_id": {
+      "default": "",
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "result": {
+      "additionalProperties": true,
+      "title": "Result",
+      "type": "object"
+    },
+    "runner_session_id": {
+      "default": "",
+      "title": "Runner Session Id",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.wake.complete_wake_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "wake_id": {
+      "title": "Wake Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "wake_id"
+  ],
+  "title": "CompleteWakeCommand",
+  "type": "object"
+}

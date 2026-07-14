@@ -1,0 +1,31 @@
+{
+  "$id": "switchboard.project_impact_receipt.v1",
+  "additionalProperties": false,
+  "description": "Content-addressed proof that archive reviewed the current impact snapshot.",
+  "properties": {
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "report_hash": {
+      "title": "Report Hash",
+      "type": "string"
+    },
+    "report_schema": {
+      "default": "switchboard.project_impact_report.v1",
+      "title": "Report Schema",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.project_impact_receipt.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "report_hash"
+  ],
+  "title": "ProjectImpactReceipt",
+  "type": "object"
+}

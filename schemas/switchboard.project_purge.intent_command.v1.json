@@ -1,0 +1,82 @@
+{
+  "$defs": {
+    "PurgeExportEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_hash": {
+          "title": "Artifact Hash",
+          "type": "string"
+        },
+        "artifact_uri": {
+          "title": "Artifact Uri",
+          "type": "string"
+        },
+        "created_at": {
+          "exclusiveMinimum": 0,
+          "title": "Created At",
+          "type": "number"
+        },
+        "immutable": {
+          "title": "Immutable",
+          "type": "boolean"
+        },
+        "schema": {
+          "default": "switchboard.project_purge.export_evidence.v1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_uri",
+        "artifact_hash",
+        "created_at",
+        "immutable"
+      ],
+      "title": "PurgeExportEvidence",
+      "type": "object"
+    }
+  },
+  "$id": "switchboard.project_purge.intent_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "export": {
+      "$ref": "#/$defs/PurgeExportEvidence"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "retention_days": {
+      "minimum": 1,
+      "title": "Retention Days",
+      "type": "integer"
+    },
+    "schema": {
+      "default": "switchboard.project_purge.intent_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "typed_confirmation": {
+      "title": "Typed Confirmation",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "reason",
+    "actor",
+    "retention_days",
+    "typed_confirmation",
+    "export"
+  ],
+  "title": "CreatePurgeIntentCommand",
+  "type": "object"
+}

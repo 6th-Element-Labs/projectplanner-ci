@@ -1,0 +1,66 @@
+{
+  "$id": "switchboard.claim.claim_task_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for claiming one exact ready task.",
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "idem_key": {
+      "default": "",
+      "title": "Idem Key",
+      "type": "string"
+    },
+    "override_identity_risk": {
+      "default": false,
+      "title": "Override Identity Risk",
+      "type": "boolean"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "require_work_session": {
+      "default": false,
+      "title": "Require Work Session",
+      "type": "boolean"
+    },
+    "schema": {
+      "default": "switchboard.claim.claim_task_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "session_policy_profile": {
+      "default": "",
+      "title": "Session Policy Profile",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "ttl_seconds": {
+      "default": 1800,
+      "title": "Ttl Seconds",
+      "type": "integer"
+    },
+    "work_session": {
+      "additionalProperties": true,
+      "title": "Work Session",
+      "type": "object"
+    },
+    "work_session_id": {
+      "default": "",
+      "title": "Work Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "agent_id"
+  ],
+  "title": "ClaimTaskCommand",
+  "type": "object"
+}

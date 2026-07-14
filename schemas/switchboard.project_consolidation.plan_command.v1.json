@@ -1,0 +1,121 @@
+{
+  "$defs": {
+    "ConsolidationApproval": {
+      "additionalProperties": false,
+      "description": "Explicit operator classification; agents cannot infer consolidation approval.",
+      "properties": {
+        "approved_at": {
+          "title": "Approved At",
+          "type": "number"
+        },
+        "approved_by": {
+          "title": "Approved By",
+          "type": "string"
+        },
+        "decision": {
+          "const": "consolidate",
+          "title": "Decision",
+          "type": "string"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "schema": {
+          "default": "switchboard.project_consolidation.approval.v1",
+          "title": "Schema",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision",
+        "approved_by",
+        "approved_at",
+        "rationale"
+      ],
+      "title": "ConsolidationApproval",
+      "type": "object"
+    }
+  },
+  "$id": "switchboard.project_consolidation.plan_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "actor": {
+      "default": "system",
+      "title": "Actor",
+      "type": "string"
+    },
+    "approval": {
+      "$ref": "#/$defs/ConsolidationApproval"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "replacement_board_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replacement Board Id"
+    },
+    "replacement_deliverable_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replacement Deliverable Id"
+    },
+    "replacement_mission_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replacement Mission Id"
+    },
+    "replacement_project_id": {
+      "title": "Replacement Project Id",
+      "type": "string"
+    },
+    "safe_routing_keys": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Safe Routing Keys",
+      "type": "array"
+    },
+    "schema": {
+      "default": "switchboard.project_consolidation.plan_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "source_project_id": {
+      "title": "Source Project Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_project_id",
+    "replacement_project_id",
+    "reason",
+    "approval"
+  ],
+  "title": "PlanProjectConsolidationCommand",
+  "type": "object"
+}

@@ -1,0 +1,36 @@
+{
+  "$id": "switchboard.project.archive_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "actor": {
+      "default": "system",
+      "title": "Actor",
+      "type": "string"
+    },
+    "impact_report_receipt": {
+      "additionalProperties": true,
+      "title": "Impact Report Receipt",
+      "type": "object"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.project.archive_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "reason",
+    "impact_report_receipt"
+  ],
+  "title": "ArchiveProjectCommand",
+  "type": "object"
+}

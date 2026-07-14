@@ -1,0 +1,8 @@
+{
+  "schema": "switchboard.task.create_command.v1",
+  "workstream_id": "ARCH-MS",
+  "title": "Event JSON Schema registry proof",
+  "description": "Golden instance for ARCH-MS-42 compatibility",
+  "depends_on": ["ARCH-MS-41"],
+  "is_blocking": false
+}

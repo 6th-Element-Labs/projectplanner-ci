@@ -1,0 +1,219 @@
+{
+  "$id": "switchboard.task.create_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for creating one task.",
+  "properties": {
+    "assignee": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assignee"
+    },
+    "deliverable": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Deliverable"
+    },
+    "depends_on": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Depends On",
+      "type": "array"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "duration_days": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Duration Days"
+    },
+    "effort_days": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effort Days"
+    },
+    "entry_criteria": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Entry Criteria"
+    },
+    "exit_criteria": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exit Criteria"
+    },
+    "finish_date": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Finish Date"
+    },
+    "is_blocking": {
+      "default": false,
+      "title": "Is Blocking",
+      "type": "boolean"
+    },
+    "owner_org": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Owner Org"
+    },
+    "owner_person_or_role": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Owner Person Or Role"
+    },
+    "phase": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Phase"
+    },
+    "risk_level": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Risk Level"
+    },
+    "schema": {
+      "default": "switchboard.task.create_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "start_date": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Start Date"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Status"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "workstream_id": {
+      "title": "Workstream Id",
+      "type": "string"
+    },
+    "workstream_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workstream Name"
+    }
+  },
+  "required": [
+    "workstream_id",
+    "title"
+  ],
+  "title": "CreateTaskCommand",
+  "type": "object"
+}

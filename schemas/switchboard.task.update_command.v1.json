@@ -1,0 +1,41 @@
+{
+  "$id": "switchboard.task.update_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for a sparse task update.",
+  "properties": {
+    "depends_on": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Depends On"
+    },
+    "fields": {
+      "additionalProperties": true,
+      "title": "Fields",
+      "type": "object"
+    },
+    "schema": {
+      "default": "switchboard.task.update_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "title": "UpdateTaskCommand",
+  "type": "object"
+}

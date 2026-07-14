@@ -1,0 +1,36 @@
+{
+  "$id": "switchboard.project_purge.export_evidence.v1",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_hash": {
+      "title": "Artifact Hash",
+      "type": "string"
+    },
+    "artifact_uri": {
+      "title": "Artifact Uri",
+      "type": "string"
+    },
+    "created_at": {
+      "exclusiveMinimum": 0,
+      "title": "Created At",
+      "type": "number"
+    },
+    "immutable": {
+      "title": "Immutable",
+      "type": "boolean"
+    },
+    "schema": {
+      "default": "switchboard.project_purge.export_evidence.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "artifact_uri",
+    "artifact_hash",
+    "created_at",
+    "immutable"
+  ],
+  "title": "PurgeExportEvidence",
+  "type": "object"
+}

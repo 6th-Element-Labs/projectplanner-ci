@@ -1,0 +1,114 @@
+{
+  "$id": "switchboard.claim.claim_next_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for scheduler claim_next.",
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "board_id": {
+      "default": "",
+      "title": "Board Id",
+      "type": "string"
+    },
+    "capabilities": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "deliverable_id": {
+      "default": "",
+      "title": "Deliverable Id",
+      "type": "string"
+    },
+    "idem_key": {
+      "default": "",
+      "title": "Idem Key",
+      "type": "string"
+    },
+    "lanes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Lanes",
+      "type": "array"
+    },
+    "max_budget_usd": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Budget Usd"
+    },
+    "max_risk": {
+      "default": "",
+      "title": "Max Risk",
+      "type": "string"
+    },
+    "milestone_id": {
+      "default": "",
+      "title": "Milestone Id",
+      "type": "string"
+    },
+    "mission_id": {
+      "default": "",
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "override_identity_risk": {
+      "default": false,
+      "title": "Override Identity Risk",
+      "type": "boolean"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "require_work_session": {
+      "default": false,
+      "title": "Require Work Session",
+      "type": "boolean"
+    },
+    "schema": {
+      "default": "switchboard.claim.claim_next_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "session_policy_profile": {
+      "default": "",
+      "title": "Session Policy Profile",
+      "type": "string"
+    },
+    "ttl_seconds": {
+      "default": 1800,
+      "title": "Ttl Seconds",
+      "type": "integer"
+    },
+    "work_session": {
+      "additionalProperties": true,
+      "title": "Work Session",
+      "type": "object"
+    },
+    "work_session_id": {
+      "default": "",
+      "title": "Work Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "agent_id"
+  ],
+  "title": "ClaimNextCommand",
+  "type": "object"
+}

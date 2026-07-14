@@ -1,0 +1,30 @@
+{
+  "$id": "switchboard.project.restore_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "actor": {
+      "default": "system",
+      "title": "Actor",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.project.restore_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "reason"
+  ],
+  "title": "RestoreProjectCommand",
+  "type": "object"
+}

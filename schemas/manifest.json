@@ -1,0 +1,106 @@
+{
+  "count": 25,
+  "schema": "switchboard.schema_manifest.v1",
+  "schemas": [
+    {
+      "$id": "switchboard.agent.register_agent_command.v1",
+      "path": "switchboard.agent.register_agent_command.v1.json"
+    },
+    {
+      "$id": "switchboard.agent.register_host_command.v1",
+      "path": "switchboard.agent.register_host_command.v1.json"
+    },
+    {
+      "$id": "switchboard.claim.claim_next_command.v1",
+      "path": "switchboard.claim.claim_next_command.v1.json"
+    },
+    {
+      "$id": "switchboard.claim.claim_task_command.v1",
+      "path": "switchboard.claim.claim_task_command.v1.json"
+    },
+    {
+      "$id": "switchboard.claim.complete_claim_command.v1",
+      "path": "switchboard.claim.complete_claim_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project.archive_command.v1",
+      "path": "switchboard.project.archive_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project.restore_command.v1",
+      "path": "switchboard.project.restore_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project_cleanup.review_command.v1",
+      "path": "switchboard.project_cleanup.review_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project_consolidation.apply_command.v1",
+      "path": "switchboard.project_consolidation.apply_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project_consolidation.approval.v1",
+      "path": "switchboard.project_consolidation.approval.v1.json"
+    },
+    {
+      "$id": "switchboard.project_consolidation.plan_command.v1",
+      "path": "switchboard.project_consolidation.plan_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project_consolidation.rollback_command.v1",
+      "path": "switchboard.project_consolidation.rollback_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project_impact_receipt.v1",
+      "path": "switchboard.project_impact_receipt.v1.json"
+    },
+    {
+      "$id": "switchboard.project_impact_report.v1",
+      "path": "switchboard.project_impact_report.v1.json"
+    },
+    {
+      "$id": "switchboard.project_purge.execute_command.v1",
+      "path": "switchboard.project_purge.execute_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project_purge.export_evidence.v1",
+      "path": "switchboard.project_purge.export_evidence.v1.json"
+    },
+    {
+      "$id": "switchboard.project_purge.intent_command.v1",
+      "path": "switchboard.project_purge.intent_command.v1.json"
+    },
+    {
+      "$id": "switchboard.project_purge.verify_command.v1",
+      "path": "switchboard.project_purge.verify_command.v1.json"
+    },
+    {
+      "$id": "switchboard.task.create_command.v1",
+      "path": "switchboard.task.create_command.v1.json"
+    },
+    {
+      "$id": "switchboard.task.get_query.v1",
+      "path": "switchboard.task.get_query.v1.json"
+    },
+    {
+      "$id": "switchboard.task.move_command.v1",
+      "path": "switchboard.task.move_command.v1.json"
+    },
+    {
+      "$id": "switchboard.task.update_command.v1",
+      "path": "switchboard.task.update_command.v1.json"
+    },
+    {
+      "$id": "switchboard.wake.claim_wake_command.v1",
+      "path": "switchboard.wake.claim_wake_command.v1.json"
+    },
+    {
+      "$id": "switchboard.wake.complete_wake_command.v1",
+      "path": "switchboard.wake.complete_wake_command.v1.json"
+    },
+    {
+      "$id": "switchboard.wake.request_wake_command.v1",
+      "path": "switchboard.wake.request_wake_command.v1.json"
+    }
+  ]
+}

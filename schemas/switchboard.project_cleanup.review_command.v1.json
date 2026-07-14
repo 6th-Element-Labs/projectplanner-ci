@@ -1,0 +1,51 @@
+{
+  "$id": "switchboard.project_cleanup.review_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "approved_at": {
+      "title": "Approved At",
+      "type": "number"
+    },
+    "approved_by": {
+      "title": "Approved By",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "keep",
+        "consolidate",
+        "archive"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "impact_report_receipt": {
+      "additionalProperties": true,
+      "title": "Impact Report Receipt",
+      "type": "object"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "rationale": {
+      "title": "Rationale",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.project_cleanup.review_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "decision",
+    "impact_report_receipt",
+    "approved_by",
+    "approved_at",
+    "rationale"
+  ],
+  "title": "RecordCleanupReviewCommand",
+  "type": "object"
+}

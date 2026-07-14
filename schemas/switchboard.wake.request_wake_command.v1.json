@@ -1,0 +1,49 @@
+{
+  "$id": "switchboard.wake.request_wake_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for creating a durable wake intent.",
+  "properties": {
+    "idem_key": {
+      "default": "",
+      "title": "Idem Key",
+      "type": "string"
+    },
+    "policy": {
+      "additionalProperties": true,
+      "title": "Policy",
+      "type": "object"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.wake.request_wake_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "selector": {
+      "additionalProperties": true,
+      "title": "Selector",
+      "type": "object"
+    },
+    "source": {
+      "default": "",
+      "title": "Source",
+      "type": "string"
+    },
+    "task_id": {
+      "default": "",
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "title": "RequestWakeCommand",
+  "type": "object"
+}

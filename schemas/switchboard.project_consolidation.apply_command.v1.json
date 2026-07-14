@@ -1,0 +1,31 @@
+{
+  "$id": "switchboard.project_consolidation.apply_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "actor": {
+      "default": "system",
+      "title": "Actor",
+      "type": "string"
+    },
+    "confirmation": {
+      "title": "Confirmation",
+      "type": "string"
+    },
+    "plan": {
+      "additionalProperties": true,
+      "title": "Plan",
+      "type": "object"
+    },
+    "schema": {
+      "default": "switchboard.project_consolidation.apply_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan",
+    "confirmation"
+  ],
+  "title": "ApplyProjectConsolidationCommand",
+  "type": "object"
+}

@@ -1,0 +1,37 @@
+{
+  "$id": "switchboard.project_consolidation.approval.v1",
+  "additionalProperties": false,
+  "description": "Explicit operator classification; agents cannot infer consolidation approval.",
+  "properties": {
+    "approved_at": {
+      "title": "Approved At",
+      "type": "number"
+    },
+    "approved_by": {
+      "title": "Approved By",
+      "type": "string"
+    },
+    "decision": {
+      "const": "consolidate",
+      "title": "Decision",
+      "type": "string"
+    },
+    "rationale": {
+      "title": "Rationale",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.project_consolidation.approval.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "decision",
+    "approved_by",
+    "approved_at",
+    "rationale"
+  ],
+  "title": "ConsolidationApproval",
+  "type": "object"
+}
