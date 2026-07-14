@@ -259,8 +259,8 @@ try:
 
     ok(hasattr(agents_router, "create_router"),
        "agents REST router module provides create_router")
-    ok(set(agents_tools.AGENT_TOOL_NAMES) == {"register_agent", "register_host"},
-       "agents MCP module registers both tools")
+    ok({"register_agent", "register_host"}.issubset(set(agents_tools.AGENT_TOOL_NAMES)),
+       "agents MCP module registers register_agent and register_host")
     ok(callable(getattr(mcp_mod, "register_agent", None))
        and callable(getattr(mcp_mod, "register_host", None)),
        "mcp_server exports register_agent and register_host callables")

@@ -150,7 +150,64 @@ def complete_claim(claim_id: str, ctx: Context, evidence: str = "", final_status
     ))
 
 
-CLAIM_TOOL_NAMES = ("claim_next", "claim_task", "complete_claim")
+def verify_offline_completion(task_id: str, ctx: Context, evidence: str = "",
+                              artifact_url: str = "", evidence_hash: str = "",
+                              verifier: str = "", reviewed_at: float = 0,
+                              project: str = "maxwell") -> str:
+    """Mark an In Review non-PR/offline task Done with verifier-stamped evidence.
+
+    Agents still use complete_claim(...) to move work to In Review. This tool is the
+    privileged verifier/operator path for work that has no code PR: it records
+    provenance_type=offline_evidence, evidence/artifact/hash/verifier/reviewed_at, and
+    then marks Done. It fails closed unless the task is already In Review and evidence
+    is supplied.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project)
+    return services.dumps(store.mark_task_offline_done(
+        task_id, evidence=evidence, artifact_url=artifact_url,
+        evidence_hash=evidence_hash, verifier=verifier or auth.actor(principal),
+        reviewed_at=reviewed_at or None, actor=auth.actor(principal), project=project))
+
+
+
+def abandon_claim(claim_id: str, reason: str, ctx: Context,
+                  project: str = "maxwell") -> str:
+    """Abandon a task claim, release its task lease, and return the task to the ready queue."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    return services.dumps(store.abandon_claim(claim_id, reason=reason,
+                                     actor=auth.actor(principal), project=project))
+
+
+
+def revoke_claim(claim_id: str, reason: str, ctx: Context,
+                 project: str = "maxwell", reassign_to: str = "",
+                 sort_order: int = 0, partial_evidence: str = "",
+                 notify: bool = True, ack_deadline_minutes: float = 5) -> str:
+    """Operator override for a live claim.
+
+    Revokes the active task claim, releases its task lease, requeues the task,
+    optionally redirects/reprioritizes it, preserves partial evidence, and sends
+    the displaced agent an ack-required claim_revoked message.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    return services.dumps(store.revoke_claim(
+        claim_id,
+        reason=reason,
+        reassign_to=reassign_to,
+        sort_order=sort_order if sort_order > 0 else None,
+        partial_evidence=partial_evidence,
+        notify=notify,
+        ack_deadline_minutes=ack_deadline_minutes,
+        actor=auth.actor(principal),
+        project=project,
+    ))
+
+
+
+CLAIM_TOOL_NAMES = ("claim_next", "claim_task", "complete_claim", 'verify_offline_completion', 'abandon_claim', 'revoke_claim')
 
 
 def register_claim_tools(mcp: Any, services: ClaimToolServices) -> dict[str, Callable[..., str]]:

@@ -6,12 +6,15 @@ REST own transport-neutral validation.
 """
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from mcp.server.fastmcp import Context
 
 import auth
+import store
 from switchboard.application.commands import register_agent as register_agent_command
 from switchboard.application.commands import register_host as register_host_command
 
@@ -87,7 +90,57 @@ def register_host(host_id: str, runtimes_json: str, ctx: Context,
     ))
 
 
-AGENT_TOOL_NAMES = ("register_agent", "register_host")
+def heartbeat(agent_id: str, ctx: Context, project: str = "maxwell") -> str:
+    """Renew presence for a registered agent session."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    return services.dumps(store.heartbeat(agent_id, actor=auth.actor(principal), project=project))
+
+
+
+def list_active_agents(project: str = "maxwell", lane: str = "") -> str:
+    """List active registered agents and their advertised control fidelity."""
+    services = _services()
+    return services.dumps(store.list_active_agents(lane=lane, project=project))
+
+
+
+def heartbeat_host(host_id: str, ctx: Context, active_sessions: int = -1,
+                   capacity_json: str = "{}", status: str = "online",
+                   last_error: str = "", project: str = "maxwell") -> str:
+    """Renew liveness/capacity for an Agent Host."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    try:
+        capacity = json.loads(capacity_json or "{}")
+    except Exception:
+        return services.dumps({"error": "capacity_json must be a JSON object string"})
+    return services.dumps(store.heartbeat_host(
+        host_id, active_sessions=(None if active_sessions < 0 else active_sessions),
+        capacity=capacity, status=status, last_error=last_error,
+        actor=auth.actor(principal), project=project))
+
+
+
+def list_agent_hosts(project: str = "maxwell", runtime: str = "", lane: str = "",
+                     capability: str = "", include_stale: bool = False) -> str:
+    """List registered Agent Hosts and their wake capacity."""
+    services = _services()
+    return services.dumps(store.list_agent_hosts(runtime=runtime, lane=lane,
+                                        capability=capability,
+                                        include_stale=include_stale,
+                                        project=project))
+
+
+
+def host_status(host_id: str, project: str = "maxwell") -> str:
+    """Return one Agent Host's inventory, liveness, capacity, and wake counts."""
+    services = _services()
+    return services.dumps(store.host_status(host_id, project=project))
+
+
+
+AGENT_TOOL_NAMES = ("register_agent", "register_host", 'heartbeat', 'list_active_agents', 'heartbeat_host', 'list_agent_hosts', 'host_status')
 
 
 def register_agent_tools(mcp: Any, services: AgentToolServices) -> dict[str, Callable[..., str]]:

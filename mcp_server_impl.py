@@ -42,6 +42,10 @@ from switchboard.mcp.tools import claims as claim_tools  # noqa: E402
 from switchboard.mcp.tools import wakes as wake_tools  # noqa: E402
 from switchboard.mcp.tools import agents as agent_tools  # noqa: E402
 from switchboard.mcp.tools import messaging as messaging_tools  # noqa: E402
+from switchboard.mcp.tools import leases as lease_tools  # noqa: E402
+from switchboard.mcp.tools import work_sessions as work_session_tools  # noqa: E402
+from switchboard.mcp.tools import resources as resource_tools  # noqa: E402
+from switchboard.mcp.tools import tally as tally_tools  # noqa: E402
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -236,6 +240,42 @@ _messaging_tool_functions = messaging_tools.register_messaging_tools(
     ),
 )
 globals().update(_messaging_tool_functions)
+
+_lease_tool_functions = lease_tools.register_lease_tools(
+    mcp,
+    lease_tools.LeaseToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_lease_tool_functions)
+
+_work_session_tool_functions = work_session_tools.register_work_session_tools(
+    mcp,
+    work_session_tools.WorkSessionToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_work_session_tool_functions)
+
+_resource_tool_functions = resource_tools.register_resource_tools(
+    mcp,
+    resource_tools.ResourceToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_resource_tool_functions)
+
+_tally_tool_functions = tally_tools.register_tally_tools(
+    mcp,
+    tally_tools.TallyToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_tally_tool_functions)
 
 # Compatibility aliases for direct Python callers while the monolith is strangled.
 _dep_ids = task_tools.dep_ids
@@ -891,107 +931,6 @@ def ask_plan(question: str, project: str = "maxwell") -> str:
 
 # ---- file lease tools (open — advisory, no token required) ---------------
 @mcp.tool()
-def claim_files(agent_id: str, files: str, ctx: Context, project: str = "maxwell",
-                task_id: str = "", ttl_minutes: int = 30) -> str:
-    """Claim file paths before editing them (advisory soft lock — prevents parallel agents
-    from clobbering each other). Call before writing; call release_files when done.
-
-    agent_id: a stable string identifying this agent session (e.g. 'claude/ENGINE-11').
-    files: comma or newline-separated list of paths (relative to repo root).
-    task_id: the board task you're working on (optional but recommended).
-    ttl_minutes: auto-expire after this many minutes if release_files is never called (default 30).
-
-    On success: {lease_id, files, expires_at, ttl_minutes}
-    On conflict: {conflict, task_id, files, retry_after_seconds} — use Bash(sleep N) before retrying."""
-    file_list = [f.strip() for f in files.replace("\n", ",").split(",") if f.strip()]
-    if not file_list:
-        return _dumps({"error": "no files given"})
-    _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.claim_files(agent_id, file_list,
-                                    task_id=task_id or None,
-                                    ttl_minutes=max(1, ttl_minutes),
-                                    project=project))
-
-
-@mcp.tool()
-def release_files(lease_id: str, ctx: Context, project: str = "maxwell") -> str:
-    """Release a file lease when you are done editing. Pass the lease_id returned by
-    claim_files. Idempotent — releasing an already-released lease returns an error but does
-    not corrupt state. project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.release_files(lease_id, project=project))
-
-
-@mcp.tool()
-def check_files(files: str, project: str = "maxwell") -> str:
-    """Check whether any of the given file paths are held by an active lease.
-    files: comma or newline-separated list of paths.
-    Returns a list of {file, held_by, task_id, expires_at} for files that ARE held.
-    Empty list means all files are free — safe to edit without claiming first (though
-    calling claim_files is strongly preferred to avoid races).
-    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    file_list = [f.strip() for f in files.replace("\n", ",").split(",") if f.strip()]
-    if not file_list:
-        return _dumps([])
-    return _dumps(store.check_files(file_list, project=project))
-
-
-@mcp.tool()
-def list_active_leases(project: str = "maxwell") -> str:
-    """All active file leases on the board — who holds what, and when it expires.
-    Use to see which agents are currently active and which files they have claimed.
-    Expired and released leases are not shown.
-    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    return _dumps(store.list_active_leases(project=project))
-
-
-# ---- IXP-core runtime lifecycle -----------------------------------------
-@mcp.tool()
-def heartbeat(agent_id: str, ctx: Context, project: str = "maxwell") -> str:
-    """Renew presence for a registered agent session."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.heartbeat(agent_id, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def list_active_agents(project: str = "maxwell", lane: str = "") -> str:
-    """List active registered agents and their advertised control fidelity."""
-    return _dumps(store.list_active_agents(lane=lane, project=project))
-
-
-@mcp.tool()
-def heartbeat_host(host_id: str, ctx: Context, active_sessions: int = -1,
-                   capacity_json: str = "{}", status: str = "online",
-                   last_error: str = "", project: str = "maxwell") -> str:
-    """Renew liveness/capacity for an Agent Host."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        capacity = json.loads(capacity_json or "{}")
-    except Exception:
-        return _dumps({"error": "capacity_json must be a JSON object string"})
-    return _dumps(store.heartbeat_host(
-        host_id, active_sessions=(None if active_sessions < 0 else active_sessions),
-        capacity=capacity, status=status, last_error=last_error,
-        actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def list_agent_hosts(project: str = "maxwell", runtime: str = "", lane: str = "",
-                     capability: str = "", include_stale: bool = False) -> str:
-    """List registered Agent Hosts and their wake capacity."""
-    return _dumps(store.list_agent_hosts(runtime=runtime, lane=lane,
-                                        capability=capability,
-                                        include_stale=include_stale,
-                                        project=project))
-
-
-@mcp.tool()
-def host_status(host_id: str, project: str = "maxwell") -> str:
-    """Return one Agent Host's inventory, liveness, capacity, and wake counts."""
-    return _dumps(store.host_status(host_id, project=project))
-
-
-@mcp.tool()
 def list_runner_sessions(project: str = "maxwell", host_id: str = "", runtime: str = "",
                          task_id: str = "", status: str = "",
                          include_stale: bool = False) -> str:
@@ -1017,174 +956,6 @@ def register_runner_session(runner_session_json: str, ctx: Context,
         return _dumps({"error": "runner_session_json must be a JSON object string"})
     return _dumps(store.upsert_runner_session(
         record, principal_id=principal["id"], actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def create_work_session(work_session_json: str, ctx: Context,
-                        project: str = "maxwell") -> str:
-    """Create a first-class Work Session for code work.
-
-    The session binds agent/task work to project, repo_role, branch, worktree/clone path,
-    hygiene state, and lease/env evidence. Enforcement into claim_task and complete_claim
-    lands in follow-on SESSION tasks.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        payload = json.loads(work_session_json or "{}")
-    except json.JSONDecodeError:
-        return _dumps({"error": "work_session_json must be valid JSON"})
-    return _dumps(store.create_work_session(
-        payload, actor=auth.actor(principal), principal_id=principal.get("id") or "",
-        project=project))
-
-
-@mcp.tool()
-def create_managed_work_session(managed_session_json: str, ctx: Context,
-                                project: str = "maxwell") -> str:
-    """Create an isolated git worktree/clone and persist it as a Work Session.
-
-    The payload should include task_id, agent_id, source_path or repo_path, optional
-    workspace_root/workspace_path, storage_mode=worktree|clone, and policy_profile.
-    The tool allocates branch/path/base/env namespace/session token from repo topology,
-    runs git, preflights the workspace, claims a worktree lease, and returns a ready
-    Work Session. It fails closed for disallowed modes, existing paths, wrong repos,
-    and git/preflight failures.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        payload = json.loads(managed_session_json or "{}")
-    except json.JSONDecodeError:
-        return _dumps({"error": "managed_session_json must be valid JSON"})
-    return _dumps(store.create_managed_work_session(
-        payload, actor=auth.actor(principal), principal_id=principal.get("id") or "",
-        project=project))
-
-
-@mcp.tool()
-def get_work_session(work_session_id: str, project: str = "maxwell") -> str:
-    """Read one Work Session by id."""
-    session = store.get_work_session(work_session_id, project=project)
-    return _dumps(session or {"error": "work_session_not_found",
-                             "work_session_id": work_session_id})
-
-
-@mcp.tool()
-def get_work_session_health(work_session_id: str, project: str = "maxwell") -> str:
-    """Read the computed health verdict for one Work Session."""
-    health = store.get_work_session_health(work_session_id, project=project)
-    return _dumps(health or {"error": "work_session_not_found",
-                            "work_session_id": work_session_id})
-
-
-@mcp.tool()
-def list_work_sessions(project: str = "maxwell", task_id: str = "",
-                       agent_id: str = "", status: str = "",
-                       repo_role: str = "", include_expired: bool = True) -> str:
-    """List Work Sessions for a project, task, agent, repo role, or lifecycle status."""
-    return _dumps({
-        "project": project,
-        "contract": store.work_session_contract(project) if store.has_project(project) else None,
-        "work_sessions": store.list_work_sessions(
-            project=project, task_id=task_id, agent_id=agent_id, status=status,
-            repo_role=repo_role, include_expired=include_expired),
-    })
-
-
-@mcp.tool()
-def list_session_health(project: str = "maxwell", task_id: str = "",
-                        agent_id: str = "", status: str = "",
-                        only_unsafe: bool = False) -> str:
-    """List computed Work Session health rows and the task-level session_health aggregate."""
-    return _dumps(store.list_session_health(
-        project=project, task_id=task_id, agent_id=agent_id,
-        status=status, only_unsafe=only_unsafe))
-
-
-@mcp.tool()
-def update_work_session(work_session_id: str, updates_json: str, ctx: Context,
-                        project: str = "maxwell") -> str:
-    """Update Work Session state, hygiene, leases, SHAs, branch, or lifecycle status."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        payload = json.loads(updates_json or "{}")
-    except json.JSONDecodeError:
-        return _dumps({"error": "updates_json must be valid JSON"})
-    return _dumps(store.update_work_session(
-        work_session_id, payload, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def archive_work_session_workspace(work_session_id: str, ctx: Context,
-                                   project: str = "maxwell",
-                                   remove_workspace: bool = False) -> str:
-    """Archive a managed Work Session and optionally remove its owned workspace path."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.archive_work_session_workspace(
-        work_session_id,
-        remove_workspace=remove_workspace,
-        actor=auth.actor(principal),
-        project=project))
-
-
-@mcp.tool()
-def repo_preflight(worktree_path: str, ctx: Context, project: str = "maxwell",
-                   task_id: str = "", agent_id: str = "", repo_role: str = "canonical",
-                   expected_branch: str = "", expected_base_ref: str = "",
-                   scan_conflicts: bool = True) -> str:
-    """Run a side-effect-free git/worktree preflight before edit/claim/complete/merge.
-
-    Returns pass/warn/deny with typed failure classes such as dirty_worktree,
-    conflict_markers, wrong_repo, wrong_branch, stale_base, and
-    shared_worktree_collision.
-    """
-    _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.repo_preflight(
-        worktree_path=worktree_path, project=project, task_id=task_id,
-        agent_id=agent_id, repo_role=repo_role, expected_branch=expected_branch,
-        expected_base_ref=expected_base_ref, scan_conflicts=scan_conflicts))
-
-
-@mcp.tool()
-def preflight_work_session(work_session_id: str, ctx: Context, project: str = "maxwell",
-                           expected_branch: str = "", expected_base_ref: str = "") -> str:
-    """Run repo_preflight for a Work Session path and write the result into hygiene."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.preflight_work_session(
-        work_session_id, actor=auth.actor(principal), project=project,
-        expected_branch=expected_branch, expected_base_ref=expected_base_ref))
-
-
-@mcp.tool()
-def pre_tool_check(ctx: Context, tool_name: str = "", tool_input_json: str = "",
-                   action: str = "", task_id: str = "", agent_id: str = "",
-                   work_session_id: str = "", claim_id: str = "",
-                   control_mode: str = "", project: str = "maxwell") -> str:
-    """Validate a pending side-effectful tool before an adapter executes it.
-
-    Returns allow/warn/deny plus remediation. Hook-capable adapters should deny locally on
-    `decision=deny`; advisory adapters should surface the reason and advertise reduced
-    control fidelity. Denied unsafe attempts are audited as unbound_write or unsafe_session.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        tool_input = json.loads(tool_input_json or "{}")
-    except json.JSONDecodeError:
-        return _dumps({"error": "tool_input_json must be valid JSON"})
-    return _dumps(store.pre_tool_check(
-        {
-            "tool_name": tool_name,
-            "tool_input": tool_input,
-            "action": action,
-            "task_id": task_id,
-            "agent_id": agent_id,
-            "work_session_id": work_session_id,
-            "claim_id": claim_id,
-            "control_mode": control_mode,
-        },
-        actor=auth.actor(principal),
-        principal_id=principal.get("id") or "",
-        project=project,
-    ))
 
 
 @mcp.tool()
@@ -1534,249 +1305,6 @@ def complete_runner_control(request_id: str, ctx: Context, result_json: str = "{
     return _dumps(store.complete_runner_control_request(
         request_id, result=result, snapshot=snapshot, status=status,
         actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def list_wake_intents(project: str = "maxwell", status: str = "", host_id: str = "",
-                      runtime: str = "") -> str:
-    """List durable wake intents. status can be pending|claimed|completed|failed|cancelled."""
-    return _dumps(store.list_wake_intents(status=status, host_id=host_id,
-                                         runtime=runtime, project=project))
-
-
-@mcp.tool()
-def cancel_wake(wake_id: str, ctx: Context, reason: str = "cancelled",
-                project: str = "maxwell") -> str:
-    """Cancel a pending or claimed wake intent."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.cancel_wake(wake_id, reason=reason,
-                                   actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def claim_resource(agent_id: str, resource_type: str, names: str, ctx: Context,
-                   task_id: str = "", ttl_seconds: int = 1800,
-                   idem_key: str = "", project: str = "maxwell") -> str:
-    """Generic IXP resource claim. resource_type can be file, port, build_dir, worktree,
-    binary, branch, task, etc. names is comma/newline-separated."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    name_list = [n.strip() for n in names.replace("\n", ",").split(",") if n.strip()]
-    return _dumps(store.claim_resources(
-        agent_id=agent_id, resource_type=resource_type, names=name_list,
-        task_id=task_id or None, ttl_seconds=ttl_seconds, principal_id=principal["id"],
-        actor=auth.actor(principal), idem_key=idem_key, project=project))
-
-
-@mcp.tool()
-def check_resource(resource_type: str, names: str, project: str = "maxwell") -> str:
-    """Check whether generic IXP resources are held by active leases."""
-    name_list = [n.strip() for n in names.replace("\n", ",").split(",") if n.strip()]
-    return _dumps(store.check_resources(resource_type, name_list, project=project))
-
-
-@mcp.tool()
-def release_resource(lease_id: str, ctx: Context, project: str = "maxwell") -> str:
-    """Release a generic IXP resource lease."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.release_resource_lease(
-        lease_id, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def list_active_resource_leases(project: str = "maxwell") -> str:
-    """All active generic IXP resource leases."""
-    return _dumps(store.list_active_resource_leases(project=project))
-
-
-
-@mcp.tool()
-def verify_offline_completion(task_id: str, ctx: Context, evidence: str = "",
-                              artifact_url: str = "", evidence_hash: str = "",
-                              verifier: str = "", reviewed_at: float = 0,
-                              project: str = "maxwell") -> str:
-    """Mark an In Review non-PR/offline task Done with verifier-stamped evidence.
-
-    Agents still use complete_claim(...) to move work to In Review. This tool is the
-    privileged verifier/operator path for work that has no code PR: it records
-    provenance_type=offline_evidence, evidence/artifact/hash/verifier/reviewed_at, and
-    then marks Done. It fails closed unless the task is already In Review and evidence
-    is supplied.
-    """
-    principal = _require_write(ctx, project)
-    return _dumps(store.mark_task_offline_done(
-        task_id, evidence=evidence, artifact_url=artifact_url,
-        evidence_hash=evidence_hash, verifier=verifier or auth.actor(principal),
-        reviewed_at=reviewed_at or None, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def abandon_claim(claim_id: str, reason: str, ctx: Context,
-                  project: str = "maxwell") -> str:
-    """Abandon a task claim, release its task lease, and return the task to the ready queue."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.abandon_claim(claim_id, reason=reason,
-                                     actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def revoke_claim(claim_id: str, reason: str, ctx: Context,
-                 project: str = "maxwell", reassign_to: str = "",
-                 sort_order: int = 0, partial_evidence: str = "",
-                 notify: bool = True, ack_deadline_minutes: float = 5) -> str:
-    """Operator override for a live claim.
-
-    Revokes the active task claim, releases its task lease, requeues the task,
-    optionally redirects/reprioritizes it, preserves partial evidence, and sends
-    the displaced agent an ack-required claim_revoked message.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.revoke_claim(
-        claim_id,
-        reason=reason,
-        reassign_to=reassign_to,
-        sort_order=sort_order if sort_order > 0 else None,
-        partial_evidence=partial_evidence,
-        notify=notify,
-        ack_deadline_minutes=ack_deadline_minutes,
-        actor=auth.actor(principal),
-        project=project,
-    ))
-
-
-@mcp.tool()
-def report_usage(ctx: Context, source: str = "agent_report", confidence: str = "reported",
-                 task_id: str = "", claim_id: str = "", agent_id: str = "",
-                 outcome_id: str = "",
-                 runtime: str = "", provider: str = "", model: str = "",
-                 prompt_tokens: int = 0, completion_tokens: int = 0,
-                 total_tokens: int = 0, cost_usd: float = 0.0,
-                 call_site: str = "coding", request_id: str = "",
-                 metadata_json: str = "{}", project: str = "maxwell") -> str:
-    """Report usage/cost into Tally. Gateway-measured calls should use source='gateway';
-    external coding agents should use source='agent_report' and honest confidence."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        metadata = json.loads(metadata_json or "{}")
-    except Exception:
-        return _dumps({"error": "metadata_json must be a JSON object string"})
-    return _dumps(store.report_usage(
-        source=source, confidence=confidence, task_id=task_id or None,
-        claim_id=claim_id or None, outcome_id=outcome_id or None,
-        agent_id=agent_id or None,
-        principal_id=principal["id"], runtime=runtime, call_site=call_site,
-        provider=provider, model=model, prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=total_tokens or None, cost_usd=cost_usd,
-        metadata=metadata, request_id=request_id or None, project=project))
-
-
-@mcp.tool()
-def record_outcome(ctx: Context, outcome_type: str, title: str,
-                   task_id: str = "", claim_id: str = "", epic_id: str = "",
-                   status: str = "proposed", verifier: str = "",
-                   verification: str = "", evidence_json: str = "{}",
-                   value_json: str = "{}", project: str = "maxwell") -> str:
-    """Record an OXP outcome. Proposed outcomes are pending value; only verified outcomes
-    count in cost-per-outcome denominators."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        evidence = json.loads(evidence_json or "{}")
-        value = json.loads(value_json or "{}")
-    except Exception:
-        return _dumps({"error": "evidence_json and value_json must be JSON object strings"})
-    return _dumps(store.record_outcome(
-        outcome_type=outcome_type, title=title, task_id=task_id or None,
-        claim_id=claim_id or None, epic_id=epic_id or None, status=status,
-        verifier=verifier, verification=verification, evidence=evidence,
-        value=value, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def verify_outcome(outcome_id: str, ctx: Context, verifier: str = "",
-                   verification: str = "", evidence_json: str = "{}",
-                   project: str = "maxwell") -> str:
-    """Mark an outcome verified so it enters Tally's denominator."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        evidence = json.loads(evidence_json or "{}")
-    except Exception:
-        return _dumps({"error": "evidence_json must be a JSON object string"})
-    return _dumps(store.verify_outcome(
-        outcome_id, verifier=verifier or auth.actor(principal),
-        verification=verification, evidence=evidence,
-        actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def reject_outcome(outcome_id: str, reason: str, ctx: Context,
-                   verifier: str = "", project: str = "maxwell") -> str:
-    """Reject a proposed outcome. Rejected outcomes remain auditable but never count."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.reject_outcome(
-        outcome_id, verifier=verifier or auth.actor(principal), reason=reason,
-        actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def create_kpi(ctx: Context, name: str, unit: str, direction: str,
-               owner: str = "", baseline_value: float = 0.0,
-               current_value: float = 0.0, target_value: float = 0.0,
-               period: str = "", project: str = "maxwell") -> str:
-    """Create a KPI that outcomes can move. direction: increase|decrease|maintain."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.create_kpi(
-        name=name, unit=unit, direction=direction, owner=owner,
-        baseline_value=baseline_value if baseline_value else None,
-        current_value=current_value if current_value else None,
-        target_value=target_value if target_value else None,
-        period=period, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def update_kpi_value(kpi_id: str, current_value: float, ctx: Context,
-                     evidence_json: str = "{}", project: str = "maxwell") -> str:
-    """Update the current value for a KPI."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        evidence = json.loads(evidence_json or "{}")
-    except Exception:
-        return _dumps({"error": "evidence_json must be a JSON object string"})
-    return _dumps(store.update_kpi_value(
-        kpi_id, current_value=current_value, evidence=evidence,
-        actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def link_outcome_to_kpi(ctx: Context, outcome_id: str, kpi_id: str,
-                        contribution: float = 0.0, contribution_unit: str = "",
-                        confidence: str = "directional", rationale: str = "",
-                        project: str = "maxwell") -> str:
-    """Link a verified or proposed outcome to a KPI with measured|estimated|directional
-    confidence. Only verified outcome links count in cost-per-KPI movement."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.link_outcome_to_kpi(
-        outcome_id=outcome_id, kpi_id=kpi_id,
-        contribution=contribution if contribution else None,
-        contribution_unit=contribution_unit, confidence=confidence,
-        rationale=rationale, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def get_task_tally(task_id: str, project: str = "maxwell") -> str:
-    """Tally rollup for one task: spend by source, total tokens/cost, and outcome denominator."""
-    return _dumps(store.task_tally(task_id, project=project))
-
-
-@mcp.tool()
-def get_kpi_tally(kpi_id: str, project: str = "maxwell") -> str:
-    """KPI rollup: linked outcomes, spend, verified contribution, and cost per movement unit."""
-    return _dumps(store.kpi_tally(kpi_id, project=project))
-
-
-@mcp.tool()
-def get_deliverable_tally(deliverable_id: str, project: str = "maxwell") -> str:
-    """Deliverable/mission economics: spend, verified outcomes, KPI movement, and proven vs in-review split."""
-    return _dumps(store.deliverable_tally(deliverable_id, project=project))
 
 
 @mcp.tool()

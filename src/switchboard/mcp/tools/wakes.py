@@ -12,6 +12,7 @@ from typing import Any, Callable
 from mcp.server.fastmcp import Context
 
 import auth
+import store
 from switchboard.application.commands import claim_wake as claim_wake_command
 from switchboard.application.commands import complete_wake as complete_wake_command
 from switchboard.application.commands import request_wake as request_wake_command
@@ -98,7 +99,26 @@ def complete_wake(wake_id: str, ctx: Context, runner_session_id: str = "",
     ))
 
 
-WAKE_TOOL_NAMES = ("request_wake", "claim_wake", "complete_wake")
+def list_wake_intents(project: str = "maxwell", status: str = "", host_id: str = "",
+                      runtime: str = "") -> str:
+    """List durable wake intents. status can be pending|claimed|completed|failed|cancelled."""
+    services = _services()
+    return services.dumps(store.list_wake_intents(status=status, host_id=host_id,
+                                         runtime=runtime, project=project))
+
+
+
+def cancel_wake(wake_id: str, ctx: Context, reason: str = "cancelled",
+                project: str = "maxwell") -> str:
+    """Cancel a pending or claimed wake intent."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    return services.dumps(store.cancel_wake(wake_id, reason=reason,
+                                   actor=auth.actor(principal), project=project))
+
+
+
+WAKE_TOOL_NAMES = ("request_wake", "claim_wake", "complete_wake", 'list_wake_intents', 'cancel_wake')
 
 
 def register_wake_tools(mcp: Any, services: WakeToolServices) -> dict[str, Callable[..., str]]:
