@@ -976,6 +976,132 @@ class ProviderCredentialRepository:
             ).fetchone()
             return self._public_lease(current, now=now)
 
+    def writeback_active_codex_capsule(self, lease_id: str, *, credential: str,
+                                       actor: str,
+                                       principal: CredentialPrincipal) -> dict[str, Any]:
+        """Reseal an opaque Codex auth capsule for the exact active lease holder.
+
+        This is a trusted-runtime surface, not a REST or MCP operation.  The capsule is
+        never parsed or returned.  Advancing both the connection and lease version in one
+        transaction prevents a stale or replaced worker from overwriting newer auth state.
+        """
+        self._prepare()
+        capsule = str(credential or "")
+        if not capsule or len(capsule.encode("utf-8")) > 1024 * 1024:
+            raise CredentialVaultError(
+                "credential_writeback_invalid",
+                "provider credential writeback is invalid",
+                status_code=400,
+            )
+        now = time.time()
+        with _registry_conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            self._expire_leases_in(c, now)
+            lease = c.execute(
+                "SELECT * FROM provider_credential_leases WHERE lease_id=?",
+                (str(lease_id or "").strip(),),
+            ).fetchone()
+            if not lease or lease["state"] != "active":
+                if lease and lease["state"] == "expired":
+                    c.commit()
+                raise CredentialVaultError(
+                    "credential_writeback_denied",
+                    "provider credential writeback requires an active lease",
+                    status_code=409,
+                )
+            if (not principal.can_use_credentials()
+                    or not self._principal_is_acquirer(dict(lease), principal)):
+                raise CredentialVaultError(
+                    "credential_principal_binding_mismatch",
+                    "provider credential principal binding failed",
+                    status_code=403,
+                )
+            row = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (lease["credential_reference"],),
+            ).fetchone()
+            if row:
+                row = self._refresh_expiration_in(c, row, now)
+            if (not row or row["provider"] != "openai-codex"
+                    or row["lifecycle_state"] != "active"
+                    or row["revocation_state"] != "not_revoked"
+                    or int(row["credential_version"]) != int(lease["credential_version"])):
+                if row and row["lifecycle_state"] == "expired":
+                    c.commit()
+                raise CredentialVaultError(
+                    "credential_writeback_denied",
+                    "provider credential writeback binding is no longer active",
+                    status_code=409,
+                )
+            policy = _json_object(row["concurrency_policy_json"])
+            if policy.get("mode") != "exclusive" or int(policy.get("max_parallel") or 0) != 1:
+                raise CredentialVaultError(
+                    "credential_writeback_denied",
+                    "Codex auth-state writeback requires an exclusive credential lease",
+                    status_code=409,
+                )
+            new_version = int(row["credential_version"]) + 1
+            try:
+                sealed = encrypt_credential(
+                    capsule,
+                    associated_data=_aad(
+                        row["credential_reference"], row["tenant_id"], row["user_id"],
+                        row["provider"], row["provider_account_id"], new_version),
+                )
+            except VaultKeyUnavailable as exc:
+                raise CredentialVaultError(
+                    "vault_key_unavailable",
+                    "provider vault key is unavailable",
+                    status_code=503,
+                ) from exc
+            changed = c.execute(
+                "UPDATE provider_connections SET credential_version=?, "
+                "encrypted_credential=?, credential_nonce=?, key_id=?, refresh_state='fresh', "
+                "rotated_at=?, rotated_by=?, updated_at=?, updated_by=? "
+                "WHERE credential_reference=? AND credential_version=? "
+                "AND lifecycle_state='active' AND revocation_state='not_revoked'",
+                (
+                    new_version, sealed.ciphertext, sealed.nonce, sealed.key_id,
+                    now, actor, now, actor, row["credential_reference"],
+                    row["credential_version"],
+                ),
+            ).rowcount
+            if changed != 1:
+                raise CredentialVaultError(
+                    "credential_writeback_denied",
+                    "provider credential writeback lost its version fence",
+                    status_code=409,
+                )
+            lease_changed = c.execute(
+                "UPDATE provider_credential_leases SET credential_version=? "
+                "WHERE lease_id=? AND state='active' AND credential_version=?",
+                (new_version, lease["lease_id"], lease["credential_version"]),
+            ).rowcount
+            if lease_changed != 1:
+                raise CredentialVaultError(
+                    "credential_writeback_denied",
+                    "provider credential lease writeback fence failed",
+                    status_code=409,
+                )
+            updated = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (row["credential_reference"],),
+            ).fetchone()
+            self._event_in(
+                c, updated, "credential_writeback", actor=actor,
+                project=lease["project_id"], task_id=lease["task_id"],
+                host_id=lease["host_id"], runner_session_id=lease["runner_session_id"],
+                work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                details={"credential_version": new_version, "refresh_state": "fresh"},
+                now=now,
+            )
+            return {
+                "schema": "switchboard.provider_credential.writeback_receipt.v1",
+                "written_back": True,
+                "lease_id": lease["lease_id"],
+                "credential_version": new_version,
+            }
+
     def fence_materialized_lease(self, lease_id: str, *, actor: str, reason: str,
                                  principal: CredentialPrincipal) -> dict[str, Any]:
         """Permanently consume a lease after any launch/materialization failure."""
