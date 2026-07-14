@@ -86,17 +86,23 @@ class ReviewFinding(VersionedModel):
             raise ValueError("class must be auto or escalate")
         if self.state not in REVIEW_FINDING_STATES:
             raise ValueError("state must be open, fixed, waived, or overridden")
-        resolution = (
-            self.resolved_by, self.resolved_principal_id, self.resolved_reason,
-            self.resolved_sha, self.resolved_at,
+        legacy_resolution = (
+            self.resolved_by, self.resolved_reason, self.resolved_sha,
         )
-        if self.state == "open" and any(resolution):
+        authority_resolution = (
+            self.resolved_principal_id, self.resolved_at,
+        )
+        if self.state == "open" and any((*legacy_resolution, *authority_resolution)):
             raise ValueError("open findings cannot carry resolution metadata")
         if self.state != "open":
-            if not all(resolution):
+            if not all(legacy_resolution):
                 raise ValueError("resolved findings require resolved_by, resolved_reason, and resolved_sha")
             if not SHA_RE.match(self.resolved_sha or ""):
                 raise ValueError("resolved_sha must be a 40-character lowercase git SHA")
+        if self.state in {"waived", "overridden"} and not all(authority_resolution):
+            raise ValueError(
+                "waived/overridden findings require resolved_principal_id and resolved_at"
+            )
         return self
 
 

@@ -29,6 +29,7 @@ from switchboard.api.routers.tasks import create_router as create_task_router  #
 from switchboard.contracts.reviews import (  # noqa: E402
     REVIEW_FINDING_SCHEMA,
     REVIEW_VERDICT_SCHEMA,
+    ReviewFinding,
 )
 from switchboard.storage.repositories.review_verdicts import (  # noqa: E402
     HISTORICAL_CO8_VERDICT_ID,
@@ -419,6 +420,26 @@ try:
     ok(all(item["state"] == "fixed" and not item["valid_for_current_head"]
            for item in co8_findings),
        "historical findings preserve remediation state and remain fenced from the new head")
+    historical_verdict = store.get_review_verdict(
+        "CO-8", head_sha="94f03c6fb485bd0959eff9070a50c9356218f3ee",
+        project=PROJECT)
+    historical_contracts = [
+        ReviewFinding.model_validate(item)
+        for item in historical_verdict["findings"]
+    ]
+    ok(len(historical_contracts) == 4
+       and all(item.state == "fixed" for item in historical_contracts),
+       "historical fixed findings remain valid contracts without invented authority metadata")
+    authority_metadata_required = False
+    try:
+        ReviewFinding.model_validate({
+            **historical_verdict["findings"][0],
+            "state": "waived",
+        })
+    except ValueError:
+        authority_metadata_required = True
+    ok(authority_metadata_required,
+       "waived findings still require authenticated authority identity and timestamp")
     ok(co8_detail["finding_count"] == 4
        and co8_detail["review_verdict"]["current_head_finding_count"] == 0,
        "CO-8 task detail reports four real findings without treating them as current")
