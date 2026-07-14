@@ -265,6 +265,68 @@ ok(len(claim_calls) == 1 and claim_calls[0][2]["wake_id"] == "wake-lane",
 ok(summary["acted"] and summary["acted"][0]["wake_mode"] == "claim_next",
    "run_once reports claim_next mode for lane-scoped wake")
 
+calls = []
+bound_wake = {
+    "wake_id": "wake-byoa",
+    "task_id": "CO-10",
+    "selector": {
+        "runtime": "claude-code", "agent_id": "claude/CO-10", "lane": "ADAPTER",
+    },
+    "policy": {"account_binding": {
+        "tenant_id": "tenant-safe", "user_id": "user-safe", "project": "switchboard",
+        "provider": "anthropic-claude", "provider_account_id": "account-safe",
+        "credential_reference": "provider-cred-safe", "task_id": "CO-10",
+        "claim_id": "claim-safe", "work_session_id": "worksession-safe",
+        "account_affinity_id": "affinity-safe",
+    }},
+}
+
+
+def fake_try_byoa(method, path, body=None):
+    calls.append((method, path, body or {}))
+    if path.startswith(agent_host.P_LIST_WAKES):
+        return {"wake_intents": [bound_wake]}
+    if path.endswith("/leases"):
+        return {"lease_id": "provider-lease-safe", "state": "issued"}
+    if path == agent_host.P_CLAIM_WAKE:
+        claimed_wake = json.loads(json.dumps(bound_wake))
+        claimed_wake["policy"]["account_binding"].update({
+            "host_id": inventory["host_id"],
+            "runner_session_id": body["runner_session_id"],
+            "credential_lease_id": body["credential_lease_id"],
+        })
+        return {"claimed": True, "wake": claimed_wake}
+    if path == agent_host.P_COMPLETE_WAKE:
+        return {"ok": True}
+    return {"ok": True}
+
+
+agent_host._try = fake_try_byoa
+agent_host.launch = lambda wake, inv, runner_session_id="": {
+    "runner_session_id": runner_session_id,
+    "pid": 12346,
+    "wake_mode": agent_host.wake_mode(wake),
+}
+summary = agent_host.run_once(inventory)
+lease_index = next(i for i, call in enumerate(calls) if call[1].endswith("/leases"))
+claim_index = next(i for i, call in enumerate(calls) if call[1] == agent_host.P_CLAIM_WAKE)
+claim_body = calls[claim_index][2]
+ok(lease_index < claim_index
+   and claim_body["runner_session_id"].startswith("run_")
+   and claim_body["credential_lease_id"] == "provider-lease-safe",
+   "BYOA host registers a runner and acquires an exact lease before wake claim")
+ok(summary["acted"][0]["runner_session_id"] == claim_body["runner_session_id"],
+   "the supervisor launches with the same runner identity admitted by the lease")
+byoa_runner_registers = [
+    call[2] for call in calls if call[1] == agent_host.P_REGISTER_RUNNER
+]
+ok(len(byoa_runner_registers) == 2
+   and byoa_runner_registers[-1]["claim_id"] == "claim-safe"
+   and byoa_runner_registers[-1]["metadata"]["work_session_id"] == "worksession-safe"
+   and byoa_runner_registers[-1]["metadata"]["credential_lease_id"]
+   == "provider-lease-safe",
+   "post-launch runner update preserves the admitted claim, work session, and lease")
+
 # run_once end-to-end for a closure_verify wake: a fast, already-exited "job" must
 # still be reported started=True (the bug this whole block guards against — before
 # the confirm_closure_verified wiring, run_once used bare os.kill liveness for every

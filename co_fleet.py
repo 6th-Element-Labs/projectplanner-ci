@@ -28,7 +28,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import scripts.switchboard_path  # noqa: F401 - make src/switchboard importable
 from adapters import switchboard_core as sb
+from switchboard.domain.coordination.placement import order_wakes_fairly
 
 
 SCHEMA = "switchboard.co_fleet_receipt.v1"
@@ -196,7 +198,7 @@ def validate_account_binding(wake: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError("account binding must be an object")
     required = (
         "tenant_id", "user_id", "project", "provider", "provider_account_id",
-        "credential_reference", "work_session_id", "account_affinity_id",
+        "credential_reference", "claim_id", "work_session_id", "account_affinity_id",
     )
     missing = [key for key in required if not binding.get(key)]
     if missing:
@@ -209,7 +211,7 @@ def validate_account_binding(wake: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError("dispatcher cannot pre-bind an ephemeral host or runner")
     affinity_source = {key: binding.get(key) for key in (
         "tenant_id", "user_id", "project", "provider", "provider_account_id",
-        "credential_reference", "credential_lease_id", "auth_lane",
+        "credential_reference", "auth_lane",
     )}
     expected = hashlib.sha256(
         json.dumps(affinity_source, sort_keys=True, separators=(",", ":")).encode()
@@ -258,6 +260,7 @@ def render_user_data(base_user_data: str, wake: dict[str, Any], pool: Pool) -> s
     """Replace the CO-2 placeholder with a reference-only runtime bootstrap."""
     selector = wake.get("selector") or {}
     policy = wake.get("policy") or {}
+    binding = validate_account_binding(wake) or {}
     wake_id = _safe_field(wake.get("wake_id"), "wake_id")
     task_id = _safe_field(wake.get("task_id"), "task_id")
     runtime = _safe_field(selector.get("runtime"), "runtime")
@@ -338,6 +341,9 @@ PYTHONPATH=/opt/projectplanner /opt/projectplanner/.venv/bin/python /opt/project
         "lane": shlex.quote(lane),
         "caps": shlex.quote(capabilities),
         "sessions": pool.max_sessions,
+        "tenant": shlex.quote(str(binding.get("tenant_id") or "")),
+        "provider": shlex.quote(str(binding.get("provider") or "")),
+        "affinity": shlex.quote(str(binding.get("account_affinity_id") or "")),
     }
     extension = f"""
 # CO-3 reference-only runtime binding. No secret value is present in this script.
@@ -375,6 +381,16 @@ PM_RUNTIME={values['runtime']}
 PM_HOST_LANES={values['lane']}
 PM_HOST_CAPABILITIES={values['caps']}
 PM_HOST_MAX_SESSIONS={values['sessions']}
+PM_HOST_CLASS=ephemeral
+PM_HOST_COST_CLASS=ephemeral_variable
+PM_HOST_PROJECTS={shlex.quote(str(wake.get('project') or 'switchboard'))}
+PM_HOST_TENANTS={values['tenant']}
+PM_HOST_PROVIDERS={values['provider']}
+PM_HOST_ACCOUNT_AFFINITIES={values['affinity']}
+PM_HOST_SUPPORTS_CREDENTIAL_LEASES=1
+PM_HOST_REPOSITORIES=6th-Element-Labs/projectplanner
+PM_HOST_SESSION_POLICIES=code_strict
+PM_HOST_ISOLATION=task_worktree
 PM_WAKE_ID={values['wake']}
 PM_TASK_ID={values['task']}
 PM_AGENT_HOST_ALLOW_WORK=1
@@ -715,8 +731,45 @@ def provision_wake(aws: AwsCli, client: SwitchboardClient, config: Config,
 
 def process_once(aws: AwsCli, client: SwitchboardClient, config: Config) -> list[dict[str, Any]]:
     outcomes = []
-    for wake in client.pending_wakes():
+    for wake in order_wakes_fairly(client.pending_wakes()):
         if (wake.get("policy") or {}).get("mode") != "co_fleet":
+            continue
+        placement = wake.get("placement") or {}
+        if (placement.get("scheduler_mode") == "hybrid"
+                and placement.get("action") in {"assign_persistent", "assign_ephemeral"}):
+            outcomes.append({
+                "ok": True,
+                "wake_id": wake.get("wake_id"),
+                "task_id": wake.get("task_id"),
+                "action": "defer_to_registered_host",
+                "selected_host_id": placement.get("selected_host_id"),
+                "reason_code": placement.get("reason_code"),
+                "cost_class": placement.get("cost_class"),
+            })
+            continue
+        if (placement.get("scheduler_mode") == "hybrid"
+                and placement.get("action") != "provision_ephemeral"):
+            if placement.get("action") in {"wait", "wait_for_credential_rebind"}:
+                outcomes.append({
+                    "ok": True, "wake_id": wake.get("wake_id"),
+                    "task_id": wake.get("task_id"), "action": "defer_placement",
+                    "reason_code": placement.get("reason_code"),
+                })
+                continue
+            reason = str(placement.get("reason_code") or "hybrid_placement_blocked")
+            details = {
+                "action": placement.get("action") or "wait",
+                "cost_class": placement.get("cost_class"),
+            }
+            try:
+                client.fail_wake(wake, reason, "failed_gate", details)
+            except Exception as report_exc:
+                details["report_error"] = str(report_exc)
+            outcomes.append({
+                "ok": False, "wake_id": wake.get("wake_id"),
+                "task_id": wake.get("task_id"), "failure_class": "failed_gate",
+                "reason": reason, **details,
+            })
             continue
         try:
             receipt = provision_wake(aws, client, config, wake)

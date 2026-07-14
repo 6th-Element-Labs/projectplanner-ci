@@ -88,9 +88,14 @@ class ClaimWakeCommand(VersionedModel):
     schema_id: str = Field(default=CLAIM_WAKE_COMMAND_SCHEMA, alias="schema")
     host_id: str
     wake_id: str
+    runner_session_id: str = ""
+    credential_lease_id: str = ""
     project: str = "maxwell"
 
-    @field_validator("host_id", "wake_id", "project", mode="before")
+    @field_validator(
+        "host_id", "wake_id", "runner_session_id", "credential_lease_id",
+        "project", mode="before",
+    )
     @classmethod
     def _strip_text(cls, value: Any) -> str:
         return str(value or "").strip()

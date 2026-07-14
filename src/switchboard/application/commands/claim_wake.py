@@ -52,6 +52,8 @@ def execute(
         command.wake_id,
         actor=actor,
         project=command.project,
+        runner_session_id=command.runner_session_id,
+        credential_lease_id=command.credential_lease_id,
     )
 
 

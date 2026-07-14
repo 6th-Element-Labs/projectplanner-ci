@@ -11,12 +11,19 @@ from pathlib import Path
 TMP = Path(tempfile.mkdtemp(prefix="co-fleet-test-"))
 os.environ["PM_DB_PATH"] = str(TMP / "maxwell.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = str(TMP / "switchboard.db")
+os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(TMP / "project_registry.db")
+os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
 os.environ["PM_AUTH_MODE"] = "off"
+os.environ["PM_PROVIDER_VAULT_KEY"] = base64.urlsafe_b64encode(b"C" * 32).decode()
+os.environ["PM_PROVIDER_VAULT_KEY_ID"] = "co-fleet-test:v1"
 
 import co_fleet  # noqa: E402
 import dispatch  # noqa: E402
 import store  # noqa: E402
 from adapters import agent_host  # noqa: E402
+from switchboard.storage.repositories.provider_credentials import (  # noqa: E402
+    default_provider_credential_repository as credential_repository,
+)
 
 
 passed = failed = 0
@@ -176,7 +183,19 @@ os.environ.pop("PM_AGENT_HOST_ALLOW_WORK", None)
 os.environ.pop("PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM", None)
 
 
+store.ensure_org(store.DEFAULT_ORG_ID, "6th Element Labs", created_by="test")
+store.set_project_access(
+    "switchboard", store.DEFAULT_ORG_ID, purpose="CO fleet fixture", created_by="test")
 store.init_db("switchboard")
+store.ensure_user("user-1", "co-fleet@example.test", "CO fleet user", created_by="test")
+store.add_org_member(store.DEFAULT_ORG_ID, "user-1", role="member", created_by="test")
+provider_connection = credential_repository.enroll(
+    project="switchboard", user_id="user-1", provider="anthropic",
+    provider_account_id="account-1", auth_type="personal_subscription",
+    credential="co-fleet-provider-secret", project_allowlist=["switchboard"],
+    actor="test", expires_at=time.time() + 3600,
+    concurrency_policy={"mode": "exclusive", "max_parallel": 1},
+)
 task = store.create_task({
     "workstream_id": "CO", "workstream_name": "CO", "title": "Fleet proof", "phase": "Build",
 }, actor="test", project="switchboard")
@@ -206,9 +225,10 @@ ok(not incomplete_binding.get("dispatched")
    and incomplete_binding.get("error") == "invalid_account_binding",
    "BYOA dispatch fails closed when required account affinity is incomplete")
 binding = {
-    "tenant_id": "tenant-1", "user_id": "user-1", "provider": "anthropic",
-    "provider_account_id": "account-1", "credential_reference": "vault:credential-1",
-    "credential_lease_id": "lease-1", "auth_lane": "personal-plan",
+    "tenant_id": store.DEFAULT_ORG_ID, "user_id": "user-1", "provider": "anthropic",
+    "provider_account_id": "account-1",
+    "credential_reference": provider_connection["credential_reference"],
+    "claim_id": "claim-1", "auth_lane": "personal-plan",
     "work_session_id": "worksession-1",
 }
 bound_dispatch = dispatch.dispatch_to_co_fleet(
@@ -218,7 +238,7 @@ bound_wake = next(item for item in store.list_wake_intents(project="switchboard"
                   if item.get("wake_id") == bound_dispatch.get("wake_id"))
 stored_binding = (bound_wake.get("policy") or {}).get("account_binding") or {}
 ok(bound_dispatch.get("dispatched") and stored_binding.get("provider_account_id") == "account-1"
-   and stored_binding.get("credential_reference") == "vault:credential-1"
+   and stored_binding.get("credential_reference") == provider_connection["credential_reference"]
    and stored_binding.get("host_id") is None and stored_binding.get("runner_session_id") is None,
    "durable wake preserves non-secret BYOA affinity for later host/runner binding")
 ok(co_fleet.validate_account_binding(bound_wake) == stored_binding,

@@ -151,6 +151,23 @@ Required operations:
 A stale host must not be selected for a wake intent. Stale host state is evidence, not failure:
 it tells the operator no always-on worker is currently listening.
 
+### Hybrid placement inventory
+
+Work-capable hosts also publish a `switchboard.agent_host_placement.v1` object in `capacity`.
+It truthfully describes whether the host is persistent or ephemeral; its cost class; current
+CPU, memory, disk, and session headroom; installed runtime binaries; project/tenant/provider/
+account-affinity allowlists; repository and Work Session policies; isolation modes;
+credential-lease support; and wake/drain state. A hybrid wake never infers an omitted field:
+required project, tenant, provider account, repository, isolation, credential-lease support,
+runtime, capability, or resource headroom must be explicitly compatible. The lease itself is
+acquired only after host selection and is validated against the exact host and runner when the
+wake is claimed.
+
+Host capacity and provider subscription capacity are different admission gates. A free CPU
+slot cannot override a personal-plan cooldown, and a ready provider subscription does not make
+a saturated host available. Switchboard persists both signals in the placement receipt without
+copying credential or provider-account identifiers into activity records.
+
 ## 6. Wake Intent
 
 A wake intent is a durable request to ensure a runtime session exists. It is not a message to

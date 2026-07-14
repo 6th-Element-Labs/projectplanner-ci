@@ -29,6 +29,9 @@ from switchboard.domain.provider_credentials import (
 
 PROVIDER_CONNECTION_SCHEMA = "switchboard.provider_connection.v1"
 PROVIDER_CREDENTIAL_LEASE_SCHEMA = "switchboard.provider_credential_lease.v1"
+PROVIDER_CREDENTIAL_LEASE_ADMISSION_SCHEMA = (
+    "switchboard.provider_credential_lease_admission.v1"
+)
 PROVIDER_CREDENTIAL_EVENT_SCHEMA = "switchboard.provider_credential_event.v1"
 LIVE_LEASE_STATES = ("issued", "materializing", "active")
 
@@ -604,6 +607,78 @@ class ProviderCredentialRepository:
             )
             return self._public_connection(current, now=now)
 
+    def lease_admission_decision(
+        self,
+        lease_id: str,
+        *,
+        project: str,
+        credential_reference: str,
+        user_id: str,
+        provider: str,
+        provider_account_id: str,
+        task_id: str,
+        host_id: str,
+        runner_session_id: str,
+        work_session_id: str,
+        now: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Validate a fresh exact-binding lease at the wake-claim boundary."""
+        self._prepare()
+        timestamp = time.time() if now is None else float(now)
+
+        def decision(allowed: bool, state: str, reason: str) -> dict[str, Any]:
+            return {
+                "schema": PROVIDER_CREDENTIAL_LEASE_ADMISSION_SCHEMA,
+                "allowed": allowed,
+                "state": state,
+                "reason_code": reason,
+            }
+
+        try:
+            provider_id = normalize_provider(provider)
+        except CredentialPolicyError:
+            return decision(False, "policy_blocked", "provider_not_supported")
+        expected = {
+            "credential_reference": str(credential_reference or "").strip(),
+            "user_id": str(user_id or "").strip(),
+            "provider": provider_id,
+            "provider_account_id": str(provider_account_id or "").strip(),
+            "project_id": str(project or "").strip().lower(),
+            "task_id": str(task_id or "").strip(),
+            "host_id": str(host_id or "").strip(),
+            "runner_session_id": str(runner_session_id or "").strip(),
+            "work_session_id": str(work_session_id or "").strip(),
+        }
+        if not str(lease_id or "").strip() or not all(expected.values()):
+            return decision(False, "binding_incomplete", "credential_lease_binding_incomplete")
+
+        with _registry_conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            self._expire_leases_in(c, timestamp)
+            lease = c.execute(
+                "SELECT * FROM provider_credential_leases WHERE lease_id=?",
+                (str(lease_id).strip(),),
+            ).fetchone()
+            if not lease:
+                return decision(False, "not_available", "credential_lease_not_available")
+            if any(str(lease[key] or "") != value for key, value in expected.items()):
+                return decision(False, "binding_mismatch", "credential_lease_binding_mismatch")
+            if lease["state"] != "issued" or float(lease["expires_at"] or 0) <= timestamp:
+                return decision(False, str(lease["state"] or "not_available"),
+                                "credential_lease_not_claimable")
+            connection = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (lease["credential_reference"],),
+            ).fetchone()
+            if (not connection
+                    or connection["lifecycle_state"] != "active"
+                    or connection["revocation_state"] != "not_revoked"
+                    or int(connection["credential_version"] or 0)
+                    != int(lease["credential_version"] or 0)
+                    or not connection["encrypted_credential"]):
+                return decision(False, "credential_not_usable", "provider_credential_not_active")
+            return decision(True, "issued", "credential_lease_ready")
+
     def acquire_lease(self, *, project: str, credential_reference: str, user_id: str,
                       provider: str, provider_account_id: str, task_id: str,
                       host_id: str, runner_session_id: str, work_session_id: str,
@@ -1162,6 +1237,7 @@ default_provider_credential_repository = ProviderCredentialRepository()
 __all__ = [
     "CredentialVaultError",
     "PROVIDER_CONNECTION_SCHEMA",
+    "PROVIDER_CREDENTIAL_LEASE_ADMISSION_SCHEMA",
     "PROVIDER_CREDENTIAL_EVENT_SCHEMA",
     "PROVIDER_CREDENTIAL_LEASE_SCHEMA",
     "ProviderCredentialRepository",

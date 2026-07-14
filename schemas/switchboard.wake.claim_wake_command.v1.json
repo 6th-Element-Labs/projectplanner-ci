@@ -3,6 +3,11 @@
   "additionalProperties": false,
   "description": "Transport-neutral input for claiming one pending wake intent.",
   "properties": {
+    "credential_lease_id": {
+      "default": "",
+      "title": "Credential Lease Id",
+      "type": "string"
+    },
     "host_id": {
       "title": "Host Id",
       "type": "string"
@@ -10,6 +15,11 @@
     "project": {
       "default": "maxwell",
       "title": "Project",
+      "type": "string"
+    },
+    "runner_session_id": {
+      "default": "",
+      "title": "Runner Session Id",
       "type": "string"
     },
     "schema": {

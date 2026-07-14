@@ -99,6 +99,9 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "ALTER TABLE decisions ADD COLUMN skipped_alternatives_json TEXT"),
     ("0028_decisions_result_json", "decisions", "result_json",
      "ALTER TABLE decisions ADD COLUMN result_json TEXT"),
+    # CO-9 — durable, explainable hybrid Agent Host placement.
+    ("0032_wake_intents_placement_json", "wake_intents", "placement_json",
+     "ALTER TABLE wake_intents ADD COLUMN placement_json TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,

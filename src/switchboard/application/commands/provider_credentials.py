@@ -240,9 +240,19 @@ def _validate_runtime_binding(command: AcquireProviderCredentialLeaseCommand,
         )
 
     runner_metadata = runner_session.get("metadata") or {}
+    affinity = str(runner_metadata.get("account_affinity_id") or "").strip()
+    affinity_matches = (
+        bool(affinity)
+        and bool(command.account_affinity_id)
+        and affinity == command.account_affinity_id
+    )
+    legacy_identity_matches = (
+        not affinity
+        and runner_metadata.get("credential_reference") == command.credential_reference
+        and runner_metadata.get("provider_account_id") == command.provider_account_id
+    )
     if (runner_metadata.get("work_session_id") != command.work_session_id
-            or runner_metadata.get("credential_reference") != command.credential_reference
-            or runner_metadata.get("provider_account_id") != command.provider_account_id):
+            or not (affinity_matches or legacy_identity_matches)):
         raise CredentialVaultError(
             "credential_runner_account_binding_invalid",
             "credential runner account binding is invalid",

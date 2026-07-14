@@ -21,8 +21,10 @@ PM_MCP_TOKEN, PM_HOST_ID, PM_REPO_ROOT, PM_HOST_MAX_SESSIONS, PM_AGENT_WORK_MODU
 absent -> --dry, which claims+abandons safely), PM_AGENT_HOST_ALLOW_WORK,
 PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM.
 """
+import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -64,6 +66,80 @@ def _csv(value):
 
 def _truthy(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _memory_resources():
+    total = available = None
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        total = int(os.sysconf("SC_PHYS_PAGES")) * page_size
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as source:
+            values = {}
+            for line in source:
+                key, _, raw = line.partition(":")
+                values[key] = int((raw.strip().split() or ["0"])[0]) * 1024
+        total = values.get("MemTotal") or total
+        available = values.get("MemAvailable")
+    except (OSError, TypeError, ValueError):
+        pass
+    return {
+        "memory_mb_total": round(total / 1024 / 1024, 1) if total else None,
+        "memory_mb_available": round(available / 1024 / 1024, 1) if available else None,
+    }
+
+
+def placement_inventory(repo, runtime, policy):
+    """Build the truthful, non-secret host-placement advertisement used by CO-9."""
+    try:
+        disk = shutil.disk_usage(repo)
+        disk_values = {
+            "disk_gb_total": round(disk.total / 1024 ** 3, 2),
+            "disk_gb_available": round(disk.free / 1024 ** 3, 2),
+        }
+    except OSError:
+        disk_values = {"disk_gb_total": None, "disk_gb_available": None}
+    binary_names = {"git", "python3", "gh"}
+    binary_names.add("claude" if runtime == "claude-code" else runtime)
+    binaries = sorted(name for name in binary_names if name and shutil.which(name))
+    ephemeral = bool(str(os.environ.get("PM_WAKE_ID") or "").strip())
+    return {
+        "schema": "switchboard.agent_host_placement.v1",
+        "host_class": os.environ.get(
+            "PM_HOST_CLASS", "ephemeral" if ephemeral else "persistent"),
+        "cost_class": os.environ.get(
+            "PM_HOST_COST_CLASS", "ephemeral_variable" if ephemeral else "already_paid"),
+        "wakeable": True,
+        "drain_state": "accepting" if policy.get("allow_work") else "message_only",
+        "tenant_ids": _csv(os.environ.get("PM_HOST_TENANTS", "")),
+        "projects": _csv(os.environ.get("PM_HOST_PROJECTS", PROJECT)),
+        "providers": _csv(os.environ.get("PM_HOST_PROVIDERS", "")),
+        "account_affinity_ids": _csv(os.environ.get("PM_HOST_ACCOUNT_AFFINITIES", "")),
+        "supports_credential_leases": _truthy(
+            os.environ.get("PM_HOST_SUPPORTS_CREDENTIAL_LEASES")),
+        "repositories": _csv(os.environ.get(
+            "PM_HOST_REPOSITORIES", "6th-Element-Labs/projectplanner")),
+        "session_policies": _csv(os.environ.get("PM_HOST_SESSION_POLICIES", "code_strict")),
+        "isolation_modes": _csv(os.environ.get("PM_HOST_ISOLATION", "task_worktree")),
+        "runtime_binaries": binaries,
+        "provider_capacity_mode": "external_account_admission",
+        "resources": {
+            "cpu_total": os.cpu_count(),
+            # CPU availability is scheduler input only when a host monitor supplies it;
+            # total logical CPUs are not a truthful measure of current headroom.
+            "cpu_available": (
+                float(os.environ["PM_HOST_CPU_AVAILABLE"])
+                if os.environ.get("PM_HOST_CPU_AVAILABLE") else None
+            ),
+            **_memory_resources(),
+            **disk_values,
+        },
+        "concurrency": {
+            "max_sessions": int(os.environ.get("PM_HOST_MAX_SESSIONS", "2")),
+        },
+    }
 
 
 def host_policy_from_env(lanes):
@@ -114,6 +190,7 @@ def default_inventory():
     if cloud_enabled:
         profiles.append("cloud_execution")
         capabilities.append("cloud_execution")
+    placement = placement_inventory(repo, runtime, policy)
     return {
         "project": PROJECT, "host_id": host_id, "hostname": socket.gethostname(),
         "agent_host_version": "0.1.0", "repo_root": repo,
@@ -128,6 +205,7 @@ def default_inventory():
             "capabilities": capabilities,
         }],
         "limits": {"max_sessions": int(os.environ.get("PM_HOST_MAX_SESSIONS", "2"))},
+        "capacity": {"active_sessions": 0, "placement": placement},
         "heartbeat_ttl_s": 60,
     }
 
@@ -243,7 +321,7 @@ def active_codex_cloud_session_count():
     return active
 
 
-def launch_command(wake, inventory):
+def launch_command(wake, inventory, runner_session_id=""):
     """Build the supervisor command for a wake without executing it."""
     sel = wake.get("selector") or {}
     eligible = eligible_runtime(wake, inventory)
@@ -280,13 +358,15 @@ def launch_command(wake, inventory):
         child += (["--work-module", work_mod] if work_mod else ["--dry"])
     cmd = ["python3", SUPERVISOR, "start", "--agent-id", agent_id,
            "--cwd", inventory["repo_root"]]
+    if runner_session_id:
+        cmd += ["--runner-session-id", runner_session_id]
     if wake.get("task_id"):
         cmd += ["--task-id", wake.get("task_id")]
     cmd += ["--"] + child
     return cmd, mode
 
 
-def launch(wake, inventory):
+def launch(wake, inventory, runner_session_id=""):
     """Spawn a supervised run_agent for this wake via supervisor.py (the proven CLI). Returns the
     supervisor session record (with runner_session_id, pid) or None on failure."""
     mode = wake_mode(wake, inventory)
@@ -303,7 +383,7 @@ def launch(wake, inventory):
         rec = launch_codex_cloud_wake(wake, inventory, active_sessions=count)
         rec["host_id"] = inventory.get("host_id")
         return rec
-    cmd, mode = launch_command(wake, inventory)
+    cmd, mode = launch_command(wake, inventory, runner_session_id=runner_session_id)
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         rec = json.loads(out.stdout)
@@ -389,7 +469,7 @@ def register_runner_session(rec, wake, inventory):
         "agent_id": rec.get("agent_id") or (wake.get("selector") or {}).get("agent_id"),
         "runtime": rec.get("runtime") or (wake.get("selector") or {}).get("runtime"),
         "task_id": rec.get("task_id") or wake.get("task_id") or "",
-        "claim_id": rec.get("claim_id") or "",
+        "claim_id": rec.get("claim_id") or binding.get("claim_id") or "",
         "pid": rec.get("pid"),
         "status": rec.get("status") or "running",
         "cwd": rec.get("cwd") or inventory.get("repo_root"),
@@ -547,6 +627,52 @@ def _release_provider_lease(lease_id, reason):
     ) or {"state": "release_failed"}
 
 
+def _runner_session_id_for_wake(wake, host_id):
+    source = f"{wake.get('wake_id') or ''}:{host_id or ''}"
+    return "run_" + hashlib.sha256(source.encode()).hexdigest()[:16]
+
+
+def _register_preclaim_runner(wake, inventory, runner_session_id):
+    binding = ((wake.get("policy") or {}).get("account_binding") or {})
+    selector = wake.get("selector") or {}
+    return register_runner_session({
+        "runner_session_id": runner_session_id,
+        "agent_id": selector.get("agent_id"),
+        "runtime": selector.get("runtime"),
+        "task_id": wake.get("task_id"),
+        "claim_id": binding.get("claim_id"),
+        "status": "starting",
+        "cwd": inventory.get("repo_root"),
+        "control": {"tier": "T3", "runner_kill": True, "managed_process": True},
+        "metadata": {"credential_admission_phase": "preclaim"},
+    }, wake, inventory)
+
+
+def _acquire_provider_lease(wake, inventory, runner_session_id):
+    binding = ((wake.get("policy") or {}).get("account_binding") or {})
+    reference = str(binding.get("credential_reference") or "")
+    if not reference:
+        return {"error": "credential_reference_missing"}
+    return _try(
+        "POST",
+        f"/api/projects/{urllib.parse.quote(PROJECT, safe='')}/"
+        f"provider-connections/{urllib.parse.quote(reference, safe='')}/leases",
+        {
+            "project": PROJECT,
+            "user_id": binding.get("user_id"),
+            "provider": binding.get("provider"),
+            "provider_account_id": binding.get("provider_account_id"),
+            "task_id": wake.get("task_id"),
+            "host_id": inventory.get("host_id"),
+            "runner_session_id": runner_session_id,
+            "work_session_id": binding.get("work_session_id"),
+            "account_affinity_id": binding.get("account_affinity_id"),
+            "ttl_seconds": int((wake.get("policy") or {}).get(
+                "credential_lease_ttl_seconds") or 900),
+        },
+    ) or {"error": "credential_lease_acquisition_failed"}
+
+
 def _publish_drain_host(inventory, status, capacity):
     return _try("POST", P_HEARTBEAT_HOST, {
         "project": PROJECT,
@@ -619,15 +745,41 @@ def run_once(inventory):
         if not eligible_runtime(w, inventory):
             continue  # not ours — let an eligible host claim it (substrate records if none do)
         wake_id = w.get("wake_id")
-        claimed = _try("POST", P_CLAIM_WAKE, {"project": PROJECT, "host_id": host_id, "wake_id": wake_id})
+        binding = ((w.get("policy") or {}).get("account_binding") or {})
+        runner_session_id = ""
+        credential_lease_id = ""
+        if binding:
+            runner_session_id = _runner_session_id_for_wake(w, host_id)
+            registered = _register_preclaim_runner(w, inventory, runner_session_id)
+            if not registered or registered.get("error"):
+                continue
+            lease = _acquire_provider_lease(w, inventory, runner_session_id)
+            credential_lease_id = str(lease.get("lease_id") or "")
+            if not credential_lease_id:
+                continue
+        claimed = _try("POST", P_CLAIM_WAKE, {
+            "project": PROJECT,
+            "host_id": host_id,
+            "wake_id": wake_id,
+            "runner_session_id": runner_session_id,
+            "credential_lease_id": credential_lease_id,
+        })
         if not claimed or not (claimed.get("claimed", True)):
+            if credential_lease_id:
+                _release_provider_lease(credential_lease_id, "wake_claim_not_acquired")
             continue  # another host won it (atomic claim)
-        rec = launch(w, inventory)
+        claimed_wake = claimed.get("wake") or w
+        rec = (launch(claimed_wake, inventory, runner_session_id=runner_session_id)
+               if runner_session_id else launch(claimed_wake, inventory))
         rec_mode = (rec or {}).get("wake_mode") or wake_mode(w, inventory)
         started = (confirm_closure_verified(rec) if rec_mode == "closure_verify"
                   else confirm_started(rec))
-        runner_registration = register_runner_session(rec, w, inventory) if started else None
-        usage_registration = report_cloud_usage(rec, w) if started and rec.get("cloud_session") else None
+        runner_registration = register_runner_session(
+            rec, claimed_wake, inventory) if started else None
+        usage_registration = report_cloud_usage(
+            rec, claimed_wake) if started and rec.get("cloud_session") else None
+        if credential_lease_id and not started:
+            _release_provider_lease(credential_lease_id, "runtime_launch_failed")
         result = {"started": started, "runner_session_id": (rec or {}).get("runner_session_id"),
                   "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
                   "reason": "started" if started else "launch_failed",
@@ -660,6 +812,9 @@ def run(interval=10, once=False):
         now = time.time()
         drain_request = co_drain.discover_request()
         advertised = co_drain.inventory_for_drain(inv) if drain_request else inv
+        if drain_request:
+            placement = ((advertised.get("capacity") or {}).get("placement") or {})
+            placement["drain_state"] = "draining"
         should_register = (not registered or now - last_register_at >= register_every
                            or bool(drain_request) != drain_advertised)
         if should_register:

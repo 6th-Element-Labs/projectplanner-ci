@@ -5,7 +5,9 @@ CloudFormation) is appropriate for the slow-changing IAM, AMI pipeline, budgets,
 and base launch templates established by CO-1/CO-2. `co_fleet.py` owns the
 per-wake decision that cannot sensibly wait for infrastructure reconciliation:
 
-1. Read a pending `policy.mode=co_fleet` wake.
+1. Read a pending `policy.mode=co_fleet` wake with its durable CO-9 placement decision.
+   If a healthy persistent Agent Host was selected, leave EC2 untouched and let that host
+   claim the wake. Provision only `action=provision_ephemeral` decisions.
 2. Select `co-general` or `co-build` from required capabilities.
 3. Fail closed on the SSM guardrails, launch switch, budget readback, and 4+2/6 caps.
 4. Derive one launch-template version from the explicitly pinned CO-2 base version.
@@ -44,13 +46,16 @@ contain no secret value. Instance tags store only a SHA-256 prefix of the refere
 BYOA/hybrid dispatches may additionally carry a durable
 `switchboard.co_account_binding.v1` object. If any account-affinity field is supplied,
 tenant, user, project, provider, provider account, opaque credential reference, task,
-and Work Session are all required; optional credential lease and auth lane values are
-preserved. A hash binds the complete tuple so account substitution fails closed. The
-wake retains the identifiers for the later scheduler/runtime resolver, while provisioner
+active task claim, and Work Session are all required; an optional auth lane is preserved.
+A stable hash binds the account tuple so account substitution fails closed. Provider
+capacity is read authoritatively before placement. After the selected host registers a
+runner, that host acquires an exact host/runner-bound credential lease and presents both
+identifiers atomically with `claim_wake`; caller-supplied dispatch lease ids are rejected.
+The wake retains the identifiers for the later scheduler/runtime resolver, while provisioner
 receipts redact provider-account and credential identifiers and expose only the affinity
 hash. These fields are never copied into user data, EC2 tags, host metadata, or logs.
-Ephemeral `host_id` and `runner_session_id` remain unset until the registered host claims
-and completes the durable wake; the dispatcher is forbidden from guessing them.
+Ephemeral `host_id`, `runner_session_id`, and `credential_lease_id` remain unset until the
+registered host completes claim-time admission; the dispatcher is forbidden from guessing them.
 
 During drain, the runner binding retains only what is needed to release or fence the
 personal-login lease: Work Session id, lease id, provider, and the non-reversible account
@@ -77,6 +82,28 @@ Persistent Agent Hosts use the same request schema with
 `reason=persistent_host_removal` and `termination_kind=persistent_host`; an operator or
 host-removal workflow writes the configured `PM_CO_DRAIN_REQUEST_PATH` marker before
 stopping that host.
+
+## Hybrid placement contract
+
+Agent Hosts advertise `switchboard.agent_host_placement.v1` inside their capacity record:
+host class, cost class, CPU/memory/disk headroom, installed runtime binaries, project and
+tenant allowlists, provider/account-affinity allowlists, supported credential leases,
+repositories, session policies, isolation modes, concurrency, wakeability, and drain state.
+Missing or mismatched fields fail closed for hybrid work.
+
+Switchboard persists `switchboard.hybrid_placement_decision.v1` on every hybrid wake. The
+decision records reason-coded candidates, selected host/class, physical headroom, cost class,
+fair-share bucket, and the independent provider-capacity state. It intentionally excludes raw
+provider accounts, credential references, and lease identifiers. Persistent `already_paid`
+capacity wins when eligible. Saturation or incompatible inventory produces a Spot-first
+ephemeral decision; On-Demand remains disabled unless the wake policy explicitly allows it.
+
+Pending persistent reservations count against physical slots, so two concurrent wakes cannot
+both be promised the final local slot. Elastic wakes are round-robined by tenant/project
+fair-share bucket. If a claimed host's heartbeat expires, the wake returns to `pending` with a
+bounded recovery count and explicit checkpoint/workspace-reconstruction requirements. Planned
+drain still performs the stronger CO-4 sequence: stop claims, checkpoint, purge credentials,
+release account leases, acknowledge, then terminate.
 
 Base versions are explicit environment values:
 

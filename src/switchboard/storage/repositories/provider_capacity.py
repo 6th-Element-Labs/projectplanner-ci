@@ -94,7 +94,9 @@ class ProviderCapacityRepository:
         init_project_registry()
 
     @staticmethod
-    def _normalize_binding(binding: Mapping[str, Any]) -> dict[str, str]:
+    def _normalize_binding(
+        binding: Mapping[str, Any], *, require_execution_binding: bool = True,
+    ) -> dict[str, str]:
         raw = dict(binding or {})
         try:
             provider = normalize_provider(str(raw.get("provider") or ""))
@@ -103,6 +105,7 @@ class ProviderCapacityRepository:
         normalized = {
             "credential_reference": str(raw.get("credential_reference") or "").strip(),
             "project_id": str(raw.get("project") or raw.get("project_id") or "").strip().lower(),
+            "tenant_id": str(raw.get("tenant_id") or "").strip(),
             "user_id": str(raw.get("user_id") or "").strip(),
             "provider": provider,
             "provider_account_id": str(raw.get("provider_account_id") or "").strip(),
@@ -112,10 +115,16 @@ class ProviderCapacityRepository:
             "runner_session_id": str(raw.get("runner_session_id") or "").strip(),
             "work_session_id": str(raw.get("work_session_id") or "").strip(),
         }
-        if not all(normalized.values()):
+        required = (
+            "credential_reference", "project_id", "user_id", "provider",
+            "provider_account_id", "task_id", "work_session_id",
+        )
+        if require_execution_binding:
+            required += ("claim_id", "host_id", "runner_session_id")
+        if any(not normalized[key] for key in required):
             raise CredentialVaultError(
                 "provider_capacity_binding_incomplete",
-                "credential, customer, provider, task, claim, host, runner, and work session bindings are required",
+                "provider capacity identity binding is incomplete",
             )
         return normalized
 
@@ -133,6 +142,7 @@ class ProviderCapacityRepository:
             c, binding["project_id"])
         exact = (
             connection.get("tenant_id") == tenant_id
+            and (not binding.get("tenant_id") or binding.get("tenant_id") == tenant_id)
             and connection.get("user_id") == binding["user_id"]
             and connection.get("provider") == binding["provider"]
             and connection.get("provider_account_id") == binding["provider_account_id"]
@@ -418,11 +428,14 @@ class ProviderCapacityRepository:
         task_policy: Mapping[str, Any] | None = None,
         lane_policy: Mapping[str, Any] | None = None,
         host_available: bool = True,
+        require_execution_binding: bool = True,
+        exclude_lease_id: str = "",
         now: Optional[float] = None,
     ) -> dict[str, Any]:
         self._prepare()
         timestamp = time.time() if now is None else float(now)
-        normalized = self._normalize_binding(binding)
+        normalized = self._normalize_binding(
+            binding, require_execution_binding=require_execution_binding)
         task = dict(task_policy or {})
 
         def decision(allowed: bool, state: str, reason: str, **extra: Any) -> dict[str, Any]:
@@ -505,8 +518,12 @@ class ProviderCapacityRepository:
             active = c.execute(
                 "SELECT COUNT(*), MIN(expires_at) FROM provider_credential_leases "
                 "WHERE credential_reference=? AND state IN ('issued','materializing','active') "
-                "AND expires_at>?",
-                (connection["credential_reference"], timestamp),
+                "AND expires_at>? AND (?='' OR lease_id<>?)",
+                (
+                    connection["credential_reference"], timestamp,
+                    str(exclude_lease_id or "").strip(),
+                    str(exclude_lease_id or "").strip(),
+                ),
             ).fetchone()
             if int(active[0] or 0) >= maximum:
                 retry = max(1, int(float(active[1] or timestamp + 60) - timestamp))

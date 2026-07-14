@@ -60,14 +60,17 @@ def request_wake(selector_json: str, reason: str, ctx: Context,
 
 
 def claim_wake(host_id: str, wake_id: str, ctx: Context,
+               runner_session_id: str = "", credential_lease_id: str = "",
                project: str = "maxwell") -> str:
-    """Atomically assign one pending wake intent to an eligible Agent Host."""
+    """Assign a wake; BYOA claims present an exact runner-bound credential lease."""
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
     return services.dumps(claim_wake_command.execute_mapping_result(
         {
             "host_id": host_id,
             "wake_id": wake_id,
+            "runner_session_id": runner_session_id,
+            "credential_lease_id": credential_lease_id,
             "project": project,
         },
         actor=auth.actor(principal),

@@ -20,7 +20,7 @@ _CO_FLEET_CAPABILITY = "co_fleet"
 _BINDING_FIELD = re.compile(r"^[A-Za-z0-9._:/@+\-]{1,240}$")
 _BINDING_REQUIRED = (
     "tenant_id", "user_id", "provider", "provider_account_id",
-    "credential_reference", "work_session_id",
+    "credential_reference", "claim_id", "work_session_id",
 )
 
 
@@ -30,7 +30,7 @@ def _co_account_binding(task_id, project, account_binding):
         return None
     if not isinstance(account_binding, dict):
         raise ValueError("account_binding must be an object")
-    allowed = set(_BINDING_REQUIRED) | {"credential_lease_id", "auth_lane"}
+    allowed = set(_BINDING_REQUIRED) | {"auth_lane"}
     unknown = set(account_binding) - allowed - {"project", "task_id"}
     if unknown:
         raise ValueError(f"unsupported account binding fields: {sorted(unknown)}")
@@ -48,7 +48,9 @@ def _co_account_binding(task_id, project, account_binding):
         if value:
             normalized[key] = value
     reference = normalized["credential_reference"]
-    if not reference.startswith(("credential:", "vault:", "ssm:/", "secretsmanager:arn:")):
+    if not reference.startswith((
+        "provider-cred-", "credential:", "vault:", "ssm:/", "secretsmanager:arn:",
+    )):
         raise ValueError("credential_reference must be an opaque credential/vault/secret reference")
     normalized.update({
         "schema": "switchboard.co_account_binding.v1",
@@ -61,7 +63,7 @@ def _co_account_binding(task_id, project, account_binding):
     })
     affinity_source = {key: normalized.get(key) for key in (
         "tenant_id", "user_id", "project", "provider", "provider_account_id",
-        "credential_reference", "credential_lease_id", "auth_lane",
+        "credential_reference", "auth_lane",
     )}
     normalized["account_affinity_id"] = hashlib.sha256(
         json.dumps(affinity_source, sort_keys=True, separators=(",", ":")).encode()
@@ -212,7 +214,7 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
 def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
                          runtime=_RUNTIME, capabilities=None,
                          runtime_config_ref="", allow_on_demand=False,
-                         account_binding=None):
+                         account_binding=None, placement=None):
     """Queue a task for the elastic CO worker fleet.
 
     ``runtime_config_ref`` is an SSM parameter or Secrets Manager *reference*.
@@ -257,6 +259,20 @@ def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
         "allow_on_demand": bool(allow_on_demand),
         "registration_timeout_s": 180,
         "account_binding_required": binding is not None,
+        "scheduler": {
+            "mode": "hybrid",
+            "prefer_persistent": True,
+            "allow_persistent": True,
+            "allow_ephemeral": True,
+            "burst_enabled": True,
+            "max_host_loss_reschedules": 3,
+        },
+        "placement": {
+            "canonical_repo": "6th-Element-Labs/projectplanner",
+            "session_policy": str(task.get("policy_profile") or "code_strict"),
+            "isolation": "task_worktree",
+            **dict(placement or {}),
+        },
     }
     if binding is not None:
         policy["account_binding"] = binding
@@ -270,6 +286,14 @@ def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
     if wake.get("error") or not wake.get("wake_id"):
         return {"dispatched": False, "task_id": task_id, "project": project,
                 "error": wake.get("error") or wake.get("reason") or "wake not created"}
+    if wake.get("status") == "failed":
+        return {
+            "dispatched": False, "task_id": task_id, "project": project,
+            "wake_id": wake.get("wake_id"), "wake_status": "failed",
+            "error": "hybrid_placement_denied",
+            "reason": (wake.get("placement") or {}).get("reason_code")
+            or (wake.get("result") or {}).get("reason"),
+        }
     store.add_comment(
         task_id, "Switchboard (CO Fleet)",
         f"Queued elastic {selected_runtime} worker wake {wake['wake_id']} for lane "

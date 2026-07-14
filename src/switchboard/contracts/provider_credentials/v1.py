@@ -156,12 +156,13 @@ class AcquireProviderCredentialLeaseCommand(VersionedModel):
     host_id: str
     runner_session_id: str
     work_session_id: str
+    account_affinity_id: str = ""
     ttl_seconds: int = Field(default=900, ge=30, le=3600)
 
     @field_validator(
         "project", "credential_reference", "user_id", "provider",
         "provider_account_id", "task_id", "host_id", "runner_session_id",
-        "work_session_id", mode="before",
+        "work_session_id", "account_affinity_id", mode="before",
     )
     @classmethod
     def _strip_text(cls, value: Any) -> str:

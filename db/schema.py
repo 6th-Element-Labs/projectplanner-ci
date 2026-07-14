@@ -679,6 +679,7 @@ def apply_schema(c):
             runner_session_id TEXT,
             agent_id          TEXT,
             result_json       TEXT NOT NULL DEFAULT '{}',
+            placement_json    TEXT NOT NULL DEFAULT '{}',
             task_id           TEXT,
             principal_id      TEXT,
             idem_key          TEXT,

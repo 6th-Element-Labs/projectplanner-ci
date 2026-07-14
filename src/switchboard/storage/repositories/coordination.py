@@ -22,12 +22,25 @@ from switchboard.domain.coordination.delivery import (
     build_message_delivery_receipt,
     classify_agent_delivery,
 )
+from switchboard.domain.coordination.placement import (
+    claim_decision,
+    plan_hybrid_placement,
+)
 from switchboard.domain.coordination.terminal import TERMINAL_WAKE_STATUSES
 from switchboard.domain.ixp.protocol import (
     PROTOCOL_ENVELOPE,
     check_protocol_compatibility,
     normalize_send_ack_deadline,
     protocol_envelope,
+)
+from switchboard.domain.provider_credentials import CredentialPrincipal
+from switchboard.storage.repositories.provider_capacity import (
+    PROVIDER_CAPACITY_DECISION_SCHEMA,
+    default_provider_capacity_repository,
+)
+from switchboard.storage.repositories.provider_credentials import (
+    CredentialVaultError,
+    default_provider_credential_repository,
 )
 
 
@@ -41,32 +54,196 @@ def _wake_row(row: sqlite3.Row) -> Dict[str, Any]:
     d["selector"] = _json_obj(d.pop("selector_json", "{}"), {})
     d["policy"] = _json_obj(d.pop("policy_json", "{}"), {})
     d["result"] = _json_obj(d.pop("result_json", "{}"), {})
+    d["placement"] = _json_obj(d.pop("placement_json", "{}"), {})
     return d
+
+
+def _host_rows_in(c: sqlite3.Connection, now: float) -> List[Dict[str, Any]]:
+    rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
+    return [_store_facade()._host_row(row, now=now) for row in rows]
+
+
+def _placement_reservations_in(c: sqlite3.Connection) -> Dict[str, int]:
+    reservations: Dict[str, int] = {}
+    rows = c.execute(
+        "SELECT placement_json FROM wake_intents WHERE status IN ('pending','claimed')"
+    ).fetchall()
+    for row in rows:
+        placement = _json_obj(row["placement_json"], {})
+        host_id = str(placement.get("selected_host_id") or "")
+        if host_id:
+            reservations[host_id] = reservations.get(host_id, 0) + 1
+    return reservations
+
+
+def _audit_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep placement activity useful without copying credential/account identifiers."""
+    binding = policy.get("account_binding") or {}
+    placement = policy.get("placement") or {}
+    resources = placement.get("resources") or {}
+    scheduler = policy.get("scheduler") or {}
+    return {
+        "mode": policy.get("mode"),
+        "scheduler": {
+            key: scheduler.get(key) for key in (
+                "mode", "prefer_persistent", "allow_persistent", "allow_ephemeral",
+                "burst_enabled", "max_host_loss_reschedules", "fair_share_key",
+            ) if scheduler.get(key) is not None
+        },
+        "placement": {
+            "canonical_repo": placement.get("canonical_repo"),
+            "session_policy": placement.get("session_policy"),
+            "isolation": placement.get("isolation"),
+            "runtime_binaries": placement.get("runtime_binaries") or [],
+            "resources": {
+                key: resources.get(key) for key in ("cpu", "memory_mb", "disk_gb")
+                if resources.get(key) is not None
+            },
+        },
+        "allow_on_demand": policy.get("allow_on_demand") is True,
+        "account_binding": {
+            "present": bool(binding),
+            "provider": binding.get("provider"),
+            "tenant_bound": bool(binding.get("tenant_id")),
+            "account_affinity_bound": bool(binding.get("account_affinity_id")),
+            "credential_lease_bound": bool(binding.get("credential_lease_id")),
+        },
+    }
+
+
+def _provider_capacity_decision(
+    policy: Dict[str, Any], *, task_id: str, project: str,
+    host_id: str = "", runner_session_id: str = "",
+    exclude_lease_id: str = "", require_execution_binding: bool = False,
+) -> Dict[str, Any]:
+    """Read CO-8 admission without persisting provider/account identifiers to activity."""
+    binding = dict(policy.get("account_binding") or {})
+    if not binding:
+        return {}
+    exact = {
+        **binding,
+        "project": project,
+        "task_id": task_id,
+        "host_id": host_id or binding.get("host_id") or "",
+        "runner_session_id": runner_session_id or binding.get("runner_session_id") or "",
+    }
+    try:
+        return default_provider_capacity_repository.admission_decision(
+            exact,
+            task_policy={
+                "customer_user_id": binding.get("user_id"),
+                "requested_provider": binding.get("provider"),
+                "allow_provider_substitution": False,
+            },
+            lane_policy=policy.get("provider_lane_policy") or {},
+            host_available=True,
+            require_execution_binding=require_execution_binding,
+            exclude_lease_id=exclude_lease_id,
+        )
+    except CredentialVaultError as exc:
+        return {
+            "schema": PROVIDER_CAPACITY_DECISION_SCHEMA,
+            "allowed": False,
+            "state": "policy_blocked",
+            "reason_code": exc.code,
+        }
+
+
+def _credential_lease_decision(
+    policy: Dict[str, Any], *, task_id: str, project: str, host_id: str,
+    runner_session_id: str, credential_lease_id: str,
+) -> Dict[str, Any]:
+    binding = dict(policy.get("account_binding") or {})
+    return default_provider_credential_repository.lease_admission_decision(
+        credential_lease_id,
+        project=project,
+        credential_reference=binding.get("credential_reference") or "",
+        user_id=binding.get("user_id") or "",
+        provider=binding.get("provider") or "",
+        provider_account_id=binding.get("provider_account_id") or "",
+        task_id=task_id,
+        host_id=host_id,
+        runner_session_id=runner_session_id,
+        work_session_id=binding.get("work_session_id") or "",
+    )
+
+
+def _release_lost_credential_lease(policy: Dict[str, Any], *, project: str) -> bool:
+    binding = dict(policy.get("account_binding") or {})
+    lease_id = str(binding.get("credential_lease_id") or "")
+    if not lease_id:
+        return True
+    principal = CredentialPrincipal.from_mapping({
+        "principal_id": "switchboard/wake",
+        "principal_kind": "system",
+        "scopes": ["use:credentials"],
+    })
+    try:
+        released = default_provider_credential_repository.release_lease(
+            lease_id, project=project, actor="switchboard/wake",
+            reason="host_lost", principal=principal,
+        )
+    except CredentialVaultError:
+        return False
+    return str(released.get("state") or "") in {"released", "expired", "fenced"}
+
+
+def _clear_execution_credential_binding(policy: Dict[str, Any]) -> Dict[str, Any]:
+    updated = dict(policy)
+    binding = dict(updated.get("account_binding") or {})
+    for key in ("host_id", "runner_session_id", "credential_lease_id"):
+        binding.pop(key, None)
+    if binding:
+        updated["account_binding"] = binding
+    return updated
 
 def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
                         reason: str, source: str, policy: Dict[str, Any],
                         task_id: Optional[str], principal_id: str, actor: str,
-                        now: float, idem_key: str = "", effect_key: str = "") -> Dict[str, Any]:
+                        now: float, project: str, idem_key: str = "",
+                        effect_key: str = "") -> Dict[str, Any]:
     deadline_s = (policy.get("deadline_seconds") or policy.get("claim_timeout_s") or
                   policy.get("ttl_s"))
     deadline = now + float(deadline_s) if deadline_s else None
-    eligible = _store_facade()._eligible_hosts_in(c, selector, now)
+    hybrid = str((policy.get("scheduler") or {}).get("mode") or "") == "hybrid"
+    placement: Dict[str, Any] = {}
+    if hybrid:
+        hosts = _host_rows_in(c, now)
+        placement = plan_hybrid_placement(
+            hosts, selector, policy, project=project,
+            reserved_by_host=_placement_reservations_in(c),
+        )
+        eligible_ids = {
+            item.get("host_id") for item in placement.get("candidates") or []
+            if item.get("eligible")
+        }
+        eligible = [host for host in hosts if host.get("host_id") in eligible_ids]
+    else:
+        eligible = _store_facade()._eligible_hosts_in(c, selector, now)
     no_host_policy = (policy.get("no_eligible_host") or "wait").strip()
-    status = "failed" if no_host_policy == "fail" and not eligible else "pending"
-    result = ({"reason": "no_eligible_host", "eligible_host_count": 0}
-              if status == "failed" else {})
+    burst_pending = placement.get("action") == "provision_ephemeral"
+    placement_denied = placement.get("action") == "deny"
+    status = ("failed" if placement_denied
+              or (no_host_policy == "fail" and not eligible and not burst_pending)
+              else "pending")
+    result = ({
+        "reason": (placement.get("reason_code") if placement_denied else "no_eligible_host"),
+        "eligible_host_count": 0,
+    } if status == "failed" else {})
     wake_id = "wake-" + uuid.uuid4().hex[:16]
     c.execute(
         "INSERT INTO wake_intents(wake_id, source, reason, selector_json, policy_json, "
-        "status, requested_at, deadline, result_json, task_id, principal_id, idem_key, effect_key) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "status, requested_at, deadline, result_json, placement_json, task_id, principal_id, "
+        "idem_key, effect_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (wake_id, source, reason, json.dumps(selector, sort_keys=True),
          json.dumps(policy, sort_keys=True), status, now, deadline,
-         json.dumps(result, sort_keys=True), task_id, principal_id or None,
+         json.dumps(result, sort_keys=True), json.dumps(placement, sort_keys=True),
+         task_id, principal_id or None,
          idem_key or None, effect_key or None),
     )
     payload = {"wake_id": wake_id, "source": source, "reason": reason,
-               "selector": selector, "policy": policy, "status": status,
+               "selector": selector, "policy": _audit_policy(policy), "status": status,
+               "placement": placement,
                "eligible_host_count": len(eligible), "effect_key": effect_key or None}
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (task_id, actor, "wake.requested", json.dumps(payload, sort_keys=True), now))
@@ -75,6 +252,12 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
                   (task_id, actor, "wake.no_eligible_host",
                    json.dumps({"wake_id": wake_id, "selector": selector,
                                "status": status}, sort_keys=True), now))
+    if placement:
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (task_id, actor, "wake.placement_decided",
+             json.dumps({"wake_id": wake_id, "placement": placement}, sort_keys=True), now),
+        )
     row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     wake = _wake_row(row)
     wake["eligible_host_count"] = len(eligible)
@@ -97,7 +280,13 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
     if not selector.get("runtime") and not selector.get("agent_id"):
         return {"error": "selector.runtime or selector.agent_id required"}
     payload = {"selector": selector, "reason": reason or "wake requested",
-               "source": source or actor, "policy": policy, "task_id": task_id}
+               "source": source or actor, "policy": dict(policy), "task_id": task_id}
+    if (str((policy.get("scheduler") or {}).get("mode") or "") == "hybrid"
+            and policy.get("account_binding")):
+        policy["provider_capacity"] = _provider_capacity_decision(
+            policy, task_id=str(task_id or ""), project=project,
+            require_execution_binding=False,
+        )
     try:
         with _store_facade()._control_plane_conn(project) as c:
             hit = _store_facade()._idem_hit(c, "request_wake", idem_key, actor, payload)
@@ -122,7 +311,7 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                 c, selector=selector, reason=reason or "wake requested",
                 source=source or actor, policy=policy, task_id=task_id,
                 principal_id=principal_id, actor=actor, now=now, idem_key=idem_key,
-                effect_key=effect_claim["effect_key"])
+                effect_key=effect_claim["effect_key"], project=project)
             _store_facade()._update_external_effect_in(
                 c, effect_claim["effect_key"], "issued",
                 readback={"wake_id": wake["wake_id"], "wake_status": wake["status"]},
@@ -157,7 +346,8 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
     return wakes
 
 def claim_wake(host_id: str, wake_id: str, actor: str = "system",
-               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+               project: str = DEFAULT_PROJECT, runner_session_id: str = "",
+               credential_lease_id: str = "") -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
     try:
@@ -178,13 +368,75 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if not host_row:
                 return {"claimed": False, "reason": "host_not_registered", "host_id": host_id}
             host = _store_facade()._host_row(host_row, now=now)
-            if not _store_facade()._host_can_handle(host, wake["selector"]):
+            policy = dict(wake.get("policy") or {})
+            binding = dict(policy.get("account_binding") or {})
+            placement_claim = claim_decision(
+                host, wake, project=project, credential_rebound=bool(binding),
+            )
+            if not placement_claim.get("allowed"):
                 return {"claimed": False, "reason": "host_not_eligible",
+                        "reason_codes": (placement_claim.get("candidate") or {}).get(
+                            "reason_codes") or [],
                         "host_id": host_id, "wake_id": wake_id}
+            if binding:
+                runner_id = str(runner_session_id or "").strip()
+                lease_id = str(credential_lease_id or "").strip()
+                if not runner_id or not lease_id:
+                    missing = []
+                    if not runner_id:
+                        missing.append("runner_session_required_for_credential_lease")
+                    if not lease_id:
+                        missing.append("credential_lease_required")
+                    return {"claimed": False, "reason": "credential_admission_denied",
+                            "reason_codes": missing, "host_id": host_id,
+                            "wake_id": wake_id}
+                lease_decision = _credential_lease_decision(
+                    policy, task_id=str(wake.get("task_id") or ""), project=project,
+                    host_id=host_id, runner_session_id=runner_id,
+                    credential_lease_id=lease_id,
+                )
+                if not lease_decision.get("allowed"):
+                    return {"claimed": False, "reason": "credential_admission_denied",
+                            "reason_codes": [lease_decision.get("reason_code")],
+                            "host_id": host_id, "wake_id": wake_id}
+                capacity = _provider_capacity_decision(
+                    policy, task_id=str(wake.get("task_id") or ""), project=project,
+                    host_id=host_id, runner_session_id=runner_id,
+                    exclude_lease_id=lease_id, require_execution_binding=True,
+                )
+                if not capacity.get("allowed"):
+                    return {"claimed": False, "reason": "provider_capacity_denied",
+                            "reason_codes": [capacity.get("reason_code")],
+                            "host_id": host_id, "wake_id": wake_id}
+                binding.update({
+                    "host_id": host_id,
+                    "runner_session_id": runner_id,
+                    "credential_lease_id": lease_id,
+                })
+                policy["account_binding"] = binding
+                policy["provider_capacity"] = capacity
+                wake["policy"] = policy
+            placement = dict(wake.get("placement") or {})
+            if placement.get("scheduler_mode") == "hybrid":
+                candidate = placement_claim.get("candidate") or {}
+                placement.update({
+                    "action": f"claimed_{candidate.get('host_class') or 'host'}",
+                    "reason_code": "eligible_host_claimed",
+                    "selected_host_id": host_id,
+                    "selected_host_class": candidate.get("host_class"),
+                    "cost_class": candidate.get("cost_class"),
+                    "claimed_at": now,
+                    "credential_rebind_required": False,
+                    "credential_lease_state": (
+                        "issued" if binding else placement.get("credential_lease_state")
+                    ),
+                })
             cur = c.execute(
-                "UPDATE wake_intents SET status='claimed', claimed_at=?, claimed_by_host=? "
+                "UPDATE wake_intents SET status='claimed', claimed_at=?, claimed_by_host=?, "
+                "placement_json=?, policy_json=? "
                 "WHERE wake_id=? AND status='pending'",
-                (now, host_id, wake_id),
+                (now, host_id, json.dumps(placement, sort_keys=True),
+                 json.dumps(policy, sort_keys=True), wake_id),
             )
             if cur.rowcount == 0:
                 row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
@@ -192,6 +444,14 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (wake.get("task_id"), actor, "wake.claimed",
                        json.dumps({"wake_id": wake_id, "host_id": host_id}, sort_keys=True), now))
+            if placement.get("scheduler_mode") == "hybrid":
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (wake.get("task_id"), actor, "wake.placement_claimed",
+                     json.dumps({"wake_id": wake_id, "placement": placement}, sort_keys=True),
+                     now),
+                )
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
@@ -312,6 +572,7 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
     started_at = time.time()
     now = time.time() if now is None else float(now)
     failed = 0
+    requeued = 0
     events: List[Dict[str, Any]] = []
     try:
         with _store_facade()._control_plane_conn(project) as c:
@@ -342,12 +603,111 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                 failed += 1
                 events.append({"wake_id": wake["wake_id"], "status": "failed",
                                "reason": "deadline_expired"})
+
+            recovery_rows = c.execute(
+                "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
+                "AND (deadline IS NULL OR deadline>?)",
+                (now,),
+            ).fetchall()
+            for row in recovery_rows:
+                wake = _wake_row(row)
+                placement = dict(wake.get("placement") or {})
+                if placement.get("scheduler_mode") != "hybrid":
+                    continue
+                original_status = str(wake.get("status") or "")
+                host_id = str(
+                    wake.get("claimed_by_host")
+                    or placement.get("selected_host_id")
+                    or ""
+                )
+                if not host_id:
+                    continue
+                host_row = c.execute(
+                    "SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)
+                ).fetchone() if host_id else None
+                host = _store_facade()._host_row(host_row, now=now) if host_row else None
+                if host and not host.get("stale"):
+                    continue
+
+                scheduler = dict((wake.get("policy") or {}).get("scheduler") or {})
+                recovery_count = int(placement.get("host_loss_recovery_count") or 0)
+                max_recoveries = max(0, int(scheduler.get("max_host_loss_reschedules") or 3))
+                if recovery_count >= max_recoveries:
+                    result = dict(wake.get("result") or {})
+                    result["recovery"] = {
+                        "reason": "host_loss_recovery_exhausted",
+                        "lost_host_id": host_id,
+                        "attempts": recovery_count,
+                    }
+                    c.execute(
+                        "UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+                        "WHERE wake_id=? AND status=?",
+                        (now, json.dumps(result, sort_keys=True), wake["wake_id"],
+                         original_status),
+                    )
+                    failed += 1
+                    events.append({"wake_id": wake["wake_id"], "status": "failed",
+                                   "reason": "host_loss_recovery_exhausted"})
+                    continue
+
+                policy = dict(wake.get("policy") or {})
+                account_bound = bool(policy.get("account_binding"))
+                if (original_status == "claimed" and account_bound
+                        and not _release_lost_credential_lease(policy, project=project)):
+                    events.append({
+                        "wake_id": wake["wake_id"], "status": "claimed",
+                        "reason": "credential_lease_fence_failed",
+                        "lost_host_id": host_id,
+                    })
+                    continue
+                policy = _clear_execution_credential_binding(policy)
+                if account_bound:
+                    policy["provider_capacity"] = _provider_capacity_decision(
+                        policy, task_id=str(wake.get("task_id") or ""), project=project,
+                        require_execution_binding=False,
+                    )
+                hosts = _host_rows_in(c, now)
+                recovered = plan_hybrid_placement(
+                    hosts, wake.get("selector") or {}, policy,
+                    project=project, reserved_by_host=_placement_reservations_in(c),
+                )
+                recovered.update({
+                    "host_loss_recovery_count": recovery_count + 1,
+                    "lost_host_id": host_id,
+                    "requeued_at": now,
+                    "checkpoint_required": original_status == "claimed",
+                    "workspace_reconstruction": "switchboard_claim_plus_git_provenance",
+                    "credential_rebind_required": account_bound,
+                })
+                updated = c.execute(
+                    "UPDATE wake_intents SET status='pending', claimed_at=NULL, "
+                    "claimed_by_host=NULL, placement_json=?, policy_json=? "
+                    "WHERE wake_id=? AND status=?",
+                    (json.dumps(recovered, sort_keys=True),
+                     json.dumps(policy, sort_keys=True), wake["wake_id"],
+                     original_status),
+                )
+                if updated.rowcount == 0:
+                    continue
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (wake.get("task_id"), "switchboard/wake", "wake.placement_recovered",
+                     json.dumps({"wake_id": wake["wake_id"],
+                                 "placement": recovered}, sort_keys=True), now),
+                )
+                requeued += 1
+                events.append({"wake_id": wake["wake_id"], "status": "pending",
+                               "reason": (
+                                   "claimed_host_lost" if original_status == "claimed"
+                                   else "pending_host_lost"
+                               ), "lost_host_id": host_id})
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
             err = _store_facade()._control_plane_unavailable("sweep_wake_intents", project, started_at, exc)
             return {"project": project, "failed": failed, "events": events, **err}
         raise
-    return {"project": project, "failed": failed, "events": events}
+    return {"project": project, "failed": failed, "requeued": requeued, "events": events}
 
 def request_unblock(requesting_agent: str, blocking_task_id: str,
                     blocked_task_id: str, message: str,
@@ -831,6 +1191,7 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
                                 "operator_alert": action == "wake_or_operator_alert"},
                         task_id=msg["task_id"], principal_id="",
                         actor="switchboard/monitor", now=now,
+                        project=project,
                         idem_key=f"ack-timeout:{mon['id']}")
                     result["wake_id"] = wake["wake_id"]
                     result["wake_status"] = wake["status"]
