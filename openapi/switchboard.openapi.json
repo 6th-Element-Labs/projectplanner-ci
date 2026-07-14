@@ -1,0 +1,898 @@
+{
+  "components": {
+    "schemas": {
+      "ClaimCompleteClaimCommandV1": {
+        "additionalProperties": false,
+        "description": "Transport-neutral input for completing one claim.",
+        "properties": {
+          "claim_id": {
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "evidence": {
+            "default": "",
+            "title": "Evidence"
+          },
+          "final_status": {
+            "default": "",
+            "title": "Final Status",
+            "type": "string"
+          },
+          "mission_project": {
+            "default": "",
+            "title": "Mission Project",
+            "type": "string"
+          },
+          "project": {
+            "default": "maxwell",
+            "title": "Project",
+            "type": "string"
+          },
+          "schema": {
+            "default": "switchboard.claim.complete_claim_command.v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id"
+        ],
+        "title": "CompleteClaimCommand",
+        "type": "object"
+      },
+      "ClaimNextCommandV1": {
+        "additionalProperties": false,
+        "description": "Transport-neutral input for scheduler claim_next.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "board_id": {
+            "default": "",
+            "title": "Board Id",
+            "type": "string"
+          },
+          "capabilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "deliverable_id": {
+            "default": "",
+            "title": "Deliverable Id",
+            "type": "string"
+          },
+          "idem_key": {
+            "default": "",
+            "title": "Idem Key",
+            "type": "string"
+          },
+          "lanes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Lanes",
+            "type": "array"
+          },
+          "max_budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Budget Usd"
+          },
+          "max_risk": {
+            "default": "",
+            "title": "Max Risk",
+            "type": "string"
+          },
+          "milestone_id": {
+            "default": "",
+            "title": "Milestone Id",
+            "type": "string"
+          },
+          "mission_id": {
+            "default": "",
+            "title": "Mission Id",
+            "type": "string"
+          },
+          "override_identity_risk": {
+            "default": false,
+            "title": "Override Identity Risk",
+            "type": "boolean"
+          },
+          "project": {
+            "default": "maxwell",
+            "title": "Project",
+            "type": "string"
+          },
+          "require_work_session": {
+            "default": false,
+            "title": "Require Work Session",
+            "type": "boolean"
+          },
+          "schema": {
+            "default": "switchboard.claim.claim_next_command.v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "session_policy_profile": {
+            "default": "",
+            "title": "Session Policy Profile",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 1800,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          },
+          "work_session": {
+            "additionalProperties": true,
+            "title": "Work Session",
+            "type": "object"
+          },
+          "work_session_id": {
+            "default": "",
+            "title": "Work Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "ClaimNextCommand",
+        "type": "object"
+      },
+      "ClaimTaskCommandV1": {
+        "additionalProperties": false,
+        "description": "Transport-neutral input for claiming one exact ready task.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "idem_key": {
+            "default": "",
+            "title": "Idem Key",
+            "type": "string"
+          },
+          "override_identity_risk": {
+            "default": false,
+            "title": "Override Identity Risk",
+            "type": "boolean"
+          },
+          "project": {
+            "default": "maxwell",
+            "title": "Project",
+            "type": "string"
+          },
+          "require_work_session": {
+            "default": false,
+            "title": "Require Work Session",
+            "type": "boolean"
+          },
+          "schema": {
+            "default": "switchboard.claim.claim_task_command.v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "session_policy_profile": {
+            "default": "",
+            "title": "Session Policy Profile",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 1800,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          },
+          "work_session": {
+            "additionalProperties": true,
+            "title": "Work Session",
+            "type": "object"
+          },
+          "work_session_id": {
+            "default": "",
+            "title": "Work Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "agent_id"
+        ],
+        "title": "ClaimTaskCommand",
+        "type": "object"
+      },
+      "TaskCreateCommandV1": {
+        "additionalProperties": false,
+        "description": "Transport-neutral input for creating one task.",
+        "properties": {
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Assignee"
+          },
+          "deliverable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deliverable"
+          },
+          "depends_on": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "duration_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Duration Days"
+          },
+          "effort_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Effort Days"
+          },
+          "entry_criteria": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entry Criteria"
+          },
+          "exit_criteria": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Exit Criteria"
+          },
+          "finish_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Finish Date"
+          },
+          "is_blocking": {
+            "default": false,
+            "title": "Is Blocking",
+            "type": "boolean"
+          },
+          "owner_org": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Owner Org"
+          },
+          "owner_person_or_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Owner Person Or Role"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Phase"
+          },
+          "risk_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Risk Level"
+          },
+          "schema": {
+            "default": "switchboard.task.create_command.v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "workstream_id": {
+            "title": "Workstream Id",
+            "type": "string"
+          },
+          "workstream_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workstream Name"
+          }
+        },
+        "required": [
+          "workstream_id",
+          "title"
+        ],
+        "title": "CreateTaskCommand",
+        "type": "object"
+      },
+      "TaskGetQueryV1": {
+        "additionalProperties": false,
+        "description": "Transport-neutral input for reading one project-scoped task.",
+        "properties": {
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "schema": {
+            "default": "switchboard.task.get_query.v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "project"
+        ],
+        "title": "GetTaskQuery",
+        "type": "object"
+      },
+      "TaskMoveCommandV1": {
+        "additionalProperties": false,
+        "description": "Transport-neutral input for moving one task between project boards.",
+        "properties": {
+          "dependency_policy": {
+            "default": "fail",
+            "title": "Dependency Policy",
+            "type": "string"
+          },
+          "new_task_id": {
+            "default": "",
+            "title": "New Task Id",
+            "type": "string"
+          },
+          "project_from": {
+            "title": "Project From",
+            "type": "string"
+          },
+          "project_to": {
+            "title": "Project To",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "schema": {
+            "default": "switchboard.task.move_command.v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "project_from",
+          "project_to"
+        ],
+        "title": "MoveTaskCommand",
+        "type": "object"
+      },
+      "TaskUpdateCommandV1": {
+        "additionalProperties": false,
+        "description": "Transport-neutral input for a sparse task update.",
+        "properties": {
+          "depends_on": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Depends On"
+          },
+          "fields": {
+            "additionalProperties": true,
+            "title": "Fields",
+            "type": "object"
+          },
+          "schema": {
+            "default": "switchboard.task.update_command.v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "UpdateTaskCommand",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Contract-first REST surface for Switchboard. Request bodies for the paths below are generated from ``src/switchboard/contracts`` Pydantic models shared with MCP application commands.",
+    "title": "Switchboard REST",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/tasks": {
+      "post": {
+        "operationId": "createTask",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCreateCommandV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request payload"
+          }
+        },
+        "summary": "Create a task",
+        "tags": [
+          "contracts"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}": {
+      "get": {
+        "operationId": "getTask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request payload"
+          }
+        },
+        "summary": "Get one task",
+        "tags": [
+          "contracts"
+        ]
+      },
+      "patch": {
+        "operationId": "updateTask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskUpdateCommandV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request payload"
+          }
+        },
+        "summary": "Update a task",
+        "tags": [
+          "contracts"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/move": {
+      "post": {
+        "operationId": "moveTask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskMoveCommandV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request payload"
+          }
+        },
+        "summary": "Move a task between project boards",
+        "tags": [
+          "contracts"
+        ]
+      }
+    },
+    "/txp/v1/claim_next": {
+      "post": {
+        "operationId": "claimNext",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimNextCommandV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request payload"
+          }
+        },
+        "summary": "Claim the next ready task",
+        "tags": [
+          "contracts"
+        ]
+      }
+    },
+    "/txp/v1/claim_task": {
+      "post": {
+        "operationId": "claimTask",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimTaskCommandV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request payload"
+          }
+        },
+        "summary": "Claim one exact ready task",
+        "tags": [
+          "contracts"
+        ]
+      }
+    },
+    "/txp/v1/complete_claim": {
+      "post": {
+        "operationId": "completeClaim",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimCompleteClaimCommandV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request payload"
+          }
+        },
+        "summary": "Complete a claim and move work to In Review",
+        "tags": [
+          "contracts"
+        ]
+      }
+    }
+  }
+}
