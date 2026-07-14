@@ -81,9 +81,10 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.get("/api/audit/export")
     async def audit_export(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+        from switchboard.application.queries.audit_export import execute
         project = resolve_project(project)
         resolve_principal(request, project, ("write:system",), dev_actor="auditor")
-        data = store.audit_export(project=project)
+        data = execute(project=project)
         return JSONResponse(
             data,
             headers={"Content-Disposition": f'attachment; filename="{project}-audit-export.json"'},

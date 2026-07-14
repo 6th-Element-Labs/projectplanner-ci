@@ -95,7 +95,8 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.get("/ixp/v1/control_plane_probe")
     async def ixp_control_plane_probe(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
                                       include_heavy: bool = False):
-        return store.control_plane_probe(
+        from switchboard.application.queries.control_plane_probe import execute
+        return execute(
             project=resolve_project(project), lane=lane, include_heavy=include_heavy)
 
     @router.get("/ixp/v1/host_status")

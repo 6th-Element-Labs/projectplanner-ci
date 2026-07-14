@@ -852,7 +852,8 @@ async def ixp_delta(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
 
 @app.get("/ixp/v1/working_agreement")
 async def ixp_working_agreement(project: str = Query(store.DEFAULT_PROJECT)):
-    return store.get_working_agreement(project=_proj(project))
+    from switchboard.application.queries.working_agreement import execute
+    return execute(project=_proj(project))
 
 
 @app.post("/ixp/v1/bugs/submit")

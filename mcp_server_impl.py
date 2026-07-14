@@ -372,7 +372,8 @@ def control_plane_probe(project: str = "maxwell", lane: str = "",
                         include_heavy: bool = False) -> str:
     """Tiny latency probe for MCP clients. Compare your client wall time to server_elapsed_ms.
     A large gap means time is outside Switchboard's Python/SQLite path."""
-    probe = store.control_plane_probe(project=project, lane=lane, include_heavy=include_heavy)
+    from switchboard.application.queries.control_plane_probe import execute
+    probe = execute(project=project, lane=lane, include_heavy=include_heavy)
     probe["mcp_framing"] = {
         "stateless_http": True,
         "approx_tool_payload_bytes": len(_dumps(probe).encode("utf-8")),
@@ -458,7 +459,8 @@ def doc_search(query: str, project: str = "maxwell") -> str:
 def get_working_agreement(project: str = "maxwell") -> str:
     """Connect-time policy for agents: definition of done, branch convention, merge strategy,
     canonical main SHA, and the session-start sequence. Call before register_agent."""
-    return _dumps(store.get_working_agreement(project=project))
+    from switchboard.application.queries.working_agreement import execute
+    return _dumps(execute(project=project))
 
 
 @mcp.tool()
@@ -864,7 +866,8 @@ def get_audit_export(ctx: Context, project: str = "maxwell") -> str:
     principal/role history without exposing token hashes or raw secrets.
     """
     _require_write(ctx, project, ("write:system",))
-    return _dumps(store.audit_export(project=project))
+    from switchboard.application.queries.audit_export import execute
+    return _dumps(execute(project=project))
 
 
 @mcp.tool()
