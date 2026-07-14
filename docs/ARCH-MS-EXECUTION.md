@@ -165,3 +165,4 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-12 | ARCH-MS-10 | Added executable `PM_*` census and CI gate; verified all tracked declarations have runtime defenders; documented CONSOL-9 deleted-name tombstones |
 | 2026-07-12 | ARCH-MS-9 | Added `tests/test_arch_ms0_scaffold.py` Phase-0 proof gate (package imports + `create_task` callable + REST/MCP shared handler); deps ARCH-MS-7/8 merged |
 | 2026-07-12 | ARCH-MS-24 | Added the fixed-baseline Phase 0 exit audit; moved project/access persistence into `src/switchboard/storage/repositories/access.py`; measured all exit criteria green |
+| 2026-07-14 | ARCH-MS-45 | Phase 1 exit gate: `store.py` / `app.py` / `mcp_server.py` thinned to absolute ceilings; residual in `repositories/shell.py`, `app_impl.py`, `mcp_server_impl.py`; `scripts/arch_ms_phase1_exit_gate.py` + `tests/test_arch_ms45_phase1_exit_gate.py` |

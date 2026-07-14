@@ -512,9 +512,18 @@ def update_canonical_main_sha(sha: str, actor: str = "github-webhook",
                     task_id=None, project=project)
 
 
+def _repo_root() -> str:
+    configured = (os.environ.get("PM_REPO_PATH") or "").strip()
+    if configured:
+        return os.path.abspath(configured)
+    return os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    )
+
+
 def _git_ok(args: List[str], timeout: float = 5) -> bool:
     try:
-        return subprocess.run(["git", *args], cwd=os.path.dirname(__file__),
+        return subprocess.run(["git", *args], cwd=_repo_root(),
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                               timeout=timeout).returncode == 0
     except Exception:
@@ -564,7 +573,7 @@ def _local_github_repo() -> str:
     try:
         remote = subprocess.check_output(
             ["git", "config", "--get", "remote.origin.url"],
-            cwd=os.path.dirname(__file__),
+            cwd=_repo_root(),
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=5,

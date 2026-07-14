@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from path_setup import ROOT
+from path_setup import ROOT, entrypoint_source
 
 TMP = tempfile.mkdtemp(prefix="arch-ms15-get-update-task-")
 os.environ["PM_DB_PATH"] = str(Path(TMP) / "maxwell.db")
@@ -109,7 +109,7 @@ try:
        "updating a missing task returns None for the adapter to render as 404")
 
     # ---- both adapters invoke the shared application handlers -----------------
-    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    app_source = entrypoint_source("app")
     task_router_source = (
         ROOT / "src/switchboard/api/routers/tasks.py"
     ).read_text(encoding="utf-8")

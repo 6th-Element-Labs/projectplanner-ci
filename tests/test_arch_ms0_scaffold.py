@@ -21,7 +21,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from path_setup import ROOT
+from path_setup import ROOT, entrypoint_source
 
 TMP = tempfile.mkdtemp(prefix="arch-ms0-scaffold-")
 os.environ["PM_DB_PATH"] = str(Path(TMP) / "maxwell.db")
@@ -148,7 +148,7 @@ try:
         "create_task fails closed on unknown dependencies before any write",
     )
 
-    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    app_source = entrypoint_source("app")
     task_router_source = (
         ROOT / "src/switchboard/api/routers/tasks.py"
     ).read_text(encoding="utf-8")

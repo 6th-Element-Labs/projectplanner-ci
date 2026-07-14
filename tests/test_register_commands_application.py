@@ -6,7 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from path_setup import ROOT  # noqa: F401
+from path_setup import ROOT, entrypoint_source  # noqa: F401
 
 TMP = tempfile.mkdtemp(prefix="arch-ms38-register-commands-")
 os.environ["PM_DB_PATH"] = str(Path(TMP) / "maxwell.db")
@@ -241,8 +241,8 @@ try:
        and "store.register_host(" not in mcp_source,
        "REST and MCP adapters invoke the same register commands")
 
-    mcp_host = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
-    app_host = (ROOT / "app.py").read_text(encoding="utf-8")
+    mcp_host = entrypoint_source("mcp_server")
+    app_host = entrypoint_source("app")
     ok("register_agent_tools" in mcp_host
        and "def register_agent(" not in mcp_host
        and "def register_host(" not in mcp_host

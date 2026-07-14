@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from path_setup import ROOT
+from path_setup import ROOT, entrypoint_source
 
 TMP = tempfile.mkdtemp(prefix="arch-ms36-claim-commands-")
 os.environ["PM_DB_PATH"] = str(Path(TMP) / "maxwell.db")
@@ -239,8 +239,8 @@ try:
        and "store.complete_claim(" not in mcp_source,
        "REST and MCP adapters invoke the same claim commands")
 
-    mcp_host = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
-    app_host = (ROOT / "app.py").read_text(encoding="utf-8")
+    mcp_host = entrypoint_source("mcp_server")
+    app_host = entrypoint_source("app")
     ok("register_claim_tools" in mcp_host
        and "def claim_next(" not in mcp_host
        and "def claim_task(" not in mcp_host

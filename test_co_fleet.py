@@ -231,7 +231,9 @@ try:
 except ValueError:
     tamper_allowed = False
 ok(not tamper_allowed, "provider-account substitution fails the affinity check")
-tool_source = Path("mcp_server.py").read_text(encoding="utf-8")
+tool_source = Path("mcp_server.py").read_text(encoding="utf-8") + (
+    ("\n" + Path("mcp_server_impl.py").read_text(encoding="utf-8"))
+    if Path("mcp_server_impl.py").is_file() else "")
 ok("def dispatch_to_co_fleet(" in tool_source
    and "dispatch_mod.dispatch_to_co_fleet(" in tool_source,
    "MCP exposes the elastic fleet dispatcher instead of requiring an internal Python call")

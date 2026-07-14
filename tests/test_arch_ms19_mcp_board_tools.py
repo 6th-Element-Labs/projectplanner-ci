@@ -8,7 +8,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from path_setup import ROOT
+from path_setup import ROOT, entrypoint_source
 from switchboard.mcp.tools import board as board_tools
 
 
@@ -30,7 +30,7 @@ BOARD_TOOLS = (
     "list_projects", "board_summary", "get_lane_delta", "get_plan_signals",
 )
 
-server_source = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
+server_source = entrypoint_source("mcp_server")
 adapter_path = ROOT / "src/switchboard/mcp/tools/board.py"
 adapter_source = adapter_path.read_text(encoding="utf-8")
 

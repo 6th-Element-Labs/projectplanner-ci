@@ -2,7 +2,7 @@
 """ARCH-MS-17: task MCP tools live behind the package adapter seam."""
 from pathlib import Path
 
-from path_setup import ROOT
+from path_setup import ROOT, entrypoint_source
 from switchboard.mcp.tools import tasks as task_tools
 
 
@@ -18,7 +18,7 @@ def ok(condition, message):
     print("  PASS  " + message)
 
 
-server_source = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
+server_source = entrypoint_source("mcp_server")
 adapter_path = ROOT / "src/switchboard/mcp/tools/tasks.py"
 adapter_source = adapter_path.read_text(encoding="utf-8")
 

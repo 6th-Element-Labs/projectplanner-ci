@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from path_setup import ROOT
+from path_setup import ROOT, entrypoint_source
 
 TMP = tempfile.mkdtemp(prefix="arch-ms37-messaging-commands-")
 os.environ["PM_DB_PATH"] = str(Path(TMP) / "maxwell.db")
@@ -205,8 +205,8 @@ try:
        and "setdefault(\"from_agent\"" not in messaging_router,
        "REST and MCP adapters invoke the same messaging commands")
 
-    mcp_host = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
-    app_host = (ROOT / "app.py").read_text(encoding="utf-8")
+    mcp_host = entrypoint_source("mcp_server")
+    app_host = entrypoint_source("app")
     ok("register_messaging_tools" in mcp_host
        and "def send_agent_message(" not in mcp_host
        and "def ack_message(" not in mcp_host

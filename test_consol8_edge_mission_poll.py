@@ -46,7 +46,9 @@ ok("import security_headers" in caddy, "site blocks import security_headers")
 ok("import access_log" in caddy, "site blocks import access_log")
 ok("format json" in caddy, "access_log uses structured JSON format")
 
-app_src = (ROOT / "app.py").read_text(encoding="utf-8")
+app_src = (ROOT / "app.py").read_text(encoding="utf-8") + (
+    ("\n" + (ROOT / "app_impl.py").read_text(encoding="utf-8"))
+    if (ROOT / "app_impl.py").is_file() else "")
 ok("def _etag_json(" in app_src, "app.py exposes shared _etag_json helper")
 for route in MISSION_ETAG_ROUTES:
     ok(route in app_src, f"app.py registers {route}")

@@ -43,11 +43,15 @@ snap = obs.snapshot()
 ok("calls" in snap["tools"]["claim_task"], "mcp_observability exposes per-tool call counters")
 ok(snap["tools"]["claim_task"]["calls"] == 1, "call counter increments on record()")
 
-mcp_src = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
+mcp_src = (ROOT / "mcp_server.py").read_text(encoding="utf-8") + (
+    ("\n" + (ROOT / "mcp_server_impl.py").read_text(encoding="utf-8"))
+    if (ROOT / "mcp_server_impl.py").is_file() else "")
 for tool in DELETED_MCP_TOOLS:
     ok(f"def {tool}(" not in mcp_src, f"MCP tool {tool} removed from mcp_server.py")
 
-app_src = (ROOT / "app.py").read_text(encoding="utf-8")
+app_src = (ROOT / "app.py").read_text(encoding="utf-8") + (
+    ("\n" + (ROOT / "app_impl.py").read_text(encoding="utf-8"))
+    if (ROOT / "app_impl.py").is_file() else "")
 for fragment in DELETED_ROUTE_FRAGMENTS:
     ok(fragment not in app_src, f"REST route fragment {fragment} removed from app.py")
 

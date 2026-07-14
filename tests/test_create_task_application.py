@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from path_setup import ROOT
+from path_setup import ROOT, entrypoint_source
 
 TMP = tempfile.mkdtemp(prefix="arch-ms8-create-task-")
 os.environ["PM_DB_PATH"] = str(Path(TMP) / "maxwell.db")
@@ -69,7 +69,7 @@ try:
     ok(rejected and len(store.list_tasks(project="switchboard")) == before,
        "unknown dependencies fail closed before task creation")
 
-    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    app_source = entrypoint_source("app")
     task_router_source = (
         ROOT / "src/switchboard/api/routers/tasks.py"
     ).read_text(encoding="utf-8")

@@ -137,7 +137,11 @@ def build_report() -> Dict[str, object]:
         for name in MOVED_ACCESS_FUNCTIONS
     }
 
+    # ARCH-MS-45 moved FastAPI composition into app_impl.py; the thin app.py
+    # entrypoint re-exports it. Accept either location for the mount token.
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    app_impl = ROOT / "app_impl.py"
+    app_impl_source = app_impl.read_text(encoding="utf-8") if app_impl.is_file() else ""
     rest_source = (
         ROOT / "src/switchboard/api/routers/tasks.py"
     ).read_text(encoding="utf-8")
@@ -150,7 +154,10 @@ def build_report() -> Dict[str, object]:
         "get_task_query.execute_for",
     )
     application_seam = {
-        "rest_router_mounted": "_create_task_router" in app_source,
+        "rest_router_mounted": (
+            "_create_task_router" in app_source
+            or "_create_task_router" in app_impl_source
+        ),
         "rest_handlers_shared": all(token in rest_source for token in shared_handlers),
         "mcp_handlers_shared": all(token in mcp_source for token in shared_handlers),
     }

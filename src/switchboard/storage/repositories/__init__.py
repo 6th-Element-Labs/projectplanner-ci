@@ -33,6 +33,10 @@ from switchboard.storage.repositories.tasks import (
     StoreTaskRepository,
     default_task_repository,
 )
+from switchboard.storage.repositories.work_sessions import (
+    StoreWorkSessionsRepository,
+    default_work_sessions_repository,
+)
 
 __all__ = [
     "AccessRepository",
@@ -42,6 +46,7 @@ __all__ = [
     "StoreCoordinationRepository",
     "StoreDeliverablesRepository",
     "StoreProvenanceRepository",
+    "StoreWorkSessionsRepository",
     "CredentialVaultError",
     "ProviderCredentialRepository",
     "StoreTaskRepository",
@@ -53,4 +58,5 @@ __all__ = [
     "default_provenance_repository",
     "default_provider_credential_repository",
     "default_task_repository",
+    "default_work_sessions_repository",
 ]

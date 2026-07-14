@@ -43,6 +43,7 @@ for rel in DELETED_AUTH:
 
 auth_runtime_paths = [
     ROOT / "app.py",
+    ROOT / "app_impl.py",
     ROOT / "auth.py",
     *(ROOT / "src/switchboard/api/routers/auth").glob("*.py"),
     *(path for path in (ROOT / "deploy").rglob("*")
@@ -56,7 +57,9 @@ for path in auth_runtime_paths:
     ok("PM_GLOBAL_AUTH" not in text,
        f"{path.relative_to(ROOT)} cannot restore the retired global-auth feature gate")
 
-app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+app_source = (ROOT / "app.py").read_text(encoding="utf-8") + (
+    ("\n" + (ROOT / "app_impl.py").read_text(encoding="utf-8"))
+    if (ROOT / "app_impl.py").is_file() else "")
 ok("app.include_router(_global_auth_router)" in app_source,
    "global auth router remains mounted unconditionally")
 ok("/api/auth/bootstrap" not in app_source,
