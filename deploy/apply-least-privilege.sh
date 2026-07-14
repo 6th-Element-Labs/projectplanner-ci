@@ -34,17 +34,23 @@ getent passwd "$SERVICE_USER" >/dev/null || \
 # 2. Data dir is the ONLY tree the runtime may write (matches ReadWritePaths=).
 mkdir -p "$DATA_ROOT" "$DATA_ROOT/runner" "$DATA_ROOT/repo-hygiene-archive" \
          "$DATA_ROOT/workspaces"
+# Re-assert data ownership before touching the coordination checkout. On the
+# second and later deploys this checkout is already service-owned; running Git
+# as root then trips Git's dubious-ownership protection. Keep every checkout
+# operation under the same identity that owns and uses the checkout instead.
+chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_ROOT"
+chmod 750 "$DATA_ROOT"
 # CI-12 needs a writable coordination checkout because ProtectSystem=strict keeps
 # /opt/projectplanner read-only. Seed from the already-provisioned code clone so
 # setup needs no second private fetch; runtime fetches exact PR refs using GH_TOKEN
 # (promoted from the normal Switchboard token variables by external_ci_mirror).
 if [ ! -d "$CI_SOURCE_ROOT/.git" ]; then
-  git clone --no-checkout "$CODE_ROOT" "$CI_SOURCE_ROOT"
+  runuser --user "$SERVICE_USER" -- git clone --no-checkout "$CODE_ROOT" "$CI_SOURCE_ROOT"
 fi
-git -C "$CI_SOURCE_ROOT" remote set-url origin "$CI_SOURCE_REMOTE"
-git -C "$CI_SOURCE_ROOT" config credential.helper '!gh auth git-credential'
-chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_ROOT"
-chmod 750 "$DATA_ROOT"
+runuser --user "$SERVICE_USER" -- \
+  git -C "$CI_SOURCE_ROOT" remote set-url origin "$CI_SOURCE_REMOTE"
+runuser --user "$SERVICE_USER" -- \
+  git -C "$CI_SOURCE_ROOT" config credential.helper '!gh auth git-credential'
 
 # 3. Code tree + venv: root-owned and not group/other-writable. The runtime
 #    reads/executes it but cannot rewrite it (defense in depth behind ProtectSystem=strict).

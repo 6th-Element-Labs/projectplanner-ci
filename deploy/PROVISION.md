@@ -169,6 +169,9 @@ establishes and re-asserts the posture:
 
 Because the code tree is root-owned, `git pull` and `pip install` in `redeploy.sh` run under
 `sudo`, and manual `jobs.py` maintenance runs as `sudo -u projectplanner` (see below).
+The service-owned `/var/lib/projectplanner/ci-source` checkout is the exception: provisioning
+and every redeploy run its Git operations as `projectplanner`, so repeated deploys do not need
+a root-level `safe.directory` exception and remain safe under Git's ownership checks.
 
 Verify the sandbox is actually applied to the running services:
 ```bash
