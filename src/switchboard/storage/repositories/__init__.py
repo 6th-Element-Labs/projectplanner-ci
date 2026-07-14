@@ -11,6 +11,10 @@ from switchboard.storage.repositories.coordination import (
     StoreCoordinationRepository,
     default_coordination_repository,
 )
+from switchboard.storage.repositories.deliverables import (
+    StoreDeliverablesRepository,
+    default_deliverables_repository,
+)
 from switchboard.storage.repositories.provenance import (
     StoreProvenanceRepository,
     default_provenance_repository,
@@ -31,12 +35,14 @@ __all__ = [
     "ClaimsRepository",
     "StoreClaimsRepository",
     "StoreCoordinationRepository",
+    "StoreDeliverablesRepository",
     "StoreProvenanceRepository",
     "StoreTaskRepository",
     "TaskRepository",
     "default_access_repository",
     "default_claims_repository",
     "default_coordination_repository",
+    "default_deliverables_repository",
     "default_provenance_repository",
     "default_task_repository",
 ]
