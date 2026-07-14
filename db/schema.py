@@ -322,8 +322,10 @@ def apply_schema(c):
             finding_class       TEXT NOT NULL,
             state               TEXT NOT NULL,
             resolved_by         TEXT,
+            resolved_principal_id TEXT,
             resolved_reason     TEXT,
             resolved_sha        TEXT,
+            resolved_at         REAL,
             created_at          REAL NOT NULL,
             updated_at          REAL NOT NULL,
             PRIMARY KEY(verdict_id, finding_id)

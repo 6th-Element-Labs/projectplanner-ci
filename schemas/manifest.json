@@ -1,5 +1,5 @@
 {
-  "count": 38,
+  "count": 39,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -109,6 +109,10 @@
     {
       "$id": "switchboard.review_finding.list_query.v1",
       "path": "switchboard.review_finding.list_query.v1.json"
+    },
+    {
+      "$id": "switchboard.review_finding.resolve_command.v1",
+      "path": "switchboard.review_finding.resolve_command.v1.json"
     },
     {
       "$id": "switchboard.review_finding.v1",

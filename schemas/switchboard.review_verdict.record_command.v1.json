@@ -28,6 +28,18 @@
           "title": "Repair Requirement",
           "type": "string"
         },
+        "resolved_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved At"
+        },
         "resolved_by": {
           "anyOf": [
             {
@@ -39,6 +51,18 @@
           ],
           "default": null,
           "title": "Resolved By"
+        },
+        "resolved_principal_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Principal Id"
         },
         "resolved_reason": {
           "anyOf": [

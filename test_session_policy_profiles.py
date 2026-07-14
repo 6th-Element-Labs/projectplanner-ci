@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import store  # noqa: E402
 
 AGENT = "codex/SESSION-9-policy-profiles"
+HEAD_SHA = "a" * 40
 passed = failed = 0
 
 
@@ -48,7 +49,7 @@ def session_payload(project, task_id, profile="code_strict", dirty="clean"):
         "branch": f"codex/{task_id}-policy-profiles",
         "upstream": "origin/main" if project == "helm" else "origin/master",
         "base_sha": "base-ok",
-        "head_sha": "head-ok",
+        "head_sha": HEAD_SHA,
         "worktree_path": f"/tmp/{task_id.lower()}-policy-profiles",
         "storage_mode": "worktree",
         "status": "active",
@@ -62,7 +63,7 @@ def session_payload(project, task_id, profile="code_strict", dirty="clean"):
                 "verdict": "pass",
                 "repo_role": "canonical",
                 "branch": f"codex/{task_id}-policy-profiles",
-                "head_sha": "head-ok",
+                "head_sha": HEAD_SHA,
                 "findings": [],
             },
         },
@@ -77,7 +78,7 @@ def github_pr(task_id):
         "mergeable": True,
         "mergeable_state": "clean",
         "base": {"ref": "main"},
-        "head": {"ref": f"codex/{task_id}-policy-profiles", "sha": "head-ok"},
+        "head": {"ref": f"codex/{task_id}-policy-profiles", "sha": HEAD_SHA},
         "status_contexts": {"helm-ci/full-suite": "success"},
     }
 
@@ -158,7 +159,7 @@ try:
         strict_claim["claim_id"],
         evidence={
             "branch": f"codex/{code_task['task_id']}-policy-profiles",
-            "head_sha": "head-ok",
+            "head_sha": HEAD_SHA,
             "pr_url": "https://github.com/StevenRidder/Helm/pull/909",
             "pr_number": 909,
             "executed_test_run": {
@@ -166,7 +167,7 @@ try:
                 "run_id": "policy-profile-test-run",
                 "work_session_id": strict_claim["work_session_id"],
                 "branch": f"codex/{code_task['task_id']}-policy-profiles",
-                "head_sha": "head-ok",
+                "head_sha": HEAD_SHA,
                 "commands": ["python3 test_session_policy_profiles.py"],
                 "exit_code": 0,
                 "status": "success",
@@ -184,15 +185,30 @@ try:
 
     store.mark_task_pr_opened(
         code_task["task_id"], 909, "https://github.com/StevenRidder/Helm/pull/909",
-        f"codex/{code_task['task_id']}-policy-profiles", "head-ok",
+        f"codex/{code_task['task_id']}-policy-profiles", HEAD_SHA,
         actor="github-webhook", project="helm")
+    review = store.record_review_verdict(
+        {
+            "task_id": code_task["task_id"],
+            "pr_url": "https://github.com/StevenRidder/Helm/pull/909",
+            "head_sha": HEAD_SHA,
+            "reviewer_principal": "codex/SESSION-9-independent-review",
+            "status": "pass",
+            "findings": [],
+        },
+        actor="codex/SESSION-9-independent-review",
+        principal_id="principal-session-9-independent-review",
+        project="helm",
+    )
+    ok(review.get("created") is True,
+       "merge fixture records a passing independent exact-head review")
     merge_without_session = store.merge_gate({
         "task_id": code_task["task_id"],
         "agent_id": AGENT,
         "repo": "StevenRidder/Helm",
         "target_branch": "main",
         "branch": f"codex/{code_task['task_id']}-policy-profiles",
-        "head_sha": "head-ok",
+        "head_sha": HEAD_SHA,
         "pr_url": "https://github.com/StevenRidder/Helm/pull/909",
         "pr_number": 909,
         "github_pr": github_pr(code_task["task_id"]),
@@ -211,7 +227,7 @@ try:
         "repo": "StevenRidder/Helm",
         "target_branch": "main",
         "branch": f"codex/{code_task['task_id']}-policy-profiles",
-        "head_sha": "head-ok",
+        "head_sha": HEAD_SHA,
         "pr_url": "https://github.com/StevenRidder/Helm/pull/909",
         "pr_number": 909,
         "github_pr": github_pr(code_task["task_id"]),
@@ -220,7 +236,7 @@ try:
             "run_id": "policy-profile-merge-run",
             "work_session_id": strict_claim["work_session_id"],
             "branch": f"codex/{code_task['task_id']}-policy-profiles",
-            "head_sha": "head-ok",
+            "head_sha": HEAD_SHA,
             "commands": ["python3 test_session_policy_profiles.py"],
             "exit_code": 0,
             "status": "success",

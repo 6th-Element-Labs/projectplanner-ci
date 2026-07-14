@@ -29,6 +29,7 @@ from switchboard.api.routers.tasks import create_router as create_task_router  #
 from switchboard.contracts.reviews import (  # noqa: E402
     REVIEW_FINDING_SCHEMA,
     REVIEW_VERDICT_SCHEMA,
+    ReviewFinding,
 )
 from switchboard.storage.repositories.review_verdicts import (  # noqa: E402
     HISTORICAL_CO8_VERDICT_ID,
@@ -341,11 +342,14 @@ try:
     rest_task_id = rest_task["task_id"]
     rest_worker = f"{WORKER}-rest"
     rest_reviewer = f"{REVIEWER}-rest"
+    rest_resolver = "operator/COORD-19-rest-resolution"
     rest_head = "e" * 40
     rest_pr_url = "https://github.com/6th-Element-Labs/projectplanner/pull/521"
     store.register_agent(rest_worker, "codex", lane="COORD", task_id=rest_task_id,
                          project=PROJECT)
     store.register_agent(rest_reviewer, "codex", lane="COORD", task_id=rest_task_id,
+                         project=PROJECT)
+    store.register_agent(rest_resolver, "web", lane="COORD", task_id=rest_task_id,
                          project=PROJECT)
     store.claim_task(
         rest_task_id, rest_worker, principal_id="principal-worker-rest",
@@ -364,14 +368,32 @@ try:
         rest_response = client.post(
             f"/api/tasks/{rest_task_id}/review_verdict?project={PROJECT}",
             json=verdict(
-                rest_task_id, head=rest_head, status="pass", findings=[],
+                rest_task_id, head=rest_head, status="changes_requested",
+                findings=[finding("RV-REST-OVERRIDE")],
                 reviewer=rest_reviewer, pr_url=rest_pr_url),
+        )
+        resolution_response = client.post(
+            f"/api/tasks/{rest_task_id}/review_findings/RV-REST-OVERRIDE/resolution"
+            f"?project={PROJECT}",
+            json={
+                "head_sha": rest_head,
+                "state": "overridden",
+                "resolved_reason": "Admin accepts the explicitly documented exception.",
+                "resolved_sha": rest_head,
+                "resolver_principal": rest_resolver,
+            },
         )
     rest_body = rest_response.json()
     ok(rest_response.status_code == 200
        and rest_body.get("created") is True
        and rest_body.get("verdict", {}).get("reviewer_principal_id") == "dev-open",
        "REST review binds the resolver-authenticated principal without middleware state")
+    resolution_body = resolution_response.json()
+    ok(resolution_response.status_code == 200
+       and resolution_body.get("finding", {}).get("state") == "overridden"
+       and resolution_body.get("finding", {}).get("resolved_principal_id") == "dev-open"
+       and resolution_body.get("verdict", {}).get("status") == "pass",
+       "REST admin authority durably overrides an open finding and unblocks the verdict")
 
     # Historical repair: recreate the live CO-8 identity in the hermetic board,
     # then prove the startup backfill restores all four review findings once.
@@ -398,6 +420,26 @@ try:
     ok(all(item["state"] == "fixed" and not item["valid_for_current_head"]
            for item in co8_findings),
        "historical findings preserve remediation state and remain fenced from the new head")
+    historical_verdict = store.get_review_verdict(
+        "CO-8", head_sha="94f03c6fb485bd0959eff9070a50c9356218f3ee",
+        project=PROJECT)
+    historical_contracts = [
+        ReviewFinding.model_validate(item)
+        for item in historical_verdict["findings"]
+    ]
+    ok(len(historical_contracts) == 4
+       and all(item.state == "fixed" for item in historical_contracts),
+       "historical fixed findings remain valid contracts without invented authority metadata")
+    authority_metadata_required = False
+    try:
+        ReviewFinding.model_validate({
+            **historical_verdict["findings"][0],
+            "state": "waived",
+        })
+    except ValueError:
+        authority_metadata_required = True
+    ok(authority_metadata_required,
+       "waived findings still require authenticated authority identity and timestamp")
     ok(co8_detail["finding_count"] == 4
        and co8_detail["review_verdict"]["current_head_finding_count"] == 0,
        "CO-8 task detail reports four real findings without treating them as current")

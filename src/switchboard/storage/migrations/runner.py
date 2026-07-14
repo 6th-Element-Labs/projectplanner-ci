@@ -107,6 +107,12 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     ("0037_review_verdicts_reviewer_principal_id", "review_verdicts",
      "reviewer_principal_id",
      "ALTER TABLE review_verdicts ADD COLUMN reviewer_principal_id TEXT"),
+    # COORD-19 — durable authority identity and timestamp for finding waivers/overrides.
+    ("0038_review_findings_resolved_principal_id", "review_findings",
+     "resolved_principal_id",
+     "ALTER TABLE review_findings ADD COLUMN resolved_principal_id TEXT"),
+    ("0039_review_findings_resolved_at", "review_findings", "resolved_at",
+     "ALTER TABLE review_findings ADD COLUMN resolved_at REAL"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
@@ -135,7 +141,8 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "location TEXT NOT NULL, category TEXT NOT NULL, severity TEXT NOT NULL, "
      "invariant_violated TEXT NOT NULL, repair_requirement TEXT NOT NULL, "
      "finding_class TEXT NOT NULL, state TEXT NOT NULL, resolved_by TEXT, "
-     "resolved_reason TEXT, resolved_sha TEXT, created_at REAL NOT NULL, "
+     "resolved_principal_id TEXT, resolved_reason TEXT, resolved_sha TEXT, "
+     "resolved_at REAL, created_at REAL NOT NULL, "
      "updated_at REAL NOT NULL, PRIMARY KEY(verdict_id, finding_id))"),
     ("0035_ix_review_verdicts_task",
      "CREATE INDEX IF NOT EXISTS ix_review_verdicts_task "

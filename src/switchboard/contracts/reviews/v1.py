@@ -15,6 +15,7 @@ REVIEW_FINDING_SCHEMA = "switchboard.review_finding.v1"
 RECORD_REVIEW_VERDICT_COMMAND_SCHEMA = "switchboard.review_verdict.record_command.v1"
 GET_REVIEW_VERDICT_QUERY_SCHEMA = "switchboard.review_verdict.get_query.v1"
 LIST_REVIEW_FINDINGS_QUERY_SCHEMA = "switchboard.review_finding.list_query.v1"
+RESOLVE_REVIEW_FINDING_COMMAND_SCHEMA = "switchboard.review_finding.resolve_command.v1"
 
 REVIEW_STATUSES = frozenset({"pass", "changes_requested"})
 REVIEW_FINDING_CLASSES = frozenset({"auto", "escalate"})
@@ -39,8 +40,10 @@ class ReviewFinding(VersionedModel):
     finding_class: str = Field(alias="class")
     state: str = "open"
     resolved_by: str | None = None
+    resolved_principal_id: str | None = None
     resolved_reason: str | None = None
     resolved_sha: str | None = None
+    resolved_at: float | None = None
 
     @field_validator(
         "id", "location", "category", "severity", "invariant_violated",
@@ -50,7 +53,10 @@ class ReviewFinding(VersionedModel):
     def _strip_required_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("resolved_by", "resolved_reason", "resolved_sha", mode="before")
+    @field_validator(
+        "resolved_by", "resolved_principal_id", "resolved_reason", "resolved_sha",
+        mode="before",
+    )
     @classmethod
     def _strip_optional_text(cls, value: Any) -> str | None:
         text = str(value or "").strip()
@@ -80,15 +86,92 @@ class ReviewFinding(VersionedModel):
             raise ValueError("class must be auto or escalate")
         if self.state not in REVIEW_FINDING_STATES:
             raise ValueError("state must be open, fixed, waived, or overridden")
-        resolution = (self.resolved_by, self.resolved_reason, self.resolved_sha)
-        if self.state == "open" and any(resolution):
+        legacy_resolution = (
+            self.resolved_by, self.resolved_reason, self.resolved_sha,
+        )
+        authority_resolution = (
+            self.resolved_principal_id, self.resolved_at,
+        )
+        if self.state == "open" and any((*legacy_resolution, *authority_resolution)):
             raise ValueError("open findings cannot carry resolution metadata")
         if self.state != "open":
-            if not all(resolution):
+            if not all(legacy_resolution):
                 raise ValueError("resolved findings require resolved_by, resolved_reason, and resolved_sha")
             if not SHA_RE.match(self.resolved_sha or ""):
                 raise ValueError("resolved_sha must be a 40-character lowercase git SHA")
+        if self.state in {"waived", "overridden"} and not all(authority_resolution):
+            raise ValueError(
+                "waived/overridden findings require resolved_principal_id and resolved_at"
+            )
         return self
+
+
+class ResolveReviewFindingCommand(VersionedModel):
+    """Authorized escape valve for one open finding at the exact current head."""
+
+    SCHEMA: ClassVar[str] = RESOLVE_REVIEW_FINDING_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
+
+    schema_id: str = Field(default=RESOLVE_REVIEW_FINDING_COMMAND_SCHEMA, alias="schema")
+    task_id: str
+    head_sha: str
+    finding_id: str
+    state: str
+    resolved_reason: str
+    resolved_sha: str
+    resolver_principal: str
+
+    @field_validator(
+        "task_id", "head_sha", "finding_id", "state", "resolved_reason",
+        "resolved_sha", "resolver_principal", mode="before",
+    )
+    @classmethod
+    def _strip_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("state", mode="after")
+    @classmethod
+    def _lower_state(cls, value: str) -> str:
+        return value.lower()
+
+    @model_validator(mode="after")
+    def _validate_resolution(self) -> "ResolveReviewFindingCommand":
+        required = {
+            "task_id": self.task_id,
+            "head_sha": self.head_sha,
+            "finding_id": self.finding_id,
+            "state": self.state,
+            "resolved_reason": self.resolved_reason,
+            "resolved_sha": self.resolved_sha,
+            "resolver_principal": self.resolver_principal,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise ValueError("missing review resolution field(s): " + ", ".join(missing))
+        if self.state not in {"waived", "overridden"}:
+            raise ValueError("state must be waived or overridden")
+        if not SHA_RE.match(self.head_sha):
+            raise ValueError("head_sha must be a 40-character lowercase git SHA")
+        if not SHA_RE.match(self.resolved_sha):
+            raise ValueError("resolved_sha must be a 40-character lowercase git SHA")
+        if self.resolved_sha != self.head_sha:
+            raise ValueError("resolved_sha must match the exact reviewed head_sha")
+        return self
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "ResolveReviewFindingCommand":
+        return cls.model_validate(dict(value or {}))
+
+    def to_repository_data(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "head_sha": self.head_sha,
+            "finding_id": self.finding_id,
+            "state": self.state,
+            "resolved_reason": self.resolved_reason,
+            "resolved_sha": self.resolved_sha,
+            "resolver_principal": self.resolver_principal,
+        }
 
 
 class ReviewVerdict(VersionedModel):
@@ -227,6 +310,7 @@ for _model in (
     ReviewFinding,
     ReviewVerdict,
     RecordReviewVerdictCommand,
+    ResolveReviewFindingCommand,
     GetReviewVerdictQuery,
     ListReviewFindingsQuery,
 ):

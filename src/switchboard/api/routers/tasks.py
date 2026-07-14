@@ -181,6 +181,46 @@ def create_router(*, resolve_project: ProjectResolver,
         return {"task_id": task_id, "finding_count": len(findings),
                 "findings": findings}
 
+    @router.post("/api/tasks/{task_id}/review_findings/{finding_id}/resolution")
+    async def resolve_review_finding(
+            request: Request, task_id: str, finding_id: str,
+            body: dict = Body(...), project: str = Query(...)):
+        """Admin-authorized, audited waiver/override for one exact-head finding."""
+        project = resolve_project(project)
+        payload = dict(body or {})
+        payload["task_id"] = task_id
+        payload["finding_id"] = finding_id
+        resolver = str(payload.get("resolver_principal") or "").strip()
+        binding = resolve_write_actor(
+            request, project, {**payload, "agent_id": resolver}, task_id=task_id,
+            scopes=("admin",),
+        )
+        payload["resolver_principal"] = binding["actor"]
+        result = review_verdict_commands.resolve_finding_mapping(
+            payload, actor=binding["actor"],
+            principal_id=binding.get("principal_id") or "",
+            authorized=True, project=project,
+        )
+        if result.get("error_code") in {
+            "review_resolution_forbidden", "review_resolver_principal_mismatch",
+            "review_resolver_principal_unbound",
+        }:
+            raise HTTPException(403, result)
+        if result.get("error_code") in {
+            "stale_review_head", "review_head_unbound", "review_finding_not_open",
+        }:
+            raise HTTPException(409, result)
+        if result.get("error_code") in {
+            "review_task_not_found", "review_verdict_not_found",
+            "review_finding_not_found",
+        }:
+            raise HTTPException(404, result)
+        if result.get("error"):
+            raise HTTPException(400, result)
+        if result.get("resolved"):
+            record_write_binding(task_id, binding, project)
+        return result
+
     @router.post("/api/tasks")
     async def create_task(request: Request, body: dict = Body(...),
                           project: str = Query(...)):

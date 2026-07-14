@@ -51,6 +51,7 @@ try:
         ("POST", "/api/tasks/{task_id}/review_verdict"),
         ("GET", "/api/tasks/{task_id}/review_verdict"),
         ("GET", "/api/tasks/{task_id}/review_findings"),
+        ("POST", "/api/tasks/{task_id}/review_findings/{finding_id}/resolution"),
         ("POST", "/api/tasks/{task_id}/verify_offline"),
         ("DELETE", "/api/tasks/{task_id}"),
         ("POST", "/api/tasks/{task_id}/archive"),
