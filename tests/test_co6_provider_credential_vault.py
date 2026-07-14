@@ -658,6 +658,42 @@ try:
        and purges == [True],
        "process-start failure purges runtime residue and permanently fences the lease")
 
+    activation_secret = "co6-activation-binding-" + uuid.uuid4().hex
+    activation = repository.enroll(
+        project=PROJECT, user_id=USER_ID, provider="codex",
+        provider_account_id="acct-activation-binding", auth_type="oauth_capsule",
+        credential=activation_secret, project_allowlist=[PROJECT], actor="co6-test",
+        expires_at=time.time() + 3600)
+    activation_binding = {
+        **binding,
+        "credential_reference": activation["credential_reference"],
+        "provider_account_id": "acct-activation-binding",
+    }
+    activation_lease = repository.acquire_lease(
+        project=PROJECT, credential_reference=activation["credential_reference"],
+        user_id=USER_ID, provider="openai-codex",
+        provider_account_id="acct-activation-binding", task_id=TASK_ID,
+        host_id=HOST_ID, runner_session_id=RUNNER_ID,
+        work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
+        principal=PRINCIPAL)
+    repository.materialize_for_runtime(
+        activation_lease["lease_id"], actor="co6-test", principal=PRINCIPAL,
+        **{key: activation_binding[key] for key in (
+            "project", "user_id", "provider", "provider_account_id", "task_id",
+            "host_id", "runner_session_id", "work_session_id")})
+    try:
+        repository.activate_materialized_lease(
+            activation_lease["lease_id"], actor="co6-test", principal=PRINCIPAL,
+            expected_binding={**activation_binding, "host_id": "host-other"})
+        wrong_activation_denied = False
+    except CredentialVaultError as exc:
+        wrong_activation_denied = exc.code == "credential_binding_mismatch"
+    activated = repository.activate_materialized_lease(
+        activation_lease["lease_id"], actor="co6-test", principal=PRINCIPAL,
+        expected_binding=activation_binding)
+    ok(wrong_activation_denied and activated.get("state") == "active",
+       "materialized lease activation requires the exact lease runtime binding")
+
     expiry_secret = "co6-materializing-expiry-" + uuid.uuid4().hex
     expiry = repository.enroll(
         project=PROJECT, user_id=USER_ID, provider="codex",

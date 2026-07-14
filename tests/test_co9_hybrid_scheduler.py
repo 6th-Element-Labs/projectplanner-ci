@@ -251,6 +251,57 @@ try:
        and ephemeral_claim["wake"]["placement"]["selected_host_class"] == "ephemeral",
        "one deliverable can hold simultaneous persistent and ephemeral host placements")
 
+    bootstrap_task = task("CO-9 two-phase BYOA bootstrap")
+    bootstrap_binding = account_binding(
+        provider_connection, bootstrap_task["task_id"], "", "")
+    bootstrap_binding.pop("claim_id", None)
+    bootstrap_binding.pop("work_session_id", None)
+    bootstrap_binding["credential_admission_phase"] = "preclaim"
+    bootstrap_host = "host/i-co9-bootstrap"
+    register(
+        bootstrap_host, "ephemeral", tenant=store.DEFAULT_ORG_ID,
+        provider="openai-codex", affinity=bootstrap_binding["account_affinity_id"],
+        ttl=3600, cost="spot")
+    bootstrap_wake = request(
+        bootstrap_task["task_id"], "bootstrap",
+        policy=hybrid_policy(binding=bootstrap_binding))
+    bootstrap_runner = "runner-co9-bootstrap"
+    reserved = store.claim_wake(
+        bootstrap_host, bootstrap_wake["wake_id"],
+        runner_session_id=bootstrap_runner,
+        actor="co9-bootstrap-reserve", project=PROJECT)
+    bootstrap_work_session, bootstrap_claim_id = claim_context(
+        bootstrap_task["task_id"], "bootstrap")
+    bootstrap_lease = credential_repository.acquire_lease(
+        project=PROJECT,
+        credential_reference=provider_connection["credential_reference"],
+        user_id=USER_ID,
+        provider="codex",
+        provider_account_id=PROVIDER_ACCOUNT_ID,
+        task_id=bootstrap_task["task_id"],
+        host_id=bootstrap_host,
+        runner_session_id=bootstrap_runner,
+        work_session_id=bootstrap_work_session,
+        ttl_seconds=900,
+        actor="co9-test",
+        principal=PRINCIPAL,
+    )
+    admitted = store.claim_wake(
+        bootstrap_host, bootstrap_wake["wake_id"],
+        runner_session_id=bootstrap_runner,
+        credential_lease_id=bootstrap_lease["lease_id"],
+        claim_id=bootstrap_claim_id,
+        work_session_id=bootstrap_work_session,
+        actor="co9-bootstrap-admit", project=PROJECT)
+    ok(reserved.get("reserved") is True
+       and reserved.get("credential_admission_phase") == "pending"
+       and admitted.get("claimed") is True
+       and admitted.get("credential_admission_phase") == "ready",
+       "BYOA wake reserves first and admits only after exact claim/session/lease binding")
+    credential_repository.release_lease(
+        bootstrap_lease["lease_id"], project=PROJECT, actor="co9-test",
+        reason="bootstrap_fixture_complete", principal=PRINCIPAL)
+
     bound_task = task("CO-9 authoritative credential admission")
     bound_work_session, bound_claim_id = claim_context(bound_task["task_id"], "bound")
     binding = account_binding(
@@ -509,8 +560,9 @@ try:
     missing_rebind = store.claim_wake(
         bound_replacement, bound["wake_id"], actor="co9-rebind-missing", project=PROJECT)
     ok(not missing_rebind.get("claimed")
-       and "credential_lease_required" in set(missing_rebind.get("reason_codes") or []),
-       "recovered work cannot claim until the replacement host presents a fresh lease")
+       and "runner_session_required_for_credential_reservation" in set(
+           missing_rebind.get("reason_codes") or []),
+       "recovered work cannot reserve until the replacement runner identity is known")
     replacement_runner = "runner-co9-replacement"
     replacement_lease = credential_repository.acquire_lease(
         project=PROJECT,

@@ -198,7 +198,7 @@ def validate_account_binding(wake: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError("account binding must be an object")
     required = (
         "tenant_id", "user_id", "project", "provider", "provider_account_id",
-        "credential_reference", "claim_id", "work_session_id", "account_affinity_id",
+        "credential_reference", "account_affinity_id",
     )
     missing = [key for key in required if not binding.get(key)]
     if missing:
@@ -207,8 +207,12 @@ def validate_account_binding(wake: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError("account binding project mismatch")
     if binding.get("task_id") != wake.get("task_id"):
         raise ValueError("account binding task mismatch")
-    if binding.get("host_id") or binding.get("runner_session_id"):
-        raise ValueError("dispatcher cannot pre-bind an ephemeral host or runner")
+    runtime_fields = (
+        "claim_id", "work_session_id", "host_id", "runner_session_id",
+        "credential_lease_id",
+    )
+    if any(binding.get(key) for key in runtime_fields):
+        raise ValueError("dispatcher cannot pre-bind execution identifiers")
     affinity_source = {key: binding.get(key) for key in (
         "tenant_id", "user_id", "project", "provider", "provider_account_id",
         "credential_reference", "auth_lane",
@@ -364,13 +368,19 @@ import json, shlex, sys
 value = json.loads(sys.argv[1])
 allowed = {{
     "PM_BASE", "PM_PROJECT", "PM_MCP_TOKEN", "PM_AGENT_WORK_MODULE",
-    "ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "AWS_REGION",
-    "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
+    "PM_VERIFY_COMPLETION_PUSH", "PM_WORK_SESSION_TEST_CMD", "AWS_REGION",
     "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST",
 }}
 missing = [key for key in ("PM_MCP_TOKEN", "PM_AGENT_WORK_MODULE") if not value.get(key)]
 if missing:
     raise SystemExit("runtime config missing required worker fields: " + ", ".join(missing))
+forbidden = [key for key in (
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "OPENAI_API_KEY",
+    "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
+) if value.get(key)]
+if forbidden:
+    raise SystemExit("personal-subscription fleet config contains forbidden fallback fields")
 with open("/etc/switchboard-co/agent-host.env", "w", encoding="utf-8") as f:
     for key in sorted(allowed & value.keys()):
         f.write(f"{{key}}={{shlex.quote(str(value[key]))}}\\n")

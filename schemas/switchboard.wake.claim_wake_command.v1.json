@@ -3,6 +3,11 @@
   "additionalProperties": false,
   "description": "Transport-neutral input for claiming one pending wake intent.",
   "properties": {
+    "claim_id": {
+      "default": "",
+      "title": "Claim Id",
+      "type": "string"
+    },
     "credential_lease_id": {
       "default": "",
       "title": "Credential Lease Id",
@@ -29,6 +34,11 @@
     },
     "wake_id": {
       "title": "Wake Id",
+      "type": "string"
+    },
+    "work_session_id": {
+      "default": "",
+      "title": "Work Session Id",
       "type": "string"
     }
   },

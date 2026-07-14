@@ -996,8 +996,9 @@ class ProviderCredentialRepository:
             )
             return credential
 
-    def activate_materialized_lease(self, lease_id: str, *, actor: str,
-                                    principal: CredentialPrincipal) -> dict[str, Any]:
+    def activate_materialized_lease(
+            self, lease_id: str, *, actor: str, principal: CredentialPrincipal,
+            expected_binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Mark a consumed lease active only after the provider process starts."""
         self._prepare()
         now = time.time()
@@ -1023,6 +1024,32 @@ class ProviderCredentialRepository:
                     "provider credential principal binding failed",
                     status_code=403,
                 )
+            if expected_binding is not None:
+                try:
+                    expected_provider = normalize_provider(
+                        str(expected_binding.get("provider") or ""))
+                except CredentialPolicyError as exc:
+                    raise CredentialVaultError(
+                        exc.code, exc.message, status_code=403) from exc
+                expected = {
+                    "project_id": str(expected_binding.get("project") or "").strip().lower(),
+                    "user_id": str(expected_binding.get("user_id") or "").strip(),
+                    "provider": expected_provider,
+                    "provider_account_id": str(
+                        expected_binding.get("provider_account_id") or "").strip(),
+                    "task_id": str(expected_binding.get("task_id") or "").strip(),
+                    "host_id": str(expected_binding.get("host_id") or "").strip(),
+                    "runner_session_id": str(
+                        expected_binding.get("runner_session_id") or "").strip(),
+                    "work_session_id": str(
+                        expected_binding.get("work_session_id") or "").strip(),
+                }
+                if any(lease[key] != value for key, value in expected.items()):
+                    raise CredentialVaultError(
+                        "credential_binding_mismatch",
+                        "provider credential lease binding failed",
+                        status_code=403,
+                    )
             changed = c.execute(
                 "UPDATE provider_credential_leases SET state='active', activated_at=? "
                 "WHERE lease_id=? AND state='materializing' AND expires_at>?",

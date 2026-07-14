@@ -347,9 +347,55 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
         wakes = [w for w in wakes if (w.get("selector") or {}).get("runtime") == runtime]
     return wakes
 
+
+def _credential_admission_ready(
+    policy: Dict[str, Any], *, task_id: str, project: str, host_id: str,
+    runner_session_id: str, credential_lease_id: str, claim_id: str,
+    work_session_id: str,
+) -> tuple[Dict[str, Any], Dict[str, Any], str]:
+    """Validate the post-claim BYOA binding and return updated policy/capacity.
+
+    Dispatch-time affinity deliberately has no claim, Work Session, host, runner,
+    or lease. Those values are accepted only from the selected worker after its
+    local worktree has been persisted and the exact task claim is active.
+    """
+    if not all((runner_session_id, credential_lease_id, claim_id, work_session_id)):
+        return policy, {}, "credential_execution_binding_incomplete"
+    updated = dict(policy)
+    binding = dict(updated.get("account_binding") or {})
+    binding.update({
+        "claim_id": claim_id,
+        "work_session_id": work_session_id,
+        "host_id": host_id,
+        "runner_session_id": runner_session_id,
+    })
+    updated["account_binding"] = binding
+    lease_decision = _credential_lease_decision(
+        updated, task_id=task_id, project=project, host_id=host_id,
+        runner_session_id=runner_session_id,
+        credential_lease_id=credential_lease_id,
+    )
+    if not lease_decision.get("allowed"):
+        return policy, {}, str(lease_decision.get("reason_code") or "credential_lease_denied")
+    capacity = _provider_capacity_decision(
+        updated, task_id=task_id, project=project, host_id=host_id,
+        runner_session_id=runner_session_id, exclude_lease_id=credential_lease_id,
+        require_execution_binding=True,
+    )
+    if not capacity.get("allowed"):
+        return policy, capacity, str(capacity.get("reason_code") or "provider_capacity_denied")
+    binding.update({
+        "credential_lease_id": credential_lease_id,
+        "credential_admission_phase": "ready",
+    })
+    updated["account_binding"] = binding
+    updated["provider_capacity"] = capacity
+    return updated, capacity, ""
+
 def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                project: str = DEFAULT_PROJECT, runner_session_id: str = "",
-               credential_lease_id: str = "") -> Dict[str, Any]:
+               credential_lease_id: str = "", claim_id: str = "",
+               work_session_id: str = "") -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
     try:
@@ -358,6 +404,55 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if not wake_row:
                 return {"claimed": False, "error": "wake not found", "wake_id": wake_id}
             wake = _wake_row(wake_row)
+            if wake["status"] == "claimed":
+                policy = dict(wake.get("policy") or {})
+                binding = dict(policy.get("account_binding") or {})
+                same_reservation = (
+                    wake.get("claimed_by_host") == host_id
+                    and binding.get("host_id") == host_id
+                    and binding.get("runner_session_id") == str(runner_session_id or "").strip()
+                    and binding.get("credential_admission_phase") == "pending"
+                )
+                if not same_reservation:
+                    return {"claimed": False, "reason": "wake_already_claimed", "wake": wake}
+                updated_policy, capacity, error = _credential_admission_ready(
+                    policy, task_id=str(wake.get("task_id") or ""), project=project,
+                    host_id=host_id, runner_session_id=str(runner_session_id or "").strip(),
+                    credential_lease_id=str(credential_lease_id or "").strip(),
+                    claim_id=str(claim_id or binding.get("claim_id") or "").strip(),
+                    work_session_id=str(
+                        work_session_id or binding.get("work_session_id") or "").strip(),
+                )
+                if error:
+                    reason = ("provider_capacity_denied" if capacity else
+                              "credential_admission_denied")
+                    return {"claimed": False, "reason": reason,
+                            "reason_codes": [error], "host_id": host_id,
+                            "wake_id": wake_id}
+                placement = dict(wake.get("placement") or {})
+                placement.update({
+                    "credential_rebind_required": False,
+                    "credential_lease_state": "issued",
+                    "credential_admission_phase": "ready",
+                })
+                c.execute(
+                    "UPDATE wake_intents SET placement_json=?, policy_json=? WHERE wake_id=?",
+                    (json.dumps(placement, sort_keys=True),
+                     json.dumps(updated_policy, sort_keys=True), wake_id),
+                )
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (wake.get("task_id"), actor, "wake.credential_admission_ready",
+                     json.dumps({"wake_id": wake_id, "host_id": host_id,
+                                 "runner_session_id": runner_session_id,
+                                 "provider_capacity_state": capacity.get("state")},
+                                sort_keys=True), now),
+                )
+                row = c.execute(
+                    "SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
+                return {"claimed": True, "reserved": False,
+                        "credential_admission_phase": "ready", "wake": _wake_row(row)}
             if wake["status"] != "pending":
                 return {"claimed": False, "reason": f"wake is {wake['status']}", "wake": wake}
             if wake.get("deadline") and wake["deadline"] <= now:
@@ -383,40 +478,32 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if binding:
                 runner_id = str(runner_session_id or "").strip()
                 lease_id = str(credential_lease_id or "").strip()
-                if not runner_id or not lease_id:
-                    missing = []
-                    if not runner_id:
-                        missing.append("runner_session_required_for_credential_lease")
-                    if not lease_id:
-                        missing.append("credential_lease_required")
+                if not runner_id:
                     return {"claimed": False, "reason": "credential_admission_denied",
-                            "reason_codes": missing, "host_id": host_id,
+                            "reason_codes": ["runner_session_required_for_credential_reservation"],
+                            "host_id": host_id,
                             "wake_id": wake_id}
-                lease_decision = _credential_lease_decision(
-                    policy, task_id=str(wake.get("task_id") or ""), project=project,
-                    host_id=host_id, runner_session_id=runner_id,
-                    credential_lease_id=lease_id,
-                )
-                if not lease_decision.get("allowed"):
-                    return {"claimed": False, "reason": "credential_admission_denied",
-                            "reason_codes": [lease_decision.get("reason_code")],
-                            "host_id": host_id, "wake_id": wake_id}
-                capacity = _provider_capacity_decision(
-                    policy, task_id=str(wake.get("task_id") or ""), project=project,
-                    host_id=host_id, runner_session_id=runner_id,
-                    exclude_lease_id=lease_id, require_execution_binding=True,
-                )
-                if not capacity.get("allowed"):
-                    return {"claimed": False, "reason": "provider_capacity_denied",
-                            "reason_codes": [capacity.get("reason_code")],
-                            "host_id": host_id, "wake_id": wake_id}
                 binding.update({
                     "host_id": host_id,
                     "runner_session_id": runner_id,
-                    "credential_lease_id": lease_id,
+                    "credential_admission_phase": "pending",
                 })
                 policy["account_binding"] = binding
-                policy["provider_capacity"] = capacity
+                if lease_id:
+                    policy, capacity, error = _credential_admission_ready(
+                        policy, task_id=str(wake.get("task_id") or ""), project=project,
+                        host_id=host_id, runner_session_id=runner_id,
+                        credential_lease_id=lease_id,
+                        claim_id=str(claim_id or binding.get("claim_id") or "").strip(),
+                        work_session_id=str(
+                            work_session_id or binding.get("work_session_id") or "").strip(),
+                    )
+                    if error:
+                        reason = ("provider_capacity_denied" if capacity else
+                                  "credential_admission_denied")
+                        return {"claimed": False, "reason": reason,
+                                "reason_codes": [error], "host_id": host_id,
+                                "wake_id": wake_id}
                 wake["policy"] = policy
             placement = dict(wake.get("placement") or {})
             if placement.get("scheduler_mode") == "hybrid":
@@ -428,10 +515,14 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                     "selected_host_class": candidate.get("host_class"),
                     "cost_class": candidate.get("cost_class"),
                     "claimed_at": now,
-                    "credential_rebind_required": False,
+                    "credential_rebind_required": bool(binding and not lease_id),
                     "credential_lease_state": (
-                        "issued" if binding else placement.get("credential_lease_state")
+                        ("issued" if lease_id else "pending_claim_binding")
+                        if binding else placement.get("credential_lease_state")
                     ),
+                    "credential_admission_phase": (
+                        "ready" if lease_id else "pending"
+                    ) if binding else None,
                 })
             cur = c.execute(
                 "UPDATE wake_intents SET status='claimed', claimed_at=?, claimed_by_host=?, "
@@ -460,7 +551,11 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             err = _store_facade()._control_plane_unavailable("claim_wake", project, started_at, exc)
             return {"claimed": False, **err}
         raise
-    return {"claimed": True, "wake": _wake_row(row)}
+    claimed_wake = _wake_row(row)
+    phase = (((claimed_wake.get("policy") or {}).get("account_binding") or {})
+             .get("credential_admission_phase"))
+    return {"claimed": True, "reserved": phase == "pending",
+            "credential_admission_phase": phase, "wake": claimed_wake}
 
 def complete_wake(wake_id: str, runner_session_id: str = "",
                   agent_id: str = "", result: Optional[Dict[str, Any]] = None,

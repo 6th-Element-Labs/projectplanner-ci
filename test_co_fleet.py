@@ -228,8 +228,7 @@ binding = {
     "tenant_id": store.DEFAULT_ORG_ID, "user_id": "user-1", "provider": "anthropic",
     "provider_account_id": "account-1",
     "credential_reference": provider_connection["credential_reference"],
-    "claim_id": "claim-1", "auth_lane": "personal-plan",
-    "work_session_id": "worksession-1",
+    "auth_lane": "personal-plan",
 }
 bound_dispatch = dispatch.dispatch_to_co_fleet(
     binding_task["task_id"], project="switchboard",
@@ -239,7 +238,9 @@ bound_wake = next(item for item in store.list_wake_intents(project="switchboard"
 stored_binding = (bound_wake.get("policy") or {}).get("account_binding") or {}
 ok(bound_dispatch.get("dispatched") and stored_binding.get("provider_account_id") == "account-1"
    and stored_binding.get("credential_reference") == provider_connection["credential_reference"]
-   and stored_binding.get("host_id") is None and stored_binding.get("runner_session_id") is None,
+   and stored_binding.get("host_id") is None and stored_binding.get("runner_session_id") is None
+   and stored_binding.get("claim_id") is None
+   and stored_binding.get("credential_admission_phase") == "preclaim",
    "durable wake preserves non-secret BYOA affinity for later host/runner binding")
 ok(co_fleet.validate_account_binding(bound_wake) == stored_binding,
    "provisioner verifies the task/project/account affinity before launch")
@@ -305,6 +306,9 @@ ok(created_tags.get("CO:ConfigRefHash") and "runtime/co-3" not in json.dumps(cre
    "instance tags contain a reference hash, not the secret locator")
 ok("ssm:/switchboard/co/runtime/co-3" in created_script,
    "derived LT injects the reference-only bootstrap")
+ok("personal-subscription fleet config contains forbidden fallback fields" in created_script
+   and '"ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK"' not in created_script,
+   "derived fleet bootstrap rejects metered or alternate Claude auth fallbacks")
 
 
 ready_host = {

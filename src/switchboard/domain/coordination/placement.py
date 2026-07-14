@@ -89,8 +89,7 @@ def _request_error(policy: Mapping[str, Any], project: str) -> str:
         return ""
     required = (
         "tenant_id", "user_id", "provider", "provider_account_id",
-        "account_affinity_id", "credential_reference", "task_id", "claim_id",
-        "work_session_id",
+        "account_affinity_id", "credential_reference", "task_id",
     )
     if any(not str(binding.get(key) or "").strip() for key in required):
         return "account_binding_incomplete"

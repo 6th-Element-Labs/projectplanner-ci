@@ -366,7 +366,7 @@ def launch_command(wake, inventory, runner_session_id=""):
     return cmd, mode
 
 
-def launch(wake, inventory, runner_session_id=""):
+def launch(wake, inventory, runner_session_id="", extra_env=None):
     """Spawn a supervised run_agent for this wake via supervisor.py (the proven CLI). Returns the
     supervisor session record (with runner_session_id, pid) or None on failure."""
     mode = wake_mode(wake, inventory)
@@ -385,7 +385,9 @@ def launch(wake, inventory, runner_session_id=""):
         return rec
     cmd, mode = launch_command(wake, inventory, runner_session_id=runner_session_id)
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        env = os.environ.copy()
+        env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
         rec = json.loads(out.stdout)
         if isinstance(rec, dict):
             rec["wake_mode"] = mode
@@ -747,39 +749,48 @@ def run_once(inventory):
         wake_id = w.get("wake_id")
         binding = ((w.get("policy") or {}).get("account_binding") or {})
         runner_session_id = ""
-        credential_lease_id = ""
+        preclaim_registration = None
         if binding:
             runner_session_id = _runner_session_id_for_wake(w, host_id)
-            registered = _register_preclaim_runner(w, inventory, runner_session_id)
-            if not registered or registered.get("error"):
-                continue
-            lease = _acquire_provider_lease(w, inventory, runner_session_id)
-            credential_lease_id = str(lease.get("lease_id") or "")
-            if not credential_lease_id:
+            preclaim_registration = _register_preclaim_runner(
+                w, inventory, runner_session_id)
+            if not preclaim_registration or preclaim_registration.get("error"):
                 continue
         claimed = _try("POST", P_CLAIM_WAKE, {
             "project": PROJECT,
             "host_id": host_id,
             "wake_id": wake_id,
             "runner_session_id": runner_session_id,
-            "credential_lease_id": credential_lease_id,
         })
         if not claimed or not (claimed.get("claimed", True)):
-            if credential_lease_id:
-                _release_provider_lease(credential_lease_id, "wake_claim_not_acquired")
             continue  # another host won it (atomic claim)
         claimed_wake = claimed.get("wake") or w
-        rec = (launch(claimed_wake, inventory, runner_session_id=runner_session_id)
+        launch_env = ({
+            "PM_CO_ACCOUNT_BINDING_JSON": json.dumps(
+                (claimed_wake.get("policy") or {}).get("account_binding") or {},
+                sort_keys=True,
+            ),
+            "PM_CO_WAKE_ID": str(claimed_wake.get("wake_id") or wake_id or ""),
+            "PM_CO_HOST_ID": str(host_id or ""),
+            "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
+            "PM_AUTO_WORK_SESSION": "1",
+            "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
+        } if binding else {})
+        rec = (launch(claimed_wake, inventory, runner_session_id=runner_session_id,
+                      extra_env=launch_env)
                if runner_session_id else launch(claimed_wake, inventory))
         rec_mode = (rec or {}).get("wake_mode") or wake_mode(w, inventory)
         started = (confirm_closure_verified(rec) if rec_mode == "closure_verify"
                   else confirm_started(rec))
-        runner_registration = register_runner_session(
-            rec, claimed_wake, inventory) if started else None
+        # BYOA runners rebind this preclaim row themselves after claim_next has
+        # produced the active task claim and Work Session. A generic post-launch
+        # upsert here would race that update and erase the exact binding.
+        runner_registration = (
+            preclaim_registration if binding and started
+            else register_runner_session(rec, claimed_wake, inventory) if started else None
+        )
         usage_registration = report_cloud_usage(
             rec, claimed_wake) if started and rec.get("cloud_session") else None
-        if credential_lease_id and not started:
-            _release_provider_lease(credential_lease_id, "runtime_launch_failed")
         result = {"started": started, "runner_session_id": (rec or {}).get("runner_session_id"),
                   "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
                   "reason": "started" if started else "launch_failed",
@@ -793,10 +804,17 @@ def run_once(inventory):
                   "provider_error": (rec or {}).get("provider_error"),
                   "runner_registered": bool(runner_registration and not runner_registration.get("error")),
                   "usage_registered": bool(usage_registration and not usage_registration.get("error"))}
-        _try("POST", P_COMPLETE_WAKE, {"project": PROJECT, "wake_id": wake_id,
-                                       "runner_session_id": result["runner_session_id"],
-                                       "agent_id": (w.get("selector") or {}).get("agent_id"),
-                                       "result": result})
+        # A BYOA wake is only reserved here. The child must establish its task claim,
+        # Work Session, exact lease, encrypted materialization, and provider preflight
+        # before it completes the wake. Completing it now would race the second-phase
+        # claim_wake call and make the admission contract impossible.
+        if not binding:
+            _try("POST", P_COMPLETE_WAKE, {"project": PROJECT, "wake_id": wake_id,
+                                           "runner_session_id": result["runner_session_id"],
+                                           "agent_id": (w.get("selector") or {}).get("agent_id"),
+                                           "result": result})
+        else:
+            result["wake_completion_delegated"] = True
         acted.append({"wake_id": wake_id, **result})
     return {"host_id": host_id, "pending": len(wakes), "acted": acted,
             "runner_controls": controls}

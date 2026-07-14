@@ -117,10 +117,10 @@ class ProviderCapacityRepository:
         }
         required = (
             "credential_reference", "project_id", "user_id", "provider",
-            "provider_account_id", "task_id", "work_session_id",
+            "provider_account_id", "task_id",
         )
         if require_execution_binding:
-            required += ("claim_id", "host_id", "runner_session_id")
+            required += ("claim_id", "host_id", "runner_session_id", "work_session_id")
         if any(not normalized[key] for key in required):
             raise CredentialVaultError(
                 "provider_capacity_binding_incomplete",

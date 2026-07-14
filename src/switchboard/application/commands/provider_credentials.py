@@ -23,6 +23,7 @@ from switchboard.storage.repositories.provider_credentials import (
     ProviderCredentialRepository,
     default_provider_credential_repository,
 )
+from switchboard.integrations.worker_credential_envelope import encrypt_for_worker
 
 
 def _error(exc: BaseException, default_code: str) -> dict[str, Any]:
@@ -319,6 +320,77 @@ def release_lease_mapping(data: dict[str, Any], *, actor: str,
         return _error(exc, "invalid_provider_credential_release")
 
 
+def materialize_worker_envelope_mapping(
+        data: dict[str, Any], *, lease_id: str, actor: str,
+        principal: dict[str, Any] | CredentialPrincipal,
+        repository: ProviderCredentialRepository = default_provider_credential_repository,
+        raise_errors: bool = False) -> dict[str, Any]:
+    """Consume an issued lease and return only ciphertext bound to the worker key."""
+    raw = dict(data or {})
+    public_key_pem = str(raw.pop("public_key_pem", "") or "")
+    try:
+        command = AcquireProviderCredentialLeaseCommand.model_validate(raw)
+        credential_principal = _credential_principal(principal)
+        _require_user_authority(command.user_id, credential_principal)
+        _validate_runtime_binding(command, credential_principal)
+        credential = repository.materialize_for_runtime(
+            lease_id,
+            project=command.project,
+            user_id=command.user_id,
+            provider=command.provider,
+            provider_account_id=command.provider_account_id,
+            task_id=command.task_id,
+            host_id=command.host_id,
+            runner_session_id=command.runner_session_id,
+            work_session_id=command.work_session_id,
+            actor=actor,
+            principal=credential_principal,
+        )
+        try:
+            return encrypt_for_worker(credential, public_key_pem, {
+                "project": command.project,
+                "task_id": command.task_id,
+                "host_id": command.host_id,
+                "runner_session_id": command.runner_session_id,
+                "work_session_id": command.work_session_id,
+                "lease_id": lease_id,
+            })
+        except Exception as exc:
+            repository.fence_materialized_lease(
+                lease_id, actor=actor, reason="worker_envelope_failed",
+                principal=credential_principal,
+            )
+            raise CredentialVaultError(
+                "worker_envelope_invalid",
+                "worker credential envelope could not be created",
+                status_code=400,
+            ) from exc
+    except (ValidationError, CredentialVaultError) as exc:
+        if raise_errors:
+            raise
+        return _error(exc, "invalid_worker_credential_envelope")
+
+
+def activate_worker_lease_mapping(
+        data: dict[str, Any], *, lease_id: str, actor: str,
+        principal: dict[str, Any] | CredentialPrincipal,
+        repository: ProviderCredentialRepository = default_provider_credential_repository,
+        raise_errors: bool = False) -> dict[str, Any]:
+    """Activate a materialized lease only while its exact runtime binding remains valid."""
+    try:
+        command = AcquireProviderCredentialLeaseCommand.model_validate(data)
+        credential_principal = _credential_principal(principal)
+        _validate_runtime_binding(command, credential_principal)
+        return repository.activate_materialized_lease(
+            lease_id, actor=actor, principal=credential_principal,
+            expected_binding=command.model_dump(),
+        )
+    except (ValidationError, CredentialVaultError) as exc:
+        if raise_errors:
+            raise
+        return _error(exc, "invalid_worker_credential_activation")
+
+
 def start_with_provider_credential(
         data: dict[str, Any], *, lease_id: str, actor: str,
         start_process: Callable[[str], Any],
@@ -374,7 +446,9 @@ def start_with_provider_credential(
             )
         try:
             repository.activate_materialized_lease(
-                lease_id, actor=actor, principal=credential_principal)
+                lease_id, actor=actor, principal=credential_principal,
+                expected_binding=command.model_dump(),
+            )
         except CredentialVaultError:
             _purge_safely(purge_runtime)
             raise

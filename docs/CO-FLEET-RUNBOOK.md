@@ -37,8 +37,10 @@ revision, allowing application roll-forward/back independently of AMI replacemen
 ## Secret contract
 
 Dispatch accepts `ssm:/path` or `secretsmanager:arn:...`; it never accepts a raw
-token or API key. The referenced JSON may contain the allowlisted worker variables
-(`PM_MCP_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and related runtime config).
+token or API key. The referenced JSON may contain only coordination and repository
+variables such as `PM_MCP_TOKEN`, the vetted work-module name, verified-push controls,
+and GitHub authorization. Provider API keys, OAuth tokens, Bedrock, Vertex, and other
+metered/alternate provider fallbacks are rejected before Agent Host starts.
 The worker IAM role resolves it at boot and writes it to a root-owned `0600`
 environment file. EC2 user data, instance tags, wake activity, and provisioner logs
 contain no secret value. Instance tags store only a SHA-256 prefix of the reference.
@@ -46,16 +48,26 @@ contain no secret value. Instance tags store only a SHA-256 prefix of the refere
 BYOA/hybrid dispatches may additionally carry a durable
 `switchboard.co_account_binding.v1` object. If any account-affinity field is supplied,
 tenant, user, project, provider, provider account, opaque credential reference, task,
-active task claim, and Work Session are all required; an optional auth lane is preserved.
+and an optional auth lane are required at dispatch. Claim, Work Session, host, runner, and
+lease identifiers do not exist yet and are rejected if an operator tries to pre-bind them.
 A stable hash binds the account tuple so account substitution fails closed. Provider
 capacity is read authoritatively before placement. After the selected host registers a
-runner, that host acquires an exact host/runner-bound credential lease and presents both
-identifiers atomically with `claim_wake`; caller-supplied dispatch lease ids are rejected.
+runner, it first reserves the wake, creates and registers its worker-local Work Session,
+and claims the exact task. It then rebinds the runner, acquires an exact
+task/host/runner/Work-Session credential lease, and finalizes `claim_wake`; caller-supplied
+dispatch execution ids are rejected.
 The wake retains the identifiers for the later scheduler/runtime resolver, while provisioner
 receipts redact provider-account and credential identifiers and expose only the affinity
 hash. These fields are never copied into user data, EC2 tags, host metadata, or logs.
 Ephemeral `host_id`, `runner_session_id`, and `credential_lease_id` remain unset until the
 registered host completes claim-time admission; the dispatcher is forbidden from guessing them.
+
+Only after that exact binding passes does the vault consume the lease. The worker supplies an
+ephemeral RSA public key; Switchboard returns a one-use RSA-OAEP-256/AES-256-GCM envelope whose
+authenticated data includes project, task, host, runner, Work Session, and lease. Plaintext
+exists only in the worker process long enough to populate an isolated runtime home. Claude's
+`auth status --json` must prove personal OAuth before the real command starts, then the runtime
+home is purged and the lease is released or fenced.
 
 During drain, the runner binding retains only what is needed to release or fence the
 personal-login lease: Work Session id, lease id, provider, and the non-reversible account

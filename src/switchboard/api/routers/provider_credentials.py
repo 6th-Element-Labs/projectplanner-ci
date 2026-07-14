@@ -184,4 +184,40 @@ def create_router(*, resolve_project: ProjectResolver,
         except (ValidationError, CredentialVaultError) as exc:
             _raise_http(exc)
 
+    @router.post(
+        "/api/projects/{project}/provider-credential-leases/{lease_id}/materialize-envelope"
+    )
+    def materialize_provider_credential_envelope(
+            request: Request, project: str, lease_id: str,
+            body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("use:credentials",), dev_actor="provider-vault")
+        try:
+            return commands.materialize_worker_envelope_mapping(
+                {**dict(body or {}), "project": project_id}, lease_id=lease_id,
+                actor=auth.actor(principal), principal=_access(principal),
+                raise_errors=True,
+            )
+        except (ValidationError, CredentialVaultError) as exc:
+            _raise_http(exc)
+
+    @router.post(
+        "/api/projects/{project}/provider-credential-leases/{lease_id}/activate"
+    )
+    def activate_provider_credential_lease(
+            request: Request, project: str, lease_id: str,
+            body: dict = Body(...)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("use:credentials",), dev_actor="provider-vault")
+        try:
+            return commands.activate_worker_lease_mapping(
+                {**dict(body or {}), "project": project_id}, lease_id=lease_id,
+                actor=auth.actor(principal), principal=_access(principal),
+                raise_errors=True,
+            )
+        except (ValidationError, CredentialVaultError) as exc:
+            _raise_http(exc)
+
     return router

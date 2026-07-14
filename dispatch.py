@@ -20,7 +20,7 @@ _CO_FLEET_CAPABILITY = "co_fleet"
 _BINDING_FIELD = re.compile(r"^[A-Za-z0-9._:/@+\-]{1,240}$")
 _BINDING_REQUIRED = (
     "tenant_id", "user_id", "provider", "provider_account_id",
-    "credential_reference", "claim_id", "work_session_id",
+    "credential_reference",
 )
 
 
@@ -56,10 +56,16 @@ def _co_account_binding(task_id, project, account_binding):
         "schema": "switchboard.co_account_binding.v1",
         "project": project,
         "task_id": task_id,
-        # The exact ephemeral host and runner are bound by durable wake claim and
-        # completion. They must never be guessed by the dispatcher.
+        # Execution identifiers do not exist at dispatch time. The selected host
+        # binds them in order: wake reservation -> task claim/Work Session ->
+        # credential lease -> credential-ready wake. They must never be guessed by
+        # the dispatcher or supplied by an operator.
+        "claim_id": None,
+        "work_session_id": None,
         "host_id": None,
         "runner_session_id": None,
+        "credential_lease_id": None,
+        "credential_admission_phase": "preclaim",
     })
     affinity_source = {key: normalized.get(key) for key in (
         "tenant_id", "user_id", "project", "provider", "provider_account_id",

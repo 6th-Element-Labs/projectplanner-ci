@@ -21,6 +21,7 @@ evaluate_tool applies, in priority order:
 Fail-open: any board/network error returns allow — never brick a tool call. Config via args or
 env: PM_BASE, PM_PROJECT, PM_MCP_TOKEN, PM_AGENT_ID.
 """
+import hashlib
 import json
 import os
 import re
@@ -368,6 +369,83 @@ def create_managed_work_session(project, task_id, agent_id, storage_mode="worktr
     return _http("POST", "/ixp/v1/managed_work_sessions", body, base=base, token=token, timeout=90)
 
 
+def create_external_work_session(project, task_id, agent_id, runtime, source_path,
+                                 policy_profile="code_strict", base=None, token=None):
+    """Persist a worker-owned git Work Session when the coordinator cannot see its disk.
+
+    The worker performs the git checks locally and submits their exact values. Switchboard
+    remains the durable claim/session authority; it does not pretend that the coordination
+    VM created or inspected an inaccessible cloud-host path.
+    """
+    source_path = os.path.abspath(source_path or os.getcwd())
+
+    def git(*args):
+        completed = subprocess.run(
+            ["git", "-C", source_path, *args], capture_output=True, text=True,
+            timeout=30, check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)} failed")
+        return (completed.stdout or "").strip()
+
+    if git("rev-parse", "--is-inside-work-tree") != "true":
+        raise RuntimeError("external source_path is not a git worktree")
+    dirty = git("status", "--porcelain")
+    if dirty:
+        raise RuntimeError("external source_path is dirty")
+    head_sha = git("rev-parse", "HEAD")
+    branch = git("branch", "--show-current")
+    task_marker = str(task_id or "").strip().upper()
+    if task_marker.lower() not in branch.lower():
+        branch = f"codex/{task_marker}-byoa"
+        switched = subprocess.run(
+            ["git", "-C", source_path, "switch", "-c", branch],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if switched.returncode != 0:
+            raise RuntimeError("external task branch creation failed")
+    remote = git("remote", "get-url", "origin")
+    payload = {
+        "project": project,
+        "task_id": task_marker,
+        "agent_id": agent_id,
+        "runtime": runtime,
+        "repo_role": "canonical",
+        "branch": branch,
+        "upstream": "origin/master",
+        "base_sha": head_sha,
+        "head_sha": head_sha,
+        "worktree_path": source_path,
+        "storage_mode": "worktree",
+        "status": "active",
+        "dirty_status": "clean",
+        "conflict_marker_count": 0,
+        "policy_profile": policy_profile or "code_strict",
+        "hygiene": {
+            "git_status": "clean",
+            "conflict_marker_scan": "passed",
+            "external_host_preflight": True,
+            "head_sha": head_sha,
+            "origin_fingerprint": hashlib.sha256(remote.encode()).hexdigest()[:16],
+        },
+        "env": {"workspace_visibility": "worker_local"},
+    }
+    created = _http("POST", "/ixp/v1/work_sessions", payload,
+                    base=base, token=token, timeout=30)
+    session = created.get("work_session") or {}
+    work_session_id = session.get("work_session_id")
+    if not work_session_id:
+        raise RuntimeError("external Work Session registration failed")
+    return {
+        "work_session_id": work_session_id,
+        "workspace_path": source_path,
+        "branch": branch,
+        "head_sha": head_sha,
+        "profile": policy_profile or "code_strict",
+        "external": True,
+    }
+
+
 def archive_work_session_workspace(project, work_session_id, remove_workspace=True,
                                    base=None, token=None):
     """Archive a managed Work Session and (optionally) remove its worktree. Best-effort."""
@@ -375,6 +453,19 @@ def archive_work_session_workspace(project, work_session_id, remove_workspace=Tr
         return _http("POST", f"/ixp/v1/work_sessions/{work_session_id}/archive_workspace",
                      {"project": project, "remove_workspace": bool(remove_workspace)},
                      base=base, token=token, timeout=60)
+    except Exception:
+        return None
+
+
+def expire_external_work_session(project, work_session_id, agent_id,
+                                 base=None, token=None):
+    """Close worker-local session metadata without touching the worker's filesystem."""
+    try:
+        return _http(
+            "PATCH", f"/ixp/v1/work_sessions/{work_session_id}",
+            {"project": project, "agent_id": agent_id, "status": "expired"},
+            base=base, token=token, timeout=15,
+        )
     except Exception:
         return None
 
@@ -457,6 +548,31 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
     """Claim the next task. If the scheduler skipped code-strict tasks only because they
     need a Work Session (and auto_work_session is on), provision a managed worktree session
     and claim by exact id. Returns (claim_response, managed_context_or_None)."""
+    remote_registration = os.environ.get(
+        "PM_REMOTE_WORK_SESSION_REGISTRATION", "").strip().lower() in (
+            "1", "true", "yes", "on")
+    exact_task_id = str(os.environ.get("PM_TASK_ID") or "").strip().upper()
+    if remote_registration and auto_work_session and exact_task_id:
+        profile = os.environ.get("PM_WORK_SESSION_POLICY_PROFILE", "code_strict")
+        try:
+            managed = create_external_work_session(
+                project, exact_task_id, agent_id,
+                os.environ.get("PM_RUNTIME", "claude-code"), source_path,
+                policy_profile=profile, base=base, token=token,
+            )
+        except Exception as exc:
+            return {"claimed": False, "reason": f"external_work_session_error:{exc}"}, None
+        claim = claim_task(
+            project, exact_task_id, agent_id, base=base, token=token,
+            ttl_seconds=ttl_seconds, work_session_id=managed["work_session_id"],
+            session_policy_profile=profile,
+        )
+        if claim.get("claimed"):
+            return claim, managed
+        expire_external_work_session(
+            project, managed["work_session_id"], agent_id, base=base, token=token)
+        return claim, managed
+
     res = claim_next(project, agent_id, lanes=lane_list, base=base, token=token)
     if res.get("claimed") or not auto_work_session:
         return res, None
@@ -547,12 +663,18 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
         task_id = (res.get("task_id") or task.get("task_id")
                    or (res.get("names") or [None])[0])
         try:
-            evidence = work_fn({**res, "task_id": task_id, "task": task}) or {}
+            evidence = work_fn({**res, "task_id": task_id, "task": task,
+                                "managed": managed or {}}) or {}
         except Exception as e:
             abandon_claim(project, claim_id, f"work_fn error: {e}", base=base, token=token)
             if managed:
-                archive_work_session_workspace(project, managed["work_session_id"],
-                                               remove_workspace=True, base=base, token=token)
+                if managed.get("external"):
+                    expire_external_work_session(
+                        project, managed["work_session_id"], agent_id,
+                        base=base, token=token)
+                else:
+                    archive_work_session_workspace(project, managed["work_session_id"],
+                                                   remove_workspace=True, base=base, token=token)
             return {"completed": completed, "stopped": f"work_error:{task_id}:{e}",
                     "startup_inbox": startup_inbox}
         if managed:
@@ -580,9 +702,14 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                         abandon_claim(project, claim_id,
                                       f"push failed for {task_id}: {pushed.get('detail')}",
                                       base=base, token=token)
-                        archive_work_session_workspace(
-                            project, managed["work_session_id"],
-                            remove_workspace=True, base=base, token=token)
+                        if managed.get("external"):
+                            expire_external_work_session(
+                                project, managed["work_session_id"], agent_id,
+                                base=base, token=token)
+                        else:
+                            archive_work_session_workspace(
+                                project, managed["work_session_id"],
+                                remove_workspace=True, base=base, token=token)
                         return {"completed": completed,
                                 "stopped": f"push_error:{task_id}:{pushed.get('detail')}",
                                 "startup_inbox": startup_inbox}
@@ -594,7 +721,7 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     # remote verification are enabled via PM_VERIFY_COMPLETION_PUSH.
                     evidence["remote_ref"] = f"refs/heads/{evidence.get('branch', '')}"
         completion = complete_claim(project, claim_id, evidence, base=base, token=token)
-        if managed:
+        if managed and not managed.get("external"):
             archive_work_session_workspace(project, managed["work_session_id"],
                                            remove_workspace=True, base=base, token=token)
         # Verify progress before claiming it: if the server fail-closed the

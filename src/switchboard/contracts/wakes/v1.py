@@ -90,11 +90,13 @@ class ClaimWakeCommand(VersionedModel):
     wake_id: str
     runner_session_id: str = ""
     credential_lease_id: str = ""
+    claim_id: str = ""
+    work_session_id: str = ""
     project: str = "maxwell"
 
     @field_validator(
         "host_id", "wake_id", "runner_session_id", "credential_lease_id",
-        "project", mode="before",
+        "claim_id", "work_session_id", "project", mode="before",
     )
     @classmethod
     def _strip_text(cls, value: Any) -> str:

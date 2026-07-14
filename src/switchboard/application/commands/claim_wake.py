@@ -54,6 +54,8 @@ def execute(
         project=command.project,
         runner_session_id=command.runner_session_id,
         credential_lease_id=command.credential_lease_id,
+        claim_id=command.claim_id,
+        work_session_id=command.work_session_id,
     )
 
 

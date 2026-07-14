@@ -276,8 +276,8 @@ bound_wake = {
         "tenant_id": "tenant-safe", "user_id": "user-safe", "project": "switchboard",
         "provider": "anthropic-claude", "provider_account_id": "account-safe",
         "credential_reference": "provider-cred-safe", "task_id": "CO-10",
-        "claim_id": "claim-safe", "work_session_id": "worksession-safe",
         "account_affinity_id": "affinity-safe",
+        "credential_admission_phase": "preclaim",
     }},
 }
 
@@ -286,46 +286,50 @@ def fake_try_byoa(method, path, body=None):
     calls.append((method, path, body or {}))
     if path.startswith(agent_host.P_LIST_WAKES):
         return {"wake_intents": [bound_wake]}
-    if path.endswith("/leases"):
-        return {"lease_id": "provider-lease-safe", "state": "issued"}
     if path == agent_host.P_CLAIM_WAKE:
         claimed_wake = json.loads(json.dumps(bound_wake))
         claimed_wake["policy"]["account_binding"].update({
             "host_id": inventory["host_id"],
             "runner_session_id": body["runner_session_id"],
-            "credential_lease_id": body["credential_lease_id"],
+            "credential_admission_phase": "pending",
         })
-        return {"claimed": True, "wake": claimed_wake}
+        return {"claimed": True, "reserved": True,
+                "credential_admission_phase": "pending", "wake": claimed_wake}
     if path == agent_host.P_COMPLETE_WAKE:
         return {"ok": True}
     return {"ok": True}
 
 
 agent_host._try = fake_try_byoa
-agent_host.launch = lambda wake, inv, runner_session_id="": {
+launch_envs = []
+def fake_launch_byoa(wake, inv, runner_session_id="", extra_env=None):
+    launch_envs.append(dict(extra_env or {}))
+    return {
     "runner_session_id": runner_session_id,
     "pid": 12346,
     "wake_mode": agent_host.wake_mode(wake),
-}
+    }
+agent_host.launch = fake_launch_byoa
 summary = agent_host.run_once(inventory)
-lease_index = next(i for i, call in enumerate(calls) if call[1].endswith("/leases"))
 claim_index = next(i for i, call in enumerate(calls) if call[1] == agent_host.P_CLAIM_WAKE)
 claim_body = calls[claim_index][2]
-ok(lease_index < claim_index
-   and claim_body["runner_session_id"].startswith("run_")
-   and claim_body["credential_lease_id"] == "provider-lease-safe",
-   "BYOA host registers a runner and acquires an exact lease before wake claim")
+ok(claim_body["runner_session_id"].startswith("run_")
+   and "credential_lease_id" not in claim_body
+   and not any(call[1].endswith("/leases") for call in calls),
+   "BYOA host reserves the wake before any credential lease exists")
 ok(summary["acted"][0]["runner_session_id"] == claim_body["runner_session_id"],
-   "the supervisor launches with the same runner identity admitted by the lease")
+   "the supervisor launches with the same runner identity that reserved the wake")
 byoa_runner_registers = [
     call[2] for call in calls if call[1] == agent_host.P_REGISTER_RUNNER
 ]
-ok(len(byoa_runner_registers) == 2
-   and byoa_runner_registers[-1]["claim_id"] == "claim-safe"
-   and byoa_runner_registers[-1]["metadata"]["work_session_id"] == "worksession-safe"
-   and byoa_runner_registers[-1]["metadata"]["credential_lease_id"]
-   == "provider-lease-safe",
-   "post-launch runner update preserves the admitted claim, work session, and lease")
+ok(len(byoa_runner_registers) == 1
+   and byoa_runner_registers[0]["metadata"]["credential_admission_phase"] == "preclaim"
+   and launch_envs[0]["PM_REMOTE_WORK_SESSION_REGISTRATION"] == "1"
+   and launch_envs[0]["PM_AUTO_WORK_SESSION"] == "1",
+   "worker receives the reservation context and owns exact claim/session/lease rebinding")
+ok(summary["acted"][0]["wake_completion_delegated"] is True
+   and not any(call[1] == agent_host.P_COMPLETE_WAKE for call in calls),
+   "Agent Host leaves BYOA wake completion to the credential-admitted child")
 
 # run_once end-to-end for a closure_verify wake: a fast, already-exited "job" must
 # still be reported started=True (the bug this whole block guards against — before
