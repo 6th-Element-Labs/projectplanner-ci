@@ -407,4 +407,114 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         _record(c, provider_lease_state_migration)
         newly.append(provider_lease_state_migration)
 
+    provider_capacity_migration = "co8_subscription_capacity_state_machine"
+    if provider_capacity_migration not in done:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS provider_capacity_accounts (
+                credential_reference TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_account_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                retry_after_seconds INTEGER,
+                reset_at REAL,
+                next_poll_at REAL,
+                cooldown_until REAL,
+                poll_attempts INTEGER NOT NULL DEFAULT 0,
+                poll_window_started_at REAL,
+                state_version INTEGER NOT NULL DEFAULT 1,
+                observed_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                updated_by TEXT NOT NULL,
+                FOREIGN KEY(credential_reference)
+                    REFERENCES provider_connections(credential_reference)
+            );
+            CREATE INDEX IF NOT EXISTS ix_provider_capacity_accounts_identity
+                ON provider_capacity_accounts(
+                    tenant_id, user_id, provider, provider_account_id, state, next_poll_at
+                );
+
+            CREATE TABLE IF NOT EXISTS provider_capacity_checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                credential_reference TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_account_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                claim_id TEXT NOT NULL,
+                host_id TEXT NOT NULL,
+                runner_session_id TEXT NOT NULL,
+                work_session_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                status TEXT NOT NULL,
+                checkpoint_json TEXT NOT NULL DEFAULT '{}',
+                retry_after_seconds INTEGER,
+                reset_at REAL,
+                next_retry_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                resumed_at REAL,
+                UNIQUE(
+                    credential_reference, project_id, task_id, claim_id, work_session_id
+                ),
+                FOREIGN KEY(credential_reference)
+                    REFERENCES provider_connections(credential_reference)
+            );
+            CREATE INDEX IF NOT EXISTS ix_provider_capacity_checkpoints_resume
+                ON provider_capacity_checkpoints(
+                    credential_reference, status, next_retry_at, task_id
+                );
+
+            CREATE TABLE IF NOT EXISTS provider_capacity_polls (
+                poll_id TEXT PRIMARY KEY,
+                credential_reference TEXT NOT NULL,
+                idem_key TEXT NOT NULL,
+                state_version INTEGER NOT NULL,
+                attempt INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                requested_at REAL NOT NULL,
+                lease_expires_at REAL NOT NULL,
+                completed_at REAL,
+                receipt_json TEXT NOT NULL DEFAULT '{}',
+                UNIQUE(credential_reference, idem_key),
+                FOREIGN KEY(credential_reference)
+                    REFERENCES provider_connections(credential_reference)
+            );
+            CREATE INDEX IF NOT EXISTS ix_provider_capacity_polls_account
+                ON provider_capacity_polls(credential_reference, requested_at, poll_id);
+
+            CREATE TABLE IF NOT EXISTS provider_capacity_events (
+                event_id TEXT PRIMARY KEY,
+                credential_reference TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_account_id TEXT NOT NULL,
+                project_id TEXT,
+                task_id TEXT,
+                claim_id TEXT,
+                work_session_id TEXT,
+                state TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                FOREIGN KEY(credential_reference)
+                    REFERENCES provider_connections(credential_reference)
+            );
+            CREATE INDEX IF NOT EXISTS ix_provider_capacity_events_account
+                ON provider_capacity_events(credential_reference, created_at, event_id);
+            CREATE INDEX IF NOT EXISTS ix_provider_capacity_events_task
+                ON provider_capacity_events(project_id, task_id, created_at, event_id);
+            """
+        )
+        _record(c, provider_capacity_migration)
+        newly.append(provider_capacity_migration)
+
     return newly
