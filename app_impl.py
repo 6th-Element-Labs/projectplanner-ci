@@ -71,6 +71,9 @@ from switchboard.api.routers.claims import create_router as _create_claims_route
 from switchboard.api.routers.wakes import create_router as _create_wakes_router  # noqa: E402
 from switchboard.api.routers.agents import create_router as _create_agents_router  # noqa: E402
 from switchboard.api.routers.messaging import create_router as _create_messaging_router  # noqa: E402
+from switchboard.api.routers.access import create_router as _create_access_router  # noqa: E402
+from switchboard.api.routers.health import create_router as _create_health_router  # noqa: E402
+from switchboard.api.routers.tally import create_router as _create_tally_router  # noqa: E402
 from switchboard.application.commands import request_wake as request_wake_command  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
@@ -214,6 +217,23 @@ app.include_router(_create_provider_credentials_router(
     resolve_principal=_principal,
 ))
 app.include_router(_create_plan_chat_router(resolve_project=_proj))
+app.include_router(_create_access_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    lookup_auth_user=_auth_store.get_user,
+    lookup_auth_user_by_email=_auth_store.get_user_by_email,
+))
+app.include_router(_create_tally_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
+))
+app.include_router(_create_health_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    saturation_snapshot=lambda project: _saturation_snapshot(project),
+    project_init_failures=lambda: _PROJECT_INIT_FAILURES,
+))
 
 
 def _attach_server_timing(response: Response, started_at: float) -> Response:
@@ -509,291 +529,7 @@ async def _auth_boundary(request: Request, call_next):
     return await _global_auth_gate(request, call_next, started_at, path, method)
 
 
-@app.get("/api/access/model")
-async def access_model(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
-    principal = _principal(request, project, ("read",), dev_actor="web")
-    return store.project_access_model(_proj(project), principal_id=principal["id"])
 
-
-@app.post("/api/access/project_role")
-async def access_grant_project_role(request: Request, body: dict = Body(...),
-                                    project: str = Query(store.DEFAULT_PROJECT)):
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    result = store.grant_project_role(
-        _proj(project),
-        subject_kind=(body or {}).get("subject_kind") or "principal",
-        subject_id=(body or {}).get("subject_id") or "",
-        role=(body or {}).get("role") or "",
-        created_by=auth.actor(principal),
-        scopes=store.coerce_csv_list((body or {}).get("scopes")) or None,
-    )
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    store.append_activity(
-        "access.project_role_granted",
-        auth.actor(principal),
-        result,
-        task_id=None,
-        project=_proj(project),
-    )
-    return result
-
-
-# ---- UI-5: members & access management ----
-
-def _resolve_member_identity(subject_kind: str, subject_id: str, principals_by_id: dict) -> dict:
-    """Human-readable identity for a grant subject: principals resolve via the board's
-    principal list; users resolve via the global-auth account store when it's enabled."""
-    if subject_kind in ("principal", "agent", "system", "host"):
-        p = principals_by_id.get(subject_id) or {}
-        return {"display_name": p.get("display_name") or subject_id,
-                "email": None, "revoked": bool(p.get("revoked_at")) if p else None}
-    if subject_kind == "user":
-        try:
-            u = _auth_store.get_user(subject_id) or _auth_store.get_user_by_email(subject_id)
-        except Exception:
-            u = None
-        if u:
-            return {"display_name": u.get("display_name") or u.get("email") or subject_id,
-                    "email": u.get("email"), "revoked": None}
-    return {"display_name": subject_id,
-            "email": subject_id if "@" in subject_id else None, "revoked": None}
-
-
-@app.get("/api/access/members")
-async def access_members(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
-    """Members table + private-visibility facts for the UI-5 Members screen (admin-gated).
-    Decorates each role grant with a human-readable identity and the audit (granted-by/at)."""
-    _principal(request, project, ("write:system",), dev_actor="web")
-    proj = _proj(project)
-    grants = store.list_project_role_grants(proj)
-    principals_by_id = {p.get("id"): p for p in
-                        store.list_principals(project=proj, include_revoked=True)}
-    members = []
-    for g in grants:
-        ident = _resolve_member_identity(g["subject_kind"], g["subject_id"], principals_by_id)
-        members.append({**g, "display_name": ident["display_name"], "email": ident["email"]})
-    access = store.project_access(proj)
-    return {
-        "project": proj,
-        "members": members,
-        "access": access,
-        "visibility": (access.get("visibility") or "org"),
-        "owner_user_id": access.get("owner_user_id"),
-        "role_definitions": {r: list(s) for r, s in sorted(store.ROLE_SCOPES.items())},
-        "global_auth": True,
-    }
-
-
-@app.post("/api/access/project_role/revoke")
-async def access_revoke_project_role(request: Request, body: dict = Body(...),
-                                     project: str = Query(store.DEFAULT_PROJECT)):
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    result = store.revoke_project_role(
-        _proj(project),
-        subject_kind=(body or {}).get("subject_kind") or "principal",
-        subject_id=(body or {}).get("subject_id") or "",
-        role=(body or {}).get("role") or "",
-        created_by=auth.actor(principal),
-    )
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    store.append_activity("access.project_role_revoked", auth.actor(principal), result,
-                          task_id=None, project=_proj(project))
-    return result
-
-
-@app.post("/api/access/invite")
-async def access_invite(request: Request, body: dict = Body(...),
-                        project: str = Query(store.DEFAULT_PROJECT)):
-    """Invite a human into this project by email + role. Under global auth this grants the
-    role to their existing account (they see the project on next load); pending-invite email
-    for not-yet-registered users is ACCESS-5's scope, so we return a clear next step instead."""
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    proj = _proj(project)
-    email = ((body or {}).get("email") or "").strip().lower()
-    role = ((body or {}).get("role") or "").strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(400, "a valid email is required")
-    if not store.role_scopes(role):
-        raise HTTPException(400, f"unknown role: {role}")
-    user = _auth_store.get_user_by_email(email)
-    if not user:
-        raise HTTPException(
-            404, f"no account for {email} yet — ask them to sign up, then invite again")
-    result = store.grant_project_role(proj, subject_kind="user", subject_id=user["id"],
-                                      role=role, created_by=auth.actor(principal))
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    store.append_activity("access.invited", auth.actor(principal),
-                          {"email": email, "user_id": user["id"], "role": role},
-                          task_id=None, project=proj)
-    return {"project": proj, "grant": result,
-            "invited": {"email": email, "user_id": user["id"],
-                        "display_name": user.get("display_name")}}
-
-
-@app.get("/api/access/tokens")
-async def access_tokens(request: Request, project: str = Query(store.DEFAULT_PROJECT),
-                        include_revoked: bool = False, kind: str = ""):
-    _principal(request, project, ("write:system",), dev_actor="web")
-    return {
-        "project": _proj(project),
-        "tokens": store.list_principals(
-            project=_proj(project), include_revoked=include_revoked, kind=kind),
-        "scope_definitions": store.principal_scope_definitions(),
-        "valid_kinds": sorted(store.VALID_PRINCIPAL_KINDS),
-    }
-
-
-@app.post("/api/access/tokens")
-async def access_create_token(request: Request, body: dict = Body(...),
-                              project: str = Query(store.DEFAULT_PROJECT)):
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    target_project = _proj(project)
-    resolved = store.resolve_principal_scopes(
-        (body or {}).get("scopes"), role=(body or {}).get("role") or "")
-    if resolved.get("error"):
-        raise HTTPException(400, resolved["error"])
-    kind = store.validate_principal_kind((body or {}).get("kind") or "agent")
-    if not kind:
-        raise HTTPException(400, "kind must be one of: " + ", ".join(sorted(store.VALID_PRINCIPAL_KINDS)))
-    raw_token = auth.new_secret_token()
-    created = store.create_principal(
-        kind=kind,
-        display_name=((body or {}).get("display_name") or kind).strip(),
-        token=raw_token,
-        scopes=resolved["scopes"],
-        principal_id=((body or {}).get("principal_id") or None),
-        project=target_project,
-    )
-    if created.get("error"):
-        raise HTTPException(400, created["error"])
-    public = store.public_principal_record(created, project=target_project)
-    store.append_activity(
-        "access.token_created",
-        auth.actor(principal),
-        {"principal": public, "role": resolved.get("role"), "token_returned_once": True},
-        task_id=None,
-        project=target_project,
-    )
-    return {"project": target_project, "principal": public, "token": raw_token,
-            "token_returned_once": True}
-
-
-@app.post("/api/access/tokens/{principal_id}/revoke")
-async def access_revoke_token(principal_id: str, request: Request,
-                              project: str = Query(store.DEFAULT_PROJECT)):
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    result = store.revoke_principal_token(
-        principal_id, project=_proj(project), actor=auth.actor(principal))
-    if result.get("error"):
-        raise HTTPException(404 if "not found" in result["error"] else 400, result["error"])
-    return result
-
-
-@app.get("/health")
-async def health():
-    """Liveness probe — must stay cheap so monitors/Caddy never block the event loop."""
-    return {"status": "ok", "service": "taikun-pm"}
-
-
-@app.get("/health/deep")
-async def health_deep():
-    """Readiness probe. Publicly routed under Caddy's /health*, so it must NOT expose any
-    project data (ids, task counts, names). It verifies that every configured board db is
-    accessible with the required schema, and fails CLOSED (503) if any configured project
-    could not initialize at startup or is not reachable now. BUG-48."""
-    def _probe():
-        configured = store.project_ids()
-        unready = 0
-        for pid in configured:
-            # A project skipped at startup is unready regardless of a later live probe;
-            # otherwise re-check the db + schema live so a db that went away is caught.
-            reason = _PROJECT_INIT_FAILURES.get(pid) or store.probe_project_db(pid)
-            if reason:
-                unready += 1
-                # Detail (which project, why) goes to the server log only — never the wire.
-                print(f"[readiness] project not ready: {pid}: {reason}")
-        return len(configured), unready
-
-    projects_configured, projects_unready = await asyncio.to_thread(_probe)
-    ready = projects_unready == 0
-    body = {
-        "status": "ready" if ready else "unready",
-        "service": "taikun-pm",
-        "ready": ready,
-        "projects_configured": projects_configured,
-        "projects_ready": projects_configured - projects_unready,
-        "projects_unready": projects_unready,
-    }
-    return JSONResponse(body, status_code=200 if ready else 503)
-
-
-@app.get("/health/saturation")
-def health_saturation(project: str = Query(store.DEFAULT_PROJECT)):
-    """Cheap saturation/alerts probe for external monitors (PERF-7)."""
-    snap = _saturation_snapshot(project)
-    return {
-        "status": snap.get("status") or "healthy",
-        "as_of": snap.get("as_of"),
-        "project": snap.get("project"),
-        "alert_count": snap.get("alert_count", 0),
-        "alerts": snap.get("alerts") or [],
-        "slos_ok": (snap.get("slos") or {}).get("ok"),
-        "load_shed": (snap.get("load_shed") or {}).get("should_shed"),
-        "psi_available": (snap.get("psi") or {}).get("available"),
-        "sqlite_lock_waits": (snap.get("mcp_observability") or {}).get("sqlite_lock_waits", 0),
-        "sqlite_lock_waits_window": (snap.get("mcp_observability") or {}).get(
-            "sqlite_lock_waits_window", 0),
-        "webhook_inbox_pending": (snap.get("webhook_inbox_depth") or {}).get("pending", 0),
-        "concurrency_inflight": (snap.get("concurrency_limiter") or {}).get("inflight", 0),
-        "concurrency_limit": (snap.get("concurrency_limiter") or {}).get("limit", 0),
-        "concurrency_saturated": (snap.get("concurrency_limiter") or {}).get("saturated", False),
-    }
-
-
-@app.get("/api/saturation")
-def api_saturation(project: str = Query(store.DEFAULT_PROJECT)):
-    """Full saturation dashboard payload: PSI, lock-wait, inbox depth, SLOs, alerts."""
-    return _saturation_snapshot(project)
-
-
-# ---- NARRATE-13: narration queue health + authorized operator controls ----
-
-@app.get("/api/narration/health")
-def api_narration_health(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
-    """Bounded narration queue + receipt/cost snapshot with alert flags (read-only)."""
-    _principal(request, project, ("read",), dev_actor="web")
-    return narration_ops.narration_health(_proj(project))
-
-
-@app.post("/api/narration/narrate-now")
-async def api_narrate_now(request: Request, body: dict = Body(...),
-                          project: str = Query(store.DEFAULT_PROJECT)):
-    """Force (re)generation of an entity's current narration revision — audited, deduped, and
-    still subject to the generation budget (no silent bypass)."""
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    result = narration_ops.narrate_now(
-        _proj(project), (body or {}).get("entity_type") or "",
-        (body or {}).get("entity_id") or "", actor=auth.actor(principal),
-        reason=(body or {}).get("reason") or "")
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/api/narration/reactivate")
-async def api_narration_reactivate(request: Request, body: dict = Body(...),
-                                   project: str = Query(store.DEFAULT_PROJECT)):
-    """Authorized retry / dead-letter recovery on a narration request (audited)."""
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    result = narration_ops.reactivate_request(
-        _proj(project), (body or {}).get("event_id") or "", actor=auth.actor(principal),
-        action=(body or {}).get("action") or "retry", reason=(body or {}).get("reason") or "")
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
 
 
 @app.get("/", include_in_schema=False)
@@ -1872,18 +1608,6 @@ async def ocr_pdf(file: UploadFile = File(...)):
 
 # ---- Switchboard runtime protocol (IXP core + first TXP/OXP slices) ---------
 
-@app.post("/ixp/v1/heartbeat")
-async def ixp_heartbeat(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "agent")
-    return store.heartbeat((body.get("agent_id") or "").strip(),
-                           actor=auth.actor(principal), project=project)
-
-
-@app.get("/ixp/v1/agents")
-async def ixp_agents(project: str = Query(store.DEFAULT_PROJECT), lane: str = ""):
-    return {"agents": store.list_active_agents(lane=lane, project=_proj(project))}
 
 
 @app.get("/coordination", include_in_schema=False)
@@ -2000,36 +1724,10 @@ async def api_message_status(request: Request, message_id: int,
     return msg
 
 
-@app.post("/ixp/v1/heartbeat_host")
-async def ixp_heartbeat_host(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("host_id") or "agent-host")
-    return _control_plane_http(store.heartbeat_host(
-        (body.get("host_id") or "").strip(),
-        active_sessions=body.get("active_sessions"),
-        capacity=body.get("capacity") or {},
-        status=body.get("status") or "online",
-        last_error=body.get("last_error") or "",
-        actor=auth.actor(principal), project=project))
 
 
-@app.get("/ixp/v1/agent_hosts")
-async def ixp_agent_hosts(project: str = Query(store.DEFAULT_PROJECT), runtime: str = "",
-                          lane: str = "", capability: str = "",
-                          include_stale: bool = False):
-    hosts = store.list_agent_hosts(runtime=runtime, lane=lane,
-                                   capability=capability,
-                                   include_stale=include_stale,
-                                   project=_proj(project))
-    _control_plane_http(hosts)
-    return {"hosts": hosts}
 
 
-@app.get("/ixp/v1/control_plane_probe")
-async def ixp_control_plane_probe(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
-                                  include_heavy: bool = False):
-    return store.control_plane_probe(project=_proj(project), lane=lane, include_heavy=include_heavy)
 
 
 @app.get("/ixp/v1/saturation_signals")
@@ -2038,12 +1736,6 @@ def ixp_saturation_signals(project: str = Query(store.DEFAULT_PROJECT)):
     return _saturation_snapshot(project)
 
 
-@app.get("/ixp/v1/host_status")
-async def ixp_host_status(host_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    status = _control_plane_http(store.host_status(host_id, project=_proj(project)))
-    if status.get("error"):
-        raise HTTPException(404, status["error"])
-    return status
 
 
 @app.get("/ixp/v1/runner_sessions")
@@ -2740,149 +2432,6 @@ async def txp_revoke_claim(request: Request, body: dict = Body(...)):
     )
 
 
-@app.post("/tally/v1/spend/ingest")
-async def tally_spend_ingest(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor=body.get("agent_id") or "tally")
-    return store.report_usage(
-        source=body.get("source") or "agent_report",
-        confidence=body.get("confidence") or "reported",
-        task_id=body.get("task_id"), claim_id=body.get("claim_id"),
-        outcome_id=body.get("outcome_id"), agent_id=body.get("agent_id"),
-        principal_id=principal["id"], runtime=body.get("runtime") or "",
-        call_site=body.get("call_site") or "", provider=body.get("provider") or "",
-        model=body.get("model") or "", prompt_tokens=int(body.get("prompt_tokens") or 0),
-        completion_tokens=int(body.get("completion_tokens") or 0),
-        total_tokens=body.get("total_tokens"), cost_usd=float(body.get("cost_usd") or 0.0),
-        latency_ms=body.get("latency_ms"), status=body.get("status") or "ok",
-        metadata=body.get("metadata") or {}, request_id=body.get("request_id"),
-        project=project)
-
-
-@app.post("/tally/v1/outcomes")
-async def tally_record_outcome(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("actor") or body.get("agent_id") or "tally")
-    return store.record_outcome(
-        outcome_type=body.get("type") or body.get("outcome_type") or "",
-        title=body.get("title") or "",
-        task_id=body.get("task_id") or body.get("task"),
-        claim_id=body.get("claim_id"),
-        epic_id=body.get("epic_id") or body.get("epic"),
-        status=body.get("status") or "proposed",
-        verifier=body.get("verifier") or "",
-        verification=body.get("verification") or "",
-        evidence=body.get("evidence") or {},
-        value=body.get("value") or {},
-        actor=auth.actor(principal),
-        project=project)
-
-
-@app.post("/tally/v1/outcomes/{outcome_id}/verify")
-async def tally_verify_outcome(outcome_id: str, request: Request, body: dict = Body(default={})):
-    project = _body_project(body or {})
-    principal = _principal(request, project, ("write:ixp",), dev_actor="tally")
-    return store.verify_outcome(
-        outcome_id,
-        verifier=body.get("verifier") or auth.actor(principal),
-        verification=body.get("verification") or "",
-        evidence=body.get("evidence") or {},
-        actor=auth.actor(principal),
-        project=project)
-
-
-@app.post("/tally/v1/outcomes/{outcome_id}/reject")
-async def tally_reject_outcome(outcome_id: str, request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="tally")
-    return store.reject_outcome(
-        outcome_id,
-        verifier=body.get("verifier") or auth.actor(principal),
-        reason=body.get("reason") or "rejected",
-        actor=auth.actor(principal),
-        project=project)
-
-
-@app.post("/tally/v1/kpis")
-async def tally_create_kpi(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="tally")
-    return store.create_kpi(
-        name=body.get("name") or "",
-        unit=body.get("unit") or "",
-        direction=body.get("direction") or "",
-        owner=body.get("owner") or "",
-        baseline_value=body.get("baseline_value"),
-        current_value=body.get("current_value"),
-        target_value=body.get("target_value"),
-        period=body.get("period") or "",
-        actor=auth.actor(principal),
-        project=project)
-
-
-@app.patch("/tally/v1/kpis/{kpi_id}")
-async def tally_update_kpi(kpi_id: str, request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="tally")
-    if body.get("current_value") is None:
-        raise HTTPException(400, "current_value is required")
-    return store.update_kpi_value(
-        kpi_id,
-        current_value=float(body.get("current_value")),
-        evidence=body.get("evidence") or {},
-        actor=auth.actor(principal),
-        project=project)
-
-
-@app.post("/tally/v1/outcome_kpi_links")
-async def tally_link_outcome_kpi(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="tally")
-    return store.link_outcome_to_kpi(
-        outcome_id=body.get("outcome_id") or "",
-        kpi_id=body.get("kpi_id") or "",
-        contribution=body.get("contribution"),
-        contribution_unit=body.get("contribution_unit") or "",
-        confidence=body.get("confidence") or "directional",
-        rationale=body.get("rationale") or "",
-        actor=auth.actor(principal),
-        project=project)
-
-
-@app.get("/tally/v1/kpis")
-async def tally_list_kpis(project: str = Query(store.DEFAULT_PROJECT)):
-    return {"kpis": store.list_kpis(project=_proj(project))}
-
-
-@app.get("/tally/v1/outcomes")
-async def tally_list_outcomes(project: str = Query(store.DEFAULT_PROJECT),
-                              status: str = Query(""), limit: int = Query(200)):
-    return {"outcomes": store.list_outcomes(project=_proj(project),
-                                            status=status, limit=limit)}
-
-
-@app.get("/tally/v1/task/{task_id}")
-async def tally_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    return store.task_tally(task_id, project=_proj(project))
-
-
-@app.get("/tally/v1/kpi/{kpi_id}")
-async def tally_kpi(kpi_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    return store.kpi_tally(kpi_id, project=_proj(project))
-
-
-@app.get("/tally/v1/project")
-async def tally_project(project: str = Query(store.DEFAULT_PROJECT)):
-    return store.project_tally(project=_proj(project))
-
-
-@app.get("/tally/v1/deliverable/{deliverable_id}")
-async def tally_deliverable(deliverable_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    result = store.deliverable_tally(deliverable_id, project=_proj(project))
-    if result.get("error"):
-        raise HTTPException(404, result["error"])
-    return result
 
 
 @app.get("/ixp/v1/reconcile")
