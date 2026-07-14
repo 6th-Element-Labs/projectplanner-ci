@@ -3,8 +3,8 @@
 Transport adapter finished in ARCH-MS-66. Authentication and MCP serialization
 remain edge concerns; mutating create/update/preflight/archive paths call
 application commands. Persistence stays behind store /
-repositories/work_sessions.py. ``repo_preflight`` / ``pre_tool_check`` remain
-thin store wrappers until ARCH-MS-58 / ARCH-MS-60.
+repositories/work_sessions.py. ``repo_preflight`` stays a thin store wrapper;
+``pre_tool_check`` goes through the ARCH-MS-60 application command.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from mcp.server.fastmcp import Context
 
 import auth
 import store
+from switchboard.application.commands import pre_tool_check as pre_tool_check_command
 from switchboard.application.commands import work_sessions as work_session_commands
 
 
@@ -187,7 +188,7 @@ def pre_tool_check(ctx: Context, tool_name: str = "", tool_input_json: str = "",
         tool_input = json.loads(tool_input_json or "{}")
     except json.JSONDecodeError:
         return services.dumps({"error": "tool_input_json must be valid JSON"})
-    return services.dumps(store.pre_tool_check(
+    return services.dumps(pre_tool_check_command.execute_mapping_result(
         {
             "tool_name": tool_name,
             "tool_input": tool_input,

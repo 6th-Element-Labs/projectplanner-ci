@@ -13,6 +13,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
 import store
+from switchboard.application.commands import pre_tool_check as pre_tool_check_command
 from switchboard.application.commands import work_sessions as work_session_commands
 
 
@@ -183,8 +184,7 @@ def create_router(*, resolve_project: ProjectResolver,
             dev_actor=body.get("agent_id") or "pre-tool")
         payload = dict(body or {})
         payload.pop("project", None)
-        # Policy command extraction is ARCH-MS-60; keep adapter thin for now.
-        return store.pre_tool_check(
+        return pre_tool_check_command.execute_mapping_result(
             payload, actor=auth.actor(principal),
             principal_id=principal["id"], project=project)
 
