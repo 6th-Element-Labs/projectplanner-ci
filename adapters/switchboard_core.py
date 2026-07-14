@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -523,22 +524,66 @@ def _push_and_verify(workspace_path, branch, head_sha, remote="origin", timeout_
     if not workspace_path or not branch:
         return {"ok": False, "detail": "missing workspace_path or branch"}
     try:
-        push = subprocess.run(
-            ["git", "-C", workspace_path, "push", "-u", remote, branch],
-            capture_output=True, text=True, timeout=timeout_s)
-        if push.returncode != 0:
-            return {"ok": False, "detail": f"git push failed: {push.stderr.strip()[-500:]}"}
-        ls = subprocess.run(
-            ["git", "-C", workspace_path, "ls-remote", remote, f"refs/heads/{branch}"],
-            capture_output=True, text=True, timeout=timeout_s)
-        remote_sha = (ls.stdout or "").split("\t")[0].strip() if ls.stdout.strip() else ""
-        if not remote_sha:
-            return {"ok": False, "detail": f"branch {branch} not on {remote} after push"}
-        if head_sha and remote_sha != head_sha:
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        remote_lookup = subprocess.run(
+            ["git", "-C", workspace_path, "remote", "get-url", remote],
+            capture_output=True, text=True, timeout=timeout_s, env=env)
+        if remote_lookup.returncode != 0:
+            return {"ok": False, "detail": f"cannot resolve git remote {remote}"}
+
+        remote_url = (remote_lookup.stdout or "").strip()
+        parsed_remote = urllib.parse.urlparse(remote_url)
+        github_host = (parsed_remote.hostname or "").lower()
+        configured_host = str(env.get("GH_HOST") or "github.com").strip().lower()
+        github_https = (
+            parsed_remote.scheme.lower() == "https"
+            and github_host in {"github.com", configured_host}
+        )
+
+        def push_with_env(push_env):
+            push = subprocess.run(
+                ["git", "-C", workspace_path, "push", "-u", remote, branch],
+                capture_output=True, text=True, timeout=timeout_s, env=push_env)
+            if push.returncode != 0:
+                detail = (push.stderr or "").strip()[-500:]
+                for secret_name in ("GH_TOKEN", "GITHUB_TOKEN"):
+                    secret = str(push_env.get(secret_name) or "")
+                    if secret:
+                        detail = detail.replace(secret, "[REDACTED]")
+                return {"ok": False, "detail": f"git push failed: {detail}"}
+            ls = subprocess.run(
+                ["git", "-C", workspace_path, "ls-remote", remote,
+                 f"refs/heads/{branch}"],
+                capture_output=True, text=True, timeout=timeout_s, env=push_env)
+            remote_sha = ((ls.stdout or "").split("\t")[0].strip()
+                          if (ls.stdout or "").strip() else "")
+            if not remote_sha:
+                return {"ok": False, "detail": f"branch {branch} not on {remote} after push"}
+            if head_sha and remote_sha != head_sha:
+                return {"ok": False,
+                        "detail": (f"remote head {remote_sha[:12]} != evidence head "
+                                   f"{head_sha[:12]}")}
+            return {"ok": True, "remote_ref": f"refs/heads/{branch}",
+                    "pushed_at": time.time(), "remote_sha": remote_sha}
+
+        if not github_https:
+            return push_with_env(env)
+
+        token = str(env.get("GH_TOKEN") or env.get("GITHUB_TOKEN") or "").strip()
+        if not token:
             return {"ok": False,
-                    "detail": f"remote head {remote_sha[:12]} != evidence head {head_sha[:12]}"}
-        return {"ok": True, "remote_ref": f"refs/heads/{branch}",
-                "pushed_at": time.time(), "remote_sha": remote_sha}
+                    "detail": "missing GitHub runtime token for noninteractive push"}
+        env["GH_TOKEN"] = token
+        with tempfile.TemporaryDirectory(prefix="switchboard-git-auth-") as auth_dir:
+            env["GIT_CONFIG_GLOBAL"] = os.path.join(auth_dir, "gitconfig")
+            setup = subprocess.run(
+                ["gh", "auth", "setup-git", "--hostname", github_host],
+                capture_output=True, text=True, timeout=timeout_s, env=env)
+            if setup.returncode != 0:
+                return {"ok": False,
+                        "detail": f"GitHub credential helper setup failed (exit {setup.returncode})"}
+            return push_with_env(env)
     except Exception as e:
         return {"ok": False, "detail": f"push/verify error: {e}"}
 
