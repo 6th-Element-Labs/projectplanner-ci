@@ -2,9 +2,10 @@
 
 Owns external_ci_runs CRUD, topology/request validation, task summaries, and
 review-gate helpers previously living in ``repositories/shell.py``. Cross-cutting
-store helpers (init_db, topology, external effects) are reached via
-``_store_facade()`` during the strangler. ``store.py`` / ``shell.py`` re-export
-these symbols; root ``external_ci_store.py`` is a compatibility shim.
+store helpers (init_db, topology) are reached via ``_store_facade()`` during the
+strangler; external side-effect claim/update helpers come from
+``external_effects`` (ARCH-MS-54). ``store.py`` / ``shell.py`` re-export these
+symbols; root ``external_ci_store.py`` is a compatibility shim.
 """
 from __future__ import annotations
 
@@ -45,12 +46,9 @@ def _validate_github_repo(*args, **kwargs):
     return _store_facade()._validate_github_repo(*args, **kwargs)
 
 
-def _claim_external_effect_in(*args, **kwargs):
-    return _store_facade()._claim_external_effect_in(*args, **kwargs)
-
-
-def _update_external_effect_in(*args, **kwargs):
-    return _store_facade()._update_external_effect_in(*args, **kwargs)
+from switchboard.storage.repositories.external_effects import (  # noqa: E402
+    _claim_external_effect_in,
+)
 
 
 EXTERNAL_CI_STATUSES = {
