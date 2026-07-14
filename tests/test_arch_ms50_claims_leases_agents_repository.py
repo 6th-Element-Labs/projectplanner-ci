@@ -110,7 +110,8 @@ for name in (
     ok(name not in shell_src, f"shell residual no longer defines {name[4:].rstrip('(')}")
     ok(name in coord_src, f"coordination repository owns {name[4:].rstrip('(')}")
 
-ok("def repo_preflight(" in shell_src, "repo_preflight remains in shell residual")
+# ARCH-MS-58 moved repo_preflight out of shell into domain/provenance/preflight.py.
+ok("def repo_preflight(" not in shell_src, "repo_preflight left shell residual (ARCH-MS-58)")
 ok("def pre_tool_check(" in shell_src, "pre_tool_check remains in shell residual")
 ok("def control_plane_probe(" in shell_src, "control_plane_probe remains in shell residual")
 ok(len(shell_src.splitlines()) < 3500, "shell residual shrunk after ARCH-MS-50 extract")
