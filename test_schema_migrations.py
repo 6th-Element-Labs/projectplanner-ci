@@ -71,6 +71,8 @@ check("review verdicts persist authenticated reviewer principal IDs",
 check("review_findings table created", c.execute(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='review_findings'"
 ).fetchone()[0] == 1)
+check("review finding resolutions persist authority identity and timestamp",
+      {"resolved_principal_id", "resolved_at"}.issubset(cols(c, "review_findings")))
 check("review finding query index created", c.execute(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
     "AND name='ix_review_findings_task_state'"

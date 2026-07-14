@@ -90,10 +90,38 @@ def list_review_findings(task_id: str, project: str = "maxwell", head_sha: str =
     })
 
 
+def resolve_review_finding(resolution_json: str, ctx: Context,
+                           project: str = "maxwell") -> str:
+    """Admin-authorized open -> waived|overridden transition for one exact-head finding."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("admin",))
+    try:
+        payload = json.loads(resolution_json or "{}")
+    except json.JSONDecodeError:
+        return services.dumps({"error": "resolution_json must be valid JSON"})
+    if not isinstance(payload, dict):
+        return services.dumps({"error": "resolution_json must be a JSON object"})
+    task_id = str(payload.get("task_id") or "").strip()
+    resolver = str(payload.get("resolver_principal") or "").strip()
+    binding = services.resolve_write_actor(
+        principal, project=project, task_id=task_id, agent_id=resolver)
+    if not binding.get("ok"):
+        return services.dumps(binding)
+    payload["resolver_principal"] = binding["actor"]
+    result = review_commands.resolve_finding_mapping(
+        payload, actor=binding["actor"], principal_id=principal.get("id") or "",
+        authorized=True, project=project,
+    )
+    if result.get("resolved"):
+        services.write_binding_comment(task_id, binding, project)
+    return services.dumps(result)
+
+
 REVIEW_TOOL_NAMES = (
     "record_review_verdict",
     "get_review_verdict",
     "list_review_findings",
+    "resolve_review_finding",
 )
 
 

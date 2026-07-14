@@ -1,0 +1,51 @@
+{
+  "$id": "switchboard.review_finding.resolve_command.v1",
+  "additionalProperties": false,
+  "description": "Authorized escape valve for one open finding at the exact current head.",
+  "properties": {
+    "finding_id": {
+      "title": "Finding Id",
+      "type": "string"
+    },
+    "head_sha": {
+      "title": "Head Sha",
+      "type": "string"
+    },
+    "resolved_reason": {
+      "title": "Resolved Reason",
+      "type": "string"
+    },
+    "resolved_sha": {
+      "title": "Resolved Sha",
+      "type": "string"
+    },
+    "resolver_principal": {
+      "title": "Resolver Principal",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.review_finding.resolve_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "state": {
+      "title": "State",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "head_sha",
+    "finding_id",
+    "state",
+    "resolved_reason",
+    "resolved_sha",
+    "resolver_principal"
+  ],
+  "title": "ResolveReviewFindingCommand",
+  "type": "object"
+}

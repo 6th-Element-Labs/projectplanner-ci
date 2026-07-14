@@ -72,6 +72,10 @@ def _external_ci_review_gate(*args: Any, **kwargs: Any) -> Any:
     return _store_facade()._external_ci_review_gate(*args, **kwargs)
 
 
+def review_merge_gate_findings(*args: Any, **kwargs: Any) -> Any:
+    return _store_facade().review_merge_gate_findings(*args, **kwargs)
+
+
 def _task_work_session_profile(*args: Any, **kwargs: Any) -> Any:
     return _store_facade()._task_work_session_profile(*args, **kwargs)
 
@@ -281,6 +285,7 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             details={"target_branch": target_branch, "default_branch": default_branch}))
 
     pr, pr_source = _merge_gate_pr_evidence(pr_url, pr_number, merged_payload, repo)
+    pr_head_sha = ""
     if not pr:
         findings.append(_merge_gate_finding(
             "github_pr_state_unavailable",
@@ -295,6 +300,7 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         base_ref = _merge_gate_pr_ref(pr, "base", "ref")
         head_ref = _merge_gate_pr_ref(pr, "head", "ref")
         head_sha = _merge_gate_pr_ref(pr, "head", "sha")
+        pr_head_sha = head_sha
         if base_ref and base_ref != target_branch:
             findings.append(_merge_gate_finding(
                 "wrong_target_branch",
@@ -381,6 +387,12 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             "External CI mirror evidence is required before merge.",
             "failed_gate",
             details={"external_ci": external_ci}))
+
+    review_head_sha = str(pr_head_sha or merged_payload.get("head_sha") or
+                          (task.get("git_state") or {}).get("head_sha") or "").strip()
+    review_gate, review_findings = review_merge_gate_findings(
+        task_id, review_head_sha, project=project)
+    findings.extend(review_findings)
 
     profile = _task_work_session_profile(
         task,
@@ -507,6 +519,7 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "required_status_contexts": required_contexts,
         "status_contexts": pr_contexts,
         "external_ci": external_ci,
+        "review_gate": review_gate,
         "github_pr_source": pr_source,
         "done_authority": "github_webhook_or_reconcile",
         "done_controlled_by_merge_provenance": True,

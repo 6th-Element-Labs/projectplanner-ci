@@ -13,6 +13,8 @@ from switchboard.contracts.reviews import REVIEW_FINDING_SCHEMA, REVIEW_VERDICT_
 
 
 REVIEW_SUMMARY_SCHEMA = "switchboard.review_summary.v1"
+REVIEW_MERGE_GATE_SCHEMA = "switchboard.review_merge_gate.v1"
+REVIEW_MAX_ROUNDS = 3
 HISTORICAL_CO8_VERDICT_ID = "reviewverdict-co8-pr441-94f03c6f"
 
 
@@ -132,6 +134,7 @@ def _worker_principal_ids_in(c: sqlite3.Connection, task_id: str,
 
 
 def _finding_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    columns = set(row.keys())
     return {
         "schema": REVIEW_FINDING_SCHEMA,
         "id": row["finding_id"],
@@ -143,8 +146,12 @@ def _finding_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "class": row["finding_class"],
         "state": row["state"],
         "resolved_by": row["resolved_by"],
+        "resolved_principal_id": (
+            row["resolved_principal_id"] if "resolved_principal_id" in columns else None
+        ),
         "resolved_reason": row["resolved_reason"],
         "resolved_sha": row["resolved_sha"],
+        "resolved_at": row["resolved_at"] if "resolved_at" in columns else None,
     }
 
 
@@ -235,14 +242,16 @@ def _insert_findings_in(c: sqlite3.Connection, verdict_id: str,
             "INSERT INTO review_findings("
             "verdict_id, task_id, finding_id, location, category, severity, "
             "invariant_violated, repair_requirement, finding_class, state, resolved_by, "
-            "resolved_reason, resolved_sha, created_at, updated_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "resolved_principal_id, resolved_reason, resolved_sha, resolved_at, "
+            "created_at, updated_at"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 verdict_id, data["task_id"], finding["id"], finding["location"],
                 finding["category"], finding["severity"], finding["invariant_violated"],
                 finding["repair_requirement"], finding["class"], state,
-                finding.get("resolved_by"), finding.get("resolved_reason"),
-                finding.get("resolved_sha"), created_at, recorded_at,
+                finding.get("resolved_by"), finding.get("resolved_principal_id"),
+                finding.get("resolved_reason"), finding.get("resolved_sha"),
+                finding.get("resolved_at"), created_at, recorded_at,
             ),
         )
 
@@ -401,6 +410,180 @@ class ReviewVerdictRepository:
             ).fetchone()
             return _verdict_from_row(c, row, current_head) if row else None
 
+    def resolve_finding(self, data: Mapping[str, Any], *, actor: str,
+                        principal_id: str = "", authorized: bool = False,
+                        project: str = DEFAULT_PROJECT) -> dict[str, Any]:
+        """Move one exact-head finding open -> waived|overridden with durable authority."""
+        payload = dict(data or {})
+        return _write_through(
+            project,
+            lambda: self._resolve_finding_impl(
+                payload, actor=actor, principal_id=principal_id,
+                authorized=authorized, project=project),
+        )
+
+    def _resolve_finding_impl(self, data: Mapping[str, Any], *, actor: str,
+                              principal_id: str, authorized: bool,
+                              project: str) -> dict[str, Any]:
+        payload = dict(data or {})
+        task_id = str(payload.get("task_id") or "").strip()
+        head_sha = str(payload.get("head_sha") or "").strip()
+        finding_id = str(payload.get("finding_id") or "").strip()
+        resolver = str(payload.get("resolver_principal") or "").strip()
+        resolver_principal_id = str(principal_id or "").strip()
+        state = str(payload.get("state") or "").strip().lower()
+        reason = str(payload.get("resolved_reason") or "").strip()
+        resolved_sha = str(payload.get("resolved_sha") or "").strip()
+        if state not in {"waived", "overridden"} or not all(
+                (task_id, head_sha, finding_id, reason, resolved_sha, resolver)):
+            raise ReviewVerdictError(
+                "invalid_review_finding_resolution",
+                "resolution requires task/head/finding/reason/resolver and state waived|overridden",
+                status_code=400,
+            )
+        if not authorized:
+            raise ReviewVerdictError(
+                "review_resolution_forbidden",
+                "review finding waiver/override requires explicit admin authority",
+                status_code=403,
+            )
+        if resolver != str(actor or "").strip():
+            raise ReviewVerdictError(
+                "review_resolver_principal_mismatch",
+                "resolver_principal must match the authenticated write actor",
+                status_code=403,
+            )
+        if not resolver_principal_id:
+            raise ReviewVerdictError(
+                "review_resolver_principal_unbound",
+                "review finding resolution requires an authenticated principal ID",
+                status_code=403,
+            )
+        with _conn(project) as c:
+            task = c.execute(
+                "SELECT task_id FROM tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if not task:
+                raise ReviewVerdictError(
+                    "review_task_not_found", "review task does not exist", status_code=404,
+                    details={"task_id": task_id},
+                )
+            current_head = _current_git_state_in(c, task_id)["head_sha"]
+            if not current_head:
+                raise ReviewVerdictError(
+                    "review_head_unbound",
+                    "task has no recorded PR head_sha; finding resolution cannot be fenced",
+                    status_code=409,
+                )
+            if head_sha != current_head or resolved_sha != current_head:
+                raise ReviewVerdictError(
+                    "stale_review_head",
+                    "finding resolution must match the task's exact current PR head",
+                    status_code=409,
+                    details={"expected_head_sha": current_head},
+                )
+            verdict_row = c.execute(
+                "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=?",
+                (task_id, current_head),
+            ).fetchone()
+            if not verdict_row:
+                raise ReviewVerdictError(
+                    "review_verdict_not_found",
+                    "no review verdict exists for the task's current head_sha",
+                    status_code=404,
+                    details={"head_sha": current_head},
+                )
+            finding_row = c.execute(
+                "SELECT * FROM review_findings WHERE verdict_id=? AND finding_id=?",
+                (verdict_row["verdict_id"], finding_id),
+            ).fetchone()
+            if not finding_row:
+                raise ReviewVerdictError(
+                    "review_finding_not_found", "review finding does not exist",
+                    status_code=404, details={"finding_id": finding_id},
+                )
+            existing = _finding_from_row(finding_row)
+            if existing["state"] != "open":
+                same_resolution = (
+                    existing["state"] == state
+                    and existing["resolved_by"] == resolver
+                    and existing.get("resolved_principal_id") == resolver_principal_id
+                    and existing["resolved_reason"] == reason
+                    and existing["resolved_sha"] == resolved_sha
+                )
+                if same_resolution:
+                    return {
+                        "resolved": False,
+                        "idempotent_replay": True,
+                        "finding": existing,
+                        "verdict": _verdict_from_row(c, verdict_row, current_head),
+                    }
+                raise ReviewVerdictError(
+                    "review_finding_not_open",
+                    "only an open review finding may be waived or overridden",
+                    status_code=409,
+                    details={"finding_id": finding_id, "state": existing["state"]},
+                )
+            now = time.time()
+            previous_verdict_status = str(verdict_row["status"] or "").strip()
+            c.execute(
+                "UPDATE review_findings SET state=?, resolved_by=?, "
+                "resolved_principal_id=?, resolved_reason=?, resolved_sha=?, "
+                "resolved_at=?, updated_at=? WHERE verdict_id=? AND finding_id=?",
+                (
+                    state, resolver, resolver_principal_id, reason, resolved_sha,
+                    now, now, verdict_row["verdict_id"], finding_id,
+                ),
+            )
+            open_count = int(c.execute(
+                "SELECT COUNT(*) FROM review_findings WHERE verdict_id=? AND state='open'",
+                (verdict_row["verdict_id"],),
+            ).fetchone()[0])
+            promoted = open_count == 0 and previous_verdict_status != "pass"
+            if promoted:
+                c.execute(
+                    "UPDATE review_verdicts SET status='pass' WHERE verdict_id=?",
+                    (verdict_row["verdict_id"],),
+                )
+            event = {
+                "schema": "switchboard.review_finding_resolution.v1",
+                "verdict_id": verdict_row["verdict_id"],
+                "finding_id": finding_id,
+                "head_sha": current_head,
+                "state": state,
+                "resolved_reason": reason,
+                "resolved_sha": resolved_sha,
+                "resolver_principal": resolver,
+                "resolver_principal_id": resolver_principal_id,
+                "reviewer_principal": verdict_row["reviewer_principal"],
+                "reviewer_principal_id": verdict_row["reviewer_principal_id"],
+                "previous_verdict_status": previous_verdict_status,
+                "verdict_status": "pass" if promoted else previous_verdict_status,
+                "remaining_open_finding_count": open_count,
+                "reviewer_quality_signal": state,
+            }
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (task_id, actor, "review.finding_resolved",
+                 json.dumps(event, sort_keys=True), now),
+            )
+            updated_finding = c.execute(
+                "SELECT * FROM review_findings WHERE verdict_id=? AND finding_id=?",
+                (verdict_row["verdict_id"], finding_id),
+            ).fetchone()
+            updated_verdict = c.execute(
+                "SELECT * FROM review_verdicts WHERE verdict_id=?",
+                (verdict_row["verdict_id"],),
+            ).fetchone()
+            return {
+                "resolved": True,
+                "idempotent_replay": False,
+                "finding": _finding_from_row(updated_finding),
+                "verdict": _verdict_from_row(c, updated_verdict, current_head),
+                "audit": event,
+            }
+
     def list_findings(self, *, task_id: str = "", head_sha: str = "", state: str = "",
                       finding_class: str = "", severity: str = "",
                       current_head_only: bool = False,
@@ -509,6 +692,121 @@ def review_verdict_summary_in(c: sqlite3.Connection, task_id: str,
         "verdict_count": verdict_count,
         "stale_verdict_count": verdict_count - (1 if current_verdict else 0),
     }
+
+
+def review_merge_gate(task_id: str, head_sha: str, *,
+                      project: str = DEFAULT_PROJECT,
+                      max_rounds: int = REVIEW_MAX_ROUNDS) -> dict[str, Any]:
+    """Return the deterministic exact-head review input consumed by merge_gate."""
+    requested_head = str(head_sha or "").strip()
+    with _conn(project) as c:
+        current_head = _current_git_state_in(c, task_id)["head_sha"]
+        summary = review_verdict_summary_in(c, task_id, current_head)
+        row = None
+        if requested_head:
+            row = c.execute(
+                "SELECT * FROM review_verdicts WHERE task_id=? AND head_sha=?",
+                (task_id, requested_head),
+            ).fetchone()
+        verdict = _verdict_from_row(c, row, current_head) if row else None
+
+    code = ""
+    message = ""
+    if not requested_head:
+        code = "review_head_sha_required"
+        message = "Review required, but the current PR head_sha is unavailable."
+    elif not current_head:
+        code = "review_head_sha_required"
+        message = "Review required, but the task has no current recorded PR head_sha."
+    elif current_head and requested_head != current_head:
+        code = "stale_review_verdict"
+        message = (
+            f"Review required for current head {current_head}; merge intent used "
+            f"stale head {requested_head}."
+        )
+    elif not verdict:
+        code = "review_required"
+        message = f"Review required for current head {requested_head}."
+    elif int(verdict.get("open_finding_count") or 0) > 0:
+        count = int(verdict.get("open_finding_count") or 0)
+        message = (
+            f"{count} open review finding{'s' if count != 1 else ''} at "
+            f"{requested_head}."
+        )
+        code = "open_review_findings"
+    elif verdict.get("status") != "pass":
+        code = "review_not_passed"
+        message = (
+            f"Review verdict at {requested_head} has status "
+            f"{verdict.get('status') or 'missing'}; pass is required."
+        )
+
+    ok = not code
+    rounds = int(summary.get("verdict_count") or 0)
+    bounded_rounds = max(1, int(max_rounds or REVIEW_MAX_ROUNDS))
+    escalation_required = not ok and rounds >= bounded_rounds
+    return {
+        "schema": REVIEW_MERGE_GATE_SCHEMA,
+        "task_id": task_id,
+        "head_sha": requested_head or None,
+        "current_head_sha": current_head or None,
+        "required": True,
+        "ok": ok,
+        "status": "passed" if ok else "blocked",
+        "code": code or None,
+        "message": message or "Passing review verdict recorded for the current head_sha.",
+        "verdict_status": (verdict or {}).get("status") or "missing",
+        "open_finding_count": int((verdict or {}).get("open_finding_count") or 0),
+        "open_finding_ids": [
+            item.get("id") for item in (verdict or {}).get("findings") or []
+            if item.get("state") == "open"
+        ],
+        "verdict": verdict,
+        "round": rounds,
+        "max_rounds": bounded_rounds,
+        "escalation_required": escalation_required,
+        "escalation_task_id": "COORD-6" if escalation_required else None,
+    }
+
+
+def review_merge_gate_findings(task_id: str, head_sha: str, *,
+                               project: str = DEFAULT_PROJECT,
+                               max_rounds: int = REVIEW_MAX_ROUNDS,
+                               ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Adapt the exact-head review gate to merge-gate blocking findings."""
+    gate = review_merge_gate(
+        task_id, head_sha, project=project, max_rounds=max_rounds,
+    )
+    if gate.get("ok"):
+        return gate, []
+
+    code = str(gate.get("code") or "review_required")
+    findings = [{
+        "code": code,
+        "message": str(gate.get("message") or "Review required before merge."),
+        "failure_class": (
+            "missing_data" if code == "review_head_sha_required" else "failed_gate"
+        ),
+        "severity": "high",
+        "blocking": True,
+        "review_gate": gate,
+    }]
+    if gate.get("escalation_required"):
+        findings.append({
+            "code": "review_round_limit_reached",
+            "message": (
+                f"Review remains blocked after {gate.get('round')} rounds; "
+                "escalate through COORD-6."
+            ),
+            "failure_class": "failed_gate",
+            "severity": "high",
+            "blocking": True,
+            "review_round": gate.get("round"),
+            "max_review_rounds": gate.get("max_rounds"),
+            "escalation_task_id": gate.get("escalation_task_id"),
+            "head_sha": str(head_sha or "").strip() or None,
+        })
+    return gate, findings
 
 
 def ensure_historical_review_backfills_in(c: sqlite3.Connection,
@@ -630,8 +928,18 @@ def list_review_findings(*, task_id: str = "", head_sha: str = "", state: str = 
         severity=severity, current_head_only=current_head_only, project=project)
 
 
+def resolve_review_finding(data: Mapping[str, Any], *, actor: str,
+                           principal_id: str = "", authorized: bool = False,
+                           project: str = DEFAULT_PROJECT) -> dict[str, Any]:
+    return default_review_verdict_repository.resolve_finding(
+        data, actor=actor, principal_id=principal_id, authorized=authorized,
+        project=project)
+
+
 __all__ = [
     "HISTORICAL_CO8_VERDICT_ID",
+    "REVIEW_MAX_ROUNDS",
+    "REVIEW_MERGE_GATE_SCHEMA",
     "REVIEW_SUMMARY_SCHEMA",
     "ReviewVerdictError",
     "ReviewVerdictRepository",
@@ -640,5 +948,8 @@ __all__ = [
     "get_review_verdict",
     "list_review_findings",
     "record_review_verdict",
+    "resolve_review_finding",
+    "review_merge_gate",
+    "review_merge_gate_findings",
     "review_verdict_summary_in",
 ]

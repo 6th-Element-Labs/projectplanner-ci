@@ -6,7 +6,10 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from switchboard.contracts import validation_error_message
-from switchboard.contracts.reviews import RecordReviewVerdictCommand
+from switchboard.contracts.reviews import (
+    RecordReviewVerdictCommand,
+    ResolveReviewFindingCommand,
+)
 from switchboard.storage.repositories.review_verdicts import (
     ReviewVerdictError,
     ReviewVerdictRepository,
@@ -32,6 +35,32 @@ def execute_mapping(
         return {
             "error": "invalid_review_verdict",
             "error_code": "invalid_review_verdict",
+            "message": validation_error_message(exc),
+        }
+    except ReviewVerdictError as exc:
+        if raise_errors:
+            raise
+        return exc.as_dict()
+
+
+def resolve_finding_mapping(
+        data: Mapping[str, Any], *, actor: str, principal_id: str = "",
+        authorized: bool = False, project: str,
+        repository: ReviewVerdictRepository = default_review_verdict_repository,
+        raise_errors: bool = False) -> dict[str, Any]:
+    """Validate and persist one authorized exact-head finding waiver/override."""
+    try:
+        command = ResolveReviewFindingCommand.from_mapping(data)
+        return repository.resolve_finding(
+            command.to_repository_data(), actor=actor, principal_id=principal_id,
+            authorized=authorized, project=project,
+        )
+    except ValidationError as exc:
+        if raise_errors:
+            raise
+        return {
+            "error": "invalid_review_finding_resolution",
+            "error_code": "invalid_review_finding_resolution",
             "message": validation_error_message(exc),
         }
     except ReviewVerdictError as exc:
