@@ -21,6 +21,7 @@ import re
 import shlex
 import subprocess
 import time
+import urllib.error
 import urllib.parse
 import uuid
 from dataclasses import dataclass
@@ -642,15 +643,30 @@ def _runtime_ready(host: dict[str, Any], wake: dict[str, Any]) -> bool:
 
 def wait_for_registration(client: SwitchboardClient, instance_id: str,
                           wake: dict[str, Any], timeout_s: int,
-                          sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+                          sleep: Callable[[float], None] = time.sleep,
+                          monotonic: Callable[[], float] = time.monotonic) -> dict[str, Any]:
     host_id = f"host/{instance_id}"
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        for host in client.hosts(include_stale=True):
+    deadline = monotonic() + timeout_s
+    last_read_error = ""
+    while monotonic() < deadline:
+        try:
+            hosts = client.hosts(include_stale=True)
+        except Exception as exc:
+            retryable = isinstance(exc, (TimeoutError, ConnectionError, OSError))
+            if isinstance(exc, urllib.error.HTTPError):
+                retryable = exc.code in (408, 425, 429) or 500 <= exc.code < 600
+            elif isinstance(exc, urllib.error.URLError):
+                retryable = True
+            if not retryable:
+                raise
+            last_read_error = f"{type(exc).__name__}: {str(exc)[-240:]}"
+            hosts = []
+        for host in hosts:
             if host.get("host_id") == host_id and _runtime_ready(host, wake):
                 return host
-        sleep(min(5, max(0.1, deadline - time.monotonic())))
-    raise RuntimeError(f"registration timeout for {host_id}")
+        sleep(min(5, max(0.1, deadline - monotonic())))
+    suffix = f"; last control-plane read error: {last_read_error}" if last_read_error else ""
+    raise RuntimeError(f"registration timeout for {host_id}{suffix}")
 
 
 def provision_wake(aws: AwsCli, client: SwitchboardClient, config: Config,

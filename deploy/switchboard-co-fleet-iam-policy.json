@@ -45,6 +45,34 @@
       }
     },
     {
+      "Sid": "UseOnlyCOFleetLaunchFoundation",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:us-east-1::image/ami-0beb8ed9da67f77f6",
+        "arn:aws:ec2:us-east-1:584673484283:launch-template/lt-06e82fa3ce11f96a8",
+        "arn:aws:ec2:us-east-1:584673484283:launch-template/lt-04205361bf23f5fe6",
+        "arn:aws:ec2:us-east-1:584673484283:subnet/*",
+        "arn:aws:ec2:us-east-1:584673484283:security-group/sg-0728f464adcfa03cf",
+        "arn:aws:ec2:us-east-1:584673484283:network-interface/*"
+      ]
+    },
+    {
+      "Sid": "RunOnlyTaggedCOWorkerResources",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:us-east-1:584673484283:instance/*",
+        "arn:aws:ec2:us-east-1:584673484283:volume/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "switchboard-co",
+          "aws:RequestTag/CO:ManagedBy": "switchboard-co-fleet-v1"
+        }
+      }
+    },
+    {
       "Sid": "OperateCOFleet",
       "Effect": "Allow",
       "Action": [

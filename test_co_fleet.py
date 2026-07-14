@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import time
+import urllib.error
 from pathlib import Path
 
 
@@ -325,6 +326,77 @@ not_ready = json.loads(json.dumps(ready_host))
 not_ready["runtimes"][0]["policy"]["allow_work"] = False
 ok(not co_fleet._runtime_ready(not_ready, wake),
    "registration gate rejects allow_work=false")
+
+
+class RegistrationClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class TransientRegistrationClient:
+    def __init__(self):
+        self.calls = 0
+
+    def hosts(self, include_stale=True):
+        self.calls += 1
+        if self.calls == 1:
+            raise TimeoutError("temporary control-plane read timeout")
+        return [ready_host]
+
+
+registration_clock = RegistrationClock()
+registration_client = TransientRegistrationClient()
+registered = co_fleet.wait_for_registration(
+    registration_client, "i-ready", wake, 10,
+    sleep=registration_clock.sleep, monotonic=registration_clock.monotonic)
+ok(registered == ready_host and registration_client.calls == 2,
+   "transient registration reads retry until the already-online worker is observed")
+
+
+class DeniedRegistrationClient:
+    def hosts(self, include_stale=True):
+        raise urllib.error.HTTPError(
+            "https://plan.example.test/ixp/v1/agent_hosts", 401, "unauthorized", {}, None)
+
+
+try:
+    co_fleet.wait_for_registration(
+        DeniedRegistrationClient(), "i-denied", wake, 10,
+        sleep=registration_clock.sleep, monotonic=registration_clock.monotonic)
+    denied_registration_retried = True
+except urllib.error.HTTPError:
+    denied_registration_retried = False
+ok(not denied_registration_retried,
+   "non-transient registration authorization failures still fail immediately")
+
+
+iam_policy = json.loads(Path("deploy/switchboard-co-fleet-iam-policy.json").read_text())
+iam_by_sid = {statement["Sid"]: statement for statement in iam_policy["Statement"]}
+launch_foundation = set(iam_by_sid["UseOnlyCOFleetLaunchFoundation"]["Resource"])
+tagged_workers = iam_by_sid["RunOnlyTaggedCOWorkerResources"]
+ok(iam_by_sid["UseOnlyCOFleetLaunchFoundation"]["Action"] == "ec2:RunInstances"
+   and "arn:aws:ec2:us-east-1::image/ami-0beb8ed9da67f77f6" in launch_foundation
+   and "arn:aws:ec2:us-east-1:584673484283:launch-template/lt-06e82fa3ce11f96a8"
+   in launch_foundation
+   and "arn:aws:ec2:us-east-1:584673484283:launch-template/lt-04205361bf23f5fe6"
+   in launch_foundation
+   and "arn:aws:ec2:us-east-1:584673484283:security-group/sg-0728f464adcfa03cf"
+   in launch_foundation,
+   "RunInstances is limited to the proven AMI, launch templates, and network foundation")
+ok(set(tagged_workers["Resource"]) == {
+       "arn:aws:ec2:us-east-1:584673484283:instance/*",
+       "arn:aws:ec2:us-east-1:584673484283:volume/*",
+   } and tagged_workers["Condition"]["StringEquals"] == {
+       "aws:RequestTag/Project": "switchboard-co",
+       "aws:RequestTag/CO:ManagedBy": "switchboard-co-fleet-v1",
+   },
+   "worker instance and volume launches require both CO ownership request tags")
 
 
 old = time.time() - 2000

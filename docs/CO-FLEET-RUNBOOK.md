@@ -140,6 +140,30 @@ Production runs `deploy/switchboard-co-fleet.service` with the least-privilege p
 in `deploy/switchboard-co-fleet-iam-policy.json`. Keep `PM_MCP_TOKEN` in the protected
 service environment, never in the unit or repository.
 
+The coordinator role needs `ec2:RunInstances` on the exact golden AMI, both CO launch
+templates, the selected subnets/security group/network interfaces, and only worker
+instances/volumes carrying the `Project=switchboard-co` and
+`CO:ManagedBy=switchboard-co-fleet-v1` request tags. Do not collapse those resource
+statements into an unrestricted `Resource: "*"` launch grant.
+
+Build each exact-source cache on an agent host, never on the Plan VM. The helper disables
+macOS copyfile metadata, rejects AppleDouble entries, extracts the result, runs a full
+`git fsck`, and verifies the pinned commit before it returns success:
+
+```bash
+scripts/build_co_repo_cache.sh /path/to/projectplanner "$SOURCE_SHA" \
+  "/tmp/projectplanner-${SOURCE_SHA}.mirror.tar.gz"
+scripts/build_co_repo_cache.sh --verify \
+  "/tmp/projectplanner-${SOURCE_SHA}.mirror.tar.gz" "$SOURCE_SHA"
+```
+
+Publish the archive only after that verification passes, then update the cache manifest's
+`mirror_archive`, `mirror_sha256`, and `source_sha` together. Fleet control on the Plan VM
+should use its local coordination endpoint (`PM_BASE=http://127.0.0.1:8110`) so a transient
+public-edge read cannot turn an already-online worker into failed capacity. Registration
+polling still tolerates transient local read timeouts until the configured deadline; auth and
+other non-transient HTTP failures fail immediately.
+
 Measure cold starts from the emitted `switchboard.co_fleet_receipt.v1`
 `wake_to_register_seconds` and the matching `CO:WakeToRegisterSeconds` instance tag.
 Acceptance is p50 <= 90 seconds and p95 <= 180 seconds from a zero-capacity start.
