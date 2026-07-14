@@ -40,6 +40,13 @@ def _store_facade():
     return store
 
 
+SEVERITY_VALUE = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _severity_value(severity: str) -> int:
+    return SEVERITY_VALUE.get((severity or "").strip().lower(), 0)
+
+
 RECONCILE_FAILURE_CLASS_BY_CODE = {
     "canonical_main_sha_not_found": "stale_branch",
     "claim_evidence_missing": "missing_data",
@@ -1447,17 +1454,17 @@ def run_reconcile_alerts(project: str = DEFAULT_PROJECT,
     now = time.time() if now is None else float(now)
     alert_to = (alert_to or "switchboard/operator").strip()
     min_severity = (min_severity or "medium").strip().lower()
-    floor = _store_facade()._severity_value(min_severity)
+    floor = _severity_value(min_severity)
     if floor <= 0:
         min_severity = "medium"
-        floor = _store_facade()._severity_value(min_severity)
+        floor = _severity_value(min_severity)
     dedupe_window_s = max(60, int(dedupe_window_s or 3600))
     inbox_closed = (close_stale_reconcile_alert_inbox(project=project, actor=actor, now=now)
                     if close_stale_inbox else
                     {"closed_count": 0, "message_ids": [], "monitor_ids": []})
     report = reconcile(project=project, incremental=incremental)
     findings = [f for f in report["findings"]
-                if _store_facade()._severity_value(str(f.get("severity") or "")) >= floor]
+                if _severity_value(str(f.get("severity") or "")) >= floor]
     if not findings:
         return {"project": project, "ok": True, "alert_sent": False, "deduped": False,
                 "finding_count": 0, "min_severity": min_severity,
@@ -1552,6 +1559,8 @@ def default_provenance_repository() -> StoreProvenanceRepository:
 __all__ = [
     "StoreProvenanceRepository",
     "default_provenance_repository",
+    "SEVERITY_VALUE",
+    "_severity_value",
     "_reconcile_failure_class",
     "_annotate_reconcile_finding",
     "_git_state_row",

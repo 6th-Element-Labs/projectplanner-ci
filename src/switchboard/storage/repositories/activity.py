@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from constants import *  # noqa: F401,F403
-from db.connection import _conn
+from db.connection import _conn, _control_plane_conn, _control_plane_unavailable
 from db.core import *  # noqa: F401,F403
 from switchboard.storage.repositories.provenance import _load_git_state  # noqa: F401
 
@@ -24,16 +24,8 @@ def _store_facade():
     return store
 
 
-def _control_plane_timeout_s() -> float:
-    return _sqlite_timeout_s("PM_CONTROL_PLANE_SQLITE_TIMEOUT_S", 2.0)
-
-
-def _activity_control_plane_conn(project: str = DEFAULT_PROJECT):
-    return _conn(project, timeout_s=_control_plane_timeout_s())
-
-
 def _activity_cursor(project: str = DEFAULT_PROJECT) -> int:
-    with _activity_control_plane_conn(project) as c:
+    with _control_plane_conn(project) as c:
         return int(c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0] or 0)
 
 

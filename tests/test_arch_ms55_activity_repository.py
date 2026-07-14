@@ -73,26 +73,11 @@ try:
     ok(isinstance(store.activity_repository, act_repo.StoreActivityRepository),
        "store.activity_repository is StoreActivityRepository")
 
-    shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+    ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+       "shell residual deleted (ARCH-MS-64)")
     act_src = (ROOT / "src/switchboard/storage/repositories/activity.py").read_text()
     projects_src = (ROOT / "src/switchboard/storage/repositories/projects.py").read_text()
     ws_src = (ROOT / "src/switchboard/storage/repositories/work_sessions.py").read_text()
-    ok("def append_activity(" not in shell_src,
-       "shell residual no longer defines append_activity")
-    ok("def get_activity_delta(" not in shell_src,
-       "shell residual no longer defines get_activity_delta")
-    ok("def activity_since(" not in shell_src,
-       "shell residual no longer defines activity_since")
-    ok("def _activity_cursor(" not in shell_src,
-       "shell residual no longer defines _activity_cursor")
-    ok("def get_meta(" not in shell_src,
-       "shell residual no longer defines get_meta")
-    ok("def set_meta(" not in shell_src,
-       "shell residual no longer defines set_meta")
-    ok("def get_contacts(" not in shell_src,
-       "shell residual no longer defines get_contacts")
-    ok("_SEED_CONTACTS =" not in shell_src,
-       "shell residual no longer owns _SEED_CONTACTS")
     ok("def append_activity(" in act_src
        and "INSERT INTO activity" in act_src
        and "def get_meta(" in act_src,
@@ -104,10 +89,6 @@ try:
     ok("from switchboard.storage.repositories.activity import" in ws_src
        and "_store_facade().append_activity" not in ws_src,
        "work_sessions imports append_activity directly")
-
-    shell_lines = shell_src.count("\n") + 1
-    ok(shell_lines <= 2924 - 80,
-       f"shell residual shrank by >=80 lines ({shell_lines} <= {2924 - 80})")
 
     store.init_db("switchboard")
     row_id = store.append_activity(

@@ -228,3 +228,19 @@ def bug_report_description(report: Dict[str, Any]) -> str:
 
 
 _bug_report_description = bug_report_description
+
+
+__all__ = [
+    "BUG_FAILURE_CLASSES",
+    "BUG_INTAKE_POLICY",
+    "BUG_REPORT_REQUIRED_FIELDS",
+    "BUG_SEVERITIES",
+    "FAIL_FIX_FAILURE_CLASSES",
+    "FAIL_FIX_REQUIRED_FIELDS",
+    "_bug_report_description",
+    "_bug_report_value_present",
+    "_bug_title",
+    "_failure_class_detail",
+    "bug_intake_policy",
+    "fail_fix_signal_schema",
+]

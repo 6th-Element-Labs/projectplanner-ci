@@ -9,7 +9,8 @@ import sys
 from path_setup import ROOT
 
 import store  # noqa: E402
-from switchboard.storage.repositories import shell as store_shell  # noqa: E402
+from switchboard.storage.repositories import tasks as tasks_repo  # noqa: E402
+from db.connection import _registry_conn  # noqa: E402
 
 
 passed = failed = 0
@@ -46,20 +47,16 @@ ok(checks.get("store_facade_ceiling") is True
    and checks.get("app_adapter_ceiling") is True
    and checks.get("mcp_adapter_ceiling") is True,
    "entry façades/adapters clear ARCH-MS-45 absolute ceilings")
-ok(store.merge_gate is store_shell.merge_gate
-   and store.create_task is store_shell.create_task
-   and store._registry_conn is store_shell._registry_conn,
-   "store.py remains a compatible façade over repositories.shell")
-ok((ROOT / "app_impl.py").is_file() and (ROOT / "mcp_server_impl.py").is_file(),
-   "app/mcp residual implementation modules exist beside the thin entrypoints")
-ok((ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
-   "store residual shell module exists under storage/repositories")
-# ARCH-MS-53: fat residual dump must not count as Phase 1 exit.
-ok(report.get("rename_as_done") is True
-   or checks.get("store_residual_ceiling") is False,
-   "live tree still has residual bodies above shrinking ceilings (not rename-as-done exit)")
-ok(report.get("passed") is False,
-   "Phase 1 exit remains fail-closed until residuals drain under ARCH-MS-53 ceilings")
+ok(store.merge_gate is not None
+   and store.create_task is tasks_repo.create_task
+   and store._registry_conn is _registry_conn,
+   "store.py remains a compatible lazy composition root")
+ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+   "store residual shell module is deleted (ARCH-MS-64)")
+ok(checks.get("store_residual_ceiling") is True,
+   "deleted shell residual passes ARCH-MS-53 store residual ceiling")
+ok(report.get("passed") is True,
+   "Phase 1 exit passes after shell delete and residual drain")
 ok(report.get("missing_artifacts") == [],
    "every Phase 1 proof artifact exists")
 

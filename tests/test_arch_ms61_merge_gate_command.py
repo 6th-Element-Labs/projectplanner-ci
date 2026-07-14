@@ -54,7 +54,8 @@ try:
        or "never marks" in (store.merge_gate.__doc__ or ""),
        "docstring keeps non-executor / never-marks-Done contract")
 
-    shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+    ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+       "shell residual deleted (ARCH-MS-64)")
     cmd_src = cmd_path.read_text()
     rest_src = (ROOT / "src/switchboard/api/routers/external_effects.py").read_text()
     mcp_src = (ROOT / "src/switchboard/mcp/tools/external_effects.py").read_text()
@@ -71,13 +72,9 @@ try:
         "_merge_gate_bool",
         "merge_gate",
     ):
-        ok(f"def {name}(" not in shell_src,
-           f"shell residual no longer defines {name}")
         ok(f"def {name}(" in cmd_src,
            f"application command defines {name}")
 
-    ok("from switchboard.application.commands.merge_gate import" in shell_src,
-       "shell re-exports application merge_gate")
     ok("merge_gate_command.execute_mapping_result" in rest_src,
        "REST adapter calls application command")
     ok("store.merge_gate(" not in rest_src,
@@ -88,10 +85,6 @@ try:
        "MCP adapter is not a fat store call for merge_gate")
     ok("def execute_mapping_result(" in cmd_src,
        "execute_mapping_result remains the adapter entry")
-
-    shell_lines = shell_src.count("\n") + 1
-    ok(shell_lines <= SHELL_BEFORE - 350,
-       f"shell residual shrank meaningfully ({shell_lines} <= {SHELL_BEFORE - 350})")
 
     finding = cmd_mod._merge_gate_finding(
         "draft_pr", "Draft PRs cannot pass the merge gate.", "failed_gate")

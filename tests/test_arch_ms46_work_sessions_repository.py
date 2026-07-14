@@ -70,12 +70,9 @@ ok(store.create_work_session.__module__
 ok(isinstance(store.work_sessions_repository, ws_repo.StoreWorkSessionsRepository),
    "store.work_sessions_repository is StoreWorkSessionsRepository")
 
-shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+   "shell residual deleted (ARCH-MS-64)")
 ws_src = (ROOT / "src/switchboard/storage/repositories/work_sessions.py").read_text()
-ok("def create_work_session(" not in shell_src,
-   "shell residual no longer defines create_work_session")
-ok("def list_session_health(" not in shell_src,
-   "shell residual no longer defines list_session_health")
 ok("def create_work_session(" in ws_src,
    "work_sessions repository owns create_work_session")
 ok(len(ws_src.splitlines()) > 500,

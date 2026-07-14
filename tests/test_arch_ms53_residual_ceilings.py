@@ -140,9 +140,9 @@ ok("store_residual_ceiling" in live.get("checks", {}),
    "live report includes store residual ceiling check")
 ok("rename_as_done_forbidden" in live.get("checks", {}),
    "live report includes rename-as-done forbid check")
-# Current master still has fat entry monoliths — exit must not greenwash that.
-ok(live.get("passed") is False,
-   "current tree does not falsely pass Phase 1 exit before residual drain")
+# Current tree has drained store residual and MS-70 shrunk app/mcp impls — exit may pass.
+ok(live.get("passed") is True,
+   "current tree passes Phase 1 exit after shell delete and residual drain")
 
 if proc.stderr:
     print(proc.stderr)

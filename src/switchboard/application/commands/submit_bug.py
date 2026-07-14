@@ -31,6 +31,8 @@ GetTaskFn = Callable[..., Optional[dict[str, Any]]]
 SetAgentStateFn = Callable[..., Any]
 AppendActivityFn = Callable[..., Any]
 
+__all__ = ["execute", "execute_mapping_result", "submit_bug"]
+
 
 def _deps():
     """Lazy store façade so adapters can inject fakes in tests later."""
@@ -198,3 +200,6 @@ def execute_mapping_result(
         set_agent_state=set_agent_state,
         append_activity=append_activity,
     )
+
+
+submit_bug = execute_mapping_result

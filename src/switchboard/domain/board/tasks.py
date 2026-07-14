@@ -18,6 +18,8 @@ EDITABLE_TASK_FIELDS = (
     "entry_criteria", "exit_criteria", "deliverable", "depends_on",
 )
 
+EDITABLE = list(EDITABLE_TASK_FIELDS)
+
 READY_TASK_STATUSES = frozenset({"Not Started", "Ready", "Todo", "Backlog"})
 TERMINAL_TASK_STATUSES = frozenset({"Done", "Cancelled", "Canceled"})
 

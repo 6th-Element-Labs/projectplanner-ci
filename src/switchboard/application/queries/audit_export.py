@@ -16,6 +16,17 @@ from db.core import _json_payload
 import evidence_claims
 
 
+__all__ = [
+    "_AUDIT_REDACT_KEYS",
+    "_audit_redact",
+    "_canonical_repo_root",
+    "_evidence_claim_reports",
+    "audit_export",
+    "execute",
+    "execute_mapping_result",
+]
+
+
 def _store():
     import store
     return store
@@ -347,3 +358,6 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
 
 def execute_mapping_result(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     return execute(project=project)
+
+
+audit_export = execute

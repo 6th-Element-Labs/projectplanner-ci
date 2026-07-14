@@ -87,17 +87,10 @@ ok(isinstance(store.external_ci_repository, eci_repo.StoreExternalCiRepository),
 ok(isinstance(store.publication_repository, pub_repo.StorePublicationRepository),
    "store.publication_repository is StorePublicationRepository")
 
-shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+   "shell residual deleted (ARCH-MS-64)")
 eci_src = (ROOT / "src/switchboard/storage/repositories/external_ci.py").read_text()
 pub_src = (ROOT / "src/switchboard/storage/repositories/publication.py").read_text()
-ok("def create_external_ci_run(" not in shell_src,
-   "shell residual no longer defines create_external_ci_run")
-ok("def create_publication_evidence(" not in shell_src,
-   "shell residual no longer defines create_publication_evidence")
-ok("def _publication_reconcile_findings(" not in shell_src,
-   "shell residual no longer defines _publication_reconcile_findings")
-ok("def merge_gate(" not in shell_src,
-   "merge_gate left shell residual (ARCH-MS-61)")
 ok("def create_external_ci_run(" in eci_src,
    "external_ci repository owns create_external_ci_run")
 ok("def create_publication_evidence(" in pub_src,
@@ -106,8 +99,6 @@ ok(len(eci_src.splitlines()) > 400,
    "external_ci extract is substantial")
 ok(len(pub_src.splitlines()) > 300,
    "publication extract is substantial")
-ok(len(shell_src.splitlines()) < 5500,
-   "shell residual shrunk after ARCH-MS-47 extract")
 
 try:
     store.init_project_registry()

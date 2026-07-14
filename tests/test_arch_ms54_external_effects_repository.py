@@ -71,20 +71,10 @@ try:
                   fx_repo.StoreExternalEffectsRepository),
        "store.external_effects_repository is StoreExternalEffectsRepository")
 
-    shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+    ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+       "shell residual deleted (ARCH-MS-64)")
     fx_src = (ROOT / "src/switchboard/storage/repositories/external_effects.py").read_text()
     eci_src = (ROOT / "src/switchboard/storage/repositories/external_ci.py").read_text()
-    ok("def make_external_effect_key(" not in shell_src,
-       "shell residual no longer defines make_external_effect_key")
-    ok("def claim_external_effect(" not in shell_src,
-       "shell residual no longer defines claim_external_effect")
-    ok("def _claim_external_effect_in(" not in shell_src,
-       "shell residual no longer defines _claim_external_effect_in")
-    ok("def list_external_effects(" not in shell_src,
-       "shell residual no longer defines list_external_effects")
-    ok("EXTERNAL_EFFECT_TERMINAL_STATUSES" not in shell_src
-       or "EXTERNAL_EFFECT_TERMINAL_STATUSES =" not in shell_src,
-       "shell residual no longer owns EXTERNAL_EFFECT_TERMINAL_STATUSES assignment")
     ok("def make_external_effect_key(" in fx_src
        and "def claim_external_effect(" in fx_src
        and "INSERT INTO external_side_effects" in fx_src,
@@ -92,10 +82,6 @@ try:
     ok("from switchboard.storage.repositories.external_effects import" in eci_src
        and "_store_facade()._claim_external_effect_in" not in eci_src,
        "external_ci imports claim helpers directly from external_effects")
-
-    shell_lines = shell_src.count("\n") + 1
-    ok(shell_lines <= 3116 - 150,
-       f"shell residual shrank by >=150 lines ({shell_lines} <= {3116 - 150})")
 
     # Functional smoke through the store façade
     store.init_db("switchboard")

@@ -16,7 +16,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from constants import *  # noqa: F401,F403
-from db.connection import _conn
+from db.connection import _conn, _control_plane_conn, _control_plane_unavailable
 from db.core import _json_obj  # noqa: F401
 from switchboard.domain.coordination.delivery import (
     build_message_delivery_receipt,
@@ -290,7 +290,7 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             require_execution_binding=False,
         )
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             hit = _store_facade()._idem_hit(c, "request_wake", idem_key, actor, payload)
             if hit is not None:
                 return hit
@@ -323,7 +323,7 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             return wake
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            return _store_facade()._control_plane_unavailable("request_wake", project, started_at, exc)
+            return _control_plane_unavailable("request_wake", project, started_at, exc)
         raise
 
 def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
@@ -337,11 +337,11 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
         q += " AND claimed_by_host=?"; params.append(host_id)
     q += " ORDER BY requested_at"
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             wakes = [_wake_row(r) for r in c.execute(q, params).fetchall()]
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            return [_store_facade()._control_plane_unavailable("list_wake_intents", project, started_at, exc)]
+            return [_control_plane_unavailable("list_wake_intents", project, started_at, exc)]
         raise
     if runtime:
         wakes = [w for w in wakes if (w.get("selector") or {}).get("runtime") == runtime]
@@ -399,7 +399,7 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
     started_at = time.time()
     now = time.time()
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             wake_row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
             if not wake_row:
                 return {"claimed": False, "error": "wake not found", "wake_id": wake_id}
@@ -548,7 +548,7 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            err = _store_facade()._control_plane_unavailable("claim_wake", project, started_at, exc)
+            err = _control_plane_unavailable("claim_wake", project, started_at, exc)
             return {"claimed": False, **err}
         raise
     claimed_wake = _wake_row(row)
@@ -570,7 +570,7 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
     if "reason" not in result:
         result["reason"] = "started" if success else "launch_failed"
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
             if not row:
                 return {"error": "wake not found", "wake_id": wake_id}
@@ -629,7 +629,7 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            return _store_facade()._control_plane_unavailable("complete_wake", project, started_at, exc)
+            return _control_plane_unavailable("complete_wake", project, started_at, exc)
         raise
     return _wake_row(row)
 
@@ -638,7 +638,7 @@ def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
     started_at = time.time()
     now = time.time()
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
             if not row:
                 return {"error": "wake not found", "wake_id": wake_id}
@@ -661,7 +661,7 @@ def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
             row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            return _store_facade()._control_plane_unavailable("cancel_wake", project, started_at, exc)
+            return _control_plane_unavailable("cancel_wake", project, started_at, exc)
         raise
     return _wake_row(row)
 
@@ -673,7 +673,7 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
     requeued = 0
     events: List[Dict[str, Any]] = []
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             rows = c.execute(
                 "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
                 "AND deadline IS NOT NULL AND deadline<=?",
@@ -802,7 +802,7 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                                ), "lost_host_id": host_id})
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            err = _store_facade()._control_plane_unavailable("sweep_wake_intents", project, started_at, exc)
+            err = _control_plane_unavailable("sweep_wake_intents", project, started_at, exc)
             return {"project": project, "failed": failed, "events": events, **err}
         raise
     return {"project": project, "failed": failed, "requeued": requeued, "events": events}
@@ -1548,7 +1548,7 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
         capacity["active_sessions"] = inventory.get("active_sessions")
     ttl_s = max(10, int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60))
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             c.execute(
                 "INSERT INTO agent_hosts(host_id, hostname, agent_host_version, repo_root, "
                 "runtimes_json, limits_json, capacity_json, principal_id, registered_at, "
@@ -1573,7 +1573,7 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            return _store_facade()._control_plane_unavailable("register_host", project, started_at, exc)
+            return _control_plane_unavailable("register_host", project, started_at, exc)
         raise
     return _host_row(row, now=now)
 
@@ -1586,7 +1586,7 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
     started_at = time.time()
     now = time.time()
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
             if not row:
                 return {"error": "host not registered", "host_id": host_id}
@@ -1608,7 +1608,7 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            return _store_facade()._control_plane_unavailable("heartbeat_host", project, started_at, exc)
+            return _control_plane_unavailable("heartbeat_host", project, started_at, exc)
         raise
     return _host_row(row, now=now)
 
@@ -1621,11 +1621,11 @@ def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
     selector = {"runtime": runtime or "", "lane": lane or "",
                 "capabilities": [capability] if capability else []}
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            return [_store_facade()._control_plane_unavailable("list_agent_hosts", project, started_at, exc)]
+            return [_control_plane_unavailable("list_agent_hosts", project, started_at, exc)]
         raise
     hosts = [_host_row(r, now=now) for r in rows]
     out = []
@@ -1644,7 +1644,7 @@ def host_status(host_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
     try:
-        with _store_facade()._control_plane_conn(project) as c:
+        with _control_plane_conn(project) as c:
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
             if not row:
                 return {"error": "host not registered", "host_id": host_id}
@@ -1655,7 +1655,7 @@ def host_status(host_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             ).fetchall()
     except sqlite3.OperationalError as exc:
         if _store_facade()._sqlite_busy(exc):
-            return _store_facade()._control_plane_unavailable("host_status", project, started_at, exc)
+            return _control_plane_unavailable("host_status", project, started_at, exc)
         raise
     host["wake_counts"] = {r["status"]: r["n"] for r in counts}
     return host

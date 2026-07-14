@@ -71,15 +71,11 @@ try:
     ok(isinstance(store.plan_chat_repository, chat_repo.StorePlanChatRepository),
        "store.plan_chat_repository is StorePlanChatRepository")
 
-    shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+    ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+       "shell residual deleted (ARCH-MS-64)")
     tasks_src = (ROOT / "src/switchboard/storage/repositories/tasks.py").read_text()
     chat_src = (ROOT / "src/switchboard/storage/repositories/plan_chat.py").read_text()
     router_src = (ROOT / "src/switchboard/api/routers/plan_chat.py").read_text()
-
-    for name in ("add_comment", "add_chat", "clear_chat", "recent_chat",
-                 "add_dispatch", "latest_dispatch"):
-        ok(f"def {name}(" not in shell_src,
-           f"shell residual no longer defines {name}")
 
     ok("def add_comment(" in tasks_src
        and "INSERT INTO activity" in tasks_src,
@@ -110,10 +106,6 @@ try:
             dispatch_hits.append(str(path.relative_to(ROOT)))
     ok(not dispatch_hits,
        f"no add_dispatch/latest_dispatch defs/callers remain ({dispatch_hits})")
-
-    shell_lines = shell_src.count("\n") + 1
-    ok(shell_lines <= SHELL_BEFORE - 70,
-       f"shell residual shrank meaningfully ({shell_lines} <= {SHELL_BEFORE - 70})")
 
     store.init_db("switchboard")
     created = store.create_task({

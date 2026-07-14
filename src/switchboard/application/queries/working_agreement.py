@@ -9,6 +9,9 @@ from typing import Any, Dict
 from constants import DEFAULT_PROJECT
 
 
+__all__ = ["get_working_agreement", "execute", "execute_mapping_result"]
+
+
 def _store():
     import store
     return store
@@ -192,3 +195,6 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
 
 def execute_mapping_result(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     return execute(project=project)
+
+
+get_working_agreement = execute

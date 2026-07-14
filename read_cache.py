@@ -18,6 +18,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict
 
+__all__ = ["_READ_CACHE", "ttl_read_cache"]
+
 _READ_CACHE: Dict[str, Dict[str, Any]] = {}
 _READ_CACHE_TTL = float(os.environ.get("PM_READ_CACHE_TTL_S", "30") or 30)  # >poll interval so 5s mission/board polls hit the cache (was 3s → every poll missed); PM_READ_CACHE_TTL_S=3 reverts
 # Serve-stale-while-revalidate: when an entry's TTL has lapsed but its STAMP is unchanged,

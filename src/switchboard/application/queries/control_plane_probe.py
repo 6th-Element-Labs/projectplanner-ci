@@ -13,6 +13,9 @@ from constants import DEFAULT_PROJECT
 from db.core import _json_size_bytes, _sqlite_busy
 
 
+__all__ = ["control_plane_probe", "execute", "execute_mapping_result"]
+
+
 def _store():
     import store
     return store
@@ -103,3 +106,6 @@ def execute(project: str = DEFAULT_PROJECT, lane: str = "",
 def execute_mapping_result(project: str = DEFAULT_PROJECT, lane: str = "",
                            include_heavy: bool = False) -> Dict[str, Any]:
     return execute(project=project, lane=lane, include_heavy=include_heavy)
+
+
+control_plane_probe = execute

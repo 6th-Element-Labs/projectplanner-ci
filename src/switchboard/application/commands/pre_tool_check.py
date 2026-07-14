@@ -21,6 +21,19 @@ from constants import DEFAULT_PROJECT, PRE_TOOL_CHECK_SCHEMA
 from switchboard.domain.access.identity import write_binding_activity_payload
 
 
+__all__ = [
+    "_pre_tool_classify",
+    "_pre_tool_decision",
+    "_pre_tool_input",
+    "_pre_tool_relpath",
+    "_pre_tool_requested_profile",
+    "_pre_tool_target_path",
+    "_record_pre_tool_activity",
+    "pre_tool_check",
+    "execute_mapping_result",
+]
+
+
 def _store_facade():
     """Resolve board/session/lease helpers after store.py is initialized."""
     import store

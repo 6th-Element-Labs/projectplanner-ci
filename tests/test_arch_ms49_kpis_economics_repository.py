@@ -85,20 +85,9 @@ ok(store.create_kpi.__module__
 ok(isinstance(store.kpis_economics_repository, kpi_repo.StoreKpisEconomicsRepository),
    "store.kpis_economics_repository is StoreKpisEconomicsRepository")
 
-shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+   "shell residual deleted (ARCH-MS-64)")
 kpi_src = (ROOT / "src/switchboard/storage/repositories/kpis_economics.py").read_text()
-ok("def report_usage(" not in shell_src,
-   "shell residual no longer defines report_usage")
-ok("def create_kpi(" not in shell_src,
-   "shell residual no longer defines create_kpi")
-ok("def kpi_tally(" not in shell_src,
-   "shell residual no longer defines kpi_tally")
-ok("def list_outcomes(" not in shell_src,
-   "shell residual no longer defines list_outcomes")
-ok("def _dispatch_score(" not in shell_src,
-   "shell residual no longer defines _dispatch_score")
-ok("def _risk_value(" not in shell_src,
-   "_risk_value no longer defined in shell residual (ARCH-MS-50 → claims)")
 ok(store._risk_value.__module__
    == "switchboard.storage.repositories.claims",
    "_risk_value now lives under claims after ARCH-MS-50")
@@ -108,8 +97,6 @@ ok("def create_kpi(" in kpi_src,
    "kpis_economics repository owns create_kpi")
 ok(len(kpi_src.splitlines()) > 400,
    "kpis_economics extract is substantial")
-ok(len(shell_src.splitlines()) < 4000,
-   "shell residual shrunk after ARCH-MS-49 extract")
 
 try:
     store.init_project_registry()

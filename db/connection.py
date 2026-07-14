@@ -30,6 +30,9 @@ __all__ = [
     "_project_map",
     "_resolve",
     "_conn",
+    "_control_plane_timeout_s",
+    "_control_plane_conn",
+    "_control_plane_unavailable",
     "_write_through",
     "_sqlite_write_queue_stats",
     "bust_project_cache",
@@ -429,3 +432,24 @@ def _write_through(project: str, thunk, timeout_s: Optional[float] = None):
 
 def _sqlite_write_queue_stats() -> Dict[str, Any]:
     return all_queue_stats()
+
+
+def _control_plane_timeout_s() -> float:
+    return _sqlite_timeout_s("PM_CONTROL_PLANE_SQLITE_TIMEOUT_S", 2.0)
+
+
+def _control_plane_conn(project: str = DEFAULT_PROJECT):
+    return _conn(project, timeout_s=_control_plane_timeout_s())
+
+
+def _control_plane_unavailable(operation: str, project: str, started_at: float,
+                               exc: Exception) -> Dict[str, Any]:
+    return {
+        "error": "control_plane_unavailable",
+        "reason": "sqlite_busy",
+        "operation": operation,
+        "project": project,
+        "elapsed_ms": int((time.time() - started_at) * 1000),
+        "timeout_ms": int(_control_plane_timeout_s() * 1000),
+        "message": str(exc),
+    }

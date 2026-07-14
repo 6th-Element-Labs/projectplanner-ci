@@ -77,19 +77,15 @@ ok(store.create_project.__module__ == "switchboard.storage.repositories.projects
 ok(isinstance(store.projects_repository, projects_repo.StoreProjectsRepository),
    "store.projects_repository is StoreProjectsRepository")
 
-shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+   "shell residual deleted (ARCH-MS-64)")
 proj_src = (ROOT / "src/switchboard/storage/repositories/projects.py").read_text()
-ok("def init_db(" not in shell_src, "shell residual no longer defines init_db")
-ok("def seed_if_empty(" not in shell_src, "shell residual no longer defines seed_if_empty")
-ok("def create_project(" not in shell_src, "shell residual no longer defines create_project")
-ok("def get_project_repo_topology(" not in shell_src,
-   "shell residual no longer defines get_project_repo_topology")
-ok("def get_working_agreement(" in shell_src,
-   "get_working_agreement remains in shell residual")
+wa_src = (ROOT / "src/switchboard/application/queries/working_agreement.py").read_text()
 ok("def init_db(" in proj_src, "projects repository owns init_db")
 ok("def create_project(" in proj_src, "projects repository owns create_project")
+ok("def get_working_agreement" in wa_src or "get_working_agreement = execute" in wa_src,
+   "get_working_agreement lives in application query module")
 ok(len(proj_src.splitlines()) > 400, "projects extract is substantial")
-ok(len(shell_src.splitlines()) < 4800, "shell residual shrunk after ARCH-MS-48 extract")
 
 try:
     store.init_project_registry()

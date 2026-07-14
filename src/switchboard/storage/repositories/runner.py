@@ -9,7 +9,7 @@ import json
 import sqlite3
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from constants import DEFAULT_PROJECT
 from db.connection import _conn
@@ -18,6 +18,8 @@ from db.core import _json_obj, _text_tail
 RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open"}
 
 __all__ = [
+    "_runner_session_row",
+    "_upsert_runner_session_in",
     "upsert_runner_session",
     "list_runner_sessions",
     "get_runner_session",

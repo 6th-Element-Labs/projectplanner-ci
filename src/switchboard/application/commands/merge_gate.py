@@ -17,6 +17,21 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from constants import DEFAULT_PROJECT, GITHUB_PR_URL_RE, MERGE_GATE_SCHEMA
 
 
+__all__ = [
+    "_merge_gate_bool",
+    "_merge_gate_context_passed",
+    "_merge_gate_context_rows",
+    "_merge_gate_finding",
+    "_merge_gate_pr_evidence",
+    "_merge_gate_pr_number",
+    "_merge_gate_pr_ref",
+    "_merge_gate_required_contexts",
+    "_merge_gate_status_contexts",
+    "merge_gate",
+    "execute_mapping_result",
+]
+
+
 def _store_facade():
     """Resolve board/session/GitHub helpers after store.py is initialized."""
     import store

@@ -51,7 +51,8 @@ try:
        == "switchboard.application.commands.pre_tool_check",
        "pre_tool_check lives under application.commands.pre_tool_check")
 
-    shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+    ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+       "shell residual deleted (ARCH-MS-64)")
     cmd_src = cmd_path.read_text()
     rest_src = (ROOT / "src/switchboard/api/routers/ixp_work_sessions.py").read_text()
     mcp_src = (ROOT / "src/switchboard/mcp/tools/work_sessions.py").read_text()
@@ -66,13 +67,9 @@ try:
         "_record_pre_tool_activity",
         "pre_tool_check",
     ):
-        ok(f"def {name}(" not in shell_src,
-           f"shell residual no longer defines {name}")
         ok(f"def {name}(" in cmd_src,
            f"application command defines {name}")
 
-    ok("from switchboard.application.commands.pre_tool_check import" in shell_src,
-       "shell re-exports application pre_tool_check")
     ok("pre_tool_check_command.execute_mapping_result" in rest_src,
        "REST adapter calls application command")
     ok("store.pre_tool_check(" not in rest_src,
@@ -81,10 +78,6 @@ try:
        "MCP adapter calls application command")
     ok("store.pre_tool_check(" not in mcp_src,
        "MCP adapter is not a fat store call for pre_tool_check")
-
-    shell_lines = shell_src.count("\n") + 1
-    ok(shell_lines <= SHELL_BEFORE - 300,
-       f"shell residual shrank meaningfully ({shell_lines} <= {SHELL_BEFORE - 300})")
 
     # Golden decision shape preserved (classification + schema).
     classification = cmd_mod._pre_tool_classify("Write", {"file_path": "a.py"})

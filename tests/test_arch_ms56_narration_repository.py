@@ -72,21 +72,10 @@ try:
     ok(isinstance(store.narration_repository, narr_repo.StoreNarrationRepository),
        "store.narration_repository is StoreNarrationRepository")
 
-    shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+    ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+       "shell residual deleted (ARCH-MS-64)")
     narr_src = (ROOT / "src/switchboard/storage/repositories/narration.py").read_text()
     tasks_src = (ROOT / "src/switchboard/storage/repositories/tasks.py").read_text()
-    for name in (
-        "task_narration_fingerprint",
-        "_narration_state",
-        "set_task_narration",
-        "get_task_narration",
-        "enqueue_narration",
-        "list_pending_narrations",
-        "clear_pending_narration",
-        "_max_activity_cursor",
-    ):
-        ok(f"def {name}(" not in shell_src,
-           f"shell residual no longer defines {name}")
     ok("def enqueue_narration(" in narr_src
        and "INSERT OR REPLACE INTO pending_narrations" in narr_src
        and "INSERT OR REPLACE INTO task_narrations" in narr_src,
@@ -95,10 +84,6 @@ try:
        and "_store_facade()._narration_state" not in tasks_src
        and "s.enqueue_narration(" not in tasks_src,
        "tasks imports narration helpers directly (no shell/store enqueue)")
-
-    shell_lines = shell_src.count("\n") + 1
-    ok(shell_lines <= 2817 - 70,
-       f"shell residual shrank meaningfully ({shell_lines} <= {2817 - 70})")
 
     store.init_db("switchboard")
     created = store.create_task({

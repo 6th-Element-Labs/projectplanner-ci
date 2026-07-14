@@ -86,9 +86,11 @@ ok(store.claim_files.__module__ == "switchboard.storage.repositories.claims",
 ok(store.register_agent.__module__ == "switchboard.storage.repositories.coordination",
    "register_agent lives under coordination repository")
 
-shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+   "shell residual deleted (ARCH-MS-64)")
 claims_src = (ROOT / "src/switchboard/storage/repositories/claims.py").read_text()
 coord_src = (ROOT / "src/switchboard/storage/repositories/coordination.py").read_text()
+probe_src = (ROOT / "src/switchboard/application/queries/control_plane_probe.py").read_text()
 
 for name in (
     "def claim_files(",
@@ -97,7 +99,6 @@ for name in (
     "def _executed_test_run_gate(",
     "def _risk_value(",
 ):
-    ok(name not in shell_src, f"shell residual no longer defines {name[4:].rstrip('(')}")
     ok(name in claims_src, f"claims repository owns {name[4:].rstrip('(')}")
 
 for name in (
@@ -107,14 +108,10 @@ for name in (
     "def set_agent_state(",
     "def _host_row(",
 ):
-    ok(name not in shell_src, f"shell residual no longer defines {name[4:].rstrip('(')}")
     ok(name in coord_src, f"coordination repository owns {name[4:].rstrip('(')}")
 
-# ARCH-MS-58 moved repo_preflight out of shell into domain/provenance/preflight.py.
-ok("def repo_preflight(" not in shell_src, "repo_preflight left shell residual (ARCH-MS-58)")
-ok("def pre_tool_check(" not in shell_src, "pre_tool_check left shell residual (ARCH-MS-60)")
-ok("def control_plane_probe(" in shell_src, "control_plane_probe remains in shell residual")
-ok(len(shell_src.splitlines()) < 3500, "shell residual shrunk after ARCH-MS-50 extract")
+ok("def control_plane_probe" in probe_src or "control_plane_probe = execute" in probe_src,
+   "control_plane_probe lives in application query module")
 ok(len(claims_src.splitlines()) > 1500, "claims repository grew with leases/evidence")
 ok(len(coord_src.splitlines()) > 1400, "coordination repository grew with agents/hosts")
 
@@ -129,7 +126,7 @@ try:
     ok(any(a.get("agent_id") == "ms50/arch-proof" for a in agents),
        "list_active_agents includes registered agent")
     lease = store.claim_files(
-        "ms50/arch-proof", ["src/switchboard/storage/repositories/shell.py"],
+        "ms50/arch-proof", ["store.py"],
         task_id="ARCH-MS-50", project="switchboard",
     )
     ok(bool(lease.get("lease_id")), f"claim_files via store façade ({lease.get('error')})")

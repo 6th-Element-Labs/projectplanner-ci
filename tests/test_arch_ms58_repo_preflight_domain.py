@@ -54,7 +54,8 @@ try:
     ok("side-effect-free" in (store.repo_preflight.__doc__ or ""),
        "docstring keeps side-effect-free report contract")
 
-    shell_src = (ROOT / "src/switchboard/storage/repositories/shell.py").read_text()
+    ok(not (ROOT / "src/switchboard/storage/repositories/shell.py").is_file(),
+       "shell residual deleted (ARCH-MS-64)")
     pre_src = (ROOT / "src/switchboard/domain/provenance/preflight.py").read_text()
 
     for name in (
@@ -69,23 +70,12 @@ try:
         "_repo_worktree_collisions",
         "repo_preflight",
     ):
-        ok(f"def {name}(" not in shell_src,
-           f"shell residual no longer defines {name}")
         ok(f"def {name}(" in pre_src,
            f"domain preflight defines {name}")
 
-    ok("subprocess.run" not in shell_src
-       or not re.search(r'\["git"', shell_src),
-       "shell has no subprocess git invocations")
     ok('["git", "-C", repo_path, *args]' in pre_src
        or '["git", "-C", repo_path' in pre_src,
        "git subprocess lives in domain preflight")
-    ok("from switchboard.domain.provenance.preflight import" in shell_src,
-       "shell re-exports domain preflight")
-
-    shell_lines = shell_src.count("\n") + 1
-    ok(shell_lines <= SHELL_BEFORE - 250,
-       f"shell residual shrank meaningfully ({shell_lines} <= {SHELL_BEFORE - 250})")
 
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
