@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Mobile Console — Money · Waves · Supervise</title>
+<style>
+*,*::before,*::after{ box-sizing:border-box; } body{ margin:0; } svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; } :where(a){ color:inherit; text-decoration:none; }
+:root{
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --red:#c0392b; --red-rgb:192,57,43; --green:#1f9d55; --green-rgb:31,157,85; --blue:#3b6fd4; --blue-rgb:59,111,212;
+  --azure:#3b82c4; --azure-rgb:59,130,196; --amber:#e0820b; --amber-rgb:224,130,11; --purple:#7048e8; --purple-rgb:112,72,232;
+  --ink:#101114; --ink-2:#565d6b; --ink-3:#878e9c; --card:#fff; --hair:#e6e9ef; --hair-2:#eff1f4; --chip:#f1f3f6; --bg:#f5f6f8;
+}
+body{ font-family:var(--ui); background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; letter-spacing:-.006em;
+  min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:16px; padding:26px 14px 44px; }
+.page-h{ text-align:center; max-width:560px; }
+.page-h .ey{ font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--red); font-weight:600; }
+.page-h h1{ font-size:22px; font-weight:720; letter-spacing:-.02em; margin:6px 0 4px; }
+.page-h p{ color:var(--ink-2); font-size:13.5px; margin:0; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.phones{ display:flex; gap:26px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+.wrap{ display:flex; flex-direction:column; align-items:center; gap:10px; }
+.wrap .cap{ font-size:12px; color:var(--ink-3); font-weight:600; } .wrap .cap b{ color:var(--red); }
+
+/* phone */
+.phone{ width:378px; border-radius:52px; padding:11px; background:linear-gradient(160deg,#24262c,#0e0f12 60%);
+  box-shadow:0 2px 6px rgba(16,24,40,.06),0 30px 70px -20px rgba(16,24,40,.5); }
+.screen{ position:relative; border-radius:42px; overflow:hidden; background:var(--bg); height:800px; display:flex; flex-direction:column; }
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%); width:112px; height:30px; background:#000; border-radius:20px; z-index:40; }
+.sb{ height:50px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between; padding:0 26px 7px; font-size:13px; font-weight:650; background:var(--card); }
+.sb .r{ display:flex; gap:6px; align-items:center; } .sb .r svg{ width:17px; height:12px; }
+
+/* top header */
+.top{ display:flex; align-items:center; gap:9px; padding:6px 16px 11px; background:var(--card); border-bottom:1px solid var(--hair); flex:0 0 auto; }
+.top .h1{ font-size:21px; font-weight:730; letter-spacing:-.02em; } .top .sub{ font-size:11px; color:var(--ink-3); font-family:var(--mono); }
+.top .grow{ flex:1; }
+.avatar{ width:30px; height:30px; border-radius:50%; background:#101114; color:#fff; display:grid; place-items:center; font-size:12px; font-weight:700; }
+.seg2{ display:flex; gap:4px; background:var(--chip); border-radius:10px; padding:3px; }
+.seg2 button{ font-size:11px; font-weight:600; padding:4px 9px; border-radius:7px; color:var(--ink-2); } .seg2 button.on{ background:var(--card); color:var(--ink); box-shadow:0 1px 2px rgba(16,24,40,.1); }
+
+/* scroll body */
+.body{ flex:1; min-height:0; overflow:hidden; }
+.scroll{ height:100%; overflow:hidden; padding:13px 15px 12px; }
+.slabel{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin:14px 2px 8px; display:flex; align-items:center; gap:7px; }
+.slabel .grow{ flex:1; }
+.card{ background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:13px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+.card + .card{ margin-top:9px; }
+.row{ display:flex; align-items:center; gap:9px; } .grow{ flex:1; }
+.badge{ display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:640; padding:2px 7px; border-radius:999px; white-space:nowrap; } .badge svg{ width:10px;height:10px; }
+.b-green{ color:var(--green); background:rgba(var(--green-rgb),.11); } .b-amber{ color:var(--amber); background:rgba(var(--amber-rgb),.13); }
+.b-red{ color:var(--red); background:rgba(var(--red-rgb),.1); } .b-blue{ color:var(--blue); background:rgba(var(--blue-rgb),.11); }
+.b-azure{ color:var(--azure); background:rgba(var(--azure-rgb),.12); } .b-purple{ color:var(--purple); background:rgba(var(--purple-rgb),.11); } .b-gray{ color:var(--ink-2); background:var(--chip); }
+.dot{ width:6px;height:6px;border-radius:50%; } .d-live{ background:var(--red); animation:pulse 1.8s infinite; }
+@keyframes pulse{ 0%{box-shadow:0 0 0 0 rgba(var(--red-rgb),.5);} 70%{box-shadow:0 0 0 5px rgba(var(--red-rgb),0);} }
+.av{ width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:#fff;font-size:10px;font-weight:700;flex:0 0 auto; }
+.pill{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:3px 8px; border-radius:999px; } .p-live{ color:var(--red); background:rgba(var(--red-rgb),.09); }
+.mut{ color:var(--ink-2); } code{ font-family:var(--mono); font-size:10.5px; background:var(--chip); padding:1px 4px; border-radius:4px; }
+
+/* stat tiles */
+.tiles{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.tile{ background:var(--card); border:1px solid var(--hair); border-radius:13px; padding:11px 12px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+.tile .k{ font-family:var(--mono); font-size:9px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3); }
+.tile .v{ font-size:22px; font-weight:730; letter-spacing:-.02em; margin-top:2px; } .tile .v small{ font-size:11px; font-weight:500; color:var(--ink-2); }
+
+/* tally seg meter */
+.seg{ display:flex; height:30px; border-radius:8px; overflow:hidden; border:1px solid var(--hair); }
+.seg > span{ display:flex; align-items:center; justify-content:center; color:#fff; font-size:10.5px; font-weight:700; font-family:var(--mono); overflow:hidden; }
+.seg .pv{ background:var(--green); } .seg .rv{ background:var(--amber); } .seg .ov{ background:var(--ink-3); }
+.leg{ display:flex; flex-direction:column; gap:4px; margin-top:9px; font-size:11.5px; color:var(--ink-2); }
+.leg i{ width:9px; height:9px; border-radius:2px; display:inline-block; margin-right:6px; }
+.cbar{ display:grid; grid-template-columns:1fr auto; gap:4px 10px; align-items:center; padding:7px 0; } .cbar + .cbar{ border-top:1px solid var(--hair-2); }
+.cbar .nm{ font-size:12.5px; font-weight:560; } .cbar .nm small{ font-family:var(--mono); font-size:9.5px; color:var(--ink-3); margin-left:5px; }
+.cbar .amt{ font-family:var(--mono); font-size:12px; font-weight:640; } .cbar .track{ grid-column:1/3; height:8px; border-radius:999px; background:var(--chip); overflow:hidden; } .cbar .track>i{ display:block; height:100%; border-radius:999px; }
+
+/* waves */
+.capm{ height:9px; border-radius:999px; background:var(--chip); overflow:hidden; display:flex; margin-top:8px; } .capm>i{ height:100%; } .capm .now{ background:var(--red); } .capm .held{ background:var(--amber); } .capm .q{ background:var(--ink-3); opacity:.32; }
+.lane{ margin-bottom:9px; } .lane .ll{ font-family:var(--mono); font-size:10px; font-weight:700; color:var(--ink-2); margin-bottom:5px; }
+.wt{ border:1px solid var(--hair); border-radius:11px; padding:10px 12px; background:var(--card); } .wt + .wt{ margin-top:7px; }
+.wt .id{ font-family:var(--mono); font-size:10px; color:var(--ink-3); display:flex; gap:6px; align-items:center; }
+.wt .ti{ font-size:13px; font-weight:580; margin:2px 0 7px; } .wt.held{ border-color:rgba(var(--amber-rgb),.4); background:rgba(var(--amber-rgb),.04); }
+.score{ font-family:var(--mono); font-size:10px; font-weight:700; color:var(--red); background:rgba(var(--red-rgb),.08); padding:1px 5px; border-radius:4px; }
+.keystone{ display:flex; gap:10px; align-items:flex-start; padding:11px 12px; border:1px solid rgba(var(--purple-rgb),.3); background:rgba(var(--purple-rgb),.05); border-radius:12px; margin-top:4px; }
+.keystone .ic{ width:30px; height:30px; border-radius:9px; background:var(--purple); color:#fff; display:grid; place-items:center; flex:0 0 auto; } .keystone .ic svg{ width:16px; height:16px; }
+.us{ display:flex; gap:4px; flex-wrap:wrap; margin-top:5px; } .us span{ font-family:var(--mono); font-size:9.5px; color:var(--purple); background:rgba(var(--purple-rgb),.1); padding:1px 5px; border-radius:4px; }
+.skips{ display:flex; gap:6px; flex-wrap:wrap; } .skips .s{ font-size:11px; color:var(--ink-2); background:var(--chip); border-radius:6px; padding:3px 8px; } .skips .s b{ font-family:var(--mono); color:var(--ink); }
+
+/* supervise decision cards */
+.dq{ border-left:3px solid var(--hair); border-radius:14px; } .dq.blocking{ border-left-color:var(--red); } .dq.at_risk{ border-left-color:var(--amber); }
+.impact{ font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; padding:2px 6px; border-radius:4px; }
+.impact.blocking{ color:var(--red); background:rgba(var(--red-rgb),.1); } .impact.at_risk{ color:var(--amber); background:rgba(var(--amber-rgb),.13); }
+.owner{ font-family:var(--mono); font-size:9.5px; color:var(--ink-3); }
+.dq .lab{ font-weight:640; font-size:13.5px; margin:5px 0 3px; letter-spacing:-.01em; } .dq .rsn{ font-size:12px; color:var(--ink-2); line-height:1.45; }
+.acts{ display:flex; gap:7px; margin-top:10px; } .acts .btn{ flex:1; }
+.btn{ display:inline-flex; align-items:center; justify-content:center; gap:6px; font-weight:640; font-size:13px; padding:9px 13px; border-radius:12px; border:1px solid var(--hair); background:var(--card); color:var(--ink); } .btn svg{ width:15px; height:15px; }
+.btn--primary{ background:var(--red); color:#fff; border-color:var(--red); box-shadow:0 2px 10px rgba(var(--red-rgb),.24); }
+.btn--wide{ width:100%; }
+.autopills{ display:flex; gap:5px; flex-wrap:wrap; margin-top:8px; } .autopills .p{ font-family:var(--mono); font-size:9.5px; background:var(--chip); border-radius:6px; padding:2px 7px; color:var(--ink-2); }
+.ack{ display:flex; align-items:center; gap:9px; padding:9px 0; } .ack + .ack{ border-top:1px solid var(--hair-2); } .due{ font-family:var(--mono); font-size:10.5px; font-weight:640; } .due.over{ color:var(--red); } .due.soon{ color:var(--amber); }
+
+/* dispatch banner */
+.dispatch{ display:flex; align-items:center; gap:10px; background:linear-gradient(120deg,rgba(var(--red-rgb),.06),transparent); border:1px solid rgba(var(--red-rgb),.22); border-radius:13px; padding:11px 12px; }
+.dispatch .ico{ width:34px; height:34px; border-radius:10px; background:var(--red); color:#fff; display:grid; place-items:center; flex:0 0 auto; } .dispatch .ico svg{ width:17px; height:17px; }
+
+/* portfolio card */
+.dcard{ display:block; } .dcard .mdots{ display:flex; gap:4px; margin:10px 0 8px; } .dcard .mdots i{ height:5px; border-radius:999px; flex:1; background:var(--chip); } .dcard .mdots i.done{ background:var(--green); } .dcard .mdots i.on{ background:var(--red); }
+
+/* bottom tab bar */
+.tabbar{ flex:0 0 auto; display:flex; background:var(--card); border-top:1px solid var(--hair); padding:8px 10px 20px; }
+.tabbar .tb{ flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; color:var(--ink-3); font-size:10px; font-weight:600; position:relative; }
+.tabbar .tb svg{ width:23px; height:23px; } .tabbar .tb.on{ color:var(--red); }
+.tabbar .tb .rdot{ position:absolute; top:-2px; right:50%; margin-right:-16px; min-width:15px; height:15px; padding:0 3px; border-radius:999px; background:var(--red); color:#fff; font-size:9px; font-weight:700; display:grid; place-items:center; }
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:128px; height:5px; border-radius:999px; background:#111; opacity:.22; z-index:20; }
+.hint{ text-align:center; color:var(--ink-3); font-size:12px; } .hint b{ color:var(--red); }
+.screenwrap[data-screen]{ display:none; } .screenwrap.on{ display:flex; flex-direction:column; flex:1; min-height:0; }
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="currentColor"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7M6 9.5V20h12V9.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 8c2.5 0 2.5 4 5 4s2.5-4 5-4 2.5 4 5 4 2.5-4 5-4M2 15c2.5 0 2.5 4 5 4s2.5-4 5-4 2.5 4 5 4 2.5-4 5-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M14.5 9.2c-.6-.9-1.6-1.3-2.6-1.3-1.5 0-2.7.8-2.7 2s1.2 1.7 2.7 2 2.7.9 2.7 2.1-1.2 2-2.8 2c-1.1 0-2.1-.5-2.7-1.4M12 6.4v11.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-8h11L20 13v6H4v-6zM4 13h4l1.5 2.5h5L16 13h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.8 10.8L20 20M17 17l2-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-key2" viewBox="0 0 24 24"><path d="M14 7a4 4 0 1 0-3.5 3.97L11 12l1.5 1.5L11 15l1.5 1.5L11 18l2 2 3-3V10.9A4 4 0 0 0 14 7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7V5z" fill="currentColor"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-4 3v-3H4V5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 16"><path d="M2 5a15 15 0 0 1 20 0M5 8.5a10 10 0 0 1 14 0M8 12a5 5 0 0 1 8 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="14.5" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-sig" viewBox="0 0 20 14"><rect x="1" y="9" width="3" height="4" rx="1" fill="currentColor"/><rect x="6" y="6" width="3" height="7" rx="1" fill="currentColor"/><rect x="11" y="3" width="3" height="10" rx="1" fill="currentColor"/><rect x="16" y="1" width="3" height="12" rx="1" fill="currentColor" opacity=".4"/></symbol>
+  <symbol id="i-batt" viewBox="0 0 26 14"><rect x="1" y="2" width="21" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="3" y="4" width="15" height="6" rx="1.5" fill="currentColor"/><rect x="23.5" y="5" width="1.6" height="4" rx=".8" fill="currentColor"/></symbol>
+</svg>
+
+<div class="page-h">
+  <div class="ey">Switchboard mobile · console</div>
+  <h1>The control room, in your pocket</h1>
+  <p>The same three surfaces from the steering console, on the phone. Tap the bottom bar: portfolio Home, draw-the-work Waves, the Tally money screen, and the Supervise queue that pages you only when a human must decide.</p>
+</div>
+
+<div class="phones">
+  <div class="wrap">
+    <div class="phone">
+      <div class="island"></div>
+      <div class="screen">
+        <div class="sb"><span>9:41</span><span class="r"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+
+        <!-- ============ HOME ============ -->
+        <div class="screenwrap on" data-screen="home">
+          <div class="top"><div class="grow"><div class="sub">MON · JUL 14 · SWITCHBOARD</div><div class="h1">Portfolio</div></div><span class="avatar">S</span></div>
+          <div class="body"><div class="scroll">
+            <div class="dispatch" style="margin-bottom:4px"><span class="ico"><svg><use href="#i-inbox"/></svg></span><div class="grow"><div style="font-weight:640;font-size:13px">3 decisions need you</div><div style="font-size:11.5px" class="mut">1 blocking · across 2 engagements</div></div><button class="btn" style="padding:7px 11px" data-goto="supervise">Review</button></div>
+            <div class="tiles" style="margin-top:10px">
+              <div class="tile"><div class="k">Contracted</div><div class="v">$198k</div></div>
+              <div class="tile"><div class="k">Blended margin</div><div class="v" style="color:var(--green)">94%</div></div>
+            </div>
+            <div class="slabel">Engagements</div>
+            <a class="card dcard">
+              <div class="row"><span class="av" style="background:linear-gradient(150deg,#c0392b,#8e2018)">NE</span><div class="grow"><div style="font-weight:680;font-size:14px">Northwind Energy</div><div class="sub mono" style="font-size:10.5px;color:var(--ink-2)">SSO &amp; Identity Platform</div></div><span class="badge b-red"><span class="dot d-live"></span>Build</span></div>
+              <div class="mdots"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="on"></i><i></i><i></i></div>
+              <div class="row"><span class="grow" style="font-size:12px" class="mut">68% · $48k · <b style="color:var(--green)">93% margin</b></span><span class="badge b-amber">1 decision</span></div>
+            </a>
+            <a class="card dcard">
+              <div class="row"><span class="av" style="background:linear-gradient(150deg,#3b6fd4,#274b96)">ML</span><div class="grow"><div style="font-weight:680;font-size:14px">Meridian Labs</div><div class="sub mono" style="font-size:10.5px;color:var(--ink-2)">Data Pipeline v2</div></div><span class="badge b-amber">Scope</span></div>
+              <div class="mdots"><i class="done"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="row"><span class="grow" style="font-size:12px" class="mut">PRD · $62k</span><span class="badge b-blue">needs approval</span></div>
+            </a>
+            <a class="card dcard">
+              <div class="row"><span class="av" style="background:linear-gradient(150deg,#1f9d55,#127540)">AF</span><div class="grow"><div style="font-weight:680;font-size:14px">Atlas Freight</div><div class="sub mono" style="font-size:10.5px;color:var(--ink-2)">Ops portal rebuild</div></div><span class="badge b-azure">Deliver</span></div>
+              <div class="mdots"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="on"></i><i></i></div>
+              <div class="row"><span class="grow" style="font-size:12px" class="mut">92% · $88k · <b style="color:var(--green)">91% margin</b></span><span class="badge b-red">closure HOLD</span></div>
+            </a>
+          </div></div>
+        </div>
+
+        <!-- ============ WAVES ============ -->
+        <div class="screenwrap" data-screen="waves">
+          <div class="top"><div class="grow"><div class="sub">NORTHWIND · SSO-GO-LIVE</div><div class="h1">Draw the work</div></div><span class="pill p-live"><span class="dot d-live"></span>live</span></div>
+          <div class="body"><div class="scroll">
+            <div class="card" style="padding:12px">
+              <div class="row"><span class="grow" style="font-size:13px"><b style="font-weight:720">6 ready</b> · 3 free · <span style="color:var(--amber)">1 held</span></span></div>
+              <div class="capm"><i class="now" style="width:50%"></i><i class="held" style="width:17%"></i><i class="q" style="width:33%"></i></div>
+              <button class="btn btn--primary btn--wide" style="margin-top:11px"><svg><use href="#i-bolt"/></svg>Dispatch 3 in parallel</button>
+            </div>
+            <div class="slabel">Wave 1 · dispatchable now<span class="grow"></span>score.v1</div>
+            <div class="lane"><div class="ll">IDP</div><div class="wt"><div class="id">SEN-7 <span class="score">8420</span></div><div class="ti">SAML assertion mapping</div><div class="row" style="gap:6px"><span class="badge b-blue">balanced</span><span class="badge b-gray">~2h</span><span class="badge b-gray">$1.10</span></div></div></div>
+            <div class="lane"><div class="ll">DATA</div>
+              <div class="wt"><div class="id">DATA-3 <span class="score">8100</span></div><div class="ti">User attribute sync</div><div class="row" style="gap:6px"><span class="badge b-gray">cheap</span><span class="badge b-gray">~3h</span><span class="badge b-gray">$0.60</span></div></div>
+              <div class="wt held"><div class="id">DATA-4 <span class="score">7240</span></div><div class="ti">Directory pagination</div><span class="badge b-amber"><svg><use href="#i-key"/></svg>lease-hold · waits on DATA-3</span></div>
+            </div>
+            <div class="lane"><div class="ll">QA</div><div class="wt"><div class="id">QA-2 <span class="score">6650</span></div><div class="ti">e2e smoke</div><div class="row" style="gap:6px"><span class="badge b-gray">cheap</span><span class="badge b-gray">~1h</span><span class="badge b-gray">$0.30</span></div></div></div>
+            <div class="keystone">
+              <span class="ic"><svg><use href="#i-key2"/></svg></span>
+              <div class="grow"><div style="font-weight:640;font-size:12.5px"><span class="mono">SEN-6</span> keystone <span class="badge b-amber">in review</span></div><div style="font-size:11.5px;margin-top:1px" class="mut">Merging unlocks <b>5</b> downstream →</div><div class="us"><span>SEN-8</span><span>SEN-9</span><span>INT-1</span><span>INT-2</span><span>QA-3</span></div></div>
+            </div>
+            <div class="slabel">Why 15 aren't here</div>
+            <div class="skips"><span class="s"><b>9</b> deps</span><span class="s"><b>1</b> human gate</span><span class="s"><b>1</b> lease</span><span class="s"><b>2</b> claimed</span><span class="s"><b>1</b> capability</span><span class="s"><b>1</b> budget</span></div>
+          </div></div>
+        </div>
+
+        <!-- ============ TALLY ============ -->
+        <div class="screenwrap" data-screen="tally">
+          <div class="top"><div class="grow"><div class="sub">COST → VERIFIED OUTCOME</div><div class="h1">Tally</div></div><div class="seg2"><button class="on">Month</button><button>All</button></div></div>
+          <div class="body"><div class="scroll">
+            <div class="tiles">
+              <div class="tile"><div class="k">Agent cost</div><div class="v">$11.2k</div></div>
+              <div class="tile"><div class="k">Blended margin</div><div class="v" style="color:var(--green)">94%</div></div>
+              <div class="tile"><div class="k">Cost / outcome</div><div class="v">$190<small> proven</small></div></div>
+              <div class="tile"><div class="k">Verified</div><div class="v">34<small> /6 prop.</small></div></div>
+            </div>
+            <div class="slabel">Cost → verified outcome<span class="grow"></span>we only bill proven</div>
+            <div class="card">
+              <div class="seg"><span class="pv" style="flex:0 0 71%">$7.9k proven</span><span class="rv" style="flex:0 0 20%">$2.3k</span><span class="ov" style="flex:0 0 9%">$1k</span></div>
+              <div class="leg"><span><i style="background:var(--green)"></i><b>Proven</b> — terminal Done + gate · billable</span><span><i style="background:var(--amber)"></i>In review — PR open, gate pending</span><span><i style="background:var(--ink-3)"></i>Overhead — not tied to an outcome</span></div>
+              <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap"><span class="badge b-green"><svg><use href="#i-shield"/></svg>provider-actual $0.3k</span><span class="badge b-azure">agent-reported $10.9k</span></div>
+              <div style="font-size:10.5px;margin-top:6px" class="mut mono">two-stream ledger · honest by construction</div>
+            </div>
+            <div class="slabel">Spend by milestone · Northwind</div>
+            <div class="card">
+              <div class="cbar"><div class="nm">Define shared contract<small>M1</small></div><div class="amt">$0.6k</div><div class="track"><i style="width:44%;background:var(--green)"></i></div></div>
+              <div class="cbar"><div class="nm">Build core implementation<small>M2</small></div><div class="amt">$1.4k</div><div class="track"><i style="width:100%;background:var(--green)"></i></div></div>
+              <div class="cbar"><div class="nm">Integrate cross-board<small>M3</small></div><div class="amt">$0.9k</div><div class="track"><i style="width:64%;background:var(--amber)"></i></div></div>
+              <div class="cbar"><div class="nm">Prove parity &amp; ship<small>M4</small></div><div class="amt">$0.5k</div><div class="track"><i style="width:36%;background:var(--ink-3)"></i></div></div>
+            </div>
+            <div class="slabel">Northwind P&amp;L</div>
+            <div class="card">
+              <div class="row"><span class="grow" style="font-size:13px">Contract (fixed)</span><span class="mono" style="font-weight:640">$48,000</span></div>
+              <div class="row" style="margin-top:7px"><span class="grow" style="font-size:13px">Agent spend + est.</span><span class="mono" style="font-weight:640;color:var(--red)">−$4,300</span></div>
+              <div class="row" style="margin-top:9px;padding-top:9px;border-top:1.5px solid var(--hair)"><span class="grow" style="font-weight:640">Projected gross</span><span class="mono" style="font-size:17px;font-weight:740;color:var(--green)">$43.7k · 93%</span></div>
+            </div>
+          </div></div>
+        </div>
+
+        <!-- ============ SUPERVISE ============ -->
+        <div class="screenwrap" data-screen="supervise">
+          <div class="top"><div class="grow"><div class="sub">PAGES YOU ONLY WHEN NEEDED</div><div class="h1">Supervise</div></div><span class="badge b-amber" style="font-size:11px">3 needed</span></div>
+          <div class="body"><div class="scroll">
+            <div class="slabel">Decisions needed from you<span class="grow"></span>next_actions · attention</div>
+            <div class="card dq blocking">
+              <div class="row" style="gap:7px"><span class="av" style="width:24px;height:24px;background:linear-gradient(150deg,#c0392b,#8e2018)">NE</span><span class="impact blocking">blocking</span><span class="owner">request_human_approval</span></div>
+              <div class="lab">Approve to unblock a gated task</div>
+              <div class="rsn">Northwind · <code>SEN-11</code> hit a <b>spend approval</b> gate — ~$6 over the wave cap. Autopilot paused this lane rather than overspend.</div>
+              <div class="acts"><button class="btn">Deny</button><button class="btn btn--primary"><svg><use href="#i-check"/></svg>Approve</button></div>
+            </div>
+            <div class="card dq at_risk">
+              <div class="row" style="gap:7px"><span class="av" style="width:24px;height:24px;background:linear-gradient(150deg,#3b6fd4,#274b96)">ML</span><span class="impact at_risk">at risk</span><span class="owner">approve_breakdown</span></div>
+              <div class="lab">Approve the proposed breakdown</div>
+              <div class="rsn">Meridian · coordinator drafted a <b>19-task breakdown</b> from the signed PRD. Nothing dispatches until you accept.</div>
+              <div class="acts"><button class="btn">Review</button><button class="btn btn--primary"><svg><use href="#i-check"/></svg>Approve</button></div>
+            </div>
+            <div class="card dq blocking">
+              <div class="row" style="gap:7px"><span class="av" style="width:24px;height:24px;background:linear-gradient(150deg,#1f9d55,#127540)">AF</span><span class="impact blocking">blocking</span><span class="owner">closure_grade</span></div>
+              <div class="lab">Closure gate returned HOLD</div>
+              <div class="rsn">Atlas · functional gate <code>pytest</code> came back <code>not_run</code> — won't optimistically pass. Re-run, waive, or reopen.</div>
+              <div class="row" style="gap:5px;margin-top:8px"><span class="badge b-red">GRADE HOLD</span><span class="badge b-green">scope ✓</span><span class="badge b-red">functional ✗</span></div>
+              <div class="acts"><button class="btn">Waive…</button><button class="btn btn--primary"><svg><use href="#i-play"/></svg>Re-run gate</button></div>
+            </div>
+            <div class="card">
+              <div class="row"><span class="badge b-green"><svg><use href="#i-check"/></svg>12 handled automatically</span></div>
+              <div class="autopills"><span class="p">claim_task ×5</span><span class="p">verify_merge_provenance ×3</span><span class="p">resume_or_claim ×2</span><span class="p">refresh ×2</span></div>
+            </div>
+            <div class="slabel">Acks due</div>
+            <div class="card">
+              <div class="ack"><span class="av" style="width:24px;height:24px;background:linear-gradient(150deg,#c0392b,#8e2018)">A</span><div class="grow"><div style="font-weight:560;font-size:12.5px">Atlas · stop-at-boundary</div><div class="owner">redirect delivered · awaiting ack</div></div><span class="due over">overdue 2m</span></div>
+              <div class="ack"><span class="av" style="width:24px;height:24px;background:linear-gradient(150deg,#3b6fd4,#274b96)">C</span><div class="grow"><div style="font-weight:560;font-size:12.5px">Codex · budget wrap-up</div><div class="owner">90% cap · heads-up sent</div></div><span class="due soon">due 6m</span></div>
+            </div>
+          </div></div>
+        </div>
+
+        <!-- bottom tab bar -->
+        <div class="tabbar">
+          <button class="tb on" data-screen="home"><svg><use href="#i-home"/></svg>Home</button>
+          <button class="tb" data-screen="waves"><svg><use href="#i-wave"/></svg>Waves</button>
+          <button class="tb" data-screen="tally"><svg><use href="#i-coin"/></svg>Tally</button>
+          <button class="tb" data-screen="supervise"><svg><use href="#i-inbox"/></svg>Supervise<span class="rdot">3</span></button>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <div class="cap">Tap the <b>bottom bar</b> — Home · Waves · Tally · Supervise</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  function go(name){
+    document.querySelectorAll('.screenwrap').forEach(function(s){ s.classList.toggle('on', s.dataset.screen===name); });
+    document.querySelectorAll('.tabbar .tb').forEach(function(t){ t.classList.toggle('on', t.dataset.screen===name); });
+    var sc=document.querySelector('.screenwrap.on .scroll'); if(sc) sc.scrollTop=0;
+  }
+  document.querySelectorAll('.tabbar .tb').forEach(function(t){ t.addEventListener('click',function(){ go(t.dataset.screen); }); });
+  document.querySelectorAll('[data-goto]').forEach(function(b){ b.addEventListener('click',function(){ go(b.dataset.goto); }); });
+})();
+</script>
+</body>
+</html>

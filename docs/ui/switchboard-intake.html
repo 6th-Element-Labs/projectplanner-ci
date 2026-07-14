@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Intake — a goal in, a plan out</title>
+<style>
+*,*::before,*::after{ box-sizing:border-box; } html,body{ height:100%; } body{ margin:0; }
+svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; } :where(a){ color:inherit; text-decoration:none; }
+:root{
+  --font:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --red:#c0392b; --red-rgb:192,57,43; --green:#2fa25a; --green-rgb:47,162,90; --blue:#3b6fd4; --blue-rgb:59,111,212;
+  --amber:#e0820b; --amber-rgb:224,130,11; --purple:#7048e8; --purple-rgb:112,72,232;
+  --ink:#101114; --ink-2:#5b626e; --ink-3:#8b919c; --card:#fff; --canvas:#f5f6f8; --hair:#e4e7ec; --hair-2:#eceef2; --chip:#f1f3f6;
+  --shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06);
+}
+@media (prefers-color-scheme:dark){ :root{ --ink:#e9ecf1;--ink-2:#9aa1ad;--ink-3:#6b7280;--card:#16181d;--canvas:#0d0f12;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.06);--chip:#1b1e24;--shadow:0 1px 2px rgba(0,0,0,.4);} }
+:root[data-theme="dark"]{ --ink:#e9ecf1;--ink-2:#9aa1ad;--ink-3:#6b7280;--card:#16181d;--canvas:#0d0f12;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.06);--chip:#1b1e24;--shadow:0 1px 2px rgba(0,0,0,.4); }
+:root[data-theme="light"]{ --ink:#101114;--ink-2:#5b626e;--ink-3:#8b919c;--card:#fff;--canvas:#f5f6f8;--hair:#e4e7ec;--hair-2:#eceef2;--chip:#f1f3f6; }
+body{ font-family:var(--font); color:var(--ink); background:var(--canvas); font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; letter-spacing:-.006em; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+.app{ display:grid; grid-template-rows:auto minmax(0,1fr); height:100vh; }
+.bar{ background:var(--card); border-bottom:1px solid var(--hair); padding:11px 20px; display:flex; align-items:center; gap:12px; }
+.logo{ width:32px; height:32px; border-radius:9px; background:linear-gradient(150deg,var(--red),#8e2018); color:#fff; display:grid; place-items:center; font-weight:800; font-size:13px; }
+.bar .name{ font-weight:680; } .bar .sub{ font-family:var(--mono); font-size:11.5px; color:var(--ink-2); }
+.bar .grow{ flex:1; }
+.pill{ display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:4px 10px; border-radius:999px; background:var(--chip); color:var(--ink-2); }
+.tbtn{ width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink-2);border:1px solid var(--hair); } .tbtn svg{ width:16px;height:16px; }
+
+.body{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.15fr); overflow:hidden; }
+@media(max-width:940px){ .body{ grid-template-columns:1fr; overflow:auto; } }
+.pane{ overflow:auto; padding:22px clamp(16px,3vw,34px); }
+.pane.src{ border-right:1px solid var(--hair); background:var(--card); }
+.kick{ font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--red); font-weight:600; }
+h1{ font-size:22px; font-weight:720; letter-spacing:-.025em; margin:6px 0 3px; }
+.lead{ color:var(--ink-2); font-size:13px; margin-bottom:16px; }
+.tabs{ display:flex; gap:4px; background:var(--chip); border-radius:10px; padding:4px; margin-bottom:12px; width:fit-content; }
+.tabs button{ font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:7px; color:var(--ink-2); }
+.tabs button.on{ background:var(--card); color:var(--ink); box-shadow:var(--shadow); }
+.transcript{ background:var(--canvas); border:1px solid var(--hair); border-radius:12px; padding:14px 16px; font-size:13px; line-height:1.6; height:auto; }
+.transcript .line{ margin:0 0 9px; } .transcript .who{ font-weight:660; } .transcript .who.c{ color:var(--red); }
+.transcript mark{ background:rgba(var(--amber-rgb),.22); border-radius:3px; padding:0 2px; }
+.composer{ display:flex; align-items:center; gap:9px; margin-top:14px; }
+.composer .box{ flex:1; background:var(--canvas); border:1px solid var(--hair); border-radius:11px; padding:10px 13px; color:var(--ink-3); font-size:13px; }
+.btn{ display:inline-flex; align-items:center; gap:7px; font-weight:600; font-size:13.5px; padding:9px 15px; border-radius:10px; border:1px solid var(--hair); background:var(--card); color:var(--ink); } .btn svg{ width:16px; height:16px; }
+.btn--primary{ background:var(--red); color:#fff; border-color:var(--red); box-shadow:0 1px 2px rgba(var(--red-rgb),.35); }
+.attach{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+.attach .a{ display:inline-flex; align-items:center; gap:7px; font-size:12px; color:var(--ink-2); background:var(--chip); border-radius:8px; padding:6px 10px; } .attach .a svg{ width:14px; height:14px; }
+
+/* right — plan authoring itself */
+.synth{ display:flex; align-items:center; gap:9px; font-size:12.5px; color:var(--green); font-weight:600; margin-bottom:14px; }
+.synth .d{ width:7px; height:7px; border-radius:50%; background:var(--green); }
+.doc{ background:var(--card); border:1px solid var(--hair); border-radius:14px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:12px; }
+.doc__h{ display:flex; align-items:center; gap:8px; padding:11px 15px; border-bottom:1px solid var(--hair); }
+.doc__h .t{ font-weight:640; font-size:13.5px; } .doc__h .grow{ flex:1; }
+.sec{ padding:12px 15px; } .sec + .sec{ border-top:1px solid var(--hair-2); }
+.sec .h{ font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:6px; }
+.sec p{ margin:0; font-size:13.5px; line-height:1.55; } .sec ul{ margin:3px 0 0; padding-left:1.15rem; } .sec li{ margin:2px 0; font-size:13.5px; }
+.badge{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; } .badge svg{ width:11px; height:11px; }
+.b-green{ color:var(--green); background:rgba(var(--green-rgb),.11); } .b-blue{ color:var(--blue); background:rgba(var(--blue-rgb),.11); } .b-amber{ color:var(--amber); background:rgba(var(--amber-rgb),.13); } .b-purple{ color:var(--purple); background:rgba(var(--purple-rgb),.11); } .b-gray{ color:var(--ink-2); background:var(--chip); }
+.chips{ display:flex; gap:7px; flex-wrap:wrap; margin:0 0 12px; }
+.chip{ font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px; background:var(--chip); color:var(--ink-2); } .chip--red{ color:var(--red); background:rgba(var(--red-rgb),.09); }
+.epic{ display:flex; align-items:center; gap:10px; padding:10px 15px; } .epic + .epic{ border-top:1px solid var(--hair-2); }
+.epic .n{ width:24px; height:24px; border-radius:7px; background:var(--chip); color:var(--ink-2); display:grid; place-items:center; font-family:var(--mono); font-size:11px; font-weight:700; }
+.epic .ti{ font-weight:580; font-size:13.5px; } .epic .mt{ font-family:var(--mono); font-size:10.5px; color:var(--ink-3); }
+.wave{ display:flex; gap:6px; flex-wrap:wrap; } .wave .w{ font-family:var(--mono); font-size:11px; color:var(--red); background:rgba(var(--red-rgb),.08); padding:3px 8px; border-radius:6px; }
+.gate{ display:flex; align-items:center; gap:11px; margin-top:6px; padding:14px 16px; background:var(--card); border:1px solid var(--hair); border-radius:12px; box-shadow:var(--shadow); }
+.gate .lbl{ font-weight:600; font-size:13px; } .gate .lbl .s{ color:var(--ink-2); font-weight:400; } .gate .grow{ flex:1; }
+.prov{ display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--ink-3); margin-top:9px; } .prov code{ font-family:var(--mono); background:var(--chip); padding:1px 5px; border-radius:5px; }
+:focus-visible{ outline:2px solid var(--red); outline-offset:2px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="currentColor"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3v4h4M9 12h6M9 16h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" fill="currentColor"/></symbol>
+</svg>
+
+<div class="app">
+  <div class="bar">
+    <span class="logo">SW</span>
+    <div><div class="name">New engagement</div><div class="sub">intake · a goal in, a live plan out</div></div>
+    <span class="grow"></span>
+    <span class="pill"><svg style="width:13px"><use href="#i-spark"/></svg>goal→plan synthesis</span>
+    <button class="tbtn" id="themeBtn"><svg><use href="#i-sun"/></svg></button>
+  </div>
+
+  <div class="body">
+    <!-- LEFT: the source -->
+    <div class="pane src">
+      <div class="kick">Step 1 · Source</div>
+      <h1>Drop in what you have</h1>
+      <div class="lead">A goal, a PRD, or a raw discovery transcript. Switchboard reads it and authors the plan — you don't fill in a form.</div>
+      <div class="tabs"><button class="on"><svg style="width:13px;display:inline;vertical-align:-2px"><use href="#i-mic"/></svg> Transcript</button><button>Paste a goal</button><button>Upload PRD</button></div>
+      <div class="transcript">
+        <p class="line"><span class="who c">Client · A. Reyes</span> — we can't go live with TotalEnergies until pilot users can actually sign in. Right now it's all manual provisioning.</p>
+        <p class="line"><span class="who">You</span> — got it. Is this Entra / Azure AD on your side?</p>
+        <p class="line"><span class="who c">Client</span> — yeah, <mark>Entra ID, and we'd need SAML</mark>. One hard constraint — <mark>we can't drop Okta yet, it has to stay as a fallback</mark>.</p>
+        <p class="line"><span class="who">You</span> — and the bar for "done"?</p>
+        <p class="line"><span class="who c">Client</span> — <mark>95%+ sign-in success, and it can't ship unless it's at parity with our Helm baseline</mark>. Three weeks, ideally.</p>
+        <p class="line"><span class="who">You</span> — mobile app in this phase?</p>
+        <p class="line"><span class="who c">Client</span> — no, later.</p>
+      </div>
+      <div class="attach">
+        <span class="a"><svg><use href="#i-doc"/></svg>discovery-call.vtt · 42 min</span>
+        <span class="a"><svg><use href="#i-doc"/></svg>rfp-northwind.pdf</span>
+      </div>
+      <div class="composer">
+        <div class="box">Add context or correct anything the model got wrong…</div>
+        <button class="btn btn--primary"><svg><use href="#i-spark"/></svg>Synthesize</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: the plan authors itself -->
+    <div class="pane">
+      <div class="kick">Step 2 · The plan authors itself</div>
+      <h1>Northwind Energy · SSO Platform</h1>
+      <div class="synth"><span class="d"></span>Synthesized from the transcript · review &amp; adjust, then create</div>
+
+      <div class="doc">
+        <div class="doc__h"><svg style="width:15px;color:var(--red)"><use href="#i-doc"/></svg><span class="t">Discovery brief</span><span class="grow"></span><span class="badge b-green"><svg><use href="#i-check"/></svg>derived</span></div>
+        <div class="sec"><div class="h">Problem</div><p>Pilot users can't SSO into the ops portal; manual provisioning blocks go-live with TotalEnergies.</p></div>
+        <div class="sec"><div class="h">Goals</div><ul><li>Entra ID / SAML sign-in</li><li>Auto-provision from directory</li><li>Go-live gated on CI parity with Helm</li></ul></div>
+        <div class="sec"><div class="h">Constraints</div><p>3-week window · their Azure tenant · <b>Okta kept as fallback</b> · no PII to third parties.</p></div>
+        <div class="sec"><div class="h">Success</div><p>≥95% SSO success · MTTA ≤ 15m · zero manual provisioning · parity green.</p></div>
+      </div>
+
+      <div class="chips"><span class="chip">PRD · 6 sections</span><span class="chip">3 epics</span><span class="chip">21 tasks</span><span class="chip">4 milestones</span><span class="chip chip--red">~9 days on autopilot</span></div>
+
+      <div class="doc">
+        <div class="doc__h"><svg style="width:15px;color:var(--red)"><use href="#i-bolt"/></svg><span class="t">Plan sketch</span><span class="grow"></span><span class="badge b-gray">mission graph</span></div>
+        <div class="epic"><span class="n">1</span><div class="grow"><div class="ti">Identity provider</div><div class="mt">EPIC · 8 tasks · Entra/SAML</div></div><span class="badge b-blue">wave 1</span></div>
+        <div class="epic"><span class="n">2</span><div class="grow"><div class="ti">Directory integration</div><div class="mt">EPIC · 7 tasks · auto-provision</div></div><span class="badge b-gray">wave 2</span></div>
+        <div class="epic"><span class="n">3</span><div class="grow"><div class="ti">CI parity gate</div><div class="mt">EPIC · 6 tasks · Helm baseline</div></div><span class="badge b-blue">wave 1</span></div>
+      </div>
+
+      <div class="doc">
+        <div class="doc__h"><svg style="width:15px;color:var(--red)"><use href="#i-check"/></svg><span class="t">Proof &amp; first wave</span></div>
+        <div class="sec"><div class="h">Closure requires</div><p style="display:flex;gap:7px;flex-wrap:wrap"><span class="badge b-green"><svg><use href="#i-check"/></svg>merge provenance</span><span class="badge b-green"><svg><use href="#i-check"/></svg>scope gate</span><span class="badge b-green"><svg><use href="#i-check"/></svg>functional gate</span></p></div>
+        <div class="sec"><div class="h">Dispatchable now · wave 1</div><div class="wave"><span class="w">SEN-7</span><span class="w">DATA-3</span><span class="w">QA-2</span><span class="w">+ parity gate</span></div></div>
+      </div>
+
+      <div class="gate">
+        <span class="lbl">Create engagement? <span class="s">Opens at the Brief stage — nothing dispatches until you approve scope.</span></span>
+        <span class="grow"></span>
+        <button class="btn">Edit</button>
+        <button class="btn btn--primary"><svg><use href="#i-arrow"/></svg>Create &amp; open</button>
+      </div>
+      <div class="prov"><svg style="width:13px"><use href="#i-spark"/></svg>Authored by <code>intake.py</code> → <code>build_plan_artifacts.py</code> · brief, PRD sections, and mission graph are drafts you own — not agent gospel.</div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){ var root=document.documentElement;
+  document.getElementById('themeBtn').addEventListener('click',function(){ var c=root.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'); root.setAttribute('data-theme',c==='dark'?'light':'dark'); });
+  document.querySelectorAll('.tabs button').forEach(function(b){ b.addEventListener('click',function(){ document.querySelectorAll('.tabs button').forEach(function(x){x.classList.remove('on');}); b.classList.add('on'); }); });
+})();
+</script>
+</body>
+</html>

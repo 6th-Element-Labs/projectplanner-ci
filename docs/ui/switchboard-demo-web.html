@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Console → Engagement — continuous demo</title>
+<style>
+*{ box-sizing:border-box; } html,body{ height:100%; margin:0; background:#0d0f12; }
+.stage{ position:fixed; inset:0; border:0; width:100%; height:100%; transition:opacity .32s ease, transform .32s ease; }
+.stage.hide{ opacity:0; pointer-events:none; transform:scale(.985); }
+.tag{ position:fixed; left:50%; top:10px; transform:translateX(-50%); z-index:10; font:600 11px/1 ui-monospace,"SF Mono",Menlo,monospace;
+  letter-spacing:.08em; text-transform:uppercase; color:#fff; background:rgba(192,57,43,.92); padding:6px 12px; border-radius:999px;
+  box-shadow:0 4px 14px rgba(0,0,0,.3); opacity:.0; transition:opacity .3s; pointer-events:none; }
+.tag.show{ opacity:1; }
+</style>
+</head>
+<body>
+<iframe id="console" class="stage" src="switchboard-console-wireframe.html" title="Console"></iframe>
+<iframe id="engagement" class="stage hide" src="switchboard-engagement-web.html" title="Engagement"></iframe>
+<div class="tag" id="tag"></div>
+<script>
+(function(){
+  var con=document.getElementById('console'), eng=document.getElementById('engagement'), tag=document.getElementById('tag');
+  function flash(t){ tag.textContent=t; tag.classList.add('show'); setTimeout(function(){ tag.classList.remove('show'); },1600); }
+  function toEngagement(stage){ con.classList.add('hide'); eng.classList.remove('hide');
+    try{ eng.contentWindow.postMessage({sb:'set-stage', stage:stage||1},'*'); }catch(e){}
+    flash('▶ opening engagement'); }
+  function toConsole(){ eng.classList.add('hide'); con.classList.remove('hide'); flash('◀ back to console'); }
+  window.addEventListener('message',function(e){
+    var d=e.data||{};
+    if(d.sb==='open-engagement') toEngagement(d.stage);
+    else if(d.sb==='open-console') toConsole();
+  });
+})();
+</script>
+</body>
+</html>

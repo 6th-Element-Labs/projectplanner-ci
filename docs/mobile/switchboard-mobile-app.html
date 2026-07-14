@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Native Mobile App — Design & Wireframes</title>
+<style>
+/* ============================================================================
+   Switchboard — Native Mobile App · design wireframes
+   Grounded in the Taikun/Switchboard control plane. Brand: taikun red #c0392b,
+   white canvas, native SF type. CSP-safe (no external assets).
+   ============================================================================ */
+*,*::before,*::after{ box-sizing:border-box; }
+html{ -webkit-text-size-adjust:100%; }
+body{ margin:0; }
+img,svg{ display:block; max-width:100%; }
+/* icon svgs reference symbols via style-width only; give them a square height so a
+   missing height can't balloon the aspect ratio. The ring uses width/height ATTRs
+   (svg[width]) so it is excluded; class-based sizing (.btn svg, etc) still wins. */
+svg:not([width]){ height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+:where(a){ color:inherit; text-decoration:none; }
+
+:root{
+  --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-display:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,"Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+
+  /* brand */
+  --red:#c0392b; --red-press:#a5281c; --red-rgb:192,57,43;
+
+  /* semantic (separate from accent) */
+  --merged:#1f9d55; --merged-rgb:31,157,85;
+  --needs:#e0820b;  --needs-rgb:224,130,11;
+  --flight:#3b6fd4; --flight-rgb:59,111,212;
+
+  /* light theme (showcase chrome) */
+  --ink:#111318;
+  --ink-2:#565d6b;
+  --ink-3:#878e9c;
+  --canvas:#ffffff;
+  --ground:#eef0f4;
+  --ground-2:#e6e9ef;
+  --hair:#e2e5ea;
+  --hair-soft:#eceef2;
+  --raised:#ffffff;
+  --glow:rgba(var(--red-rgb),.16);
+  --shadow-phone:0 2px 6px rgba(16,24,40,.06),0 24px 60px -18px rgba(16,24,40,.42);
+  --shadow-card:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ink:#eef0f4; --ink-2:#a2a9b6; --ink-3:#767d8c;
+    --canvas:#0d0e12; --ground:#0a0b0e; --ground-2:#111318;
+    --hair:rgba(255,255,255,.09); --hair-soft:rgba(255,255,255,.06);
+    --raised:#14161b; --glow:rgba(var(--red-rgb),.28);
+    --shadow-phone:0 2px 8px rgba(0,0,0,.5),0 30px 70px -20px rgba(0,0,0,.75);
+    --shadow-card:0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="light"]{
+  --ink:#111318; --ink-2:#565d6b; --ink-3:#878e9c;
+  --canvas:#ffffff; --ground:#eef0f4; --ground-2:#e6e9ef;
+  --hair:#e2e5ea; --hair-soft:#eceef2; --raised:#ffffff; --glow:rgba(var(--red-rgb),.16);
+  --shadow-phone:0 2px 6px rgba(16,24,40,.06),0 24px 60px -18px rgba(16,24,40,.42);
+  --shadow-card:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08);
+}
+:root[data-theme="dark"]{
+  --ink:#eef0f4; --ink-2:#a2a9b6; --ink-3:#767d8c;
+  --canvas:#0d0e12; --ground:#0a0b0e; --ground-2:#111318;
+  --hair:rgba(255,255,255,.09); --hair-soft:rgba(255,255,255,.06);
+  --raised:#14161b; --glow:rgba(var(--red-rgb),.28);
+  --shadow-phone:0 2px 8px rgba(0,0,0,.5),0 30px 70px -20px rgba(0,0,0,.75);
+  --shadow-card:0 1px 2px rgba(0,0,0,.4);
+}
+
+body{
+  font-family:var(--font-ui); color:var(--ink); background:var(--ground);
+  line-height:1.5; -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  letter-spacing:-.006em;
+}
+
+/* ---- showcase page chrome ---------------------------------------------- */
+.topbar{
+  position:sticky; top:0; z-index:50;
+  display:flex; align-items:center; justify-content:space-between; gap:1rem;
+  padding:.7rem clamp(1rem,4vw,2.4rem);
+  background:color-mix(in srgb,var(--ground) 82%,transparent);
+  backdrop-filter:saturate(180%) blur(14px);
+  border-bottom:1px solid var(--hair);
+}
+.brand{ display:flex; align-items:center; gap:.6rem; font-weight:650; letter-spacing:-.02em; }
+.brand .mark{
+  width:26px; height:26px; border-radius:8px; flex:0 0 auto;
+  background:linear-gradient(150deg,var(--red),var(--red-press));
+  box-shadow:0 2px 10px var(--glow), inset 0 1px 0 rgba(255,255,255,.28);
+  display:grid; place-items:center;
+}
+.brand .mark svg{ width:15px; height:15px; color:#fff; }
+.brand small{ display:block; font-family:var(--font-mono); font-size:.62rem; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-top:1px; }
+.topbar__right{ display:flex; align-items:center; gap:.5rem; }
+.tag{
+  font-family:var(--font-mono); font-size:.66rem; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink-2); padding:.32rem .55rem; border:1px solid var(--hair); border-radius:999px;
+}
+.tglbtn{ display:grid; place-items:center; width:34px; height:34px; border-radius:9px;
+  border:1px solid var(--hair); color:var(--ink-2); background:var(--canvas); }
+.tglbtn:hover{ color:var(--ink); border-color:var(--ink-3); }
+.tglbtn svg{ width:16px; height:16px; }
+
+.wrap{ max-width:1240px; margin:0 auto; padding:0 clamp(1rem,4vw,2.4rem); }
+
+/* ---- hero -------------------------------------------------------------- */
+.hero{ position:relative; overflow:hidden; }
+.hero__glow{
+  position:absolute; inset:-30% -10% auto; height:520px; pointer-events:none; z-index:0;
+  background:radial-gradient(60% 60% at 72% 20%,var(--glow),transparent 70%);
+}
+.hero__inner{ position:relative; z-index:1; display:grid; grid-template-columns:1.05fr .95fr;
+  gap:clamp(1.5rem,4vw,3.5rem); align-items:center; padding:clamp(2.4rem,6vw,5rem) 0 clamp(1.5rem,4vw,3rem); }
+.eyebrow{ font-family:var(--font-mono); font-size:.72rem; letter-spacing:.2em; text-transform:uppercase;
+  color:var(--red); font-weight:600; display:flex; align-items:center; gap:.55rem; }
+.eyebrow::before{ content:""; width:22px; height:1.5px; background:var(--red); display:inline-block; }
+.hero h1{
+  font-family:var(--font-display); font-weight:760; letter-spacing:-.035em; text-wrap:balance;
+  font-size:clamp(2.3rem,5.2vw,4rem); line-height:1.02; margin:1rem 0 0;
+}
+.hero h1 em{ font-style:normal; color:var(--red); }
+.hero .lede{ font-size:clamp(1.02rem,1.5vw,1.22rem); color:var(--ink-2); max-width:34ch; margin:1.1rem 0 0;
+  letter-spacing:-.01em; }
+.hero__meta{ display:flex; flex-wrap:wrap; gap:.5rem .55rem; margin-top:1.6rem; }
+.metachip{ font-family:var(--font-mono); font-size:.72rem; letter-spacing:.02em; color:var(--ink-2);
+  padding:.4rem .7rem; border:1px solid var(--hair); border-radius:999px; background:var(--canvas);
+  display:inline-flex; align-items:center; gap:.45rem; }
+.metachip svg{ width:13px; height:13px; color:var(--red); }
+.hero__stage{ position:relative; display:flex; justify-content:center; }
+
+/* ---- chapters ---------------------------------------------------------- */
+.chapter{ padding:clamp(2.6rem,6vw,4.6rem) 0 clamp(1rem,3vw,2rem); border-top:1px solid var(--hair); }
+.chapter__head{ display:flex; align-items:flex-start; gap:1.1rem; max-width:64ch; }
+.chapter__num{ font-family:var(--font-mono); font-size:.9rem; font-weight:600; color:var(--red);
+  border:1px solid var(--hair); border-radius:10px; padding:.35rem .55rem; letter-spacing:.02em;
+  flex:0 0 auto; margin-top:.25rem; }
+.chapter h2{ font-family:var(--font-display); font-weight:720; letter-spacing:-.028em;
+  font-size:clamp(1.7rem,3.4vw,2.5rem); line-height:1.06; margin:0; text-wrap:balance; }
+.chapter h2 small{ display:block; font-family:var(--font-mono); font-weight:600; font-size:.7rem;
+  letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3); margin-bottom:.5rem; }
+.chapter__lede{ color:var(--ink-2); font-size:1.04rem; max-width:60ch; margin:.9rem 0 0; }
+.chapter__lede b{ color:var(--ink); font-weight:600; }
+
+.rail{ display:flex; gap:clamp(1.4rem,3vw,2.6rem); margin-top:clamp(1.8rem,4vw,2.8rem);
+  overflow-x:auto; padding:.5rem .2rem 1.6rem; scroll-snap-type:x proximity; }
+.rail::-webkit-scrollbar{ height:8px; }
+.rail::-webkit-scrollbar-thumb{ background:var(--ground-2); border-radius:20px; }
+.cell{ flex:0 0 auto; scroll-snap-align:center; display:flex; flex-direction:column; align-items:center; gap:1rem; }
+.cell__note{ max-width:320px; }
+.cell__note h3{ font-size:1rem; font-weight:650; margin:0 0 .3rem; letter-spacing:-.01em;
+  display:flex; align-items:center; gap:.5rem; }
+.cell__note h3 .kbd{ font-family:var(--font-mono); font-size:.64rem; letter-spacing:.04em; color:var(--red);
+  border:1px solid var(--glow); background:rgba(var(--red-rgb),.06); border-radius:6px; padding:.1rem .38rem; }
+.cell__note p{ margin:0; color:var(--ink-2); font-size:.9rem; }
+.cell__note p b{ color:var(--ink); font-weight:600; }
+
+/* ============================================================================
+   PHONE
+   ============================================================================ */
+.phone{
+  --w:344px;
+  width:var(--w); flex:0 0 auto; position:relative;
+  border-radius:52px; padding:11px;
+  background:linear-gradient(160deg,#24262c,#0e0f12 60%);
+  box-shadow:var(--shadow-phone), inset 0 0 0 1.5px rgba(255,255,255,.06);
+  transition:transform .35s cubic-bezier(.2,.7,.2,1), box-shadow .35s;
+}
+.rail .phone:hover{ transform:translateY(-6px); }
+.phone__screen{
+  position:relative; border-radius:42px; overflow:hidden;
+  background:var(--s-bg,#fff); height:734px;
+  color:var(--s-ink,#111318);
+  display:flex; flex-direction:column;
+}
+.phone--tilt{ transform:rotate(-1.4deg); }
+.phone--tilt:hover{ transform:rotate(0) translateY(-6px); }
+
+/* dynamic island */
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%);
+  width:112px; height:31px; background:#000; border-radius:20px; z-index:40; }
+.island::after{ content:""; position:absolute; right:12px; top:50%; transform:translateY(-50%);
+  width:9px; height:9px; border-radius:50%; background:#0b0b0d; box-shadow:inset 0 0 0 1.5px #1c1d22; }
+
+/* status bar */
+.statusbar{ height:52px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between;
+  padding:0 26px 7px; font-size:.82rem; font-weight:650; letter-spacing:.01em; z-index:30;
+  color:var(--s-ink,#111318); }
+.statusbar .sig{ display:flex; align-items:center; gap:6px; }
+.statusbar .sig svg{ width:17px; height:12px; }
+.statusbar time{ font-variant-numeric:tabular-nums; }
+
+/* the scrolling app view */
+.view{ flex:1 1 auto; overflow:hidden; position:relative; display:flex; flex-direction:column; }
+.view__scroll{ flex:1 1 auto; overflow:hidden; padding:2px 18px 14px; }
+
+/* app top bar inside screen */
+.appbar{ display:flex; align-items:center; justify-content:space-between; padding:2px 18px 6px; }
+.appbar__l{ display:flex; align-items:center; gap:.5rem; min-width:0; }
+.appbar__title{ font-size:1.02rem; font-weight:650; letter-spacing:-.01em; }
+.appbar .ico{ width:34px; height:34px; border-radius:11px; display:grid; place-items:center;
+  color:var(--s-ink,#111318); background:var(--s-chip,#f1f3f6); }
+.appbar .ico svg{ width:18px; height:18px; }
+.appbar .ico--ghost{ background:transparent; color:var(--s-ink2,#565d6b); }
+
+.h-large{ font-family:var(--font-display); font-weight:730; letter-spacing:-.03em; font-size:1.9rem;
+  line-height:1.05; margin:.2rem 0 .1rem; }
+.h-sub{ color:var(--s-ink2,#565d6b); font-size:.92rem; margin:0 0 .2rem; }
+.h-sub b{ color:var(--s-ink,#111318); font-weight:640; }
+
+/* section label */
+.slabel{ font-family:var(--font-mono); font-size:.66rem; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--s-ink3,#878e9c); font-weight:600; margin:1.05rem 2px .5rem; display:flex;
+  align-items:center; justify-content:space-between; }
+.slabel a{ color:var(--red); text-transform:none; letter-spacing:0; font-family:var(--font-ui);
+  font-size:.78rem; font-weight:600; }
+
+/* cards */
+.card{ background:var(--s-card,#fff); border:1px solid var(--s-hair,#e6e9ef); border-radius:18px;
+  padding:14px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+.card + .card{ margin-top:10px; }
+.card--flush{ padding:0; overflow:hidden; }
+
+/* rows */
+.row{ display:flex; align-items:center; gap:11px; }
+.row + .row{ margin-top:0; }
+.rowline{ display:flex; align-items:center; gap:11px; padding:12px 14px; }
+.rowline + .rowline{ border-top:1px solid var(--s-hair,#e6e9ef); }
+.grow{ min-width:0; flex:1 1 auto; }
+.dim{ color:var(--s-ink2,#565d6b); }
+.mono{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.tnum{ font-variant-numeric:tabular-nums; }
+.ttl{ font-weight:600; font-size:.92rem; letter-spacing:-.01em; }
+.sub2{ font-size:.78rem; color:var(--s-ink2,#565d6b); }
+.tid{ font-family:var(--font-mono); font-size:.72rem; color:var(--s-ink3,#878e9c); letter-spacing:.02em; }
+
+/* avatars */
+.av{ width:30px; height:30px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center;
+  font-size:.74rem; font-weight:680; color:#fff; box-shadow:0 0 0 2px var(--s-card,#fff); letter-spacing:0; }
+.av--sm{ width:22px; height:22px; font-size:.6rem; }
+.av--lg{ width:40px; height:40px; font-size:.9rem; }
+.av-atlas{ background:linear-gradient(150deg,#c0392b,#8e2018); }
+.av-codex{ background:linear-gradient(150deg,#3b6fd4,#274b96); }
+.av-cursor{ background:linear-gradient(150deg,#5b626e,#33373f); }
+.av-nova{ background:linear-gradient(150deg,#1f9d55,#127540); }
+.av-sahir{ background:linear-gradient(150deg,#e0820b,#b1620a); }
+.av-you{ background:#111318; }
+.avstack{ display:flex; }
+.avstack .av{ margin-left:-8px; }
+.avstack .av:first-child{ margin-left:0; }
+
+/* pills / chips / dots */
+.pill{ display:inline-flex; align-items:center; gap:.35rem; font-size:.72rem; font-weight:640;
+  padding:.25rem .55rem; border-radius:999px; letter-spacing:-.005em; white-space:nowrap; }
+.pill svg{ width:12px; height:12px; }
+.p-live{ color:var(--red); background:rgba(var(--red-rgb),.09); }
+.p-merged{ color:var(--merged); background:rgba(var(--merged-rgb),.11); }
+.p-needs{ color:var(--needs); background:rgba(var(--needs-rgb),.13); }
+.p-flight{ color:var(--flight); background:rgba(var(--flight-rgb),.11); }
+.p-idle{ color:var(--s-ink2,#565d6b); background:var(--s-chip,#f1f3f6); }
+.dot{ width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
+.d-live{ background:var(--red); box-shadow:0 0 0 0 rgba(var(--red-rgb),.55); animation:pulse 1.8s infinite; }
+.d-merged{ background:var(--merged); }
+.d-needs{ background:var(--needs); }
+.d-flight{ background:var(--flight); }
+.d-idle{ background:var(--s-ink3,#a9b0bd); }
+@keyframes pulse{ 0%{ box-shadow:0 0 0 0 rgba(var(--red-rgb),.5); } 70%{ box-shadow:0 0 0 7px rgba(var(--red-rgb),0); } 100%{ box-shadow:0 0 0 0 rgba(var(--red-rgb),0); } }
+
+.chip{ font-size:.78rem; font-weight:560; padding:.4rem .7rem; border-radius:999px;
+  border:1px solid var(--s-hair,#e6e9ef); color:var(--s-ink2,#565d6b); background:var(--s-card,#fff); white-space:nowrap; }
+.chip--on{ color:#fff; background:var(--ink); border-color:var(--ink); }
+.chiprow{ display:flex; gap:.4rem; overflow:hidden; }
+
+/* progress */
+.bar{ height:6px; border-radius:999px; background:var(--s-chip,#eef0f4); overflow:hidden; }
+.bar > i{ display:block; height:100%; border-radius:999px; background:var(--red); }
+.bar--merged > i{ background:var(--merged); }
+.bar--flight > i{ background:var(--flight); }
+
+/* buttons */
+.btn{ display:inline-flex; align-items:center; justify-content:center; gap:.45rem; font-weight:640;
+  font-size:.92rem; padding:.75rem 1rem; border-radius:14px; letter-spacing:-.01em; }
+.btn svg{ width:17px; height:17px; }
+.btn--primary{ background:var(--red); color:#fff; box-shadow:0 2px 12px var(--glow); }
+.btn--dark{ background:var(--ink); color:var(--canvas); }
+.btn--ghost{ border:1px solid var(--s-hair,#e6e9ef); color:var(--s-ink,#111318); background:var(--s-card,#fff); }
+.btn--soft{ background:var(--s-chip,#f1f3f6); color:var(--s-ink,#111318); }
+.btn--wide{ width:100%; }
+.btn--lg{ padding:.9rem 1.1rem; font-size:1rem; border-radius:16px; }
+
+/* input */
+.field{ background:var(--s-chip,#f5f6f8); border:1px solid var(--s-hair,#e6e9ef); border-radius:16px;
+  padding:14px; color:var(--s-ink,#111318); }
+.field .ph{ color:var(--s-ink3,#9aa1af); font-size:1rem; }
+.caret{ display:inline-block; width:2px; height:1.05em; background:var(--red); vertical-align:-2px;
+  animation:blink 1.1s steps(1) infinite; margin-left:1px; }
+@keyframes blink{ 50%{ opacity:0; } }
+
+/* tab bar */
+.tabbar{ flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-around;
+  padding:9px 14px 26px; border-top:1px solid var(--s-hair,#e6e9ef);
+  background:color-mix(in srgb,var(--s-bg,#fff) 86%,transparent); backdrop-filter:blur(12px); }
+.tab{ display:flex; flex-direction:column; align-items:center; gap:3px; color:var(--s-ink3,#9aa1af);
+  font-size:.62rem; font-weight:600; letter-spacing:.01em; flex:1 1 0; }
+.tab svg{ width:23px; height:23px; }
+.tab.on{ color:var(--red); }
+.tab--fab{ flex:0 0 auto; margin-top:-30px; }
+.tab--fab .fab{ width:56px; height:56px; border-radius:19px; display:grid; place-items:center;
+  background:linear-gradient(155deg,var(--red),var(--red-press)); color:#fff;
+  box-shadow:0 8px 22px var(--glow),inset 0 1px 0 rgba(255,255,255,.3); }
+.tab--fab .fab svg{ width:26px; height:26px; }
+.tab--fab span{ color:var(--s-ink3,#9aa1af); margin-top:5px; }
+.badge-dot{ position:absolute; top:-2px; right:-6px; min-width:15px; height:15px; padding:0 3px;
+  border-radius:999px; background:var(--red); color:#fff; font-size:.58rem; font-weight:700;
+  display:grid; place-items:center; box-shadow:0 0 0 2px var(--s-bg,#fff); }
+.tabico{ position:relative; }
+
+/* home indicator (dark cockpit only / used where no tabbar) */
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%);
+  width:128px; height:5px; border-radius:999px; background:currentColor; opacity:.25; z-index:20; }
+
+/* mini task chip flow */
+.flowcol{ display:flex; flex-direction:column; gap:8px; }
+.stage{ display:flex; align-items:center; gap:10px; }
+.stage__k{ font-family:var(--font-mono); font-size:.62rem; letter-spacing:.1em; text-transform:uppercase;
+  width:74px; flex:0 0 auto; }
+.stage__bar{ flex:1 1 auto; height:34px; border-radius:11px; display:flex; align-items:center; gap:6px;
+  padding:0 10px; font-size:.74rem; font-weight:600; overflow:hidden; }
+.stage__n{ margin-left:auto; font-family:var(--font-mono); font-weight:600; }
+
+/* ============================================================================
+   DARK COCKPIT screen skin (autopilot)
+   ============================================================================ */
+.cockpit{
+  --s-bg:#0b0c0f; --s-ink:#f2f4f8; --s-ink2:#9aa1b0; --s-ink3:#6a7180;
+  --s-card:#14161c; --s-hair:rgba(255,255,255,.08); --s-chip:#1a1d24;
+}
+.cockpit .statusbar{ color:#f2f4f8; }
+.cockpit .card{ box-shadow:none; }
+.cockpit-bg{ position:absolute; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(80% 42% at 50% 0%,rgba(var(--red-rgb),.30),transparent 62%),
+    radial-gradient(60% 40% at 90% 30%,rgba(var(--red-rgb),.12),transparent 70%); }
+.cockpit .view{ z-index:1; }
+
+.ringwrap{ position:relative; display:grid; place-items:center; }
+.ringwrap .num{ position:absolute; text-align:center; }
+.ringwrap .num b{ font-family:var(--font-display); font-size:2.6rem; font-weight:750; letter-spacing:-.03em;
+  line-height:1; display:block; }
+.ringwrap .num span{ font-family:var(--font-mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--s-ink2); }
+
+.telem{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+.telem .t{ background:var(--s-chip); border:1px solid var(--s-hair); border-radius:13px; padding:10px; }
+.telem .t .k{ font-family:var(--font-mono); font-size:.6rem; letter-spacing:.1em; text-transform:uppercase; color:var(--s-ink3); }
+.telem .t .v{ font-family:var(--font-display); font-weight:680; font-size:1.15rem; letter-spacing:-.02em; margin-top:3px; }
+.telem .t .v small{ font-size:.7rem; color:var(--s-ink2); font-weight:500; font-family:var(--font-ui); }
+
+.ticker{ background:var(--s-card); border:1px solid var(--s-hair); border-radius:14px; padding:11px 12px;
+  display:flex; gap:9px; align-items:flex-start; }
+.ticker .strm{ font-size:.8rem; line-height:1.45; }
+.ticker .strm .t{ color:var(--s-ink3); font-family:var(--font-mono); font-size:.68rem; }
+
+/* narration timeline */
+.tl{ position:relative; padding-left:22px; }
+.tl::before{ content:""; position:absolute; left:6px; top:4px; bottom:6px; width:1.5px; background:var(--s-hair,#e6e9ef); }
+.tl__i{ position:relative; padding:0 0 14px; }
+.tl__i::before{ content:""; position:absolute; left:-18px; top:3px; width:9px; height:9px; border-radius:50%;
+  background:var(--s-card,#fff); border:2px solid var(--s-ink3,#c4cad4); }
+.tl__i.on::before{ background:var(--red); border-color:var(--red); box-shadow:0 0 0 4px rgba(var(--red-rgb),.15); }
+.tl__i.ok::before{ background:var(--merged); border-color:var(--merged); }
+.tl__t{ font-size:.86rem; font-weight:560; }
+.tl__t b{ font-weight:660; }
+.tl__m{ font-family:var(--font-mono); font-size:.68rem; color:var(--s-ink3,#9aa1af); margin-top:1px; }
+
+/* milestone rail */
+.mrail{ display:flex; gap:0; }
+.mnode{ flex:1 1 0; display:flex; flex-direction:column; align-items:center; gap:6px; position:relative; }
+.mnode::before{ content:""; position:absolute; top:9px; left:-50%; width:100%; height:2px; background:var(--s-hair,#e6e9ef); z-index:0; }
+.mnode:first-child::before{ display:none; }
+.mnode.done::before,.mnode.active::before{ background:var(--merged); }
+.mnode .mk{ width:20px; height:20px; border-radius:50%; z-index:1; display:grid; place-items:center;
+  background:var(--s-chip,#eef0f4); color:var(--s-ink3,#9aa1af); border:2px solid var(--s-hair,#e6e9ef); }
+.mnode .mk svg{ width:11px; height:11px; }
+.mnode.done .mk{ background:var(--merged); border-color:var(--merged); color:#fff; }
+.mnode.active .mk{ background:var(--red); border-color:var(--red); color:#fff; box-shadow:0 0 0 4px rgba(var(--red-rgb),.14); }
+.mnode .ml{ font-size:.6rem; text-align:center; color:var(--s-ink2,#565d6b); line-height:1.2; max-width:56px; }
+.mnode.active .ml{ color:var(--s-ink,#111318); font-weight:640; }
+
+/* swipe-hint action card */
+.approve{ display:grid; grid-template-columns:1fr; }
+.approve__act{ display:flex; gap:8px; margin-top:12px; }
+
+/* footer / design notes */
+.notes{ border-top:1px solid var(--hair); padding:clamp(2.4rem,5vw,4rem) 0 3rem; margin-top:2rem; }
+.notes__grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:1.4rem 2rem; margin-top:1.6rem; }
+.note h4{ font-family:var(--font-mono); font-size:.68rem; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--red); margin:0 0 .6rem; font-weight:600; }
+.note p{ margin:0 0 .5rem; color:var(--ink-2); font-size:.9rem; }
+.note .sw{ display:flex; gap:6px; margin:.2rem 0 .7rem; flex-wrap:wrap; }
+.note .sw i{ width:26px; height:26px; border-radius:7px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.08); }
+.map{ font-family:var(--font-mono); font-size:.8rem; color:var(--ink-2); line-height:1.9; }
+.map b{ color:var(--ink); }
+.map .ar{ color:var(--red); }
+.footnote{ margin-top:2.4rem; color:var(--ink-3); font-size:.82rem; display:flex; align-items:center;
+  gap:.6rem; flex-wrap:wrap; }
+
+/* responsive */
+@media (max-width:900px){
+  .hero__inner{ grid-template-columns:1fr; }
+  .hero__stage{ order:-1; }
+}
+@media (prefers-reduced-motion:reduce){
+  *{ animation:none !important; transition:none !important; }
+}
+:focus-visible{ outline:2px solid var(--red); outline-offset:2px; border-radius:6px; }
+</style>
+</head>
+<body>
+
+<!-- ============================ ICON SPRITE ============================ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="i-switch"><path d="M4 8h9a4 4 0 1 1 0 8H4M20 16h-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="7" cy="8" r="2.4" fill="currentColor"/></g>
+  </defs>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-6 8 6M6 10v9h5v-5h2v5h5v-9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="currentColor"/><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-pr" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="18" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.5v7M18 15.5V11a3 3 0 0 0-3-3h-3l2-2m-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="7" y="5" width="3.4" height="14" rx="1.2" fill="currentColor"/><rect x="13.6" y="5" width="3.4" height="14" rx="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7V5z" fill="currentColor"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.4 3.4 0 0 1 5 5l-8 8a1.8 1.8 0 0 1-2.6-2.6L16 7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3z" fill="currentColor"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-redirect" viewBox="0 0 24 24"><path d="M4 7h11a4 4 0 0 1 0 8H9m0 0l3-3m-3 3l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4 7l8 6 8-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><circle cx="12" cy="6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="14" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 8.3v3.7a4 4 0 0 0 4 0M6 15.7V8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 16"><path d="M2 5a15 15 0 0 1 20 0M5 8.5a10 10 0 0 1 14 0M8 12a5 5 0 0 1 8 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="14.5" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-sig" viewBox="0 0 20 14"><rect x="1" y="9" width="3" height="4" rx="1" fill="currentColor"/><rect x="6" y="6" width="3" height="7" rx="1" fill="currentColor"/><rect x="11" y="3" width="3" height="10" rx="1" fill="currentColor"/><rect x="16" y="1" width="3" height="12" rx="1" fill="currentColor" opacity=".4"/></symbol>
+  <symbol id="i-batt" viewBox="0 0 26 14"><rect x="1" y="2" width="21" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="3" y="4" width="15" height="6" rx="1.5" fill="currentColor"/><rect x="23.5" y="5" width="1.6" height="4" rx=".8" fill="currentColor"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3v4h4M9.5 13h5M9.5 16.5h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-deck" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 17v3M8 20h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+</svg>
+
+<!-- ============================ TOP BAR ============================ -->
+<header class="topbar">
+  <div class="brand">
+    <span class="mark"><svg viewBox="0 0 24 24"><use href="#i-switch"/></svg></span>
+    <span>Switchboard<small>Native · iOS</small></span>
+  </div>
+  <div class="topbar__right">
+    <span class="tag">Wireframes v1</span>
+    <button class="tglbtn" id="themeBtn" aria-label="Toggle light / dark theme">
+      <svg class="icon-sun"><use href="#i-sun"/></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+<!-- ============================ HERO ============================ -->
+<section class="hero">
+  <div class="hero__glow"></div>
+  <div class="wrap hero__inner">
+    <div>
+      <div class="eyebrow">Switchboard for iPhone</div>
+      <h1>The plan <em>ships itself.</em><br>You just watch it&nbsp;drain.</h1>
+      <p class="lede">Kick off a project from your pocket, flip on autopilot, and watch a fleet of coding agents design, build, and merge — live. The phone is the observation deck; the AI is the operator.</p>
+      <div class="hero__meta">
+        <span class="metachip"><svg><use href="#i-bolt"/></svg> Kickoff → plan in ~40s</span>
+        <span class="metachip"><svg><use href="#i-cpu"/></svg> Autonomous delivery loop</span>
+        <span class="metachip"><svg><use href="#i-shield"/></svg> Approve · redirect · stop</span>
+      </div>
+    </div>
+    <div class="hero__stage">
+      <!-- SIGNATURE PHONE: Autopilot cockpit (dark) -->
+      <div class="phone">
+        <div class="island"></div>
+        <div class="phone__screen cockpit">
+          <div class="cockpit-bg"></div>
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar">
+              <div class="appbar__l"><span class="appbar__title">Autopilot</span><span class="pill p-live"><span class="dot d-live"></span>Engaged</span></div>
+              <button class="ico ico--ghost"><svg><use href="#i-x"/></svg></button>
+            </div>
+            <div class="view__scroll">
+              <div style="text-align:center; margin:.3rem 0 .1rem"><span class="tid">PROJECT ATLAS · SSO GO-LIVE</span></div>
+              <div class="ringwrap" style="margin:.4rem 0 1rem">
+                <svg width="176" height="176" viewBox="0 0 176 176">
+                  <circle cx="88" cy="88" r="76" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="10"/>
+                  <circle cx="88" cy="88" r="76" fill="none" stroke="url(#g1)" stroke-width="10" stroke-linecap="round"
+                    stroke-dasharray="477" stroke-dashoffset="153" transform="rotate(-90 88 88)"/>
+                  <defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5a48"/><stop offset="1" stop-color="#c0392b"/></linearGradient></defs>
+                </svg>
+                <div class="num"><b>14</b><span>ready to drain</span></div>
+              </div>
+              <div class="flowcol" style="margin-bottom:12px">
+                <div class="stage"><span class="stage__k dim">Dispatched</span><div class="stage__bar" style="background:rgba(59,111,212,.14); color:#7ea6ee"><span class="dot d-flight"></span>SEN-6 · DATA-3<span class="stage__n">2</span></div></div>
+                <div class="stage"><span class="stage__k dim">Building</span><div class="stage__bar" style="background:rgba(var(--red-rgb),.16); color:#ff7a6b"><span class="dot d-live"></span>SEN-6 opened PR<span class="stage__n">1</span></div></div>
+                <div class="stage"><span class="stage__k dim">Merged today</span><div class="stage__bar" style="background:rgba(31,157,85,.15); color:#4fd58a"><svg style="width:12px;height:12px"><use href="#i-check"/></svg>7 shipped<span class="stage__n">7</span></div></div>
+              </div>
+              <div class="telem" style="margin-bottom:12px">
+                <div class="t"><div class="k">Throughput</div><div class="v">3<small>/hr</small></div></div>
+                <div class="t"><div class="k">Budget</div><div class="v">$42<small>/120</small></div></div>
+                <div class="t"><div class="k">Models</div><div class="v" style="font-size:.8rem; font-family:var(--font-ui)">CC · Codex</div></div>
+              </div>
+              <div class="ticker">
+                <span class="dot d-live" style="margin-top:6px"></span>
+                <div class="strm"><span class="t">09:41:07</span> · <b>Atlas</b> opened <b>PR&nbsp;#412</b> for SEN-6 — CI running, 3/4 green.</div>
+              </div>
+              <div class="row" style="gap:8px; margin-top:12px">
+                <button class="btn btn--soft grow"><svg><use href="#i-pause"/></svg>Pause</button>
+                <button class="btn btn--soft grow"><svg><use href="#i-redirect"/></svg>Redirect</button>
+              </div>
+            </div>
+          </div>
+          <div class="homebar" style="color:#fff"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ CHAPTER 01 · KICKOFF ============================ -->
+<section class="chapter wrap" id="kickoff">
+  <div class="chapter__head">
+    <span class="chapter__num">01</span>
+    <div>
+      <h2><small>Kick off</small>Describe it once. Get a whole plan back.</h2>
+      <p class="chapter__lede">Drop a goal, a PRD, a deck, or a voice note. Switchboard's synthesis agent returns the full workstream — <b>epics, tasks, dependencies, owners, and estimates</b> — for you to approve. No dragging cards.</p>
+    </div>
+  </div>
+  <div class="rail">
+
+    <!-- 1a — Kickoff prompt -->
+    <div class="cell">
+      <div class="phone">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar">
+              <button class="ico ico--ghost"><svg><use href="#i-x"/></svg></button>
+              <span class="appbar__title">New project</span>
+              <span style="width:34px"></span>
+            </div>
+            <div class="view__scroll">
+              <h2 class="h-large" style="margin-top:.6rem">What should<br>we build?</h2>
+              <p class="h-sub" style="margin-bottom:14px">Switchboard drafts the plan and can start executing it on autopilot.</p>
+              <div class="field" style="min-height:150px">
+                <div style="font-size:1rem; line-height:1.5">Ship SSO for the TotalEnergies pilot — Entra ID, SAML, go-live gated on CI parity with Helm<span class="caret"></span></div>
+              </div>
+              <div class="chiprow" style="margin:12px 0 6px; flex-wrap:wrap; gap:8px">
+                <button class="chip"><svg style="width:13px;height:13px;display:inline;vertical-align:-2px;margin-right:4px"><use href="#i-doc"/></svg>Attach PRD</button>
+                <button class="chip"><svg style="width:13px;height:13px;display:inline;vertical-align:-2px;margin-right:4px"><use href="#i-deck"/></svg>Deck</button>
+                <button class="chip"><svg style="width:13px;height:13px;display:inline;vertical-align:-2px;margin-right:4px"><use href="#i-mic"/></svg>Voice</button>
+              </div>
+              <div class="slabel">Start from a template</div>
+              <div class="chiprow" style="flex-wrap:wrap; gap:8px">
+                <button class="chip">Ingest pipeline v2</button>
+                <button class="chip">Auth &amp; SSO</button>
+                <button class="chip">Data migration</button>
+              </div>
+            </div>
+            <div style="padding:10px 18px 16px">
+              <button class="btn btn--primary btn--wide btn--lg">Draft the plan<svg><use href="#i-arrow"/></svg></button>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Goal → plan synthesis <span class="kbd">intake.py</span></h3>
+        <p>One input box takes text, files, or voice. Everything routes through the same intake the desktop uses — so a phone kickoff and a boardroom kickoff produce the identical plan graph.</p>
+      </div>
+    </div>
+
+    <!-- 1b — Draft plan -->
+    <div class="cell">
+      <div class="phone phone--tilt">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar">
+              <button class="ico ico--ghost"><svg style="transform:rotate(180deg)"><use href="#i-arrow"/></svg></button>
+              <span class="appbar__title">Draft plan</span>
+              <button class="ico ico--ghost"><svg><use href="#i-spark"/></svg></button>
+            </div>
+            <div class="view__scroll">
+              <h2 class="h-large" style="font-size:1.5rem; margin-top:.4rem">SSO Go-Live</h2>
+              <div class="chiprow" style="gap:6px; margin:6px 0 14px; flex-wrap:wrap">
+                <span class="pill p-idle">3 epics</span>
+                <span class="pill p-idle">21 tasks</span>
+                <span class="pill p-idle">6 milestones</span>
+                <span class="pill p-flight"><svg><use href="#i-clock"/></svg>~9 days</span>
+              </div>
+
+              <div class="card">
+                <div class="row"><span class="ttl grow">Identity provider</span><span class="tid">EPIC · 8</span></div>
+                <div class="bar" style="margin:9px 0 11px"><i style="width:22%"></i></div>
+                <div class="rowline" style="padding:8px 0 0; border:0"><span class="tid">SEN-6</span><span class="ttl grow" style="font-size:.84rem">Wire Entra app registration</span><span class="av av-atlas av--sm">A</span></div>
+                <div class="rowline" style="padding:8px 0 0"><span class="tid">SEN-7</span><span class="ttl grow" style="font-size:.84rem">SAML assertion mapping</span><span class="pill p-idle" style="font-size:.62rem">dep SEN-6</span></div>
+              </div>
+              <div class="card">
+                <div class="row"><span class="ttl grow">CI parity gate</span><span class="tid">EPIC · 7</span></div>
+                <div class="bar" style="margin:9px 0 0"><i style="width:0%"></i></div>
+              </div>
+            </div>
+            <div style="padding:8px 18px 16px; border-top:1px solid var(--s-hair)">
+              <label class="row" style="margin:2px 2px 10px"><span class="grow"><span class="ttl" style="font-size:.86rem">Engage autopilot on approve</span><br><span class="sub2">Start draining ready tasks immediately</span></span><span style="width:44px;height:26px;border-radius:999px;background:var(--red);position:relative;flex:0 0 auto"><span style="position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:#fff"></span></span></label>
+              <button class="btn btn--primary btn--wide btn--lg"><svg><use href="#i-bolt"/></svg>Approve &amp; engage autopilot</button>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Approve, don't author</h3>
+        <p>The draft comes back typed and dependency-aware. Flip <b>autopilot on</b> and approving the plan is the same gesture as starting delivery — the loop begins the moment you tap.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ CHAPTER 02 · AUTOPILOT ============================ -->
+<section class="chapter wrap" id="autopilot">
+  <div class="chapter__head">
+    <span class="chapter__num">02</span>
+    <div>
+      <h2><small>Autopilot</small>A fleet that designs, builds, and merges — hands-off.</h2>
+      <p class="chapter__lede">The autonomous delivery loop claims the next ready task, dispatches a coding agent, watches the PR, and on merge unblocks the next. You supervise from a <b>mission-control cockpit</b> and drop into any agent's live session to redirect or stop it.</p>
+    </div>
+  </div>
+  <div class="rail">
+
+    <!-- 2a — Cockpit (dark, larger recap) -->
+    <div class="cell">
+      <div class="phone">
+        <div class="island"></div>
+        <div class="phone__screen cockpit">
+          <div class="cockpit-bg"></div>
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar">
+              <div class="appbar__l"><span class="appbar__title">Autopilot</span><span class="pill p-live"><span class="dot d-live"></span>Engaged</span></div>
+              <button class="ico" style="background:var(--s-chip)"><svg><use href="#i-target"/></svg></button>
+            </div>
+            <div class="view__scroll">
+              <div class="card" style="background:var(--s-chip); border:0; margin-bottom:12px">
+                <div class="row"><div class="grow"><div class="tid">DRAINING</div><div style="font-family:var(--font-display); font-size:1.5rem; font-weight:720; letter-spacing:-.03em">14 <span style="font-size:.9rem; color:var(--s-ink2); font-weight:500">of 21 tasks</span></div></div>
+                <div style="text-align:right"><div class="tid">ETA</div><div style="font-weight:680">~2d 4h</div></div></div>
+                <div class="bar bar--merged" style="margin-top:12px; background:rgba(255,255,255,.08)"><i style="width:33%"></i></div>
+              </div>
+              <div class="slabel" style="color:var(--s-ink3)">Live pipeline</div>
+              <div class="flowcol">
+                <div class="stage"><span class="stage__k dim">Ready</span><div class="stage__bar" style="background:var(--s-chip); color:var(--s-ink2)">11 queued<span class="stage__n">11</span></div></div>
+                <div class="stage"><span class="stage__k dim">Dispatched</span><div class="stage__bar" style="background:rgba(59,111,212,.16); color:#7ea6ee"><span class="dot d-flight"></span>DATA-3<span class="stage__n">2</span></div></div>
+                <div class="stage"><span class="stage__k dim">Building</span><div class="stage__bar" style="background:rgba(var(--red-rgb),.18); color:#ff7a6b"><span class="dot d-live"></span>SEN-6<span class="stage__n">1</span></div></div>
+                <div class="stage"><span class="stage__k dim">Review</span><div class="stage__bar" style="background:rgba(224,130,11,.16); color:#f0a53a"><span class="dot d-needs"></span>SEN-4 · needs you<span class="stage__n">1</span></div></div>
+                <div class="stage"><span class="stage__k dim">Merged</span><div class="stage__bar" style="background:rgba(31,157,85,.16); color:#4fd58a"><svg style="width:12px;height:12px"><use href="#i-check"/></svg>7<span class="stage__n">7</span></div></div>
+              </div>
+              <div class="telem" style="margin-top:12px">
+                <div class="t"><div class="k">Spend</div><div class="v">$42<small>/120</small></div></div>
+                <div class="t"><div class="k">Merged/hr</div><div class="v">3.0</div></div>
+                <div class="t"><div class="k">On track</div><div class="v" style="color:#4fd58a">4/6</div></div>
+              </div>
+            </div>
+            <div style="padding:8px 18px 16px">
+              <div class="row" style="gap:8px"><button class="btn grow" style="background:var(--s-chip); color:var(--s-ink)"><svg><use href="#i-pause"/></svg>Pause fleet</button><button class="btn btn--primary grow"><svg><use href="#i-cpu"/></svg>View fleet</button></div>
+            </div>
+          </div>
+          <div class="homebar" style="color:#fff"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>The cockpit <span class="kbd">delivery loop</span></h3>
+        <p>Ready → dispatched → building → review → merged, with counts that move on their own. Budget, throughput, and outcome-tracking sit right under it. <b>Pause the whole fleet</b> with one tap.</p>
+      </div>
+    </div>
+
+    <!-- 2b — Agent session detail -->
+    <div class="cell">
+      <div class="phone phone--tilt">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar">
+              <button class="ico ico--ghost"><svg style="transform:rotate(180deg)"><use href="#i-arrow"/></svg></button>
+              <span class="appbar__title">Session</span>
+              <span class="pill p-live"><span class="dot d-live"></span>Building</span>
+            </div>
+            <div class="view__scroll">
+              <div class="row" style="margin:.2rem 0 12px">
+                <span class="av av-atlas av--lg">A</span>
+                <div class="grow"><div class="ttl" style="font-size:1.02rem">Atlas</div><div class="sub2 mono">claude-code · sess_7fa1</div></div>
+              </div>
+              <div class="card" style="margin-bottom:12px">
+                <div class="tid">SEN-6 · IDENTITY PROVIDER</div>
+                <div class="ttl" style="margin:3px 0 0">Wire Entra app registration</div>
+              </div>
+              <div class="slabel">Live narration</div>
+              <div class="tl">
+                <div class="tl__i ok"><div class="tl__t">Claimed task &amp; opened work session</div><div class="tl__m">09:38:02 · clean tree</div></div>
+                <div class="tl__i ok"><div class="tl__t">Added <b>3 tests</b>, all green locally</div><div class="tl__m">09:39:44</div></div>
+                <div class="tl__i ok"><div class="tl__t">Pushed <span class="mono">a91c…</span> to <b>sso/entra</b></div><div class="tl__m">09:40:51</div></div>
+                <div class="tl__i on"><div class="tl__t">Opened <b>PR #412</b> — CI running</div><div class="tl__m">09:41:07 · 3 of 4 checks green</div></div>
+              </div>
+              <div class="card" style="margin-top:4px">
+                <div class="row"><span class="ico" style="width:30px;height:30px;background:rgba(var(--red-rgb),.08);color:var(--red)"><svg style="width:16px"><use href="#i-pr"/></svg></span>
+                <div class="grow"><div class="ttl" style="font-size:.86rem">PR #412 · sso/entra</div><div class="sub2 mono">+214 −38 · 6 files</div></div>
+                <span class="pill p-flight">CI 3/4</span></div>
+              </div>
+            </div>
+            <div style="padding:8px 18px 16px; border-top:1px solid var(--s-hair)">
+              <div class="row" style="gap:8px"><button class="btn btn--ghost grow"><svg><use href="#i-redirect"/></svg>Redirect</button><button class="btn btn--ghost grow" style="color:var(--red);border-color:rgba(var(--red-rgb),.25)"><svg><use href="#i-pause"/></svg>Stop</button></div>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Drop into any agent</h3>
+        <p>Every session narrates itself in plain language — claim, tests, push, PR, CI. From here you can <b>redirect</b> the agent with a new instruction or <b>stop</b> it cold. Interrupts are visible and enforced.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ CHAPTER 03 · LIVE ============================ -->
+<section class="chapter wrap" id="live">
+  <div class="chapter__head">
+    <span class="chapter__num">03</span>
+    <div>
+      <h2><small>See it live</small>Deliverables, fleet, and the two things that need you.</h2>
+      <p class="chapter__lede">The observation deck: watch a deliverable progress against honest, evidence-backed gates, scan the whole fleet at a glance, and clear the approval queue — <b>dispatch, chase, ship</b> — with a tap.</p>
+    </div>
+  </div>
+  <div class="rail">
+
+    <!-- 3a — Deliverable live -->
+    <div class="cell">
+      <div class="phone">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar"><div class="appbar__l"><span class="ico"><svg><use href="#i-layers"/></svg></span><span class="appbar__title">Deliverable</span></div><span class="pill p-live"><span class="dot d-live"></span>Live</span></div>
+            <div class="view__scroll">
+              <h2 class="h-large" style="font-size:1.5rem">SSO Go-Live</h2>
+              <p class="h-sub">Owner <b>Atlas</b> · 4 agents · across 2 repos</p>
+              <div class="card" style="margin:12px 0; border-color:rgba(31,157,85,.3); background:rgba(31,157,85,.05)">
+                <div class="row"><span class="ico" style="width:28px;height:28px;background:rgba(31,157,85,.14);color:var(--merged)"><svg style="width:15px"><use href="#i-shield"/></svg></span><div class="grow"><div class="ttl" style="font-size:.86rem">On track to ship</div><div class="sub2">1 gate open · CI parity with Helm</div></div></div>
+              </div>
+              <div class="slabel">Milestones</div>
+              <div class="mrail" style="margin:6px 2px 4px">
+                <div class="mnode done"><span class="mk"><svg><use href="#i-check"/></svg></span><span class="ml">Contract</span></div>
+                <div class="mnode done"><span class="mk"><svg><use href="#i-check"/></svg></span><span class="ml">Build core</span></div>
+                <div class="mnode active"><span class="mk"><span class="dot" style="background:#fff;width:6px;height:6px"></span></span><span class="ml">Integrate</span></div>
+                <div class="mnode"><span class="mk"></span><span class="ml">Prove parity</span></div>
+                <div class="mnode"><span class="mk"></span><span class="ml">Ship</span></div>
+              </div>
+              <div class="row" style="margin:16px 2px 6px"><span class="ttl grow" style="font-size:.86rem">Progress</span><span class="mono ttl" style="font-size:.86rem">68%</span></div>
+              <div class="bar bar--merged"><i style="width:68%"></i></div>
+              <div class="slabel">Proof of done <a>Why?</a></div>
+              <div class="card card--flush">
+                <div class="rowline"><svg style="width:15px;color:var(--merged)"><use href="#i-check"/></svg><span class="grow ttl" style="font-size:.82rem">SEN-2 merged</span><span class="tid">#398</span></div>
+                <div class="rowline"><svg style="width:15px;color:var(--merged)"><use href="#i-check"/></svg><span class="grow ttl" style="font-size:.82rem">SEN-5 merged</span><span class="tid">#401</span></div>
+                <div class="rowline"><span class="dot d-needs"></span><span class="grow ttl" style="font-size:.82rem">SEN-4 — claimed done, PR open</span><span class="tid">#409</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Honest by design <span class="kbd">evidence gates</span></h3>
+        <p>A deliverable is only "done" when its PRs are <b>actually merged</b>. Switchboard flags the lie — "claimed done, PR open" — instead of trusting a checkbox. The brief tells you what's true, with citations.</p>
+      </div>
+    </div>
+
+    <!-- 3b — Fleet -->
+    <div class="cell">
+      <div class="phone phone--tilt">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar"><div class="appbar__l"><span class="appbar__title" style="font-size:1.05rem">Fleet</span></div><span class="sub2">5 sessions · <b style="color:var(--red)">3 active</b></span></div>
+            <div style="padding:0 18px"><div class="chiprow" style="gap:6px"><button class="chip chip--on">All</button><button class="chip">Active</button><button class="chip">Needs you</button><button class="chip">Blocked</button></div></div>
+            <div class="view__scroll" style="padding-top:12px">
+              <div class="card card--flush">
+                <div class="rowline"><span class="av av-atlas">A</span><div class="grow"><div class="ttl">Atlas</div><div class="sub2 mono">SEN-6 · building</div></div><span class="pill p-live"><span class="dot d-live"></span>PR open</span></div>
+                <div class="rowline"><span class="av av-codex">C</span><div class="grow"><div class="ttl">Codex</div><div class="sub2 mono">DATA-3 · review</div></div><span class="pill p-needs"><span class="dot d-needs"></span>Needs you</span></div>
+                <div class="rowline"><span class="av av-cursor">Cu</span><div class="grow"><div class="ttl">Cursor</div><div class="sub2 mono">SEN-7 · blocked on SEN-6</div></div><span class="pill p-idle">Blocked</span></div>
+                <div class="rowline"><span class="av av-nova">N</span><div class="grow"><div class="ttl">Nova</div><div class="sub2 mono">DATA-2 · merged #401</div></div><span class="pill p-merged"><svg><use href="#i-check"/></svg>Done</span></div>
+              </div>
+              <div class="slabel">Idle · ready to claim</div>
+              <div class="card"><div class="row"><span class="av av-sm" style="background:var(--s-chip);color:var(--s-ink3)">+</span><div class="grow"><div class="ttl" style="font-size:.86rem">2 runners available</div><div class="sub2">Autopilot will dispatch next</div></div><span class="pill p-idle"><span class="dot d-idle"></span>Idle</span></div></div>
+            </div>
+            <div class="tabbar">
+              <a class="tab"><svg><use href="#i-home"/></svg><span>Today</span></a>
+              <a class="tab"><svg><use href="#i-layers"/></svg><span>Deliver</span></a>
+              <a class="tab tab--fab"><span class="fab"><svg><use href="#i-plus"/></svg></span><span>Kickoff</span></a>
+              <a class="tab on"><svg><use href="#i-cpu"/></svg><span>Fleet</span></a>
+              <a class="tab"><span class="tabico"><svg><use href="#i-bell"/></svg><span class="badge-dot">2</span></span><span>Inbox</span></a>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>The whole fleet, one screen</h3>
+        <p>Each agent's model, task, and live status — building, needs-you, blocked, merged — with the native tab bar underneath. <b>Kickoff</b> is always one thumb-tap away from the center button.</p>
+      </div>
+    </div>
+
+    <!-- 3c — Approvals / action queue -->
+    <div class="cell">
+      <div class="phone">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#f6f7f9">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar"><span class="appbar__title" style="font-size:1.05rem">Approvals</span><span class="pill p-needs">2 pending</span></div>
+            <div class="view__scroll">
+              <p class="h-sub" style="margin:2px 2px 12px">Every agent action waits here. You're the reviewer, not the clicker.</p>
+
+              <div class="card" style="margin-bottom:12px">
+                <div class="row" style="margin-bottom:10px"><span class="ico" style="width:32px;height:32px;background:rgba(var(--red-rgb),.08);color:var(--red)"><svg style="width:17px"><use href="#i-bolt"/></svg></span><div class="grow"><div class="ttl" style="font-size:.9rem">Dispatch SEN-7</div><div class="sub2">to <b>Claude Code</b> · est $3 · budget ok</div></div></div>
+                <div class="field" style="padding:10px; background:var(--s-chip); font-size:.8rem; color:var(--s-ink2)">SAML assertion mapping — SEN-6 just merged, dependency clear.</div>
+                <div class="approve__act"><button class="btn btn--ghost grow"><svg><use href="#i-x"/></svg>Deny</button><button class="btn btn--primary grow"><svg><use href="#i-check"/></svg>Approve</button></div>
+              </div>
+
+              <div class="card">
+                <div class="row" style="margin-bottom:10px"><span class="ico" style="width:32px;height:32px;background:rgba(224,130,11,.12);color:var(--needs)"><svg style="width:17px"><use href="#i-mail"/></svg></span><div class="grow"><div class="ttl" style="font-size:.9rem">Chase Sahir</div><div class="sub2">overdue · SSO-2 go-live gate</div></div></div>
+                <div class="field" style="padding:10px; background:var(--s-chip); font-size:.8rem; color:var(--s-ink2)">"Sahir — SSO-2 is the go-live gate, due 6/2. What's the ETA on the Entra app-reg?"</div>
+                <div class="approve__act"><button class="btn btn--soft grow">Edit</button><button class="btn btn--primary grow"><svg><use href="#i-mail"/></svg>Send</button></div>
+              </div>
+
+              <div class="slabel">Auto-approved by policy · today <a>Log</a></div>
+              <div class="card card--flush">
+                <div class="rowline"><svg style="width:14px;color:var(--merged)"><use href="#i-check"/></svg><span class="grow sub2">Marked SEN-5 done — PR #401 merged</span><span class="tid">08:12</span></div>
+                <div class="rowline"><svg style="width:14px;color:var(--merged)"><use href="#i-check"/></svg><span class="grow sub2">Dispatched DATA-3 (low-risk)</span><span class="tid">08:47</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Supervise → approve → redirect <span class="kbd">action queue</span></h3>
+        <p>Dispatches, emails, date changes, closes — every governed effect lands in one queue. Low-risk classes auto-approve by policy and log themselves; the rest wait for your thumb.</p>
+      </div>
+    </div>
+
+    <!-- 3d — Home / Today -->
+    <div class="cell">
+      <div class="phone phone--tilt">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar"><div><div class="tid">MON · JUL 13</div><span class="appbar__title" style="font-size:1.1rem">Today</span></div><span class="av av-you">S</span></div>
+            <div class="view__scroll">
+              <p class="h-sub" style="margin:2px 2px 12px; font-size:1rem"><b style="color:var(--red)">3 agents building.</b> 2 things need you.</p>
+              <div class="card" style="background:linear-gradient(150deg,#151317,#0d0e12); border:0; color:#fff; margin-bottom:12px">
+                <div class="row"><span class="pill p-live" style="background:rgba(var(--red-rgb),.2)"><span class="dot d-live"></span>Autopilot ON</span><span class="grow"></span><svg style="width:16px;color:rgba(255,255,255,.5)"><use href="#i-chevron"/></svg></div>
+                <div style="font-family:var(--font-display); font-size:1.3rem; font-weight:700; letter-spacing:-.02em; margin:10px 0 2px">SSO Go-Live</div>
+                <div style="color:rgba(255,255,255,.6); font-size:.82rem" class="mono">draining 14 · 7 merged today</div>
+                <div class="bar bar--merged" style="margin-top:12px; background:rgba(255,255,255,.12)"><i style="width:33%"></i></div>
+              </div>
+              <div class="slabel">Needs you <a>2</a></div>
+              <div class="card card--flush" style="margin-bottom:12px">
+                <div class="rowline"><span class="ico" style="width:30px;height:30px;background:rgba(var(--red-rgb),.08);color:var(--red)"><svg style="width:15px"><use href="#i-bolt"/></svg></span><div class="grow"><div class="ttl" style="font-size:.84rem">Approve dispatch · SEN-7</div><div class="sub2">est $3</div></div><svg style="width:16px;color:var(--s-ink3)"><use href="#i-chevron"/></svg></div>
+                <div class="rowline"><span class="ico" style="width:30px;height:30px;background:rgba(224,130,11,.12);color:var(--needs)"><svg style="width:15px"><use href="#i-mail"/></svg></span><div class="grow"><div class="ttl" style="font-size:.84rem">Send chase · Sahir</div><div class="sub2">SSO-2 overdue</div></div><svg style="width:16px;color:var(--s-ink3)"><use href="#i-chevron"/></svg></div>
+              </div>
+              <div class="slabel">Pulse</div>
+              <div class="telem" style="--s-chip:#f4f5f7">
+                <div class="t" style="background:var(--s-chip);border:1px solid var(--s-hair);border-radius:13px;padding:10px"><div class="k" style="font-family:var(--font-mono);font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;color:var(--s-ink3)">On track</div><div style="font-family:var(--font-display);font-weight:700;font-size:1.2rem;color:var(--merged)">4/6</div></div>
+                <div class="t" style="background:var(--s-chip);border:1px solid var(--s-hair);border-radius:13px;padding:10px"><div class="k" style="font-family:var(--font-mono);font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;color:var(--s-ink3)">Merged</div><div style="font-family:var(--font-display);font-weight:700;font-size:1.2rem">7</div></div>
+                <div class="t" style="background:var(--s-chip);border:1px solid var(--s-hair);border-radius:13px;padding:10px"><div class="k" style="font-family:var(--font-mono);font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;color:var(--s-ink3)">Spend</div><div style="font-family:var(--font-display);font-weight:700;font-size:1.2rem">$42</div></div>
+              </div>
+            </div>
+            <div class="tabbar">
+              <a class="tab on"><svg><use href="#i-home"/></svg><span>Today</span></a>
+              <a class="tab"><svg><use href="#i-layers"/></svg><span>Deliver</span></a>
+              <a class="tab tab--fab"><span class="fab"><svg><use href="#i-plus"/></svg></span><span>Kickoff</span></a>
+              <a class="tab"><svg><use href="#i-cpu"/></svg><span>Fleet</span></a>
+              <a class="tab"><span class="tabico"><svg><use href="#i-bell"/></svg><span class="badge-dot">2</span></span><span>Inbox</span></a>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Open the app, see the state</h3>
+        <p>Today leads with what's live and what's waiting on you — never a to-do list. One glance: autopilot's draining, two approvals pending, outcomes 4-of-6 on track. Then close the phone.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ DESIGN NOTES ============================ -->
+<section class="notes wrap">
+  <div class="chapter__head" style="border:0">
+    <span class="chapter__num" style="color:var(--ink-2)">·</span>
+    <div><h2 style="font-size:1.5rem"><small>Design system</small>Built on the real Switchboard, not a mockup.</h2></div>
+  </div>
+  <div class="notes__grid">
+    <div class="note">
+      <h4>Palette</h4>
+      <div class="sw"><i style="background:#c0392b"></i><i style="background:#111318"></i><i style="background:#1f9d55"></i><i style="background:#e0820b"></i><i style="background:#3b6fd4"></i><i style="background:#eef0f4"></i></div>
+      <p>Taikun red <b>#c0392b</b> is the only accent — it also signals "live." Semantic greens, ambers and slates are kept separate from the brand and used only for state. The cockpit inverts to near-black with red telemetry glow.</p>
+    </div>
+    <div class="note">
+      <h4>Typography</h4>
+      <p><b>SF Pro</b> (native system) carries the UI — authentic on-device and CSP-safe, no webfont. <b>SF&nbsp;Mono</b> voices the technical layer: task IDs, session handles, spend, timestamps. Display weights for the numbers you watch move.</p>
+    </div>
+    <div class="note">
+      <h4>Native patterns</h4>
+      <p>Dynamic-island frame, 9:41 status bar, a 5-tab bar with a raised center <b>Kickoff</b> action, swipe-approve cards, live pulse dots, and a home indicator. Motion is limited to state that's genuinely changing.</p>
+    </div>
+    <div class="note">
+      <h4>Maps to the control plane</h4>
+      <p class="map">
+        Kickoff <span class="ar">→</span> <b>intake.py</b> · goal→plan<br>
+        Autopilot <span class="ar">→</span> <b>dispatch.py</b> loop<br>
+        Session <span class="ar">→</span> <b>narration</b> + interrupts<br>
+        Deliverable <span class="ar">→</span> <b>evidence gates</b><br>
+        Approvals <span class="ar">→</span> <b>action queue</b> · Tally
+      </p>
+    </div>
+  </div>
+  <div class="footnote">
+    <span class="brand"><span class="mark" style="width:20px;height:20px"><svg style="width:12px" viewBox="0 0 24 24"><use href="#i-switch"/></svg></span></span>
+    <span>Switchboard mobile · the AI operates, you supervise. Wireframes are directional — every surface traces to a shipping module.</span>
+  </div>
+</section>
+</main>
+
+<script>
+(function(){
+  var root=document.documentElement, btn=document.getElementById('themeBtn');
+  function icon(){ var d=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme:dark)').matches);
+    btn.innerHTML='<svg><use href="#'+(d?'i-sun':'i-moon')+'"/></svg>'; }
+  icon();
+  btn.addEventListener('click',function(){
+    var cur=root.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+    root.setAttribute('data-theme',cur==='dark'?'light':'dark'); icon();
+  });
+})();
+</script>
+</body>
+</html>

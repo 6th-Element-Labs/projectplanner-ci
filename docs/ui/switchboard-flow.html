@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · The full R/GA-in-a-box lifecycle — Intake → Measure</title>
+<style>
+/* The complete deliverable lifecycle on the live-Switchboard base.
+   R/GA phases: Strategy · Concept · Define · Design · Build · Ship · Grow.
+   Brand lockup · --tblr-primary #c0392b · bg-*-lt state badges · soft white cards. */
+*,*::before,*::after{ box-sizing:border-box; } html,body{ height:100%; } body{ margin:0; }
+svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; } :where(a){ color:inherit; text-decoration:none; }
+:root{
+  --font:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --primary:#c0392b; --primary-rgb:192,57,43;
+  --azure:#4299e1; --azure-rgb:66,153,225; --blue:#206bc4; --blue-rgb:32,107,196;
+  --green:#2fb344; --green-rgb:47,179,68; --orange:#f76707; --orange-rgb:247,103,7;
+  --purple:#ae3ec9; --purple-rgb:174,62,201; --red:#d63939; --red-rgb:214,57,57; --teal:#0ca678; --teal-rgb:12,166,120;
+  --ink:#1a2230; --ink-2:#5a6577; --ink-3:#8b95a5; --card:#fff; --canvas:#f6f7f9;
+  --hair:#e6e9ef; --hair-2:#eef0f4; --chip:#f1f3f6; --shadow:0 1px 2px rgba(20,30,50,.04),0 1px 3px rgba(20,30,50,.05);
+}
+@media (prefers-color-scheme:dark){ :root{ --ink:#e9ecf1;--ink-2:#9aa3b1;--ink-3:#6b7482;--card:#171a20;--canvas:#0f1116;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.055);--chip:#1c2029;--shadow:0 1px 2px rgba(0,0,0,.4);} }
+:root[data-theme="dark"]{ --ink:#e9ecf1;--ink-2:#9aa3b1;--ink-3:#6b7482;--card:#171a20;--canvas:#0f1116;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.055);--chip:#1c2029;--shadow:0 1px 2px rgba(0,0,0,.4); }
+:root[data-theme="light"]{ --ink:#1a2230;--ink-2:#5a6577;--ink-3:#8b95a5;--card:#fff;--canvas:#f6f7f9;--hair:#e6e9ef;--hair-2:#eef0f4;--chip:#f1f3f6; }
+body{ font-family:var(--font); color:var(--ink); background:var(--canvas); font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased; letter-spacing:-.006em; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.app{ display:grid; grid-template-columns:248px minmax(0,1fr); grid-template-rows:54px minmax(0,1fr); grid-template-areas:"brand appbar" "rail main"; height:100vh; }
+.appbar{ grid-area:appbar; background:var(--card); border-bottom:1px solid var(--hair); display:flex; align-items:center; gap:12px; padding:0 16px; }
+.brand{ grid-area:brand; background:var(--card); border-bottom:1px solid var(--hair); border-right:1px solid var(--hair); display:flex; align-items:center; gap:9px; padding:0 16px; }
+.brand .mk{ width:26px; height:26px; display:grid; place-items:center; color:var(--primary); } .brand .mk svg{ width:24px; height:24px; }
+.brand .lk{ font-size:14px; font-weight:500; letter-spacing:.1em; white-space:nowrap; } .brand .lk .sb{ font-weight:400; color:var(--primary); margin-left:.35em; }
+.search{ display:flex; align-items:center; gap:8px; background:var(--chip); border:1px solid var(--hair); border-radius:8px; padding:7px 11px; color:var(--ink-3); font-size:13px; width:220px; } .search svg{ width:15px; height:15px; } .search kbd{ margin-left:auto; font-family:var(--mono); font-size:10.5px; background:var(--card); border:1px solid var(--hair); border-radius:4px; padding:1px 5px; }
+.appbar .grow{ flex:1; }
+.obtn{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:500; padding:7px 11px; border-radius:8px; border:1px solid var(--hair); background:var(--card); color:var(--ink-2); } .obtn svg{ width:15px; height:15px; } .obtn:hover{ background:var(--chip); }
+.ibtn{ width:34px; height:34px; border-radius:8px; border:1px solid var(--hair); display:grid; place-items:center; color:var(--ink-2); } .ibtn svg{ width:17px; height:17px; }
+.pbtn{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; padding:8px 13px; border-radius:8px; background:var(--primary); color:#fff; box-shadow:0 1px 2px rgba(var(--primary-rgb),.35); } .pbtn svg{ width:15px; height:15px; } .pbtn:hover{ background:#a5281c; }
+.rail{ grid-area:rail; background:var(--card); border-right:1px solid var(--hair); display:flex; flex-direction:column; padding:12px; overflow:auto; }
+.psel{ display:flex; align-items:center; gap:8px; border:1px solid var(--hair); border-radius:9px; padding:9px 11px; font-weight:600; font-size:13.5px; margin-bottom:12px; } .psel .grow{ flex:1; } .psel svg{ width:15px; height:15px; color:var(--ink-3); }
+.nav{ display:flex; flex-direction:column; gap:2px; }
+.ni{ display:flex; align-items:center; gap:11px; padding:9px 11px; border-radius:9px; color:var(--ink-2); font-weight:500; font-size:13.5px; } .ni svg{ width:19px; height:19px; } .ni:hover{ background:var(--chip); color:var(--ink); } .ni.on{ background:var(--chip); color:var(--ink); font-weight:600; }
+.rail .foot{ margin-top:auto; display:flex; flex-direction:column; gap:7px; padding-top:12px; } .rail .foot .obtn{ justify-content:center; width:100%; }
+.boxp{ display:inline-flex; align-items:center; gap:6px; align-self:flex-start; font-size:12px; font-weight:600; color:#fff; background:var(--orange); border-radius:999px; padding:5px 11px; } .boxp svg{ width:13px; height:13px; }
+.main{ grid-area:main; overflow:hidden; display:flex; flex-direction:column; }
+.toolbar{ display:flex; align-items:center; gap:12px; padding:11px 18px; border-bottom:1px solid var(--hair); background:var(--card); }
+.dsel{ display:flex; align-items:center; gap:9px; } .dsel .lbl{ color:var(--ink-2); font-weight:600; font-size:13px; display:inline-flex; align-items:center; gap:6px; } .dsel .lbl svg{ width:16px; height:16px; }
+.dbox{ display:flex; align-items:center; gap:9px; border:1px solid var(--hair); border-radius:9px; padding:8px 12px; font-weight:600; min-width:230px; } .dbox .grow{ flex:1; } .dbox svg{ width:15px; height:15px; color:var(--ink-3); }
+.toolbar .grow{ flex:1; }
+.status{ display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:600; color:var(--primary); background:rgba(var(--primary-rgb),.08); padding:5px 11px; border-radius:999px; } .status .d{ width:7px; height:7px; border-radius:50%; background:var(--primary); }
+/* phased stepper */
+.stepper{ display:flex; align-items:center; gap:0; padding:9px 18px; border-bottom:1px solid var(--hair); background:var(--card); overflow-x:auto; }
+.phase{ display:flex; align-items:center; flex:0 0 auto; }
+.phase .plabel{ font-family:var(--mono); font-size:9px; letter-spacing:.11em; text-transform:uppercase; color:var(--ink-3); font-weight:700; padding:0 10px 0 4px; border-left:2px solid var(--hair); margin:0 4px 0 8px; white-space:nowrap; }
+.phase:first-child .plabel{ border-left:0; margin-left:0; }
+.step{ display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+.step__b{ display:flex; align-items:center; gap:6px; padding:5px 8px; border-radius:8px; color:var(--ink-3); font-weight:600; font-size:12px; white-space:nowrap; } .step__b:hover{ background:var(--chip); color:var(--ink); }
+.step .n{ width:19px; height:19px; border-radius:50%; display:grid; place-items:center; font-size:9.5px; font-weight:700; background:var(--chip); color:var(--ink-3); border:1.5px solid var(--hair); flex:0 0 auto; } .step .n svg{ width:11px; height:11px; }
+.step.done .n{ background:var(--green); border-color:var(--green); color:#fff; } .step.done .step__b{ color:var(--ink-2); }
+.step.on .n{ background:var(--primary); border-color:var(--primary); color:#fff; box-shadow:0 0 0 3px rgba(var(--primary-rgb),.13); } .step.on .step__b{ color:var(--primary); }
+.wrap{ position:relative; flex:1; overflow:hidden; }
+.screen{ position:absolute; inset:0; display:flex; flex-direction:column; overflow:hidden; } .screen.hidden{ display:none; }
+.split{ flex:1; display:grid; grid-template-columns:minmax(0,1fr) 380px; overflow:hidden; }
+.artifact{ overflow:auto; padding:18px 20px 84px; } .art{ max-width:720px; } .art.wide{ max-width:960px; }
+.kick{ font-family:var(--mono); font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--primary); font-weight:600; }
+.art h1{ font-size:21px; font-weight:700; letter-spacing:-.02em; margin:5px 0 3px; } .art .meta{ color:var(--ink-2); font-size:12.5px; margin-bottom:15px; } .art .meta code{ font-family:var(--mono); font-size:11px; background:var(--chip); padding:1px 5px; border-radius:5px; }
+.card{ background:var(--card); border:1px solid var(--hair); border-radius:13px; box-shadow:var(--shadow); margin-bottom:12px; }
+.card__h{ display:flex; align-items:center; gap:9px; padding:12px 15px; border-bottom:1px solid var(--hair); } .card__h .ic{ color:var(--ink-2); } .card__h .ic svg{ width:17px; height:17px; } .card__h h3{ margin:0; font-size:14px; font-weight:640; } .card__h .grow{ flex:1; } .card__h .meta{ font-size:12px; color:var(--ink-3); }
+.card__b{ padding:14px 15px; }
+.doc__sec{ padding:12px 15px; } .doc__sec + .doc__sec{ border-top:1px solid var(--hair-2); } .doc__sec .h{ font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:6px; display:flex; align-items:center; gap:8px; } .doc__sec p{ margin:0; font-size:13.5px; line-height:1.55; } .doc__sec ul{ margin:3px 0 0; padding-left:1.15rem; } .doc__sec li{ margin:2px 0; font-size:13.5px; }
+.edit{ font-size:9.5px; font-weight:700; color:var(--orange); background:rgba(var(--orange-rgb),.13); padding:1px 6px; border-radius:5px; letter-spacing:.02em; }
+mark{ background:rgba(var(--orange-rgb),.2); border-radius:3px; padding:0 2px; color:inherit; }
+.mini{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; padding:5px 10px; border-radius:7px; border:1px solid var(--hair); color:var(--ink-2); } .mini svg{ width:13px; height:13px; } .mini.red{ color:var(--primary); border-color:rgba(var(--primary-rgb),.3); background:rgba(var(--primary-rgb),.05); }
+.badge{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; } .badge svg{ width:11px; height:11px; }
+.bg-azure-lt{ color:var(--azure); background:rgba(var(--azure-rgb),.13); } .bg-blue-lt{ color:var(--blue); background:rgba(var(--blue-rgb),.12); } .bg-green-lt{ color:var(--green); background:rgba(var(--green-rgb),.13); } .bg-orange-lt{ color:var(--orange); background:rgba(var(--orange-rgb),.13); } .bg-purple-lt{ color:var(--purple); background:rgba(var(--purple-rgb),.12); } .bg-red-lt{ color:var(--red); background:rgba(var(--red-rgb),.12); } .bg-teal-lt{ color:var(--teal); background:rgba(var(--teal-rgb),.12); } .bg-secondary-lt{ color:var(--ink-2); background:var(--chip); }
+.crit{ display:flex; align-items:flex-start; gap:9px; padding:6px 0; font-size:13.5px; } .crit + .crit{ border-top:1px solid var(--hair-2); } .crit .ck{ width:18px; height:18px; border-radius:50%; background:rgba(var(--green-rgb),.13); color:var(--green); display:grid; place-items:center; flex:0 0 auto; margin-top:1px; } .crit .ck svg{ width:12px; height:12px; }
+.proof{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; color:var(--green); background:rgba(var(--green-rgb),.1); padding:3px 9px; border-radius:999px; } .proof svg{ width:12px; height:12px; }
+.bar{ height:8px; border-radius:999px; background:var(--chip); overflow:hidden; } .bar>i{ display:block; height:100%; border-radius:999px; background:var(--green); }
+.ms{ border:1px solid var(--hair); border-radius:11px; overflow:hidden; } .ms + .ms{ margin-top:9px; }
+.ms__h{ display:flex; align-items:center; gap:10px; padding:11px 13px; } .ms__h .n{ width:22px; height:22px; border-radius:6px; background:var(--chip); color:var(--ink-2); display:grid; place-items:center; font-family:var(--mono); font-size:11px; font-weight:700; flex:0 0 auto; } .ms__h .ti{ font-weight:620; font-size:13.5px; } .ms__h .grow{ flex:1; } .ms__h .cw{ font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+.role{ font-size:9.5px; font-weight:700; padding:1px 6px; border-radius:5px; letter-spacing:.02em; text-transform:uppercase; } .r-impl{ color:var(--blue); background:rgba(var(--blue-rgb),.11); } .r-acc{ color:var(--green); background:rgba(var(--green-rgb),.12); } .r-found{ color:var(--purple); background:rgba(var(--purple-rgb),.11); }
+.legend{ display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px; } .lg{ font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; }
+.wave{ border:1px solid var(--hair); border-radius:11px; padding:10px 12px; } .wave + .wave{ margin-top:8px; } .wave.ghost{ border-style:dashed; opacity:.72; }
+.wave .wh{ display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; color:var(--ink-2); margin-bottom:8px; } .wave .wh .ix{ width:18px; height:18px; border-radius:5px; background:var(--primary); color:#fff; display:grid; place-items:center; font-family:var(--mono); font-size:10px; font-weight:700; } .wave.ghost .wh .ix{ background:var(--ink-3); }
+.lanes{ display:flex; gap:7px; flex-wrap:wrap; } .wtask{ font-family:var(--mono); font-size:11px; font-weight:600; padding:4px 9px; border-radius:7px; background:var(--chip); color:var(--ink-2); } .wtask.key{ background:rgba(var(--purple-rgb),.12); color:var(--purple); }
+.estrow{ display:grid; grid-template-columns:repeat(4,1fr); gap:9px; } .est{ background:var(--canvas); border:1px solid var(--hair); border-radius:10px; padding:10px 12px; text-align:center; } .est .k{ font-family:var(--mono); font-size:9px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); } .est .v{ font-size:18px; font-weight:720; margin-top:2px; }
+/* discussion rail */
+.discuss{ border-left:1px solid var(--hair); background:var(--card); display:flex; flex-direction:column; overflow:hidden; }
+.discuss__h{ display:flex; align-items:center; gap:9px; padding:12px 15px; border-bottom:1px solid var(--hair); } .discuss__h .av{ width:28px; height:28px; border-radius:8px; background:linear-gradient(150deg,var(--primary),#8e2018); color:#fff; display:grid; place-items:center; font-weight:700; font-size:12px; } .discuss__h .ttl{ font-weight:640; font-size:13.5px; } .discuss__h .s{ font-size:11px; color:var(--ink-3); } .discuss__h .grow{ flex:1; }
+.thread{ flex:1; overflow:auto; padding:15px; display:flex; flex-direction:column; gap:12px; }
+.msg{ display:flex; gap:8px; } .msg .av{ width:24px; height:24px; border-radius:7px; display:grid; place-items:center; color:#fff; font-size:10px; font-weight:700; flex:0 0 auto; margin-top:1px; } .msg .av.t{ background:linear-gradient(150deg,var(--primary),#8e2018); }
+.msg .b{ font-size:13px; line-height:1.5; border:1px solid var(--hair); border-radius:12px; padding:9px 12px; background:var(--card); } .msg .b b{ font-weight:640; } .msg .b code{ font-family:var(--mono); font-size:11px; background:var(--chip); padding:1px 5px; border-radius:5px; }
+.msg-bot .b{ border-top-left-radius:4px; } .msg-you{ flex-direction:row-reverse; } .msg-you .b{ background:var(--primary); color:#fff; border-color:var(--primary); border-top-right-radius:4px; } .msg-you .b code{ background:rgba(255,255,255,.2); }
+.options{ display:flex; flex-direction:column; gap:6px; margin-top:8px; } .opt{ display:flex; align-items:center; gap:8px; border:1px solid var(--hair); border-radius:9px; padding:8px 10px; font-size:12.5px; } .opt .r{ width:15px; height:15px; border-radius:50%; border:2px solid var(--hair); flex:0 0 auto; } .opt.sel{ border-color:var(--primary); background:rgba(var(--primary-rgb),.04); } .opt.sel .r{ border-color:var(--primary); background:var(--primary); box-shadow:inset 0 0 0 2.5px #fff; }
+.propose{ border:1px dashed var(--hair); border-radius:11px; background:var(--chip); padding:10px 12px; } .propose .h{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--orange); } .propose .d{ font-size:12.5px; margin-top:4px; } .propose .acts{ display:flex; gap:7px; margin-top:9px; } .propose .acts .mini{ flex:1; justify-content:center; }
+.evt{ text-align:center; font-size:11px; color:var(--ink-3); font-family:var(--mono); }
+.composer{ border-top:1px solid var(--hair); padding:11px 13px; } .chips{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:9px; } .chips .c{ font-size:11px; font-weight:600; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:999px; padding:4px 10px; }
+.cbox{ display:flex; align-items:center; gap:9px; } .cbox .in{ flex:1; background:var(--canvas); border:1px solid var(--hair); border-radius:11px; padding:10px 12px; color:var(--ink-3); font-size:13px; } .cbox .snd{ width:38px; height:38px; border-radius:10px; background:var(--primary); color:#fff; display:grid; place-items:center; } .cbox .snd svg{ width:17px; height:17px; }
+/* gate */
+.gate{ position:absolute; left:0; right:380px; bottom:0; background:var(--card); border-top:1px solid var(--hair); box-shadow:0 -4px 16px rgba(20,30,50,.05); padding:11px 20px; display:flex; align-items:center; gap:14px; }
+.gate.full{ right:0; } .gate .lab{ font-size:13px; font-weight:600; } .gate .lab s{ text-decoration:none; color:var(--ink-2); font-weight:400; } .gate .grow{ flex:1; } .gate .lb{ font-size:10px; font-family:var(--mono); letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); } .gate .sum{ display:flex; gap:7px; flex-wrap:wrap; } .gate .sum .s{ font-size:12px; font-weight:600; color:var(--ink-2); background:var(--chip); border-radius:7px; padding:3px 9px; }
+.commitwrap{ position:relative; flex:1; overflow:hidden; }
+/* session viewer */
+.tl{ padding-left:18px; } .tl__i{ position:relative; padding:0 0 12px; } .tl__i::before{ content:""; position:absolute; left:-15px; top:3px; width:9px; height:9px; border-radius:50%; background:var(--card); border:2px solid var(--ink-3); } .tl__i.ok::before{ background:var(--green); border-color:var(--green); } .tl__i.on::before{ background:var(--primary); border-color:var(--primary); box-shadow:0 0 0 3px rgba(var(--primary-rgb),.14); } .tl__i::after{ content:""; position:absolute; left:-11px; top:12px; bottom:0; width:1.5px; background:var(--hair); } .tl__i:last-child::after{ display:none; }
+.tl__t{ font-size:13px; } .tl__t b{ font-weight:640; } .tl__m{ font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:1px; }
+.diff{ font-family:var(--mono); font-size:12px; border:1px solid var(--hair); border-radius:10px; overflow:hidden; } .diff .ln{ padding:2px 12px; } .diff .add{ background:rgba(var(--green-rgb),.1); color:var(--green); } .diff .del{ background:rgba(var(--red-rgb),.08); color:var(--red); }
+.term{ background:#0b0c0f; color:#d6d9df; border-radius:10px; padding:11px 13px; font-family:var(--mono); font-size:12px; line-height:1.55; } .term .p{ color:#5fd38a; } .term .muted{ color:#6b7280; } .term .cur{ display:inline-block; width:7px; height:14px; background:#5fd38a; vertical-align:-2px; animation:blink 1.1s steps(1) infinite; } @keyframes blink{ 50%{opacity:0;} }
+.statrow{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:13px; } .stat{ background:var(--card); border:1px solid var(--hair); border-radius:11px; box-shadow:var(--shadow); padding:11px 13px; text-align:center; } .stat .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); } .stat .v{ font-size:20px; font-weight:720; margin-top:2px; }
+.av2{ width:26px; height:26px; border-radius:7px; display:grid; place-items:center; color:#fff; font-size:11px; font-weight:700; flex:0 0 auto; } .av-atlas{ background:linear-gradient(150deg,#c0392b,#8e2018);} .av-codex{ background:linear-gradient(150deg,#206bc4,#16457f);} .av-nova{ background:linear-gradient(150deg,#2fb344,#1c7a2d);} .av-t{ background:linear-gradient(150deg,#c0392b,#8e2018);}
+.d-live{ animation:pulse 1.8s infinite; } @keyframes pulse{ 0%{box-shadow:0 0 0 0 rgba(var(--primary-rgb),.5);} 70%{box-shadow:0 0 0 6px rgba(var(--primary-rgb),0);} }
+.slabel{ font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin:14px 2px 8px; }
+/* gantt */
+.gantt{ position:relative; border:1px solid var(--hair); border-radius:12px; background:var(--card); box-shadow:var(--shadow); overflow:hidden; }
+.grow2{ display:grid; grid-template-columns:140px 1fr; align-items:center; } .grow2.hd{ border-bottom:1px solid var(--hair); font-family:var(--mono); font-size:10px; color:var(--ink-3); } .grow2.hd .plot{ display:flex; height:auto; background:none; } .grow2.hd .wk{ flex:1; padding:7px 0 7px 9px; border-left:1px solid var(--hair-2); } .grow2.stripe .plot{ background:rgba(20,30,50,.025); }
+.gname{ font-family:var(--mono); font-size:11px; padding:0 11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink-2); }
+.plot{ position:relative; height:27px; background-image:linear-gradient(90deg,var(--hair-2) 1px,transparent 1px); background-size:calc(100%/3) 100%; }
+.gbar{ position:absolute; top:5px; height:17px; border-radius:4px; display:flex; align-items:center; padding:0 7px; gap:4px; font-family:var(--mono); font-size:9.5px; font-weight:700; color:#fff; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.12); } .gbar svg{ width:10px; height:10px; } .gbar.todo{ opacity:.42; }
+.today{ position:absolute; top:26px; bottom:0; width:2px; background:var(--primary); z-index:2; } .today::after{ content:'today'; position:absolute; top:-13px; left:-13px; font-family:var(--mono); font-size:9px; color:var(--primary); font-weight:700; }
+.glegend{ display:flex; gap:13px; flex-wrap:wrap; padding:10px 12px; font-size:11px; color:var(--ink-2); border-top:1px solid var(--hair-2); } .glegend i{ width:10px; height:10px; border-radius:3px; display:inline-block; vertical-align:-1px; margin-right:5px; }
+/* brief deck */
+.docdeck{ display:inline-flex; gap:4px; background:var(--chip); border-radius:9px; padding:3px; margin-bottom:14px; } .docdeck button{ font-size:12.5px; font-weight:600; padding:6px 13px; border-radius:7px; color:var(--ink-2); display:inline-flex; gap:6px; align-items:center; } .docdeck button svg{ width:14px; height:14px; } .docdeck button.on{ background:var(--card); color:var(--ink); box-shadow:var(--shadow); }
+.view2.hidden{ display:none; }
+.stage16{ position:relative; aspect-ratio:16/9; border-radius:14px; overflow:hidden; border:1px solid var(--hair); box-shadow:0 10px 34px -14px rgba(20,30,50,.34); background:var(--card); }
+.slide{ position:absolute; inset:0; padding:32px 36px; display:flex; flex-direction:column; } .slide.hidden{ display:none; }
+.slide .sn{ font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; font-weight:600; } .slide .foot{ margin-top:auto; display:flex; align-items:center; gap:8px; font-size:11px; font-family:var(--mono); }
+.slmk{ display:inline-flex; align-items:center; gap:6px; font-weight:600; letter-spacing:.08em; }
+.slide--cover{ background:radial-gradient(120% 140% at 80% 10%, #2a3550 0%, #141b28 55%, #0d1117 100%); color:#fff; justify-content:flex-end; }
+.slide--cover .sn{ position:absolute; top:32px; left:36px; color:rgba(255,255,255,.55); } .slide--cover .tag{ position:absolute; top:30px; right:36px; font-size:11px; font-weight:600; color:rgba(255,255,255,.7); border:1px solid rgba(255,255,255,.25); border-radius:999px; padding:4px 11px; }
+.slide--cover h2{ font-size:36px; font-weight:760; letter-spacing:-.035em; line-height:1.02; margin:0 0 8px; max-width:15ch; } .slide--cover p{ margin:0; color:rgba(255,255,255,.72); font-size:14px; } .slide--cover .foot{ color:rgba(255,255,255,.5); margin-top:22px; }
+.slide h3{ font-size:12px; font-family:var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--primary); font-weight:600; margin:0 0 12px; }
+.slide .big{ font-size:26px; font-weight:720; letter-spacing:-.025em; line-height:1.12; margin:0; max-width:20ch; } .slide .big mark{ background:linear-gradient(transparent 62%, rgba(var(--orange-rgb),.28) 62%); padding:0; } .slide .sub{ color:var(--ink-2); font-size:13.5px; margin-top:12px; max-width:44ch; }
+.pillars{ display:grid; grid-template-columns:repeat(3,1fr); gap:11px; } .pil{ border:1px solid var(--hair); border-radius:12px; padding:14px; } .pil .pi{ width:32px; height:32px; border-radius:9px; background:rgba(var(--primary-rgb),.09); color:var(--primary); display:grid; place-items:center; margin-bottom:8px; } .pil .pi svg{ width:18px; height:18px; } .pil .pt{ font-weight:660; font-size:14px; } .pil .pd{ font-size:12px; color:var(--ink-2); line-height:1.45; margin-top:5px; }
+.film{ display:flex; gap:9px; margin-top:12px; overflow-x:auto; padding-bottom:3px; }
+.thumb{ flex:0 0 auto; width:118px; border:1px solid var(--hair); border-radius:9px; overflow:hidden; background:var(--card); cursor:pointer; } .thumb.on{ border-color:var(--primary); box-shadow:0 0 0 2px rgba(var(--primary-rgb),.15); }
+.thumb .tv{ height:52px; padding:7px 8px; font-size:8px; line-height:1.25; overflow:hidden; position:relative; } .thumb .tv .tt{ font-weight:700; font-size:9px; } .thumb .tv .ta{ position:absolute; left:8px; bottom:6px; right:8px; height:4px; border-radius:2px; background:var(--chip); } .thumb.cover .tv{ background:linear-gradient(150deg,#26324c,#0d1117); color:#fff; } .thumb .cap{ padding:5px 8px; border-top:1px solid var(--hair-2); font-size:10px; font-weight:600; color:var(--ink-2); display:flex; gap:6px; } .thumb .cap .i{ font-family:var(--mono); color:var(--ink-3); }
+.deckbar{ display:flex; align-items:center; gap:9px; margin-top:11px; } .deckbar .grow{ flex:1; } .deckbar .pg{ font-family:var(--mono); font-size:12px; color:var(--ink-3); }
+/* concepts */
+.reco{ display:flex; gap:12px; align-items:flex-start; border:1px solid rgba(var(--primary-rgb),.22); background:linear-gradient(120deg,rgba(var(--primary-rgb),.05),transparent); border-radius:13px; padding:14px 16px; margin-bottom:16px; } .reco .av2{ width:30px; height:30px; } .reco .h{ font-weight:660; font-size:14px; } .reco .d{ font-size:13px; color:var(--ink-2); margin-top:3px; line-height:1.5; } .reco .d b{ color:var(--ink); }
+.terr{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.tcard{ border:1px solid var(--hair); border-radius:14px; background:var(--card); box-shadow:var(--shadow); overflow:hidden; display:flex; flex-direction:column; } .tcard.pick{ border-color:var(--primary); box-shadow:0 0 0 2px rgba(var(--primary-rgb),.14),var(--shadow); }
+.tcard__h{ padding:14px 16px 10px; } .tcard .num{ font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); } .tcard .name{ font-size:19px; font-weight:730; letter-spacing:-.02em; margin:3px 0 2px; } .tcard .one{ font-size:13px; color:var(--ink-2); }
+.sketch{ height:110px; margin:2px 16px 0; border:1px solid var(--hair-2); border-radius:10px; background:var(--canvas); position:relative; overflow:hidden; }
+.node{ position:absolute; font-family:var(--mono); font-size:9.5px; font-weight:700; padding:4px 8px; border-radius:6px; color:#fff; box-shadow:0 1px 2px rgba(0,0,0,.15); } .edge{ position:absolute; height:2px; background:var(--hair); transform-origin:left center; }
+.tcard__b{ padding:14px 16px; display:flex; flex-direction:column; gap:11px; flex:1; }
+.tro{ display:flex; gap:8px; font-size:12.5px; } .tro .i{ width:16px; height:16px; border-radius:50%; display:grid; place-items:center; flex:0 0 auto; margin-top:1px; } .tro .i svg{ width:10px; height:10px; } .tro.up .i{ background:rgba(var(--green-rgb),.14); color:var(--green); } .tro.dn .i{ background:rgba(var(--orange-rgb),.14); color:var(--orange); }
+.shape{ display:flex; gap:6px; flex-wrap:wrap; } .shape .s{ font-size:11px; font-weight:600; color:var(--ink-2); background:var(--chip); border-radius:7px; padding:3px 9px; }
+.tcard__f{ padding:12px 16px; border-top:1px solid var(--hair-2); display:flex; align-items:center; gap:9px; } .tcard__f .by{ font-size:11px; color:var(--ink-3); flex:1; } .tcard__f .by b{ color:var(--ink-2); } .tcard__f .choose{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; padding:7px 12px; border-radius:8px; border:1px solid var(--hair); color:var(--ink); } .tcard.pick .tcard__f .choose{ background:var(--primary); color:#fff; border-color:var(--primary); } .tcard__f .choose svg{ width:14px; height:14px; }
+/* design system */
+.swatches{ display:flex; gap:9px; flex-wrap:wrap; } .sw{ text-align:center; } .sw .c{ width:52px; height:52px; border-radius:10px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.06); } .sw .n{ font-family:var(--mono); font-size:9.5px; color:var(--ink-3); margin-top:5px; }
+.typescale{ display:flex; flex-direction:column; gap:6px; } .typescale > div{ display:flex; align-items:baseline; gap:12px; } .typescale .tn{ font-family:var(--mono); font-size:10px; color:var(--ink-3); width:44px; flex:0 0 auto; }
+.compv{ display:flex; gap:9px; flex-wrap:wrap; align-items:center; }
+/* prototype */
+.browser{ border:1px solid var(--hair); border-radius:12px; overflow:hidden; box-shadow:0 8px 26px -12px rgba(20,30,50,.3); }
+.browser .bar{ display:flex; align-items:center; gap:7px; padding:9px 12px; background:var(--chip); border-bottom:1px solid var(--hair); } .browser .bar .dot{ width:10px; height:10px; border-radius:50%; } .browser .bar .url{ flex:1; background:var(--card); border:1px solid var(--hair); border-radius:6px; padding:4px 10px; font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+.proto{ padding:40px; background:linear-gradient(160deg,#f8fafc,#eef2f7); min-height:280px; display:flex; align-items:center; justify-content:center; }
+.protoCard{ width:320px; background:#fff; border:1px solid var(--hair); border-radius:16px; box-shadow:0 12px 30px -12px rgba(20,30,50,.25); padding:28px 26px; text-align:center; }
+.protoCard .lg{ width:38px; height:38px; border-radius:11px; background:linear-gradient(150deg,var(--primary),#8e2018); color:#fff; display:grid; place-items:center; margin:0 auto 14px; font-weight:800; }
+.protoCard h4{ margin:0 0 4px; font-size:18px; font-weight:700; } .protoCard .pp{ font-size:12.5px; color:var(--ink-2); margin:0 0 18px; }
+.ssobtn{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%; padding:11px; border-radius:10px; border:1px solid var(--hair); font-weight:600; font-size:13.5px; margin-bottom:9px; } .ssobtn.primary{ background:#0f6cbd; color:#fff; border-color:#0f6cbd; }
+/* crit */
+.critrow{ display:flex; gap:11px; align-items:flex-start; padding:11px 0; } .critrow + .critrow{ border-top:1px solid var(--hair-2); } .critrow .sev{ width:22px; height:22px; border-radius:6px; display:grid; place-items:center; flex:0 0 auto; margin-top:1px; } .critrow .sev svg{ width:13px; height:13px; } .critrow .g{ flex:1; } .critrow .g .t{ font-weight:580; font-size:13.5px; } .critrow .g .d{ font-size:12.5px; color:var(--ink-2); margin-top:2px; }
+.sev-ok{ background:rgba(var(--green-rgb),.14); color:var(--green); } .sev-note{ background:rgba(var(--orange-rgb),.14); color:var(--orange); }
+.gatepair{ display:grid; grid-template-columns:1fr 1fr; gap:11px; } .gpair{ border:1px solid var(--hair); border-radius:11px; padding:13px 15px; } .gpair .gt{ font-size:12px; font-weight:640; display:flex; align-items:center; gap:7px; } .gpair .gv{ font-size:22px; font-weight:730; margin-top:6px; }
+/* playback */
+.pbcard{ border:1px solid var(--hair); border-radius:13px; overflow:hidden; } .pbcard .pbh{ background:radial-gradient(120% 160% at 85% 0%, #223049, #10161f); color:#fff; padding:20px 22px; } .pbcard .pbh .sn{ font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:rgba(255,255,255,.55); } .pbcard .pbh h4{ margin:5px 0 3px; font-size:20px; font-weight:720; } .pbcard .pbh p{ margin:0; color:rgba(255,255,255,.72); font-size:13px; }
+.pbcard .pbb{ padding:15px 18px; }
+.clientrow{ display:flex; align-items:center; gap:11px; padding:12px 16px; border:1px solid var(--hair); border-radius:12px; background:var(--chip); } .clientrow .g{ flex:1; }
+/* measure */
+.kpi{ display:grid; grid-template-columns:repeat(3,1fr); gap:11px; } .kcard{ border:1px solid var(--hair); border-radius:13px; padding:15px; background:var(--card); box-shadow:var(--shadow); } .kcard .kn{ font-size:13px; font-weight:600; } .kcard .kv{ font-size:26px; font-weight:740; letter-spacing:-.02em; margin:8px 0 2px; } .kcard .kv small{ font-size:13px; font-weight:500; color:var(--ink-2); }
+.spark{ height:34px; margin-top:8px; display:flex; align-items:flex-end; gap:3px; } .spark i{ flex:1; background:rgba(var(--green-rgb),.25); border-radius:2px 2px 0 0; } .spark i.hi{ background:var(--green); }
+.track{ height:7px; border-radius:999px; background:var(--chip); overflow:hidden; margin-top:9px; position:relative; } .track > i{ display:block; height:100%; border-radius:999px; background:var(--green); } .track .tgt{ position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--ink-2); }
+:focus-visible{ outline:2px solid var(--primary); outline-offset:2px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12c1.5 0 1.5-5 3-5s1.5 10 3 10 1.5-8 3-8 1.5 5 3 5 1.5-4 3-4 1.5 3 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M16 16l4 4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 8v5l-4 2v-7L4 5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-cols" viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9.5" y="4" width="5" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="16" y="4" width="5" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="currentColor"/><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" fill="currentColor"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-8h11L20 13v6H4v-6zM4 13h4l1.5 2.5h5L16 13h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 3v2.5M12 18.5V21M4.2 7l2.2 1.3M17.6 15.7l2.2 1.3M4.2 17l2.2-1.3M17.6 8.3l2.2-1.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.3v7.4M18 15.7V11a3 3 0 0 0-3-3h-3l2-2m-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-3-6-7-2z" fill="currentColor"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="currentColor"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l4-1L19 8a2 2 0 0 0-3-3L5 16l-1 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-q" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.7.3-.9.8-.9 1.5v.4M12 17h.01" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M6 3h12v18l-2.5-1.5L13 21l-2.5-1.5L8 21l-2.5-1.5V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 8h6M9 12h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 4v14M15 6v14" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-1.3-1-1.5-1-2.6 0-.8.7-1.4 1.5-1.4H17a4 4 0 0 0 4-4c0-4.4-4-8-9-8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="7.5" cy="11.5" r="1.1" fill="currentColor"/><circle cx="11.5" cy="7.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="9.5" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.6 6.3L21 10l-5 4.3L17.5 21 12 17.3 6.5 21 8 14.3 3 10l6.4-.7L12 3z" fill="currentColor"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="6" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.2 10.8l7.6-3.6M8.2 13.2l7.6 3.6" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+</svg>
+
+<div class="app">
+  <div class="brand"><span class="mk"><svg viewBox="0 0 24 24"><use href="#i-wave"/></svg></span><span class="lk">TAIKUN<span class="sb">SWITCHBOARD</span></span></div>
+  <header class="appbar">
+    <div class="search"><svg><use href="#i-search"/></svg>Search…<kbd>⌘K</kbd></div>
+    <span class="grow"></span>
+    <button class="obtn"><svg><use href="#i-filter"/></svg>Filters</button>
+    <button class="ibtn"><svg><use href="#i-bell"/></svg></button>
+    <button class="ibtn" id="themeBtn"><svg><use href="#i-sun"/></svg></button>
+    <button class="pbtn"><svg><use href="#i-plus"/></svg>New task</button>
+  </header>
+  <nav class="rail">
+    <div class="psel"><span class="grow">Northwind Energy</span><svg><use href="#i-chev"/></svg></div>
+    <div class="nav">
+      <a class="ni"><svg><use href="#i-grid"/></svg>Overview</a>
+      <a class="ni"><svg><use href="#i-cols"/></svg>Plan</a>
+      <a class="ni on"><svg><use href="#i-target"/></svg>Deliverable</a>
+      <a class="ni"><svg><use href="#i-cpu"/></svg>Fleet</a>
+      <a class="ni"><svg><use href="#i-spark"/></svg>Ask</a>
+      <a class="ni"><svg><use href="#i-inbox"/></svg>Inbox</a>
+      <a class="ni"><svg><use href="#i-gear"/></svg>Settings</a>
+    </div>
+    <div class="foot"><button class="obtn"><svg><use href="#i-git"/></svg>Connect repo</button><span class="boxp"><svg><use href="#i-bolt"/></svg>Box pressure</span></div>
+  </nav>
+
+  <main class="main">
+    <div class="toolbar">
+      <div class="dsel"><span class="lbl"><svg><use href="#i-target"/></svg>Deliverable</span><div class="dbox"><span class="grow">SSO &amp; Identity Platform</span><svg><use href="#i-chev"/></svg></div></div>
+      <span class="grow"></span>
+      <span class="status" id="statusPill"><span class="d"></span>Strategy · 2 POV</span>
+    </div>
+    <div class="stepper" id="stepper">
+      <div class="phase"><span class="plabel">Strategy</span>
+        <div class="step" data-go="1"><button class="step__b"><span class="n">1</span>Intake</button></div>
+        <div class="step" data-go="2"><button class="step__b"><span class="n">2</span>POV</button></div></div>
+      <div class="phase"><span class="plabel">Concept</span>
+        <div class="step" data-go="3"><button class="step__b"><span class="n">3</span>Big Idea</button></div></div>
+      <div class="phase"><span class="plabel">Define</span>
+        <div class="step" data-go="4"><button class="step__b"><span class="n">4</span>Brief</button></div>
+        <div class="step" data-go="5"><button class="step__b"><span class="n">5</span>PRD</button></div>
+        <div class="step" data-go="6"><button class="step__b"><span class="n">6</span>SOW</button></div>
+        <div class="step" data-go="7"><button class="step__b"><span class="n">7</span>Scope</button></div></div>
+      <div class="phase"><span class="plabel">Design</span>
+        <div class="step" data-go="8"><button class="step__b"><span class="n">8</span>System</button></div>
+        <div class="step" data-go="9"><button class="step__b"><span class="n">9</span>Prototype</button></div></div>
+      <div class="phase"><span class="plabel">Build</span>
+        <div class="step" data-go="10"><button class="step__b"><span class="n">10</span>Build</button></div>
+        <div class="step" data-go="11"><button class="step__b"><span class="n">11</span>Crit</button></div>
+        <div class="step" data-go="12"><button class="step__b"><span class="n">12</span>Monitor</button></div>
+        <div class="step" data-go="13"><button class="step__b"><span class="n">13</span>Playback</button></div></div>
+      <div class="phase"><span class="plabel">Ship</span>
+        <div class="step" data-go="14"><button class="step__b"><span class="n">14</span>Wrap</button></div></div>
+      <div class="phase"><span class="plabel">Grow</span>
+        <div class="step" data-go="15"><button class="step__b"><span class="n">15</span>Case study</button></div>
+        <div class="step" data-go="16"><button class="step__b"><span class="n">16</span>Measure</button></div></div>
+    </div>
+
+    <div class="wrap">
+
+      <!-- 1 INTAKE -->
+      <section class="screen hidden" data-screen="1"><div class="split">
+        <div class="artifact"><div class="art">
+          <div class="kick">Strategy · Intake</div><h1>Drop in what you have</h1><div class="meta">A goal, a PRD, or a raw discovery transcript. Switchboard reads it — no forms.</div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-mic"/></svg></span><h3>Discovery transcript</h3><span class="grow"></span><span class="meta">discovery-call.vtt · 42 min</span></div><div class="card__b" style="font-size:13px;line-height:1.7;color:var(--ink-2)">
+            <p style="margin:0 0 8px"><b style="color:var(--primary)">Client</b> — we can't go live until pilot users can sign in. It's all manual right now.</p>
+            <p style="margin:0 0 8px"><b style="color:var(--primary)">Client</b> — <mark>Entra ID, and we'd need SAML</mark>. Hard constraint — <mark>Okta stays as fallback</mark>.</p>
+            <p style="margin:0"><b style="color:var(--primary)">Client</b> — <mark>95%+ sign-in, parity with our Helm baseline</mark>. Three weeks. Mobile later.</p></div></div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-spark"/></svg></span><h3>Ingested</h3><span class="grow"></span><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>RAG'd over 6 docs</span></div><div class="doc__sec"><p style="font-size:13px;color:var(--ink-2)">Transcript + RFP + the client's existing Helm baseline docs are now in context. Ready to form a point of view.</p></div></div>
+        </div></div>
+        <aside class="discuss"><div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Discuss · Taikun</div><div class="s">reading your inputs</div></div></div>
+          <div class="thread"><div class="msg msg-bot"><span class="av t">T</span><div class="b">Read the call + RFP. Before I write a brief, I want to form a <b>point of view</b> on what this really is. Anything I'm missing?</div></div><div class="msg msg-you"><div class="b">Mobile's out of scope for v1.</div></div><div class="msg msg-bot"><span class="av t">T</span><div class="b">Noted. Building the strategy now.</div></div></div>
+          <div class="composer"><div class="chips"><span class="c">Paste a goal</span><span class="c">Upload PRD</span></div><div class="cbox"><div class="in">Add context…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div></div>
+        </aside></div>
+        <div class="gate full"><span class="lab">Inputs captured <s>· the strategy forms from this</s></span><span class="grow"></span><button class="pbtn" data-go="2"><svg><use href="#i-arrow"/></svg>Form the POV</button></div>
+      </section>
+
+      <!-- 2 STRATEGY / POV -->
+      <section class="screen hidden" data-screen="2"><div class="split">
+        <div class="artifact"><div class="art">
+          <div class="kick">Strategy · Point of view</div><h1>The strategy</h1><div class="meta">Before execution — the reframe, the insight, and the metrics that matter. Authored from your inputs by the strategy agent. This is where your judgment plugs in hardest.</div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-spark"/></svg></span><h3>The reframe</h3><span class="grow"></span><span class="badge bg-purple-lt">POV</span></div><div class="card__b"><p style="font-size:16px;font-weight:640;line-height:1.4;letter-spacing:-.01em">This isn't a login problem. It's a <mark>go-live problem</mark> — every day without SSO is a day the TotalEnergies account can't onboard.</p></div></div>
+          <div class="card"><div class="doc__sec"><div class="h">Audience insight</div><p>Pilot operators are field-first and low-patience. They won't tolerate a second login system; anything that adds friction gets worked around — which is exactly how manual provisioning crept in.</p></div>
+            <div class="doc__sec"><div class="h">Competitive teardown</div><ul><li><b>Okta-only shops</b> — fast to stand up, but a dead end for the Entra-native enterprise buyer.</li><li><b>Full IdP rebuilds</b> — "right" but months long; miss the TotalEnergies window entirely.</li><li><b>Our lane</b> — Entra-native SSO with Okta as a safety net, proven at parity. Fast <i>and</i> safe.</li></ul></div>
+            <div class="doc__sec"><div class="h">Why now</div><p>The TotalEnergies contract has a go-live date. Ship in the window and it's a flagship reference; miss it and it's a stalled pilot.</p></div>
+          </div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-chart"/></svg></span><h3>Metrics that matter</h3><span class="grow"></span><span class="meta">seeds the KPI model</span></div><div class="card__b"><div class="kpi">
+            <div class="kcard" style="box-shadow:none;padding:12px"><div class="kn" style="font-size:12px">SSO success</div><div class="kv" style="font-size:20px">≥95%<small></small></div></div>
+            <div class="kcard" style="box-shadow:none;padding:12px"><div class="kn" style="font-size:12px">MTTA</div><div class="kv" style="font-size:20px">≤15m</div></div>
+            <div class="kcard" style="box-shadow:none;padding:12px"><div class="kn" style="font-size:12px">Manual provisioning</div><div class="kv" style="font-size:20px">0</div></div>
+          </div></div></div>
+        </div></div>
+        <aside class="discuss"><div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Discuss · Taikun</div><div class="s">on the strategy</div></div><span class="badge bg-orange-lt">1 open</span></div>
+          <div class="thread"><div class="msg msg-bot"><span class="av t">T</span><div class="b">My POV: <b>frame this as go-live insurance, not a login feature.</b> It changes what "done" means — proven at parity, not just working. Agree?</div></div>
+            <div class="msg msg-you"><div class="b">Yes. Lean hard on the parity story.</div></div>
+            <div class="propose"><div class="h">Proposed · sharpen the POV</div><div class="d">Elevate <code>CI parity</code> from a constraint to <b>the headline promise</b>.</div><div class="acts"><button class="mini">Discard</button><button class="mini red"><svg><use href="#i-check"/></svg>Apply</button></div></div>
+            <div class="msg msg-bot"><span class="av t">T</span><div class="b">Done — parity is now the spine of the brief and the deck.</div></div></div>
+          <div class="composer"><div class="chips"><span class="c">Add a competitor</span><span class="c">Reframe again</span></div><div class="cbox"><div class="in">Discuss the strategy…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div></div>
+        </aside></div>
+        <div class="gate"><span class="lab">POV agreed? <s>Concepts explore against this strategy.</s></span><span class="grow"></span><button class="mini">Export strategy deck</button><button class="pbtn" data-go="3"><svg><use href="#i-arrow"/></svg>Explore concepts</button></div>
+      </section>
+
+      <!-- 3 CONCEPTS -->
+      <section class="screen hidden" data-screen="3"><div class="commitwrap"><div class="artifact" style="padding-bottom:80px"><div class="art wide">
+        <div class="kick">Concept · the Big Idea</div><h1>Choose the direction</h1><div class="meta">Three approaches, explored in parallel by the fleet against the strategy. Pick the Big Idea — it becomes the scope, before a single task exists.</div>
+        <div class="reco"><span class="av2 av-t">T</span><div><div class="h">Taikun's read</div><div class="d">All three ship the same acceptance. I'd lead with <b>Parity-First</b> — it delivers on the POV (go-live insurance) and reads safest to a nervous client. <b>Invisible Sign-In</b> is the bolder story; <b>Directory-Native</b> is cheapest but least differentiated. Your call.</div></div></div>
+        <div class="terr">
+          <div class="tcard"><div class="tcard__h"><div class="num">Territory A</div><div class="name">Invisible Sign-In</div><div class="one">Passwordless-first. Okta hidden as a silent fallback.</div></div>
+            <div class="sketch"><span class="edge" style="left:22px;top:52px;width:66px;transform:rotate(-18deg);background:rgba(var(--purple-rgb),.4)"></span><span class="edge" style="left:22px;top:56px;width:66px;transform:rotate(18deg);background:rgba(var(--purple-rgb),.4)"></span><span class="node" style="left:12px;top:44px;background:#1a2230">User</span><span class="node" style="left:92px;top:20px;background:var(--purple)">Entra</span><span class="node" style="left:92px;top:70px;background:var(--ink-3)">Okta·fb</span><span class="node" style="right:14px;top:46px;background:var(--green)">In</span></div>
+            <div class="tcard__b"><div class="tro up"><span class="i"><svg><use href="#i-check"/></svg></span><span>Best experience — users never see a login wall</span></div><div class="tro dn"><span class="i"><svg><use href="#i-arrow"/></svg></span><span>More fallback edge cases → +2 tasks</span></div><div class="shape"><span class="s">23 tasks</span><span class="s">~10d</span><span class="s">$3.9k</span><span class="s">risk: med</span></div></div>
+            <div class="tcard__f"><span class="by">by <b>Atlas</b></span><button class="choose">Choose</button></div></div>
+          <div class="tcard pick"><div class="tcard__h"><div class="num">Territory B · <span style="color:var(--primary)">recommended</span></div><div class="name">Parity-First</div><div class="one">Lead with the CI-parity gate. Go-live risk retired on day one.</div></div>
+            <div class="sketch"><span class="edge" style="left:14px;top:54px;width:52px;background:rgba(var(--blue-rgb),.4)"></span><span class="edge" style="left:80px;top:54px;width:48px;background:rgba(var(--orange-rgb),.5)"></span><span class="edge" style="left:142px;top:54px;width:44px;background:rgba(var(--green-rgb),.4)"></span><span class="node" style="left:8px;top:44px;background:var(--blue)">Build</span><span class="node" style="left:68px;top:44px;background:var(--orange)">Parity✓</span><span class="node" style="left:146px;top:44px;background:var(--green)">Ship</span><span class="node" style="left:66px;top:18px;background:#1a2230;font-size:8px">gate wk1</span></div>
+            <div class="tcard__b"><div class="tro up"><span class="i"><svg><use href="#i-check"/></svg></span><span>Lowest go-live risk — proven before week 3</span></div><div class="tro up"><span class="i"><svg><use href="#i-check"/></svg></span><span>Delivers on the POV · fewest surprises</span></div><div class="shape"><span class="s">21 tasks</span><span class="s">~9d</span><span class="s">$3.4k</span><span class="s">risk: low</span></div></div>
+            <div class="tcard__f"><span class="by">by <b>Nova</b></span><button class="choose"><svg><use href="#i-check"/></svg>Choose this</button></div></div>
+          <div class="tcard"><div class="tcard__h"><div class="num">Territory C</div><div class="name">Directory-Native</div><div class="one">Auto-provisioning is the hero. Zero-touch onboarding.</div></div>
+            <div class="sketch"><span class="edge" style="left:20px;top:54px;width:146px;background:rgba(var(--azure-rgb),.4)"></span><span class="node" style="left:10px;top:44px;background:var(--azure)">Directory</span><span class="node" style="left:90px;top:22px;background:#1a2230;font-size:8px">sync</span><span class="node" style="right:12px;top:44px;background:var(--green)">Users</span></div>
+            <div class="tcard__b"><div class="tro up"><span class="i"><svg><use href="#i-check"/></svg></span><span>Cheapest — leans on their existing directory</span></div><div class="tro dn"><span class="i"><svg><use href="#i-arrow"/></svg></span><span>Least differentiated · SSO UX is table-stakes</span></div><div class="shape"><span class="s">19 tasks</span><span class="s">~8d</span><span class="s">$3.0k</span><span class="s">risk: low</span></div></div>
+            <div class="tcard__f"><span class="by">by <b>Codex</b></span><button class="choose">Choose</button></div></div>
+        </div>
+      </div></div>
+      <div class="gate full"><span class="lab">Direction: <b>Parity-First</b> <s>· this becomes the scope</s></span><span class="grow"></span><button class="mini">Explore a 4th</button><button class="pbtn" data-go="4"><svg><use href="#i-arrow"/></svg>Write the brief</button></div>
+      </div></section>
+
+      <!-- 4 BRIEF (doc + deck) -->
+      <section class="screen hidden" data-screen="4"><div class="split">
+        <div class="artifact"><div class="art">
+          <div class="kick">Define · Artifact</div><h1>Discovery brief</h1><div class="meta">The scoping brief — a document and a kickoff deck, on the chosen direction.</div>
+          <div class="docdeck" id="briefTabs"><button class="on" data-view="doc"><svg><use href="#i-list"/></svg>Document</button><button data-view="deck"><svg><use href="#i-grid"/></svg>Kickoff deck</button></div>
+          <div class="view2" data-view="doc"><div class="card">
+            <div class="doc__sec"><div class="h">Problem</div><p>Pilot users can't SSO into the ops portal; manual provisioning blocks go-live with TotalEnergies.</p></div>
+            <div class="doc__sec"><div class="h">Direction <span class="edit">Parity-First</span></div><p>Lead with the CI-parity gate — go-live insurance, proven before week 3.</p></div>
+            <div class="doc__sec"><div class="h">Constraints</div><p>3-week window · Azure tenant · <mark>Okta kept as fallback</mark> · no PII to third parties.</p></div>
+            <div class="doc__sec"><div class="h">Success</div><p>≥95% SSO · MTTA ≤ 15m · zero manual provisioning · parity green.</p></div>
+          </div></div>
+          <div class="view2 hidden" data-view="deck">
+            <div class="stage16" id="deckStage">
+              <div class="slide slide--cover" data-slide="1"><span class="sn">Kickoff brief</span><span class="tag">Northwind Energy</span><h2>SSO &amp; Identity Platform</h2><p>Go-live insurance — Entra/SAML, auto-provisioned, proven at parity.</p><div class="foot"><span class="slmk"><svg style="width:14px;color:#fff"><use href="#i-wave"/></svg>TAIKUN · SWITCHBOARD</span><span>·</span><span>3-week engagement</span></div></div>
+              <div class="slide hidden" data-slide="2"><span class="sn" style="color:var(--ink-3)">01 · The challenge</span><h3 style="margin-top:20px">Why we're here</h3><p class="big">Pilot users <mark>can't sign in</mark> — manual provisioning is blocking go-live with TotalEnergies.</p><p class="sub">The fix is bounded. The risk is shipping it late or shipping it unproven.</p></div>
+              <div class="slide hidden" data-slide="3"><h3>02 · What we'll build</h3><div class="pillars"><div class="pil"><span class="pi"><svg><use href="#i-target"/></svg></span><div class="pt">Entra / SAML</div><div class="pd">SSO on their Azure tenant — Okta as fallback.</div></div><div class="pil"><span class="pi"><svg><use href="#i-cpu"/></svg></span><div class="pt">Auto-provision</div><div class="pd">Users from the directory. Zero manual ops.</div></div><div class="pil"><span class="pi"><svg><use href="#i-git"/></svg></span><div class="pt">CI-parity gate</div><div class="pd">Go-live blocked until proven at parity.</div></div></div></div>
+              <div class="slide hidden" data-slide="4"><h3>03 · How it gets built — in parallel</h3><div style="display:flex;gap:12px;margin-top:6px"><div class="wave" style="flex:1"><div class="wh"><span class="ix">1</span>Wave 1 · at kickoff</div><div class="lanes"><span class="wtask">SEN-7</span><span class="wtask">DATA-3</span><span class="wtask">QA-2</span><span class="wtask">parity</span></div></div><div class="wave" style="flex:1;border-color:rgba(var(--purple-rgb),.35);background:rgba(var(--purple-rgb),.04)"><div class="wh"><span class="ix" style="background:var(--purple)">2</span>Wave 2 · unlocked by SEN-6</div><div class="lanes"><span class="wtask">SEN-8</span><span class="wtask">INT-1</span><span class="wtask">QA-3</span></div></div></div><p class="sub">A fleet, not a queue · 4 milestones · 21 tasks.</p></div>
+              <div class="slide hidden" data-slide="5"><h3>04 · How you'll know it's done</h3><div style="display:flex;flex-direction:column;gap:10px;margin-top:4px"><div style="display:flex;gap:11px;align-items:center;font-size:15px"><span style="width:22px;height:22px;border-radius:50%;background:rgba(var(--green-rgb),.14);color:var(--green);display:grid;place-items:center"><svg style="width:13px"><use href="#i-check"/></svg></span>≥95% SSO · MTTA ≤15m · zero manual provisioning</div><div style="display:flex;gap:11px;align-items:center;font-size:15px"><span style="width:22px;height:22px;border-radius:50%;background:rgba(var(--green-rgb),.14);color:var(--green);display:grid;place-items:center"><svg style="width:13px"><use href="#i-check"/></svg></span>CI parity green · Okta fallback verified e2e</div></div><div style="display:flex;gap:8px;margin-top:18px"><span class="proof"><svg><use href="#i-check"/></svg>merge provenance</span><span class="proof"><svg><use href="#i-check"/></svg>scope gate</span><span class="proof"><svg><use href="#i-check"/></svg>functional gate</span></div><div class="foot" style="color:var(--ink-3);margin-top:auto"><span style="font-weight:700;color:var(--ink-2)">Done means merged.</span></div></div>
+              <div class="slide hidden" data-slide="6"><h3>05 · One roof, no handoff</h3><p class="big" style="font-size:22px">Your judgment, at the scale and cost of a fleet.</p><div style="display:flex;gap:8px;margin-top:16px"><span class="badge bg-secondary-lt">You · director</span><span class="badge bg-red-lt">Atlas · identity</span><span class="badge bg-blue-lt">Codex · directory</span><span class="badge bg-green-lt">Nova · QA</span></div><div class="foot" style="color:var(--ink-3);margin-top:auto"><span>Fixed price · $48,000</span></div></div>
+            </div>
+            <div class="deckbar"><span class="pg" id="deckPg">Slide 1 / 6</span><span class="grow"></span><button class="mini" id="deckPrev">‹ Prev</button><button class="mini" id="deckNext">Next ›</button><button class="mini red"><svg><use href="#i-arrow"/></svg>Present</button></div>
+            <div class="film" id="deckFilm">
+              <div class="thumb cover on" data-t="1"><div class="tv"><div class="tt" style="color:#fff">SSO &amp; Identity Platform</div></div><div class="cap"><span class="i">01</span>Cover</div></div>
+              <div class="thumb" data-t="2"><div class="tv"><div class="tt">Can't sign in</div><div class="ta" style="background:rgba(var(--orange-rgb),.4)"></div></div><div class="cap"><span class="i">02</span>Challenge</div></div>
+              <div class="thumb" data-t="3"><div class="tv"><div class="tt">What we'll build</div><div style="display:flex;gap:3px;margin-top:5px"><span style="flex:1;height:12px;border-radius:2px;background:var(--chip)"></span><span style="flex:1;height:12px;border-radius:2px;background:var(--chip)"></span><span style="flex:1;height:12px;border-radius:2px;background:var(--chip)"></span></div></div><div class="cap"><span class="i">03</span>Build</div></div>
+              <div class="thumb" data-t="4"><div class="tv"><div class="tt">In parallel</div><div style="display:flex;gap:3px;margin-top:5px"><span style="flex:1;height:12px;border-radius:2px;background:rgba(var(--primary-rgb),.15)"></span><span style="flex:1;height:12px;border-radius:2px;background:rgba(var(--purple-rgb),.15)"></span></div></div><div class="cap"><span class="i">04</span>Plan</div></div>
+              <div class="thumb" data-t="5"><div class="tv"><div class="tt">Done means merged</div><div class="ta" style="background:rgba(var(--green-rgb),.4)"></div></div><div class="cap"><span class="i">05</span>Proof</div></div>
+              <div class="thumb" data-t="6"><div class="tv"><div class="tt">One roof, no handoff</div></div><div class="cap"><span class="i">06</span>Team</div></div>
+            </div>
+          </div>
+        </div></div>
+        <aside class="discuss"><div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Discuss · Taikun</div><div class="s">on the brief</div></div></div>
+          <div class="thread"><div class="msg msg-bot"><span class="av t">T</span><div class="b">Brief + deck are built on <b>Parity-First</b>. The deck is client-ready — want any slide reworded before we PRD it?</div></div><div class="msg msg-you"><div class="b">Looks sharp. Draft the PRD.</div></div><div class="evt">brief locked · v1</div></div>
+          <div class="composer"><div class="cbox"><div class="in">Message Taikun about the brief…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div></div>
+        </aside></div>
+        <div class="gate"><span class="lab">Brief agreed? <s>The PRD drafts from this.</s></span><span class="grow"></span><button class="mini">Add note</button><button class="pbtn" data-go="5"><svg><use href="#i-pen"/></svg>Draft PRD</button></div>
+      </section>
+
+      <!-- 5 PRD -->
+      <section class="screen hidden" data-screen="5"><div class="split">
+        <div class="artifact"><div class="art"><div class="kick">Define · Artifact</div><h1>PRD · SSO Platform <span class="badge bg-red-lt" style="vertical-align:middle">v2 · client review</span></h1><div class="meta">Auto-drafted from the brief. Approve and it becomes the SOW scope.</div>
+          <div class="card"><div class="doc__sec"><div class="h">Summary</div><p>SSO &amp; auto-provisioning — Entra/SAML with Okta fallback, go-live gated on CI parity.</p></div><div class="doc__sec"><div class="h">In scope</div><ul><li>Entra app registration + SAML</li><li>Directory sync · Okta fallback path</li><li>e2e + CI-parity gates</li></ul></div><div class="doc__sec"><div class="h">Out of scope <span class="edit">edited</span></div><p><mark>SCIM, multi-IdP, mobile app</mark> — deferred.</p></div><div class="doc__sec"><div class="h">Acceptance</div><p>≥95% SSO · MTTA ≤15m · CI parity green · zero manual provisioning.</p></div></div>
+        </div></div>
+        <aside class="discuss"><div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Discuss · Taikun</div><div class="s">on the PRD</div></div></div>
+          <div class="thread"><div class="msg msg-bot"><span class="av t">T</span><div class="b">Skim <b>Out of scope</b> — protecting you from creep.</div></div><div class="msg msg-you"><div class="b">Add SCIM there, make MTTA explicit.</div></div><div class="propose"><div class="h">Proposed · confirm</div><div class="d">Add <code>SCIM</code> to out-of-scope · Acceptance <code>MTTA ≤15m</code></div><div class="acts"><button class="mini">Discard</button><button class="mini red"><svg><use href="#i-check"/></svg>Apply</button></div></div><div class="msg msg-bot"><span class="av t">T</span><div class="b">Applied. PRD is <b>v2</b>.</div></div></div>
+          <div class="composer"><div class="cbox"><div class="in">Message Taikun about the PRD…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div></div>
+        </aside></div>
+        <div class="gate"><span class="lab">Approve the PRD? <s>Locks scope for the SOW.</s></span><span class="grow"></span><button class="mini">Request changes</button><button class="pbtn" data-go="6"><svg><use href="#i-check"/></svg>Approve PRD</button></div>
+      </section>
+
+      <!-- 6 SOW -->
+      <section class="screen hidden" data-screen="6"><div class="split">
+        <div class="artifact"><div class="art"><div class="kick">Define · Artifact</div><h1>Statement of Work</h1><div class="meta">Priced from the approved PRD. Nothing builds until it's signed.</div>
+          <div class="card"><div class="doc__sec"><div style="display:flex;align-items:center"><div style="flex:1"><div class="h">Fixed price</div><div style="font-size:26px;font-weight:740;letter-spacing:-.03em">$48,000</div></div><div style="text-align:right"><div class="h">Timeline</div><div style="font-weight:680">3 weeks · 4 milestones</div></div></div></div>
+            <div class="doc__sec"><div class="h">Scope &amp; milestones</div><ul><li>Discovery, strategy &amp; PRD — $6k</li><li>Identity core (Entra/SAML) — $18k</li><li>Directory integration — $14k</li><li>Hardening &amp; CI parity — $6k</li><li>Delivery &amp; handoff — $4k</li></ul></div>
+            <div class="doc__sec"><div class="h">Client sign-off</div><p style="font-family:'Snell Roundhand',cursive;font-size:22px;margin-bottom:3px">A. Reyes</p><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>Signed · Jul 13, 9:40am</span></div></div>
+        </div></div>
+        <aside class="discuss"><div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Discuss · Taikun</div><div class="s">on the SOW</div></div></div>
+          <div class="thread"><div class="msg msg-bot"><span class="av t">T</span><div class="b">Priced at <b>$48k fixed, 3 weeks</b>. Send to <b>A. Reyes</b>?</div></div><div class="msg msg-you"><div class="b">Send it.</div></div><div class="msg msg-bot"><span class="av t">T</span><div class="b">Sent. I'll ping when it's countersigned.</div></div><div class="evt">✓ signed · A. Reyes · 9:40am</div></div>
+          <div class="composer"><div class="cbox"><div class="in">Message Taikun…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div></div>
+        </aside></div>
+        <div class="gate"><span class="lab"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>Signed</span> <s>Kickoff unlocked.</s></span><span class="grow"></span><button class="pbtn" data-go="7"><svg><use href="#i-arrow"/></svg>Scope the deliverable</button></div>
+      </section>
+
+      <!-- 7 SCOPE -->
+      <section class="screen hidden" data-screen="7"><div class="split">
+        <div class="artifact"><div class="art"><div class="kick">Define · Deliverable brief</div><h1>Scope the deliverable</h1><div class="meta">Shape it with Taikun until you know <b>exactly</b> what will be built — then submit.</div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-target"/></svg></span><h3>Brief</h3><span class="grow"></span><button class="mini"><svg><use href="#i-pen"/></svg>Edit</button></div><div class="doc__sec"><div class="h">Outcome</div><p>Entra/SAML sign-in, auto-provisioned, go-live gated on CI parity — Okta fallback.</p></div><div class="doc__sec"><div class="h">Target projects</div><p style="display:flex;gap:7px;flex-wrap:wrap"><span class="badge bg-secondary-lt mono">northwind/ops-portal</span><span class="badge bg-secondary-lt mono">northwind/identity-svc</span></p></div></div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-check"/></svg></span><h3>Acceptance criteria</h3></div><div class="card__b"><div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span>≥95% SSO · MTTA ≤15m · zero manual provisioning</span></div><div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span>CI parity green vs. Helm baseline</span></div><div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span><mark>Okta fallback verified end-to-end</mark></span></div></div></div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-git"/></svg></span><h3>Proof &amp; closure</h3><span class="grow"></span><span class="meta">Done means merged</span></div><div class="card__b"><div style="display:flex;gap:7px;flex-wrap:wrap"><span class="proof"><svg><use href="#i-check"/></svg>merge provenance</span><span class="proof"><svg><use href="#i-check"/></svg>scope gate</span><span class="proof"><svg><use href="#i-check"/></svg>functional gate</span></div></div></div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-list"/></svg></span><h3>Milestones &amp; work</h3><span class="grow"></span><button class="mini red"><svg><use href="#i-spark"/></svg>Record outcome → draft</button></div><div class="card__b">
+            <div class="ms"><div class="ms__h"><span class="n">1</span><span class="ti">Define shared contract</span><span class="grow"></span><span class="role r-found">foundation</span><span class="cw">3</span></div></div>
+            <div class="ms"><div class="ms__h"><span class="n">2</span><span class="ti">Build core implementation</span><span class="grow"></span><span class="role r-impl">implementation</span><span class="cw">9</span></div></div>
+            <div class="ms"><div class="ms__h"><span class="n">3</span><span class="ti">Integrate cross-board</span><span class="grow"></span><span class="role r-impl">implementation</span><span class="cw">5</span></div></div>
+            <div class="ms"><div class="ms__h"><span class="n">4</span><span class="ti">Prove parity &amp; ship</span><span class="grow"></span><span class="role r-acc">acceptance</span><span class="cw">4</span></div></div>
+          </div></div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-wave"/></svg></span><h3>Parallel plan</h3></div><div class="card__b"><div class="wave"><div class="wh"><span class="ix">1</span>Wave 1 · at kickoff · parity pulled forward</div><div class="lanes"><span class="wtask">SEN-7</span><span class="wtask">DATA-3</span><span class="wtask">QA-2</span><span class="wtask">parity gate</span></div></div><div class="wave ghost"><div class="wh"><span class="ix">2</span>Wave 2 · unlocked by <span class="wtask key" style="padding:1px 6px">SEN-6</span></div><div class="lanes"><span class="wtask">SEN-8</span><span class="wtask">SEN-9</span><span class="wtask">INT-1</span><span class="wtask">INT-2</span><span class="wtask">QA-3</span></div></div></div></div>
+        </div></div>
+        <aside class="discuss"><div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Discuss · Taikun</div><div class="s">shaping this deliverable</div></div></div>
+          <div class="thread"><div class="msg msg-bot"><span class="av t">T</span><div class="b">Broke the direction into <b>4 milestones, 21 tasks</b>. Parity's in wave 1 per the strategy. Approve to dispatch.</div></div><div class="msg msg-you"><div class="b">Ship it.</div></div></div>
+          <div class="composer"><div class="chips"><span class="c">Risk of X?</span><span class="c">Tighten scope</span></div><div class="cbox"><div class="in">Discuss this deliverable…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div></div>
+        </aside></div>
+        <div class="gate"><div><div class="lb">Exactly what will be built</div><div class="sum" style="margin-top:3px"><span class="s">4 milestones</span><span class="s">21 tasks</span><span class="s">2 projects</span><span class="s">merge + 2 gates</span><span class="s">~9d</span><span class="s">$3.4k</span></div></div><span class="grow"></span><button class="mini">Review full scope</button><button class="pbtn" data-go="8"><svg><use href="#i-arrow"/></svg>Establish the system</button></div>
+      </section>
+
+      <!-- 8 DESIGN SYSTEM -->
+      <section class="screen hidden" data-screen="8"><div class="commitwrap"><div class="artifact" style="padding-bottom:80px"><div class="art wide">
+        <div class="kick">Design · Foundation</div><h1>Design system <span class="badge bg-purple-lt" style="vertical-align:middle">living deliverable</span></h1><div class="meta">Tokens and components the fleet builds <b>against</b>, so everything's consistent. Owned by a design-system agent · grounded in <code>taikun-tabler.css</code>. Consumed by 3 deliverables.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start">
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-palette"/></svg></span><h3>Color tokens</h3><span class="grow"></span><span class="meta">semantic · light + dark</span></div><div class="card__b"><div class="swatches">
+            <div class="sw"><div class="c" style="background:#c0392b"></div><div class="n">primary</div></div>
+            <div class="sw"><div class="c" style="background:#206bc4"></div><div class="n">blue</div></div>
+            <div class="sw"><div class="c" style="background:#4299e1"></div><div class="n">azure</div></div>
+            <div class="sw"><div class="c" style="background:#2fb344"></div><div class="n">green</div></div>
+            <div class="sw"><div class="c" style="background:#f76707"></div><div class="n">orange</div></div>
+            <div class="sw"><div class="c" style="background:#ae3ec9"></div><div class="n">purple</div></div>
+            <div class="sw"><div class="c" style="background:#1a2230"></div><div class="n">ink</div></div>
+            <div class="sw"><div class="c" style="background:#f1f3f6"></div><div class="n">chip</div></div>
+          </div></div></div>
+          <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-list"/></svg></span><h3>Type scale</h3><span class="grow"></span><span class="meta">Inter · tabular nums</span></div><div class="card__b"><div class="typescale">
+            <div><span class="tn">display</span><span style="font-size:24px;font-weight:730;letter-spacing:-.02em">Sign in</span></div>
+            <div><span class="tn">h3</span><span style="font-size:16px;font-weight:640">Section title</span></div>
+            <div><span class="tn">body</span><span style="font-size:14px">Body copy for the interface.</span></div>
+            <div><span class="tn">mono</span><span class="mono" style="font-size:12px">SEN-6 · claim_next</span></div>
+          </div></div></div>
+        </div>
+        <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-grid"/></svg></span><h3>Components</h3><span class="grow"></span><span class="badge bg-green-lt">17 · versioned</span></div><div class="card__b"><div class="compv">
+          <button class="pbtn"><svg><use href="#i-check"/></svg>Primary</button>
+          <button class="mini">Secondary</button>
+          <span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>Done ✓ proof</span>
+          <span class="badge bg-blue-lt">In progress</span>
+          <span class="badge bg-orange-lt">In review</span>
+          <span class="proof"><svg><use href="#i-check"/></svg>merge provenance</span>
+          <span class="role r-impl">implementation</span>
+        </div><div style="font-size:12px;color:var(--ink-3);margin-top:12px">Every deliverable's build tasks reference these components — a crit gate later fails anything that drifts from them.</div></div></div>
+      </div></div>
+      <div class="gate full"><span class="lab">Design system v3 <s>· the fleet builds against this</s></span><span class="grow"></span><button class="mini">Open in Figma-sync</button><button class="pbtn" data-go="9"><svg><use href="#i-arrow"/></svg>Prototype the idea</button></div>
+      </div></section>
+
+      <!-- 9 PROTOTYPE -->
+      <section class="screen hidden" data-screen="9"><div class="split">
+        <div class="artifact"><div class="art"><div class="kick">Design · Make to think</div><h1>Prototype <span class="badge bg-orange-lt" style="vertical-align:middle">de-risk before build</span></h1><div class="meta">A rough clickable preview — built in hours by one agent, against the design system. Validate the idea before pouring the fleet into the full build.</div>
+          <div class="browser"><div class="bar"><span class="dot" style="background:#ef5350"></span><span class="dot" style="background:#fbc02d"></span><span class="dot" style="background:#66bb6a"></span><span class="url">portal.northwind.io/sign-in</span></div>
+            <div class="proto"><div class="protoCard"><div class="lg">NE</div><h4>Sign in</h4><p class="pp">to the Northwind ops portal</p><div class="ssobtn primary"><svg style="width:16px"><use href="#i-target"/></svg>Continue with Microsoft</div><div class="ssobtn">Use Okta instead</div><div style="font-size:11px;color:var(--ink-3);margin-top:10px">No password. Provisioned from your directory.</div></div></div>
+          </div>
+          <div class="card" style="margin-top:12px"><div class="card__b" style="display:flex;align-items:center;gap:11px"><span class="badge bg-orange-lt">$0.4k prototype</span><span style="font-size:12.5px;color:var(--ink-2);flex:1">De-risks the <b>$3.4k</b> build. If the flow's wrong, we learn it here — not in week 3.</span></div></div>
+        </div></div>
+        <aside class="discuss"><div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Discuss · Taikun</div><div class="s">on the prototype</div></div></div>
+          <div class="thread"><div class="msg msg-bot"><span class="av t">T</span><div class="b">Clickable prototype of the sign-in flow is live. <b>Click through it</b> — does the "Continue with Microsoft" primary feel right, or should Okta be more visible?</div></div><div class="msg msg-you"><div class="b">Microsoft primary is right. Ship this direction.</div></div><div class="msg msg-bot"><span class="av t">T</span><div class="b">Locked. The build tasks will match this exact flow.</div></div><div class="evt">prototype approved · flow validated</div></div>
+          <div class="composer"><div class="chips"><span class="c">Try a variant</span><span class="c">Share with client</span></div><div class="cbox"><div class="in">Feedback on the prototype…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div></div>
+        </aside></div>
+        <div class="gate"><span class="lab">Prototype validated? <s>Approve to commit the full build.</s></span><span class="grow"></span><button class="mini">Iterate</button><button class="pbtn" data-go="10"><svg><use href="#i-bolt"/></svg>Kick off the build</button></div>
+      </section>
+
+      <!-- 10 BUILD -->
+      <section class="screen hidden" data-screen="10"><div class="split">
+        <div class="artifact"><div class="art"><div class="kick">Build · Live</div><h1>Build <span class="badge bg-red-lt" style="vertical-align:middle"><span class="d-live" style="width:7px;height:7px;border-radius:50%;background:var(--red);display:inline-block"></span> autopilot on</span></h1><div class="meta">The fleet is building against the system + prototype. Drive any session from the panel.</div>
+          <div class="statrow"><div class="stat"><div class="k">Draining</div><div class="v">14/21</div></div><div class="stat"><div class="k">Agents</div><div class="v">3</div></div><div class="stat"><div class="k">Merged</div><div class="v" style="color:var(--green)">7</div></div><div class="stat"><div class="k">Spend</div><div class="v">$3.1k</div></div></div>
+          <div class="card"><div class="card__h"><span class="av2 av-atlas">A</span><div class="grow"><h3 style="margin:0">Atlas · SEN-6 · Wire Entra app registration</h3><div class="meta mono">claude-code · sess_7fa1</div></div><span class="badge bg-red-lt"><span class="d-live" style="width:7px;height:7px;border-radius:50%;background:var(--red);display:inline-block"></span>building</span></div><div class="card__b">
+            <div class="slabel" style="margin-top:0">Session transcript</div><div class="tl"><div class="tl__i ok"><div class="tl__t"><b>Claimed task</b> · clean tree</div><div class="tl__m">09:38</div></div><div class="tl__i ok"><div class="tl__t"><b>Added 3 tests</b> — green locally</div><div class="tl__m">09:40</div></div><div class="tl__i on"><div class="tl__t"><b>Opened PR #412</b> — CI running</div><div class="tl__m">09:41 · 3 of 4 green</div></div></div>
+            <div class="slabel">Diff · directory/entra.py</div><div class="diff"><div class="ln add">+ def resolve_entra_app(tenant_id: str) -&gt; AppReg:</div><div class="ln add">+     return _graph.app_registrations.get(tenant_id)</div><div class="ln del">-     raise NotImplementedError</div></div>
+            <div class="slabel">Terminal · ec2-t4g</div><div class="term"><div><span class="muted">atlas@ec2:~$</span> claude -p "run parity gate"</div><div class="p">✓ 3 of 4 checks green</div><div><span class="p">atlas@ec2:~$</span> <span class="cur"></span></div></div>
+          </div></div>
+        </div></div>
+        <aside class="discuss"><div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Drive · Taikun</div><div class="s">wave 1 live · 3 agents</div></div></div>
+          <div class="thread"><div class="msg msg-bot"><span class="av t">T</span><div class="b">Wave 1 live — Atlas <code>SEN-6</code>, Codex <code>DATA-3</code>, Nova <code>QA-2</code>. Atlas opened <b>PR #412</b>.</div></div><div class="msg msg-you"><div class="b">Have Atlas use the shared session store.</div></div><div class="propose"><div class="h">Redirect · Atlas / SEN-6</div><div class="d">"Use the shared <code>session_store</code>; no new table."</div><div class="acts"><button class="mini">Cancel</button><button class="mini red"><svg><use href="#i-send"/></svg>Send</button></div></div><div class="msg msg-bot"><span class="av t">T</span><div class="b">Delivered — Atlas is refactoring.</div></div></div>
+          <div class="composer"><div class="chips"><span class="c">/redirect</span><span class="c">/hold</span><span class="c">/approve merge</span></div><div class="cbox"><div class="in">Drive the fleet…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div></div>
+        </aside></div>
+        <div class="gate"><span class="lab">Wave 1 draining <s>· crit runs before anything's accepted</s></span><span class="grow"></span><button class="mini">Pause fleet</button><button class="pbtn" data-go="11"><svg><use href="#i-eye"/></svg>Run the crit</button></div>
+      </section>
+
+      <!-- 11 CRIT -->
+      <section class="screen hidden" data-screen="11"><div class="commitwrap"><div class="artifact" style="padding-bottom:80px"><div class="art">
+        <div class="kick">Build · Crit — taste, not just CI</div><h1>Design crit</h1><div class="meta">CI proves it <b>works</b>. The crit proves it's <b>good</b> — a review agent grades the work against the design system + your standing taste notes, before it's accepted.</div>
+        <div class="gatepair" style="margin-bottom:14px">
+          <div class="gpair"><div class="gt"><svg style="width:14px;color:var(--green)"><use href="#i-check"/></svg>Functional gate (CI)</div><div class="gv" style="color:var(--green)">PASS</div><div style="font-size:12px;color:var(--ink-3);margin-top:2px">parity green · 21 checks</div></div>
+          <div class="gpair" style="border-color:rgba(var(--orange-rgb),.35)"><div class="gt"><svg style="width:14px;color:var(--orange)"><use href="#i-eye"/></svg>Crit gate (taste)</div><div class="gv" style="color:var(--orange)">2 notes</div><div style="font-size:12px;color:var(--ink-3);margin-top:2px">1 must-fix · 1 nit</div></div>
+        </div>
+        <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-eye"/></svg></span><h3>Crit notes · SEN-6 sign-in</h3><span class="grow"></span><span class="meta">graded vs. design system v3</span></div><div class="card__b">
+          <div class="critrow"><span class="sev sev-ok"><svg><use href="#i-check"/></svg></span><div class="g"><div class="t">Uses system tokens &amp; components</div><div class="d">Primary button, spacing, and type all match the system. No drift.</div></div></div>
+          <div class="critrow"><span class="sev sev-note"><svg><use href="#i-q"/></svg></span><div class="g"><div class="t">Must-fix · fallback link is too quiet</div><div class="d">"Use Okta instead" fails the 4.5:1 contrast token — a real user in the field won't find it. Bump to <code>ink-2</code>.</div></div><button class="mini red">Send to Atlas</button></div>
+          <div class="critrow"><span class="sev sev-note"><svg><use href="#i-q"/></svg></span><div class="g"><div class="t">Nit · loading state has no motion</div><div class="d">The sign-in spinner is instant-swap. A 150ms fade would feel more considered. Optional.</div></div><button class="mini">Log</button></div>
+        </div></div>
+        <div style="font-size:12.5px;color:var(--ink-2);margin-top:4px">Your taste notes are remembered: <span class="badge bg-secondary-lt">"contrast is non-negotiable"</span> <span class="badge bg-secondary-lt">"prefer motion on state change"</span> — the crit agent applies them every time.</div>
+      </div></div>
+      <div class="gate full"><span class="lab">1 must-fix before accept <s>· CI already green</s></span><span class="grow"></span><button class="mini">Waive nit</button><button class="pbtn" data-go="12"><svg><use href="#i-send"/></svg>Send fixes &amp; monitor</button></div>
+      </div></section>
+
+      <!-- 12 MONITOR -->
+      <section class="screen hidden" data-screen="12"><div class="commitwrap"><div class="artifact" style="padding-bottom:80px"><div class="art wide">
+        <div class="kick">Build · Track</div><h1>Monitor &amp; drive</h1><div class="meta">Honest progress against evidence gates — functional and crit. Approve milestones or reopen bad work.</div>
+        <div class="card"><div class="card__b"><div style="display:flex;align-items:center;gap:10px"><span style="font-weight:640">SSO Platform · 68%</span><span class="badge bg-green-lt">on track</span></div><div class="bar" style="margin:10px 0"><i style="width:68%"></i></div><div style="display:flex;gap:8px"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>7 done w/ proof</span><span class="badge bg-orange-lt">2 in review</span><span class="badge bg-red-lt">1 needs you</span></div></div></div>
+        <div class="slabel">Timeline · phases</div>
+        <div class="gantt"><div class="grow2 hd"><div class="gname">workstream</div><div class="plot"><span class="wk">Week 1</span><span class="wk">Week 2</span><span class="wk">Week 3</span></div></div>
+          <div class="grow2"><div class="gname">Shared contract</div><div class="plot"><span class="gbar" style="left:1%;width:19%;background:var(--azure)"><svg><use href="#i-check"/></svg>M1</span></div></div>
+          <div class="grow2 stripe"><div class="gname">identity-svc</div><div class="plot"><span class="gbar" style="left:19%;width:26%;background:var(--blue)"><svg><use href="#i-check"/></svg>SEN-6</span><span class="gbar" style="left:45%;width:13%;background:var(--blue)">SEN-4</span></div></div>
+          <div class="grow2"><div class="gname">ops-portal</div><div class="plot"><span class="gbar" style="left:44%;width:20%;background:var(--purple)">DATA-3</span><span class="gbar todo" style="left:64%;width:14%;background:var(--purple)">DATA-7</span></div></div>
+          <div class="grow2 stripe"><div class="gname">parity &amp; ship</div><div class="plot"><span class="gbar" style="left:6%;width:15%;background:var(--orange)"><svg><use href="#i-check"/></svg>parity</span><span class="gbar todo" style="left:78%;width:20%;background:var(--green)">ship</span></div></div>
+          <div class="today" style="left:calc(140px + (100% - 140px) * 0.62)"></div>
+          <div class="glegend"><span><i style="background:var(--azure)"></i>contract</span><span><i style="background:var(--blue)"></i>core</span><span><i style="background:var(--purple)"></i>integrate</span><span><i style="background:var(--orange)"></i>parity</span><span><i style="background:var(--green)"></i>ship</span></div>
+        </div>
+        <div class="slabel">Milestones</div>
+        <div class="card"><div class="card__b" style="padding:0">
+          <div style="display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid var(--hair-2)"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg></span><span style="flex:1;font-weight:560">Identity core</span><span class="badge bg-green-lt">accepted</span></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid var(--hair-2)"><span class="d-live" style="width:8px;height:8px;border-radius:50%;background:var(--primary)"></span><span style="flex:1;font-weight:560">Directory integration</span><span class="badge bg-blue-lt">in progress</span></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:11px 14px"><span class="badge bg-orange-lt">!</span><span style="flex:1;font-weight:560">SEN-4 · marked Done, no merged PR</span><button class="mini">Reopen</button></div>
+        </div></div>
+      </div></div>
+      <div class="gate full"><span class="lab">Milestone 2 ready to accept? <s>Closure PASS · crit clean.</s></span><span class="grow"></span><button class="mini">Give feedback</button><button class="pbtn" data-go="13"><svg><use href="#i-eye"/></svg>Play it back to the client</button></div>
+      </div></section>
+
+      <!-- 13 PLAYBACK -->
+      <section class="screen hidden" data-screen="13"><div class="commitwrap"><div class="artifact" style="padding-bottom:80px"><div class="art">
+        <div class="kick">Build · Client ritual</div><h1>Playback <span class="badge bg-azure-lt" style="vertical-align:middle">white-label portal</span></h1><div class="meta">Every milestone gets played back to the client — a mini-deck of what shipped, with a one-click accept. Built from closure + acceptance, shown in their portal.</div>
+        <div class="pbcard"><div class="pbh"><div class="sn">Playback 2 of 4 · Northwind Energy</div><h4>Identity core is live</h4><p>Entra/SAML sign-in and directory sync — merged, tested, and green at parity.</p></div><div class="pbb">
+          <div class="craft" style="display:flex;align-items:center;gap:10px;padding:9px 0"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg></span><span style="flex:1;font-size:13.5px">Entra app registration + SAML handler</span><span class="mono" style="font-size:11px;color:var(--ink-3)">9 PRs</span></div>
+          <div class="craft" style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--hair-2)"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg></span><span style="flex:1;font-size:13.5px">Directory / attribute sync</span><span class="mono" style="font-size:11px;color:var(--ink-3)">5 PRs</span></div>
+          <div class="craft" style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--hair-2)"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg></span><span style="flex:1;font-size:13.5px">SSO success in staging</span><span class="mono" style="font-size:11px;color:var(--green)">96.2%</span></div>
+        </div></div>
+        <div class="clientrow" style="margin-top:12px"><span class="av2" style="background:#1a2230">AR</span><div class="g"><div style="font-weight:600;font-size:13px">A. Reyes · Northwind</div><div style="font-size:12px;color:var(--ink-2)">saw this playback · Jul 21, 2:14pm</div></div><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>Accepted milestone</span></div>
+        <div style="font-size:12.5px;color:var(--ink-2);margin-top:12px">Client acceptance is captured against closure — it's what releases the milestone's invoice and feeds the case study later.</div>
+      </div></div>
+      <div class="gate full"><span class="lab"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>Client accepted</span> <s>· 2 of 4 milestones signed off</s></span><span class="grow"></span><button class="mini">Send next playback</button><button class="pbtn" data-go="14"><svg><use href="#i-arrow"/></svg>Wrap &amp; deliver</button></div>
+      </div></section>
+
+      <!-- 14 WRAP -->
+      <section class="screen hidden" data-screen="14"><div class="commitwrap"><div class="artifact" style="padding-bottom:80px"><div class="art">
+        <div class="kick">Ship · Deliver</div><h1>Wrap-up</h1><div class="meta">Hand off, capture final acceptance, invoice, and log the lessons to memory.</div>
+        <div class="card"><div class="card__b"><div style="display:flex;align-items:center;gap:10px"><span class="av2" style="background:var(--primary)"><svg style="width:15px"><use href="#i-bolt"/></svg></span><div style="flex:1"><div style="font-weight:640">Release v1.0 · SSO Platform</div><div class="meta mono">closure PASS · crit clean · 21 PRs merged · parity green</div></div><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>shipped</span></div></div></div>
+        <div class="slabel">Acceptance &amp; billing</div>
+        <div class="card"><div class="card__b" style="padding:0"><div style="display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid var(--hair-2)"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg></span><span style="flex:1">Final client sign-off · A. Reyes</span><span class="meta mono">Jul 27</span></div><div style="display:flex;align-items:center;gap:9px;padding:11px 14px"><span class="av2" style="background:var(--green);width:24px;height:24px"><svg style="width:13px"><use href="#i-receipt"/></svg></span><span style="flex:1;font-weight:560">Final invoice · $16,000</span><span class="badge bg-green-lt">released</span></div></div></div>
+        <div class="card"><div class="card__b"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div style="font-weight:640">Delivered $48k for $3.4k agent cost</div><div style="font-size:12.5px;color:var(--ink-2)">93% margin · logged as a routing precedent</div></div><span style="font-size:22px;font-weight:740;color:var(--green)">93%</span></div></div></div>
+      </div></div>
+      <div class="gate full"><span class="lab"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg>Delivered</span></span><span class="grow"></span><button class="mini">Close engagement</button><button class="pbtn" data-go="15"><svg><use href="#i-star"/></svg>Generate the case study</button></div>
+      </div></section>
+
+      <!-- 15 CASE STUDY -->
+      <section class="screen hidden" data-screen="15"><div class="commitwrap"><div class="artifact" style="padding-bottom:80px"><div class="art wide">
+        <div class="kick">Grow · Showcase</div><h1>Case study <span class="badge bg-green-lt" style="vertical-align:middle">auto-generated</span></h1><div class="meta">Built from <code>mission_narrative</code> + Tally + closure + the deck engine the moment the engagement closed. The document that wins the next client.</div>
+        <div style="border-radius:16px;overflow:hidden;background:radial-gradient(120% 160% at 82% 8%, #2a3550 0%, #141b28 52%, #0d1117 100%);color:#fff;padding:28px 32px;position:relative;margin-bottom:14px">
+          <span style="position:absolute;top:24px;right:28px;font-size:11px;font-weight:600;color:rgba(255,255,255,.75);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:4px 11px">Northwind Energy</span>
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.55)">Case study · Identity · 2026</div>
+          <h2 style="font-size:30px;font-weight:750;letter-spacing:-.03em;margin:8px 0 4px;max-width:20ch">Sign-in that unblocked a flagship account in 3 weeks</h2>
+          <p style="margin:0;color:rgba(255,255,255,.72);font-size:14.5px;max-width:52ch">Entra/SAML SSO with auto-provisioning and Okta fallback — proven at CI parity, shipped for the cost of a coffee run.</p>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-top:20px">
+            <div style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px 14px"><div style="font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.55)">SSO success</div><div style="font-size:23px;font-weight:740;margin-top:3px">97.4%</div></div>
+            <div style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px 14px"><div style="font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.55)">Time to ship</div><div style="font-size:23px;font-weight:740;margin-top:3px">3 wks</div></div>
+            <div style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px 14px"><div style="font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.55)">Delivered for</div><div style="font-size:23px;font-weight:740;margin-top:3px">$3.4k</div></div>
+            <div style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px 14px"><div style="font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.55)">Gross margin</div><div style="font-size:23px;font-weight:740;margin-top:3px">93%</div></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px">
+          <div>
+            <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-target"/></svg></span><h3>The challenge</h3></div><div class="card__b"><p style="font-size:13.5px;line-height:1.6;margin:0 0 8px">Northwind's pilot operators couldn't sign in — every account was provisioned by hand, and that was the single thing blocking go-live with <b>TotalEnergies</b>.</p><p style="font-size:13.5px;line-height:1.6;margin:0">The fix was bounded. The risk was shipping late, or shipping unproven.</p></div></div>
+            <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-git"/></svg></span><h3>The craft · with proof</h3></div><div class="card__b">
+              <div style="display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg></span><span style="flex:1">Entra app registration + SAML handler</span><span class="mono" style="font-size:11px;color:var(--ink-3)">9 PRs</span></div>
+              <div style="display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px;border-top:1px solid var(--hair-2)"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg></span><span style="flex:1">CI-parity gate vs. Helm baseline</span><span class="mono" style="font-size:11px;color:var(--ink-3)">4 PRs</span></div>
+              <div style="display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px;border-top:1px solid var(--hair-2)"><span class="badge bg-green-lt"><svg><use href="#i-check"/></svg></span><span style="flex:1">Closure PASS · crit clean · parity green</span><span class="mono" style="font-size:11px;color:var(--ink-3)">proof</span></div>
+            </div></div>
+          </div>
+          <div>
+            <div class="card"><div class="card__b"><div style="font-size:15px;font-weight:600;line-height:1.5;letter-spacing:-.01em">"Can't-sign-in to shipped in three weeks — and green at parity before we even saw a demo."<div style="font-size:12.5px;font-weight:500;color:var(--ink-2);margin-top:9px">— A. Reyes · Northwind</div></div></div></div>
+            <div class="card"><div class="card__h"><span class="ic"><svg><use href="#i-star"/></svg></span><h3>By the numbers</h3></div><div class="card__b">
+              <div style="display:flex;padding:6px 0;font-size:13px"><span style="flex:1">Contract</span><span class="mono">$48,000</span></div>
+              <div style="display:flex;padding:6px 0;font-size:13px;border-top:1px solid var(--hair-2)"><span style="flex:1">Agent cost</span><span class="mono">$3,400</span></div>
+              <div style="display:flex;padding:6px 0;font-size:13px;border-top:1px solid var(--hair-2)"><span style="flex:1">Human supervision</span><span class="mono">4 decisions</span></div>
+            </div></div>
+          </div>
+        </div>
+      </div></div>
+      <div class="gate full"><span class="lab"><b>Ready to reuse</b> <s>· publish, export a deck, or spin into outreach</s></span><span class="grow"></span><button class="mini"><svg><use href="#i-share"/></svg>Publish to showcase</button><button class="pbtn" data-go="16"><svg><use href="#i-chart"/></svg>Track what it moved</button></div>
+      </div></section>
+
+      <!-- 16 MEASURE -->
+      <section class="screen hidden" data-screen="16"><div class="commitwrap"><div class="artifact" style="padding-bottom:80px"><div class="art wide">
+        <div class="kick">Grow · Measure &amp; optimize</div><h1>Did it move the number?</h1><div class="meta">Post-launch, we track the KPIs the work was meant to move — from <code>kpis</code> + <code>outcome_kpi_links</code>. Shipped isn't the end; moved-the-number is.</div>
+        <div class="kpi">
+          <div class="kcard"><div class="kn">SSO success rate</div><div class="kv" style="color:var(--green)">97.4%<small> / 95 target</small></div><div class="track"><i style="width:97%"></i><span class="tgt" style="left:95%"></span></div><div class="spark"><i style="height:32%"></i><i style="height:38%"></i><i style="height:55%"></i><i style="height:70%"></i><i class="hi" style="height:88%"></i><i class="hi" style="height:97%"></i></div><div style="font-size:11px;color:var(--green);margin-top:6px;font-weight:600">▲ from 62% baseline · target met</div></div>
+          <div class="kcard"><div class="kn">Mean time to access</div><div class="kv" style="color:var(--green)">9m<small> / ≤15 target</small></div><div class="track"><i style="width:60%"></i><span class="tgt" style="left:100%"></span></div><div class="spark"><i style="height:90%"></i><i style="height:82%"></i><i style="height:70%"></i><i style="height:52%"></i><i class="hi" style="height:44%"></i><i class="hi" style="height:40%"></i></div><div style="font-size:11px;color:var(--green);margin-top:6px;font-weight:600">▼ from 3 days manual · target met</div></div>
+          <div class="kcard"><div class="kn">Onboarding conversion</div><div class="kv" style="color:var(--orange)">71%<small> / 85 target</small></div><div class="track"><i style="width:71%;background:var(--orange)"></i><span class="tgt" style="left:85%"></span></div><div class="spark"><i style="height:40%"></i><i style="height:48%"></i><i style="height:55%"></i><i style="height:62%"></i><i style="height:66%;background:rgba(var(--orange-rgb),.4)"></i><i style="height:71%;background:var(--orange)"></i></div><div style="font-size:11px;color:var(--orange);margin-top:6px;font-weight:600">▲ climbing · below target</div></div>
+        </div>
+        <div class="card" style="margin-top:14px"><div class="card__b" style="display:flex;align-items:center;gap:12px"><span class="av2 av-t">T</span><div style="flex:1;font-size:13px;color:var(--ink-2)"><b style="color:var(--ink)">Onboarding conversion is short of target.</b> The data points at the Okta-fallback step — the crit flagged its contrast, and drop-off spikes there. I can scope a small <b>optimize</b> deliverable to fix it — ~4 tasks, ~$0.6k.</div><button class="pbtn"><svg><use href="#i-bolt"/></svg>Scope optimize v1.1</button></div></div>
+        <div style="font-size:12.5px;color:var(--ink-2);margin-top:12px">This closes the loop: <b>ship → measure → optimize</b> becomes the next engagement — and the reason the client renews.</div>
+      </div></div>
+      <div class="gate full"><span class="lab">2 of 3 KPIs at target <s>· 1 optimization proposed</s></span><span class="grow"></span><button class="mini" data-go="1">Replay from Intake</button><button class="pbtn"><svg><use href="#i-check"/></svg>Close the loop</button></div>
+      </div></section>
+
+    </div>
+  </main>
+</div>
+<script>
+(function(){
+  var root=document.documentElement;
+  document.getElementById('themeBtn').addEventListener('click',function(){ var c=root.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'); root.setAttribute('data-theme',c==='dark'?'light':'dark'); });
+  var names={1:'Intake',2:'POV',3:'Big Idea',4:'Brief',5:'PRD',6:'SOW',7:'Scope',8:'System',9:'Prototype',10:'Build',11:'Crit',12:'Monitor',13:'Playback',14:'Wrap',15:'Case study',16:'Measure'};
+  var phases={1:'Strategy',2:'Strategy',3:'Concept',4:'Define',5:'Define',6:'Define',7:'Define',8:'Design',9:'Design',10:'Build',11:'Build',12:'Build',13:'Build',14:'Ship',15:'Grow',16:'Grow'};
+  function go(n){ n=+n;
+    document.querySelectorAll('.screen').forEach(function(s){ s.classList.toggle('hidden', +s.dataset.screen!==n); });
+    document.querySelectorAll('.step').forEach(function(s){ var i=+s.dataset.go; s.classList.toggle('on', i===n); s.classList.toggle('done', i<n); });
+    document.getElementById('statusPill').innerHTML='<span class="d"></span>'+phases[n]+' · '+n+' '+names[n];
+    var a=document.querySelector('.screen[data-screen="'+n+'"] .artifact'); if(a) a.scrollTop=0;
+    var t=document.querySelector('.screen[data-screen="'+n+'"] .thread'); if(t) t.scrollTop=t.scrollHeight;
+    var on=document.querySelector('.step.on'); if(on&&on.scrollIntoView) on.scrollIntoView({inline:'center',block:'nearest'});
+  }
+  document.querySelectorAll('[data-go]').forEach(function(el){ el.addEventListener('click',function(e){ e.preventDefault(); go(el.dataset.go); }); });
+  // brief doc/deck
+  var tabs=document.getElementById('briefTabs');
+  if(tabs){ tabs.querySelectorAll('button').forEach(function(b){ b.addEventListener('click',function(){ tabs.querySelectorAll('button').forEach(function(x){ x.classList.toggle('on', x===b); }); document.querySelectorAll('.view2').forEach(function(v){ v.classList.toggle('hidden', v.dataset.view!==b.dataset.view); }); }); }); }
+  var cur=1, total=6;
+  function slide(n){ cur=Math.max(1,Math.min(total,n)); document.querySelectorAll('#deckStage .slide').forEach(function(s){ s.classList.toggle('hidden', +s.dataset.slide!==cur); }); document.querySelectorAll('#deckFilm .thumb').forEach(function(t){ t.classList.toggle('on', +t.dataset.t===cur); }); var pg=document.getElementById('deckPg'); if(pg) pg.textContent='Slide '+cur+' / '+total; }
+  var pv=document.getElementById('deckPrev'), nx=document.getElementById('deckNext');
+  if(pv) pv.addEventListener('click',function(){ slide(cur-1); }); if(nx) nx.addEventListener('click',function(){ slide(cur+1); });
+  document.querySelectorAll('#deckFilm .thumb').forEach(function(t){ t.addEventListener('click',function(){ slide(+t.dataset.t); }); });
+  // concept choose
+  document.querySelectorAll('.tcard .choose').forEach(function(btn){ btn.addEventListener('click',function(){ document.querySelectorAll('.tcard').forEach(function(c){ c.classList.remove('pick'); c.querySelector('.choose').innerHTML='Choose'; }); var card=btn.closest('.tcard'); card.classList.add('pick'); btn.innerHTML='<svg><use href="#i-check"/></svg>Chosen'; }); });
+  go(2);
+})();
+</script>
+</body>
+</html>

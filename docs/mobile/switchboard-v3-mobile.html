@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard v3 · Fused &amp; Grounded — Mobile</title>
+<style>
+
+/* ============================================================================
+   Switchboard — Native Mobile App · design wireframes
+   Grounded in the Taikun/Switchboard control plane. Brand: taikun red #c0392b,
+   white canvas, native SF type. CSP-safe (no external assets).
+   ============================================================================ */
+*,*::before,*::after{ box-sizing:border-box; }
+html{ -webkit-text-size-adjust:100%; }
+body{ margin:0; }
+img,svg{ display:block; max-width:100%; }
+/* icon svgs reference symbols via style-width only; give them a square height so a
+   missing height can't balloon the aspect ratio. The ring uses width/height ATTRs
+   (svg[width]) so it is excluded; class-based sizing (.btn svg, etc) still wins. */
+svg:not([width]){ height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+:where(a){ color:inherit; text-decoration:none; }
+
+:root{
+  --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-display:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,"Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+
+  /* brand */
+  --red:#c0392b; --red-press:#a5281c; --red-rgb:192,57,43;
+
+  /* semantic (separate from accent) */
+  --merged:#1f9d55; --merged-rgb:31,157,85;
+  --needs:#e0820b;  --needs-rgb:224,130,11;
+  --flight:#3b6fd4; --flight-rgb:59,111,212;
+
+  /* light theme (showcase chrome) */
+  --ink:#111318;
+  --ink-2:#565d6b;
+  --ink-3:#878e9c;
+  --canvas:#ffffff;
+  --ground:#eef0f4;
+  --ground-2:#e6e9ef;
+  --hair:#e2e5ea;
+  --hair-soft:#eceef2;
+  --raised:#ffffff;
+  --glow:rgba(var(--red-rgb),.16);
+  --shadow-phone:0 2px 6px rgba(16,24,40,.06),0 24px 60px -18px rgba(16,24,40,.42);
+  --shadow-card:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ink:#eef0f4; --ink-2:#a2a9b6; --ink-3:#767d8c;
+    --canvas:#0d0e12; --ground:#0a0b0e; --ground-2:#111318;
+    --hair:rgba(255,255,255,.09); --hair-soft:rgba(255,255,255,.06);
+    --raised:#14161b; --glow:rgba(var(--red-rgb),.28);
+    --shadow-phone:0 2px 8px rgba(0,0,0,.5),0 30px 70px -20px rgba(0,0,0,.75);
+    --shadow-card:0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="light"]{
+  --ink:#111318; --ink-2:#565d6b; --ink-3:#878e9c;
+  --canvas:#ffffff; --ground:#eef0f4; --ground-2:#e6e9ef;
+  --hair:#e2e5ea; --hair-soft:#eceef2; --raised:#ffffff; --glow:rgba(var(--red-rgb),.16);
+  --shadow-phone:0 2px 6px rgba(16,24,40,.06),0 24px 60px -18px rgba(16,24,40,.42);
+  --shadow-card:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08);
+}
+:root[data-theme="dark"]{
+  --ink:#eef0f4; --ink-2:#a2a9b6; --ink-3:#767d8c;
+  --canvas:#0d0e12; --ground:#0a0b0e; --ground-2:#111318;
+  --hair:rgba(255,255,255,.09); --hair-soft:rgba(255,255,255,.06);
+  --raised:#14161b; --glow:rgba(var(--red-rgb),.28);
+  --shadow-phone:0 2px 8px rgba(0,0,0,.5),0 30px 70px -20px rgba(0,0,0,.75);
+  --shadow-card:0 1px 2px rgba(0,0,0,.4);
+}
+
+body{
+  font-family:var(--font-ui); color:var(--ink); background:var(--ground);
+  line-height:1.5; -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  letter-spacing:-.006em;
+}
+
+/* ---- showcase page chrome ---------------------------------------------- */
+.topbar{
+  position:sticky; top:0; z-index:50;
+  display:flex; align-items:center; justify-content:space-between; gap:1rem;
+  padding:.7rem clamp(1rem,4vw,2.4rem);
+  background:color-mix(in srgb,var(--ground) 82%,transparent);
+  backdrop-filter:saturate(180%) blur(14px);
+  border-bottom:1px solid var(--hair);
+}
+.brand{ display:flex; align-items:center; gap:.6rem; font-weight:650; letter-spacing:-.02em; }
+.brand .mark{
+  width:26px; height:26px; border-radius:8px; flex:0 0 auto;
+  background:linear-gradient(150deg,var(--red),var(--red-press));
+  box-shadow:0 2px 10px var(--glow), inset 0 1px 0 rgba(255,255,255,.28);
+  display:grid; place-items:center;
+}
+.brand .mark svg{ width:15px; height:15px; color:#fff; }
+.brand small{ display:block; font-family:var(--font-mono); font-size:.62rem; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-top:1px; }
+.topbar__right{ display:flex; align-items:center; gap:.5rem; }
+.tag{
+  font-family:var(--font-mono); font-size:.66rem; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink-2); padding:.32rem .55rem; border:1px solid var(--hair); border-radius:999px;
+}
+.tglbtn{ display:grid; place-items:center; width:34px; height:34px; border-radius:9px;
+  border:1px solid var(--hair); color:var(--ink-2); background:var(--canvas); }
+.tglbtn:hover{ color:var(--ink); border-color:var(--ink-3); }
+.tglbtn svg{ width:16px; height:16px; }
+
+.wrap{ max-width:1240px; margin:0 auto; padding:0 clamp(1rem,4vw,2.4rem); }
+
+/* ---- hero -------------------------------------------------------------- */
+.hero{ position:relative; overflow:hidden; }
+.hero__glow{
+  position:absolute; inset:-30% -10% auto; height:520px; pointer-events:none; z-index:0;
+  background:radial-gradient(60% 60% at 72% 20%,var(--glow),transparent 70%);
+}
+.hero__inner{ position:relative; z-index:1; display:grid; grid-template-columns:1.05fr .95fr;
+  gap:clamp(1.5rem,4vw,3.5rem); align-items:center; padding:clamp(2.4rem,6vw,5rem) 0 clamp(1.5rem,4vw,3rem); }
+.eyebrow{ font-family:var(--font-mono); font-size:.72rem; letter-spacing:.2em; text-transform:uppercase;
+  color:var(--red); font-weight:600; display:flex; align-items:center; gap:.55rem; }
+.eyebrow::before{ content:""; width:22px; height:1.5px; background:var(--red); display:inline-block; }
+.hero h1{
+  font-family:var(--font-display); font-weight:760; letter-spacing:-.035em; text-wrap:balance;
+  font-size:clamp(2.3rem,5.2vw,4rem); line-height:1.02; margin:1rem 0 0;
+}
+.hero h1 em{ font-style:normal; color:var(--red); }
+.hero .lede{ font-size:clamp(1.02rem,1.5vw,1.22rem); color:var(--ink-2); max-width:34ch; margin:1.1rem 0 0;
+  letter-spacing:-.01em; }
+.hero__meta{ display:flex; flex-wrap:wrap; gap:.5rem .55rem; margin-top:1.6rem; }
+.metachip{ font-family:var(--font-mono); font-size:.72rem; letter-spacing:.02em; color:var(--ink-2);
+  padding:.4rem .7rem; border:1px solid var(--hair); border-radius:999px; background:var(--canvas);
+  display:inline-flex; align-items:center; gap:.45rem; }
+.metachip svg{ width:13px; height:13px; color:var(--red); }
+.hero__stage{ position:relative; display:flex; justify-content:center; }
+
+/* ---- chapters ---------------------------------------------------------- */
+.chapter{ padding:clamp(2.6rem,6vw,4.6rem) 0 clamp(1rem,3vw,2rem); border-top:1px solid var(--hair); }
+.chapter__head{ display:flex; align-items:flex-start; gap:1.1rem; max-width:64ch; }
+.chapter__num{ font-family:var(--font-mono); font-size:.9rem; font-weight:600; color:var(--red);
+  border:1px solid var(--hair); border-radius:10px; padding:.35rem .55rem; letter-spacing:.02em;
+  flex:0 0 auto; margin-top:.25rem; }
+.chapter h2{ font-family:var(--font-display); font-weight:720; letter-spacing:-.028em;
+  font-size:clamp(1.7rem,3.4vw,2.5rem); line-height:1.06; margin:0; text-wrap:balance; }
+.chapter h2 small{ display:block; font-family:var(--font-mono); font-weight:600; font-size:.7rem;
+  letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3); margin-bottom:.5rem; }
+.chapter__lede{ color:var(--ink-2); font-size:1.04rem; max-width:60ch; margin:.9rem 0 0; }
+.chapter__lede b{ color:var(--ink); font-weight:600; }
+
+.rail{ display:flex; gap:clamp(1.4rem,3vw,2.6rem); margin-top:clamp(1.8rem,4vw,2.8rem);
+  overflow-x:auto; padding:.5rem .2rem 1.6rem; scroll-snap-type:x proximity; }
+.rail::-webkit-scrollbar{ height:8px; }
+.rail::-webkit-scrollbar-thumb{ background:var(--ground-2); border-radius:20px; }
+.cell{ flex:0 0 auto; scroll-snap-align:center; display:flex; flex-direction:column; align-items:center; gap:1rem; }
+.cell__note{ max-width:320px; }
+.cell__note h3{ font-size:1rem; font-weight:650; margin:0 0 .3rem; letter-spacing:-.01em;
+  display:flex; align-items:center; gap:.5rem; }
+.cell__note h3 .kbd{ font-family:var(--font-mono); font-size:.64rem; letter-spacing:.04em; color:var(--red);
+  border:1px solid var(--glow); background:rgba(var(--red-rgb),.06); border-radius:6px; padding:.1rem .38rem; }
+.cell__note p{ margin:0; color:var(--ink-2); font-size:.9rem; }
+.cell__note p b{ color:var(--ink); font-weight:600; }
+
+/* ============================================================================
+   PHONE
+   ============================================================================ */
+.phone{
+  --w:344px;
+  width:var(--w); flex:0 0 auto; position:relative;
+  border-radius:52px; padding:11px;
+  background:linear-gradient(160deg,#24262c,#0e0f12 60%);
+  box-shadow:var(--shadow-phone), inset 0 0 0 1.5px rgba(255,255,255,.06);
+  transition:transform .35s cubic-bezier(.2,.7,.2,1), box-shadow .35s;
+}
+.rail .phone:hover{ transform:translateY(-6px); }
+.phone__screen{
+  position:relative; border-radius:42px; overflow:hidden;
+  background:var(--s-bg,#fff); height:734px;
+  color:var(--s-ink,#111318);
+  display:flex; flex-direction:column;
+}
+.phone--tilt{ transform:rotate(-1.4deg); }
+.phone--tilt:hover{ transform:rotate(0) translateY(-6px); }
+
+/* dynamic island */
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%);
+  width:112px; height:31px; background:#000; border-radius:20px; z-index:40; }
+.island::after{ content:""; position:absolute; right:12px; top:50%; transform:translateY(-50%);
+  width:9px; height:9px; border-radius:50%; background:#0b0b0d; box-shadow:inset 0 0 0 1.5px #1c1d22; }
+
+/* status bar */
+.statusbar{ height:52px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between;
+  padding:0 26px 7px; font-size:.82rem; font-weight:650; letter-spacing:.01em; z-index:30;
+  color:var(--s-ink,#111318); }
+.statusbar .sig{ display:flex; align-items:center; gap:6px; }
+.statusbar .sig svg{ width:17px; height:12px; }
+.statusbar time{ font-variant-numeric:tabular-nums; }
+
+/* the scrolling app view */
+.view{ flex:1 1 auto; overflow:hidden; position:relative; display:flex; flex-direction:column; }
+.view__scroll{ flex:1 1 auto; overflow:hidden; padding:2px 18px 14px; }
+
+/* app top bar inside screen */
+.appbar{ display:flex; align-items:center; justify-content:space-between; padding:2px 18px 6px; }
+.appbar__l{ display:flex; align-items:center; gap:.5rem; min-width:0; }
+.appbar__title{ font-size:1.02rem; font-weight:650; letter-spacing:-.01em; }
+.appbar .ico{ width:34px; height:34px; border-radius:11px; display:grid; place-items:center;
+  color:var(--s-ink,#111318); background:var(--s-chip,#f1f3f6); }
+.appbar .ico svg{ width:18px; height:18px; }
+.appbar .ico--ghost{ background:transparent; color:var(--s-ink2,#565d6b); }
+
+.h-large{ font-family:var(--font-display); font-weight:730; letter-spacing:-.03em; font-size:1.9rem;
+  line-height:1.05; margin:.2rem 0 .1rem; }
+.h-sub{ color:var(--s-ink2,#565d6b); font-size:.92rem; margin:0 0 .2rem; }
+.h-sub b{ color:var(--s-ink,#111318); font-weight:640; }
+
+/* section label */
+.slabel{ font-family:var(--font-mono); font-size:.66rem; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--s-ink3,#878e9c); font-weight:600; margin:1.05rem 2px .5rem; display:flex;
+  align-items:center; justify-content:space-between; }
+.slabel a{ color:var(--red); text-transform:none; letter-spacing:0; font-family:var(--font-ui);
+  font-size:.78rem; font-weight:600; }
+
+/* cards */
+.card{ background:var(--s-card,#fff); border:1px solid var(--s-hair,#e6e9ef); border-radius:18px;
+  padding:14px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+.card + .card{ margin-top:10px; }
+.card--flush{ padding:0; overflow:hidden; }
+
+/* rows */
+.row{ display:flex; align-items:center; gap:11px; }
+.row + .row{ margin-top:0; }
+.rowline{ display:flex; align-items:center; gap:11px; padding:12px 14px; }
+.rowline + .rowline{ border-top:1px solid var(--s-hair,#e6e9ef); }
+.grow{ min-width:0; flex:1 1 auto; }
+.dim{ color:var(--s-ink2,#565d6b); }
+.mono{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.tnum{ font-variant-numeric:tabular-nums; }
+.ttl{ font-weight:600; font-size:.92rem; letter-spacing:-.01em; }
+.sub2{ font-size:.78rem; color:var(--s-ink2,#565d6b); }
+.tid{ font-family:var(--font-mono); font-size:.72rem; color:var(--s-ink3,#878e9c); letter-spacing:.02em; }
+
+/* avatars */
+.av{ width:30px; height:30px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center;
+  font-size:.74rem; font-weight:680; color:#fff; box-shadow:0 0 0 2px var(--s-card,#fff); letter-spacing:0; }
+.av--sm{ width:22px; height:22px; font-size:.6rem; }
+.av--lg{ width:40px; height:40px; font-size:.9rem; }
+.av-atlas{ background:linear-gradient(150deg,#c0392b,#8e2018); }
+.av-codex{ background:linear-gradient(150deg,#3b6fd4,#274b96); }
+.av-cursor{ background:linear-gradient(150deg,#5b626e,#33373f); }
+.av-nova{ background:linear-gradient(150deg,#1f9d55,#127540); }
+.av-sahir{ background:linear-gradient(150deg,#e0820b,#b1620a); }
+.av-you{ background:#111318; }
+.avstack{ display:flex; }
+.avstack .av{ margin-left:-8px; }
+.avstack .av:first-child{ margin-left:0; }
+
+/* pills / chips / dots */
+.pill{ display:inline-flex; align-items:center; gap:.35rem; font-size:.72rem; font-weight:640;
+  padding:.25rem .55rem; border-radius:999px; letter-spacing:-.005em; white-space:nowrap; }
+.pill svg{ width:12px; height:12px; }
+.p-live{ color:var(--red); background:rgba(var(--red-rgb),.09); }
+.p-merged{ color:var(--merged); background:rgba(var(--merged-rgb),.11); }
+.p-needs{ color:var(--needs); background:rgba(var(--needs-rgb),.13); }
+.p-flight{ color:var(--flight); background:rgba(var(--flight-rgb),.11); }
+.p-idle{ color:var(--s-ink2,#565d6b); background:var(--s-chip,#f1f3f6); }
+.dot{ width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
+.d-live{ background:var(--red); box-shadow:0 0 0 0 rgba(var(--red-rgb),.55); animation:pulse 1.8s infinite; }
+.d-merged{ background:var(--merged); }
+.d-needs{ background:var(--needs); }
+.d-flight{ background:var(--flight); }
+.d-idle{ background:var(--s-ink3,#a9b0bd); }
+@keyframes pulse{ 0%{ box-shadow:0 0 0 0 rgba(var(--red-rgb),.5); } 70%{ box-shadow:0 0 0 7px rgba(var(--red-rgb),0); } 100%{ box-shadow:0 0 0 0 rgba(var(--red-rgb),0); } }
+
+.chip{ font-size:.78rem; font-weight:560; padding:.4rem .7rem; border-radius:999px;
+  border:1px solid var(--s-hair,#e6e9ef); color:var(--s-ink2,#565d6b); background:var(--s-card,#fff); white-space:nowrap; }
+.chip--on{ color:#fff; background:var(--ink); border-color:var(--ink); }
+.chiprow{ display:flex; gap:.4rem; overflow:hidden; }
+
+/* progress */
+.bar{ height:6px; border-radius:999px; background:var(--s-chip,#eef0f4); overflow:hidden; }
+.bar > i{ display:block; height:100%; border-radius:999px; background:var(--red); }
+.bar--merged > i{ background:var(--merged); }
+.bar--flight > i{ background:var(--flight); }
+
+/* buttons */
+.btn{ display:inline-flex; align-items:center; justify-content:center; gap:.45rem; font-weight:640;
+  font-size:.92rem; padding:.75rem 1rem; border-radius:14px; letter-spacing:-.01em; }
+.btn svg{ width:17px; height:17px; }
+.btn--primary{ background:var(--red); color:#fff; box-shadow:0 2px 12px var(--glow); }
+.btn--dark{ background:var(--ink); color:var(--canvas); }
+.btn--ghost{ border:1px solid var(--s-hair,#e6e9ef); color:var(--s-ink,#111318); background:var(--s-card,#fff); }
+.btn--soft{ background:var(--s-chip,#f1f3f6); color:var(--s-ink,#111318); }
+.btn--wide{ width:100%; }
+.btn--lg{ padding:.9rem 1.1rem; font-size:1rem; border-radius:16px; }
+
+/* input */
+.field{ background:var(--s-chip,#f5f6f8); border:1px solid var(--s-hair,#e6e9ef); border-radius:16px;
+  padding:14px; color:var(--s-ink,#111318); }
+.field .ph{ color:var(--s-ink3,#9aa1af); font-size:1rem; }
+.caret{ display:inline-block; width:2px; height:1.05em; background:var(--red); vertical-align:-2px;
+  animation:blink 1.1s steps(1) infinite; margin-left:1px; }
+@keyframes blink{ 50%{ opacity:0; } }
+
+/* tab bar */
+.tabbar{ flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-around;
+  padding:9px 14px 26px; border-top:1px solid var(--s-hair,#e6e9ef);
+  background:color-mix(in srgb,var(--s-bg,#fff) 86%,transparent); backdrop-filter:blur(12px); }
+.tab{ display:flex; flex-direction:column; align-items:center; gap:3px; color:var(--s-ink3,#9aa1af);
+  font-size:.62rem; font-weight:600; letter-spacing:.01em; flex:1 1 0; }
+.tab svg{ width:23px; height:23px; }
+.tab.on{ color:var(--red); }
+.tab--fab{ flex:0 0 auto; margin-top:-30px; }
+.tab--fab .fab{ width:56px; height:56px; border-radius:19px; display:grid; place-items:center;
+  background:linear-gradient(155deg,var(--red),var(--red-press)); color:#fff;
+  box-shadow:0 8px 22px var(--glow),inset 0 1px 0 rgba(255,255,255,.3); }
+.tab--fab .fab svg{ width:26px; height:26px; }
+.tab--fab span{ color:var(--s-ink3,#9aa1af); margin-top:5px; }
+.badge-dot{ position:absolute; top:-2px; right:-6px; min-width:15px; height:15px; padding:0 3px;
+  border-radius:999px; background:var(--red); color:#fff; font-size:.58rem; font-weight:700;
+  display:grid; place-items:center; box-shadow:0 0 0 2px var(--s-bg,#fff); }
+.tabico{ position:relative; }
+
+/* home indicator (dark cockpit only / used where no tabbar) */
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%);
+  width:128px; height:5px; border-radius:999px; background:currentColor; opacity:.25; z-index:20; }
+
+/* mini task chip flow */
+.flowcol{ display:flex; flex-direction:column; gap:8px; }
+.stage{ display:flex; align-items:center; gap:10px; }
+.stage__k{ font-family:var(--font-mono); font-size:.62rem; letter-spacing:.1em; text-transform:uppercase;
+  width:74px; flex:0 0 auto; }
+.stage__bar{ flex:1 1 auto; height:34px; border-radius:11px; display:flex; align-items:center; gap:6px;
+  padding:0 10px; font-size:.74rem; font-weight:600; overflow:hidden; }
+.stage__n{ margin-left:auto; font-family:var(--font-mono); font-weight:600; }
+
+/* ============================================================================
+   DARK COCKPIT screen skin (autopilot)
+   ============================================================================ */
+.cockpit{
+  --s-bg:#0b0c0f; --s-ink:#f2f4f8; --s-ink2:#9aa1b0; --s-ink3:#6a7180;
+  --s-card:#14161c; --s-hair:rgba(255,255,255,.08); --s-chip:#1a1d24;
+}
+.cockpit .statusbar{ color:#f2f4f8; }
+.cockpit .card{ box-shadow:none; }
+.cockpit-bg{ position:absolute; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(80% 42% at 50% 0%,rgba(var(--red-rgb),.30),transparent 62%),
+    radial-gradient(60% 40% at 90% 30%,rgba(var(--red-rgb),.12),transparent 70%); }
+.cockpit .view{ z-index:1; }
+
+.ringwrap{ position:relative; display:grid; place-items:center; }
+.ringwrap .num{ position:absolute; text-align:center; }
+.ringwrap .num b{ font-family:var(--font-display); font-size:2.6rem; font-weight:750; letter-spacing:-.03em;
+  line-height:1; display:block; }
+.ringwrap .num span{ font-family:var(--font-mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--s-ink2); }
+
+.telem{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+.telem .t{ background:var(--s-chip); border:1px solid var(--s-hair); border-radius:13px; padding:10px; }
+.telem .t .k{ font-family:var(--font-mono); font-size:.6rem; letter-spacing:.1em; text-transform:uppercase; color:var(--s-ink3); }
+.telem .t .v{ font-family:var(--font-display); font-weight:680; font-size:1.15rem; letter-spacing:-.02em; margin-top:3px; }
+.telem .t .v small{ font-size:.7rem; color:var(--s-ink2); font-weight:500; font-family:var(--font-ui); }
+
+.ticker{ background:var(--s-card); border:1px solid var(--s-hair); border-radius:14px; padding:11px 12px;
+  display:flex; gap:9px; align-items:flex-start; }
+.ticker .strm{ font-size:.8rem; line-height:1.45; }
+.ticker .strm .t{ color:var(--s-ink3); font-family:var(--font-mono); font-size:.68rem; }
+
+/* narration timeline */
+.tl{ position:relative; padding-left:22px; }
+.tl::before{ content:""; position:absolute; left:6px; top:4px; bottom:6px; width:1.5px; background:var(--s-hair,#e6e9ef); }
+.tl__i{ position:relative; padding:0 0 14px; }
+.tl__i::before{ content:""; position:absolute; left:-18px; top:3px; width:9px; height:9px; border-radius:50%;
+  background:var(--s-card,#fff); border:2px solid var(--s-ink3,#c4cad4); }
+.tl__i.on::before{ background:var(--red); border-color:var(--red); box-shadow:0 0 0 4px rgba(var(--red-rgb),.15); }
+.tl__i.ok::before{ background:var(--merged); border-color:var(--merged); }
+.tl__t{ font-size:.86rem; font-weight:560; }
+.tl__t b{ font-weight:660; }
+.tl__m{ font-family:var(--font-mono); font-size:.68rem; color:var(--s-ink3,#9aa1af); margin-top:1px; }
+
+/* milestone rail */
+.mrail{ display:flex; gap:0; }
+.mnode{ flex:1 1 0; display:flex; flex-direction:column; align-items:center; gap:6px; position:relative; }
+.mnode::before{ content:""; position:absolute; top:9px; left:-50%; width:100%; height:2px; background:var(--s-hair,#e6e9ef); z-index:0; }
+.mnode:first-child::before{ display:none; }
+.mnode.done::before,.mnode.active::before{ background:var(--merged); }
+.mnode .mk{ width:20px; height:20px; border-radius:50%; z-index:1; display:grid; place-items:center;
+  background:var(--s-chip,#eef0f4); color:var(--s-ink3,#9aa1af); border:2px solid var(--s-hair,#e6e9ef); }
+.mnode .mk svg{ width:11px; height:11px; }
+.mnode.done .mk{ background:var(--merged); border-color:var(--merged); color:#fff; }
+.mnode.active .mk{ background:var(--red); border-color:var(--red); color:#fff; box-shadow:0 0 0 4px rgba(var(--red-rgb),.14); }
+.mnode .ml{ font-size:.6rem; text-align:center; color:var(--s-ink2,#565d6b); line-height:1.2; max-width:56px; }
+.mnode.active .ml{ color:var(--s-ink,#111318); font-weight:640; }
+
+/* swipe-hint action card */
+.approve{ display:grid; grid-template-columns:1fr; }
+.approve__act{ display:flex; gap:8px; margin-top:12px; }
+
+/* footer / design notes */
+.notes{ border-top:1px solid var(--hair); padding:clamp(2.4rem,5vw,4rem) 0 3rem; margin-top:2rem; }
+.notes__grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:1.4rem 2rem; margin-top:1.6rem; }
+.note h4{ font-family:var(--font-mono); font-size:.68rem; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--red); margin:0 0 .6rem; font-weight:600; }
+.note p{ margin:0 0 .5rem; color:var(--ink-2); font-size:.9rem; }
+.note .sw{ display:flex; gap:6px; margin:.2rem 0 .7rem; flex-wrap:wrap; }
+.note .sw i{ width:26px; height:26px; border-radius:7px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.08); }
+.map{ font-family:var(--font-mono); font-size:.8rem; color:var(--ink-2); line-height:1.9; }
+.map b{ color:var(--ink); }
+.map .ar{ color:var(--red); }
+.footnote{ margin-top:2.4rem; color:var(--ink-3); font-size:.82rem; display:flex; align-items:center;
+  gap:.6rem; flex-wrap:wrap; }
+
+/* responsive */
+@media (max-width:900px){
+  .hero__inner{ grid-template-columns:1fr; }
+  .hero__stage{ order:-1; }
+}
+@media (prefers-reduced-motion:reduce){
+  *{ animation:none !important; transition:none !important; }
+}
+:focus-visible{ outline:2px solid var(--red); outline-offset:2px; border-radius:6px; }
+
+/* ===== Deliverables-specific components (extends the v1 system) ===== */
+:root{ --teal:#12b886; --teal-rgb:18,184,134; }
+
+/* capacity meter — ready vs free runners */
+.capmeter{ background:linear-gradient(150deg,#151317,#0d0e12); color:#fff; border:0; border-radius:18px; padding:15px; }
+.capmeter .big{ font-family:var(--font-display); font-size:2.3rem; font-weight:750; letter-spacing:-.03em; line-height:1; }
+.capmeter .big small{ font-size:.9rem; font-weight:500; color:rgba(255,255,255,.6); font-family:var(--font-ui); letter-spacing:0; }
+.capgauge{ display:flex; gap:4px; margin:12px 0 4px; }
+.capgauge i{ height:8px; border-radius:999px; flex:1 1 0; background:rgba(255,255,255,.14); }
+.capgauge i.on{ background:var(--red); }
+.capgauge i.free{ background:rgba(255,255,255,.34); }
+.capnote{ font-size:.78rem; color:rgba(255,255,255,.66); }
+.capnote b{ color:#fff; font-weight:640; }
+
+/* wave block */
+.wavehdr{ display:flex; align-items:center; gap:.5rem; margin:1.1rem 2px .55rem; }
+.wavehdr .wk{ font-family:var(--font-mono); font-size:.66rem; letter-spacing:.13em; text-transform:uppercase; font-weight:600; color:var(--s-ink,#111318); }
+.wavehdr .wn{ font-family:var(--font-mono); font-size:.66rem; color:var(--s-ink3,#878e9c); margin-left:auto; }
+.wavehdr .wtag{ font-family:var(--font-ui); font-size:.66rem; font-weight:640; padding:.16rem .5rem; border-radius:999px; letter-spacing:0; text-transform:none; }
+.wtag-live{ color:var(--red); background:rgba(var(--red-rgb),.09); }
+.wtag-lock{ color:var(--s-ink2,#565d6b); background:var(--s-chip,#f1f3f6); }
+
+/* parallel lane (workstream) */
+.lane{ position:relative; padding-left:12px; margin-bottom:8px; }
+.lane::before{ content:""; position:absolute; left:0; top:4px; bottom:8px; width:3px; border-radius:3px; background:var(--lane,#3b6fd4); opacity:.55; }
+.lane__k{ font-family:var(--font-mono); font-size:.6rem; letter-spacing:.08em; text-transform:uppercase; color:var(--s-ink2,#565d6b); font-weight:600; margin:0 0 5px 2px; display:flex; align-items:center; gap:5px; }
+.lane__k .lc{ width:6px; height:6px; border-radius:2px; background:var(--lane,#3b6fd4); }
+
+/* ready task row */
+.wtask{ display:flex; align-items:center; gap:10px; background:var(--s-card,#fff); border:1px solid var(--s-hair,#e6e9ef); border-radius:13px; padding:10px 11px; }
+.wtask + .wtask{ margin-top:6px; }
+.wtask.sel{ border-color:var(--red); box-shadow:0 0 0 1px var(--red), 0 2px 10px var(--glow); }
+.wtask.locked{ opacity:.52; }
+.sel-box{ width:20px; height:20px; border-radius:7px; border:1.8px solid var(--s-hair,#cfd4dc); flex:0 0 auto; display:grid; place-items:center; color:#fff; }
+.sel-box.on{ background:var(--red); border-color:var(--red); }
+.sel-box.on svg{ width:12px; height:12px; }
+.sel-box svg{ display:none; }
+.sel-box.on svg{ display:block; }
+.wtask__b{ min-width:0; flex:1 1 auto; }
+.wtask__t{ font-size:.86rem; font-weight:600; letter-spacing:-.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wmeta{ display:flex; gap:6px; margin-top:3px; flex-wrap:wrap; align-items:center; }
+.wm{ font-family:var(--font-mono); font-size:.64rem; color:var(--s-ink2,#565d6b); letter-spacing:.01em; display:inline-flex; align-items:center; gap:3px; }
+.wm svg{ width:11px; height:11px; }
+.tier{ font-family:var(--font-mono); font-size:.6rem; font-weight:600; padding:.08rem .32rem; border-radius:5px; letter-spacing:.02em; }
+.tier-cheap{ color:var(--merged); background:rgba(var(--merged-rgb),.1); }
+.tier-bal{ color:var(--flight); background:rgba(var(--flight-rgb),.1); }
+.tier-high{ color:var(--red); background:rgba(var(--red-rgb),.09); }
+.collide{ color:var(--needs); background:rgba(var(--needs-rgb),.12); font-size:.6rem; font-weight:640; padding:.08rem .34rem; border-radius:5px; display:inline-flex; align-items:center; gap:3px; }
+.collide svg{ width:10px; height:10px; }
+
+/* keystone callout */
+.keystone{ display:flex; gap:11px; align-items:flex-start; background:rgba(var(--red-rgb),.05); border:1px solid rgba(var(--red-rgb),.22); border-radius:14px; padding:12px; margin:12px 0; }
+.keystone .ki{ width:32px; height:32px; border-radius:10px; flex:0 0 auto; display:grid; place-items:center; background:var(--red); color:#fff; }
+.keystone .ki svg{ width:17px; height:17px; }
+.keystone .kt{ font-size:.86rem; font-weight:640; }
+.keystone .ks{ font-size:.78rem; color:var(--s-ink2,#565d6b); margin-top:2px; }
+.keystone .ks b{ color:var(--red); }
+
+/* sticky dispatch bar */
+.dispatchbar{ flex:0 0 auto; padding:10px 16px 16px; border-top:1px solid var(--s-hair,#e6e9ef); background:color-mix(in srgb,var(--s-bg,#fff) 90%,transparent); backdrop-filter:blur(10px); display:flex; align-items:center; gap:11px; }
+.dispatchbar .dc{ font-size:.82rem; }
+.dispatchbar .dc b{ font-weight:680; }
+
+/* deliverable list card */
+.dcard{ display:block; background:var(--s-card,#fff); border:1px solid var(--s-hair,#e6e9ef); border-radius:16px; padding:13px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+.dcard + .dcard{ margin-top:10px; }
+.dcard__top{ display:flex; align-items:flex-start; gap:8px; }
+.dcard__title{ font-size:1rem; font-weight:680; letter-spacing:-.015em; }
+.mdots{ display:flex; gap:4px; margin:9px 0; }
+.mdots i{ width:100%; height:5px; border-radius:999px; background:var(--s-chip,#eef0f4); flex:1 1 0; }
+.mdots i.done{ background:var(--merged); }
+.mdots i.active{ background:var(--red); }
+.dcard__foot{ display:flex; align-items:center; gap:8px; margin-top:10px; }
+.parbadge{ font-size:.7rem; font-weight:640; color:var(--red); background:rgba(var(--red-rgb),.08); border-radius:999px; padding:.24rem .55rem; display:inline-flex; align-items:center; gap:5px; }
+.parbadge svg{ width:13px; height:13px; }
+
+/* mobile dependency flow (layered columns, LR like the desktop mermaid) */
+.dagwrap{ overflow-x:auto; padding:4px 2px 10px; margin:0 -2px; }
+.dag{ display:flex; gap:0; min-width:min-content; }
+.dagcol{ flex:0 0 auto; width:132px; padding:0 8px; position:relative; }
+.dagcol + .dagcol::before{ content:""; position:absolute; left:-6px; top:26px; bottom:20px; width:1px; background:var(--s-hair,#e6e9ef); }
+.dagcol__k{ font-family:var(--font-mono); font-size:.56rem; letter-spacing:.08em; text-transform:uppercase; color:var(--s-ink3,#878e9c); text-align:center; margin-bottom:8px; }
+.dnode{ border-radius:11px; padding:8px 9px; margin-bottom:8px; border:1.5px solid; position:relative; }
+.dnode__id{ font-family:var(--font-mono); font-size:.66rem; font-weight:700; letter-spacing:.02em; }
+.dnode__t{ font-size:.66rem; line-height:1.25; margin-top:1px; opacity:.85; }
+.n-done{ background:rgba(var(--merged-rgb),.14); border-color:var(--merged); color:#0b3d1c; }
+.n-unproven{ background:rgba(var(--teal-rgb),.14); border-color:var(--teal); color:#0b3d2e; }
+.n-progress{ background:rgba(var(--flight-rgb),.13); border-color:var(--flight); color:#062b63; }
+.n-review{ background:rgba(224,168,0,.16); border-color:#e0a800; color:#6b4e00; }
+.n-blocked{ background:rgba(var(--red-rgb),.1); border-color:var(--red); color:#5c161c; }
+.n-todo{ background:var(--s-chip,#eef0f4); border-color:var(--s-ink3,#adb5bd); color:var(--s-ink2,#495057); }
+.n-ext{ background:var(--s-card,#fff); border-color:var(--s-ink3,#adb5bd); border-style:dashed; color:var(--s-ink2,#6c757d); }
+.dnode.keyblock{ box-shadow:0 0 0 2.5px rgba(var(--red-rgb),.28); }
+[data-theme="dark"] .n-done,[data-theme="dark"] .n-unproven,[data-theme="dark"] .n-progress,[data-theme="dark"] .n-review,[data-theme="dark"] .n-blocked{ color:#fff; }
+@media (prefers-color-scheme:dark){ .cockpit .n-done,.cockpit .n-progress{ color:#fff; } }
+.legend{ display:flex; flex-wrap:wrap; gap:5px 10px; margin:4px 2px 0; }
+.legend span{ font-size:.66rem; color:var(--s-ink2,#565d6b); display:inline-flex; align-items:center; gap:4px; }
+.legend i{ width:9px; height:9px; border-radius:3px; border:1.5px solid; }
+
+/* gate rows */
+.gate{ display:flex; align-items:center; gap:10px; padding:11px 0; }
+.gate + .gate{ border-top:1px solid var(--s-hair,#e6e9ef); }
+.gate__ico{ width:26px; height:26px; border-radius:8px; flex:0 0 auto; display:grid; place-items:center; }
+.gate__ico svg{ width:15px; height:15px; }
+.g-pass{ background:rgba(var(--merged-rgb),.12); color:var(--merged); }
+.g-run{ background:rgba(var(--flight-rgb),.12); color:var(--flight); }
+.g-wait{ background:var(--s-chip,#f1f3f6); color:var(--s-ink3,#878e9c); }
+.gate__k{ font-family:var(--font-mono); font-size:.62rem; color:var(--s-ink3,#878e9c); }
+
+/* who's-working lease row */
+.lease{ display:flex; align-items:center; gap:10px; padding:11px 0; }
+.lease + .lease{ border-top:1px solid var(--s-hair,#e6e9ef); }
+.filechip{ font-family:var(--font-mono); font-size:.62rem; color:var(--s-ink2,#565d6b); background:var(--s-chip,#f1f3f6); border-radius:6px; padding:.1rem .38rem; }
+
+/* ===== v3-specific components (extends v1 + deliverables systems) ===== */
+:root{ --teal:#12b886; --teal-rgb:18,184,134; --build:#8a5cf6; --build-rgb:138,92,246; }
+
+/* grounding badge — what's real vs staged, baked into the UI */
+.gb{ display:inline-flex; align-items:center; gap:4px; font-family:var(--font-mono); font-size:.58rem;
+  font-weight:600; letter-spacing:.04em; text-transform:uppercase; padding:.16rem .4rem; border-radius:6px; white-space:nowrap; }
+.gb .gd{ width:6px; height:6px; border-radius:50%; }
+.gb-live{ color:var(--merged); background:rgba(var(--merged-rgb),.11); } .gb-live .gd{ background:var(--merged); }
+.gb-thin{ color:#b06a00; background:rgba(224,130,11,.13); } .gb-thin .gd{ background:var(--needs); }
+.gb-build{ color:#6d3fd4; background:rgba(var(--build-rgb),.12); } .gb-build .gd{ background:var(--build); }
+
+/* legend for grounding */
+.glegend{ display:flex; flex-wrap:wrap; gap:.5rem 1.1rem; margin-top:1rem; }
+.glegend .gi{ display:flex; align-items:center; gap:.45rem; font-size:.82rem; color:var(--ink-2); }
+.glegend .gi b{ color:var(--ink); font-weight:600; }
+.glegend .gdot{ width:10px; height:10px; border-radius:50%; }
+
+/* bottom sheet (dispatch decision) */
+.scrim{ position:absolute; inset:0; background:rgba(10,12,16,.42); z-index:25; }
+.sheet{ position:absolute; left:0; right:0; bottom:0; z-index:26; background:var(--s-card,#fff);
+  border-radius:24px 24px 0 0; padding:8px 18px calc(18px + env(safe-area-inset-bottom));
+  box-shadow:0 -12px 40px rgba(16,24,40,.22); max-height:90%; overflow:hidden; display:flex; flex-direction:column; }
+.sheet__grip{ width:38px; height:5px; border-radius:999px; background:var(--s-hair,#dfe3e9); margin:4px auto 12px; flex:0 0 auto; }
+.sheet__scroll{ overflow:hidden; }
+
+/* scheduler explain row (dispatch_reason) */
+.explain{ display:flex; gap:6px; flex-wrap:wrap; margin:2px 0 4px; }
+.explain .e{ font-family:var(--font-mono); font-size:.64rem; color:var(--s-ink2,#565d6b); background:var(--s-chip,#f1f3f6);
+  border-radius:6px; padding:.16rem .42rem; }
+.explain .e b{ color:var(--s-ink,#111318); }
+
+/* assignment row in the sheet */
+.asg{ display:flex; align-items:center; gap:10px; padding:9px 0; }
+.asg + .asg{ border-top:1px solid var(--s-hair,#e6e9ef); }
+
+/* segmented control (model tier / autopilot mode) */
+.seg{ display:flex; background:var(--s-chip,#eef0f4); border-radius:11px; padding:3px; gap:2px; }
+.seg button{ flex:1 1 0; font-size:.74rem; font-weight:600; padding:.42rem .3rem; border-radius:8px; color:var(--s-ink2,#565d6b); }
+.seg button.on{ background:var(--s-card,#fff); color:var(--s-ink,#111318); box-shadow:0 1px 3px rgba(16,24,40,.12); }
+.seg--red button.on{ color:var(--red); }
+
+/* lock screen */
+.lock{ --s-bg:#08090c; --s-ink:#fff; --s-ink2:rgba(255,255,255,.62); --s-ink3:rgba(255,255,255,.4);
+  --s-card:rgba(30,32,38,.72); --s-hair:rgba(255,255,255,.08); }
+.lock-bg{ position:absolute; inset:0; z-index:0; background:
+  radial-gradient(80% 40% at 30% 8%,rgba(var(--red-rgb),.34),transparent 60%),
+  radial-gradient(70% 44% at 92% 96%,rgba(var(--build-rgb),.24),transparent 60%),
+  linear-gradient(180deg,#0b0d11,#08090c); }
+.lock .view{ z-index:1; }
+.lockclock{ text-align:center; color:#fff; margin:6px 0 2px; }
+.lockclock .dt{ font-size:.86rem; color:rgba(255,255,255,.66); font-weight:500; letter-spacing:.02em; }
+.lockclock .tm{ font-family:var(--font-display); font-size:4.6rem; font-weight:600; letter-spacing:-.04em; line-height:1; }
+.notif{ display:flex; gap:10px; align-items:flex-start; background:rgba(38,40,47,.72); backdrop-filter:blur(20px);
+  border:1px solid rgba(255,255,255,.07); border-radius:17px; padding:11px 12px; }
+.notif + .notif{ margin-top:8px; }
+.notif__ic{ width:32px; height:32px; border-radius:9px; flex:0 0 auto; display:grid; place-items:center; color:#fff; }
+.notif__b{ min-width:0; flex:1 1 auto; color:#fff; }
+.notif__hd{ display:flex; align-items:center; gap:6px; font-size:.66rem; color:rgba(255,255,255,.6); font-weight:600; letter-spacing:.02em; text-transform:uppercase; }
+.notif__t{ font-size:.86rem; font-weight:640; margin-top:2px; }
+.notif__x{ font-size:.8rem; color:rgba(255,255,255,.72); margin-top:2px; line-height:1.35; }
+.notif__time{ margin-left:auto; font-size:.64rem; color:rgba(255,255,255,.45); font-family:var(--font-mono); }
+
+/* portfolio rollup */
+.rollup{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.rollup .r{ background:var(--s-card,#fff); border:1px solid var(--s-hair,#e6e9ef); border-radius:14px; padding:11px; }
+.rollup .r .k{ font-family:var(--font-mono); font-size:.58rem; letter-spacing:.08em; text-transform:uppercase; color:var(--s-ink3,#878e9c); }
+.rollup .r .v{ font-family:var(--font-display); font-weight:730; font-size:1.5rem; letter-spacing:-.03em; margin-top:2px; }
+.rollup .r .v small{ font-size:.8rem; font-weight:500; color:var(--s-ink2); font-family:var(--font-ui); }
+
+/* attention (needs-you) item with owner + action */
+.att{ display:flex; align-items:center; gap:10px; padding:11px 12px; }
+.att + .att{ border-top:1px solid var(--s-hair,#e6e9ef); }
+.att__ic{ width:32px; height:32px; border-radius:10px; flex:0 0 auto; display:grid; place-items:center; }
+.owner{ font-size:.58rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:.1rem .34rem; border-radius:5px; }
+.ow-you{ color:var(--needs); background:rgba(var(--needs-rgb),.13); }
+.ow-agent{ color:var(--flight); background:rgba(var(--flight-rgb),.12); }
+.ow-review{ color:var(--teal); background:rgba(var(--teal-rgb),.12); }
+
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="i-switch"><path d="M4 8h9a4 4 0 1 1 0 8H4M20 16h-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="7" cy="8" r="2.4" fill="currentColor"/></g>
+  </defs>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-6 8 6M6 10v9h5v-5h2v5h5v-9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="currentColor"/><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-pr" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="18" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.5v7M18 15.5V11a3 3 0 0 0-3-3h-3l2-2m-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="7" y="5" width="3.4" height="14" rx="1.2" fill="currentColor"/><rect x="13.6" y="5" width="3.4" height="14" rx="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7V5z" fill="currentColor"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.4 3.4 0 0 1 5 5l-8 8a1.8 1.8 0 0 1-2.6-2.6L16 7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3z" fill="currentColor"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-redirect" viewBox="0 0 24 24"><path d="M4 7h11a4 4 0 0 1 0 8H9m0 0l3-3m-3 3l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4 7l8 6 8-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><circle cx="12" cy="6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="14" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 8.3v3.7a4 4 0 0 0 4 0M6 15.7V8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 16"><path d="M2 5a15 15 0 0 1 20 0M5 8.5a10 10 0 0 1 14 0M8 12a5 5 0 0 1 8 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="14.5" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-sig" viewBox="0 0 20 14"><rect x="1" y="9" width="3" height="4" rx="1" fill="currentColor"/><rect x="6" y="6" width="3" height="7" rx="1" fill="currentColor"/><rect x="11" y="3" width="3" height="10" rx="1" fill="currentColor"/><rect x="16" y="1" width="3" height="12" rx="1" fill="currentColor" opacity=".4"/></symbol>
+  <symbol id="i-batt" viewBox="0 0 26 14"><rect x="1" y="2" width="21" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="3" y="4" width="15" height="6" rx="1.5" fill="currentColor"/><rect x="23.5" y="5" width="1.6" height="4" rx=".8" fill="currentColor"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3v4h4M9.5 13h5M9.5 16.5h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-deck" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 17v3M8 20h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+</svg>
+<!-- extra icons for v3 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 15H3l9-15z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><circle cx="12" cy="16.6" r="1" fill="currentColor"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.8 10.8L20 20M17 17l2-2M14.5 14.5l2-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-columns" viewBox="0 0 24 24"><rect x="3" y="4" width="5.2" height="16" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="9.4" y="4" width="5.2" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="15.8" y="4" width="5.2" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 24 24"><circle cx="7" cy="6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="7" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="17" cy="12" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 8.3v7.4M7 12a7 7 0 0 0 7 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-hand" viewBox="0 0 24 24"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V12m0-1a1.5 1.5 0 0 1 3 0v4a5 5 0 0 1-5 5h-1.5a5 5 0 0 1-4-2l-3-4a1.6 1.6 0 0 1 2.4-2L9 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3v4h4" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="i-rosette" viewBox="0 0 24 24"><circle cx="12" cy="9" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 9l1.7 1.7L15 7M8.5 13.5L6 21l6-2.4L18 21l-2.5-7.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M14.5 9.2c-.6-.9-1.6-1.3-2.6-1.3-1.5 0-2.7.8-2.7 2s1.2 1.7 2.7 2 2.7.9 2.7 2.1-1.2 2-2.8 2c-1.1 0-2.1-.5-2.7-1.4M12 6.4v11.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-bolt2" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="currentColor"/></symbol>
+</svg>
+
+<!-- ============================ TOP BAR ============================ -->
+<header class="topbar">
+  <div class="brand">
+    <span class="mark"><svg viewBox="0 0 24 24"><use href="#i-switch"/></svg></span>
+    <span>Switchboard<small>v3 · fused &amp; grounded</small></span>
+  </div>
+  <div class="topbar__right">
+    <span class="tag">Dispatch + supervise</span>
+    <button class="tglbtn" id="themeBtn" aria-label="Toggle light / dark theme"><svg><use href="#i-moon"/></svg></button>
+  </div>
+</header>
+
+<main>
+<!-- ============================ HERO ============================ -->
+<section class="hero">
+  <div class="hero__glow"></div>
+  <div class="wrap hero__inner">
+    <div>
+      <div class="eyebrow">v3 · the innovation, grounded</div>
+      <h1>Dispatch the fleet.<br>Get pinged when <em>you're needed.</em></h1>
+      <p class="lede">v1's energy, wired to the primitives you actually ship. Hand a whole <b>wave</b> of ready work to the fleet in one tap — through the real <code style="font-family:var(--font-mono);font-size:.92em">claim_next</code> scheduler — then close the phone. It pings you only for a decision, a held gate, or a collision.</p>
+      <div class="glegend">
+        <span class="gi"><span class="gdot" style="background:var(--merged)"></span><b>Live</b> in the code today</span>
+        <span class="gi"><span class="gdot" style="background:var(--needs)"></span><b>Thin add</b> · ready_wave</span>
+        <span class="gi"><span class="gdot" style="background:var(--build)"></span><b>Roadmap</b> · loop &amp; push</span>
+      </div>
+    </div>
+    <div class="hero__stage">
+      <!-- SIGNATURE: dispatch decision sheet over the waves screen -->
+      <div class="phone">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view" style="position:relative">
+            <!-- dimmed background waves -->
+            <div class="appbar"><button class="ico ico--ghost"><svg style="transform:rotate(180deg)"><use href="#i-arrow"/></svg></button><span class="appbar__title">Draw the work</span><button class="ico"><svg><use href="#i-columns"/></svg></button></div>
+            <div class="view__scroll" style="opacity:.32">
+              <div class="capmeter"><div class="big">6<small> ready now</small></div></div>
+              <div class="wavehdr"><span class="wk">Wave 1</span><span class="wtag wtag-live">Ready now</span></div>
+              <div class="wtask sel"><span class="sel-box on"><svg><use href="#i-check"/></svg></span><div class="wtask__b"><div class="wtask__t">SEN-7 · SAML assertion</div></div></div>
+              <div class="wtask sel"><span class="sel-box on"><svg><use href="#i-check"/></svg></span><div class="wtask__b"><div class="wtask__t">DATA-3 · Attribute sync</div></div></div>
+            </div>
+            <div class="scrim"></div>
+            <!-- the sheet -->
+            <div class="sheet">
+              <div class="sheet__grip"></div>
+              <div class="row" style="margin-bottom:8px"><div class="grow"><div class="ttl" style="font-size:1.05rem">Dispatch 3 in parallel</div></div><span class="gb gb-live"><span class="gd"></span>3× claim_next</span></div>
+              <div class="explain"><span class="e"><b>6</b> ready</span><span class="e"><b>3</b> skipped</span><span class="e">5 deps · 1 lease</span><span class="e">score.v1</span></div>
+              <div class="sheet__scroll">
+                <div class="asg"><span class="av av-atlas av--sm">A</span><div class="grow"><div class="ttl" style="font-size:.84rem">SEN-7 · SAML assertion</div><div class="sub2 mono">Atlas · claude-code</div></div><span class="tier tier-bal">balanced</span></div>
+                <div class="asg"><span class="av av-codex av--sm">C</span><div class="grow"><div class="ttl" style="font-size:.84rem">DATA-3 · Attribute sync</div><div class="sub2 mono">Codex · gpt-5-mini</div></div><span class="tier tier-bal">balanced</span></div>
+                <div class="asg"><span class="av av-nova av--sm">N</span><div class="grow"><div class="ttl" style="font-size:.84rem">QA-2 · e2e smoke</div><div class="sub2 mono">Nova · haiku</div></div><span class="tier tier-cheap">cheap</span></div>
+              </div>
+              <div class="slabel" style="margin:10px 2px 6px">Model policy · recommended</div>
+              <div class="seg seg--red"><button>cheap</button><button class="on">balanced</button><button>high reasoning</button></div>
+              <div class="row" style="margin:12px 2px 12px"><span class="grow sub2" style="font-size:.82rem">Est spend</span><span class="mono ttl" style="font-size:.9rem">$9 <span class="dim" style="font-weight:400">of $120</span></span></div>
+              <button class="btn btn--primary btn--wide btn--lg"><svg><use href="#i-bolt2"/></svg>Dispatch in parallel</button>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ CHAPTER 1 · DISPATCH ============================ -->
+<section class="chapter wrap">
+  <div class="chapter__head">
+    <span class="chapter__num">1</span>
+    <div>
+      <h2><small>Slice 1 · draw the work → real dispatch</small>The scheduler, exposed as a button.</h2>
+      <p class="chapter__lede">Tapping <b>Dispatch</b> doesn't fake a batch — it shows the real <code style="font-family:var(--font-mono)">claim_next</code> reasoning (candidates, what got skipped and why, model &amp; budget guidance) and fires N atomic claims. The only new thing needed is <b>ready_wave</b>, a read over eligibility you already compute.</p>
+    </div>
+  </div>
+  <div class="rail">
+
+    <!-- 1a — Waves with grounding + verbs -->
+    <div class="cell">
+      <div class="phone">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar"><button class="ico ico--ghost"><svg style="transform:rotate(180deg)"><use href="#i-arrow"/></svg></button><div style="text-align:center"><div class="appbar__title" style="font-size:.98rem">Draw the work</div><div class="tid" style="font-size:.6rem">SSO GO-LIVE</div></div><span class="gb gb-thin"><span class="gd"></span>ready_wave</span></div>
+            <div class="view__scroll">
+              <div class="capmeter">
+                <div class="row" style="align-items:flex-end"><div class="grow"><div class="big">6<small> ready now</small></div></div><div style="text-align:right"><div class="capnote"><b>3</b> runners free</div></div></div>
+                <div class="capgauge"><i class="on"></i><i class="on"></i><i class="on"></i><i class="free"></i><i class="free"></i><i class="free"></i></div>
+                <div class="capnote" style="margin-bottom:10px">peek_wave · deps &amp; leases resolved server-side</div>
+                <button class="btn btn--primary btn--wide"><svg><use href="#i-bolt2"/></svg>Dispatch 3 in parallel</button>
+              </div>
+              <div class="wavehdr"><span class="wk">Wave 1</span><span class="wtag wtag-live">Ready now</span><span class="wn">6 unblocked</span></div>
+              <div class="lane" style="--lane:#3b6fd4"><div class="lane__k"><span class="lc"></span>IDP</div>
+                <div class="wtask sel"><span class="sel-box on"><svg><use href="#i-check"/></svg></span><div class="wtask__b"><div class="wtask__t">SEN-7 · SAML assertion mapping</div><div class="wmeta"><span class="wm">score 8420</span><span class="tier tier-bal">balanced</span></div></div></div>
+              </div>
+              <div class="lane" style="--lane:#12b886"><div class="lane__k"><span class="lc"></span>DATA</div>
+                <div class="wtask sel"><span class="sel-box on"><svg><use href="#i-check"/></svg></span><div class="wtask__b"><div class="wtask__t">DATA-3 · User attribute sync</div><div class="wmeta"><span class="wm">score 8100</span></div></div></div>
+                <div class="wtask"><span class="sel-box"><svg><use href="#i-check"/></svg></span><div class="wtask__b"><div class="wtask__t">DATA-4 · Directory pagination</div><div class="wmeta"><span class="collide"><svg><use href="#i-file"/></svg>lease hold · DATA-3</span></div></div></div>
+              </div>
+              <div class="keystone"><span class="ki"><svg><use href="#i-key"/></svg></span><div class="grow"><div class="kt">SEN-6 keystone · unlocks 5</div><div class="ks"><b>Prioritize its PR →</b> opens next wave</div></div></div>
+            </div>
+            <div class="dispatchbar"><div class="dc grow"><b>3</b> selected · <span class="gb gb-live" style="vertical-align:middle"><span class="gd"></span>atomic</span></div><button class="btn btn--primary"><svg><use href="#i-bolt2"/></svg>Dispatch</button></div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Every number is the scheduler's <span class="kbd">score.v1</span></h3>
+        <p>Ready count, per-task <b>score</b>, the lease hold on DATA-4, the keystone's unlock count — all straight from <code style="font-family:var(--font-mono);font-size:.85em">ready_wave</code>. The badge tells you it's a <b>thin add</b>; the dispatch itself is <b>live</b> today.</p>
+      </div>
+    </div>
+
+    <!-- 1b — Autopilot spectrum (honest) -->
+    <div class="cell">
+      <div class="phone phone--tilt">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar"><button class="ico ico--ghost"><svg style="transform:rotate(180deg)"><use href="#i-arrow"/></svg></button><span class="appbar__title">Delivery mode</span><span style="width:34px"></span></div>
+            <div class="view__scroll">
+              <div class="tid" style="margin:2px 2px 8px">SSO GO-LIVE · HOW HANDS-OFF?</div>
+              <div class="seg seg--red" style="margin-bottom:14px"><button>Manual</button><button class="on">Assisted</button><button>Autopilot</button></div>
+
+              <div class="card" style="border-color:var(--merged); background:rgba(var(--merged-rgb),.04); margin-bottom:10px">
+                <div class="row"><span class="ttl grow" style="font-size:.88rem">Manual dispatch</span><span class="gb gb-live"><span class="gd"></span>live</span></div>
+                <div class="sub2" style="margin-top:3px">You pick each task. Fires <span class="mono">claim_next</span> per tap. Ships today.</div>
+              </div>
+              <div class="card" style="border-color:var(--needs); background:rgba(var(--needs-rgb),.04); margin-bottom:10px; box-shadow:0 0 0 1.5px var(--needs)">
+                <div class="row"><span class="ttl grow" style="font-size:.88rem">Assisted wave <span class="dim">· selected</span></span><span class="gb gb-thin"><span class="gd"></span>ready_wave</span></div>
+                <div class="sub2" style="margin-top:3px">Approve a whole wave at once. You still confirm; the batch dispatches in parallel.</div>
+              </div>
+              <div class="card" style="border-color:var(--build); background:rgba(var(--build-rgb),.04)">
+                <div class="row"><span class="ttl grow" style="font-size:.88rem">Full autopilot</span><span class="gb gb-build"><span class="gd"></span>roadmap</span></div>
+                <div class="sub2" style="margin-top:3px">Watches PR → merge → auto-dispatches the next wave. The flagship loop — gated by your action queue.</div>
+              </div>
+
+              <div class="card" style="margin-top:12px; background:var(--s-chip,#f6f7f9); border:0">
+                <div class="row"><svg style="width:16px;color:var(--red)"><use href="#i-shield"/></svg><span class="grow sub2" style="font-size:.8rem"><b style="color:var(--s-ink)">Every mode</b> flows through the action queue. Nothing merges without proof.</span></div>
+              </div>
+            </div>
+            <div style="padding:10px 18px 16px"><button class="btn btn--primary btn--wide btn--lg">Set to Assisted wave</button></div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Market the loop, ship the on-ramp</h3>
+        <p>Instead of faking autopilot, v3 shows it as a <b>spectrum</b>: Manual (live) → Assisted wave (thin add) → Autopilot (the flagship build). You sell the destination honestly — and the on-ramp already works.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ CHAPTER 2 · SUPERVISOR LOOP ============================ -->
+<section class="chapter wrap">
+  <div class="chapter__head">
+    <span class="chapter__num">2</span>
+    <div>
+      <h2><small>Slice 2 · the mobile supervisor loop</small>Close the phone. It pings you when it matters.</h2>
+      <p class="chapter__lede">The mobile-native innovation: push keyed to the attention model you already compute — <b>decision needed, gate HOLD, collision, main-moved</b>. A portfolio home rolls up every deliverable so "what needs me" is one glance, not five tabs.</p>
+    </div>
+  </div>
+  <div class="rail">
+
+    <!-- 2a — Lock screen push -->
+    <div class="cell">
+      <div class="phone">
+        <div class="island"></div>
+        <div class="phone__screen lock">
+          <div class="lock-bg"></div>
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="view__scroll">
+              <div class="lockclock"><div class="dt">Monday, July 13</div><div class="tm">9:41</div></div>
+              <div class="slabel" style="color:rgba(255,255,255,.5); margin:16px 2px 8px">Switchboard · 3 need you</div>
+              <div class="notif">
+                <span class="notif__ic" style="background:var(--needs)"><svg style="width:17px"><use href="#i-hand"/></svg></span>
+                <div class="notif__b"><div class="notif__hd">Decision needed<span class="notif__time">now</span></div><div class="notif__t">SSO Go-Live · verify SEN-4</div><div class="notif__x">Marked Done but no merged PR. Confirm or reopen.</div></div>
+              </div>
+              <div class="notif">
+                <span class="notif__ic" style="background:var(--red)"><svg style="width:17px"><use href="#i-rosette"/></svg></span>
+                <div class="notif__b"><div class="notif__hd">Gate HOLD<span class="notif__time">2m</span></div><div class="notif__t">WebGPU Render · closure held</div><div class="notif__x">CI-parity gate NOT RUN — can't stamp done.</div></div>
+              </div>
+              <div class="notif">
+                <span class="notif__ic" style="background:var(--flight)"><svg style="width:17px"><use href="#i-file"/></svg></span>
+                <div class="notif__b"><div class="notif__hd">Collision held<span class="notif__time">5m</span></div><div class="notif__t">DATA-4 waiting on DATA-3</div><div class="notif__x">Shares directory/sync.py — held from dispatch.</div></div>
+              </div>
+              <div class="notif" style="opacity:.7">
+                <span class="notif__ic" style="background:var(--merged)"><svg style="width:17px"><use href="#i-merge"/></svg></span>
+                <div class="notif__b"><div class="notif__hd">Shipped<span class="notif__time">8m</span></div><div class="notif__t">SEN-5 merged · #401</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="homebar" style="color:#fff"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>The veto button, on your lock screen <span class="kbd">roadmap · push</span></h3>
+        <p>Silence means the fleet's fine. A push means a human call: a Done-without-proof, a held gate, a collision. This is the net-new build that makes "close the phone and trust it" a product, not a slogan — keyed to attention signals that already exist.</p>
+      </div>
+    </div>
+
+    <!-- 2b — Portfolio Today -->
+    <div class="cell">
+      <div class="phone phone--tilt">
+        <div class="island"></div>
+        <div class="phone__screen" style="--s-bg:#fff">
+          <div class="statusbar"><time>9:41</time><span class="sig"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+          <div class="view">
+            <div class="appbar"><div><div class="tid">MON · JUL 13 · ALL DELIVERABLES</div><span class="appbar__title" style="font-size:1.1rem">Today</span></div><span class="av av-you">S</span></div>
+            <div class="view__scroll">
+              <div class="rollup" style="margin-bottom:6px">
+                <div class="r"><div class="k">Deliverables</div><div class="v">4 <small>· 3 live</small></div></div>
+                <div class="r" style="border-color:rgba(var(--needs-rgb),.4);background:rgba(var(--needs-rgb),.05)"><div class="k" style="color:var(--needs)">Need you</div><div class="v" style="color:var(--needs)">3</div></div>
+                <div class="r"><div class="k">Agents live</div><div class="v">12</div></div>
+                <div class="r"><div class="k">Spend today</div><div class="v">$86</div></div>
+              </div>
+              <div class="slabel">Needs you · across all <a>3</a></div>
+              <div class="card card--flush" style="margin-bottom:12px">
+                <div class="att"><span class="att__ic" style="background:rgba(var(--needs-rgb),.13);color:var(--needs)"><svg style="width:16px"><use href="#i-hand"/></svg></span><div class="grow"><div class="ttl" style="font-size:.82rem">Verify SEN-4 · SSO</div><span class="owner ow-you">you</span></div><button class="btn btn--soft" style="padding:.4rem .7rem;font-size:.78rem">Verify</button></div>
+                <div class="att"><span class="att__ic" style="background:rgba(var(--red-rgb),.09);color:var(--red)"><svg style="width:16px"><use href="#i-rosette"/></svg></span><div class="grow"><div class="ttl" style="font-size:.82rem">Run closure · WebGPU</div><span class="owner ow-you">you</span></div><button class="btn btn--soft" style="padding:.4rem .7rem;font-size:.78rem">Run</button></div>
+                <div class="att"><span class="att__ic" style="background:rgba(var(--needs-rgb),.13);color:var(--needs)"><svg style="width:16px"><use href="#i-bolt2"/></svg></span><div class="grow"><div class="ttl" style="font-size:.82rem">Approve breakdown · Ingest v2</div><span class="owner ow-you">you</span></div><button class="btn btn--soft" style="padding:.4rem .7rem;font-size:.78rem">Open</button></div>
+              </div>
+              <div class="slabel">Live now</div>
+              <div class="card card--flush">
+                <div class="rowline"><span class="dot d-live"></span><div class="grow"><div class="ttl" style="font-size:.82rem">SSO Go-Live</div><div class="sub2 mono">3 agents · Wave 1 draining · 68%</div></div><svg style="width:15px;color:var(--s-ink3)"><use href="#i-chevron"/></svg></div>
+                <div class="rowline"><span class="dot d-needs"></span><div class="grow"><div class="ttl" style="font-size:.82rem">Ingest Pipeline v2</div><div class="sub2 mono">keystone blocked · 34%</div></div><svg style="width:15px;color:var(--s-ink3)"><use href="#i-chevron"/></svg></div>
+                <div class="rowline"><span class="dot" style="background:#e0a800"></span><div class="grow"><div class="ttl" style="font-size:.82rem">WebGPU Render</div><div class="sub2 mono">closure verifying · 91%</div></div><svg style="width:15px;color:var(--s-ink3)"><use href="#i-chevron"/></svg></div>
+              </div>
+            </div>
+            <div class="tabbar">
+              <a class="tab on"><svg><use href="#i-home"/></svg><span>Today</span></a>
+              <a class="tab"><svg><use href="#i-layers"/></svg><span>Deliver</span></a>
+              <a class="tab tab--fab"><span class="fab"><svg><use href="#i-plus"/></svg></span><span>Kickoff</span></a>
+              <a class="tab"><svg><use href="#i-cpu"/></svg><span>Fleet</span></a>
+              <a class="tab"><span class="tabico"><svg><use href="#i-bell"/></svg><span class="badge-dot">3</span></span><span>Inbox</span></a>
+            </div>
+          </div>
+          <div class="homebar" style="color:#111"></div>
+        </div>
+      </div>
+      <div class="cell__note">
+        <h3>Portfolio altitude <span class="kbd">thin add · rollup</span></h3>
+        <p>Every deliverable's <code style="font-family:var(--font-mono);font-size:.85em">mission_status</code> attention model, aggregated. "Needs you" spans all projects with one-tap actions; "Live now" is the fleet at a glance. Open the app → see the state → act or close.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ NOTES ============================ -->
+<section class="notes wrap">
+  <div class="chapter__head" style="border:0">
+    <span class="chapter__num" style="color:var(--ink-2)">·</span>
+    <div><h2 style="font-size:1.5rem"><small>The v3 contract</small>Innovative like v1. Honest like the code.</h2></div>
+  </div>
+  <div class="notes__grid">
+    <div class="note">
+      <h4>No read-only screens</h4>
+      <p>Every observation carries its verb, and every verb is a real MCP call. The deliverables view <b>is</b> the cockpit — dispatch, verify, redirect, run closure, all inline.</p>
+    </div>
+    <div class="note">
+      <h4>One keystone add</h4>
+      <p><b>ready_wave</b> — a read over <span class="mono">claim_next</span> eligibility + <span class="mono">mission_graph</span>. It's what turns "draw the work" from a mock into a working dispatcher. Days, not weeks. <span class="gb gb-thin" style="margin-top:4px"><span class="gd"></span>thin add</span></p>
+    </div>
+    <div class="note">
+      <h4>Honest maturity</h4>
+      <p>Manual dispatch is <span class="gb gb-live"><span class="gd"></span>live</span>. Assisted wave is the <span class="gb gb-thin"><span class="gd"></span>thin add</span>. Full autopilot + push are the <span class="gb gb-build"><span class="gd"></span>roadmap</span>. The UI never pretends otherwise.</p>
+    </div>
+    <div class="note">
+      <h4>Maps to the engine</h4>
+      <p class="map">
+        Dispatch <span class="ar">→</span> <b>claim_next</b> (live)<br>
+        Draw the work <span class="ar">→</span> <b>ready_wave</b> (thin)<br>
+        Collisions <span class="ar">→</span> <b>claim_files</b> (live)<br>
+        Needs-you <span class="ar">→</span> <b>mission_status</b> (live)<br>
+        Push loop <span class="ar">→</span> <b>notify + APNs</b> (build)
+      </p>
+    </div>
+  </div>
+  <div class="footnote">
+    <span class="brand"><span class="mark" style="width:20px;height:20px"><svg style="width:12px" viewBox="0 0 24 24"><use href="#i-switch"/></svg></span></span>
+    <span>Switchboard v3 · the scheduler you built, in your pocket. Green ships now; the spec for ready_wave is in docs/mobile/READY-WAVE-SPEC.md.</span>
+  </div>
+</section>
+</main>
+
+<script>
+(function(){
+  var root=document.documentElement, btn=document.getElementById('themeBtn');
+  function icon(){ var d=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme:dark)').matches);
+    btn.innerHTML='<svg><use href="#'+(d?'i-sun':'i-moon')+'"/></svg>'; }
+  icon();
+  btn.addEventListener('click',function(){
+    var cur=root.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+    root.setAttribute('data-theme',cur==='dark'?'light':'dark'); icon();
+  });
+  document.querySelectorAll('.wtask').forEach(function(t){ if(t.classList.contains('locked'))return;
+    t.addEventListener('click',function(){ t.classList.toggle('sel'); var b=t.querySelector('.sel-box'); if(b)b.classList.toggle('on'); }); });
+  document.querySelectorAll('.seg').forEach(function(s){ s.querySelectorAll('button').forEach(function(b){
+    b.addEventListener('click',function(){ s.querySelectorAll('button').forEach(function(x){x.classList.remove('on')}); b.classList.add('on'); }); }); });
+})();
+</script>
+
+</body>
+</html>

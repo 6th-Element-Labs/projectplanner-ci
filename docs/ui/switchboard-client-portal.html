@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northwind Energy · Delivery Portal</title>
+<style>
+*,*::before,*::after{ box-sizing:border-box; } html,body{ height:100%; } body{ margin:0; }
+svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; } :where(a){ color:inherit; text-decoration:none; }
+:root{
+  --font:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  /* white-label: neutral client brand (deep slate + their accent) */
+  --brand:#1f3a5f; --brand-rgb:31,58,95; --accent:#2f7d5b; --accent-rgb:47,125,91;
+  --green:#2fa25a; --green-rgb:47,162,90; --amber:#e0820b; --amber-rgb:224,130,11; --red:#c0392b; --red-rgb:192,57,43; --blue:#3b6fd4; --blue-rgb:59,111,212;
+  --ink:#16202e; --ink-2:#54606f; --ink-3:#8a95a3; --card:#fff; --canvas:#f4f6f8; --hair:#e2e7ec; --hair-2:#eef1f4; --chip:#eef2f6;
+  --shadow:0 1px 2px rgba(16,32,46,.05),0 1px 3px rgba(16,32,46,.06);
+}
+@media (prefers-color-scheme:dark){ :root{ --ink:#e8edf3;--ink-2:#9aa5b2;--ink-3:#6b7683;--card:#161b22;--canvas:#0d1117;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.06);--chip:#1c2430;--shadow:0 1px 2px rgba(0,0,0,.4);--brand:#5b83b0; } }
+:root[data-theme="dark"]{ --ink:#e8edf3;--ink-2:#9aa5b2;--ink-3:#6b7683;--card:#161b22;--canvas:#0d1117;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.06);--chip:#1c2430;--shadow:0 1px 2px rgba(0,0,0,.4);--brand:#5b83b0; }
+:root[data-theme="light"]{ --ink:#16202e;--ink-2:#54606f;--ink-3:#8a95a3;--card:#fff;--canvas:#f4f6f8;--hair:#e2e7ec;--hair-2:#eef1f4;--chip:#eef2f6;--brand:#1f3a5f; }
+body{ font-family:var(--font); color:var(--ink); background:var(--canvas); font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; letter-spacing:-.006em; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+.top{ background:var(--card); border-bottom:1px solid var(--hair); padding:12px 0; }
+.wrap{ max-width:860px; margin:0 auto; padding:0 22px; }
+.top .row{ display:flex; align-items:center; gap:12px; }
+.mark{ width:34px; height:34px; border-radius:9px; background:var(--brand); color:#fff; display:grid; place-items:center; font-weight:800; font-size:13px; letter-spacing:-.03em; }
+.top .name{ font-weight:700; letter-spacing:-.01em; } .top .sub{ font-size:12px; color:var(--ink-2); }
+.top .grow{ flex:1; }
+.powered{ font-size:11px; color:var(--ink-3); } .powered b{ color:var(--ink-2); font-weight:600; }
+.tbtn{ width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--ink-2);border:1px solid var(--hair); } .tbtn svg{ width:16px;height:16px; }
+
+.hero{ padding:26px 0 8px; }
+.hero .k{ font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); font-weight:600; }
+.hero h1{ font-size:26px; font-weight:720; letter-spacing:-.03em; margin:7px 0 4px; }
+.hero p{ color:var(--ink-2); font-size:14px; margin:0; max-width:60ch; }
+
+.grid{ display:grid; grid-template-columns:1.5fr 1fr; gap:14px; align-items:start; margin-top:18px; }
+@media(max-width:800px){ .grid{ grid-template-columns:1fr; } }
+.card{ background:var(--card); border:1px solid var(--hair); border-radius:14px; box-shadow:var(--shadow); }
+.card + .card{ margin-top:14px; }
+.card__h{ display:flex; align-items:center; gap:9px; padding:13px 16px; border-bottom:1px solid var(--hair); }
+.card__h h3{ margin:0; font-size:14px; font-weight:650; } .card__h .grow{ flex:1; }
+.card__b{ padding:16px; }
+.slabel{ font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; }
+.badge{ display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600; padding:2px 9px; border-radius:999px; } .badge svg{ width:11px; height:11px; }
+.b-green{ color:var(--green); background:rgba(var(--green-rgb),.12); } .b-amber{ color:var(--amber); background:rgba(var(--amber-rgb),.14); } .b-blue{ color:var(--blue); background:rgba(var(--blue-rgb),.11); } .b-gray{ color:var(--ink-2); background:var(--chip); }
+.bar{ height:9px; border-radius:999px; background:var(--chip); overflow:hidden; } .bar>i{ display:block; height:100%; border-radius:999px; background:var(--accent); }
+
+/* milestone list with acceptance/proof */
+.ms{ display:flex; align-items:flex-start; gap:12px; padding:13px 16px; } .ms + .ms{ border-top:1px solid var(--hair-2); }
+.ms .ic{ width:26px; height:26px; border-radius:50%; display:grid; place-items:center; flex:0 0 auto; font-size:12px; }
+.ms .ic.done{ background:var(--green); color:#fff; } .ms .ic.now{ background:rgba(var(--accent-rgb),.14); color:var(--accent); border:2px solid var(--accent); } .ms .ic.todo{ background:var(--chip); color:var(--ink-3); }
+.ms .ti{ font-weight:600; font-size:13.5px; } .ms .dt{ font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+.ms .proof{ display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; }
+.proofbadge{ display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:600; color:var(--green); background:rgba(var(--green-rgb),.1); padding:2px 8px; border-radius:999px; } .proofbadge svg{ width:11px; height:11px; }
+.ms .acc{ font-size:12px; color:var(--ink-2); margin-top:5px; }
+
+.kpi{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.kpi .t{ background:var(--canvas); border:1px solid var(--hair); border-radius:11px; padding:11px 12px; }
+.kpi .t .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); }
+.kpi .t .v{ font-size:20px; font-weight:720; letter-spacing:-.02em; margin-top:2px; } .kpi .t .v small{ font-size:11px; color:var(--ink-2); font-weight:500; }
+
+.invoice .r{ display:flex; align-items:center; padding:9px 0; border-bottom:1px solid var(--hair-2); font-size:13.5px; } .invoice .r:last-child{ border-bottom:0; }
+.invoice .r .grow{ flex:1; } .invoice .r .v{ font-family:var(--mono); font-weight:640; }
+.invoice .r.tot{ border-top:1.5px solid var(--hair); border-bottom:0; margin-top:2px; padding-top:12px; } .invoice .r.tot .v{ font-size:19px; font-weight:740; }
+
+.btn{ display:inline-flex; align-items:center; justify-content:center; gap:7px; font-weight:640; font-size:14px; padding:11px 17px; border-radius:11px; border:1px solid var(--hair); background:var(--card); color:var(--ink); } .btn svg{ width:16px; height:16px; }
+.btn--accent{ background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 2px 10px rgba(var(--accent-rgb),.28); width:100%; }
+.sign{ font-family:'Snell Roundhand',cursive; font-size:23px; }
+.foot{ text-align:center; color:var(--ink-3); font-size:12px; padding:26px 0 40px; }
+.foot .prov{ display:inline-flex; align-items:center; gap:6px; } .foot code{ font-family:var(--mono); background:var(--chip); padding:1px 5px; border-radius:5px; }
+:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M6 3h12v18l-2.5-1.5L13 21l-2.5-1.5L8 21l-2.5-1.5V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 8h6M9 12h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-pr" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.3v7.4M18 15.7V11a3 3 0 0 0-3-3h-3l2-2m-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="wrap"><div class="row">
+    <span class="mark">NE</span>
+    <div><div class="name">Northwind Energy</div><div class="sub">Delivery portal · SSO &amp; Identity Platform</div></div>
+    <span class="grow"></span>
+    <span class="powered">delivered by <b>Taikun</b></span>
+    <button class="tbtn" id="themeBtn"><svg><use href="#i-sun"/></svg></button>
+  </div></div>
+</header>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="k">Engagement #eng_204 · week 3 of 3</div>
+    <h1>Your SSO platform is ready to accept</h1>
+    <p>Live, honest status on your build — every milestone below is backed by merged, tested evidence. Nothing is marked complete on a promise.</p>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="card__b">
+      <div class="row" style="display:flex;align-items:center;gap:12px">
+        <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px"><span style="font-weight:660;font-size:15px">Overall progress</span><span class="badge b-green"><svg><use href="#i-check"/></svg>ready for sign-off</span></div>
+          <div class="bar"><i style="width:100%"></i></div>
+        </div>
+        <div style="text-align:right"><div style="font-size:26px;font-weight:740;letter-spacing:-.03em;color:var(--accent)">100%</div><div class="slabel">4 / 4 milestones</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- milestones with evidence -->
+    <div class="card">
+      <div class="card__h"><h3>Milestones &amp; evidence</h3><span class="grow"></span><span class="slabel">verified, not asserted</span></div>
+      <div class="ms">
+        <span class="ic done"><svg style="width:14px"><use href="#i-check"/></svg></span>
+        <div class="grow"><div class="ti">Define shared contract</div><div class="dt">accepted · Jul 16</div>
+          <div class="proof"><span class="proofbadge"><svg><use href="#i-pr"/></svg>3 PRs merged</span><span class="proofbadge"><svg><use href="#i-check"/></svg>gate PASS</span></div>
+        </div>
+      </div>
+      <div class="ms">
+        <span class="ic done"><svg style="width:14px"><use href="#i-check"/></svg></span>
+        <div class="grow"><div class="ti">Build core implementation</div><div class="dt">accepted · Jul 21</div>
+          <div class="acc">Entra/SAML sign-in, directory sync, Okta fallback.</div>
+          <div class="proof"><span class="proofbadge"><svg><use href="#i-pr"/></svg>9 PRs merged</span><span class="proofbadge"><svg><use href="#i-check"/></svg>gate PASS</span></div>
+        </div>
+      </div>
+      <div class="ms">
+        <span class="ic done"><svg style="width:14px"><use href="#i-check"/></svg></span>
+        <div class="grow"><div class="ti">Integrate cross-board</div><div class="dt">accepted · Jul 24</div>
+          <div class="proof"><span class="proofbadge"><svg><use href="#i-pr"/></svg>5 PRs merged</span><span class="proofbadge"><svg><use href="#i-check"/></svg>gate PASS</span></div>
+        </div>
+      </div>
+      <div class="ms">
+        <span class="ic done"><svg style="width:14px"><use href="#i-check"/></svg></span>
+        <div class="grow"><div class="ti">Prove parity &amp; ship</div><div class="dt">ready · Jul 27</div>
+          <div class="acc">CI parity green vs. Helm baseline · e2e SSO + fallback verified.</div>
+          <div class="proof"><span class="proofbadge"><svg><use href="#i-pr"/></svg>4 PRs merged</span><span class="proofbadge"><svg><use href="#i-check"/></svg>closure PASS</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <!-- acceptance criteria met -->
+      <div class="card">
+        <div class="card__h"><h3>Acceptance</h3><span class="grow"></span><span class="badge b-green">all met</span></div>
+        <div class="card__b">
+          <div class="kpi">
+            <div class="t"><div class="k">SSO success</div><div class="v" style="color:var(--green)">97.4%<small> ≥95</small></div></div>
+            <div class="t"><div class="k">MTTA</div><div class="v" style="color:var(--green)">9m<small> ≤15</small></div></div>
+            <div class="t"><div class="k">Manual provisioning</div><div class="v" style="color:var(--green)">0</div></div>
+            <div class="t"><div class="k">CI parity</div><div class="v" style="color:var(--green)">green</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- invoice + sign-off -->
+      <div class="card">
+        <div class="card__h"><svg style="width:15px;color:var(--accent)"><use href="#i-receipt"/></svg><h3>Final invoice</h3></div>
+        <div class="card__b invoice">
+          <div class="r"><span class="grow">Fixed-price engagement</span><span class="v">$48,000</span></div>
+          <div class="r"><span class="grow">Deposit (paid Jul 13)</span><span class="v">−$32,000</span></div>
+          <div class="r tot"><span class="grow">Due on acceptance</span><span class="v" style="color:var(--accent)">$16,000</span></div>
+          <div style="margin-top:14px">
+            <button class="btn btn--accent"><svg><use href="#i-check"/></svg>Accept &amp; release payment</button>
+          </div>
+          <div style="margin-top:12px;text-align:center;font-size:12px;color:var(--ink-3)">or <a style="color:var(--accent);font-weight:600">request a change</a> before accepting</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="prov"><svg style="width:13px"><use href="#i-shield"/></svg>Every status here is derived from merged provenance &amp; passing gates — <code>deliverable_closure</code>. Done means merged.</div>
+  </div>
+</div>
+<script>
+(function(){ var root=document.documentElement;
+  document.getElementById('themeBtn').addEventListener('click',function(){ var c=root.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'); root.setAttribute('data-theme',c==='dark'?'light':'dark'); });
+})();
+</script>
+</body>
+</html>

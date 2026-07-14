@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Deliverable Scope Studio — scope, discuss, commit</title>
+<style>
+/* Wireframe styled to match the LIVE Switchboard shell (Tabler + taikun-tabler.css):
+   brand lockup, --tblr-primary #c0392b, bg-*-lt node-state badges, soft white cards. */
+*,*::before,*::after{ box-sizing:border-box; } html,body{ height:100%; } body{ margin:0; }
+svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; } :where(a){ color:inherit; text-decoration:none; }
+:root{
+  --font:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --primary:#c0392b; --primary-rgb:192,57,43;
+  --azure:#4299e1; --azure-rgb:66,153,225; --blue:#206bc4; --blue-rgb:32,107,196;
+  --green:#2fb344; --green-rgb:47,179,68; --orange:#f76707; --orange-rgb:247,103,7;
+  --purple:#ae3ec9; --purple-rgb:174,62,201; --red:#d63939; --red-rgb:214,57,57;
+  --ink:#1a2230; --ink-2:#5a6577; --ink-3:#8b95a5; --card:#fff; --canvas:#f6f7f9;
+  --hair:#e6e9ef; --hair-2:#eef0f4; --chip:#f1f3f6; --shadow:0 1px 2px rgba(20,30,50,.04),0 1px 3px rgba(20,30,50,.05);
+}
+@media (prefers-color-scheme:dark){ :root{ --ink:#e9ecf1;--ink-2:#9aa3b1;--ink-3:#6b7482;--card:#171a20;--canvas:#0f1116;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.055);--chip:#1c2029;--shadow:0 1px 2px rgba(0,0,0,.4);} }
+:root[data-theme="dark"]{ --ink:#e9ecf1;--ink-2:#9aa3b1;--ink-3:#6b7482;--card:#171a20;--canvas:#0f1116;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.055);--chip:#1c2029;--shadow:0 1px 2px rgba(0,0,0,.4); }
+:root[data-theme="light"]{ --ink:#1a2230;--ink-2:#5a6577;--ink-3:#8b95a5;--card:#fff;--canvas:#f6f7f9;--hair:#e6e9ef;--hair-2:#eef0f4;--chip:#f1f3f6; }
+body{ font-family:var(--font); color:var(--ink); background:var(--canvas); font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased; letter-spacing:-.006em; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+.app{ display:grid; grid-template-columns:248px minmax(0,1fr); grid-template-rows:54px minmax(0,1fr); grid-template-areas:"brand appbar" "rail main"; height:100vh; }
+/* appbar */
+.appbar{ grid-area:appbar; background:var(--card); border-bottom:1px solid var(--hair); display:flex; align-items:center; gap:12px; padding:0 16px; }
+.brand{ grid-area:brand; background:var(--card); border-bottom:1px solid var(--hair); border-right:1px solid var(--hair); display:flex; align-items:center; gap:9px; padding:0 16px; }
+.brand .mk{ width:26px; height:26px; display:grid; place-items:center; color:var(--primary); } .brand .mk svg{ width:24px; height:24px; }
+.brand .lk{ font-size:14px; font-weight:500; letter-spacing:.1em; white-space:nowrap; } .brand .lk .sb{ font-weight:400; color:var(--primary); margin-left:.35em; }
+.search{ display:flex; align-items:center; gap:8px; background:var(--chip); border:1px solid var(--hair); border-radius:8px; padding:7px 11px; color:var(--ink-3); font-size:13px; width:260px; }
+.search svg{ width:15px; height:15px; } .search kbd{ margin-left:auto; font-family:var(--mono); font-size:10.5px; background:var(--card); border:1px solid var(--hair); border-radius:4px; padding:1px 5px; }
+.appbar .grow{ flex:1; }
+.obtn{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:500; padding:7px 11px; border-radius:8px; border:1px solid var(--hair); background:var(--card); color:var(--ink-2); } .obtn svg{ width:15px; height:15px; }
+.obtn:hover{ background:var(--chip); }
+.ibtn{ width:34px; height:34px; border-radius:8px; border:1px solid var(--hair); display:grid; place-items:center; color:var(--ink-2); } .ibtn svg{ width:17px; height:17px; }
+.pbtn{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; padding:8px 13px; border-radius:8px; background:var(--primary); color:#fff; box-shadow:0 1px 2px rgba(var(--primary-rgb),.35); } .pbtn svg{ width:15px; height:15px; }
+.pbtn:hover{ background:#a5281c; }
+/* rail */
+.rail{ grid-area:rail; background:var(--card); border-right:1px solid var(--hair); display:flex; flex-direction:column; padding:12px; overflow:auto; }
+.psel{ display:flex; align-items:center; gap:8px; border:1px solid var(--hair); border-radius:9px; padding:9px 11px; font-weight:600; font-size:13.5px; margin-bottom:12px; } .psel .grow{ flex:1; } .psel svg{ width:15px; height:15px; color:var(--ink-3); }
+.nav{ display:flex; flex-direction:column; gap:2px; }
+.ni{ display:flex; align-items:center; gap:11px; padding:9px 11px; border-radius:9px; color:var(--ink-2); font-weight:500; font-size:13.5px; } .ni svg{ width:19px; height:19px; }
+.ni:hover{ background:var(--chip); color:var(--ink); } .ni.on{ background:var(--chip); color:var(--ink); font-weight:600; }
+.rail .foot{ margin-top:auto; display:flex; flex-direction:column; gap:7px; padding-top:12px; }
+.rail .foot .obtn{ justify-content:center; width:100%; }
+.boxp{ display:inline-flex; align-items:center; gap:6px; align-self:flex-start; font-size:12px; font-weight:600; color:#fff; background:var(--orange); border-radius:999px; padding:5px 11px; } .boxp svg{ width:13px; height:13px; }
+/* main */
+.main{ grid-area:main; overflow:hidden; display:flex; flex-direction:column; }
+.toolbar{ display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--hair); background:var(--card); }
+.dsel{ display:flex; align-items:center; gap:9px; }
+.dsel .lbl{ color:var(--ink-2); font-weight:600; font-size:13px; display:inline-flex; align-items:center; gap:6px; } .dsel .lbl svg{ width:16px; height:16px; }
+.dbox{ display:flex; align-items:center; gap:9px; border:1px solid var(--hair); border-radius:9px; padding:8px 12px; font-weight:600; min-width:280px; } .dbox .grow{ flex:1; } .dbox svg{ width:15px; height:15px; color:var(--ink-3); }
+.toolbar .grow{ flex:1; }
+.seg{ display:flex; gap:3px; background:var(--chip); border-radius:9px; padding:3px; }
+.seg button{ font-size:12.5px; font-weight:600; padding:6px 13px; border-radius:7px; color:var(--ink-2); } .seg button.on{ background:var(--card); color:var(--ink); box-shadow:var(--shadow); }
+
+.surface{ flex:1; overflow:hidden; display:flex; flex-direction:column; }
+.surface.hidden{ display:none; }
+.dhead{ padding:16px 18px 0; }
+.crumb{ font-family:var(--mono); font-size:11.5px; color:var(--ink-3); }
+.dhead h1{ font-size:22px; font-weight:700; letter-spacing:-.02em; margin:5px 0 7px; }
+.pill{ display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 9px; border-radius:6px; }
+.pill-draft{ color:var(--orange); background:rgba(var(--orange-rgb),.13); }
+.dhead .sub{ color:var(--ink-2); font-size:12.5px; margin-left:8px; }
+
+/* ===== Concept A: Scope Studio (shape + discuss) ===== */
+.studio{ flex:1; display:grid; grid-template-columns:minmax(0,1fr) 400px; gap:0; overflow:hidden; }
+.shape{ overflow:auto; padding:16px 18px 90px; } /* room for commit bar */
+.discuss{ border-left:1px solid var(--hair); background:var(--card); display:flex; flex-direction:column; overflow:hidden; }
+
+.card{ background:var(--card); border:1px solid var(--hair); border-radius:13px; box-shadow:var(--shadow); margin-bottom:12px; }
+.card__h{ display:flex; align-items:center; gap:9px; padding:12px 15px; border-bottom:1px solid var(--hair); }
+.card__h .ic{ color:var(--ink-2); } .card__h .ic svg{ width:17px; height:17px; }
+.card__h h3{ margin:0; font-size:14px; font-weight:640; } .card__h .grow{ flex:1; }
+.card__h .meta{ font-size:12px; color:var(--ink-3); }
+.card__b{ padding:14px 15px; }
+.mini{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; padding:5px 10px; border-radius:7px; border:1px solid var(--hair); color:var(--ink-2); } .mini svg{ width:13px; height:13px; }
+.mini.red{ color:var(--primary); border-color:rgba(var(--primary-rgb),.3); background:rgba(var(--primary-rgb),.05); }
+
+.field{ margin-bottom:12px; } .field:last-child{ margin-bottom:0; }
+.field .k{ font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:5px; display:flex; align-items:center; gap:7px; }
+.field .v{ font-size:13.5px; line-height:1.55; } .field .v b{ font-weight:640; }
+.edit{ font-size:9.5px; font-weight:700; color:var(--orange); background:rgba(var(--orange-rgb),.13); padding:1px 6px; border-radius:5px; letter-spacing:.02em; }
+mark{ background:rgba(var(--orange-rgb),.2); border-radius:3px; padding:0 2px; color:inherit; }
+.crit{ display:flex; align-items:flex-start; gap:9px; padding:6px 0; font-size:13.5px; } .crit + .crit{ border-top:1px solid var(--hair-2); }
+.crit .ck{ width:18px; height:18px; border-radius:50%; background:rgba(var(--green-rgb),.13); color:var(--green); display:grid; place-items:center; flex:0 0 auto; margin-top:1px; } .crit .ck svg{ width:12px; height:12px; }
+.crit.add{ color:var(--ink-3); } .crit.add .ck{ background:var(--chip); color:var(--ink-3); }
+.badge{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; } .badge svg{ width:11px; height:11px; }
+.bg-azure-lt{ color:var(--azure); background:rgba(var(--azure-rgb),.13); } .bg-blue-lt{ color:var(--blue); background:rgba(var(--blue-rgb),.12); }
+.bg-green-lt{ color:var(--green); background:rgba(var(--green-rgb),.13); } .bg-orange-lt{ color:var(--orange); background:rgba(var(--orange-rgb),.13); }
+.bg-purple-lt{ color:var(--purple); background:rgba(var(--purple-rgb),.12); } .bg-red-lt{ color:var(--red); background:rgba(var(--red-rgb),.12); } .bg-secondary-lt{ color:var(--ink-2); background:var(--chip); }
+.proofline{ display:flex; gap:7px; flex-wrap:wrap; } .proof{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; color:var(--green); background:rgba(var(--green-rgb),.1); padding:3px 9px; border-radius:999px; } .proof svg{ width:12px; height:12px; }
+
+/* milestones */
+.ms{ border:1px solid var(--hair); border-radius:11px; overflow:hidden; } .ms + .ms{ margin-top:9px; }
+.ms__h{ display:flex; align-items:center; gap:10px; padding:11px 13px; cursor:pointer; }
+.ms__h .n{ width:22px; height:22px; border-radius:6px; background:var(--chip); color:var(--ink-2); display:grid; place-items:center; font-family:var(--mono); font-size:11px; font-weight:700; flex:0 0 auto; }
+.ms__h .ti{ font-weight:620; font-size:13.5px; } .ms__h .grow{ flex:1; } .ms__h .cw{ font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+.ms__b{ padding:0 13px 12px 45px; }
+.tk{ display:flex; align-items:center; gap:9px; padding:6px 0; font-size:12.5px; } .tk + .tk{ border-top:1px solid var(--hair-2); }
+.tk .id{ font-family:var(--mono); font-size:11px; color:var(--ink-3); min-width:66px; } .tk .nm{ flex:1; }
+.role{ font-size:9.5px; font-weight:700; padding:1px 6px; border-radius:5px; letter-spacing:.02em; text-transform:uppercase; }
+.r-impl{ color:var(--blue); background:rgba(var(--blue-rgb),.11); } .r-acc{ color:var(--green); background:rgba(var(--green-rgb),.12); } .r-found{ color:var(--purple); background:rgba(var(--purple-rgb),.11); } .r-contrib{ color:var(--ink-2); background:var(--chip); }
+
+/* parallel plan (waves) */
+.legend{ display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px; }
+.lg{ font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; }
+.wave{ border:1px solid var(--hair); border-radius:11px; padding:10px 12px; } .wave + .wave{ margin-top:8px; }
+.wave.ghost{ border-style:dashed; opacity:.72; }
+.wave .wh{ display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; color:var(--ink-2); margin-bottom:8px; } .wave .wh .ix{ width:18px; height:18px; border-radius:5px; background:var(--primary); color:#fff; display:grid; place-items:center; font-family:var(--mono); font-size:10px; font-weight:700; } .wave.ghost .wh .ix{ background:var(--ink-3); }
+.lanes{ display:flex; gap:7px; flex-wrap:wrap; } .wtask{ font-family:var(--mono); font-size:11px; font-weight:600; padding:4px 9px; border-radius:7px; background:var(--chip); color:var(--ink-2); } .wtask.key{ background:rgba(var(--purple-rgb),.12); color:var(--purple); }
+.estrow{ display:grid; grid-template-columns:repeat(4,1fr); gap:9px; }
+.est{ background:var(--canvas); border:1px solid var(--hair); border-radius:10px; padding:10px 12px; text-align:center; } .est .k{ font-family:var(--mono); font-size:9px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); } .est .v{ font-size:18px; font-weight:720; margin-top:2px; }
+
+/* discussion rail */
+.discuss__h{ display:flex; align-items:center; gap:9px; padding:12px 15px; border-bottom:1px solid var(--hair); }
+.discuss__h .av{ width:28px; height:28px; border-radius:8px; background:linear-gradient(150deg,var(--primary),#8e2018); color:#fff; display:grid; place-items:center; font-weight:700; font-size:12px; }
+.discuss__h .ttl{ font-weight:640; font-size:13.5px; } .discuss__h .s{ font-size:11px; color:var(--ink-3); } .discuss__h .grow{ flex:1; }
+.thread{ flex:1; overflow:auto; padding:15px; display:flex; flex-direction:column; gap:12px; }
+.msg{ display:flex; gap:8px; } .msg .av{ width:24px; height:24px; border-radius:7px; display:grid; place-items:center; color:#fff; font-size:10px; font-weight:700; flex:0 0 auto; margin-top:1px; }
+.msg .av.t{ background:linear-gradient(150deg,var(--primary),#8e2018); } .msg .av.y{ background:#1a2230; }
+.msg .b{ font-size:13px; line-height:1.5; border:1px solid var(--hair); border-radius:12px; padding:9px 12px; background:var(--card); } .msg .b b{ font-weight:640; } .msg .b code{ font-family:var(--mono); font-size:11px; background:var(--chip); padding:1px 5px; border-radius:5px; }
+.msg-bot .b{ border-top-left-radius:4px; } .msg-you{ flex-direction:row-reverse; } .msg-you .b{ background:var(--primary); color:#fff; border-color:var(--primary); border-top-right-radius:4px; } .msg-you .b code{ background:rgba(255,255,255,.2); }
+.options{ display:flex; flex-direction:column; gap:6px; margin-top:8px; } .opt{ display:flex; align-items:center; gap:8px; border:1px solid var(--hair); border-radius:9px; padding:8px 10px; font-size:12.5px; } .opt .r{ width:15px; height:15px; border-radius:50%; border:2px solid var(--hair); flex:0 0 auto; } .opt.sel{ border-color:var(--primary); background:rgba(var(--primary-rgb),.04); } .opt.sel .r{ border-color:var(--primary); background:var(--primary); box-shadow:inset 0 0 0 2.5px #fff; }
+.propose{ border:1px dashed var(--hair); border-radius:11px; background:var(--chip); padding:10px 12px; } .propose .h{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--orange); } .propose .d{ font-size:12.5px; margin-top:4px; } .propose .acts{ display:flex; gap:7px; margin-top:9px; } .propose .acts .mini{ flex:1; justify-content:center; }
+.qflag{ display:flex; gap:8px; align-items:flex-start; border-left:2.5px solid var(--orange); background:rgba(var(--orange-rgb),.05); border-radius:0 9px 9px 0; padding:8px 11px; font-size:12.5px; } .qflag b{ color:var(--orange); }
+.composer{ border-top:1px solid var(--hair); padding:11px 13px; }
+.chips{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:9px; } .chips .c{ font-size:11px; font-weight:600; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:999px; padding:4px 10px; }
+.cbox{ display:flex; align-items:center; gap:9px; } .cbox .in{ flex:1; background:var(--canvas); border:1px solid var(--hair); border-radius:11px; padding:10px 12px; color:var(--ink-3); font-size:13px; } .cbox .snd{ width:38px; height:38px; border-radius:10px; background:var(--primary); color:#fff; display:grid; place-items:center; } .cbox .snd svg{ width:17px; height:17px; }
+
+/* commit bar */
+.commit{ position:absolute; left:0; right:400px; bottom:0; background:var(--card); border-top:1px solid var(--hair); box-shadow:0 -4px 16px rgba(20,30,50,.05); padding:11px 18px; display:flex; align-items:center; gap:14px; }
+.commit .lab{ font-size:11px; font-family:var(--mono); letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); }
+.commit .sum{ display:flex; gap:7px; flex-wrap:wrap; margin-top:3px; } .commit .sum .s{ font-size:12px; font-weight:600; color:var(--ink-2); background:var(--chip); border-radius:7px; padding:3px 9px; }
+.commit .grow{ flex:1; }
+.mainwrap{ position:relative; flex:1; overflow:hidden; display:flex; flex-direction:column; }
+
+/* ===== Concept B: Review & commit ===== */
+.review{ flex:1; overflow:auto; padding:20px 0 40px; }
+.rw{ max-width:840px; margin:0 auto; padding:0 22px; }
+.review h2{ font-size:24px; font-weight:730; letter-spacing:-.025em; margin:2px 0 4px; }
+.review .lead{ color:var(--ink-2); font-size:14px; margin:0 0 20px; max-width:64ch; }
+.rsec{ margin-bottom:16px; } .rsec > .k{ font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:8px; display:flex; align-items:center; gap:8px; } .rsec > .k .grow{ flex:1; }
+.reviewfoot{ position:sticky; bottom:0; background:linear-gradient(0deg,var(--card) 70%,transparent); border-top:1px solid var(--hair); padding:14px 22px; display:flex; align-items:center; gap:12px; margin-top:8px; }
+:focus-visible{ outline:2px solid var(--primary); outline-offset:2px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12c1.5 0 1.5-5 3-5s1.5 10 3 10 1.5-8 3-8 1.5 5 3 5 1.5-4 3-4 1.5 3 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M16 16l4 4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 8v5l-4 2v-7L4 5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-cols" viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9.5" y="4" width="5" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="16" y="4" width="5" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="currentColor"/><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-4 3v-3H4V5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-8h11L20 13v6H4v-6zM4 13h4l1.5 2.5h5L16 13h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 3v2.5M12 18.5V21M4.2 7l2.2 1.3M17.6 15.7l2.2 1.3M4.2 17l2.2-1.3M17.6 8.3l2.2-1.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.3v7.4M18 15.7V11a3 3 0 0 0-3-3h-3l2-2m-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-3-6-7-2z" fill="currentColor"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="currentColor"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" fill="currentColor"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l4-1L19 8a2 2 0 0 0-3-3L5 16l-1 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-q" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.7.3-.9.8-.9 1.5v.4M12 17h.01" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+</svg>
+
+<div class="app">
+  <div class="brand"><span class="mk"><svg viewBox="0 0 24 24"><use href="#i-wave"/></svg></span><span class="lk">TAIKUN<span class="sb">SWITCHBOARD</span></span></div>
+  <header class="appbar">
+    <div class="search"><svg><use href="#i-search"/></svg>Search tasks, deliverables…<kbd>⌘K</kbd></div>
+    <span class="grow"></span>
+    <button class="obtn"><svg><use href="#i-filter"/></svg>Filters</button>
+    <button class="ibtn"><svg><use href="#i-bell"/></svg></button>
+    <button class="ibtn" id="themeBtn"><svg><use href="#i-sun"/></svg></button>
+    <button class="pbtn"><svg><use href="#i-plus"/></svg>New task</button>
+  </header>
+
+  <nav class="rail">
+    <div class="psel"><span class="grow">Northwind Energy</span><svg><use href="#i-chev"/></svg></div>
+    <div class="nav">
+      <a class="ni"><svg><use href="#i-grid"/></svg>Overview</a>
+      <a class="ni"><svg><use href="#i-cols"/></svg>Plan</a>
+      <a class="ni on"><svg><use href="#i-target"/></svg>Deliverable</a>
+      <a class="ni"><svg><use href="#i-cpu"/></svg>Fleet</a>
+      <a class="ni"><svg><use href="#i-spark"/></svg>Ask</a>
+      <a class="ni"><svg><use href="#i-inbox"/></svg>Inbox</a>
+      <a class="ni"><svg><use href="#i-gear"/></svg>Settings</a>
+    </div>
+    <div class="foot">
+      <button class="obtn"><svg><use href="#i-git"/></svg>Connect repo</button>
+      <span class="boxp"><svg><use href="#i-bolt"/></svg>Box pressure</span>
+    </div>
+  </nav>
+
+  <main class="main">
+    <div class="toolbar">
+      <div class="dsel">
+        <span class="lbl"><svg><use href="#i-target"/></svg>Deliverable</span>
+        <div class="dbox"><span class="grow">SSO &amp; Identity Platform</span><svg><use href="#i-chev"/></svg></div>
+      </div>
+      <span class="mini"><svg><use href="#i-spark"/></svg>Generate brief</span>
+      <span class="grow"></span>
+      <div class="seg" id="conceptSeg">
+        <button class="on" data-c="studio">Scope Studio</button>
+        <button data-c="review">Review &amp; commit</button>
+      </div>
+    </div>
+
+    <!-- ============ CONCEPT A: SCOPE STUDIO ============ -->
+    <section class="surface" data-surface="studio">
+      <div class="dhead">
+        <div class="crumb">northwind · sso-identity-platform</div>
+        <h1>SSO &amp; Identity Platform <span class="pill pill-draft">Draft · scoping</span></h1>
+        <div style="font-size:12.5px;color:var(--ink-2);margin-bottom:14px">Not dispatched yet — shape it with Taikun until you know <b>exactly</b> what will be built, then submit. <span class="sub">Nothing runs before you hit kick off.</span></div>
+      </div>
+      <div class="mainwrap">
+        <div class="studio">
+          <!-- LEFT: the plan taking shape -->
+          <div class="shape">
+            <div class="card">
+              <div class="card__h"><span class="ic"><svg><use href="#i-target"/></svg></span><h3>Brief</h3><span class="grow"></span><button class="mini"><svg><use href="#i-pen"/></svg>Edit</button></div>
+              <div class="card__b">
+                <div class="field"><div class="k">Outcome · end state</div><div class="v">Pilot operators sign in to the Northwind ops portal with <b>Entra / SAML</b>, are auto-provisioned from the directory, and go-live is gated on <b>CI parity</b> with the Helm baseline.</div></div>
+                <div class="field"><div class="k">Why it matters</div><div class="v">Manual provisioning is blocking go-live with TotalEnergies.</div></div>
+                <div class="field"><div class="k">Constraints <span class="edit">from discussion</span></div><div class="v">3-week window · their Azure tenant · <mark>Okta kept as fallback</mark> · no PII to third parties.</div></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__h"><span class="ic"><svg><use href="#i-check"/></svg></span><h3>Acceptance criteria</h3><span class="grow"></span><span class="meta">what "done" means to the client</span></div>
+              <div class="card__b">
+                <div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span>≥95% SSO success rate across the pilot cohort</span></div>
+                <div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span>MTTA ≤ 15 min · zero manual provisioning</span></div>
+                <div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span>CI parity gate green vs. the Helm baseline</span></div>
+                <div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span><mark>Okta fallback path verified end-to-end</mark></span></div>
+                <div class="crit add"><span class="ck"><svg><use href="#i-plus"/></svg></span><span>Add a criterion…</span></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__h"><span class="ic"><svg><use href="#i-git"/></svg></span><h3>Proof &amp; closure</h3><span class="grow"></span><span class="meta">Done means merged</span></div>
+              <div class="card__b">
+                <div class="proofline"><span class="proof"><svg><use href="#i-check"/></svg>merge provenance</span><span class="proof"><svg><use href="#i-check"/></svg>scope gate</span><span class="proof"><svg><use href="#i-check"/></svg>functional gate · pytest</span></div>
+                <div style="font-size:12px;color:var(--ink-3);margin-top:9px">A milestone accepts only when every linked task has a merged PR and both gates pass. The checkbox never closes it.</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__h"><span class="ic"><svg><use href="#i-list"/></svg></span><h3>Milestones &amp; work</h3><span class="grow"></span><span class="meta">4 milestones · 21 tasks</span><button class="mini red" style="margin-left:9px"><svg><use href="#i-spark"/></svg>Record outcome → draft</button></div>
+              <div class="card__b">
+                <div class="ms">
+                  <div class="ms__h"><span class="n">1</span><span class="ti">Define shared contract</span><span class="grow"></span><span class="role r-found">foundation</span><span class="cw">3 tasks</span></div>
+                  <div class="ms__b"><div class="tk"><span class="id">CTR-1</span><span class="nm">Agree SAML assertion shape</span><span class="role r-contrib">contributes</span></div><div class="tk"><span class="id">CTR-2</span><span class="nm">Directory schema contract</span><span class="role r-contrib">contributes</span></div></div>
+                </div>
+                <div class="ms">
+                  <div class="ms__h"><span class="n">2</span><span class="ti">Build core implementation</span><span class="grow"></span><span class="role r-impl">implementation</span><span class="cw">9 tasks</span></div>
+                  <div class="ms__b"><div class="tk"><span class="id">SEN-6</span><span class="nm">Wire Entra app registration</span><span class="role r-impl">impl</span></div><div class="tk"><span class="id">SEN-7</span><span class="nm">SAML assertion mapping</span><span class="role r-impl">impl</span></div><div class="tk"><span class="id">DATA-3</span><span class="nm">Directory / attribute sync · Okta fallback</span><span class="role r-impl">impl</span></div></div>
+                </div>
+                <div class="ms">
+                  <div class="ms__h"><span class="n">3</span><span class="ti">Integrate cross-board</span><span class="grow"></span><span class="role r-impl">implementation</span><span class="cw">5 tasks</span></div>
+                </div>
+                <div class="ms">
+                  <div class="ms__h"><span class="n">4</span><span class="ti">Prove parity &amp; ship</span><span class="grow"></span><span class="role r-acc">acceptance</span><span class="cw">4 tasks</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__h"><span class="ic"><svg><use href="#i-wave"/></svg></span><h3>Parallel plan</h3><span class="grow"></span><span class="meta">how the fleet draws the work</span></div>
+              <div class="card__b">
+                <div class="legend"><span class="lg bg-secondary-lt">Not started</span><span class="lg bg-blue-lt">In progress</span><span class="lg bg-orange-lt">In review</span><span class="lg bg-green-lt">Done ✓ proof</span><span class="lg bg-purple-lt">Keystone</span></div>
+                <div class="wave"><div class="wh"><span class="ix">1</span>Wave 1 · dispatchable at kickoff · parity pulled forward</div><div class="lanes"><span class="wtask">SEN-7</span><span class="wtask">DATA-3</span><span class="wtask">QA-2</span><span class="wtask">parity gate</span></div></div>
+                <div class="wave ghost"><div class="wh"><span class="ix">2</span>Wave 2 · unlocked by <span class="wtask key" style="padding:1px 6px">SEN-6 keystone</span> → 5 tasks</div><div class="lanes"><span class="wtask">SEN-8</span><span class="wtask">SEN-9</span><span class="wtask">INT-1</span><span class="wtask">INT-2</span><span class="wtask">QA-3</span></div></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__h"><span class="ic"><svg><use href="#i-bolt"/></svg></span><h3>Estimate</h3><span class="grow"></span><span class="meta">Tally · pre-dispatch projection</span></div>
+              <div class="card__b"><div class="estrow">
+                <div class="est"><div class="k">Tasks</div><div class="v">21</div></div>
+                <div class="est"><div class="k">On autopilot</div><div class="v">~9d</div></div>
+                <div class="est"><div class="k">Est. agent cost</div><div class="v">$3.4k</div></div>
+                <div class="est"><div class="k">Confidence</div><div class="v" style="color:var(--orange)">0.6</div></div>
+              </div></div>
+            </div>
+          </div>
+
+          <!-- RIGHT: discussion -->
+          <aside class="discuss">
+            <div class="discuss__h"><span class="av">T</span><div class="grow"><div class="ttl">Discuss · Taikun</div><div class="s">shaping this deliverable · nothing dispatched</div></div><span class="badge bg-orange-lt">2 open questions</span></div>
+            <div class="thread">
+              <div class="msg msg-bot"><span class="av t">T</span><div class="b">I drafted this from your discovery call. Before we lock it — two calls I want <b>you</b> to make, not me.</div></div>
+
+              <div class="msg msg-bot"><span class="av t">T</span><div class="b"><b>1 · SCIM provisioning.</b> The client mentioned it in passing. Include now, or defer? It adds ~5 tasks and a week.
+                <div class="options"><div class="opt sel"><span class="r"></span>Defer to a later phase — keep this tight</div><div class="opt"><span class="r"></span>Include now (+5 tasks · +~1wk · +$0.9k)</div></div>
+              </div></div>
+              <div class="msg msg-you"><div class="b">Defer it. Keep v1 tight.</div></div>
+              <div class="msg msg-bot"><span class="av t">T</span><div class="b">Done — marked <code>SCIM</code> out-of-scope in the brief.</div></div>
+
+              <div class="msg msg-you"><div class="b">One thing — I don't want parity failing at the very end. Can we prove it early?</div></div>
+              <div class="msg msg-bot"><span class="av t">T</span><div class="b">Good instinct. I can pull the <b>CI-parity gate into wave 1</b> so it runs alongside the build instead of after it.</div>
+                <div class="propose"><div class="h">Proposed change · edits the plan on the left</div><div class="d">Move <code>parity gate</code> → wave 1 · add acceptance <code>Okta fallback e2e</code></div><div class="acts"><button class="mini">Discard</button><button class="mini red"><svg><use href="#i-check"/></svg>Apply</button></div></div>
+              </div>
+              <div class="msg msg-bot"><span class="av t">T</span><div class="b">Applied. You can see it landed in <b>Parallel plan</b> and <b>Acceptance</b>.</div></div>
+
+              <div class="qflag"><svg style="width:15px;color:var(--orange);flex:0 0 auto;margin-top:1px"><use href="#i-q"/></svg><div><b>Still needs your call:</b> which model tier for the identity work — balanced (cheaper) or high-reasoning (safer on auth)? Affects the estimate.</div></div>
+            </div>
+            <div class="composer">
+              <div class="chips"><span class="c">What's the risk of X?</span><span class="c">Explore an approach</span><span class="c">Tighten scope</span></div>
+              <div class="cbox"><div class="in">Discuss this deliverable with Taikun…</div><button class="snd"><svg><use href="#i-send"/></svg></button></div>
+            </div>
+          </aside>
+        </div>
+
+        <!-- sticky commit bar -->
+        <div class="commit">
+          <div>
+            <div class="lab">Exactly what will be built</div>
+            <div class="sum"><span class="s">4 milestones</span><span class="s">21 tasks</span><span class="s">2 projects</span><span class="s">4 acceptance criteria</span><span class="s">merge + 2 gates</span><span class="s">~9 days</span><span class="s">est $3.4k</span></div>
+          </div>
+          <span class="grow"></span>
+          <button class="obtn" data-c="review">Review full scope</button>
+          <button class="pbtn"><svg><use href="#i-bolt"/></svg>Submit &amp; kick off</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CONCEPT B: REVIEW & COMMIT ============ -->
+    <section class="surface hidden" data-surface="review">
+      <div class="review"><div class="rw">
+        <div class="crumb">northwind · sso-identity-platform</div>
+        <h2>Before you submit — exactly what will be built</h2>
+        <p class="lead">One read-through of the whole scope. Everything below is what the fleet will execute the moment you kick off. Two calls still need you.</p>
+
+        <div class="rsec"><div class="k"><svg style="width:13px"><use href="#i-target"/></svg>Outcome</div>
+          <div class="card"><div class="card__b"><div class="v" style="font-size:14px">Pilot operators sign in with <b>Entra / SAML</b>, are auto-provisioned from the directory, and go-live is gated on <b>CI parity</b> with the Helm baseline — Okta kept as fallback.</div></div></div>
+        </div>
+
+        <div class="rsec"><div class="k"><svg style="width:13px"><use href="#i-git"/></svg>Target projects &amp; proof</div>
+          <div class="card"><div class="card__b">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:11px"><span class="badge bg-secondary-lt mono">northwind/ops-portal</span><span class="badge bg-secondary-lt mono">northwind/identity-svc</span></div>
+            <div class="proofline"><span class="proof"><svg><use href="#i-check"/></svg>merge provenance</span><span class="proof"><svg><use href="#i-check"/></svg>scope gate</span><span class="proof"><svg><use href="#i-check"/></svg>functional gate</span></div>
+          </div></div>
+        </div>
+
+        <div class="rsec"><div class="k"><svg style="width:13px"><use href="#i-list"/></svg>Milestones → work<span class="grow"></span>4 milestones · 21 tasks</div>
+          <div class="card"><div class="card__b">
+            <div class="ms"><div class="ms__h"><span class="n">1</span><span class="ti">Define shared contract</span><span class="grow"></span><span class="role r-found">foundation</span><span class="cw">3</span></div></div>
+            <div class="ms"><div class="ms__h"><span class="n">2</span><span class="ti">Build core implementation</span><span class="grow"></span><span class="role r-impl">implementation</span><span class="cw">9</span></div></div>
+            <div class="ms"><div class="ms__h"><span class="n">3</span><span class="ti">Integrate cross-board</span><span class="grow"></span><span class="role r-impl">implementation</span><span class="cw">5</span></div></div>
+            <div class="ms"><div class="ms__h"><span class="n">4</span><span class="ti">Prove parity &amp; ship</span><span class="grow"></span><span class="role r-acc">acceptance</span><span class="cw">4</span></div></div>
+          </div></div>
+        </div>
+
+        <div class="rsec"><div class="k"><svg style="width:13px"><use href="#i-check"/></svg>Acceptance criteria</div>
+          <div class="card"><div class="card__b">
+            <div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span>≥95% SSO success · MTTA ≤ 15 min · zero manual provisioning</span></div>
+            <div class="crit"><span class="ck"><svg><use href="#i-check"/></svg></span><span>CI parity green vs. Helm baseline · Okta fallback verified e2e</span></div>
+          </div></div>
+        </div>
+
+        <div class="rsec"><div class="k"><svg style="width:13px"><use href="#i-wave"/></svg>Parallel plan &amp; estimate</div>
+          <div class="card"><div class="card__b">
+            <div class="wave"><div class="wh"><span class="ix">1</span>Wave 1 · at kickoff</div><div class="lanes"><span class="wtask">SEN-7</span><span class="wtask">DATA-3</span><span class="wtask">QA-2</span><span class="wtask">parity gate</span></div></div>
+            <div class="wave ghost"><div class="wh"><span class="ix">2</span>Wave 2 · unlocked by <span class="wtask key" style="padding:1px 6px">SEN-6</span></div><div class="lanes"><span class="wtask">SEN-8</span><span class="wtask">SEN-9</span><span class="wtask">INT-1</span><span class="wtask">INT-2</span><span class="wtask">QA-3</span></div></div>
+            <div class="estrow" style="margin-top:12px"><div class="est"><div class="k">Tasks</div><div class="v">21</div></div><div class="est"><div class="k">On autopilot</div><div class="v">~9d</div></div><div class="est"><div class="k">Est. cost</div><div class="v">$3.4k</div></div><div class="est"><div class="k">Confidence</div><div class="v" style="color:var(--orange)">0.6</div></div></div>
+          </div></div>
+        </div>
+
+        <div class="rsec"><div class="k"><svg style="width:13px;color:var(--orange)"><use href="#i-q"/></svg>Still needs your call · 2</div>
+          <div class="card" style="border-color:rgba(var(--orange-rgb),.3)"><div class="card__b">
+            <div class="qflag" style="margin-bottom:9px"><svg style="width:15px;color:var(--orange);flex:0 0 auto;margin-top:1px"><use href="#i-q"/></svg><div><b>Model tier for identity work</b> — balanced (cheaper) or high-reasoning (safer on auth)? <span style="color:var(--ink-3)">Affects the estimate.</span></div></div>
+            <div class="qflag"><svg style="width:15px;color:var(--orange);flex:0 0 auto;margin-top:1px"><use href="#i-q"/></svg><div><b>Autopilot on submit?</b> Dispatch wave 1 automatically, or hold for your go on each wave.</div></div>
+          </div></div>
+        </div>
+      </div>
+      <div class="reviewfoot"><div class="rw" style="display:flex;align-items:center;gap:12px;width:100%;padding:0 22px"><span style="font-size:12.5px;color:var(--ink-2)">Resolve the 2 calls above, then this is locked.</span><span class="grow"></span><button class="obtn" data-c="studio">Keep discussing</button><button class="pbtn"><svg><use href="#i-bolt"/></svg>Submit &amp; kick off</button></div></div>
+    </section>
+  </main>
+</div>
+<script>
+(function(){
+  var root=document.documentElement;
+  document.getElementById('themeBtn').addEventListener('click',function(){ var c=root.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'); root.setAttribute('data-theme',c==='dark'?'light':'dark'); });
+  function show(c){
+    document.querySelectorAll('.surface').forEach(function(s){ s.classList.toggle('hidden', s.dataset.surface!==c); });
+    document.querySelectorAll('#conceptSeg button').forEach(function(b){ b.classList.toggle('on', b.dataset.c===c); });
+  }
+  document.querySelectorAll('[data-c]').forEach(function(b){ b.addEventListener('click',function(){ show(b.dataset.c); }); });
+})();
+</script>
+</body>
+</html>

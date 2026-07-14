@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Loop edges (mobile) — Intake &amp; Client portal</title>
+<style>
+*,*::before,*::after{ box-sizing:border-box; } body{ margin:0; } svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; } :where(a){ color:inherit; text-decoration:none; }
+:root{
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --red:#c0392b; --red-rgb:192,57,43; --green:#1f9d55; --green-rgb:31,157,85; --blue:#3b6fd4; --blue-rgb:59,111,212;
+  --amber:#e0820b; --amber-rgb:224,130,11; --purple:#7048e8; --purple-rgb:112,72,232;
+  --brand:#1f3a5f; --accent:#2f7d5b; --accent-rgb:47,125,91;
+  --ink:#101114; --ink-2:#565d6b; --ink-3:#878e9c; --card:#fff; --hair:#e6e9ef; --hair-2:#eff1f4; --chip:#f1f3f6; --bg:#f5f6f8;
+}
+body{ font-family:var(--ui); background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased; letter-spacing:-.006em;
+  min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:16px; padding:26px 14px 44px; }
+.page-h{ text-align:center; max-width:600px; }
+.page-h .ey{ font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--red); font-weight:600; }
+.page-h h1{ font-size:22px; font-weight:720; letter-spacing:-.02em; margin:6px 0 4px; }
+.page-h p{ color:var(--ink-2); font-size:13.5px; margin:0; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.phones{ display:flex; gap:30px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+.wrap{ display:flex; flex-direction:column; align-items:center; gap:10px; }
+.wrap .cap{ font-size:12px; color:var(--ink-3); font-weight:600; } .wrap .cap b{ color:var(--red); }
+
+.phone{ width:378px; border-radius:52px; padding:11px; background:linear-gradient(160deg,#24262c,#0e0f12 60%); box-shadow:0 2px 6px rgba(16,24,40,.06),0 30px 70px -20px rgba(16,24,40,.5); }
+.screen{ position:relative; border-radius:42px; overflow:hidden; background:var(--bg); height:800px; display:flex; flex-direction:column; }
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%); width:112px; height:30px; background:#000; border-radius:20px; z-index:40; }
+.sb{ height:50px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between; padding:0 26px 7px; font-size:13px; font-weight:650; background:var(--card); }
+.sb .r{ display:flex; gap:6px; align-items:center; } .sb .r svg{ width:17px; height:12px; }
+.top{ display:flex; align-items:center; gap:9px; padding:6px 16px 11px; background:var(--card); border-bottom:1px solid var(--hair); flex:0 0 auto; }
+.top .h1{ font-size:20px; font-weight:730; letter-spacing:-.02em; } .top .sub{ font-size:10.5px; color:var(--ink-3); font-family:var(--mono); } .top .grow{ flex:1; }
+.mk{ width:30px; height:30px; border-radius:8px; display:grid; place-items:center; color:#fff; font-size:11px; font-weight:800; flex:0 0 auto; }
+.body{ flex:1; min-height:0; overflow:hidden; } .scroll{ height:100%; overflow:hidden; padding:13px 15px 14px; }
+.slabel{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin:13px 2px 8px; display:flex; gap:7px; align-items:center; } .slabel .grow{ flex:1; }
+.card{ background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:13px; box-shadow:0 1px 2px rgba(16,24,40,.04); } .card + .card{ margin-top:9px; }
+.row{ display:flex; align-items:center; gap:9px; } .grow{ flex:1; } .mut{ color:var(--ink-2); }
+.badge{ display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:640; padding:2px 8px; border-radius:999px; } .badge svg{ width:10px;height:10px; }
+.b-green{ color:var(--green); background:rgba(var(--green-rgb),.11); } .b-amber{ color:var(--amber); background:rgba(var(--amber-rgb),.13); } .b-blue{ color:var(--blue); background:rgba(var(--blue-rgb),.11); } .b-gray{ color:var(--ink-2); background:var(--chip); }
+code{ font-family:var(--mono); font-size:10.5px; background:var(--chip); padding:1px 4px; border-radius:4px; }
+.btn{ display:inline-flex; align-items:center; justify-content:center; gap:6px; font-weight:640; font-size:14px; padding:11px 15px; border-radius:13px; } .btn svg{ width:16px; height:16px; }
+.btn--primary{ background:var(--red); color:#fff; box-shadow:0 2px 12px rgba(var(--red-rgb),.26); }
+.btn--accent{ background:var(--accent); color:#fff; box-shadow:0 2px 12px rgba(var(--accent-rgb),.28); }
+.btn--ghost{ border:1px solid var(--hair); color:var(--ink); background:var(--card); }
+.btn--wide{ width:100%; }
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:128px; height:5px; border-radius:999px; background:#111; opacity:.22; z-index:20; }
+
+/* intake specifics */
+.tabs{ display:flex; gap:3px; background:var(--chip); border-radius:10px; padding:3px; width:fit-content; }
+.tabs button{ font-size:11px; font-weight:600; padding:5px 10px; border-radius:7px; color:var(--ink-2); } .tabs button.on{ background:var(--card); color:var(--ink); box-shadow:0 1px 2px rgba(16,24,40,.1); }
+.tr{ background:var(--bg); border:1px solid var(--hair); border-radius:12px; padding:11px 13px; font-size:12px; line-height:1.55; }
+.tr p{ margin:0 0 7px; } .tr .who{ font-weight:660; } .tr .who.c{ color:var(--red); } .tr mark{ background:rgba(var(--amber-rgb),.22); border-radius:3px; padding:0 2px; }
+.doc{ background:var(--card); border:1px solid var(--hair); border-radius:13px; overflow:hidden; } .doc .h{ display:flex; gap:7px; align-items:center; padding:10px 13px; border-bottom:1px solid var(--hair); font-weight:640; font-size:12.5px; } .doc .h .grow{ flex:1; }
+.sec{ padding:10px 13px; } .sec + .sec{ border-top:1px solid var(--hair-2); } .sec .k{ font-family:var(--mono); font-size:9px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:4px; } .sec p{ margin:0; font-size:12.5px; line-height:1.5; } .sec ul{ margin:2px 0 0; padding-left:1.05rem; font-size:12.5px; } .sec li{ margin:2px 0; }
+.chips{ display:flex; gap:6px; flex-wrap:wrap; margin:10px 0; } .chip{ font-size:11px; font-weight:600; padding:3px 9px; border-radius:999px; background:var(--chip); color:var(--ink-2); } .chip--red{ color:var(--red); background:rgba(var(--red-rgb),.09); }
+.epic{ display:flex; align-items:center; gap:9px; padding:9px 13px; } .epic + .epic{ border-top:1px solid var(--hair-2); } .epic .n{ width:22px; height:22px; border-radius:6px; background:var(--chip); color:var(--ink-2); display:grid; place-items:center; font-family:var(--mono); font-size:10px; font-weight:700; flex:0 0 auto; } .epic .ti{ font-weight:580; font-size:12.5px; } .epic .mt{ font-family:var(--mono); font-size:9.5px; color:var(--ink-3); }
+
+/* portal specifics */
+.hero{ padding:2px 2px 10px; } .hero .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); font-weight:600; } .hero h2{ font-size:19px; font-weight:730; letter-spacing:-.02em; margin:5px 0 4px; } .hero p{ margin:0; font-size:12.5px; color:var(--ink-2); }
+.bar{ height:9px; border-radius:999px; background:var(--chip); overflow:hidden; } .bar>i{ display:block; height:100%; border-radius:999px; background:var(--accent); }
+.ms{ display:flex; gap:10px; align-items:flex-start; padding:11px 0; } .ms + .ms{ border-top:1px solid var(--hair-2); }
+.ic{ width:24px; height:24px; border-radius:50%; background:var(--green); color:#fff; display:grid; place-items:center; flex:0 0 auto; } .ic svg{ width:13px; height:13px; }
+.ms .ti{ font-weight:600; font-size:13px; } .ms .dt{ font-family:var(--mono); font-size:10px; color:var(--ink-3); } .ms .pf{ display:flex; gap:5px; margin-top:5px; flex-wrap:wrap; }
+.pfb{ display:inline-flex; align-items:center; gap:4px; font-size:9.5px; font-weight:600; color:var(--green); background:rgba(var(--green-rgb),.1); padding:2px 7px; border-radius:999px; } .pfb svg{ width:10px; height:10px; }
+.kpi{ display:grid; grid-template-columns:1fr 1fr; gap:8px; } .kt{ background:var(--bg); border:1px solid var(--hair); border-radius:11px; padding:9px 11px; } .kt .k{ font-family:var(--mono); font-size:8.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); } .kt .v{ font-size:18px; font-weight:730; margin-top:1px; color:var(--green); } .kt .v small{ font-size:10px; color:var(--ink-2); font-weight:500; }
+.inv .r{ display:flex; padding:7px 0; border-bottom:1px solid var(--hair-2); font-size:13px; } .inv .r:last-child{ border-bottom:0; } .inv .r .grow{ flex:1; } .inv .r .v{ font-family:var(--mono); font-weight:640; } .inv .r.tot{ border-top:1.5px solid var(--hair); border-bottom:0; margin-top:1px; padding-top:10px; } .inv .r.tot .v{ font-size:17px; font-weight:740; color:var(--accent); }
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" fill="currentColor"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-pr" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="18" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.3v7.4M18 15.7V11a3 3 0 0 0-3-3h-3l2-2m-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M6 3h12v18l-2.5-1.5L13 21l-2.5-1.5L8 21l-2.5-1.5V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 8h6M9 12h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 16"><path d="M2 5a15 15 0 0 1 20 0M5 8.5a10 10 0 0 1 14 0M8 12a5 5 0 0 1 8 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="14.5" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-sig" viewBox="0 0 20 14"><rect x="1" y="9" width="3" height="4" rx="1" fill="currentColor"/><rect x="6" y="6" width="3" height="7" rx="1" fill="currentColor"/><rect x="11" y="3" width="3" height="10" rx="1" fill="currentColor"/><rect x="16" y="1" width="3" height="12" rx="1" fill="currentColor" opacity=".4"/></symbol>
+  <symbol id="i-batt" viewBox="0 0 26 14"><rect x="1" y="2" width="21" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="3" y="4" width="15" height="6" rx="1.5" fill="currentColor"/><rect x="23.5" y="5" width="1.6" height="4" rx=".8" fill="currentColor"/></symbol>
+</svg>
+
+<div class="page-h">
+  <div class="ey">Switchboard mobile · loop edges</div>
+  <h1>The front door &amp; the finish line</h1>
+  <p>Two ends of the loop on the phone: <b>Intake</b> — drop a discovery transcript, the plan authors itself; and the white-label <b>Client portal</b> — what the buyer sees when it's time to accept and pay.</p>
+</div>
+
+<div class="phones">
+  <!-- ===== INTAKE PHONE ===== -->
+  <div class="wrap">
+    <div class="phone"><div class="island"></div><div class="screen">
+      <div class="sb"><span>9:41</span><span class="r"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+      <div class="top"><span class="mk" style="background:linear-gradient(150deg,var(--red),#8e2018)">SW</span><div class="grow"><div class="h1">New engagement</div><div class="sub">intake · goal → plan</div></div></div>
+      <div class="body"><div class="scroll">
+        <div class="tabs"><button class="on"><svg style="width:11px;display:inline;vertical-align:-1px"><use href="#i-mic"/></svg> Transcript</button><button>Goal</button><button>PRD</button></div>
+        <div class="slabel">From the discovery call</div>
+        <div class="tr">
+          <p><span class="who c">Client</span> — we can't go live until pilot users can sign in. It's all manual right now.</p>
+          <p><span class="who c">Client</span> — <mark>Entra ID, and we'd need SAML</mark>. Hard constraint — <mark>Okta stays as fallback</mark>.</p>
+          <p><span class="who c">Client</span> — <mark>95%+ sign-in, parity with our Helm baseline</mark>. Three weeks.</p>
+        </div>
+        <button class="btn btn--primary btn--wide" style="margin-top:11px"><svg><use href="#i-spark"/></svg>Synthesize plan</button>
+        <div class="slabel">The plan authors itself<span class="grow"></span>derived</div>
+        <div class="doc">
+          <div class="h"><svg style="width:13px;color:var(--red)"><use href="#i-spark"/></svg><span class="grow">Discovery brief</span><span class="badge b-green"><svg><use href="#i-check"/></svg>ok</span></div>
+          <div class="sec"><div class="k">Problem</div><p>Pilot users can't SSO into the ops portal; manual provisioning blocks go-live.</p></div>
+          <div class="sec"><div class="k">Constraints</div><p>3 weeks · Azure tenant · <b>Okta fallback</b> · no third-party PII.</p></div>
+          <div class="sec"><div class="k">Success</div><p>≥95% SSO · MTTA ≤15m · parity green.</p></div>
+        </div>
+        <div class="chips"><span class="chip">3 epics</span><span class="chip">21 tasks</span><span class="chip">4 milestones</span><span class="chip chip--red">~9 days autopilot</span></div>
+        <div class="doc">
+          <div class="epic"><span class="n">1</span><div class="grow"><div class="ti">Identity provider</div><div class="mt">8 tasks · Entra/SAML</div></div><span class="badge b-blue">wave 1</span></div>
+          <div class="epic"><span class="n">2</span><div class="grow"><div class="ti">Directory integration</div><div class="mt">7 tasks</div></div><span class="badge b-gray">wave 2</span></div>
+          <div class="epic"><span class="n">3</span><div class="grow"><div class="ti">CI parity gate</div><div class="mt">6 tasks · Helm</div></div><span class="badge b-blue">wave 1</span></div>
+        </div>
+      </div></div>
+      <div style="padding:10px 15px 16px;border-top:1px solid var(--hair);background:color-mix(in srgb,var(--card) 92%,transparent)"><button class="btn btn--primary btn--wide"><svg><use href="#i-arrow"/></svg>Create &amp; open at Brief</button></div>
+      <div class="homebar"></div>
+    </div></div>
+    <div class="cap">Intake — <b>a goal in, a plan out</b></div>
+  </div>
+
+  <!-- ===== CLIENT PORTAL PHONE ===== -->
+  <div class="wrap">
+    <div class="phone"><div class="island"></div><div class="screen">
+      <div class="sb"><span>9:41</span><span class="r"><svg><use href="#i-sig"/></svg><svg style="width:20px"><use href="#i-wifi"/></svg><svg style="width:26px"><use href="#i-batt"/></svg></span></div>
+      <div class="top"><span class="mk" style="background:var(--brand)">NE</span><div class="grow"><div class="h1" style="font-size:16px">Northwind Energy</div><div class="sub">delivery portal</div></div><span style="font-size:9.5px;color:var(--ink-3)">by <b style="color:var(--ink-2)">Taikun</b></span></div>
+      <div class="body"><div class="scroll">
+        <div class="hero"><div class="k">#eng_204 · week 3 of 3</div><h2>Ready to accept</h2><p>Every milestone below is backed by merged, tested evidence — nothing marked done on a promise.</p></div>
+        <div class="card">
+          <div class="row"><span class="grow" style="font-weight:640;font-size:13.5px">Overall progress</span><span style="font-size:22px;font-weight:740;color:var(--accent)">100%</span></div>
+          <div class="bar" style="margin-top:9px"><i style="width:100%"></i></div>
+          <div class="row" style="margin-top:8px"><span class="badge b-green"><svg><use href="#i-check"/></svg>ready for sign-off</span><span class="grow"></span><span class="mono" style="font-size:10px;color:var(--ink-3)">4/4 milestones</span></div>
+        </div>
+        <div class="slabel">Milestones &amp; evidence<span class="grow"></span>verified, not asserted</div>
+        <div class="card" style="padding:2px 13px">
+          <div class="ms"><span class="ic"><svg><use href="#i-check"/></svg></span><div class="grow"><div class="ti">Build core implementation</div><div class="dt">accepted · Jul 21</div><div class="pf"><span class="pfb"><svg><use href="#i-pr"/></svg>9 PRs merged</span><span class="pfb"><svg><use href="#i-check"/></svg>gate PASS</span></div></div></div>
+          <div class="ms"><span class="ic"><svg><use href="#i-check"/></svg></span><div class="grow"><div class="ti">Integrate cross-board</div><div class="dt">accepted · Jul 24</div><div class="pf"><span class="pfb"><svg><use href="#i-pr"/></svg>5 PRs merged</span><span class="pfb"><svg><use href="#i-check"/></svg>gate PASS</span></div></div></div>
+          <div class="ms"><span class="ic"><svg><use href="#i-check"/></svg></span><div class="grow"><div class="ti">Prove parity &amp; ship</div><div class="dt">ready · Jul 27</div><div class="pf"><span class="pfb"><svg><use href="#i-pr"/></svg>4 PRs merged</span><span class="pfb"><svg><use href="#i-check"/></svg>closure PASS</span></div></div></div>
+        </div>
+        <div class="slabel">Acceptance · all met</div>
+        <div class="kpi">
+          <div class="kt"><div class="k">SSO success</div><div class="v">97.4%<small> ≥95</small></div></div>
+          <div class="kt"><div class="k">MTTA</div><div class="v">9m<small> ≤15</small></div></div>
+          <div class="kt"><div class="k">Manual prov.</div><div class="v">0</div></div>
+          <div class="kt"><div class="k">CI parity</div><div class="v">green</div></div>
+        </div>
+        <div class="slabel">Final invoice</div>
+        <div class="card inv">
+          <div class="r"><span class="grow">Fixed-price engagement</span><span class="v">$48,000</span></div>
+          <div class="r"><span class="grow">Deposit (paid Jul 13)</span><span class="v">−$32,000</span></div>
+          <div class="r tot"><span class="grow">Due on acceptance</span><span class="v">$16,000</span></div>
+        </div>
+      </div></div>
+      <div style="padding:10px 15px 16px;border-top:1px solid var(--hair)"><button class="btn btn--accent btn--wide"><svg><use href="#i-check"/></svg>Accept &amp; release payment</button></div>
+      <div class="homebar"></div>
+    </div></div>
+    <div class="cap">Client portal — <b>the invoice</b></div>
+  </div>
+</div>
+</body>
+</html>
