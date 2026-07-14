@@ -45,6 +45,10 @@ from switchboard.storage.repositories.publication import (
     StorePublicationRepository,
     default_publication_repository,
 )
+from switchboard.storage.repositories.projects import (
+    StoreProjectsRepository,
+    default_projects_repository,
+)
 
 __all__ = [
     "AccessRepository",
@@ -54,6 +58,7 @@ __all__ = [
     "StoreCoordinationRepository",
     "StoreDeliverablesRepository",
     "StoreExternalCiRepository",
+    "StoreProjectsRepository",
     "StoreProvenanceRepository",
     "StorePublicationRepository",
     "StoreWorkSessionsRepository",
@@ -66,6 +71,7 @@ __all__ = [
     "default_coordination_repository",
     "default_deliverables_repository",
     "default_external_ci_repository",
+    "default_projects_repository",
     "default_provenance_repository",
     "default_provider_credential_repository",
     "default_publication_repository",
