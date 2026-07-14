@@ -100,8 +100,21 @@ try:
         "/api/deliverables/{deliverable_id}/mission_status",
         "/api/deliverables/{deliverable_id}/dependency_graph",
     }
+
+    def iter_api_routes(routes):
+        """Walk top-level and FastAPI 0.139+ `_IncludedRouter` nests (ARCH-MS-65)."""
+        for route in routes:
+            if getattr(route, "endpoint", None) is not None and getattr(route, "path", None):
+                yield route
+            nested = getattr(route, "routes", None)
+            if nested:
+                yield from iter_api_routes(nested)
+            original = getattr(route, "original_router", None)
+            if original is not None and getattr(original, "routes", None):
+                yield from iter_api_routes(original.routes)
+
     seen = {}
-    for route in app.routes:
+    for route in iter_api_routes(app.routes):
         p = getattr(route, "path", None)
         if p in hot_paths and "GET" in (getattr(route, "methods", None) or set()):
             seen[p] = not asyncio.iscoroutinefunction(route.endpoint)

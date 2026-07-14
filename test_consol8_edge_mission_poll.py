@@ -3,7 +3,8 @@
 
 ADR-0007 execution row — the three cuts must stay in place:
   1. deploy/Caddyfile: security_headers + access_log snippets imported by site blocks
-  2. app.py: mission_status + dependency_graph use _etag_json(..., max_age=5)
+  2. mission_status + dependency_graph use etag_json(..., max_age=5) (app_impl helper
+     and/or deliverables router after ARCH-MS-65 co-drain)
   3. static/app.js: mission fetches use cache:no-cache; ack poll has document.hidden guard
 """
 import os
@@ -31,6 +32,8 @@ MISSION_ETAG_ROUTES = (
     "/api/deliverables/{deliverable_id}/dependency_graph",
 )
 
+DELIVERABLES_ROUTER = ROOT / "src/switchboard/api/routers/deliverables.py"
+
 
 def ok(condition, message):
     if not condition:
@@ -46,16 +49,25 @@ ok("import security_headers" in caddy, "site blocks import security_headers")
 ok("import access_log" in caddy, "site blocks import access_log")
 ok("format json" in caddy, "access_log uses structured JSON format")
 
-app_src = (ROOT / "app.py").read_text(encoding="utf-8") + (
-    ("\n" + (ROOT / "app_impl.py").read_text(encoding="utf-8"))
-    if (ROOT / "app_impl.py").is_file() else "")
+app_src = (ROOT / "app.py").read_text(encoding="utf-8")
+if (ROOT / "app_impl.py").is_file():
+    app_src += "\n" + (ROOT / "app_impl.py").read_text(encoding="utf-8")
+if DELIVERABLES_ROUTER.is_file():
+    app_src += "\n" + DELIVERABLES_ROUTER.read_text(encoding="utf-8")
 ok("def _etag_json(" in app_src, "app.py exposes shared _etag_json helper")
 for route in MISSION_ETAG_ROUTES:
-    ok(route in app_src, f"app.py registers {route}")
+    ok(route in app_src, f"mission ETag route registered: {route}")
 for fn in ("mission_status_query", "deliverable_mission_status", "deliverable_dependency_graph"):
-    block = re.search(rf"def {fn}\(.*?\n(?:.*?\n)*?    return _etag_json\(request, result, max_age=5\)",
-                      app_src, re.DOTALL)
-    ok(block is not None, f"{fn} returns _etag_json(..., max_age=5)")
+    # Bound the search to the function body — a DOTALL scan of the whole corpus
+    # backtracks catastrophically once deliverables.py is included in app_src.
+    idx = app_src.find(f"def {fn}(")
+    ok(idx >= 0, f"{fn} is defined")
+    window = app_src[idx:idx + 1200]
+    # Shared helper may be called as _etag_json (app_impl) or injected etag_json (router).
+    ok(
+        re.search(r"return (_etag_json|etag_json)\(request, result, max_age=5\)", window) is not None,
+        f"{fn} returns etag_json(..., max_age=5)",
+    )
 
 app_js = read_frontend_source(ROOT)
 ok("cache: 'no-cache'" in app_js and "mission_status" in app_js,
