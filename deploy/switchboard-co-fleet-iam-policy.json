@@ -27,6 +27,24 @@
       "Resource": "*"
     },
     {
+      "Sid": "UseOnlyRunShellScriptForCODrain",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ssm:us-east-1::document/AWS-RunShellScript"
+    },
+    {
+      "Sid": "RequestDrainOnlyOnManagedCOWorkers",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:us-east-1:584673484283:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/Project": "switchboard-co",
+          "ssm:resourceTag/CO:ManagedBy": "switchboard-co-fleet-v1"
+        }
+      }
+    },
+    {
       "Sid": "OperateCOFleet",
       "Effect": "Allow",
       "Action": [

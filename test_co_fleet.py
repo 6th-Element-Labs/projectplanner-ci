@@ -49,6 +49,12 @@ try:
 except ValueError:
     invalid_idle = True
 ok(invalid_idle, "idle termination policy cannot be set below 10 minutes")
+try:
+    co_fleet.load_config({"CO_IDLE_SECONDS": "600", "CO_DRAIN_TIMEOUT_SECONDS": "29"})
+    invalid_drain = False
+except ValueError:
+    invalid_drain = True
+ok(invalid_drain, "planned drain timeout cannot undercut the interruption handoff window")
 
 
 base_script = """#!/usr/bin/env bash
@@ -114,6 +120,10 @@ ok('test "$(sudo -u switchboard git -C "$WORKTREE" rev-parse HEAD)" = "$SOURCE_S
 ok("SWITCHBOARD_CO_SOURCE_SHA=${SOURCE_SHA}" in rendered
    and "${WORKTREE}/adapters/agent_host.py --interval 10" in rendered,
    "Agent Host executes the exact checked mirror revision, not stale image code")
+ok("PM_CO_DRAIN_IMDS=1" in rendered
+   and "PM_CO_DRAIN_REQUEST_PATH=/run/switchboard-co/drain-request.json" in rendered
+   and "PM_PROVIDER_RUNTIME_ROOT=/var/lib/switchboard-co/provider-runtimes" in rendered,
+   "worker boot enables Spot notices and isolated drain/runtime roots")
 ok("super-secret-value" not in rendered,
    "no credential value appears in user data")
 embedded_python = rendered.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
@@ -304,6 +314,8 @@ class ScaleAws(RecordingAws):
         self.calls.append((service, operation, args, kwargs))
         if operation == "describe-instances":
             return {"Reservations": [{"Instances": [instance]}]}
+        if operation == "send-command":
+            return {"Command": {"CommandId": "command-drain"}}
         return {"TerminatingInstances": [{"InstanceId": "i-idle"}]}
 
 
@@ -321,9 +333,46 @@ class IdleClient:
 config.state_path.write_text(json.dumps({"idle_since": {"i-idle": old}}))
 scale_aws = ScaleAws()
 scaled = co_fleet.scale_in_once(scale_aws, IdleClient(), config, now=time.time())
-ok(scaled[0]["action"] == "terminate_idle"
-   and any(call[1] == "terminate-instances" for call in scale_aws.calls),
-   "worker idle over 10 minutes with zero claim/session/wake is terminated")
+ok(scaled[0]["action"] == "request_drain"
+   and any(call[1] == "send-command" for call in scale_aws.calls)
+   and not any(call[1] == "terminate-instances" for call in scale_aws.calls),
+   "worker idle over 10 minutes receives a drain request before termination")
+drain_state = json.loads(config.state_path.read_text())["drains"]["i-idle"]
+
+
+class DrainedClient(IdleClient):
+    def hosts(self, include_stale=True):
+        return [{
+            "host_id": "host/i-idle", "status": "drained", "stale": False,
+            "capacity": {"active_sessions": 0, "drain_receipt": {
+                "schema": "switchboard.co_drain.receipt.v1",
+                "request_id": drain_state["request_id"], "status": "drained",
+                "no_new_claims": True, "credential_values_redacted": True,
+            }},
+        }]
+
+
+drained_aws = ScaleAws()
+drained = co_fleet.scale_in_once(drained_aws, DrainedClient(), config, now=time.time())
+ok(drained[0]["action"] == "terminate_drained"
+   and drained[0].get("durable_acknowledged") is True
+   and any(call[1] == "terminate-instances" for call in drained_aws.calls),
+   "durably acknowledged drain with a final empty-work read permits termination")
+
+forced_state = {
+    "idle_since": {"i-idle": old},
+    "drains": {"i-idle": {
+        "request_id": "drain-forced-timeout", "requested_at": old,
+        "deadline": time.time() - 1, "reason": "planned_scale_in",
+    }},
+}
+config.state_path.write_text(json.dumps(forced_state))
+forced_aws = ScaleAws()
+forced = co_fleet.scale_in_once(forced_aws, IdleClient(), config, now=time.time())
+ok(forced[0]["action"] == "terminate_forced_timeout"
+   and forced[0].get("durable_acknowledged") is False
+   and any(call[1] == "terminate-instances" for call in forced_aws.calls),
+   "unacknowledged drain takes an explicit auditable forced-loss path after timeout")
 
 
 class ClaimedClient(IdleClient):

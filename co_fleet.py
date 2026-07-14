@@ -20,9 +20,9 @@ import os
 import re
 import shlex
 import subprocess
-import sys
 import time
 import urllib.parse
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -59,6 +59,7 @@ class Config:
     region: str
     account_id: str
     idle_seconds: int
+    drain_timeout_s: int
     registration_timeout_s: int
     poll_seconds: float
     state_path: Path
@@ -95,11 +96,15 @@ def load_config(env: dict[str, str] | None = None) -> Config:
     idle = int(env.get("CO_IDLE_SECONDS", "720"))
     if not 600 <= idle <= 900:
         raise ValueError("CO_IDLE_SECONDS must be between 600 and 900")
+    drain_timeout = int(env.get("CO_DRAIN_TIMEOUT_SECONDS", "120"))
+    if not 30 <= drain_timeout <= 300:
+        raise ValueError("CO_DRAIN_TIMEOUT_SECONDS must be between 30 and 300")
     return Config(
         project=env.get("PM_PROJECT", "switchboard"),
         region=env.get("AWS_REGION", "us-east-1"),
         account_id=env.get("CO_AWS_ACCOUNT_ID", "584673484283"),
         idle_seconds=idle,
+        drain_timeout_s=drain_timeout,
         registration_timeout_s=int(env.get("CO_REGISTRATION_TIMEOUT_SECONDS", "180")),
         poll_seconds=float(env.get("CO_POLL_SECONDS", "10")),
         state_path=Path(env.get("CO_STATE_PATH", "/var/lib/switchboard-co-fleet/state.json")),
@@ -374,8 +379,15 @@ PM_WAKE_ID={values['wake']}
 PM_TASK_ID={values['task']}
 PM_AGENT_HOST_ALLOW_WORK=1
 PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
+PM_CO_DRAIN_IMDS=1
+PM_CO_DRAIN_REQUEST_PATH=/run/switchboard-co/drain-request.json
+PM_CO_DRAIN_RECEIPT_PATH=/run/switchboard-co/drain-receipt.json
+PM_PROVIDER_RUNTIME_ROOT=/var/lib/switchboard-co/provider-runtimes
 EOF
+printf 'PM_WORKSPACE_ROOT=%s\n' "${{WORKTREE%/*}}" >>/etc/switchboard-co/agent-host.env
 chmod 0600 /etc/switchboard-co/agent-host.env
+install -d -m 0770 -o switchboard -g switchboard /run/switchboard-co
+install -d -m 0700 -o switchboard -g switchboard /var/lib/switchboard-co/provider-runtimes
 install -d -m 0755 /etc/systemd/system/switchboard-co-agent-host.service.d
 cat >/etc/systemd/system/switchboard-co-agent-host.service.d/10-co-fleet-worktree.conf <<EOF
 [Service]
@@ -753,10 +765,11 @@ def _host_has_active_work(client: SwitchboardClient, host: dict[str, Any] | None
     active_claims = []
     for runner in runners:
         status = str(runner.get("status") or "").lower()
-        if status not in TERMINAL_RUNNER_STATES and not runner.get("stale"):
+        runner_active = status not in TERMINAL_RUNNER_STATES and not runner.get("stale")
+        if runner_active:
             active_runners.append(runner.get("runner_session_id"))
         claim = runner.get("claim") or {}
-        if (claim.get("status") == "active"
+        if (runner_active and claim.get("status") == "active"
                 and float(claim.get("expires_at") or 0) > now):
             active_claims.append(claim.get("claim_id") or runner.get("claim_id"))
     detail = {
@@ -769,12 +782,55 @@ def _host_has_active_work(client: SwitchboardClient, host: dict[str, Any] | None
                 or active_claims or claimed_wakes), detail
 
 
+def request_host_drain(aws: AwsCli, instance_id: str,
+                       request: dict[str, Any]) -> dict[str, Any]:
+    """Write the fixed-schema drain marker through SSM without credential material."""
+    payload = json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+    encoded = base64.b64encode(payload).decode()
+    command = (
+        "install -d -m 0770 -o switchboard -g switchboard /run/switchboard-co && "
+        f"printf %s {shlex.quote(encoded)} | base64 -d "
+        ">/run/switchboard-co/drain-request.json.tmp && "
+        "chown switchboard:switchboard /run/switchboard-co/drain-request.json.tmp && "
+        "chmod 0600 /run/switchboard-co/drain-request.json.tmp && "
+        "mv /run/switchboard-co/drain-request.json.tmp "
+        "/run/switchboard-co/drain-request.json"
+    )
+    result = aws.call(
+        "ssm", "send-command",
+        "--instance-ids", instance_id,
+        "--document-name", "AWS-RunShellScript",
+        "--comment", f"Switchboard CO drain {request['request_id']}",
+        "--parameters", json.dumps({"commands": [command]}, separators=(",", ":")),
+    )
+    return {
+        "request_id": request["request_id"],
+        "requested_at": request["requested_at"],
+        "deadline": request["deadline"],
+        "reason": request["reason"],
+        "command_id": (result.get("Command") or {}).get("CommandId"),
+    }
+
+
+def _host_drain_receipt(host: dict[str, Any] | None,
+                        request_id: str) -> dict[str, Any] | None:
+    receipt = (((host or {}).get("capacity") or {}).get("drain_receipt") or {})
+    if receipt.get("request_id") != request_id:
+        return None
+    return receipt
+
+
+def _terminate(aws: AwsCli, instance_id: str) -> None:
+    aws.call("ec2", "terminate-instances", "--instance-ids", instance_id)
+
+
 def scale_in_once(aws: AwsCli, client: SwitchboardClient, config: Config,
                   now: float | None = None) -> list[dict[str, Any]]:
-    """Terminate only workers idle 10-15 minutes with no claim/session/wake."""
+    """Drain idle workers before termination; force only after the bounded deadline."""
     now = time.time() if now is None else now
     state = _load_state(config.state_path)
     idle_since = state.setdefault("idle_since", {})
+    drains = state.setdefault("drains", {})
     hosts = {host.get("host_id"): host for host in client.hosts(include_stale=True)}
     outcomes = []
     seen = set()
@@ -784,6 +840,50 @@ def scale_in_once(aws: AwsCli, client: SwitchboardClient, config: Config,
         instance_id = instance.get("InstanceId")
         seen.add(instance_id)
         host_id = f"host/{instance_id}"
+        draining = drains.get(instance_id)
+        if draining:
+            receipt = _host_drain_receipt(hosts.get(host_id), draining["request_id"])
+            if receipt and receipt.get("status") == "drained":
+                # Re-read all live control-plane state immediately before termination.
+                final_hosts = {host.get("host_id"): host
+                               for host in client.hosts(include_stale=True)}
+                active, detail = _host_has_active_work(
+                    client, final_hosts.get(host_id), host_id, now)
+                if active:
+                    outcomes.append({"instance_id": instance_id,
+                                     "action": "wait_drain_race", **detail})
+                    continue
+                _terminate(aws, instance_id)
+                idle_since.pop(instance_id, None)
+                drains.pop(instance_id, None)
+                outcomes.append({
+                    "instance_id": instance_id,
+                    "action": "terminate_drained",
+                    "request_id": draining["request_id"],
+                    "durable_acknowledged": True,
+                    **detail,
+                })
+                continue
+            if now >= float(draining.get("deadline") or 0):
+                _terminate(aws, instance_id)
+                idle_since.pop(instance_id, None)
+                drains.pop(instance_id, None)
+                outcomes.append({
+                    "instance_id": instance_id,
+                    "action": "terminate_forced_timeout",
+                    "request_id": draining["request_id"],
+                    "durable_acknowledged": False,
+                    "drain_status": (receipt or {}).get("status") or "unacknowledged",
+                })
+                continue
+            outcomes.append({
+                "instance_id": instance_id,
+                "action": "wait_drain",
+                "request_id": draining["request_id"],
+                "deadline": draining["deadline"],
+                "drain_status": (receipt or {}).get("status") or "pending",
+            })
+            continue
         active, detail = _host_has_active_work(client, hosts.get(host_id), host_id, now)
         if active:
             idle_since.pop(instance_id, None)
@@ -803,12 +903,26 @@ def scale_in_once(aws: AwsCli, client: SwitchboardClient, config: Config,
             idle_since.pop(instance_id, None)
             outcomes.append({"instance_id": instance_id, "action": "keep_race", **detail})
             continue
-        aws.call("ec2", "terminate-instances", "--instance-ids", instance_id)
-        idle_since.pop(instance_id, None)
-        outcomes.append({"instance_id": instance_id, "action": "terminate_idle",
-                         "idle_seconds": round(idle_age, 1), **detail})
+        request = {
+            "schema": "switchboard.co_drain.request.v1",
+            "request_id": "drain-" + uuid.uuid4().hex[:16],
+            "reason": "planned_scale_in",
+            "termination_kind": "ephemeral_instance",
+            "requested_at": now,
+            "deadline": now + config.drain_timeout_s,
+        }
+        drains[instance_id] = request_host_drain(aws, instance_id, request)
+        outcomes.append({
+            "instance_id": instance_id,
+            "action": "request_drain",
+            "request_id": request["request_id"],
+            "deadline": request["deadline"],
+            "idle_seconds": round(idle_age, 1),
+            **detail,
+        })
     for stale_id in set(idle_since) - seen:
         idle_since.pop(stale_id, None)
+        drains.pop(stale_id, None)
     state["updated_at"] = now
     _save_state(config.state_path, state)
     return outcomes

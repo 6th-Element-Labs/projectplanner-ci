@@ -27,10 +27,12 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same contract)
+import co_drain  # noqa: E402
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
@@ -49,6 +51,7 @@ P_LIST_RUNNER_CONTROLS = "/ixp/v1/runner_controls"
 P_CLAIM_RUNNER_CONTROL = "/ixp/v1/claim_runner_control"
 P_COMPLETE_RUNNER_CONTROL = "/ixp/v1/complete_runner_control"
 P_LIST_RUNNERS = "/ixp/v1/runner_sessions"
+P_LIST_WORK_SESSIONS = "/ixp/v1/work_sessions"
 P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
 
@@ -378,6 +381,7 @@ def register_runner_session(rec, wake, inventory):
     """Publish the supervisor session to Switchboard's central runner registry."""
     if not rec or not rec.get("runner_session_id"):
         return None
+    binding = ((wake.get("policy") or {}).get("account_binding") or {})
     body = {
         "project": PROJECT,
         "runner_session_id": rec.get("runner_session_id"),
@@ -396,6 +400,10 @@ def register_runner_session(rec, wake, inventory):
             "wake_mode": rec.get("wake_mode"),
             "log_path": rec.get("log_path"),
             "command": rec.get("command"),
+            "work_session_id": binding.get("work_session_id"),
+            "credential_lease_id": binding.get("credential_lease_id"),
+            "provider": binding.get("provider"),
+            "account_affinity_id": binding.get("account_affinity_id"),
             **(rec.get("metadata") or {}),
         },
         "heartbeat_ttl_s": 3600 if rec.get("cloud_session") else 60,
@@ -498,8 +506,104 @@ def handle_runner_controls(inventory):
     return handled
 
 
+def _drain_query(path, **query):
+    return f"{path}?{urllib.parse.urlencode({'project': PROJECT, **query})}"
+
+
+def _drain_runners(host_id):
+    result = _try("GET", _drain_query(
+        P_LIST_RUNNERS, host_id=host_id, include_stale="true")) or {}
+    sessions = result.get("sessions") or result.get("runner_sessions") or []
+    sessions = sessions if isinstance(sessions, list) else []
+    try:
+        out = subprocess.run(
+            ["python3", SUPERVISOR, "list"], capture_output=True, text=True, timeout=10)
+        local = (json.loads(out.stdout or "{}").get("sessions") or []) \
+            if out.returncode == 0 else []
+    except Exception:
+        local = []
+    merged = {row.get("runner_session_id"): dict(row) for row in local
+              if row.get("runner_session_id")}
+    for row in sessions:
+        runner_id = row.get("runner_session_id")
+        if runner_id:
+            merged[runner_id] = {**merged.get(runner_id, {}), **dict(row)}
+    return list(merged.values())
+
+
+def _drain_work_sessions():
+    result = _try("GET", _drain_query(
+        P_LIST_WORK_SESSIONS, status="active", include_expired="true")) or {}
+    sessions = result.get("work_sessions") or []
+    return sessions if isinstance(sessions, list) else []
+
+
+def _release_provider_lease(lease_id, reason):
+    return _try(
+        "POST",
+        f"/api/projects/{urllib.parse.quote(PROJECT, safe='')}/"
+        f"provider-credential-leases/{urllib.parse.quote(lease_id, safe='')}/release",
+        {"project": PROJECT, "reason": reason},
+    ) or {"state": "release_failed"}
+
+
+def _publish_drain_host(inventory, status, capacity):
+    return _try("POST", P_HEARTBEAT_HOST, {
+        "project": PROJECT,
+        "host_id": inventory["host_id"],
+        "status": status,
+        "active_sessions": capacity.get("active_sessions"),
+        "capacity": capacity,
+        "last_error": "" if status == "drained" else ",".join(
+            (capacity.get("drain_receipt") or {}).get("failures") or []),
+    })
+
+
+def _update_drained_runner(runner):
+    return _try("POST", P_REGISTER_RUNNER, {"project": PROJECT, **dict(runner)})
+
+
+def handle_drain(request, inventory):
+    """Stop claims first, then interrupt/checkpoint/release/purge and acknowledge."""
+    current = co_drain.read_receipt()
+    if current and current.get("request_id") == request.get("request_id"):
+        published = _publish_drain_host(
+            inventory, current.get("status") or "drain_failed", {
+            "active_sessions": 0 if current.get("status") == "drained" else 1,
+            "drain_receipt": current,
+        })
+        current["durable_acknowledged"] = bool(
+            published and not published.get("error"))
+        co_drain.write_receipt(current)
+        return {"host_id": inventory["host_id"], "draining": True,
+                "drain_receipt": current, "acted": [], "pending": 0,
+                "runner_controls": []}
+    receipt = co_drain.drain_host(
+        request,
+        co_drain.inventory_for_drain(inventory),
+        runners=_drain_runners(inventory["host_id"]),
+        work_sessions=_drain_work_sessions(),
+        supervisor=supervisor_action,
+        release_lease=_release_provider_lease,
+        publish_host=lambda status, capacity: _publish_drain_host(
+            inventory, status, capacity),
+        update_runner=_update_drained_runner,
+        workspace_root=os.environ.get("PM_WORKSPACE_ROOT")
+        or os.path.dirname(os.environ.get("PM_REPO_ROOT")
+                           or inventory.get("repo_root") or os.getcwd()),
+        runtime_root=os.environ.get("PM_PROVIDER_RUNTIME_ROOT"),
+    )
+    co_drain.write_receipt(receipt)
+    return {"host_id": inventory["host_id"], "draining": True,
+            "drain_receipt": receipt, "acted": [], "pending": 0,
+            "runner_controls": []}
+
+
 def run_once(inventory):
     """One daemon iteration. Returns a summary of what it did (for tests + logging)."""
+    drain_request = co_drain.discover_request()
+    if drain_request:
+        return handle_drain(drain_request, inventory)
     host_id = inventory["host_id"]
     _try("POST", P_HEARTBEAT_HOST, {"project": PROJECT, "host_id": host_id,
                                     "active_sessions": active_session_count(inventory)})
@@ -550,12 +654,18 @@ def run(interval=10, once=False):
     inv = default_inventory()
     registered = False
     last_register_at = 0.0
+    drain_advertised = False
     register_every = max(10, int(inv.get("heartbeat_ttl_s") or 60) // 2)
     while True:
         now = time.time()
-        if not registered or now - last_register_at >= register_every:
-            reg = _try("POST", P_REGISTER_HOST, inv)
+        drain_request = co_drain.discover_request()
+        advertised = co_drain.inventory_for_drain(inv) if drain_request else inv
+        should_register = (not registered or now - last_register_at >= register_every
+                           or bool(drain_request) != drain_advertised)
+        if should_register:
+            reg = _try("POST", P_REGISTER_HOST, advertised)
             registered = bool(reg)
+            drain_advertised = bool(drain_request and reg)
             last_register_at = now
             print(f"[agent_host] registered {inv['host_id']} ({'ok' if reg else 'retrying'})",
                   flush=True)

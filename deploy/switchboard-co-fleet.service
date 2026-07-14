@@ -13,6 +13,7 @@ EnvironmentFile=-/etc/switchboard-co-fleet.env
 Environment=PM_PROJECT=switchboard
 Environment=AWS_REGION=us-east-1
 Environment=CO_IDLE_SECONDS=720
+Environment=CO_DRAIN_TIMEOUT_SECONDS=120
 Environment=CO_GENERAL_LT_ID=lt-06e82fa3ce11f96a8
 Environment=CO_GENERAL_LT_VERSION=5
 Environment=CO_BUILD_LT_ID=lt-04205361bf23f5fe6

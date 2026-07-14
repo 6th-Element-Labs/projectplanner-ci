@@ -17,8 +17,15 @@ per-wake decision that cannot sensibly wait for infrastructure reconciliation:
 8. Leave the durable wake pending for that registered Agent Host to claim and launch.
    Ephemeral hosts filter the queue by their injected `PM_WAKE_ID`, so another
    same-lane wake cannot capture capacity carrying the wrong task/account affinity.
-9. Terminate a managed worker only after 10-15 minutes idle and a final read proving
-   zero active runner session, task claim, and claimed wake.
+9. After 10-15 minutes idle and a final empty-work read, send a fixed-schema drain
+   marker through SSM. The worker immediately advertises `allow_work=false` and
+   `status=draining`, so it cannot claim another wake.
+10. Snapshot and interrupt managed runners, checkpoint and push eligible task branches,
+    release provider credential leases, purge isolated provider homes, and publish a
+    redacted `switchboard.co_drain.receipt.v1` in host capacity.
+11. Terminate only after the matching durable `drained` receipt and another empty-work
+    read. If no acknowledgement arrives by `CO_DRAIN_TIMEOUT_SECONDS` (default 120),
+    terminate through the explicit `terminate_forced_timeout` audit path.
 
 The Plan VM runs only this coordination daemon. Claude Code/Codex and repository
 work execute on the EC2 worker. The immutable image supplies runtime dependencies
@@ -45,6 +52,14 @@ hash. These fields are never copied into user data, EC2 tags, host metadata, or 
 Ephemeral `host_id` and `runner_session_id` remain unset until the registered host claims
 and completes the durable wake; the dispatcher is forbidden from guessing them.
 
+During drain, the runner binding retains only what is needed to release or fence the
+personal-login lease: Work Session id, lease id, provider, and the non-reversible account
+affinity hash. The durable drain receipt omits the lease id, provider-account id, credential
+reference, process log tail, and all credential values. Codex, Claude, and Cursor runtime
+homes are purged after the managed process is interrupted; CO-7's active-lease fence remains
+the writeback authority, so an interrupted or stale Codex process cannot overwrite newer
+auth state.
+
 ## Control and rollback
 
 The real-time launch switch is SSM `/switchboard/co/launch-enabled`:
@@ -56,6 +71,12 @@ The real-time launch switch is SSM `/switchboard/co/launch-enabled`:
 Set `enabled=false` to stop new launches immediately. Existing active work is not
 hard-killed; idle scale-in continues. Capacity failures are completed as typed,
 escalated wake failures instead of remaining silently queued.
+
+Spot interruption and EC2 rebalance notices use IMDSv2 and enter the same drain path.
+Persistent Agent Hosts use the same request schema with
+`reason=persistent_host_removal` and `termination_kind=persistent_host`; an operator or
+host-removal workflow writes the configured `PM_CO_DRAIN_REQUEST_PATH` marker before
+stopping that host.
 
 Base versions are explicit environment values:
 
