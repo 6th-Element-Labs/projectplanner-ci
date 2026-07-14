@@ -23,28 +23,18 @@ from switchboard.domain.coordination.delivery import (
     classify_agent_delivery,
 )
 from switchboard.domain.coordination.terminal import TERMINAL_WAKE_STATUSES
+from switchboard.domain.ixp.protocol import (
+    PROTOCOL_ENVELOPE,
+    check_protocol_compatibility,
+    normalize_send_ack_deadline,
+    protocol_envelope,
+)
 
 
 def _store_facade():
     """Resolve transitional store helpers after store.py is initialized."""
     import store
     return store
-
-
-def protocol_envelope() -> Dict[str, Any]:
-    return json.loads(json.dumps(_store_facade().PROTOCOL_ENVELOPE))
-
-def check_protocol_compatibility(advertised: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not advertised:
-        return {"compatible": True, "mode": "legacy_assumed",
-                "warnings": ["agent did not advertise protocol; treating as pre-PROTO-2"]}
-    version = advertised.get("version") or advertised.get("ixp_version")
-    supported = _store_facade().PROTOCOL_ENVELOPE["compatible_versions"]
-    if version not in supported:
-        return {"compatible": False, "mode": "reject",
-                "reason": f"unsupported protocol version {version!r}; supported={supported}"}
-    return {"compatible": True, "mode": "exact", "version": version,
-            "profile": advertised.get("profile")}
 
 def _wake_row(row: sqlite3.Row) -> Dict[str, Any]:
     d = dict(row)
@@ -392,19 +382,24 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                        task_id: Optional[str] = None, requires_ack: bool = False,
                        ack_deadline_minutes: Optional[int] = None,
                        ack_timeout_seconds: Optional[float] = None,
+                       ack_timeout_s: Optional[float] = None,
                        signal: Optional[str] = None, priority: int = 0,
                        on_ack_timeout: str = "notify_sender",
                        principal_id: str = "", idem_key: str = "",
                        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Send a directed message from one agent to another. Returns the message record."""
     now = time.time()
-    if ack_deadline_minutes is None and ack_timeout_seconds is not None:
-        ack_deadline_minutes = float(ack_timeout_seconds) / 60.0
+    ack_deadline_minutes = normalize_send_ack_deadline(
+        ack_deadline_minutes=ack_deadline_minutes,
+        ack_timeout_seconds=ack_timeout_seconds,
+        ack_timeout_s=ack_timeout_s,
+    )
     deadline = (now + ack_deadline_minutes * 60) if ack_deadline_minutes else None
     payload = {"from_agent": from_agent, "to_agent": to_agent, "message": message,
                "task_id": task_id, "requires_ack": requires_ack,
                "ack_deadline_minutes": ack_deadline_minutes,
                "ack_timeout_seconds": ack_timeout_seconds,
+               "ack_timeout_s": ack_timeout_s,
                "signal": signal, "priority": priority,
                "on_ack_timeout": on_ack_timeout}
     with _conn(project) as c:
@@ -891,6 +886,7 @@ def default_coordination_repository() -> StoreCoordinationRepository:
 __all__ = [
     "StoreCoordinationRepository",
     "default_coordination_repository",
+    "PROTOCOL_ENVELOPE",
     "protocol_envelope",
     "check_protocol_compatibility",
     "_wake_row",

@@ -251,23 +251,9 @@ BUG_FAILURE_CLASSES = set(FAIL_FIX_FAILURE_CLASSES)
 
 # Plan-level sections that are not per-task (kept verbatim from the seed snapshot).
 
-PROTOCOL_ENVELOPE = {
-    "name": "switchboard",
-    "version": "ixp.v1",
-    "profile": "p0-dogfood",
-    "profile_version": "2026-06-28",
-    "profiles": {
-        "ixp_core": "1.0",
-        "txp_dispatch": "0.1",
-        "oxp_tally": "0.1",
-        "reconcile": "0.1",
-    },
-    "compatible_versions": ["ixp.v1"],
-    "field_aliases": {
-        "send_agent_message.ack_timeout_seconds": "ack_deadline_minutes",
-        "send_agent_message.ack_timeout_s": "ack_deadline_minutes",
-    },
-}
+# ARCH-MS-43: canonical protocol envelope lives in domain/ixp; re-export for
+# `import store` callers that still read store.PROTOCOL_ENVELOPE.
+from switchboard.domain.ixp.protocol import PROTOCOL_ENVELOPE  # noqa: E402
 
 
 def _control_plane_timeout_s() -> float:

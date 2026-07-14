@@ -38,6 +38,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
                        requires_ack: bool = False,
                        ack_deadline_minutes: int = 0,
                        ack_timeout_seconds: float = 0,
+                       ack_timeout_s: float = 0,
                        on_ack_timeout: str = "notify_sender",
                        signal: str = "", priority: int = 0,
                        idem_key: str = "") -> str:
@@ -50,6 +51,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
     requires_ack: if true, the receiving agent should call ack_message to confirm receipt.
     ack_deadline_minutes: how long the sender will wait for an ack (0 = no deadline).
     ack_timeout_seconds: equivalent seconds-based alias; used when minutes is 0.
+    ack_timeout_s: short alias for ack_timeout_seconds (IXP field_aliases / ARCH-MS-43).
 
     Returns the message record including its id and a versioned delivery_receipt. A true
     mailbox_stored value means durable storage only, never runtime delivery. The receipt
@@ -68,6 +70,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
             "requires_ack": requires_ack,
             "ack_deadline_minutes": ack_deadline_minutes,
             "ack_timeout_seconds": ack_timeout_seconds,
+            "ack_timeout_s": ack_timeout_s,
             "on_ack_timeout": on_ack_timeout,
             "signal": signal,
             "priority": priority,

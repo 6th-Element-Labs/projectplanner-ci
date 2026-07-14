@@ -1,0 +1,19 @@
+{
+  "compatible_versions": [
+    "ixp.v1"
+  ],
+  "field_aliases": {
+    "send_agent_message.ack_timeout_s": "ack_deadline_minutes",
+    "send_agent_message.ack_timeout_seconds": "ack_deadline_minutes"
+  },
+  "name": "switchboard",
+  "profile": "p0-dogfood",
+  "profile_version": "2026-06-28",
+  "profiles": {
+    "ixp_core": "1.0",
+    "oxp_tally": "0.1",
+    "reconcile": "0.1",
+    "txp_dispatch": "0.1"
+  },
+  "version": "ixp.v1"
+}

@@ -327,6 +327,15 @@ def run_p0_conformance(client: LocalStoreClient, control_mode: str = "advisory_p
             "working agreement advertises ixp.v1", {"protocol": protocol})
     _record(checks, "handshake.profile", protocol.get("profile") == "p0-dogfood",
             "working agreement advertises the P0 dogfood profile")
+    aliases = protocol.get("field_aliases") or {}
+    _record(
+        checks,
+        "handshake.field_aliases_present",
+        ("send_agent_message.ack_timeout_s" in aliases
+         and "send_agent_message.ack_timeout_seconds" in aliases),
+        "working agreement advertises send_agent_message ack field aliases",
+        {"field_aliases": aliases},
+    )
 
     reg = client.register_agent(control=control, protocol=P0_PROTOCOL)
     compatibility = reg.get("protocol_compatibility") or {}
@@ -336,6 +345,19 @@ def run_p0_conformance(client: LocalStoreClient, control_mode: str = "advisory_p
             "adapter advertises truthful control fidelity", {"control": reg.get("control")})
     _record(checks, "presence.protocol_compatibility", compatibility.get("compatible") is True,
             "server accepts adapter protocol envelope", compatibility)
+
+    bad = client.register_agent(
+        control=control,
+        protocol={"name": "switchboard-adapter", "version": "ixp.v9", "profile": "p0-dogfood"},
+    )
+    bad_compat = bad.get("protocol_compatibility") or {}
+    _record(
+        checks,
+        "presence.incompatible_protocol_rejected",
+        bad_compat.get("compatible") is False and bad_compat.get("mode") == "reject",
+        "server rejects unsupported protocol versions",
+        bad_compat,
+    )
 
     heads_up = client.send_message("heads_up", "startup inbox proof")
     stop = client.send_message("stop", "stop before doing more work")

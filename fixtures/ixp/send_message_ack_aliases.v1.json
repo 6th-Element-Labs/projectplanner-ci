@@ -1,0 +1,9 @@
+{
+  "schema": "switchboard.ixp.send_ack_alias_vectors.v1",
+  "canonical_minutes": 1.5,
+  "vectors": [
+    {"label": "ack_deadline_minutes", "input": {"ack_deadline_minutes": 1.5}},
+    {"label": "ack_timeout_seconds", "input": {"ack_timeout_seconds": 90}},
+    {"label": "ack_timeout_s", "input": {"ack_timeout_s": 90}}
+  ]
+}

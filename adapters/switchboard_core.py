@@ -83,18 +83,27 @@ def _http(method, path, body=None, base=None, token=None, timeout=None):
 
 
 def ensure_compatible(agreement):
-    """Fail closed when the server advertises an unsupported protocol version."""
+    """Fail closed when the server advertises an unsupported protocol version.
+
+    Mirrors ARCH-MS-43 ``negotiate_protocol`` intersection rules without importing
+    the server domain package (adapters must stay runnable as standalone packs).
+    """
     if not agreement:
         return
     proto = agreement.get("protocol") or {}
     version = proto.get("version") or proto.get("ixp_version")
-    compatible = proto.get("compatible_versions") or [version]
-    if not version:
+    server_versions = list(proto.get("compatible_versions") or ([version] if version else []))
+    if not version and not server_versions:
         raise RuntimeError("Switchboard server did not advertise a protocol version")
-    if SUPPORTED_PROTOCOL["version"] not in compatible:
+    adapter_versions = list(
+        SUPPORTED_PROTOCOL.get("compatible_versions")
+        or [SUPPORTED_PROTOCOL["version"]]
+    )
+    intersection = [v for v in server_versions if v in set(adapter_versions)]
+    if not intersection:
         raise RuntimeError(
             f"Switchboard protocol mismatch: adapter supports {SUPPORTED_PROTOCOL['version']}, "
-            f"server advertises {version} compatible={compatible}"
+            f"server advertises {version} compatible={server_versions}"
         )
 
 

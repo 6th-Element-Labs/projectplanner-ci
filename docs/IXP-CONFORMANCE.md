@@ -35,12 +35,20 @@ An implementation may claim **IXP-core conformant** only when it passes all core
 
 - auth rejects missing/invalid write credentials;
 - working agreement advertises `ixp.v1`;
+- working agreement includes `compatible_versions` and `field_aliases` (ARCH-MS-43);
 - agent registers stable presence with a compatible protocol envelope;
+- unsupported protocol versions are rejected (`presence.incompatible_protocol_rejected`);
 - inbox drains directed messages and acknowledges them;
 - `stop`/redirect-style signals are surfaced at the instruction boundary;
 - delta cursor advances and does not replay duplicate updates;
 - resource lease claim/release works and releases task leases on completion;
 - activity/reconcile can run without false drift for the completed conformance task.
+
+Dedicated local gate (no network):
+
+```bash
+python3 tests/test_arch_ms43_protocol_compatibility.py
+```
 
 ### `IXP-core + TXP/OXP tested`
 
