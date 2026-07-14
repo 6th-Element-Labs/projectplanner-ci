@@ -1,0 +1,78 @@
+{
+  "$id": "switchboard.provider_connection.enroll_command.v1",
+  "additionalProperties": false,
+  "description": "Enroll one personal-subscription provider identity without serializing its secret.",
+  "properties": {
+    "auth_type": {
+      "title": "Auth Type",
+      "type": "string"
+    },
+    "concurrency_policy": {
+      "additionalProperties": true,
+      "title": "Concurrency Policy",
+      "type": "object"
+    },
+    "credential": {
+      "format": "password",
+      "title": "Credential",
+      "type": "string",
+      "writeOnly": true
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expires At"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "project_allowlist": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Project Allowlist",
+      "type": "array"
+    },
+    "provider": {
+      "title": "Provider",
+      "type": "string"
+    },
+    "provider_account_id": {
+      "title": "Provider Account Id",
+      "type": "string"
+    },
+    "refresh_state": {
+      "default": "not_applicable",
+      "title": "Refresh State",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.provider_connection.enroll_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "user_id": {
+      "title": "User Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "user_id",
+    "provider",
+    "provider_account_id",
+    "auth_type",
+    "credential",
+    "project_allowlist"
+  ],
+  "title": "EnrollProviderConnectionCommand",
+  "type": "object"
+}

@@ -287,4 +287,124 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         _record(c, purge_migration)
         newly.append(purge_migration)
 
+    provider_vault_migration = "co6_provider_credential_vault"
+    if provider_vault_migration not in done:
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS provider_connections (
+                credential_reference TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_account_id TEXT NOT NULL,
+                auth_type TEXT NOT NULL,
+                project_allowlist_json TEXT NOT NULL,
+                lifecycle_state TEXT NOT NULL,
+                refresh_state TEXT NOT NULL,
+                revocation_state TEXT NOT NULL,
+                concurrency_policy_json TEXT NOT NULL,
+                expires_at REAL,
+                credential_version INTEGER NOT NULL,
+                encrypted_credential BLOB,
+                credential_nonce BLOB,
+                key_id TEXT,
+                audit_provenance_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                created_by TEXT NOT NULL,
+                rotated_at REAL,
+                rotated_by TEXT,
+                revoked_at REAL,
+                revoked_by TEXT,
+                revocation_reason TEXT,
+                deleted_at REAL,
+                deleted_by TEXT,
+                deletion_reason TEXT,
+                updated_at REAL NOT NULL,
+                updated_by TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_provider_connections_live_account
+                ON provider_connections(tenant_id, user_id, provider, provider_account_id)
+                WHERE lifecycle_state IN ('active', 'expired');
+            CREATE INDEX IF NOT EXISTS ix_provider_connections_tenant_user
+                ON provider_connections(tenant_id, user_id, provider, lifecycle_state);
+
+            CREATE TABLE IF NOT EXISTS provider_credential_leases (
+                lease_id TEXT PRIMARY KEY,
+                credential_reference TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_account_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                host_id TEXT NOT NULL,
+                runner_session_id TEXT NOT NULL,
+                work_session_id TEXT NOT NULL,
+                credential_version INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                acquired_at REAL NOT NULL,
+                acquired_by TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                released_at REAL,
+                released_by TEXT,
+                release_reason TEXT,
+                FOREIGN KEY(credential_reference)
+                    REFERENCES provider_connections(credential_reference)
+            );
+            CREATE INDEX IF NOT EXISTS ix_provider_credential_leases_active
+                ON provider_credential_leases(credential_reference, state, expires_at);
+            CREATE INDEX IF NOT EXISTS ix_provider_credential_leases_binding
+                ON provider_credential_leases(
+                    project_id, task_id, host_id, runner_session_id, work_session_id, state
+                );
+
+            CREATE TABLE IF NOT EXISTS provider_credential_events (
+                event_id TEXT PRIMARY KEY,
+                credential_reference TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_account_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                project_id TEXT,
+                task_id TEXT,
+                host_id TEXT,
+                runner_session_id TEXT,
+                work_session_id TEXT,
+                lease_id TEXT,
+                reason_code TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_provider_credential_events_reference
+                ON provider_credential_events(credential_reference, created_at, event_id);
+            CREATE INDEX IF NOT EXISTS ix_provider_credential_events_tenant
+                ON provider_credential_events(tenant_id, user_id, created_at, event_id);
+            """
+        )
+        _record(c, provider_vault_migration)
+        newly.append(provider_vault_migration)
+
+    provider_lease_state_migration = "co6_provider_credential_lease_state_machine"
+    if provider_lease_state_migration not in done:
+        c.executescript(
+            """
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN acquiring_principal_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN acquiring_principal_kind TEXT NOT NULL DEFAULT 'system';
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN acquiring_principal_scopes_json TEXT NOT NULL DEFAULT '[]';
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN acquiring_principal_admin INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN materializing_at REAL;
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN activated_at REAL;
+            """
+        )
+        _record(c, provider_lease_state_migration)
+        newly.append(provider_lease_state_migration)
+
     return newly

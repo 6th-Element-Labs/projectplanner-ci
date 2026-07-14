@@ -1,0 +1,49 @@
+{
+  "$id": "switchboard.provider_connection.rotate_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "credential": {
+      "format": "password",
+      "title": "Credential",
+      "type": "string",
+      "writeOnly": true
+    },
+    "credential_reference": {
+      "title": "Credential Reference",
+      "type": "string"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expires At"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "refresh_state": {
+      "default": "fresh",
+      "title": "Refresh State",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.provider_connection.rotate_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "credential_reference",
+    "credential"
+  ],
+  "title": "RotateProviderConnectionCommand",
+  "type": "object"
+}

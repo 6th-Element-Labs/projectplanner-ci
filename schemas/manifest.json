@@ -1,5 +1,5 @@
 {
-  "count": 27,
+  "count": 33,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -81,6 +81,30 @@
     {
       "$id": "switchboard.project_purge.verify_command.v1",
       "path": "switchboard.project_purge.verify_command.v1.json"
+    },
+    {
+      "$id": "switchboard.provider_connection.delete_command.v1",
+      "path": "switchboard.provider_connection.delete_command.v1.json"
+    },
+    {
+      "$id": "switchboard.provider_connection.enroll_command.v1",
+      "path": "switchboard.provider_connection.enroll_command.v1.json"
+    },
+    {
+      "$id": "switchboard.provider_connection.revoke_command.v1",
+      "path": "switchboard.provider_connection.revoke_command.v1.json"
+    },
+    {
+      "$id": "switchboard.provider_connection.rotate_command.v1",
+      "path": "switchboard.provider_connection.rotate_command.v1.json"
+    },
+    {
+      "$id": "switchboard.provider_credential.acquire_lease_command.v1",
+      "path": "switchboard.provider_credential.acquire_lease_command.v1.json"
+    },
+    {
+      "$id": "switchboard.provider_credential.release_lease_command.v1",
+      "path": "switchboard.provider_credential.release_lease_command.v1.json"
     },
     {
       "$id": "switchboard.task.create_command.v1",

@@ -19,6 +19,11 @@ from switchboard.storage.repositories.provenance import (
     StoreProvenanceRepository,
     default_provenance_repository,
 )
+from switchboard.storage.repositories.provider_credentials import (
+    CredentialVaultError,
+    ProviderCredentialRepository,
+    default_provider_credential_repository,
+)
 from switchboard.storage.repositories.protocols import (
     AccessRepository,
     ClaimsRepository,
@@ -37,6 +42,8 @@ __all__ = [
     "StoreCoordinationRepository",
     "StoreDeliverablesRepository",
     "StoreProvenanceRepository",
+    "CredentialVaultError",
+    "ProviderCredentialRepository",
     "StoreTaskRepository",
     "TaskRepository",
     "default_access_repository",
@@ -44,5 +51,6 @@ __all__ = [
     "default_coordination_repository",
     "default_deliverables_repository",
     "default_provenance_repository",
+    "default_provider_credential_repository",
     "default_task_repository",
 ]

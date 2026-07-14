@@ -1,0 +1,30 @@
+{
+  "$id": "switchboard.provider_connection.delete_command.v1",
+  "additionalProperties": false,
+  "properties": {
+    "credential_reference": {
+      "title": "Credential Reference",
+      "type": "string"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.provider_connection.delete_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "credential_reference",
+    "reason"
+  ],
+  "title": "DeleteProviderConnectionCommand",
+  "type": "object"
+}

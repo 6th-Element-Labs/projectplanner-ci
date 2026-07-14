@@ -65,6 +65,7 @@ from switchboard.api.routers.auth import service as _auth_service, session as _a
 from switchboard.api.routers.auth.routes import router as _global_auth_router  # noqa: E402
 from switchboard.api.routers.plan_chat import create_router as _create_plan_chat_router  # noqa: E402
 from switchboard.api.routers.projects import create_router as _create_project_router  # noqa: E402
+from switchboard.api.routers.provider_credentials import create_router as _create_provider_credentials_router  # noqa: E402
 from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
 from switchboard.api.routers.claims import create_router as _create_claims_router  # noqa: E402
 from switchboard.api.routers.wakes import create_router as _create_wakes_router  # noqa: E402
@@ -109,7 +110,10 @@ except Exception as _e:  # never let narration wiring block startup
     print(f"[narration] wake sink registration skipped: {_e}")
 
 
-ADMIN_SCOPES = ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "admin"]
+ADMIN_SCOPES = [
+    "read", "read:credentials", "write:tasks", "write:ixp", "write:system",
+    "write:bug_intake", "write:credentials", "use:credentials", "admin",
+]
 
 
 def _bootstrap_admin_from_env():
@@ -205,6 +209,10 @@ app.include_router(_create_project_router(
     resolve_project=_proj,
     resolve_principal=_principal,
 ))
+app.include_router(_create_provider_credentials_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+))
 app.include_router(_create_plan_chat_router(resolve_project=_proj))
 
 
@@ -293,6 +301,10 @@ def _write_required_scopes(path: str) -> tuple:
     # ACCESS-14: creating a project needs write:projects (contributors and up), not write:system.
     if path == "/api/projects":
         return ("write:projects",)
+    if "/provider-credential-leases/" in path or path.endswith("/leases"):
+        return ("use:credentials",)
+    if "/provider-connections" in path:
+        return ("write:credentials",)
     # ACCESS-21: ordinary metadata is project-editor work. Lifecycle and repo/trust
     # boundary mutations remain system-only even though they share the projects prefix.
     if re.fullmatch(r"/api/projects/[^/]+", path):

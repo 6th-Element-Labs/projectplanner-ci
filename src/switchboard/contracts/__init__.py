@@ -1,5 +1,5 @@
 """Versioned Pydantic contracts shared by REST, MCP, and events (ARCH-MS-25)."""
-from . import agents, claims, messaging, projects, registry, tasks, wakes
+from . import agents, claims, messaging, projects, provider_credentials, registry, tasks, wakes
 from .base import (
     SCHEMA_ID_PREFIX,
     VersionedModel,
@@ -78,9 +78,24 @@ from .messaging import (
     AckMessageCommand,
     SendAgentMessageCommand,
 )
+from .provider_credentials import (
+    ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA,
+    DELETE_PROVIDER_CONNECTION_SCHEMA,
+    ENROLL_PROVIDER_CONNECTION_SCHEMA,
+    RELEASE_PROVIDER_CREDENTIAL_LEASE_SCHEMA,
+    REVOKE_PROVIDER_CONNECTION_SCHEMA,
+    ROTATE_PROVIDER_CONNECTION_SCHEMA,
+    AcquireProviderCredentialLeaseCommand,
+    DeleteProviderConnectionCommand,
+    EnrollProviderConnectionCommand,
+    ReleaseProviderCredentialLeaseCommand,
+    RevokeProviderConnectionCommand,
+    RotateProviderConnectionCommand,
+)
 
 __all__ = [
     "ARCHIVE_PROJECT_COMMAND_SCHEMA",
+    "ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA",
     "PROJECT_CONSOLIDATION_APPLY_COMMAND_SCHEMA",
     "PROJECT_CONSOLIDATION_PLAN_COMMAND_SCHEMA",
     "PROJECT_CONSOLIDATION_PLAN_RECEIPT_SCHEMA",
@@ -103,6 +118,11 @@ __all__ = [
     "REGISTER_HOST_COMMAND_SCHEMA",
     "REQUEST_WAKE_COMMAND_SCHEMA",
     "RESTORE_PROJECT_COMMAND_SCHEMA",
+    "DELETE_PROVIDER_CONNECTION_SCHEMA",
+    "ENROLL_PROVIDER_CONNECTION_SCHEMA",
+    "RELEASE_PROVIDER_CREDENTIAL_LEASE_SCHEMA",
+    "REVOKE_PROVIDER_CONNECTION_SCHEMA",
+    "ROTATE_PROVIDER_CONNECTION_SCHEMA",
     "CLEANUP_REVIEW_COMMAND_SCHEMA",
     "PURGE_EXECUTE_COMMAND_SCHEMA",
     "PURGE_INTENT_COMMAND_SCHEMA",
@@ -112,6 +132,7 @@ __all__ = [
     "UPDATE_TASK_COMMAND_SCHEMA",
     "AckMessageCommand",
     "ArchiveProjectCommand",
+    "AcquireProviderCredentialLeaseCommand",
     "ApplyProjectConsolidationCommand",
     "ConsolidationApproval",
     "PlanProjectConsolidationCommand",
@@ -121,6 +142,8 @@ __all__ = [
     "CompleteClaimCommand",
     "CompleteWakeCommand",
     "CreateTaskCommand",
+    "DeleteProviderConnectionCommand",
+    "EnrollProviderConnectionCommand",
     "GetTaskQuery",
     "MoveTaskCommand",
     "ProjectImpactReport",
@@ -130,6 +153,9 @@ __all__ = [
     "RegisterAgentCommand",
     "RegisterHostCommand",
     "RequestWakeCommand",
+    "ReleaseProviderCredentialLeaseCommand",
+    "RevokeProviderConnectionCommand",
+    "RotateProviderConnectionCommand",
     "RestoreProjectCommand",
     "CreatePurgeIntentCommand",
     "ExecutePurgeCommand",
@@ -148,6 +174,7 @@ __all__ = [
     "claims",
     "messaging",
     "projects",
+    "provider_credentials",
     "register",
     "registry",
     "tasks",

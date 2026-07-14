@@ -5526,6 +5526,12 @@ def list_outcomes(project: str = DEFAULT_PROJECT, status: str = "",
 
 
 _AUDIT_REDACT_KEYS = {
+    "auth_capsule",
+    "ciphertext",
+    "credential",
+    "credential_nonce",
+    "encrypted_credential",
+    "nonce",
     "password",
     "password_hash",
     "raw_token",
@@ -7475,5 +7481,4 @@ def activity_since(ts: float) -> List[Dict[str, Any]]:
 # live there. Re-exported so store.ttl_read_cache / store._READ_CACHE keep working for the
 # callers below (and signals.py, the perf tests).
 from read_cache import _READ_CACHE, ttl_read_cache  # noqa: E402,F401
-
 

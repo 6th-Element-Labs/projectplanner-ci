@@ -126,9 +126,9 @@ ROLE_SCOPES = {
     "commenter": ["read", "write:comments"],
     # write:projects lets contributors create their own projects (private by default; ACCESS-14).
     "contributor": ["read", "write:tasks", "write:ixp", "write:bug_intake", "write:projects"],
-    "operator": ["read", "write:tasks", "write:ixp", "write:bug_intake", "write:projects"],
-    "admin": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "admin"],
-    "owner": ["read", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "admin"],
+    "operator": ["read", "read:credentials", "write:tasks", "write:ixp", "write:bug_intake", "write:projects", "write:credentials", "use:credentials"],
+    "admin": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "admin"],
+    "owner": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "admin"],
 }
 VALID_PRINCIPAL_KINDS = {"human", "user", "agent", "host", "system"}
 VALID_PRINCIPAL_SCOPES = sorted({s for scopes in ROLE_SCOPES.values() for s in scopes})

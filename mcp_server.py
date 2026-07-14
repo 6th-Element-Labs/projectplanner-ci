@@ -36,6 +36,7 @@ from mcp_auth import MCPAuthMiddleware
 from switchboard.mcp.tools import board as board_tools
 from switchboard.mcp.tools import decisions as decision_tools
 from switchboard.mcp.tools import projects as project_tools
+from switchboard.mcp.tools import provider_credentials as provider_credential_tools
 from switchboard.mcp.tools import tasks as task_tools
 from switchboard.mcp.tools import claims as claim_tools  # noqa: E402
 from switchboard.mcp.tools import wakes as wake_tools  # noqa: E402
@@ -265,6 +266,19 @@ _project_tool_functions = project_tools.register_project_tools(
     ),
 )
 globals().update(_project_tool_functions)
+
+_provider_credential_tool_functions = (
+    provider_credential_tools.register_provider_credential_tools(
+        mcp,
+        provider_credential_tools.ProviderCredentialToolServices(
+            dumps=_dumps,
+            require_read=_require_read,
+            require_write=_require_write,
+            principal_actor=auth.actor,
+        ),
+    )
+)
+globals().update(_provider_credential_tool_functions)
 
 
 def _resolve_project_input(project: str) -> str:

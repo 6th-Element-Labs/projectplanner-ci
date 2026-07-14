@@ -75,6 +75,15 @@ Writes (authenticated when `PM_AUTH_MODE=required`; audited as the authenticated
 - `create_task(workstream_id, title, ...)`
 - `update_task(task_id, ...only the fields you pass...)`
 - `add_comment(task_id, text)`
+- `enroll_provider_connection(connection_json)`, `get_provider_connection(credential_reference)`,
+  `list_provider_connections(user_id?)`, `rotate_provider_connection(...)`,
+  `revoke_provider_connection(...)`, and `delete_provider_connection(...)` — manage encrypted
+  BYOA provider identities through metadata-only responses. These require the dedicated
+  `read:credentials` or `write:credentials` scopes.
+- `acquire_provider_credential_lease(binding_json)` and
+  `release_provider_credential_lease(lease_id, reason)` — bind a credential reference to one
+  exact user/provider account/project/task/host/runner/Work Session tuple. These require
+  `use:credentials`; raw credential material is never an MCP response.
 - `submit_bug(source_task, observed_behavior, expected_behavior, repro_steps, evidence,
   severity_hint, affected_surface, source_agent?, failure_class?, duplicate_of?)`
 - `move_task(task_id, project_from, project_to, reason?, new_task_id?, dependency_policy?)`

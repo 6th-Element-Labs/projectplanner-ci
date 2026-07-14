@@ -26,7 +26,9 @@ click==8.4.2
 colorama==0.4.6 ; sys_platform == 'win32'
     # via click
 cryptography==48.0.1
-    # via pyjwt
+    # via
+    #   pyjwt
+    #   taikun-pm
 et-xmlfile==2.0.0
     # via openpyxl
 fastapi==0.139.0
