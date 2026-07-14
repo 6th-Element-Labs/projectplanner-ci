@@ -97,8 +97,11 @@ ok("def list_outcomes(" not in shell_src,
    "shell residual no longer defines list_outcomes")
 ok("def _dispatch_score(" not in shell_src,
    "shell residual no longer defines _dispatch_score")
-ok("def _risk_value(" in shell_src,
-   "_risk_value remains in shell residual")
+ok("def _risk_value(" not in shell_src,
+   "_risk_value no longer defined in shell residual (ARCH-MS-50 → claims)")
+ok(store._risk_value.__module__
+   == "switchboard.storage.repositories.claims",
+   "_risk_value now lives under claims after ARCH-MS-50")
 ok("def report_usage(" in kpi_src,
    "kpis_economics repository owns report_usage")
 ok("def create_kpi(" in kpi_src,

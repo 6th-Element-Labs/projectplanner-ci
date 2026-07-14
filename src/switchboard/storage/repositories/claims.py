@@ -3,7 +3,8 @@
 Owns TXP task claim persistence previously planned for ``claims_store.py``:
 claim_task / claim_next / complete_claim / abandon_claim / revoke_claim and
 helpers (work-session claim attach/gate, mission-scoped claim_next, active
-claims enrichment). Cross-cutting store helpers (write queue, work-session
+claims enrichment), plus ARCH-MS-50 leftovers: file/resource leases and
+completion-evidence / risk-capability helpers drained from ``shell.py``. Cross-cutting store helpers (write queue, work-session
 validators, idempotency, dispatch scoring) are reached via ``_store_facade()``
 during the strangler. ``store.py`` re-exports these symbols; root
 ``claims_store.py`` is a compatibility shim.
@@ -11,6 +12,7 @@ during the strangler. ``store.py`` re-exports these symbols; root
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -1335,6 +1337,410 @@ def revoke_claim(claim_id: str, reason: str,
     }
 
 
+# --- ARCH-MS-50: leases + completion evidence ---
+def _active_resource_leases_in(c: sqlite3.Connection, now: float,
+                               resource_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    if resource_type:
+        rows = c.execute("SELECT * FROM resource_leases WHERE released_at IS NULL "
+                         "AND resource_type=?", (resource_type,)).fetchall()
+    else:
+        rows = c.execute("SELECT * FROM resource_leases WHERE released_at IS NULL").fetchall()
+    return [dict(r) for r in rows if now < r["claimed_at"] + r["ttl_seconds"]]
+
+
+def claim_resources(agent_id: str, resource_type: str, names: List[str],
+                    task_id: Optional[str] = None, ttl_seconds: int = 1800,
+                    principal_id: str = "", actor: str = "system",
+                    idem_key: str = "",
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    clean_names = sorted({n.strip() for n in names if n and n.strip()})
+    payload = {"agent_id": agent_id, "resource_type": resource_type, "names": clean_names,
+               "task_id": task_id, "ttl_seconds": ttl_seconds}
+    if not clean_names:
+        return {"error": "no resource names given"}
+    with _conn(project) as c:
+        hit = _store_facade()._idem_hit(c, "claim", idem_key, actor, payload)
+        if hit is not None:
+            return hit
+        wanted = set(clean_names)
+        for lease in _active_resource_leases_in(c, now, resource_type):
+            if lease["agent_id"] == agent_id:
+                continue
+            overlap = wanted & set(json.loads(lease["names"] or "[]"))
+            if overlap:
+                expires_at = lease["claimed_at"] + lease["ttl_seconds"]
+                response = {"conflict": lease["agent_id"], "resource_type": resource_type,
+                            "names": sorted(overlap), "task_id": lease.get("task_id"),
+                            "retry_after_seconds": max(5, int((expires_at - now) / 2))}
+                _store_facade()._idem_store(c, "claim", idem_key, actor, payload, response)
+                return response
+        lease_id = "lease-" + uuid.uuid4().hex[:16]
+        c.execute(
+            "INSERT INTO resource_leases(id, agent_id, principal_id, task_id, resource_type, "
+            "names, claimed_at, ttl_seconds) VALUES (?,?,?,?,?,?,?,?)",
+            (lease_id, agent_id, principal_id or None, task_id, resource_type,
+             json.dumps(clean_names), now, max(1, int(ttl_seconds or 1800))),
+        )
+        response = {"lease_id": lease_id, "agent_id": agent_id, "resource_type": resource_type,
+                    "names": clean_names, "task_id": task_id, "claimed_at": now,
+                    "expires_at": now + max(1, int(ttl_seconds or 1800))}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, "lease.claimed", json.dumps(response, sort_keys=True), now))
+        _store_facade()._idem_store(c, "claim", idem_key, actor, payload, response)
+        return response
+
+
+def check_resources(resource_type: str, names: List[str],
+                    project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    now = time.time()
+    wanted = {n.strip() for n in names if n and n.strip()}
+    out: List[Dict[str, Any]] = []
+    with _conn(project) as c:
+        for lease in _active_resource_leases_in(c, now, resource_type):
+            for name in wanted & set(json.loads(lease["names"] or "[]")):
+                out.append({"resource_type": resource_type, "name": name,
+                            "held_by": lease["agent_id"], "lease_id": lease["id"],
+                            "task_id": lease.get("task_id"),
+                            "expires_at": lease["claimed_at"] + lease["ttl_seconds"]})
+    return sorted(out, key=lambda x: x["name"])
+
+
+def release_resource_lease(lease_id: str, actor: str = "system",
+                           project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        row = c.execute("SELECT * FROM resource_leases WHERE id=?", (lease_id,)).fetchone()
+        if not row:
+            return {"error": "lease not found", "lease_id": lease_id}
+        if row["released_at"] is not None:
+            return {"released": False, "lease_id": lease_id, "note": "already released"}
+        c.execute("UPDATE resource_leases SET released_at=? WHERE id=?", (now, lease_id))
+        payload = {"lease_id": lease_id, "agent_id": row["agent_id"],
+                   "resource_type": row["resource_type"], "names": json.loads(row["names"] or "[]")}
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (row["task_id"], actor, "lease.released", json.dumps(payload, sort_keys=True), now))
+    return {"released": True, "lease_id": lease_id}
+
+
+def list_active_resource_leases(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    now = time.time()
+    with _conn(project) as c:
+        leases = _active_resource_leases_in(c, now)
+    return [{"lease_id": l["id"], "agent_id": l["agent_id"], "task_id": l.get("task_id"),
+             "resource_type": l["resource_type"], "names": json.loads(l["names"] or "[]"),
+             "expires_at": l["claimed_at"] + l["ttl_seconds"]} for l in leases]
+
+
+RISK_ORDER = {"low": 1, "medium": 2, "med": 2, "high": 3, "critical": 4}
+CAPABILITY_RE = re.compile(
+    r"(?:requires?\s+capabilit(?:y|ies)|required\s+capabilit(?:y|ies)|capabilities)\s*[:=]\s*([^\n.;]+)",
+    re.I,
+)
+
+
+def _risk_value(risk: str) -> int:
+    return RISK_ORDER.get((risk or "").strip().lower(), 0)
+
+
+def _task_required_capabilities(task: Dict[str, Any]) -> List[str]:
+    dispatch_state = ((task.get("agent_state") or {}).get("dispatch") or {})
+    raw = (dispatch_state.get("required_capabilities") or
+           dispatch_state.get("capabilities") or [])
+    caps = _store_facade().coerce_csv_list(raw)
+    if not caps:
+        text = "\n".join(str(task.get(k) or "") for k in (
+            "description", "entry_criteria", "exit_criteria", "deliverable"))
+        for m in CAPABILITY_RE.finditer(text):
+            caps.extend(_store_facade().coerce_csv_list(m.group(1)))
+    return sorted({c.strip().lower() for c in caps if c and c.strip()})
+
+
+def _evidence_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "ok", "pass", "passed", "clean"}
+
+
+def _evidence_sequence(value: Any) -> List[Any]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _completion_evidence_has_tests(evidence: Dict[str, Any],
+                                   session: Dict[str, Any]) -> bool:
+    keys = ("tests", "test_commands", "verification_commands", "checks")
+    if any(_evidence_sequence(evidence.get(key)) for key in keys):
+        return True
+    for key in ("verification", "verification_note", "test_results"):
+        if str(evidence.get(key) or "").strip():
+            return True
+    hygiene = session.get("hygiene") or {}
+    if any(_evidence_sequence(hygiene.get(key)) for key in keys):
+        return True
+    return bool(str(hygiene.get("verification") or "").strip())
+
+
+def _executed_test_run_candidates(evidence: Dict[str, Any],
+                                  session: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+
+    def add(value: Any, source: str) -> None:
+        if value in (None, ""):
+            return
+        if isinstance(value, dict):
+            row = dict(value)
+            row.setdefault("_source", source)
+            candidates.append(row)
+            return
+        if isinstance(value, list):
+            for item in value:
+                add(item, source)
+
+    for key in (
+        "executed_test_run",
+        "executed_test_runs",
+        "test_run",
+        "test_runs",
+        "test_results",
+        "verification_run",
+        "verification_runs",
+    ):
+        add(evidence.get(key), f"evidence.{key}")
+    hygiene = (session or {}).get("hygiene") or {}
+    for key in (
+        "executed_test_run",
+        "executed_test_runs",
+        "test_run",
+        "test_runs",
+        "test_results",
+        "verification_run",
+        "verification_runs",
+    ):
+        add(hygiene.get(key), f"hygiene.{key}")
+    return candidates
+
+
+def _executed_test_run_commands(run: Dict[str, Any]) -> List[Any]:
+    commands: List[Any] = []
+    for key in ("commands", "test_commands", "verification_commands", "checks"):
+        commands.extend(_evidence_sequence(run.get(key)))
+    if run.get("command") not in (None, ""):
+        commands.append(run.get("command"))
+    return [cmd for cmd in commands if str(cmd or "").strip()]
+
+
+def _executed_test_run_has_output_hash(run: Dict[str, Any]) -> bool:
+    for key in (
+        "output_hash",
+        "output_sha256",
+        "stdout_sha256",
+        "stderr_sha256",
+        "log_hash",
+        "logs_hash",
+        "artifact_hash",
+        "result_hash",
+    ):
+        if str(run.get(key) or "").strip():
+            return True
+    return False
+
+
+def _executed_test_run_succeeded(run: Dict[str, Any]) -> bool:
+    if run.get("executed") is False:
+        return False
+    if run.get("ok") is True or run.get("passed") is True:
+        return True
+    exit_code = run.get("exit_code", run.get("returncode"))
+    if exit_code not in (None, ""):
+        try:
+            return int(exit_code) == 0
+        except (TypeError, ValueError):
+            return False
+    status = str(run.get("status") or run.get("conclusion") or run.get("result") or "").strip().lower()
+    return status in {"pass", "passed", "success", "succeeded", "ok", "green", "completed"}
+
+
+def _executed_test_run_gate(evidence: Dict[str, Any],
+                            session: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    candidates = _executed_test_run_candidates(evidence, session)
+    problems: List[Dict[str, Any]] = []
+    session_id = str((session or {}).get("work_session_id") or "").strip()
+    session_branch = str((session or {}).get("branch") or "").strip()
+    session_head = str((session or {}).get("head_sha") or "").strip()
+    for run in candidates:
+        source = run.get("_source")
+        run_id = str(run.get("run_id") or run.get("id") or "").strip() or None
+        run_schema = str(run.get("schema") or "").strip()
+        commands = _executed_test_run_commands(run)
+        run_problems: List[Dict[str, Any]] = []
+        if run_schema and run_schema != EXECUTED_TEST_RUN_SCHEMA:
+            run_problems.append({"reason": "unknown_test_run_schema",
+                                 "message": "Executed test run schema is not recognized.",
+                                 "schema": run_schema})
+        if not commands:
+            run_problems.append({"reason": "missing_test_commands",
+                                 "message": "Executed test run must include the command(s) that ran."})
+        if not _executed_test_run_succeeded(run):
+            run_problems.append({"reason": "test_run_failed",
+                                 "message": "Executed test run did not record a passing result.",
+                                 "status": run.get("status") or run.get("conclusion"),
+                                 "exit_code": run.get("exit_code", run.get("returncode"))})
+        if not _executed_test_run_has_output_hash(run):
+            run_problems.append({"reason": "missing_test_output_hash",
+                                 "message": "Executed test run must include an output/log/artifact hash."})
+        if not any(str(run.get(key) or "").strip() for key in ("completed_at", "executed_at", "finished_at")):
+            run_problems.append({"reason": "missing_test_completion_time",
+                                 "message": "Executed test run must include completed_at/executed_at/finished_at."})
+        run_session_id = str(run.get("work_session_id") or "").strip()
+        if session_id and run_session_id and run_session_id != session_id:
+            run_problems.append({"reason": "wrong_test_work_session",
+                                 "message": "Executed test run belongs to a different Work Session.",
+                                 "test_work_session_id": run_session_id,
+                                 "work_session_id": session_id})
+        run_branch = str(run.get("branch") or "").strip()
+        if session_branch and run_branch and run_branch != session_branch:
+            run_problems.append({"reason": "stale_test_branch",
+                                 "message": "Executed test run branch does not match the Work Session.",
+                                 "test_branch": run_branch,
+                                 "work_session_branch": session_branch})
+        run_head = str(run.get("head_sha") or "").strip()
+        if session_head and run_head and run_head != session_head:
+            run_problems.append({"reason": "stale_test_head_sha",
+                                 "message": "Executed test run head_sha does not match the Work Session.",
+                                 "test_head_sha": run_head,
+                                 "work_session_head_sha": session_head})
+        if not run_problems:
+            clean = {k: v for k, v in run.items() if k != "_source"}
+            return {"ok": True, "schema": EXECUTED_TEST_RUN_SCHEMA,
+                    "source": source, "run_id": run_id, "run": clean}
+        problems.append({"source": source, "run_id": run_id, "problems": run_problems})
+    return {"ok": False, "schema": EXECUTED_TEST_RUN_SCHEMA,
+            "reason": "missing_executed_test_run" if not candidates else "invalid_executed_test_run",
+            "message": (
+                "Completion evidence must include a passing executed test run with commands, "
+                "completion time, and output/log hash."
+            ),
+            "problems": problems}
+
+
+def _completion_evidence_has_diff_check(evidence: Dict[str, Any],
+                                        session: Dict[str, Any]) -> bool:
+    for key in ("git_diff_check", "diff_check", "diff_check_clean"):
+        if key in evidence and _evidence_truthy(evidence.get(key)):
+            return True
+    for item in _evidence_sequence(evidence.get("checks")):
+        text = json.dumps(item, sort_keys=True) if isinstance(item, dict) else str(item)
+        if "git diff --check" in text and not any(word in text.lower() for word in ("fail", "failed")):
+            return True
+    for item in _evidence_sequence(evidence.get("verification_commands")):
+        if "git diff --check" in str(item):
+            return True
+    hygiene = session.get("hygiene") or {}
+    for key in ("git_diff_check", "diff_check", "diff_check_clean"):
+        if key in hygiene and _evidence_truthy(hygiene.get(key)):
+            return True
+    return False
+
+
+def _completion_has_push_or_review_evidence(evidence: Dict[str, Any]) -> bool:
+    if evidence.get("pr_url") or evidence.get("pr_number"):
+        return True
+    if evidence.get("pushed_at") or evidence.get("remote_ref"):
+        return True
+    offline = evidence.get("offline_evidence")
+    return bool(offline if isinstance(offline, dict) else str(offline or "").strip())
+
+
+def _active_leases_in(c, now: float) -> List[Dict[str, Any]]:
+    """Active leases using an existing connection — not released and not TTL-expired."""
+    rows = c.execute("SELECT * FROM file_leases WHERE released_at IS NULL").fetchall()
+    return [dict(r) for r in rows if now < r["claimed_at"] + r["ttl_minutes"] * 60]
+
+
+def claim_files(agent_id: str, files: List[str], task_id: Optional[str] = None,
+                ttl_minutes: int = 30, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Claim a set of file paths for an agent. Returns {lease_id, files, expires_at} on
+    success, or {conflict, task_id, files, retry_after_seconds} if any file is held by
+    another active lease. Same agent claiming its own files is idempotent (no conflict)."""
+    now = time.time()
+    file_set = set(files)
+    with _conn(project) as c:
+        for lease in _active_leases_in(c, now):
+            if lease["agent_id"] == agent_id:
+                continue
+            held = set(json.loads(lease["files"] or "[]"))
+            overlap = file_set & held
+            if overlap:
+                expires_at = lease["claimed_at"] + lease["ttl_minutes"] * 60
+                remaining = max(0.0, expires_at - now)
+                return {"conflict": lease["agent_id"], "task_id": lease.get("task_id"),
+                        "files": sorted(overlap),
+                        "retry_after_seconds": max(30, int(remaining / 2))}
+        lease_id = f"lease-{agent_id}-{int(now)}"
+        c.execute(
+            "INSERT OR REPLACE INTO file_leases(id, agent_id, task_id, files, claimed_at, ttl_minutes) "
+            "VALUES (?,?,?,?,?,?)",
+            (lease_id, agent_id, task_id, json.dumps(sorted(files)), now, ttl_minutes),
+        )
+    expires_at = now + ttl_minutes * 60
+    return {"lease_id": lease_id, "agent_id": agent_id, "task_id": task_id,
+            "files": sorted(files), "expires_at": expires_at, "ttl_minutes": ttl_minutes}
+
+
+def release_files(lease_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Release a lease by id. Returns {released: true} or {error: ...}."""
+    now = time.time()
+    with _conn(project) as c:
+        cur = c.execute(
+            "UPDATE file_leases SET released_at=? WHERE id=? AND released_at IS NULL",
+            (now, lease_id),
+        )
+        if cur.rowcount == 0:
+            r = c.execute("SELECT id FROM file_leases WHERE id=?", (lease_id,)).fetchone()
+            if r:
+                return {"error": "lease already released", "lease_id": lease_id}
+            return {"error": "lease not found", "lease_id": lease_id}
+    return {"released": True, "lease_id": lease_id}
+
+
+def check_files(files: List[str], project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """For each file path, return its holder if held by an active lease. Files not held
+    are omitted. [{file, held_by, task_id, expires_at}]."""
+    now = time.time()
+    file_set = set(files)
+    results = []
+    with _conn(project) as c:
+        for lease in _active_leases_in(c, now):
+            held = set(json.loads(lease["files"] or "[]"))
+            for f in file_set & held:
+                results.append({"file": f, "held_by": lease["agent_id"],
+                                 "task_id": lease.get("task_id"),
+                                 "expires_at": lease["claimed_at"] + lease["ttl_minutes"] * 60})
+    return sorted(results, key=lambda x: x["file"])
+
+
+def list_active_leases(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    """All active leases board-wide (not released, not TTL-expired)."""
+    now = time.time()
+    with _conn(project) as c:
+        leases = _active_leases_in(c, now)
+    out = []
+    for lease in leases:
+        out.append({"lease_id": lease["id"], "agent_id": lease["agent_id"],
+                    "task_id": lease.get("task_id"),
+                    "files": json.loads(lease["files"] or "[]"),
+                    "expires_at": lease["claimed_at"] + lease["ttl_minutes"] * 60})
+    return sorted(out, key=lambda x: x["lease_id"])
+
+
 class StoreClaimsRepository:
     """SQL-backed claim lifecycle repository (ARCH-MS-32)."""
 
@@ -1377,4 +1783,28 @@ __all__ = [
     "revoke_claim",
     "_record_mission_claim_completion",
     "_claim_next_mission_scoped",
+    "_active_resource_leases_in",
+    "claim_resources",
+    "check_resources",
+    "release_resource_lease",
+    "list_active_resource_leases",
+    "RISK_ORDER",
+    "CAPABILITY_RE",
+    "_risk_value",
+    "_task_required_capabilities",
+    "_evidence_truthy",
+    "_evidence_sequence",
+    "_completion_evidence_has_tests",
+    "_executed_test_run_candidates",
+    "_executed_test_run_commands",
+    "_executed_test_run_has_output_hash",
+    "_executed_test_run_succeeded",
+    "_executed_test_run_gate",
+    "_completion_evidence_has_diff_check",
+    "_completion_has_push_or_review_evidence",
+    "_active_leases_in",
+    "claim_files",
+    "release_files",
+    "check_files",
+    "list_active_leases",
 ]

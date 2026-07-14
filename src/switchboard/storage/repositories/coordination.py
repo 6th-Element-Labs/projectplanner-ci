@@ -2,9 +2,9 @@
 
 Owns wake intents, coordination monitors, unblock requests, and agent
 messaging previously planned for ``coordination_store.py`` /
-``messaging_store.py``. Cross-cutting helpers (hosts/agents, idempotency,
-external effects, runner session upsert) stay on the store facade and are
-reached via ``_store_facade()``. ``store.py`` re-exports these symbols; root
+``messaging_store.py``. Hosts/agents presence and inventory live here after ARCH-MS-50; remaining
+cross-cutting helpers (idempotency, control-plane conn, runner session upsert)
+stay reachable via ``_store_facade()``. ``store.py`` re-exports these symbols; root
 ``coordination_store.py`` is a compatibility shim.
 """
 from __future__ import annotations
@@ -21,6 +21,8 @@ from db.core import _json_obj  # noqa: F401
 from switchboard.domain.coordination.delivery import (
     build_message_delivery_receipt,
     classify_agent_delivery,
+    infer_runtime_for_agent,
+    runtime_matches_selector,
 )
 from switchboard.domain.coordination.placement import (
     claim_decision,
@@ -60,7 +62,7 @@ def _wake_row(row: sqlite3.Row) -> Dict[str, Any]:
 
 def _host_rows_in(c: sqlite3.Connection, now: float) -> List[Dict[str, Any]]:
     rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
-    return [_store_facade()._host_row(row, now=now) for row in rows]
+    return [_host_row(row, now=now) for row in rows]
 
 
 def _placement_reservations_in(c: sqlite3.Connection) -> Dict[str, int]:
@@ -367,7 +369,7 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             host_row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
             if not host_row:
                 return {"claimed": False, "reason": "host_not_registered", "host_id": host_id}
-            host = _store_facade()._host_row(host_row, now=now)
+            host = _host_row(host_row, now=now)
             policy = dict(wake.get("policy") or {})
             binding = dict(policy.get("account_binding") or {})
             placement_claim = claim_decision(
@@ -625,7 +627,7 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                 host_row = c.execute(
                     "SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)
                 ).fetchone() if host_id else None
-                host = _store_facade()._host_row(host_row, now=now) if host_row else None
+                host = _host_row(host_row, now=now) if host_row else None
                 if host and not host.get("stale"):
                     continue
 
@@ -766,7 +768,7 @@ def send_agent_message(from_agent: str, to_agent: str, message: str,
         hit = _store_facade()._idem_hit(c, "send", idem_key, from_agent, payload)
         if hit is not None:
             return hit
-        delivery = _store_facade()._agent_delivery_state(c, to_agent, now)
+        delivery = _agent_delivery_state(c, to_agent, now)
         identity_state = (_store_facade()._task_identity_state_in(c, task_id, now)
                           if task_id else {"status": "clear", "takeover_safe": True})
         if (not delivery.get("reachable") and
@@ -997,7 +999,7 @@ def get_message_status(message_id: int, project: str = DEFAULT_PROJECT) -> Optio
         out = dict(r)
         out["monitor"] = _load_monitor_for_message(c, message_id)
         out["mailbox_stored"] = True
-        out["delivery"] = _store_facade()._agent_delivery_state(c, out.get("to_agent") or "", now)
+        out["delivery"] = _agent_delivery_state(c, out.get("to_agent") or "", now)
         out["delivery_status"] = out["delivery"]["status"]
         task_exists = bool(
             out.get("task_id") and c.execute(
@@ -1215,6 +1217,378 @@ def sweep_coordination_monitors(project: str = DEFAULT_PROJECT,
             "fired": fired, "events": events, "wake_sweep": wake_sweep}
 
 
+# --- ARCH-MS-50: agents + hosts ---
+def _register_agent_impl(agent_id: str, runtime: str, model: str = "", lane: str = "",
+                         task_id: str = "", ttl_s: int = 120,
+                         control: Optional[Dict[str, Any]] = None,
+                         protocol: Optional[Dict[str, Any]] = None,
+                         principal_id: str = "",
+                         actor: str = "system",
+                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    now = time.time()
+    ttl_s = max(10, int(ttl_s or 120))
+    compatibility = check_protocol_compatibility(protocol)
+    stored_control = dict(control or {})
+    if protocol:
+        stored_control["protocol"] = protocol
+    stored_control["protocol_compatibility"] = compatibility
+    control_json = json.dumps(stored_control, sort_keys=True)
+    with _conn(project) as c:
+        c.execute(
+            "INSERT OR REPLACE INTO agent_presence"
+            "(agent_id, runtime, model, lane, task_id, control, principal_id, "
+            "registered_at, heartbeat_at, ttl_s) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (agent_id, runtime, model or None, lane or None, task_id or None, control_json,
+             principal_id or None, now, now, ttl_s),
+        )
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id or None, actor, "agent.registered",
+                   json.dumps({"agent_id": agent_id, "runtime": runtime, "lane": lane,
+                               "control": control or {}, "protocol": protocol or {},
+                               "protocol_compatibility": compatibility}, sort_keys=True), now))
+    return {"agent_id": agent_id, "runtime": runtime, "model": model or None,
+            "lane": lane or None, "task_id": task_id or None,
+            "control": control or {}, "protocol": protocol or {},
+            "protocol_compatibility": compatibility, "registered_at": now,
+            "heartbeat_at": now, "expires_at": now + ttl_s, "ttl_s": ttl_s}
+
+
+def register_agent(agent_id: str, runtime: str, model: str = "", lane: str = "",
+                   task_id: str = "", ttl_s: int = 120,
+                   control: Optional[Dict[str, Any]] = None,
+                   protocol: Optional[Dict[str, Any]] = None,
+                   principal_id: str = "",
+                   actor: str = "system",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    # Resolve impl via store façade so PERF-2 monkeypatches on store._register_agent_impl
+    # still bind after ARCH-MS-45 moved this body into shell.py / ARCH-MS-50 coordination.
+    s = _store_facade()
+    return s._write_through(project, lambda: s._register_agent_impl(
+        agent_id, runtime, model=model, lane=lane, task_id=task_id, ttl_s=ttl_s,
+        control=control, protocol=protocol, principal_id=principal_id,
+        actor=actor, project=project))
+
+
+def heartbeat(agent_id: str, project: str = DEFAULT_PROJECT,
+              actor: str = "system") -> Dict[str, Any]:
+    now = time.time()
+    with _conn(project) as c:
+        cur = c.execute("UPDATE agent_presence SET heartbeat_at=? WHERE agent_id=?",
+                        (now, agent_id))
+        row = c.execute("SELECT * FROM agent_presence WHERE agent_id=?", (agent_id,)).fetchone()
+        if cur.rowcount:
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"] if row else None, actor, "agent.heartbeat",
+                       json.dumps({"agent_id": agent_id}, sort_keys=True), now))
+    if not row:
+        return {"error": "agent not registered", "agent_id": agent_id}
+    return _presence_row(row, now=now)
+
+
+def _presence_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    ttl_s = row["ttl_s"]
+    expires_at = row["heartbeat_at"] + ttl_s
+    return {"agent_id": row["agent_id"], "runtime": row["runtime"], "model": row["model"],
+            "lane": row["lane"], "task_id": row["task_id"],
+            "control": json.loads(row["control"] or "{}"),
+            "registered_at": row["registered_at"], "heartbeat_at": row["heartbeat_at"],
+            "expires_at": expires_at, "ttl_s": ttl_s, "stale": now >= expires_at}
+
+
+def _agent_delivery_state(c: sqlite3.Connection, agent_id: str,
+                          now: float) -> Dict[str, Any]:
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return {
+            "status": "unreachable",
+            "reason": "missing_agent_id",
+            "reachable": False,
+            "message": "Directed messages require a target agent_id.",
+        }
+    row = c.execute("SELECT * FROM agent_presence WHERE agent_id=?", (agent_id,)).fetchone()
+    presence = _presence_row(row, now=now) if row else None
+    delivery = {"agent_id": agent_id}
+    if presence:
+        delivery.update({
+            "runtime": presence.get("runtime"),
+            "lane": presence.get("lane"),
+            "task_id": presence.get("task_id"),
+            "heartbeat_at": presence.get("heartbeat_at"),
+            "expires_at": presence.get("expires_at"),
+            "ttl_s": presence.get("ttl_s"),
+        })
+    if not presence:
+        delivery.update({
+            "status": "unreachable",
+            "reason": "not_registered",
+            "reachable": False,
+            "message": "No active or historical registration exists for this agent_id.",
+        })
+    elif presence.get("stale"):
+        delivery.update({
+            "status": "unreachable",
+            "reason": "stale_registration",
+            "reachable": False,
+            "message": "Agent registration exists but its heartbeat has expired.",
+        })
+    else:
+        delivery.update({
+            "status": "active",
+            "reason": None,
+            "reachable": True,
+            "control": presence.get("control") or {},
+        })
+    hosts = [_host_row(host, now=now) for host in c.execute(
+        "SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC"
+    ).fetchall()]
+    wakes = [_wake_row(wake) for wake in c.execute(
+        "SELECT * FROM wake_intents WHERE status IN ('pending','claimed') "
+        "ORDER BY requested_at"
+    ).fetchall()]
+    delivery.update(classify_agent_delivery(agent_id, presence, hosts, wakes))
+    return delivery
+
+
+def _active_agent_presence_in(c: sqlite3.Connection, agent_id: str,
+                              now: float) -> Optional[Dict[str, Any]]:
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return None
+    row = c.execute("SELECT * FROM agent_presence WHERE agent_id=?", (agent_id,)).fetchone()
+    if not row:
+        return None
+    presence = _presence_row(row, now=now)
+    return None if presence.get("stale") else presence
+
+
+def _active_agent_ids_for_task(c: sqlite3.Connection, task_id: str,
+                               now: float) -> List[str]:
+    if not task_id:
+        return []
+    rows = c.execute("SELECT * FROM agent_presence WHERE task_id=?",
+                     (task_id,)).fetchall()
+    active: List[str] = []
+    for row in rows:
+        presence = _presence_row(row, now=now)
+        if not presence.get("stale"):
+            active.append(presence["agent_id"])
+    return active
+
+
+def list_active_agents(lane: str = "", project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    now = time.time()
+    with _conn(project) as c:
+        if lane:
+            rows = c.execute("SELECT * FROM agent_presence WHERE lane=? ORDER BY heartbeat_at DESC",
+                             (lane,)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM agent_presence ORDER BY heartbeat_at DESC").fetchall()
+    return [p for p in (_presence_row(r, now=now) for r in rows) if not p["stale"]]
+
+
+def _host_row(row: sqlite3.Row, now: Optional[float] = None) -> Dict[str, Any]:
+    now = time.time() if now is None else now
+    d = dict(row)
+    runtimes = _json_obj(d.pop("runtimes_json", "[]"), [])
+    limits = _json_obj(d.pop("limits_json", "{}"), {})
+    capacity = _json_obj(d.pop("capacity_json", "{}"), {})
+    ttl_s = int(d.get("heartbeat_ttl_s") or 60)
+    expires_at = float(d.get("heartbeat_at") or 0) + ttl_s
+    active = int(capacity.get("active_sessions") or 0)
+    max_sessions = limits.get("max_sessions")
+    try:
+        max_sessions = int(max_sessions) if max_sessions is not None else None
+    except Exception:
+        max_sessions = None
+    d.update({
+        "runtimes": runtimes,
+        "limits": limits,
+        "capacity": capacity,
+        "expires_at": expires_at,
+        "stale": now >= expires_at or d.get("status") != "online",
+        "available_sessions": (max(0, max_sessions - active)
+                               if max_sessions is not None else None),
+    })
+    return d
+
+
+def _selector_runtime_for_agent(agent_id: str) -> str:
+    return infer_runtime_for_agent(agent_id)
+
+
+def _runtime_matches_selector(runtime: Dict[str, Any], selector: Dict[str, Any]) -> bool:
+    return runtime_matches_selector(runtime, selector)
+
+
+def _host_can_handle(host: Dict[str, Any], selector: Dict[str, Any]) -> bool:
+    if host.get("stale"):
+        return False
+    if host.get("available_sessions") is not None and host["available_sessions"] <= 0:
+        return False
+    return any(_runtime_matches_selector(rt, selector) for rt in host.get("runtimes") or [])
+
+
+def _eligible_hosts_in(c: sqlite3.Connection, selector: Dict[str, Any],
+                       now: float) -> List[Dict[str, Any]]:
+    rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
+    hosts = [_host_row(r, now=now) for r in rows]
+    return [h for h in hosts if _host_can_handle(h, selector)]
+
+
+def register_host(inventory: Dict[str, Any], principal_id: str = "",
+                  actor: str = "system",
+                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Register or refresh an always-on Agent Host inventory record."""
+    started_at = time.time()
+    now = time.time()
+    host_id = (inventory.get("host_id") or "").strip()
+    if not host_id:
+        return {"error": "host_id required"}
+    runtimes = inventory.get("runtimes") or []
+    limits = inventory.get("limits") or {}
+    capacity = inventory.get("capacity") or {}
+    if "active_sessions" in inventory and "active_sessions" not in capacity:
+        capacity["active_sessions"] = inventory.get("active_sessions")
+    ttl_s = max(10, int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60))
+    try:
+        with _store_facade()._control_plane_conn(project) as c:
+            c.execute(
+                "INSERT INTO agent_hosts(host_id, hostname, agent_host_version, repo_root, "
+                "runtimes_json, limits_json, capacity_json, principal_id, registered_at, "
+                "heartbeat_at, heartbeat_ttl_s, status, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(host_id) DO UPDATE SET hostname=excluded.hostname, "
+                "agent_host_version=excluded.agent_host_version, repo_root=excluded.repo_root, "
+                "runtimes_json=excluded.runtimes_json, limits_json=excluded.limits_json, "
+                "capacity_json=excluded.capacity_json, principal_id=excluded.principal_id, "
+                "heartbeat_at=excluded.heartbeat_at, heartbeat_ttl_s=excluded.heartbeat_ttl_s, "
+                "status=excluded.status, last_error=NULL",
+                (host_id, inventory.get("hostname") or None,
+                 inventory.get("agent_host_version") or None, inventory.get("repo_root") or None,
+                 json.dumps(runtimes, sort_keys=True), json.dumps(limits, sort_keys=True),
+                 json.dumps(capacity, sort_keys=True), principal_id or None, now, now, ttl_s,
+                 "online", None),
+            )
+            payload = {"host_id": host_id, "runtimes": runtimes, "limits": limits,
+                       "heartbeat_ttl_s": ttl_s}
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (None, actor, "agent_host.registered",
+                       json.dumps(payload, sort_keys=True), now))
+            row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if _store_facade()._sqlite_busy(exc):
+            return _store_facade()._control_plane_unavailable("register_host", project, started_at, exc)
+        raise
+    return _host_row(row, now=now)
+
+
+def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
+                   capacity: Optional[Dict[str, Any]] = None,
+                   status: str = "online", last_error: str = "",
+                   actor: str = "system",
+                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    started_at = time.time()
+    now = time.time()
+    try:
+        with _store_facade()._control_plane_conn(project) as c:
+            row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+            if not row:
+                return {"error": "host not registered", "host_id": host_id}
+            current = _json_obj(row["capacity_json"], {})
+            if capacity:
+                current.update(capacity)
+            if active_sessions is not None:
+                current["active_sessions"] = int(active_sessions)
+            c.execute(
+                "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=? "
+                "WHERE host_id=?",
+                (now, json.dumps(current, sort_keys=True), status or "online",
+                 last_error or None, host_id),
+            )
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (None, actor, "agent_host.heartbeat",
+                       json.dumps({"host_id": host_id, "capacity": current,
+                                   "status": status or "online"}, sort_keys=True), now))
+            row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if _store_facade()._sqlite_busy(exc):
+            return _store_facade()._control_plane_unavailable("heartbeat_host", project, started_at, exc)
+        raise
+    return _host_row(row, now=now)
+
+
+def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",
+                     include_stale: bool = False,
+                     project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
+    started_at = time.time()
+    now = time.time()
+    selector = {"runtime": runtime or "", "lane": lane or "",
+                "capabilities": [capability] if capability else []}
+    try:
+        with _store_facade()._control_plane_conn(project) as c:
+            rows = c.execute("SELECT * FROM agent_hosts ORDER BY heartbeat_at DESC").fetchall()
+    except sqlite3.OperationalError as exc:
+        if _store_facade()._sqlite_busy(exc):
+            return [_store_facade()._control_plane_unavailable("list_agent_hosts", project, started_at, exc)]
+        raise
+    hosts = [_host_row(r, now=now) for r in rows]
+    out = []
+    for host in hosts:
+        if host.get("stale") and not include_stale:
+            continue
+        if (runtime or lane or capability) and not any(
+            _runtime_matches_selector(rt, selector) for rt in host.get("runtimes") or []
+        ):
+            continue
+        out.append(host)
+    return out
+
+
+def host_status(host_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    started_at = time.time()
+    now = time.time()
+    try:
+        with _store_facade()._control_plane_conn(project) as c:
+            row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
+            if not row:
+                return {"error": "host not registered", "host_id": host_id}
+            host = _host_row(row, now=now)
+            counts = c.execute(
+                "SELECT status, COUNT(*) n FROM wake_intents WHERE claimed_by_host=? GROUP BY status",
+                (host_id,),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if _store_facade()._sqlite_busy(exc):
+            return _store_facade()._control_plane_unavailable("host_status", project, started_at, exc)
+        raise
+    host["wake_counts"] = {r["status"]: r["n"] for r in counts}
+    return host
+
+
+def set_agent_state(task_id: str, agent_id: str, state: Dict[str, Any],
+                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Upsert this agent's state blob inside the task's agent_state JSON map.
+    Other agents' state keys are preserved. Returns the full merged agent_state."""
+    with _conn(project) as c:
+        row = c.execute("SELECT agent_state FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
+            return {"error": "task not found", "task_id": task_id}
+        current = json.loads(row["agent_state"] or "{}") if row["agent_state"] else {}
+        current[agent_id] = state
+        c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
+                  (json.dumps(current, sort_keys=True), time.time(), task_id))
+    return current
+
+
+def get_agent_state(task_id: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Return the full agent_state map for a task (all agents' state blobs)."""
+    with _conn(project) as c:
+        row = c.execute("SELECT agent_state FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    if not row:
+        return {"error": "task not found", "task_id": task_id}
+    return json.loads(row["agent_state"] or "{}") if row["agent_state"] else {}
+
+
 class StoreCoordinationRepository:
     """SQL-backed coordination repository (ARCH-MS-33)."""
 
@@ -1273,4 +1647,23 @@ __all__ = [
     "resolve_monitor",
     "cancel_monitor",
     "sweep_coordination_monitors",
+    "_register_agent_impl",
+    "register_agent",
+    "heartbeat",
+    "_presence_row",
+    "_agent_delivery_state",
+    "_active_agent_presence_in",
+    "_active_agent_ids_for_task",
+    "list_active_agents",
+    "_host_row",
+    "_selector_runtime_for_agent",
+    "_runtime_matches_selector",
+    "_host_can_handle",
+    "_eligible_hosts_in",
+    "register_host",
+    "heartbeat_host",
+    "list_agent_hosts",
+    "host_status",
+    "set_agent_state",
+    "get_agent_state",
 ]

@@ -1,4 +1,4 @@
-"""Backward-compatible shim — prefer ``switchboard.storage.repositories.coordination``."""
+""" Backward-compatible shim — prefer ``switchboard.storage.repositories.coordination``."""
 import scripts.switchboard_path  # noqa: F401 — make src/switchboard importable
 
 from switchboard.storage.repositories.coordination import (  # noqa: E402
@@ -9,17 +9,26 @@ from switchboard.storage.repositories.coordination import (  # noqa: E402
     claim_wake,
     complete_wake,
     default_coordination_repository,
+    get_agent_state,
     get_message_status,
+    heartbeat,
+    heartbeat_host,
+    host_status,
+    list_active_agents,
+    list_agent_hosts,
     list_agent_messages,
     list_coordination_monitors,
     list_pending_acks,
     list_unacked_messages,
     list_unblock_requests,
     list_wake_intents,
+    register_agent,
+    register_host,
     request_unblock,
     request_wake,
     resolve_monitor,
     send_agent_message,
+    set_agent_state,
     sweep_coordination_monitors,
     sweep_wake_intents,
 )
@@ -45,4 +54,13 @@ __all__ = [
     "resolve_monitor",
     "cancel_monitor",
     "sweep_coordination_monitors",
+    "register_agent",
+    "heartbeat",
+    "list_active_agents",
+    "register_host",
+    "heartbeat_host",
+    "list_agent_hosts",
+    "host_status",
+    "set_agent_state",
+    "get_agent_state",
 ]
