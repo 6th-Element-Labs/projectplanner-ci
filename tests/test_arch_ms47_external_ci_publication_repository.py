@@ -96,8 +96,8 @@ ok("def create_publication_evidence(" not in shell_src,
    "shell residual no longer defines create_publication_evidence")
 ok("def _publication_reconcile_findings(" not in shell_src,
    "shell residual no longer defines _publication_reconcile_findings")
-ok("def merge_gate(" in shell_src,
-   "merge_gate remains in shell residual (not part of ARCH-MS-47)")
+ok("def merge_gate(" not in shell_src,
+   "merge_gate left shell residual (ARCH-MS-61)")
 ok("def create_external_ci_run(" in eci_src,
    "external_ci repository owns create_external_ci_run")
 ok("def create_publication_evidence(" in pub_src,
