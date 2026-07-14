@@ -3,6 +3,8 @@
 import base64
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -128,6 +130,20 @@ ok('test "$(sudo -u switchboard git -C "$WORKTREE" rev-parse HEAD)" = "$SOURCE_S
 ok("SWITCHBOARD_CO_SOURCE_SHA=${SOURCE_SHA}" in rendered
    and "${WORKTREE}/adapters/agent_host.py --interval 10" in rendered,
    "Agent Host executes the exact checked mirror revision, not stale image code")
+ok("Environment=PYTHONPATH=${WORKTREE}:${WORKTREE}/src" in rendered,
+   "fleet Agent Host exposes both the exact worktree and its src package root")
+repo_root = Path(__file__).resolve().parent
+import_probe = subprocess.run(
+    [sys.executable, "-c",
+     "from adapters.claude_personal_worker import ProviderRuntimeAuth; print('ok')"],
+    cwd=TMP,
+    env={**os.environ, "PYTHONPATH": f"{repo_root}:{repo_root / 'src'}"},
+    capture_output=True,
+    text=True,
+    timeout=15,
+)
+ok(import_probe.returncode == 0 and import_probe.stdout.strip() == "ok",
+   "rendered fleet PYTHONPATH can import the real Claude personal worker contract")
 ok("PM_CO_DRAIN_IMDS=1" in rendered
    and "PM_CO_DRAIN_REQUEST_PATH=/run/switchboard-co/drain-request.json" in rendered
    and "PM_PROVIDER_RUNTIME_ROOT=/var/lib/switchboard-co/provider-runtimes" in rendered,

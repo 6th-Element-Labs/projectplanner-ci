@@ -216,6 +216,30 @@ try:
     ok(wake_done["status"] == "completed" and wake_done["runner_session_id"] == "run_test",
        "complete_wake records runtime start evidence")
 
+    failed_wake = store.request_wake(
+        selector={"runtime": "claude-code", "agent_id": "claude/TEST#fail",
+                  "lane": "TEST", "capabilities": ["docs"]},
+        reason="failed runtime proof",
+        source="test-failed-runtime",
+        policy={"deadline_seconds": 60},
+        principal_id=p["id"],
+        actor=auth.actor(p),
+        project=P,
+    )
+    store.claim_wake("host/test", failed_wake["wake_id"],
+                     actor=auth.actor(p), project=P)
+    wake_failed = store.complete_wake(
+        failed_wake["wake_id"],
+        runner_session_id="run_failed",
+        agent_id="claude/TEST#fail",
+        result={"started": False, "reason": "launch_failed"},
+        actor=auth.actor(p),
+        project=P,
+    )
+    ok(wake_failed["status"] == "failed"
+       and wake_failed["runner_session_id"] == "run_failed",
+       "explicit started=false remains failed even when runner identity is recorded")
+
     lease = store.claim_resources(
         agent_id="codex/TEST#1",
         resource_type="file",

@@ -331,6 +331,31 @@ ok(summary["acted"][0]["wake_completion_delegated"] is True
    and not any(call[1] == agent_host.P_COMPLETE_WAKE for call in calls),
    "Agent Host leaves BYOA wake completion to the credential-admitted child")
 
+# A child that dies before provider admission cannot complete its own wake. The
+# host must terminally record the preclaim runner and fail the wake so the Spot
+# worker is not pinned forever by a claimed intent.
+calls = []
+agent_host._try = fake_try_byoa
+agent_host.confirm_started = lambda rec: False
+agent_host.launch = lambda wake, inv, runner_session_id="", extra_env=None: None
+summary = agent_host.run_once(inventory)
+agent_host.confirm_started = lambda rec: True
+failed_runner_registers = [
+    call[2] for call in calls
+    if call[1] == agent_host.P_REGISTER_RUNNER
+    and call[2].get("status") == "failed"
+]
+failed_wake_calls = [call[2] for call in calls if call[1] == agent_host.P_COMPLETE_WAKE]
+ok(len(failed_runner_registers) == 1
+   and failed_runner_registers[0]["runner_session_id"].startswith("run_")
+   and failed_runner_registers[0]["metadata"]["credential_admission_phase"]
+       == "preclaim_failed",
+   "failed BYOA child replaces the starting runner row with terminal preclaim evidence")
+ok(summary["acted"][0]["wake_completion_delegated"] is False
+   and len(failed_wake_calls) == 1
+   and failed_wake_calls[0]["result"]["started"] is False,
+   "failed BYOA child is completed by the host instead of leaking a claimed wake")
+
 # run_once end-to-end for a closure_verify wake: a fast, already-exited "job" must
 # still be reported started=True (the bug this whole block guards against — before
 # the confirm_closure_verified wiring, run_once used bare os.kill liveness for every
