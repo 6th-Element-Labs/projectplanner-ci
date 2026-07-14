@@ -50,6 +50,7 @@ SKELETON_MODULES = (
     "switchboard.storage.repositories.access",
     "switchboard.storage.repositories.claims",
     "switchboard.storage.repositories.coordination",
+    "switchboard.storage.repositories.provenance",
     "switchboard.storage.repositories.runner",
     "switchboard.storage.repositories.tasks",
 )
