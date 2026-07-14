@@ -234,12 +234,6 @@ def _validate_runtime_binding(command: AcquireProviderCredentialLeaseCommand,
             "credential_agent_binding_invalid", "credential agent binding is invalid",
             status_code=409,
         )
-    if (principal.principal_kind == "host" and principal.principal_id != command.host_id):
-        raise CredentialVaultError(
-            "credential_host_binding_invalid", "credential host binding is invalid",
-            status_code=409,
-        )
-
     runner_metadata = runner_session.get("metadata") or {}
     affinity = str(runner_metadata.get("account_affinity_id") or "").strip()
     affinity_matches = (
@@ -260,6 +254,10 @@ def _validate_runtime_binding(command: AcquireProviderCredentialLeaseCommand,
             status_code=409,
         )
 
+    # Ephemeral fleet instances intentionally share one narrowly scoped host
+    # principal. The principal id therefore need not equal the physical host id;
+    # the trust anchor is the selected live host record plus the same principal on
+    # the Work Session, claim, and runner checked above.
     host = next((item for item in store.list_agent_hosts(
         include_stale=True, project=command.project)
         if item.get("host_id") == command.host_id), None)
