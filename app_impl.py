@@ -73,6 +73,7 @@ from switchboard.api.routers.messaging import create_router as _create_messaging
 from switchboard.api.routers.access import create_router as _create_access_router  # noqa: E402
 from switchboard.api.routers.health import create_router as _create_health_router  # noqa: E402
 from switchboard.api.routers.tally import create_router as _create_tally_router  # noqa: E402
+from switchboard.api.routers.ixp_work_sessions import create_router as _create_ixp_work_sessions_router  # noqa: E402
 from switchboard.api.routers.runner import create_router as _create_runner_router  # noqa: E402
 from switchboard.api.routers.external_effects import create_router as _create_external_effects_router  # noqa: E402
 from switchboard.application.commands import request_wake as request_wake_command  # noqa: E402
@@ -234,6 +235,11 @@ app.include_router(_create_health_router(
     resolve_principal=_principal,
     saturation_snapshot=lambda project: _saturation_snapshot(project),
     project_init_failures=lambda: _PROJECT_INIT_FAILURES,
+))
+app.include_router(_create_ixp_work_sessions_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
 ))
 
 app.include_router(_create_runner_router(
@@ -1749,158 +1755,6 @@ def ixp_saturation_signals(project: str = Query(store.DEFAULT_PROJECT)):
 
 
 
-
-@app.get("/ixp/v1/work_sessions")
-async def ixp_work_sessions(project: str = Query(store.DEFAULT_PROJECT),
-                            task_id: str = "", agent_id: str = "", status: str = "",
-                            repo_role: str = "", include_expired: bool = True):
-    project = _proj(project)
-    return {
-        "project": project,
-        "contract": store.work_session_contract(project),
-        "work_sessions": store.list_work_sessions(
-            project=project, task_id=task_id, agent_id=agent_id, status=status,
-            repo_role=repo_role, include_expired=include_expired),
-    }
-
-
-@app.post("/ixp/v1/work_sessions")
-async def ixp_create_work_session(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "work-session")
-    payload = dict(body or {})
-    payload.pop("project", None)
-    result = store.create_work_session(
-        payload, actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result)
-    return result
-
-
-@app.post("/ixp/v1/managed_work_sessions")
-async def ixp_create_managed_work_session(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "managed-work-session")
-    payload = dict(body or {})
-    payload.pop("project", None)
-    result = store.create_managed_work_session(
-        payload, actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result)
-    return result
-
-
-@app.get("/ixp/v1/work_sessions/{work_session_id}")
-async def ixp_get_work_session(work_session_id: str,
-                               project: str = Query(store.DEFAULT_PROJECT)):
-    session = store.get_work_session(work_session_id, project=_proj(project))
-    if not session:
-        raise HTTPException(404, "work_session_not_found")
-    return session
-
-
-@app.get("/ixp/v1/work_sessions/{work_session_id}/health")
-async def ixp_get_work_session_health(work_session_id: str,
-                                      project: str = Query(store.DEFAULT_PROJECT)):
-    health = store.get_work_session_health(work_session_id, project=_proj(project))
-    if not health:
-        raise HTTPException(404, "work_session_not_found")
-    return health
-
-
-@app.get("/ixp/v1/session_health")
-async def ixp_session_health(project: str = Query(store.DEFAULT_PROJECT),
-                             task_id: str = "", agent_id: str = "",
-                             status: str = "", only_unsafe: bool = False):
-    return store.list_session_health(
-        project=_proj(project), task_id=task_id, agent_id=agent_id,
-        status=status, only_unsafe=only_unsafe)
-
-
-@app.patch("/ixp/v1/work_sessions/{work_session_id}")
-async def ixp_update_work_session(work_session_id: str, request: Request,
-                                  body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "work-session")
-    payload = dict(body or {})
-    payload.pop("project", None)
-    result = store.update_work_session(
-        work_session_id, payload, actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        status = 404 if result.get("error") == "work_session_not_found" else 400
-        raise HTTPException(status, result)
-    return result
-
-
-@app.post("/ixp/v1/work_sessions/{work_session_id}/archive_workspace")
-async def ixp_archive_work_session_workspace(work_session_id: str, request: Request,
-                                             body: dict = Body(default={})):
-    body = body or {}
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "managed-work-session")
-    result = store.archive_work_session_workspace(
-        work_session_id,
-        remove_workspace=bool(body.get("remove_workspace", False)),
-        actor=auth.actor(principal),
-        project=project,
-    )
-    if result.get("error"):
-        status = 404 if result.get("error") == "work_session_not_found" else 400
-        raise HTTPException(status, result)
-    return result
-
-
-@app.post("/ixp/v1/repo_preflight")
-async def ixp_repo_preflight(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    _principal(request, project, ("write:ixp",),
-               dev_actor=body.get("agent_id") or "repo-preflight")
-    result = store.repo_preflight(
-        worktree_path=body.get("worktree_path") or body.get("path") or "",
-        project=project,
-        task_id=body.get("task_id") or body.get("task") or "",
-        agent_id=body.get("agent_id") or "",
-        repo_role=body.get("repo_role") or "canonical",
-        expected_branch=body.get("expected_branch") or "",
-        expected_base_ref=body.get("expected_base_ref") or "",
-        scan_conflicts=bool(body.get("scan_conflicts", True)),
-    )
-    if result.get("verdict") == "deny":
-        return result
-    return result
-
-
-@app.post("/ixp/v1/work_sessions/{work_session_id}/preflight")
-async def ixp_preflight_work_session(work_session_id: str, request: Request,
-                                     body: dict = Body(default={})):
-    body = body or {}
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "work-session")
-    result = store.preflight_work_session(
-        work_session_id, actor=auth.actor(principal), project=project,
-        expected_branch=body.get("expected_branch") or "",
-        expected_base_ref=body.get("expected_base_ref") or "")
-    if result.get("error"):
-        status = 404 if result.get("error") == "work_session_not_found" else 400
-        raise HTTPException(status, result)
-    return result
-
-
-@app.post("/ixp/v1/pre_tool_check")
-async def ixp_pre_tool_check(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "pre-tool")
-    payload = dict(body or {})
-    payload.pop("project", None)
-    return store.pre_tool_check(
-        payload, actor=auth.actor(principal), principal_id=principal["id"],
-        project=project)
 
 
 @app.post("/ixp/v1/claim")

@@ -1,7 +1,10 @@
 """Work Session / preflight MCP tools.
 
-Transport adapter extracted in ARCH-MS-52. Authentication and MCP serialization
-remain edge concerns; persistence stays behind store / application commands.
+Transport adapter finished in ARCH-MS-66. Authentication and MCP serialization
+remain edge concerns; mutating create/update/preflight/archive paths call
+application commands. Persistence stays behind store /
+repositories/work_sessions.py. ``repo_preflight`` / ``pre_tool_check`` remain
+thin store wrappers until ARCH-MS-58 / ARCH-MS-60.
 """
 from __future__ import annotations
 
@@ -13,6 +16,7 @@ from mcp.server.fastmcp import Context
 
 import auth
 import store
+from switchboard.application.commands import work_sessions as work_session_commands
 
 
 @dataclass(frozen=True)
@@ -46,10 +50,9 @@ def create_work_session(work_session_json: str, ctx: Context,
         payload = json.loads(work_session_json or "{}")
     except json.JSONDecodeError:
         return services.dumps({"error": "work_session_json must be valid JSON"})
-    return services.dumps(store.create_work_session(
-        payload, actor=auth.actor(principal), principal_id=principal.get("id") or "",
-        project=project))
-
+    return services.dumps(work_session_commands.create(
+        payload, actor=auth.actor(principal),
+        principal_id=principal.get("id") or "", project=project))
 
 
 def create_managed_work_session(managed_session_json: str, ctx: Context,
@@ -69,10 +72,9 @@ def create_managed_work_session(managed_session_json: str, ctx: Context,
         payload = json.loads(managed_session_json or "{}")
     except json.JSONDecodeError:
         return services.dumps({"error": "managed_session_json must be valid JSON"})
-    return services.dumps(store.create_managed_work_session(
-        payload, actor=auth.actor(principal), principal_id=principal.get("id") or "",
-        project=project))
-
+    return services.dumps(work_session_commands.create_managed(
+        payload, actor=auth.actor(principal),
+        principal_id=principal.get("id") or "", project=project))
 
 
 def get_work_session(work_session_id: str, project: str = "maxwell") -> str:
@@ -83,14 +85,12 @@ def get_work_session(work_session_id: str, project: str = "maxwell") -> str:
                              "work_session_id": work_session_id})
 
 
-
 def get_work_session_health(work_session_id: str, project: str = "maxwell") -> str:
     """Read the computed health verdict for one Work Session."""
     services = _services()
     health = store.get_work_session_health(work_session_id, project=project)
     return services.dumps(health or {"error": "work_session_not_found",
                             "work_session_id": work_session_id})
-
 
 
 def list_work_sessions(project: str = "maxwell", task_id: str = "",
@@ -107,7 +107,6 @@ def list_work_sessions(project: str = "maxwell", task_id: str = "",
     })
 
 
-
 def list_session_health(project: str = "maxwell", task_id: str = "",
                         agent_id: str = "", status: str = "",
                         only_unsafe: bool = False) -> str:
@@ -116,7 +115,6 @@ def list_session_health(project: str = "maxwell", task_id: str = "",
     return services.dumps(store.list_session_health(
         project=project, task_id=task_id, agent_id=agent_id,
         status=status, only_unsafe=only_unsafe))
-
 
 
 def update_work_session(work_session_id: str, updates_json: str, ctx: Context,
@@ -128,9 +126,8 @@ def update_work_session(work_session_id: str, updates_json: str, ctx: Context,
         payload = json.loads(updates_json or "{}")
     except json.JSONDecodeError:
         return services.dumps({"error": "updates_json must be valid JSON"})
-    return services.dumps(store.update_work_session(
+    return services.dumps(work_session_commands.update(
         work_session_id, payload, actor=auth.actor(principal), project=project))
-
 
 
 def archive_work_session_workspace(work_session_id: str, ctx: Context,
@@ -139,12 +136,11 @@ def archive_work_session_workspace(work_session_id: str, ctx: Context,
     """Archive a managed Work Session and optionally remove its owned workspace path."""
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(store.archive_work_session_workspace(
+    return services.dumps(work_session_commands.archive(
         work_session_id,
         remove_workspace=remove_workspace,
         actor=auth.actor(principal),
         project=project))
-
 
 
 def repo_preflight(worktree_path: str, ctx: Context, project: str = "maxwell",
@@ -165,16 +161,14 @@ def repo_preflight(worktree_path: str, ctx: Context, project: str = "maxwell",
         expected_base_ref=expected_base_ref, scan_conflicts=scan_conflicts))
 
 
-
 def preflight_work_session(work_session_id: str, ctx: Context, project: str = "maxwell",
                            expected_branch: str = "", expected_base_ref: str = "") -> str:
     """Run repo_preflight for a Work Session path and write the result into hygiene."""
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
-    return services.dumps(store.preflight_work_session(
+    return services.dumps(work_session_commands.preflight(
         work_session_id, actor=auth.actor(principal), project=project,
         expected_branch=expected_branch, expected_base_ref=expected_base_ref))
-
 
 
 def pre_tool_check(ctx: Context, tool_name: str = "", tool_input_json: str = "",
@@ -210,9 +204,12 @@ def pre_tool_check(ctx: Context, tool_name: str = "", tool_input_json: str = "",
     ))
 
 
-
-
-WORK_SESSION_TOOL_NAMES = ('create_work_session', 'create_managed_work_session', 'get_work_session', 'get_work_session_health', 'list_work_sessions', 'list_session_health', 'update_work_session', 'archive_work_session_workspace', 'repo_preflight', 'preflight_work_session', 'pre_tool_check')
+WORK_SESSION_TOOL_NAMES = (
+    'create_work_session', 'create_managed_work_session', 'get_work_session',
+    'get_work_session_health', 'list_work_sessions', 'list_session_health',
+    'update_work_session', 'archive_work_session_workspace', 'repo_preflight',
+    'preflight_work_session', 'pre_tool_check',
+)
 
 
 def register_work_session_tools(mcp: Any, services: WorkSessionToolServices) -> dict[str, Callable[..., str]]:
