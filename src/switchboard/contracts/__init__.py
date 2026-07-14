@@ -1,5 +1,5 @@
 """Versioned Pydantic contracts shared by REST, MCP, and events (ARCH-MS-25)."""
-from . import agents, claims, projects, registry, tasks, wakes
+from . import agents, claims, messaging, projects, registry, tasks, wakes
 from .base import (
     SCHEMA_ID_PREFIX,
     VersionedModel,
@@ -72,6 +72,12 @@ from .wakes import (
     CompleteWakeCommand,
     RequestWakeCommand,
 )
+from .messaging import (
+    ACK_MESSAGE_COMMAND_SCHEMA,
+    SEND_AGENT_MESSAGE_COMMAND_SCHEMA,
+    AckMessageCommand,
+    SendAgentMessageCommand,
+)
 
 __all__ = [
     "ARCHIVE_PROJECT_COMMAND_SCHEMA",
@@ -80,6 +86,7 @@ __all__ = [
     "PROJECT_CONSOLIDATION_PLAN_RECEIPT_SCHEMA",
     "PROJECT_CONSOLIDATION_PLAN_SCHEMA",
     "PROJECT_CONSOLIDATION_ROLLBACK_COMMAND_SCHEMA",
+    "ACK_MESSAGE_COMMAND_SCHEMA",
     "CLAIM_NEXT_COMMAND_SCHEMA",
     "CLAIM_TASK_COMMAND_SCHEMA",
     "CLAIM_WAKE_COMMAND_SCHEMA",
@@ -101,7 +108,9 @@ __all__ = [
     "PURGE_INTENT_COMMAND_SCHEMA",
     "PURGE_VERIFY_COMMAND_SCHEMA",
     "SCHEMA_ID_PREFIX",
+    "SEND_AGENT_MESSAGE_COMMAND_SCHEMA",
     "UPDATE_TASK_COMMAND_SCHEMA",
+    "AckMessageCommand",
     "ArchiveProjectCommand",
     "ApplyProjectConsolidationCommand",
     "ConsolidationApproval",
@@ -127,6 +136,7 @@ __all__ = [
     "RecordCleanupReviewCommand",
     "VerifyPurgeIntentCommand",
     "RollbackProjectConsolidationCommand",
+    "SendAgentMessageCommand",
     "build_consolidation_plan_receipt",
     "UpdateTaskCommand",
     "VersionedModel",
@@ -136,6 +146,7 @@ __all__ = [
     "normalize_dependency_ids",
     "agents",
     "claims",
+    "messaging",
     "projects",
     "register",
     "registry",

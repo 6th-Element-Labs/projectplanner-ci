@@ -69,6 +69,7 @@ from switchboard.api.routers.tasks import create_router as _create_task_router  
 from switchboard.api.routers.claims import create_router as _create_claims_router  # noqa: E402
 from switchboard.api.routers.wakes import create_router as _create_wakes_router  # noqa: E402
 from switchboard.api.routers.agents import create_router as _create_agents_router  # noqa: E402
+from switchboard.api.routers.messaging import create_router as _create_messaging_router  # noqa: E402
 from switchboard.application.commands import request_wake as request_wake_command  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
@@ -194,6 +195,11 @@ app.include_router(_create_agents_router(
     resolve_principal=_principal,
     resolve_body_project=_body_project,
     control_plane_http=_control_plane_http,
+))
+app.include_router(_create_messaging_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
 ))
 app.include_router(_create_project_router(
     resolve_project=_proj,
@@ -1955,35 +1961,8 @@ async def api_coordinator_dispatch(request: Request, body: dict = Body(default={
 
 
 # ---- UI-7: operator-facing directed messaging + ack inbox ----
-# The /ixp/v1/* message bus authenticates agents by write:ixp bearer; these /api/*
-# twins let a browser operator steer a live agent from a task's chip (send, with an
-# optional required ack) and watch the ack land — using their normal session scopes.
-
-@app.post("/api/agent_messages/send")
-async def api_send_agent_message(request: Request, body: dict = Body(...)):
-    """Operator → live agent nudge/redirect. from_agent is the operator's own identity so
-    the ack inbox can find it again; requires_ack + a deadline arm a durable monitor.
-    Pass ?project= in the query so the auth middleware scopes to the right board."""
-    project = _proj(request.query_params.get("project") or body.get("project") or store.DEFAULT_PROJECT)
-    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
-    to_agent = (body.get("to_agent") or body.get("to") or "").strip()
-    if not to_agent:
-        raise HTTPException(400, "to_agent is required")
-    if not (body.get("message") or "").strip():
-        raise HTTPException(400, "message is required")
-    deadline = body.get("ack_deadline_minutes")
-    return store.send_agent_message(
-        from_agent=auth.actor(principal),
-        to_agent=to_agent,
-        message=body.get("message"),
-        task_id=(body.get("task_id") or body.get("task") or None),
-        requires_ack=bool(body.get("requires_ack")),
-        ack_deadline_minutes=(int(deadline) if deadline not in (None, "", 0, "0") else None),
-        priority=int(body.get("priority") or 0),
-        principal_id=principal["id"],
-        idem_key=body.get("idem_key") or "",
-        project=project)
-
+# Send/ack mutators live in switchboard.api.routers.messaging. These read-side
+# twins remain here so the operator chip can poll pending acks and status.
 
 @app.get("/api/agent_messages/pending")
 async def api_pending_acks(request: Request, project: str = Query(store.DEFAULT_PROJECT),
@@ -2007,19 +1986,6 @@ async def api_message_status(request: Request, message_id: int,
     if not msg:
         raise HTTPException(404, "message not found")
     return msg
-
-
-@app.post("/api/agent_messages/ack")
-async def api_ack_message(request: Request, body: dict = Body(...)):
-    """Operator acks/dismisses a required message on the recipient's behalf.
-    Pass ?project= in the query so the auth middleware scopes to the right board."""
-    project = _proj(request.query_params.get("project") or body.get("project") or store.DEFAULT_PROJECT)
-    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
-    mid = body.get("message_id") if body.get("message_id") is not None else body.get("id")
-    if mid is None:
-        raise HTTPException(400, "message_id is required")
-    return store.ack_message(int(mid), response=body.get("response") or "",
-                             actor=auth.actor(principal), project=project)
 
 
 @app.post("/ixp/v1/heartbeat_host")
@@ -2618,28 +2584,6 @@ async def ixp_cancel_wake(request: Request, body: dict = Body(...)):
     return result
 
 
-@app.post("/ixp/v1/send")
-async def ixp_send(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("from_agent") or "agent")
-    return store.send_agent_message(
-        from_agent=body.get("from_agent") or auth.actor(principal),
-        to_agent=body.get("to_agent") or body.get("to") or "",
-        message=body.get("message") or "",
-        task_id=body.get("task") or body.get("task_id"),
-        requires_ack=bool(body.get("requires_ack")),
-        ack_deadline_minutes=body.get("ack_deadline_minutes"),
-        ack_timeout_seconds=(body.get("ack_timeout_seconds")
-                             if body.get("ack_timeout_seconds") is not None
-                             else body.get("ack_timeout_s")),
-        on_ack_timeout=(body.get("on_ack_timeout") or body.get("ack_timeout_action") or
-                        "notify_sender"),
-        signal=body.get("signal"), priority=int(body.get("priority") or 0),
-        principal_id=principal["id"], idem_key=body.get("idem_key") or "",
-        project=project)
-
-
 @app.get("/ixp/v1/inbox")
 async def ixp_inbox(project: str = Query(store.DEFAULT_PROJECT),
                     to_agent: str = "", unacked: bool = True, signal: str = ""):
@@ -2647,15 +2591,6 @@ async def ixp_inbox(project: str = Query(store.DEFAULT_PROJECT),
     if signal:
         msgs = [m for m in msgs if m.get("signal") == signal]
     return {"messages": msgs}
-
-
-@app.post("/ixp/v1/ack")
-async def ixp_ack(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    return store.ack_message(int(body.get("message_id") or body.get("id")),
-                             response=body.get("response") or "",
-                             actor=auth.actor(principal), project=project)
 
 
 @app.get("/ixp/v1/message_status")

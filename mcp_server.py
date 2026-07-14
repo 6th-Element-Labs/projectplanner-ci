@@ -40,6 +40,7 @@ from switchboard.mcp.tools import tasks as task_tools
 from switchboard.mcp.tools import claims as claim_tools  # noqa: E402
 from switchboard.mcp.tools import wakes as wake_tools  # noqa: E402
 from switchboard.mcp.tools import agents as agent_tools  # noqa: E402
+from switchboard.mcp.tools import messaging as messaging_tools  # noqa: E402
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -225,6 +226,15 @@ _agent_tool_functions = agent_tools.register_agent_tools(
     ),
 )
 globals().update(_agent_tool_functions)
+
+_messaging_tool_functions = messaging_tools.register_messaging_tools(
+    mcp,
+    messaging_tools.MessagingToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_messaging_tool_functions)
 
 # Compatibility aliases for direct Python callers while the monolith is strangled.
 _dep_ids = task_tools.dep_ids
@@ -1827,55 +1837,8 @@ def reconcile_alerts(ctx: Context, project: str = "maxwell",
 
 
 # ---- directed agent IM (IXP write-authenticated) -----------------------
-@mcp.tool()
-def send_agent_message(from_agent: str, to_agent: str, message: str,
-                       ctx: Context, project: str = "maxwell", task_id: str = "",
-                       requires_ack: bool = False,
-                       ack_deadline_minutes: int = 0,
-                       ack_timeout_seconds: float = 0,
-                       on_ack_timeout: str = "notify_sender",
-                       signal: str = "", priority: int = 0,
-                       idem_key: str = "") -> str:
-    """Send a directed message to another agent session. Unlike add_comment (bulletin
-    board, fire-and-forget), this has an ack/read-receipt so the sender can confirm
-    the message landed before acting on the assumption it was received.
-
-    from_agent / to_agent: stable agent-session identifiers (e.g. 'claude/ENGINE-11').
-    task_id: the task this message is about (optional).
-    requires_ack: if true, the receiving agent should call ack_message to confirm receipt.
-    ack_deadline_minutes: how long the sender will wait for an ack (0 = no deadline).
-    ack_timeout_seconds: equivalent seconds-based alias; used when minutes is 0.
-
-    Returns the message record including its id and a versioned delivery_receipt. A true
-    mailbox_stored value means durable storage only, never runtime delivery. The receipt
-    separately reports active-session reachability, Agent Host wakeability/queue state,
-    visible task-comment fallback, and whether an ack proves handling. Pass the id to
-    get_message_status to check whether the recipient has acked."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.send_agent_message(
-        from_agent, to_agent, message,
-        task_id=task_id or None,
-        requires_ack=requires_ack,
-        ack_deadline_minutes=ack_deadline_minutes or None,
-        ack_timeout_seconds=ack_timeout_seconds or None,
-        on_ack_timeout=on_ack_timeout,
-        signal=signal or None,
-        priority=priority,
-        principal_id=principal["id"],
-        idem_key=idem_key,
-        project=project,
-    ))
-
-
-@mcp.tool()
-def ack_message(message_id: int, ctx: Context, project: str = "maxwell", response: str = "") -> str:
-    """Acknowledge a directed message. Call this when you have received and understood a
-    message that has requires_ack=true. response is optional — include it to give the
-    sender a one-line confirmation (e.g. 'seen — will rebase before merging').
-    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.ack_message(message_id, response=response,
-                                    actor=auth.actor(principal), project=project))
+# send_agent_message / ack_message live in switchboard.mcp.tools.messaging
+# (registered above). Read-side inbox helpers remain here until extracted.
 
 
 @mcp.tool()
