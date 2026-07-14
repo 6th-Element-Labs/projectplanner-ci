@@ -16,6 +16,7 @@ from switchboard.contracts import (
     CreateTaskCommand,
     REQUEST_WAKE_COMMAND_SCHEMA,
     RequestWakeCommand,
+    REVIEW_VERDICT_SCHEMA,
     list_schemas,
 )
 from switchboard.contracts.schema_export import (
@@ -58,6 +59,8 @@ ok(
     REQUEST_WAKE_COMMAND_SCHEMA in v1,
     "wake command schemas are included (agents/wakes packages loaded)",
 )
+ok(REVIEW_VERDICT_SCHEMA in v1,
+   "durable review_verdict.v1 contract is included in the checked-in registry")
 
 for schema_id, payload in v1.items():
     ok(payload.get("$id") == schema_id, f"$id preserved for {schema_id}")

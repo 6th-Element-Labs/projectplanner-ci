@@ -53,6 +53,11 @@ from switchboard.storage.repositories.kpis_economics import (
     StoreKpisEconomicsRepository,
     default_kpis_economics_repository,
 )
+from switchboard.storage.repositories.review_verdicts import (
+    ReviewVerdictError,
+    ReviewVerdictRepository,
+    default_review_verdict_repository,
+)
 
 __all__ = [
     "AccessRepository",
@@ -69,6 +74,8 @@ __all__ = [
     "StoreWorkSessionsRepository",
     "CredentialVaultError",
     "ProviderCredentialRepository",
+    "ReviewVerdictError",
+    "ReviewVerdictRepository",
     "StoreTaskRepository",
     "TaskRepository",
     "default_access_repository",
@@ -80,6 +87,7 @@ __all__ = [
     "default_projects_repository",
     "default_provenance_repository",
     "default_provider_credential_repository",
+    "default_review_verdict_repository",
     "default_publication_repository",
     "default_task_repository",
     "default_work_sessions_repository",

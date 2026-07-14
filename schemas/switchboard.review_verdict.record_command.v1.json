@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "ReviewFinding": {
+      "additionalProperties": false,
+      "description": "One actionable review finding with durable resolution metadata.",
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "class": {
+          "title": "Class",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "invariant_violated": {
+          "title": "Invariant Violated",
+          "type": "string"
+        },
+        "location": {
+          "title": "Location",
+          "type": "string"
+        },
+        "repair_requirement": {
+          "title": "Repair Requirement",
+          "type": "string"
+        },
+        "resolved_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved By"
+        },
+        "resolved_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Reason"
+        },
+        "resolved_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Sha"
+        },
+        "schema": {
+          "default": "switchboard.review_finding.v1",
+          "title": "Schema",
+          "type": "string"
+        },
+        "severity": {
+          "title": "Severity",
+          "type": "string"
+        },
+        "state": {
+          "default": "open",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "location",
+        "category",
+        "severity",
+        "invariant_violated",
+        "repair_requirement",
+        "class"
+      ],
+      "title": "ReviewFinding",
+      "type": "object"
+    }
+  },
+  "$id": "switchboard.review_verdict.record_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral command written by the independent reviewer principal.",
+  "properties": {
+    "findings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReviewFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "head_sha": {
+      "title": "Head Sha",
+      "type": "string"
+    },
+    "pr_url": {
+      "title": "Pr Url",
+      "type": "string"
+    },
+    "reviewer_principal": {
+      "title": "Reviewer Principal",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.review_verdict.record_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "pr_url",
+    "head_sha",
+    "reviewer_principal",
+    "status"
+  ],
+  "title": "RecordReviewVerdictCommand",
+  "type": "object"
+}

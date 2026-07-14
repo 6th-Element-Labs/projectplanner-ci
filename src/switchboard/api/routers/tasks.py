@@ -22,8 +22,10 @@ from switchboard.api.idempotency import (
 )
 from switchboard.application.commands import create_task as create_task_command
 from switchboard.application.commands import move_task as move_task_command
+from switchboard.application.commands import review_verdicts as review_verdict_commands
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
+from switchboard.application.queries import review_verdicts as review_verdict_queries
 from switchboard.contracts.tasks.v1 import (
     CREATE_TASK_FIELDS,
     UPDATE_TASK_FIELDS,
@@ -115,6 +117,69 @@ def create_router(*, resolve_project: ProjectResolver,
         if not task:
             raise HTTPException(404, "task not found")
         return task
+
+    @router.post("/api/tasks/{task_id}/review_verdict")
+    async def record_review_verdict(request: Request, task_id: str,
+                                    body: dict = Body(...), project: str = Query(...)):
+        """Persist independent review judgment for exactly one current PR head."""
+        project = resolve_project(project)
+        payload = dict(body or {})
+        payload["task_id"] = task_id
+        reviewer = str(payload.get("reviewer_principal") or "").strip()
+        binding = resolve_write_actor(
+            request, project, {**payload, "agent_id": reviewer}, task_id=task_id,
+            scopes=("write:ixp",),
+        )
+        payload["reviewer_principal"] = binding["actor"]
+        result = review_verdict_commands.execute_mapping(
+            payload, actor=binding["actor"],
+            # The resolver is the transport's authenticated source of truth.  In
+            # dev-open mode it authenticates inside resolve_write_actor() without
+            # middleware populating request.state, while its returned binding still
+            # carries the principal ID.  Reading from request.state here therefore
+            # made legitimate dev-open reviews fail closed as falsely unbound.
+            principal_id=binding.get("principal_id") or "",
+            project=project,
+        )
+        if result.get("error_code") == "review_task_not_found":
+            raise HTTPException(404, result)
+        if result.get("error_code") in {
+            "reviewer_principal_mismatch", "reviewer_principal_unbound",
+            "reviewer_not_independent",
+            "review_head_unbound", "stale_review_head", "review_pr_mismatch",
+            "review_verdict_conflict",
+        }:
+            raise HTTPException(409, result)
+        if result.get("error"):
+            raise HTTPException(400, result)
+        if result.get("created"):
+            record_write_binding(task_id, binding, project)
+        return result
+
+    @router.get("/api/tasks/{task_id}/review_verdict")
+    async def get_review_verdict(task_id: str, head_sha: str = "",
+                                 project: str = Query(store.DEFAULT_PROJECT)):
+        project = resolve_project(project)
+        verdict = review_verdict_queries.get_for(
+            task_id, project=project, head_sha=head_sha)
+        if not verdict:
+            raise HTTPException(404, "review verdict not found")
+        return verdict
+
+    @router.get("/api/tasks/{task_id}/review_findings")
+    async def list_review_findings(
+            task_id: str, head_sha: str = "", state: str = "",
+            finding_class: str = Query(default="", alias="class"), severity: str = "",
+            current_head_only: bool = False,
+            project: str = Query(store.DEFAULT_PROJECT)):
+        project = resolve_project(project)
+        findings = review_verdict_queries.list_findings_for(
+            task_id, project=project, head_sha=head_sha, state=state,
+            finding_class=finding_class, severity=severity,
+            current_head_only=current_head_only,
+        )
+        return {"task_id": task_id, "finding_count": len(findings),
+                "findings": findings}
 
     @router.post("/api/tasks")
     async def create_task(request: Request, body: dict = Body(...),

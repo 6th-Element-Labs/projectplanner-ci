@@ -292,6 +292,44 @@ def apply_schema(c):
             evidence_json      TEXT NOT NULL DEFAULT '{}',
             updated_at         REAL NOT NULL
         );
+        -- COORD-18: code-review judgment is durable board state, fenced to the
+        -- exact PR head it reviewed.  Findings are separate rows so remediation,
+        -- audit, and future merge policy can query them without parsing activity.
+        CREATE TABLE IF NOT EXISTS review_verdicts (
+            verdict_id          TEXT PRIMARY KEY,
+            task_id             TEXT NOT NULL,
+            pr_url              TEXT NOT NULL,
+            head_sha            TEXT NOT NULL,
+            reviewer_principal  TEXT NOT NULL,
+            reviewer_principal_id TEXT,
+            status              TEXT NOT NULL,
+            source              TEXT NOT NULL DEFAULT 'review_command',
+            created_at          REAL NOT NULL,
+            recorded_at         REAL NOT NULL,
+            UNIQUE(task_id, head_sha)
+        );
+        CREATE INDEX IF NOT EXISTS ix_review_verdicts_task
+            ON review_verdicts(task_id, created_at);
+        CREATE TABLE IF NOT EXISTS review_findings (
+            verdict_id          TEXT NOT NULL,
+            task_id             TEXT NOT NULL,
+            finding_id          TEXT NOT NULL,
+            location            TEXT NOT NULL,
+            category            TEXT NOT NULL,
+            severity            TEXT NOT NULL,
+            invariant_violated  TEXT NOT NULL,
+            repair_requirement  TEXT NOT NULL,
+            finding_class       TEXT NOT NULL,
+            state               TEXT NOT NULL,
+            resolved_by         TEXT,
+            resolved_reason     TEXT,
+            resolved_sha        TEXT,
+            created_at          REAL NOT NULL,
+            updated_at          REAL NOT NULL,
+            PRIMARY KEY(verdict_id, finding_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_review_findings_task_state
+            ON review_findings(task_id, state, finding_id);
         CREATE TABLE IF NOT EXISTS idempotency_keys (
             idem_key      TEXT NOT NULL,
             operation     TEXT NOT NULL,

@@ -1,5 +1,5 @@
 {
-  "count": 33,
+  "count": 38,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -105,6 +105,26 @@
     {
       "$id": "switchboard.provider_credential.release_lease_command.v1",
       "path": "switchboard.provider_credential.release_lease_command.v1.json"
+    },
+    {
+      "$id": "switchboard.review_finding.list_query.v1",
+      "path": "switchboard.review_finding.list_query.v1.json"
+    },
+    {
+      "$id": "switchboard.review_finding.v1",
+      "path": "switchboard.review_finding.v1.json"
+    },
+    {
+      "$id": "switchboard.review_verdict.get_query.v1",
+      "path": "switchboard.review_verdict.get_query.v1.json"
+    },
+    {
+      "$id": "switchboard.review_verdict.record_command.v1",
+      "path": "switchboard.review_verdict.record_command.v1.json"
+    },
+    {
+      "$id": "switchboard.review_verdict.v1",
+      "path": "switchboard.review_verdict.v1.json"
     },
     {
       "$id": "switchboard.task.create_command.v1",

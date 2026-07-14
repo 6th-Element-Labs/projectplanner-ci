@@ -102,6 +102,11 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     # CO-9 — durable, explainable hybrid Agent Host placement.
     ("0032_wake_intents_placement_json", "wake_intents", "placement_json",
      "ALTER TABLE wake_intents ADD COLUMN placement_json TEXT NOT NULL DEFAULT '{}'"),
+    # COORD-18 review remediation — bind verdicts to the authenticated identity,
+    # not only the caller-selected agent label. Historical backfills remain NULL.
+    ("0037_review_verdicts_reviewer_principal_id", "review_verdicts",
+     "reviewer_principal_id",
+     "ALTER TABLE review_verdicts ADD COLUMN reviewer_principal_id TEXT"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
@@ -117,6 +122,27 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "ON decisions(decision_key) WHERE decision_key IS NOT NULL"),
     ("0031_ix_decisions_kind",
      "CREATE INDEX IF NOT EXISTS ix_decisions_kind ON decisions(decision_kind)"),
+    # COORD-18 — durable, SHA-fenced code-review verdicts and queryable findings.
+    ("0033_review_verdicts",
+     "CREATE TABLE IF NOT EXISTS review_verdicts ("
+     "verdict_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, pr_url TEXT NOT NULL, "
+     "head_sha TEXT NOT NULL, reviewer_principal TEXT NOT NULL, status TEXT NOT NULL, "
+     "source TEXT NOT NULL DEFAULT 'review_command', created_at REAL NOT NULL, "
+     "recorded_at REAL NOT NULL, UNIQUE(task_id, head_sha))"),
+    ("0034_review_findings",
+     "CREATE TABLE IF NOT EXISTS review_findings ("
+     "verdict_id TEXT NOT NULL, task_id TEXT NOT NULL, finding_id TEXT NOT NULL, "
+     "location TEXT NOT NULL, category TEXT NOT NULL, severity TEXT NOT NULL, "
+     "invariant_violated TEXT NOT NULL, repair_requirement TEXT NOT NULL, "
+     "finding_class TEXT NOT NULL, state TEXT NOT NULL, resolved_by TEXT, "
+     "resolved_reason TEXT, resolved_sha TEXT, created_at REAL NOT NULL, "
+     "updated_at REAL NOT NULL, PRIMARY KEY(verdict_id, finding_id))"),
+    ("0035_ix_review_verdicts_task",
+     "CREATE INDEX IF NOT EXISTS ix_review_verdicts_task "
+     "ON review_verdicts(task_id, created_at)"),
+    ("0036_ix_review_findings_task_state",
+     "CREATE INDEX IF NOT EXISTS ix_review_findings_task_state "
+     "ON review_findings(task_id, state, finding_id)"),
 ]
 
 

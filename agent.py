@@ -326,7 +326,7 @@ def _task_brief(t, full=False):
             b["rationale_raw"] = t.get("rationale_raw")
         for key in ("git_state", "provenance", "external_ci", "active_claims", "identity",
                     "human_gate", "session_health", "terminal_state", "project_context",
-                    "publication"):
+                    "publication", "review_verdict", "finding_count"):
             if t.get(key) is not None:
                 b[key] = t.get(key)
         recent = []

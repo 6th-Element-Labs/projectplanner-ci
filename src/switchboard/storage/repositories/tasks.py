@@ -42,6 +42,7 @@ from switchboard.storage.repositories.access import (
     project_access,
     projects,
 )
+from switchboard.storage.repositories.review_verdicts import review_verdict_summary_in
 
 EDITABLE = list(EDITABLE_TASK_FIELDS)
 
@@ -108,6 +109,8 @@ TASK_MOVE_TABLES = (
     "file_leases",
     "resource_leases",
     "decisions",
+    "review_verdicts",
+    "review_findings",
 )
 AUTOINCREMENT_TASK_TABLES = {"activity", "llm_spend", "decisions"}
 
@@ -340,6 +343,12 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
         t["publication"] = _store_facade()._publication_review_gate(t, c=c, project=project)
         t["session_health"] = _store_facade()._task_session_health_in(
             c, t, project=project, active_claims=t["active_claims"], git_state=t["git_state"])
+        t["review_verdict"] = review_verdict_summary_in(
+            c, task_id, str(t["git_state"].get("head_sha") or ""))
+        # COORD-18: this is code-review finding count, not Work Session hygiene.
+        # Current-head counts remain separately exposed inside review_verdict so
+        # consumers never mistake historical findings for a current SHA verdict.
+        t["finding_count"] = t["review_verdict"]["finding_count"]
         s = c.execute("SELECT rationale FROM task_summaries WHERE task_id=?", (task_id,)).fetchone()
         if s:
             raw_rationale = s["rationale"]
@@ -781,6 +790,8 @@ def _delete_task_related_in(c: sqlite3.Connection, task_id: str, snapshot: Dict[
         "file_leases",
         "resource_leases",
         "decisions",
+        "review_findings",
+        "review_verdicts",
         "agent_messages",
         "coordination_monitors",
     ):

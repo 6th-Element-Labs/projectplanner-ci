@@ -63,6 +63,18 @@ check("every migration recorded in the ledger", ledger(c) == ALL_NAMES)
 check("ux_messages_idem index created", c.execute(
     "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ux_messages_idem'"
 ).fetchone()[0] == 1)
+check("review_verdicts table created", c.execute(
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='review_verdicts'"
+).fetchone()[0] == 1)
+check("review verdicts persist authenticated reviewer principal IDs",
+      "reviewer_principal_id" in cols(c, "review_verdicts"))
+check("review_findings table created", c.execute(
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='review_findings'"
+).fetchone()[0] == 1)
+check("review finding query index created", c.execute(
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
+    "AND name='ix_review_findings_task_state'"
+).fetchone()[0] == 1)
 
 # 2. Idempotent: re-running executes nothing new and never errors.
 check("second run applies zero new migrations", run_additive_migrations(c) == [])

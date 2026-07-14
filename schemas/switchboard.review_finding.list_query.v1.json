@@ -1,0 +1,50 @@
+{
+  "$id": "switchboard.review_finding.list_query.v1",
+  "additionalProperties": false,
+  "properties": {
+    "class": {
+      "default": "",
+      "title": "Class",
+      "type": "string"
+    },
+    "current_head_only": {
+      "default": false,
+      "title": "Current Head Only",
+      "type": "boolean"
+    },
+    "head_sha": {
+      "default": "",
+      "title": "Head Sha",
+      "type": "string"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.review_finding.list_query.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "severity": {
+      "default": "",
+      "title": "Severity",
+      "type": "string"
+    },
+    "state": {
+      "default": "",
+      "title": "State",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "project"
+  ],
+  "title": "ListReviewFindingsQuery",
+  "type": "object"
+}

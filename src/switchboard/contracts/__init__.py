@@ -1,5 +1,5 @@
 """Versioned Pydantic contracts shared by REST, MCP, and events (ARCH-MS-25)."""
-from . import agents, claims, messaging, projects, provider_credentials, registry, tasks, wakes
+from . import agents, claims, messaging, projects, provider_credentials, registry, reviews, tasks, wakes
 from .base import (
     SCHEMA_ID_PREFIX,
     VersionedModel,
@@ -92,6 +92,18 @@ from .provider_credentials import (
     RevokeProviderConnectionCommand,
     RotateProviderConnectionCommand,
 )
+from .reviews import (
+    GET_REVIEW_VERDICT_QUERY_SCHEMA,
+    LIST_REVIEW_FINDINGS_QUERY_SCHEMA,
+    RECORD_REVIEW_VERDICT_COMMAND_SCHEMA,
+    REVIEW_FINDING_SCHEMA,
+    REVIEW_VERDICT_SCHEMA,
+    GetReviewVerdictQuery,
+    ListReviewFindingsQuery,
+    RecordReviewVerdictCommand,
+    ReviewFinding,
+    ReviewVerdict,
+)
 
 __all__ = [
     "ARCHIVE_PROJECT_COMMAND_SCHEMA",
@@ -109,6 +121,8 @@ __all__ = [
     "COMPLETE_WAKE_COMMAND_SCHEMA",
     "CREATE_TASK_COMMAND_SCHEMA",
     "GET_TASK_QUERY_SCHEMA",
+    "GET_REVIEW_VERDICT_QUERY_SCHEMA",
+    "LIST_REVIEW_FINDINGS_QUERY_SCHEMA",
     "MOVE_TASK_COMMAND_SCHEMA",
     "PROJECT_IMPACT_REPORT_SCHEMA",
     "PROJECT_IMPACT_RECEIPT_SCHEMA",
@@ -116,6 +130,9 @@ __all__ = [
     "PROJECT_UPDATE_COMMAND_SCHEMA",
     "REGISTER_AGENT_COMMAND_SCHEMA",
     "REGISTER_HOST_COMMAND_SCHEMA",
+    "RECORD_REVIEW_VERDICT_COMMAND_SCHEMA",
+    "REVIEW_FINDING_SCHEMA",
+    "REVIEW_VERDICT_SCHEMA",
     "REQUEST_WAKE_COMMAND_SCHEMA",
     "RESTORE_PROJECT_COMMAND_SCHEMA",
     "DELETE_PROVIDER_CONNECTION_SCHEMA",
@@ -145,6 +162,8 @@ __all__ = [
     "DeleteProviderConnectionCommand",
     "EnrollProviderConnectionCommand",
     "GetTaskQuery",
+    "GetReviewVerdictQuery",
+    "ListReviewFindingsQuery",
     "MoveTaskCommand",
     "ProjectImpactReport",
     "ProjectImpactReceipt",
@@ -153,6 +172,9 @@ __all__ = [
     "RegisterAgentCommand",
     "RegisterHostCommand",
     "RequestWakeCommand",
+    "RecordReviewVerdictCommand",
+    "ReviewFinding",
+    "ReviewVerdict",
     "ReleaseProviderCredentialLeaseCommand",
     "RevokeProviderConnectionCommand",
     "RotateProviderConnectionCommand",
@@ -175,6 +197,7 @@ __all__ = [
     "messaging",
     "projects",
     "provider_credentials",
+    "reviews",
     "register",
     "registry",
     "tasks",

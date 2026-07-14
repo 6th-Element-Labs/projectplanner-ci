@@ -97,7 +97,15 @@ def seed_if_empty(project: str = DEFAULT_PROJECT):
     if project_lifecycle_status(project) == "archived":
         return False
     with _conn(project) as c:
-        return seed_from_plan(c, _resolve(project)["seed"])
+        seeded = seed_from_plan(c, _resolve(project)["seed"])
+        # COORD-18 historical data repair runs after seeding and on every
+        # restart.  It is idempotent, project-scoped, and therefore also heals
+        # long-lived live boards whose task rows predate the new tables.
+        from switchboard.storage.repositories.review_verdicts import (
+            ensure_historical_review_backfills_in,
+        )
+        ensure_historical_review_backfills_in(c, project)
+        return seeded
 
 
 # Core tables that apply_schema() creates and every request path assumes exist.

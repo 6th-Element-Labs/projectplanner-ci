@@ -89,6 +89,11 @@ from switchboard.storage.repositories.kpis_economics import (  # noqa: F401
     StoreKpisEconomicsRepository,
     default_kpis_economics_repository,
 )  # ARCH-MS-49
+from switchboard.storage.repositories.review_verdicts import *  # noqa: F401,F403 — COORD-18
+from switchboard.storage.repositories.review_verdicts import (  # noqa: F401
+    ReviewVerdictRepository,
+    default_review_verdict_repository,
+)  # COORD-18
 from switchboard.storage.repositories.deliverables import (  # noqa: F401
     CLOSURE_REPORT_HISTORY_LIMIT,
     PROOF_REQUIREMENTS_SCHEMA,
@@ -172,6 +177,7 @@ external_effects_repository = default_external_effects_repository()
 publication_repository = default_publication_repository()
 projects_repository = default_projects_repository()
 kpis_economics_repository = default_kpis_economics_repository()
+review_verdict_repository = default_review_verdict_repository
 access_repository = default_access_repository()
 
 BUG_INTAKE_POLICY = {
@@ -2916,4 +2922,3 @@ def activity_since(ts: float) -> List[Dict[str, Any]]:
 # live there. Re-exported so store.ttl_read_cache / store._READ_CACHE keep working for the
 # callers below (and signals.py, the perf tests).
 from read_cache import _READ_CACHE, ttl_read_cache  # noqa: E402,F401
-

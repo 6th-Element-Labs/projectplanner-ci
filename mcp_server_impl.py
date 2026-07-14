@@ -37,6 +37,7 @@ from switchboard.mcp.tools import board as board_tools
 from switchboard.mcp.tools import decisions as decision_tools
 from switchboard.mcp.tools import projects as project_tools
 from switchboard.mcp.tools import provider_credentials as provider_credential_tools
+from switchboard.mcp.tools import reviews as review_tools
 from switchboard.mcp.tools import tasks as task_tools
 from switchboard.mcp.tools import claims as claim_tools  # noqa: E402
 from switchboard.mcp.tools import wakes as wake_tools  # noqa: E402
@@ -202,6 +203,17 @@ _task_tool_functions = task_tools.register_task_tools(
     ),
 )
 globals().update(_task_tool_functions)
+
+_review_tool_functions = review_tools.register_review_tools(
+    mcp,
+    review_tools.ReviewToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+        resolve_write_actor=_resolve_write_actor,
+        write_binding_comment=_write_binding_comment,
+    ),
+)
+globals().update(_review_tool_functions)
 
 _claim_tool_functions = claim_tools.register_claim_tools(
     mcp,

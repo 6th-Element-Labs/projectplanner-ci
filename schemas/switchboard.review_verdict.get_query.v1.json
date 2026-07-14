@@ -1,0 +1,30 @@
+{
+  "$id": "switchboard.review_verdict.get_query.v1",
+  "additionalProperties": false,
+  "properties": {
+    "head_sha": {
+      "default": "",
+      "title": "Head Sha",
+      "type": "string"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.review_verdict.get_query.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "project"
+  ],
+  "title": "GetReviewVerdictQuery",
+  "type": "object"
+}
