@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, Query, Request
 
 import auth
+import store
 from switchboard.api.idempotency import inject_idem_key, raise_if_idem_conflict
 from switchboard.application.commands import claim_wake as claim_wake_command
 from switchboard.application.commands import complete_wake as complete_wake_command
@@ -69,5 +70,23 @@ def create_router(*, resolve_project: ProjectResolver,
         return control_plane_http(raise_if_idem_conflict(
             complete_wake_command.execute_mapping_result(
                 body, actor=auth.actor(principal))))
+
+    @router.get("/txp/v1/list_wake_intents")
+    async def txp_list_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
+                                    status: str = "", host_id: str = "",
+                                    runtime: str = ""):
+        wakes = store.list_wake_intents(status=status, host_id=host_id,
+                                        runtime=runtime, project=resolve_project(project))
+        control_plane_http(wakes)
+        return {"wake_intents": wakes}
+
+    @router.post("/txp/v1/cancel_wake")
+    async def txp_cancel_wake(request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="agent")
+        return control_plane_http(store.cancel_wake(
+            (body.get("wake_id") or body.get("id") or "").strip(),
+            reason=body.get("reason") or "cancelled",
+            actor=auth.actor(principal), project=project))
 
     return router

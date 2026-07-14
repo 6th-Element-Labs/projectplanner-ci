@@ -12,7 +12,6 @@ Run:
 """
 import asyncio
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -28,25 +27,13 @@ if _env.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile  # noqa: E402
+from fastapi import Body, FastAPI, HTTPException, Query, Request  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-import attachments  # noqa: E402
 import auth  # noqa: E402
-import comms  # noqa: E402
 import concurrency_limiter  # noqa: E402
-import digest  # noqa: E402
-import transcribe  # noqa: E402
 import dispatch  # noqa: E402
-import export  # noqa: E402
-import inbox as inbox_mod  # noqa: E402
-import intake  # noqa: E402
-import github_sync  # noqa: E402
-import webhook_inbox  # noqa: E402
-import notify  # noqa: E402
-import ocr  # noqa: E402
-import rebrand  # noqa: E402
 import narration_ops  # noqa: E402
 import request_observability  # noqa: E402
 import saturation_signals  # noqa: E402
@@ -76,6 +63,14 @@ from switchboard.api.routers.tally import create_router as _create_tally_router 
 from switchboard.api.routers.ixp_work_sessions import create_router as _create_ixp_work_sessions_router  # noqa: E402
 from switchboard.api.routers.runner import create_router as _create_runner_router  # noqa: E402
 from switchboard.api.routers.external_effects import create_router as _create_external_effects_router  # noqa: E402
+from switchboard.api.routers.intake_inbox import create_router as _create_intake_inbox_router  # noqa: E402
+from switchboard.api.routers.digest_notify import create_router as _create_digest_notify_router  # noqa: E402
+from switchboard.api.routers.ops_export import create_router as _create_ops_export_router  # noqa: E402
+from switchboard.api.routers.github_webhook import (  # noqa: E402
+    create_router as _create_github_webhook_router,
+    webhook_secret_configured,
+)
+from switchboard.api.routers.coordination import create_router as _create_coordination_router  # noqa: E402
 from switchboard.application.commands import request_wake as request_wake_command  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
@@ -184,6 +179,21 @@ def _control_plane_http(result):
     return result
 
 
+def _etag_json(request: Request, payload, *, max_age: int) -> Response:
+    """Serialize payload to JSON with a weak ETag + short max-age, returning a bodyless
+    304 when the client's If-None-Match already matches. The one reused shape behind the
+    hot poll endpoints (/api/board + project_context, HARDEN-36/37; and the mission
+    pollers, CONSOL-8): a tab refocus/reload — or a 5s live tick that revalidates — skips
+    re-downloading an unchanged payload. Pairs with the store's short-TTL read cache: the
+    TTL saves the server rebuild, the ETag saves the wire."""
+    body = json.dumps(payload, default=str, separators=(",", ":")).encode()
+    etag = 'W/"%s"' % hashlib.md5(body).hexdigest()  # noqa: S324 (cache tag, not security)
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=%d" % max_age}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
 app.include_router(_create_task_router(
     resolve_project=_proj,
     resolve_principal=_principal,
@@ -213,6 +223,11 @@ app.include_router(_create_messaging_router(
 app.include_router(_create_project_router(
     resolve_project=_proj,
     resolve_principal=_principal,
+    current_user=lambda token: _auth_service.current_user(token),
+    cookie_name=_auth_session.COOKIE_NAME,
+    accessible_project_ids=_auth_store.accessible_project_ids,
+    etag_json=_etag_json,
+    webhook_secret_configured=webhook_secret_configured,
 ))
 app.include_router(_create_provider_credentials_router(
     resolve_project=_proj,
@@ -241,7 +256,6 @@ app.include_router(_create_ixp_work_sessions_router(
     resolve_principal=_principal,
     resolve_body_project=_body_project,
 ))
-
 app.include_router(_create_runner_router(
     resolve_project=_proj,
     resolve_principal=_principal,
@@ -251,6 +265,18 @@ app.include_router(_create_external_effects_router(
     resolve_project=_proj,
     resolve_principal=_principal,
     resolve_body_project=_body_project,
+))
+app.include_router(_create_intake_inbox_router(resolve_project=_proj))
+app.include_router(_create_digest_notify_router())
+app.include_router(_create_ops_export_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
+))
+app.include_router(_create_github_webhook_router(resolve_project=_proj))
+app.include_router(_create_coordination_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
 ))
 
 
@@ -613,246 +639,6 @@ async def auth_me(request: Request, project: str = Query(store.DEFAULT_PROJECT))
     principal = _principal(request, project, ("read",), dev_actor="web")
     return {"principal": auth.public_principal(principal),
             "mode": auth.auth_mode(), "project": _proj(project)}
-
-
-@app.get("/api/projects")
-def list_projects(request: Request, include_archived: bool = Query(False)):
-    """Active picker by default; explicit admin discovery may include archived records."""
-    if auth.auth_mode() == auth.DEV_OPEN and not request.cookies.get(_auth_session.COOKIE_NAME, ""):
-        projects = (store.list_registry_projects(include_archived=True)
-                    if include_archived else store.projects())
-        return {"projects": projects, "default": store.DEFAULT_PROJECT,
-                "include_archived": include_archived}
-    user = _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, ""))
-    if not user:
-        raise HTTPException(401, "not authenticated")
-    if not include_archived:
-        return {"projects": user.get("projects", []), "default": "",
-                "include_archived": False}
-    accessible = set(_auth_store.accessible_project_ids(
-        user["id"], bool(user.get("is_superadmin"))))
-    projects = [
-        record for record in store.list_registry_projects(include_archived=True)
-        if record.get("id") in accessible
-    ]
-    return {"projects": projects, "default": "", "include_archived": True}
-
-
-@app.post("/api/projects")
-async def create_project(request: Request, body: dict = Body(...)):
-    # ACCESS-14: contributors (write:projects) can create projects, not just admins.
-    # Human-created projects default to private (creator + invitees + org admins see them);
-    # pass visibility="org" to make one org-wide shared.
-    principal = _principal(request, "switchboard", ("write:projects",), dev_actor="web")
-    created = store.create_project(
-        name=body.get("name") or body.get("label") or "",
-        project_id=body.get("project_id") or body.get("id") or "",
-        label=body.get("label") or "",
-        pretitle=body.get("pretitle") or "",
-        github_repo=body.get("github_repo") or body.get("repo") or "",
-        owner_principal_id=principal["id"],
-        org_id=body.get("org_id") or store.DEFAULT_ORG_ID,
-        purpose=body.get("purpose") or "",
-        boundary=body.get("boundary") or "",
-        visibility=(body.get("visibility") or "private").strip().lower(),
-        actor=auth.actor(principal),
-    )
-    if created.get("error"):
-        raise HTTPException(400, created["error"])
-    return created
-
-
-@app.get("/api/projects/{project}/repo_topology")
-async def project_repo_topology(project: str):
-    return store.get_project_repo_topology(project=_proj(project))
-
-
-def _etag_json(request: Request, payload, *, max_age: int) -> Response:
-    """Serialize payload to JSON with a weak ETag + short max-age, returning a bodyless
-    304 when the client's If-None-Match already matches. The one reused shape behind the
-    hot poll endpoints (/api/board + project_context, HARDEN-36/37; and the mission
-    pollers, CONSOL-8): a tab refocus/reload — or a 5s live tick that revalidates — skips
-    re-downloading an unchanged payload. Pairs with the store's short-TTL read cache: the
-    TTL saves the server rebuild, the ETag saves the wire."""
-    body = json.dumps(payload, default=str, separators=(",", ":")).encode()
-    etag = 'W/"%s"' % hashlib.md5(body).hexdigest()  # noqa: S324 (cache tag, not security)
-    headers = {"ETag": etag, "Cache-Control": "private, max-age=%d" % max_age}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=headers)
-    return Response(content=body, media_type="application/json", headers=headers)
-
-
-@app.get("/api/projects/{project}/context")
-def project_context(request: Request, project: str):
-    # HARDEN-35: project_context (repo roles, hierarchy, policy profiles) is a
-    # near-static ~9KB blob that used to ride on every /api/board load. It lives
-    # here now so the board payload stays slim; ETag + a short max-age let a tab
-    # refocus / reload reuse the browser-cached copy (bodyless 304). Sync def so
-    # its SQLite I/O runs in the threadpool, like /api/board (HARDEN-36).
-    payload = store.get_project_context(project=_proj(project))
-    return _etag_json(request, payload, max_age=60)
-
-
-@app.post("/api/projects/{project}/repo_topology")
-async def set_project_repo_topology(request: Request, project: str, body: dict = Body(...)):
-    _principal(request, "switchboard", ("write:system",), dev_actor="web")
-    result = store.set_project_repo_topology(
-        project=_proj(project),
-        canonical_repo=body.get("canonical_repo") or body.get("private_repo") or "",
-        public_ci_repo=body.get("public_ci_repo") or body.get("ci_repo") or "",
-        public_repo=body.get("public_repo") or "",
-        release_repo=body.get("release_repo") or "",
-        topology_type=body.get("topology_type") or "",
-        canonical_default_branch=body.get("canonical_default_branch") or body.get("default_branch") or "",
-        canonical_claim_gate=body.get("canonical_claim_gate") or body.get("claim_gate") or "",
-        public_ci_required_status_contexts=(
-            body.get("public_ci_required_status_contexts") or
-            body.get("ci_required_status_contexts") or
-            body.get("required_status_contexts") or
-            ""
-        ),
-        public_ci_sync_scripts=(
-            body.get("public_ci_sync_scripts") or
-            body.get("ci_sync_scripts") or
-            body.get("sync_scripts") or
-            ""
-        ),
-        public_publish_scripts=body.get("public_publish_scripts") or body.get("publish_scripts") or "",
-        release_publish_scripts=body.get("release_publish_scripts") or "",
-    )
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.get("/api/projects/{project}/github_association")
-def project_github_association(request: Request, project: str, check: int = 0):
-    """UI-15: everything the "Wire your repo" panel needs — the webhook payload URL with
-    the ?project= pin PRE-FILLED (HARDEN-2/BUG-24: bare URLs fail closed on shared repos),
-    the secret name, a copyable gh one-liner, and delivery-based verification. Pass ?check=1
-    (the Verify button) to also probe repo reachability; the panel open path omits it so it
-    never makes a network call until the operator asks."""
-    project = _proj(project)
-    repo = store.get_project_github_repo(project) or ""
-    base = str(request.base_url).rstrip("/")
-    payload_url = f"{base}/api/github/webhook?project={project}"
-    gh_command = ""
-    if repo:
-        gh_command = (
-            f"gh api -X POST repos/{repo}/hooks -f name=web -F active=true "
-            f"-f 'events[]=push' -f 'events[]=pull_request' "
-            f"-f 'config[url]={payload_url}' -f config[content_type]=json "
-            f"-f 'config[secret]=$PM_GITHUB_WEBHOOK_SECRET'"
-        )
-    deliveries = store.github_webhook_deliveries(project)
-    reachable = store.github_repo_reachable(repo) if (check and repo) else None
-    status = "connected" if deliveries["delivered"] else ("configured" if repo else "unconfigured")
-    return {
-        "project": project,
-        "repo": repo,
-        "repo_configured": bool(repo),
-        "webhook": {
-            "payload_url": payload_url,
-            "content_type": "application/json",
-            "secret_env": "PM_GITHUB_WEBHOOK_SECRET",
-            "secret_configured": bool(_GH_SECRET),
-            "events": ["push", "pull_request"],
-            "gh_command": gh_command,
-        },
-        "verification": {**deliveries, "status": status, "repo_reachable": reachable},
-    }
-
-
-@app.post("/api/projects/{project}/github_repo")
-async def set_project_github_repo_route(request: Request, project: str, body: dict = Body(...)):
-    """UI-15: record/replace a project's canonical repo from the web (Settings path for
-    existing projects). Reroutes Done/webhook provenance, so it is gated like repo_topology."""
-    project = _proj(project)
-    _principal(request, project, ("write:system",), dev_actor="web")
-    result = store.set_project_github_repo(
-        repo=body.get("github_repo") or body.get("repo") or "", project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.get("/api/projects/{project}/comms")
-def project_comms(request: Request, project: str):
-    """UI-14: everything the Settings → Communications screen needs — the project's plus-address,
-    its associated inbound domains (the editable UI-13 routing map), per-project digest/notify
-    recipients + cadence, the global .env fallback, and channel status. Readable to anyone who can
-    read the project; edits below are admin-gated."""
-    project = _proj(project)
-    cfg = comms.get_config(project)
-    # Reflect whether THIS caller may edit, so the UI can disable Save/Test up front instead of
-    # only failing on POST. Non-raising probe of the same scope the write routes require.
-    try:
-        auth.authenticate_request(request, project, ("write:system",), dev_actor="web")
-        cfg["can_edit"] = True
-    except PermissionError:
-        cfg["can_edit"] = False
-    return cfg
-
-
-@app.post("/api/projects/{project}/comms")
-async def set_project_comms(request: Request, project: str, body: dict = Body(...)):
-    """UI-14: persist a Communications edit — associated inbound domains and/or outbound
-    recipients/cadence. Reroutes inbound mail and outbound recipients, so it is admin-gated
-    (write:system, same as repo settings) and audited."""
-    project = _proj(project)
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    result = comms.update_config(body or {}, project=project, actor=auth.actor(principal))
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    store.append_activity("comms.updated", auth.actor(principal),
-                          result.get("audit") or {}, project=project)
-    return result
-
-
-@app.post("/api/projects/{project}/comms/test")
-async def test_project_comms(request: Request, project: str, body: dict = Body(...)):
-    """UI-14 Send-test: email the project's effective recipients so an operator can confirm the
-    wiring end-to-end. Admin-gated + audited; dry-runs (logs, sent=false) until SMTP is configured."""
-    project = _proj(project)
-    principal = _principal(request, project, ("write:system",), dev_actor="web")
-    kind = (body or {}).get("kind") or "notify"
-    if kind not in ("notify", "digest"):
-        raise HTTPException(400, "kind must be 'notify' or 'digest'")
-    recipients = comms.recipients_for(project, kind) or comms.global_fallback_recipients()
-    subject = f"{project} — communications test"
-    text = (f"Communications test from plan.taikunai.com for project '{project}'. "
-            f"If you received this, {project}'s {kind} recipients are wired correctly.")
-    results = await asyncio.to_thread(notify.send, subject, text, ("email",), project, kind)
-    store.append_activity("comms.test_sent", auth.actor(principal),
-                          {"kind": kind, "recipients": recipients, "results": results},
-                          project=project)
-    return {"project": project, "kind": kind, "recipients": recipients, "results": results}
-
-
-@app.get("/api/projects/{project}/boards")
-async def list_project_boards(project: str, kind: str = "", status: str = ""):
-    project = _proj(project)
-    return {"project": project, "boards": store.list_project_boards(
-        project=project, kind=kind, status=status)}
-
-
-@app.post("/api/projects/{project}/boards")
-async def create_project_board(request: Request, project: str, body: dict = Body(...)):
-    project = _proj(project)
-    principal = _principal(request, project, ("write:tasks",), dev_actor="web")
-    result = store.create_project_board(body or {}, actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.get("/api/projects/{project}/boards/{board_id}")
-async def get_project_board(project: str, board_id: str):
-    project = _proj(project)
-    result = store.get_project_board(board_id, project=project)
-    if not result:
-        raise HTTPException(404, "board not found")
-    return result
 
 
 @app.get("/api/deliverables")
@@ -1249,176 +1035,6 @@ async def dispatch_status(project: str = Query(store.DEFAULT_PROJECT)):
     return await asyncio.to_thread(dispatch.status, _proj(project))
 
 
-def _queue_triage(res, source, subject, project=None):
-    """Persist a triage result into the Action Queue (Inbox) as a pending item so its proposed
-    changes survive reload and are bulk-confirmable in one place — not just ephemeral chat cards.
-    Only queues when there's something to act on. Mutates + returns `res` with inbox_id.
-    The item lands on `project`'s inbox (same board the artifact was ingested on)."""
-    project = project or store.DEFAULT_PROJECT
-    try:
-        if res and ((res.get("proposals")) or (res.get("new_tasks"))):
-            triage = {"proposals": res.get("proposals", []), "new_tasks": res.get("new_tasks", []),
-                      "sources": res.get("sources", []), "summary": res.get("summary", "")}
-            res["inbox_id"] = store.add_inbox_item(
-                source, source + "-" + os.urandom(6).hex(), "", subject or source,
-                res.get("summary", ""), triage, project=project)
-    except Exception:
-        pass  # queueing is best-effort; the chat cards still work
-    return res
-
-
-@app.post("/api/intake")
-async def intake_artifact(body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
-    """Ingest an artifact (transcript/email/document) into `project`'s RAG corpus + triage it
-    against that board. Returns {summary, proposals, new_tasks, sources, ingested_chunks, inbox_id}."""
-    text = (body.get("text") or "").strip()
-    if not text:
-        raise HTTPException(400, "text required")
-    try:
-        res = await asyncio.to_thread(
-            intake.ingest_and_triage, body.get("kind") or "note", body.get("title") or "", text,
-            project=project)
-        return _queue_triage(res, body.get("kind") or "note", body.get("title") or "", project)
-    except Exception as e:
-        raise HTTPException(502, f"intake error: {e}")
-
-
-@app.post("/api/intake/upload")
-async def intake_upload(file: UploadFile = File(...), kind: str = Form("document"),
-                        title: str = Form(""), project: str = Query(store.DEFAULT_PROJECT)):
-    """Drop a file — audio/video, pdf, docx, or text — extract or TRANSCRIBE it, then
-    ingest into `project`'s corpus + triage. Media is transcribed via OpenAI (Whisper) through the
-    gateway; everything else uses attachments.extract. Same response shape as /api/intake."""
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "empty file")
-    fn = file.filename or "upload"
-    label = (title or fn).strip()
-    media = transcribe.is_media(fn, file.content_type)
-    try:
-        if media:
-            text = await asyncio.to_thread(transcribe.transcribe, fn, data, file.content_type)
-        else:
-            text = await asyncio.to_thread(attachments.extract, fn, file.content_type, data)
-    except ValueError as e:                       # size limit etc. — user-facing
-        raise HTTPException(413, str(e))
-    except Exception as e:
-        raise HTTPException(502, f"{'transcription' if media else 'extract'} error: {e}")
-    if not text or not text.strip():
-        raise HTTPException(422, f"could not get text from {fn} (unsupported type or empty)")
-    try:
-        res = await asyncio.to_thread(intake.ingest_and_triage, kind or "document", label, text,
-                                      project=project)
-    except Exception as e:
-        raise HTTPException(502, f"intake error: {e}")
-    res["transcribed"] = media
-    res["chars"] = len(text)
-    return _queue_triage(res, "transcript" if media else "upload", label, project)
-
-
-# ---- Live Inbox (Phase 5.5) -------------------------------------------------
-@app.get("/api/inbox")
-async def get_inbox(status: str = None, project: str = Query(store.DEFAULT_PROJECT)):
-    return {"items": store.list_inbox(status, project=project),
-            "pending": store.inbox_pending_count(project=project)}
-
-
-@app.post("/api/inbox/{item_id}/confirm")
-async def confirm_inbox(item_id: int, body: dict = Body(default={}),
-                        project: str = Query(store.DEFAULT_PROJECT)):
-    """Apply the given proposals/new_tasks (default: all of the item's). `keep_proposals` /
-    `keep_new_tasks` are held back and the item STAYS pending with just those (used to bulk-
-    confirm the safe changes while holding status->Done items that still need evidence).
-    Edited proposals are honored — the client sends the modified field values to apply."""
-    item = store.get_inbox_item(item_id, project=project)
-    if not item:
-        raise HTTPException(404, "no such inbox item")
-    tri = item.get("triage") or {}
-    applied = inbox_mod.apply(body.get("proposals", tri.get("proposals", [])),
-                              body.get("new_tasks", tri.get("new_tasks", [])), project=project)
-    keep_p = body.get("keep_proposals") or []
-    keep_n = body.get("keep_new_tasks") or []
-    tri["applied"] = applied
-    if keep_p or keep_n:
-        tri["proposals"], tri["new_tasks"] = keep_p, keep_n
-        store.update_inbox_triage(item_id, tri, project=project)   # stays pending with the held items
-    else:
-        store.update_inbox_triage(item_id, tri, project=project)
-        store.set_inbox_status(item_id, "confirmed", project=project)
-    return {"applied": applied, "remaining": len(keep_p) + len(keep_n)}
-
-
-@app.post("/api/inbox/confirm_all")
-async def confirm_all_inbox(body: dict = Body(default={}), project: str = Query(store.DEFAULT_PROJECT)):
-    """Bulk-confirm pending queue items. safe_only=True applies everything EXCEPT status->Done
-    proposals (which need acceptance evidence), holding those back so the item stays pending."""
-    safe_only = bool(body.get("safe_only"))
-    ids = body.get("ids")
-    items = store.list_inbox("pending", limit=500, project=project)
-    if ids:
-        idset = set(ids)
-        items = [it for it in items if it["id"] in idset]
-    tot = {"items": 0, "updated": 0, "created": 0, "held": 0}
-    for it in items:
-        tri = it.get("triage") or {}
-        props = tri.get("proposals", []) or []
-        nts = tri.get("new_tasks", []) or []
-        if safe_only:
-            apply_p = [p for p in props if (p.get("status") or "") != "Done"]
-            keep_p = [p for p in props if (p.get("status") or "") == "Done"]
-        else:
-            apply_p, keep_p = props, []
-        if not (apply_p or nts):
-            continue
-        applied = inbox_mod.apply(apply_p, nts, project=project)
-        tri["applied"] = applied
-        tot["items"] += 1
-        tot["updated"] += len(applied.get("updated", []))
-        tot["created"] += len(applied.get("created", []))
-        tot["held"] += len(keep_p)
-        if keep_p:
-            tri["proposals"], tri["new_tasks"] = keep_p, []
-            store.update_inbox_triage(it["id"], tri, project=project)
-        else:
-            store.update_inbox_triage(it["id"], tri, project=project)
-            store.set_inbox_status(it["id"], "confirmed", project=project)
-    return tot
-
-
-@app.post("/api/inbox/{item_id}/dismiss")
-async def dismiss_inbox(item_id: int, project: str = Query(store.DEFAULT_PROJECT)):
-    if not store.get_inbox_item(item_id, project=project):
-        raise HTTPException(404, "no such inbox item")
-    store.set_inbox_status(item_id, "dismissed", project=project)
-    return {"dismissed": item_id}
-
-
-@app.post("/api/inbox/simulate")
-async def simulate_inbox(body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)):
-    """Inject a fake inbound email to exercise the Live Inbox pipeline without a mailbox. Routes
-    to `project` (query param, or a `project` field in the body for explicit cross-board testing)."""
-    text = (body.get("text") or "").strip()
-    if not text:
-        raise HTTPException(400, "text required")
-    project = body.get("project") or project
-    sender = body.get("sender") or "tester@taikunai.com"
-    headers = {"from": sender, "to": body.get("to") or "", "cc": body.get("cc") or "",
-               "date": body.get("date") or "", "message_id": body.get("message_id") or ""}
-    try:
-        item = await asyncio.to_thread(
-            inbox_mod.process, "email-sim", "sim-" + os.urandom(6).hex(),
-            sender, body.get("subject") or "(simulated)", text, headers, project)
-    except Exception as e:
-        raise HTTPException(502, f"inbox error: {e}")
-    return item or {"deduped": True}
-
-
-@app.post("/api/inbox/poll")
-async def poll_inbox_now():
-    import inbox_source
-    return await asyncio.to_thread(inbox_source.poll)
-
-
 @app.get("/api/signals")
 def plan_signals(project: str = Query(store.DEFAULT_PROJECT)):
     """Derived plan health: overdue / due-soon / blocked / ready / critical-slip /
@@ -1431,203 +1047,6 @@ def plan_signals(project: str = Query(store.DEFAULT_PROJECT)):
     return signals.compute_plan_signals(project=_proj(project))
 
 
-@app.post("/api/digest")
-async def make_digest():
-    """Generate + post the weekly chief-of-staff brief (signals + activity deltas)."""
-    try:
-        return await asyncio.to_thread(digest.generate_digest)
-    except Exception as e:
-        raise HTTPException(502, f"digest error: {e}")
-
-
-@app.get("/api/digests")
-async def get_digests():
-    return {"digests": store.list_digests(20)}
-
-
-@app.get("/api/notify/status")
-async def notify_status():
-    """Which channels are wired (configured) vs dry-run."""
-    return notify.status()
-
-
-@app.post("/api/notify/test")
-async def notify_test():
-    return {"results": notify.send("Project Maxwell — test", "Notify is wired (test message from plan.taikunai.com).")}
-
-
-@app.post("/api/digest/{digest_id}/send")
-async def send_digest(digest_id: int):
-    d = next((x for x in store.list_digests(50) if x["id"] == digest_id), None)
-    if not d:
-        raise HTTPException(404, "no such digest")
-    proj = store.get_meta("project") or "the plan"
-    # UI-14: honor this project's configured digest recipients (matches jobs.weekly_digest);
-    # falls back to the global list when unset.
-    return {"results": await asyncio.to_thread(
-        notify.send, f"{proj} — digest", d["content"], ("slack", "email"),
-        store.DEFAULT_PROJECT, "digest")}
-
-
-def _people_of(t, people):
-    """Owner-person(s) for a task — match the people list against owner_person_or_role.
-    Mirrors the board UI's _peopleOf so 'export = what you see' for the owner filter."""
-    owner = (t.get("owner_person_or_role") or "").lower()
-    if not owner:
-        return ["Unassigned"]
-    m = [p for p in people if p.lower() in owner]
-    return m or ["Unassigned"]
-
-
-def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None, person=None,
-                      project="maxwell"):
-    """Same filter semantics as the board UI, so 'export = what you see'."""
-    p = store.board_payload(_proj(project))
-    ql = (q or "").lower()
-    people = store.get_meta("people", store.DEFAULT_PEOPLE, project=project) if person else []
-
-    def keep(t):
-        if workstream and t.get("_wsId") != workstream:
-            return False
-        if owner and t.get("owner_org") != owner:
-            return False
-        if person and person not in _people_of(t, people):
-            return False
-        if risk and t.get("risk_level") != risk:
-            return False
-        if blocking and not t.get("is_blocking"):
-            return False
-        if ql:
-            hay = f"{t.get('task_id','')} {t.get('title','')} {t.get('description','')} {t.get('owner_person_or_role','')} {t.get('_wsName','')}".lower()
-            if ql not in hay:
-                return False
-        return True
-
-    p["workstreams"] = [{**w, "tasks": [t for t in w["tasks"] if keep(t)]} for w in p["workstreams"]]
-    p["workstreams"] = [w for w in p["workstreams"] if w["tasks"]]
-    return p
-
-
-@app.get("/api/export.xlsx")
-async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None, project: str = Query(store.DEFAULT_PROJECT)):
-    data = export.export_xlsx(_filtered_payload(workstream, owner, risk, blocking, q, person, _proj(project)))
-    return Response(content=data,
-                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": 'attachment; filename="project-plan.xlsx"'})
-
-
-@app.get("/api/export.xml")
-async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None, project: str = Query(store.DEFAULT_PROJECT)):
-    xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, person, _proj(project)))
-    return Response(content=xml, media_type="text/xml",
-                    headers={"Content-Disposition": 'attachment; filename="project-plan.xml"'})
-
-
-@app.get("/api/audit/export")
-async def audit_export(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
-    project = _proj(project)
-    _principal(request, project, ("write:system",), dev_actor="auditor")
-    data = store.audit_export(project=project)
-    return JSONResponse(
-        data,
-        headers={"Content-Disposition": f'attachment; filename="{project}-audit-export.json"'},
-    )
-
-
-@app.get("/api/cleanup/candidates")
-async def cleanup_candidates(request: Request, project: str = Query(store.DEFAULT_PROJECT),
-                             kinds: str = "", proof_task_age_days: float = 14):
-    project = _proj(project)
-    _principal(request, project, ("write:system",), dev_actor="switchboard/operator")
-    data = store.cleanup_candidates(
-        project=project,
-        proof_task_age_days=proof_task_age_days,
-        include_kinds=store.coerce_csv_list(kinds),
-    )
-    if data.get("error"):
-        raise HTTPException(400, data)
-    return data
-
-
-@app.post("/api/cleanup/apply")
-async def apply_cleanup(request: Request, body: dict = Body(default={})):
-    body = body or {}
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:system",), dev_actor="switchboard/operator")
-    result = store.apply_cleanup(
-        project=project,
-        candidate_ids=store.coerce_csv_list(body.get("candidate_ids") or body.get("ids") or []),
-        dry_run=body.get("dry_run") is not False,
-        actor=auth.actor(principal),
-        reason=body.get("reason") or "operator lifecycle cleanup",
-        proof_task_age_days=float(body.get("proof_task_age_days") or 14),
-        include_kinds=store.coerce_csv_list(body.get("kinds") or body.get("include_kinds") or []),
-    )
-    if result.get("error"):
-        raise HTTPException(400, result)
-    return result
-
-
-# ---- Deck rebrand (one-stop: drop a .pptx, get it back on-brand) ------------
-_REBRAND_MAX = 80 * 1024 * 1024  # 80 MB — protects the small VM
-
-@app.post("/api/rebrand")
-async def rebrand_deck(file: UploadFile = File(...)):
-    """Upload a .pptx -> download it re-skinned into the Taikun brand. Lossless
-    (media/charts/embeds preserved); runs the in-process rebrand.rebrand_bytes."""
-    name = file.filename or "deck.pptx"
-    if not name.lower().endswith(".pptx"):
-        raise HTTPException(400, "Please upload a PowerPoint .pptx file.")
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "The uploaded file was empty.")
-    if len(data) > _REBRAND_MAX:
-        raise HTTPException(413, f"File too large (max {_REBRAND_MAX // (1024*1024)} MB).")
-    try:
-        out = await asyncio.to_thread(rebrand.rebrand_bytes, data)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Rebrand failed: {e}")
-    base = name[:-5] if name.lower().endswith(".pptx") else name
-    dl = f"{base}-Taikun.pptx"
-    return Response(content=out,
-                    media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    headers={"Content-Disposition": f'attachment; filename="{dl}"'})
-
-
-# ---- PDF OCR (one-stop: drop a scanned PDF, get it back searchable) ---------
-_OCR_MAX = 40 * 1024 * 1024  # 40 MB — protects the small VM
-
-@app.post("/api/ocr")
-async def ocr_pdf(file: UploadFile = File(...)):
-    """Upload a scanned/printed .pdf -> download a searchable PDF: the original
-    pages are kept pixel-for-pixel and an AI-OCR'd invisible text layer is embedded
-    over them. Renders pages -> gateway vision model -> embed, in ocr.ocr_pdf_bytes."""
-    name = file.filename or "document.pdf"
-    if not ocr.is_pdf(name, file.content_type):
-        raise HTTPException(400, "Please upload a PDF file.")
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "The uploaded file was empty.")
-    if len(data) > _OCR_MAX:
-        raise HTTPException(413, f"File too large (max {_OCR_MAX // (1024*1024)} MB).")
-    try:
-        out, _text = await asyncio.to_thread(ocr.ocr_pdf_bytes, data)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    except Exception as e:
-        raise HTTPException(502, f"OCR failed: {e}")
-    base = name[:-4] if name.lower().endswith(".pdf") else name
-    dl = f"{base}-searchable.pdf"
-    return Response(content=out, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{dl}"'})
-
-
-# ---- Switchboard runtime protocol (IXP core + first TXP/OXP slices) ---------
-
-
-
 @app.get("/coordination", include_in_schema=False)
 async def coordination_page():
     """Standalone, read-only Agent Coordination view (the agent-to-agent war room).
@@ -1637,115 +1056,6 @@ async def coordination_page():
     if page.exists():
         return _shell_response(page)
     raise HTTPException(404, "coordination page not found")
-
-
-@app.get("/api/coordination")
-async def api_coordination(project: str = Query(store.DEFAULT_PROJECT), limit: int = 500):
-    """Read-only rollup for the Agent Coordination page: presence, the full directed
-    message bus, and the decision log — one project's live coordination record."""
-    proj = _proj(project)
-    return {
-        "project": proj,
-        "agents": store.list_active_agents(project=proj),
-        "messages": store.list_agent_messages(project=proj, limit=limit),
-        "decisions": store.list_decisions(project=proj, limit=limit),
-        "coordinator_decisions": store.list_coordinator_decisions(
-            project=proj, limit=min(limit, 200)),
-    }
-
-
-@app.get("/api/coordinator_decisions")
-async def api_coordinator_decisions(
-    project: str = Query(store.DEFAULT_PROJECT),
-    task_id: str = "",
-    deliverable_id: str = "",
-    decision_kind: str = "",
-    limit: int = 100,
-):
-    """COORD-3 explainable planner trail for cockpit/UI — structured decision records
-    without reading chat transcripts."""
-    proj = _proj(project)
-    return {
-        "project": proj,
-        "schema": "switchboard.coordinator_decision.v1",
-        "decisions": store.list_coordinator_decisions(
-            task_id=task_id, deliverable_id=deliverable_id,
-            decision_kind=decision_kind, limit=limit, project=proj,
-        ),
-    }
-
-
-@app.get("/api/coordinator_dispatch/plan")
-async def api_coordinator_dispatch_plan(
-    request: Request,
-    project: str = Query(store.DEFAULT_PROJECT),
-    max_dispatches: int = 3,
-    max_nudges: int = 3,
-):
-    """COORD-4 dry plan preview — what T1 would wake/nudge without acting."""
-    import coordinator_dispatch as coord_dispatch
-    proj = _proj(project)
-    _principal(request, proj, ("read",), dev_actor="web")
-    db_path = str(store._resolve(proj)["db"])
-    snapshot = __import__("coordinator_audit").collect_snapshot(db_path, proj)
-    plan = coord_dispatch.build_dispatch_plan(
-        snapshot,
-        policy={"dry_run": True, "max_dispatches_per_tick": max_dispatches,
-                "max_nudges_per_tick": max_nudges},
-    )
-    return {"project": proj, "plan": plan}
-
-
-@app.post("/api/coordinator_dispatch")
-async def api_coordinator_dispatch(request: Request, body: dict = Body(default={})):
-    """COORD-4 T1 dispatch tick. Defaults to dry_run=true; set dry_run=false to act."""
-    import coordinator_dispatch as coord_dispatch
-    proj = _proj(body.get("project") or request.query_params.get("project")
-                 or store.DEFAULT_PROJECT)
-    principal = _principal(request, proj, ("write:ixp",), dev_actor="web")
-    policy = dict(body.get("policy") or {})
-    if "dry_run" in body:
-        policy["dry_run"] = bool(body.get("dry_run"))
-    else:
-        policy.setdefault("dry_run", True)
-    tick = coord_dispatch.run_dispatch_tick(
-        proj, policy=policy, actor=auth.actor(principal),
-    )
-    return tick
-
-
-# ---- UI-7: operator-facing directed messaging + ack inbox ----
-# Send/ack mutators live in switchboard.api.routers.messaging. These read-side
-# twins remain here so the operator chip can poll pending acks and status.
-
-@app.get("/api/agent_messages/pending")
-async def api_pending_acks(request: Request, project: str = Query(store.DEFAULT_PROJECT),
-                           agent_id: str = ""):
-    """The operator's ack inbox: required messages they are party to that are still
-    unacked (defaults to the caller's own identity so it survives a reload)."""
-    proj = _proj(project)
-    principal = _principal(request, proj, ("read",), dev_actor="web")
-    return {"project": proj,
-            "pending_acks": store.list_pending_acks(
-                agent_id=(agent_id or auth.actor(principal)), project=proj)}
-
-
-@app.get("/api/agent_messages/{message_id}/status")
-async def api_message_status(request: Request, message_id: int,
-                             project: str = Query(store.DEFAULT_PROJECT)):
-    """Poll one message to see whether the recipient has acked it (and delivery state)."""
-    proj = _proj(project)
-    _principal(request, proj, ("read",), dev_actor="web")
-    msg = store.get_message_status(message_id, project=proj)
-    if not msg:
-        raise HTTPException(404, "message not found")
-    return msg
-
-
-
-
-
-
 
 
 @app.get("/ixp/v1/saturation_signals")
@@ -1925,61 +1235,6 @@ async def ixp_submit_bug(request: Request, body: dict = Body(...)):
     return result
 
 
-
-@app.get("/txp/v1/list_wake_intents")
-async def txp_list_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
-                                status: str = "", host_id: str = "",
-                                runtime: str = ""):
-    wakes = store.list_wake_intents(status=status, host_id=host_id,
-                                    runtime=runtime, project=_proj(project))
-    _control_plane_http(wakes)
-    return {"wake_intents": wakes}
-
-
-@app.post("/txp/v1/cancel_wake")
-async def txp_cancel_wake(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    return _control_plane_http(store.cancel_wake(
-        (body.get("wake_id") or body.get("id") or "").strip(),
-        reason=body.get("reason") or "cancelled",
-        actor=auth.actor(principal), project=project))
-
-
-
-@app.post("/txp/v1/abandon_claim")
-async def txp_abandon_claim(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    return store.abandon_claim(body.get("claim_id") or "", reason=body.get("reason") or "unspecified",
-                               actor=auth.actor(principal), project=project)
-
-
-@app.post("/txp/v1/revoke_claim")
-async def txp_revoke_claim(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("operator_agent") or "switchboard/operator")
-    sort_order = body.get("sort_order")
-    try:
-        sort_order_value = int(sort_order) if sort_order not in (None, "") else None
-    except (TypeError, ValueError):
-        raise HTTPException(400, "sort_order must be an integer")
-    return store.revoke_claim(
-        body.get("claim_id") or "",
-        reason=body.get("reason") or "operator override",
-        reassign_to=body.get("reassign_to") or body.get("reassigned_to") or "",
-        sort_order=sort_order_value,
-        partial_evidence=body.get("partial_evidence") or body.get("evidence") or {},
-        notify=body.get("notify") is not False,
-        ack_deadline_minutes=float(body.get("ack_deadline_minutes") or 5),
-        actor=auth.actor(principal),
-        project=project,
-    )
-
-
-
-
 @app.get("/ixp/v1/reconcile")
 async def ixp_reconcile(project: str = Query(store.DEFAULT_PROJECT)):
     return store.reconcile(project=_proj(project))
@@ -2027,111 +1282,6 @@ async def ixp_run_background_job(job_name: str, request: Request,
         )
     except background_jobs.JobBoundaryError as exc:
         raise HTTPException(400, str(exc)) from exc
-
-
-# ---- GitHub webhook — §1.2 board↔git auto-sync + §1.3 "main moved" notify ----
-# Configure in GitHub → repo Settings → Webhooks:
-#   Payload URL: https://<your-host>/api/github/webhook
-#   Content type: application/json
-#   Secret: match PM_GITHUB_WEBHOOK_SECRET in .env
-#   Events: push + pull_request (merged)
-#
-# Behaviour:
-#   push to main/master   → find active leases on changed files, send directed IM
-#                           to each lease holder. Does NOT mark tasks Done.
-#   PR opened/synced      → record PR provenance + move branch/title/closing-referenced tasks
-#                           to In Review; update head SHA after branch pushes. Broad body
-#                           mentions are ignored.
-#   PR merged             → stamp merged_sha + mark branch/title/closing-referenced tasks Done.
-
-_GH_SECRET = os.environ.get("PM_GITHUB_WEBHOOK_SECRET", "")
-
-
-def _verify_gh_signature(body: bytes, sig_header: str) -> bool:
-    """HMAC-SHA256 signature check — skip if no secret configured (dev mode)."""
-    if not _GH_SECRET:
-        return True
-    if not sig_header or not sig_header.startswith("sha256="):
-        return False
-    expected = hmac.new(_GH_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(f"sha256={expected}", sig_header)
-
-
-async def _handle_push(payload: dict, project: str):
-    return await asyncio.to_thread(github_sync.handle_push, payload, project)
-
-
-async def _handle_pr(payload: dict, project: str):
-    return await asyncio.to_thread(github_sync.handle_pr, payload, project)
-
-
-async def _drain_webhook_inbox_bg(project: str):
-    """Best-effort drain kicked off the request path. Failures are non-fatal: the
-    event is already durable in the inbox, and the backstop drain job / reconcile
-    will apply it on the next pass."""
-    try:
-        await asyncio.to_thread(webhook_inbox.drain, project)
-    except Exception:
-        pass
-
-
-@app.post("/api/github/webhook")
-async def github_webhook(request: Request, project: str = ""):
-    """Receive GitHub push/pull_request events (PERF-1: accept-and-ack, never drop).
-
-    The request path does ONE durable thing — append the raw event to the webhook
-    inbox and return 2xx in O(1). No synchronous provenance fan-out, so it cannot
-    lock-timeout under a burst and GitHub never sees a 5xx that would drop the
-    delivery. A separate drain worker applies provenance idempotently off-path.
-    Set PM_GITHUB_WEBHOOK_SECRET in .env and configure the matching secret in GitHub."""
-    body = await request.body()
-    sig = request.headers.get("X-Hub-Signature-256", "")
-    if not _verify_gh_signature(body, sig):
-        raise HTTPException(401, "invalid webhook signature")
-
-    event = request.headers.get("X-GitHub-Event", "")
-    delivery = request.headers.get("X-GitHub-Delivery", "")
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(400, "invalid JSON payload")
-
-    requested_project = project
-    project = github_sync.resolve_project(payload, project)
-    _proj(project)  # fail-closed on unknown project — a misroute is not a drop class
-
-    # Durable commit point: once this returns, the delivery survives process death.
-    enq = await asyncio.to_thread(
-        webhook_inbox.enqueue_event, project,
-        delivery_guid=delivery, event=event,
-        payload_bytes=body, headers=dict(request.headers),
-        signature_verified=True, requested_project=requested_project,
-    )
-    # Apply provenance off the request path — never blocks the ack.
-    asyncio.create_task(_drain_webhook_inbox_bg(project))
-
-    return JSONResponse({
-        "action": "accepted", "event": event, "project": project,
-        "delivery": enq.get("delivery_guid"),
-        "inbox_id": enq.get("id"),
-        "queued": enq.get("enqueued", False),
-        "duplicate": enq.get("duplicate", False),
-    })
-
-
-@app.post("/api/github/webhook/drain")
-async def github_webhook_drain(project: str = Query(...), limit: int = 200):
-    """Operator/backstop: apply pending inbox rows now. Idempotent."""
-    _proj(project)
-    return JSONResponse(await asyncio.to_thread(
-        webhook_inbox.drain, project, limit=limit))
-
-
-@app.get("/api/github/webhook/inbox")
-async def github_webhook_inbox_depth(project: str = Query(...)):
-    """Observable inbox depth: counts by status + oldest-pending age."""
-    _proj(project)
-    return JSONResponse(await asyncio.to_thread(webhook_inbox.inbox_depth, project))
 
 
 class _VersionedStaticFiles(StaticFiles):

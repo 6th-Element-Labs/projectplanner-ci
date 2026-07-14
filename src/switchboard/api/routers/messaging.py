@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
+import store
 from switchboard.api.idempotency import (
     inject_idem_key,
     raise_if_idem_conflict,
@@ -105,5 +106,27 @@ def create_router(*, resolve_project: ProjectResolver,
         body["project"] = project
         return raise_if_idem_conflict(
             _ack_with_idempotency(body, actor=auth.actor(principal)))
+
+    @router.get("/api/agent_messages/pending")
+    async def api_pending_acks(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+                               agent_id: str = ""):
+        """The operator's ack inbox: required messages they are party to that are still
+        unacked (defaults to the caller's own identity so it survives a reload)."""
+        proj = resolve_project(project)
+        principal = resolve_principal(request, proj, ("read",), dev_actor="web")
+        return {"project": proj,
+                "pending_acks": store.list_pending_acks(
+                    agent_id=(agent_id or auth.actor(principal)), project=proj)}
+
+    @router.get("/api/agent_messages/{message_id}/status")
+    async def api_message_status(request: Request, message_id: int,
+                                 project: str = Query(store.DEFAULT_PROJECT)):
+        """Poll one message to see whether the recipient has acked it (and delivery state)."""
+        proj = resolve_project(project)
+        resolve_principal(request, proj, ("read",), dev_actor="web")
+        msg = store.get_message_status(message_id, project=proj)
+        if not msg:
+            raise HTTPException(404, "message not found")
+        return msg
 
     return router

@@ -1,11 +1,15 @@
 """Project lifecycle read routes."""
 from __future__ import annotations
 
-from typing import Callable
+import asyncio
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.responses import Response
 
 import auth
+import comms
+import notify
 import store
 from switchboard.application.commands import (
     project_consolidation,
@@ -18,11 +22,232 @@ from switchboard.application.queries import project_admin, project_impact
 
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
+CurrentUserResolver = Callable[[str], Optional[dict]]
+AccessibleProjectIds = Callable[[str, bool], Any]
+EtagJson = Callable[..., Response]
+WebhookSecretConfigured = Callable[[], bool]
 
 
 def create_router(*, resolve_project: ProjectResolver,
-                  resolve_principal: PrincipalResolver) -> APIRouter:
+                  resolve_principal: PrincipalResolver,
+                  current_user: CurrentUserResolver,
+                  cookie_name: str,
+                  accessible_project_ids: AccessibleProjectIds,
+                  etag_json: EtagJson,
+                  webhook_secret_configured: WebhookSecretConfigured) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/api/projects")
+    def list_projects(request: Request, include_archived: bool = Query(False)):
+        """Active picker by default; explicit admin discovery may include archived records."""
+        if auth.auth_mode() == auth.DEV_OPEN and not request.cookies.get(cookie_name, ""):
+            projects = (store.list_registry_projects(include_archived=True)
+                        if include_archived else store.projects())
+            return {"projects": projects, "default": store.DEFAULT_PROJECT,
+                    "include_archived": include_archived}
+        user = current_user(request.cookies.get(cookie_name, ""))
+        if not user:
+            raise HTTPException(401, "not authenticated")
+        if not include_archived:
+            return {"projects": user.get("projects", []), "default": "",
+                    "include_archived": False}
+        accessible = set(accessible_project_ids(
+            user["id"], bool(user.get("is_superadmin"))))
+        projects = [
+            record for record in store.list_registry_projects(include_archived=True)
+            if record.get("id") in accessible
+        ]
+        return {"projects": projects, "default": "", "include_archived": True}
+
+    @router.post("/api/projects")
+    async def create_project(request: Request, body: dict = Body(...)):
+        # ACCESS-14: contributors (write:projects) can create projects, not just admins.
+        # Human-created projects default to private (creator + invitees + org admins see them);
+        # pass visibility="org" to make one org-wide shared.
+        principal = resolve_principal(request, "switchboard", ("write:projects",), dev_actor="web")
+        created = store.create_project(
+            name=body.get("name") or body.get("label") or "",
+            project_id=body.get("project_id") or body.get("id") or "",
+            label=body.get("label") or "",
+            pretitle=body.get("pretitle") or "",
+            github_repo=body.get("github_repo") or body.get("repo") or "",
+            owner_principal_id=principal["id"],
+            org_id=body.get("org_id") or store.DEFAULT_ORG_ID,
+            purpose=body.get("purpose") or "",
+            boundary=body.get("boundary") or "",
+            visibility=(body.get("visibility") or "private").strip().lower(),
+            actor=auth.actor(principal),
+        )
+        if created.get("error"):
+            raise HTTPException(400, created["error"])
+        return created
+
+    @router.get("/api/projects/{project}/repo_topology")
+    async def project_repo_topology(project: str):
+        return store.get_project_repo_topology(project=resolve_project(project))
+
+    @router.get("/api/projects/{project}/context")
+    def project_context(request: Request, project: str):
+        # HARDEN-35: project_context (repo roles, hierarchy, policy profiles) is a
+        # near-static ~9KB blob that used to ride on every /api/board load. It lives
+        # here now so the board payload stays slim; ETag + a short max-age let a tab
+        # refocus / reload reuse the browser-cached copy (bodyless 304). Sync def so
+        # its SQLite I/O runs in the threadpool, like /api/board (HARDEN-36).
+        payload = store.get_project_context(project=resolve_project(project))
+        return etag_json(request, payload, max_age=60)
+
+    @router.post("/api/projects/{project}/repo_topology")
+    async def set_project_repo_topology(request: Request, project: str, body: dict = Body(...)):
+        resolve_principal(request, "switchboard", ("write:system",), dev_actor="web")
+        result = store.set_project_repo_topology(
+            project=resolve_project(project),
+            canonical_repo=body.get("canonical_repo") or body.get("private_repo") or "",
+            public_ci_repo=body.get("public_ci_repo") or body.get("ci_repo") or "",
+            public_repo=body.get("public_repo") or "",
+            release_repo=body.get("release_repo") or "",
+            topology_type=body.get("topology_type") or "",
+            canonical_default_branch=body.get("canonical_default_branch") or body.get("default_branch") or "",
+            canonical_claim_gate=body.get("canonical_claim_gate") or body.get("claim_gate") or "",
+            public_ci_required_status_contexts=(
+                body.get("public_ci_required_status_contexts") or
+                body.get("ci_required_status_contexts") or
+                body.get("required_status_contexts") or
+                ""
+            ),
+            public_ci_sync_scripts=(
+                body.get("public_ci_sync_scripts") or
+                body.get("ci_sync_scripts") or
+                body.get("sync_scripts") or
+                ""
+            ),
+            public_publish_scripts=body.get("public_publish_scripts") or body.get("publish_scripts") or "",
+            release_publish_scripts=body.get("release_publish_scripts") or "",
+        )
+        if result.get("error"):
+            raise HTTPException(400, result["error"])
+        return result
+
+    @router.get("/api/projects/{project}/github_association")
+    def project_github_association(request: Request, project: str, check: int = 0):
+        """UI-15: everything the "Wire your repo" panel needs — the webhook payload URL with
+        the ?project= pin PRE-FILLED (HARDEN-2/BUG-24: bare URLs fail closed on shared repos),
+        the secret name, a copyable gh one-liner, and delivery-based verification. Pass ?check=1
+        (the Verify button) to also probe repo reachability; the panel open path omits it so it
+        never makes a network call until the operator asks."""
+        project = resolve_project(project)
+        repo = store.get_project_github_repo(project) or ""
+        base = str(request.base_url).rstrip("/")
+        payload_url = f"{base}/api/github/webhook?project={project}"
+        gh_command = ""
+        if repo:
+            gh_command = (
+                f"gh api -X POST repos/{repo}/hooks -f name=web -F active=true "
+                f"-f 'events[]=push' -f 'events[]=pull_request' "
+                f"-f 'config[url]={payload_url}' -f config[content_type]=json "
+                f"-f 'config[secret]=$PM_GITHUB_WEBHOOK_SECRET'"
+            )
+        deliveries = store.github_webhook_deliveries(project)
+        reachable = store.github_repo_reachable(repo) if (check and repo) else None
+        status = "connected" if deliveries["delivered"] else ("configured" if repo else "unconfigured")
+        return {
+            "project": project,
+            "repo": repo,
+            "repo_configured": bool(repo),
+            "webhook": {
+                "payload_url": payload_url,
+                "content_type": "application/json",
+                "secret_env": "PM_GITHUB_WEBHOOK_SECRET",
+                "secret_configured": webhook_secret_configured(),
+                "events": ["push", "pull_request"],
+                "gh_command": gh_command,
+            },
+            "verification": {**deliveries, "status": status, "repo_reachable": reachable},
+        }
+
+    @router.post("/api/projects/{project}/github_repo")
+    async def set_project_github_repo_route(request: Request, project: str, body: dict = Body(...)):
+        """UI-15: record/replace a project's canonical repo from the web (Settings path for
+        existing projects). Reroutes Done/webhook provenance, so it is gated like repo_topology."""
+        project = resolve_project(project)
+        resolve_principal(request, project, ("write:system",), dev_actor="web")
+        result = store.set_project_github_repo(
+            repo=body.get("github_repo") or body.get("repo") or "", project=project)
+        if result.get("error"):
+            raise HTTPException(400, result["error"])
+        return result
+
+    @router.get("/api/projects/{project}/comms")
+    def project_comms(request: Request, project: str):
+        """UI-14: everything the Settings → Communications screen needs — the project's plus-address,
+        its associated inbound domains (the editable UI-13 routing map), per-project digest/notify
+        recipients + cadence, the global .env fallback, and channel status. Readable to anyone who can
+        read the project; edits below are admin-gated."""
+        project = resolve_project(project)
+        cfg = comms.get_config(project)
+        # Reflect whether THIS caller may edit, so the UI can disable Save/Test up front instead of
+        # only failing on POST. Non-raising probe of the same scope the write routes require.
+        try:
+            auth.authenticate_request(request, project, ("write:system",), dev_actor="web")
+            cfg["can_edit"] = True
+        except PermissionError:
+            cfg["can_edit"] = False
+        return cfg
+
+    @router.post("/api/projects/{project}/comms")
+    async def set_project_comms(request: Request, project: str, body: dict = Body(...)):
+        """UI-14: persist a Communications edit — associated inbound domains and/or outbound
+        recipients/cadence. Reroutes inbound mail and outbound recipients, so it is admin-gated
+        (write:system, same as repo settings) and audited."""
+        project = resolve_project(project)
+        principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
+        result = comms.update_config(body or {}, project=project, actor=auth.actor(principal))
+        if result.get("error"):
+            raise HTTPException(400, result["error"])
+        store.append_activity("comms.updated", auth.actor(principal),
+                              result.get("audit") or {}, project=project)
+        return result
+
+    @router.post("/api/projects/{project}/comms/test")
+    async def test_project_comms(request: Request, project: str, body: dict = Body(...)):
+        """UI-14 Send-test: email the project's effective recipients so an operator can confirm the
+        wiring end-to-end. Admin-gated + audited; dry-runs (logs, sent=false) until SMTP is configured."""
+        project = resolve_project(project)
+        principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
+        kind = (body or {}).get("kind") or "notify"
+        if kind not in ("notify", "digest"):
+            raise HTTPException(400, "kind must be 'notify' or 'digest'")
+        recipients = comms.recipients_for(project, kind) or comms.global_fallback_recipients()
+        subject = f"{project} — communications test"
+        text = (f"Communications test from plan.taikunai.com for project '{project}'. "
+                f"If you received this, {project}'s {kind} recipients are wired correctly.")
+        results = await asyncio.to_thread(notify.send, subject, text, ("email",), project, kind)
+        store.append_activity("comms.test_sent", auth.actor(principal),
+                              {"kind": kind, "recipients": recipients, "results": results},
+                              project=project)
+        return {"project": project, "kind": kind, "recipients": recipients, "results": results}
+
+    @router.get("/api/projects/{project}/boards")
+    async def list_project_boards(project: str, kind: str = "", status: str = ""):
+        project = resolve_project(project)
+        return {"project": project, "boards": store.list_project_boards(
+            project=project, kind=kind, status=status)}
+
+    @router.post("/api/projects/{project}/boards")
+    async def create_project_board(request: Request, project: str, body: dict = Body(...)):
+        project = resolve_project(project)
+        principal = resolve_principal(request, project, ("write:tasks",), dev_actor="web")
+        result = store.create_project_board(body or {}, actor=auth.actor(principal), project=project)
+        if result.get("error"):
+            raise HTTPException(400, result["error"])
+        return result
+
+    @router.get("/api/projects/{project}/boards/{board_id}")
+    async def get_project_board(project: str, board_id: str):
+        project = resolve_project(project)
+        result = store.get_project_board(board_id, project=project)
+        if not result:
+            raise HTTPException(404, "board not found")
+        return result
 
     @router.get("/api/projects/{project}")
     def get_project(request: Request, project: str):

@@ -73,8 +73,24 @@ try:
     full = client.get("/api/deliverables", params={"project": HOME}).json()["deliverables"][0]
     ok((full.get("task_links") or [{}])[0].get("task", {}).get("task_id") == task["task_id"],
        "default REST list preserves the full compatibility contract")
-    ok(not inspect.iscoroutinefunction(app_module.list_projects),
-       "/api/projects sync SQLite/auth work runs in FastAPI's threadpool")
+
+    def _expanded_routes(routes):
+        for route in routes:
+            included = getattr(route, "original_router", None)
+            if included is not None:
+                yield from _expanded_routes(included.routes)
+            else:
+                yield route
+
+    list_projects_endpoints = [
+        route for route in _expanded_routes(app_module.app.routes)
+        if getattr(route, "path", "") == "/api/projects"
+        and "GET" in (getattr(route, "methods", None) or set())
+    ]
+    ok(list_projects_endpoints and all(
+        not inspect.iscoroutinefunction(route.endpoint)
+        for route in list_projects_endpoints
+    ), "/api/projects sync SQLite/auth work runs in FastAPI's threadpool")
 
     js = read_frontend_source(Path.cwd())
     index = Path("static/index.html").read_text(encoding="utf-8")

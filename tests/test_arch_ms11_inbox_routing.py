@@ -28,12 +28,13 @@ ok(not ({"route", "routes_map", "plus_project", "domain_project", "allow_sender"
 ok("inbox_routing.route(sender, recipients)" in source_text,
    "the IMAP adapter delegates routing through the package seam")
 
-# ARCH-MS-45 thinned app.py to a re-export; inbox wiring lives in app_impl.py.
-for caller in ("app_impl.py", "jobs.py"):
+# ARCH-MS-69 moved inbox poll into the intake_inbox router; jobs.py still polls.
+for caller in ("src/switchboard/api/routers/intake_inbox.py", "jobs.py"):
     text = (ROOT / caller).read_text(encoding="utf-8")
     ok("import inbox_source" in text, f"{caller} uses the renamed adapter")
     ok("gmail_source" not in text, f"{caller} has no retired module reference")
-ok("gmail_source" not in (ROOT / "app.py").read_text(encoding="utf-8"),
-   "thin app.py entrypoint has no retired module reference")
+for caller in ("app_impl.py", "app.py"):
+    ok("gmail_source" not in (ROOT / caller).read_text(encoding="utf-8"),
+       f"{caller} has no retired module reference")
 
 print("ARCH-MS-11 inbox routing architecture checks passed")

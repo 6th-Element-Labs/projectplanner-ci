@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 
 import auth
+import store
 from switchboard.api.idempotency import inject_idem_key, raise_if_idem_conflict
 from switchboard.application.commands import claim_next as claim_next_command
 from switchboard.application.commands import claim_task as claim_task_command
@@ -65,5 +66,34 @@ def create_router(*, resolve_project: ProjectResolver,
         body["project"] = project
         return raise_if_idem_conflict(complete_claim_command.execute_mapping_result(
             body, actor=auth.actor(principal)))
+
+    @router.post("/txp/v1/abandon_claim")
+    async def txp_abandon_claim(request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="agent")
+        return store.abandon_claim(body.get("claim_id") or "", reason=body.get("reason") or "unspecified",
+                                   actor=auth.actor(principal), project=project)
+
+    @router.post("/txp/v1/revoke_claim")
+    async def txp_revoke_claim(request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_principal(request, project, ("write:ixp",),
+                                       dev_actor=body.get("operator_agent") or "switchboard/operator")
+        sort_order = body.get("sort_order")
+        try:
+            sort_order_value = int(sort_order) if sort_order not in (None, "") else None
+        except (TypeError, ValueError):
+            raise HTTPException(400, "sort_order must be an integer")
+        return store.revoke_claim(
+            body.get("claim_id") or "",
+            reason=body.get("reason") or "operator override",
+            reassign_to=body.get("reassign_to") or body.get("reassigned_to") or "",
+            sort_order=sort_order_value,
+            partial_evidence=body.get("partial_evidence") or body.get("evidence") or {},
+            notify=body.get("notify") is not False,
+            ack_deadline_minutes=float(body.get("ack_deadline_minutes") or 5),
+            actor=auth.actor(principal),
+            project=project,
+        )
 
     return router
