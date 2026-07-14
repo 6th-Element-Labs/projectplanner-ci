@@ -790,6 +790,9 @@ def run_once(inventory):
         elif binding:
             failed_rec = {
                 **(rec or {}),
+                "runner_session_id": (
+                    (rec or {}).get("runner_session_id") or runner_session_id
+                ),
                 "status": "failed",
                 "metadata": {
                     **((rec or {}).get("metadata") or {}),
@@ -805,7 +808,9 @@ def run_once(inventory):
             )
         usage_registration = report_cloud_usage(
             rec, claimed_wake) if started and rec.get("cloud_session") else None
-        result = {"started": started, "runner_session_id": (rec or {}).get("runner_session_id"),
+        result = {"started": started,
+                  "runner_session_id": ((rec or {}).get("runner_session_id")
+                                        or runner_session_id or None),
                   "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
                   "reason": "started" if started else "launch_failed",
                   "pid": (rec or {}).get("pid"),
@@ -822,15 +827,13 @@ def run_once(inventory):
         # Work Session, exact lease, encrypted materialization, and provider preflight
         # before it completes the wake. Completing it now would race the second-phase
         # claim_wake call and make the admission contract impossible.
+        if binding:
+            result["wake_completion_delegated"] = bool(started)
         if not binding or not started:
             _try("POST", P_COMPLETE_WAKE, {"project": PROJECT, "wake_id": wake_id,
                                            "runner_session_id": result["runner_session_id"],
                                            "agent_id": (w.get("selector") or {}).get("agent_id"),
                                            "result": result})
-            if binding:
-                result["wake_completion_delegated"] = False
-        else:
-            result["wake_completion_delegated"] = True
         acted.append({"wake_id": wake_id, **result})
     return {"host_id": host_id, "pending": len(wakes), "acted": acted,
             "runner_controls": controls}

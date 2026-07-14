@@ -337,11 +337,7 @@ ok(summary["acted"][0]["wake_completion_delegated"] is True
 calls = []
 agent_host._try = fake_try_byoa
 agent_host.confirm_started = lambda rec: False
-agent_host.launch = lambda wake, inv, runner_session_id="", extra_env=None: {
-    "runner_session_id": runner_session_id,
-    "pid": 99999999,
-    "wake_mode": agent_host.wake_mode(wake),
-}
+agent_host.launch = lambda wake, inv, runner_session_id="", extra_env=None: None
 summary = agent_host.run_once(inventory)
 agent_host.confirm_started = lambda rec: True
 failed_runner_registers = [
@@ -351,6 +347,7 @@ failed_runner_registers = [
 ]
 failed_wake_calls = [call[2] for call in calls if call[1] == agent_host.P_COMPLETE_WAKE]
 ok(len(failed_runner_registers) == 1
+   and failed_runner_registers[0]["runner_session_id"].startswith("run_")
    and failed_runner_registers[0]["metadata"]["credential_admission_phase"]
        == "preclaim_failed",
    "failed BYOA child replaces the starting runner row with terminal preclaim evidence")
