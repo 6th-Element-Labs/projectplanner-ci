@@ -566,6 +566,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Optional retry key. Same key + same body replays the original response; same key + different body returns 409 idem_key_conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -598,6 +608,35 @@
               }
             },
             "description": "Invalid request payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "error_code": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "idem_key": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Idempotency-Key conflict (idem_key_conflict)"
           }
         },
         "summary": "Create a task",
@@ -672,6 +711,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Optional retry key. Same key + same body replays the original response; same key + different body returns 409 idem_key_conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -704,6 +753,35 @@
               }
             },
             "description": "Invalid request payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "error_code": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "idem_key": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Idempotency-Key conflict (idem_key_conflict)"
           }
         },
         "summary": "Update a task",
@@ -729,6 +807,16 @@
             "name": "project",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional retry key. Same key + same body replays the original response; same key + different body returns 409 idem_key_conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "minLength": 1,
               "type": "string"
             }
           }
@@ -763,6 +851,35 @@
               }
             },
             "description": "Invalid request payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "error_code": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "idem_key": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Idempotency-Key conflict (idem_key_conflict)"
           }
         },
         "summary": "Move a task between project boards",
@@ -774,6 +891,18 @@
     "/txp/v1/claim_next": {
       "post": {
         "operationId": "claimNext",
+        "parameters": [
+          {
+            "description": "Optional retry key. Same key + same body replays the original response; same key + different body returns 409 idem_key_conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -804,6 +933,35 @@
               }
             },
             "description": "Invalid request payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "error_code": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "idem_key": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Idempotency-Key conflict (idem_key_conflict)"
           }
         },
         "summary": "Claim the next ready task",
@@ -815,6 +973,18 @@
     "/txp/v1/claim_task": {
       "post": {
         "operationId": "claimTask",
+        "parameters": [
+          {
+            "description": "Optional retry key. Same key + same body replays the original response; same key + different body returns 409 idem_key_conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -845,6 +1015,35 @@
               }
             },
             "description": "Invalid request payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "error_code": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "idem_key": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Idempotency-Key conflict (idem_key_conflict)"
           }
         },
         "summary": "Claim one exact ready task",
@@ -856,6 +1055,18 @@
     "/txp/v1/complete_claim": {
       "post": {
         "operationId": "completeClaim",
+        "parameters": [
+          {
+            "description": "Optional retry key. Same key + same body replays the original response; same key + different body returns 409 idem_key_conflict.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -886,6 +1097,35 @@
               }
             },
             "description": "Invalid request payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "error_code": {
+                      "const": "idem_key_conflict",
+                      "type": "string"
+                    },
+                    "idem_key": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "operation": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Idempotency-Key conflict (idem_key_conflict)"
           }
         },
         "summary": "Complete a claim and move work to In Review",

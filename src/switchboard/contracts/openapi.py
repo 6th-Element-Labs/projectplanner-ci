@@ -169,28 +169,65 @@ def _operation_object(op: dict[str, Any]) -> dict[str, Any]:
             schema=param["schema"],
         ))
 
+    method = str(op.get("method") or "").lower()
+    mutating = method in {"post", "put", "patch", "delete"}
+    if mutating and op.get("idempotent", True):
+        parameters.append({
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": False,
+            "description": (
+                "Optional retry key. Same key + same body replays the original "
+                "response; same key + different body returns 409 idem_key_conflict."
+            ),
+            "schema": {"type": "string", "minLength": 1},
+        })
+
+    responses: dict[str, Any] = {
+        "200": {
+            "description": "Success",
+            "content": {
+                "application/json": {
+                    "schema": {"type": "object"},
+                }
+            },
+        },
+        "400": {
+            "description": "Invalid request payload",
+            "content": {
+                "application/json": {
+                    "schema": {"type": "object"},
+                }
+            },
+        },
+    }
+    if mutating and op.get("idempotent", True):
+        responses["409"] = {
+            "description": "Idempotency-Key conflict (idem_key_conflict)",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "error": {"type": "string", "const": "idem_key_conflict"},
+                            "error_code": {
+                                "type": "string",
+                                "const": "idem_key_conflict",
+                            },
+                            "message": {"type": "string"},
+                            "idem_key": {"type": "string"},
+                            "operation": {"type": "string"},
+                        },
+                    }
+                }
+            },
+        }
+
     operation: dict[str, Any] = {
         "operationId": op["operation_id"],
         "summary": op["summary"],
         "tags": ["contracts"],
-        "responses": {
-            "200": {
-                "description": "Success",
-                "content": {
-                    "application/json": {
-                        "schema": {"type": "object"},
-                    }
-                },
-            },
-            "400": {
-                "description": "Invalid request payload",
-                "content": {
-                    "application/json": {
-                        "schema": {"type": "object"},
-                    }
-                },
-            },
-        },
+        "responses": responses,
     }
     if parameters:
         operation["parameters"] = parameters

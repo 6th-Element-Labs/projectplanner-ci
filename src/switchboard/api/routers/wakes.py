@@ -11,6 +11,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Body, Request
 
 import auth
+from switchboard.api.idempotency import inject_idem_key, raise_if_idem_conflict
 from switchboard.application.commands import claim_wake as claim_wake_command
 from switchboard.application.commands import complete_wake as complete_wake_command
 from switchboard.application.commands import request_wake as request_wake_command
@@ -31,7 +32,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.post("/txp/v1/request_wake")
     async def txp_request_wake(request: Request, body: dict = Body(...)):
-        body = dict(body or {})
+        body = inject_idem_key(request, body)
         project = resolve_body_project(body)
         principal = resolve_principal(
             request, project, ("write:ixp",),
@@ -41,29 +42,32 @@ def create_router(*, resolve_project: ProjectResolver,
             body["source"] = auth.actor(principal)
         if not body.get("task_id") and body.get("task"):
             body["task_id"] = body.get("task")
-        return control_plane_http(request_wake_command.execute_mapping_result(
-            body, actor=auth.actor(principal), principal_id=principal["id"]))
+        return control_plane_http(raise_if_idem_conflict(
+            request_wake_command.execute_mapping_result(
+                body, actor=auth.actor(principal), principal_id=principal["id"])))
 
     @router.post("/txp/v1/claim_wake")
     async def txp_claim_wake(request: Request, body: dict = Body(...)):
-        body = dict(body or {})
+        body = inject_idem_key(request, body)
         project = resolve_body_project(body)
         principal = resolve_principal(
             request, project, ("write:ixp",),
             dev_actor=body.get("host_id") or "agent-host")
         body["project"] = project
-        return control_plane_http(claim_wake_command.execute_mapping_result(
-            body, actor=auth.actor(principal)))
+        return control_plane_http(raise_if_idem_conflict(
+            claim_wake_command.execute_mapping_result(
+                body, actor=auth.actor(principal))))
 
     @router.post("/txp/v1/complete_wake")
     async def txp_complete_wake(request: Request, body: dict = Body(...)):
-        body = dict(body or {})
+        body = inject_idem_key(request, body)
         project = resolve_body_project(body)
         principal = resolve_principal(
             request, project, ("write:ixp",),
             dev_actor=body.get("host_id") or body.get("agent_id") or "agent-host")
         body["project"] = project
-        return control_plane_http(complete_wake_command.execute_mapping_result(
-            body, actor=auth.actor(principal)))
+        return control_plane_http(raise_if_idem_conflict(
+            complete_wake_command.execute_mapping_result(
+                body, actor=auth.actor(principal))))
 
     return router

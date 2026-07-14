@@ -1,5 +1,5 @@
 {
-  "count": 25,
+  "count": 27,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -21,6 +21,14 @@
     {
       "$id": "switchboard.claim.complete_claim_command.v1",
       "path": "switchboard.claim.complete_claim_command.v1.json"
+    },
+    {
+      "$id": "switchboard.messaging.ack_message_command.v1",
+      "path": "switchboard.messaging.ack_message_command.v1.json"
+    },
+    {
+      "$id": "switchboard.messaging.send_agent_message_command.v1",
+      "path": "switchboard.messaging.send_agent_message_command.v1.json"
     },
     {
       "$id": "switchboard.project.archive_command.v1",

@@ -1,0 +1,90 @@
+{
+  "$id": "switchboard.messaging.send_agent_message_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for directed agent messaging.",
+  "properties": {
+    "ack_deadline_minutes": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ack Deadline Minutes"
+    },
+    "ack_timeout_seconds": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ack Timeout Seconds"
+    },
+    "from_agent": {
+      "title": "From Agent",
+      "type": "string"
+    },
+    "idem_key": {
+      "default": "",
+      "title": "Idem Key",
+      "type": "string"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "on_ack_timeout": {
+      "default": "notify_sender",
+      "title": "On Ack Timeout",
+      "type": "string"
+    },
+    "priority": {
+      "default": 0,
+      "title": "Priority",
+      "type": "integer"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "requires_ack": {
+      "default": false,
+      "title": "Requires Ack",
+      "type": "boolean"
+    },
+    "schema": {
+      "default": "switchboard.messaging.send_agent_message_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "signal": {
+      "default": "",
+      "title": "Signal",
+      "type": "string"
+    },
+    "task_id": {
+      "default": "",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "to_agent": {
+      "title": "To Agent",
+      "type": "string"
+    }
+  },
+  "required": [
+    "from_agent",
+    "to_agent",
+    "message"
+  ],
+  "title": "SendAgentMessageCommand",
+  "type": "object"
+}

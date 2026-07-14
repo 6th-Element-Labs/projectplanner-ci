@@ -15,10 +15,21 @@ import agent
 import auth
 import dispatch
 import store
+from switchboard.api.idempotency import (
+    inject_idem_key,
+    raise_if_idem_conflict,
+    run_with_idempotency,
+)
 from switchboard.application.commands import create_task as create_task_command
 from switchboard.application.commands import move_task as move_task_command
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
+from switchboard.contracts.tasks.v1 import (
+    CREATE_TASK_FIELDS,
+    UPDATE_TASK_FIELDS,
+    CreateTaskCommand,
+    UpdateTaskCommand,
+)
 
 
 ProjectResolver = Callable[[str], str]
@@ -61,9 +72,36 @@ def create_router(*, resolve_project: ProjectResolver,
 
     def without_write_binding_fields(body: dict) -> dict:
         clean = dict(body or {})
-        for key in ("agent_id", "system_actor", "system_reason"):
+        for key in ("agent_id", "system_actor", "system_reason", "idem_key"):
             clean.pop(key, None)
         return clean
+
+    def create_idem_payload(body: dict, *, project: str) -> dict:
+        # Hash the command-normalized shape so equivalent adapter bodies replay.
+        try:
+            normalized = CreateTaskCommand.from_mapping(body).to_store_data()
+        except Exception:
+            normalized = {key: body[key] for key in CREATE_TASK_FIELDS if key in body}
+        return {"project": project, **normalized}
+
+    def update_idem_payload(body: dict, *, project: str, task_id: str) -> dict:
+        try:
+            normalized = UpdateTaskCommand.from_mapping(task_id, body).to_store_fields()
+        except Exception:
+            normalized = {key: body[key] for key in UPDATE_TASK_FIELDS if key in body}
+            if "depends_on" in body:
+                normalized["depends_on"] = body["depends_on"]
+        return {"project": project, "task_id": task_id, **normalized}
+
+    def move_idem_payload(body: dict, *, task_id: str) -> dict:
+        return {
+            "task_id": task_id,
+            "project_from": body.get("project_from") or "",
+            "project_to": body.get("project_to") or "",
+            "reason": body.get("reason") or "",
+            "new_task_id": body.get("new_task_id") or "",
+            "dependency_policy": body.get("dependency_policy") or "fail",
+        }
 
     @router.get("/api/tasks")
     async def list_tasks(workstream: str = None, status: str = None, assignee: str = None,
@@ -82,30 +120,52 @@ def create_router(*, resolve_project: ProjectResolver,
     async def create_task(request: Request, body: dict = Body(...),
                           project: str = Query(...)):
         project = resolve_project(project)
+        body = inject_idem_key(request, body)
         binding = resolve_write_actor(request, project, body)
-        task = create_task_command.execute_mapping_result(
-            without_write_binding_fields(body), actor=binding["actor"], project=project)
+        idem_key = str(body.get("idem_key") or "").strip()
+        cmd_body = without_write_binding_fields(body)
+        task, replayed = run_with_idempotency(
+            project=project,
+            operation="create_task",
+            actor=binding["actor"],
+            idem_key=idem_key,
+            payload=create_idem_payload(cmd_body, project=project),
+            execute=lambda: create_task_command.execute_mapping_result(
+                cmd_body, actor=binding["actor"], project=project),
+        )
+        task = raise_if_idem_conflict(task)
         if task.get("error"):
             raise HTTPException(400, task)
-        record_write_binding(task.get("task_id") or "", binding, project)
+        if not replayed:
+            record_write_binding(task.get("task_id") or "", binding, project)
         return task
 
     @router.patch("/api/tasks/{task_id}")
     async def patch_task(request: Request, task_id: str, body: dict = Body(...),
                          project: str = Query(...)):
         project = resolve_project(project)
-        body = dict(body or {})
+        body = inject_idem_key(request, body)
         binding = resolve_write_actor(request, project, body, task_id=task_id)
-        task = update_task_command.execute_mapping_result(
-            task_id, without_write_binding_fields(body),
-            actor=binding["actor"], project=project)
+        idem_key = str(body.get("idem_key") or "").strip()
+        cmd_body = without_write_binding_fields(body)
+        task, replayed = run_with_idempotency(
+            project=project,
+            operation="update_task",
+            actor=binding["actor"],
+            idem_key=idem_key,
+            payload=update_idem_payload(cmd_body, project=project, task_id=task_id),
+            execute=lambda: update_task_command.execute_mapping_result(
+                task_id, cmd_body, actor=binding["actor"], project=project),
+        )
+        task = raise_if_idem_conflict(task)
         if not task:
             raise HTTPException(404, "task not found")
         if task.get("error") == "done_requires_merge_provenance":
             raise HTTPException(409, task.get("message") or "Done requires merge provenance")
         if task.get("error"):
             raise HTTPException(400, task)
-        record_write_binding(task_id, binding, project)
+        if not replayed:
+            record_write_binding(task_id, binding, project)
         return task
 
     @router.post("/api/tasks/{task_id}/verify_offline")
@@ -156,7 +216,7 @@ def create_router(*, resolve_project: ProjectResolver,
     async def move_task(request: Request, task_id: str, body: dict = Body(...),
                         project: str = Query(...)):
         project_from = resolve_project(project)
-        body = dict(body or {})
+        body = inject_idem_key(request, body)
         # Resolve destination through the same project gate as the query arg,
         # then hand a transport-neutral payload to the shared command.
         destination = body.get("project_to") or body.get("destination_project") or ""
@@ -164,8 +224,19 @@ def create_router(*, resolve_project: ProjectResolver,
         body["project_to"] = resolve_project(destination) if destination else ""
         principal = resolve_principal(
             request, "switchboard", ("write:system",), dev_actor="web")
-        result = move_task_command.execute_mapping_result(
-            task_id, body, actor=auth.actor(principal))
+        actor = auth.actor(principal)
+        idem_key = str(body.get("idem_key") or "").strip()
+        cmd_body = {k: v for k, v in body.items() if k != "idem_key"}
+        result, _replayed = run_with_idempotency(
+            project=project_from,
+            operation="move_task",
+            actor=actor,
+            idem_key=idem_key,
+            payload=move_idem_payload(cmd_body, task_id=task_id),
+            execute=lambda: move_task_command.execute_mapping_result(
+                task_id, cmd_body, actor=actor),
+        )
+        result = raise_if_idem_conflict(result)
         if result.get("error"):
             raise HTTPException(400, result["error"])
         return result
@@ -202,15 +273,26 @@ def create_router(*, resolve_project: ProjectResolver,
     async def comment(request: Request, task_id: str, body: dict = Body(...),
                       project: str = Query(...)):
         project = resolve_project(project)
-        body = dict(body or {})
+        body = inject_idem_key(request, body)
         text = (body.get("text") or "").strip()
         if not text:
             raise HTTPException(400, "text required")
         binding = resolve_write_actor(request, project, body, task_id=task_id)
-        record_write_binding(task_id, binding, project)
-        task = store.add_comment(task_id, binding["actor"], text, project=project)
+        idem_key = str(body.get("idem_key") or "").strip()
+        task, replayed = run_with_idempotency(
+            project=project,
+            operation="add_comment",
+            actor=binding["actor"],
+            idem_key=idem_key,
+            payload={"project": project, "task_id": task_id, "text": text},
+            execute=lambda: store.add_comment(
+                task_id, binding["actor"], text, project=project),
+        )
+        task = raise_if_idem_conflict(task)
         if not task:
             raise HTTPException(404, "task not found")
+        if not replayed:
+            record_write_binding(task_id, binding, project)
         return task
 
     @router.post("/api/tasks/{task_id}/dispatch")

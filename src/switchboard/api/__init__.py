@@ -1,1 +1,1 @@
-"""REST adapters (FastAPI routers)."""
+"""REST adapters (FastAPI routers) and shared HTTP helpers."""

@@ -1,0 +1,31 @@
+{
+  "$id": "switchboard.messaging.ack_message_command.v1",
+  "additionalProperties": false,
+  "description": "Transport-neutral input for acknowledging a directed message.",
+  "properties": {
+    "message_id": {
+      "title": "Message Id",
+      "type": "integer"
+    },
+    "project": {
+      "default": "maxwell",
+      "title": "Project",
+      "type": "string"
+    },
+    "response": {
+      "default": "",
+      "title": "Response",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.messaging.ack_message_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "message_id"
+  ],
+  "title": "AckMessageCommand",
+  "type": "object"
+}
