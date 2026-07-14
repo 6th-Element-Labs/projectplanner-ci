@@ -197,7 +197,7 @@ def default_inventory():
         "policy": policy,
         "runtimes": [{
             "runtime": runtime,
-            "launcher": "codex cloud exec" if cloud_enabled else "python3",
+            "launcher": "codex cloud exec" if cloud_enabled else sys.executable,
             "profiles": profiles,
             "control": {"mode": "hook_deny", "runner_kill": True, "host_policy": policy["mode"]},
             "policy": policy,
@@ -290,7 +290,9 @@ def wake_mode(wake, inventory=None):
 def active_session_count(inventory):
     """Best-effort live session count from the supervisor (capacity gate). 0 on any error."""
     try:
-        out = subprocess.run(["python3", SUPERVISOR, "list"], capture_output=True, text=True, timeout=10)
+        out = subprocess.run(
+            [sys.executable, SUPERVISOR, "list"],
+            capture_output=True, text=True, timeout=10)
         data = json.loads(out.stdout or "[]")
         sessions = data if isinstance(data, list) else data.get("sessions", [])
         return sum(1 for s in sessions if s.get("status") == "running")
@@ -336,19 +338,19 @@ def launch_command(wake, inventory, runner_session_id=""):
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
     if mode == "closure_verify":
         policy = wake.get("policy") or {}
-        child = ["python3", CLOSURE_VERIFIER, "--project", PROJECT,
+        child = [sys.executable, CLOSURE_VERIFIER, "--project", PROJECT,
                  "--deliverable-id", policy.get("deliverable_id"),
                  "--host-id", inventory.get("host_id", "")]
         if wake.get("wake_id"):
             child += ["--wake-id", wake.get("wake_id")]
     elif mode == "inbox_only":
         idle = os.environ.get("PM_AGENT_HOST_INBOX_IDLE_SECONDS", "6")
-        child = ["python3", RUN_AGENT, "--runtime", runtime,
+        child = [sys.executable, RUN_AGENT, "--runtime", runtime,
                  "--inbox-only", "--idle-seconds", idle]
         if _truthy(os.environ.get("PM_AGENT_HOST_ACK_INBOX_ONLY", "1")):
             child.append("--ack-inbox")
     else:
-        child = ["python3", RUN_AGENT, "--runtime", runtime, "--max-tasks", "1"]
+        child = [sys.executable, RUN_AGENT, "--runtime", runtime, "--max-tasks", "1"]
         if lane:
             child += ["--lanes", lane]
         elif not (inventory.get("policy") or {}).get("allow_global_claim"):
@@ -356,7 +358,7 @@ def launch_command(wake, inventory, runner_session_id=""):
         idle = os.environ.get("PM_AGENT_HOST_CLAIM_IDLE_SECONDS", "6")
         child += ["--idle-seconds", idle]
         child += (["--work-module", work_mod] if work_mod else ["--dry"])
-    cmd = ["python3", SUPERVISOR, "start", "--agent-id", agent_id,
+    cmd = [sys.executable, SUPERVISOR, "start", "--agent-id", agent_id,
            "--cwd", inventory["repo_root"]]
     if runner_session_id:
         cmd += ["--runner-session-id", runner_session_id]
@@ -518,13 +520,13 @@ def report_cloud_usage(rec, wake):
 def supervisor_action(action, runner_session_id, options=None):
     options = options or {}
     if action == "snapshot":
-        cmd = ["python3", SUPERVISOR, "snapshot", runner_session_id]
+        cmd = [sys.executable, SUPERVISOR, "snapshot", runner_session_id]
     elif action == "health":
-        cmd = ["python3", SUPERVISOR, "status", runner_session_id]
+        cmd = [sys.executable, SUPERVISOR, "status", runner_session_id]
     elif action == "logs":
-        cmd = ["python3", SUPERVISOR, "snapshot", runner_session_id]
+        cmd = [sys.executable, SUPERVISOR, "snapshot", runner_session_id]
     elif action == "kill":
-        cmd = ["python3", SUPERVISOR, "kill", runner_session_id,
+        cmd = [sys.executable, SUPERVISOR, "kill", runner_session_id,
                "--grace-seconds", str(options.get("grace_seconds") or 5.0),
                "--signal", options.get("signal") or "TERM"]
     elif action == "open":
@@ -599,7 +601,8 @@ def _drain_runners(host_id):
     sessions = sessions if isinstance(sessions, list) else []
     try:
         out = subprocess.run(
-            ["python3", SUPERVISOR, "list"], capture_output=True, text=True, timeout=10)
+            [sys.executable, SUPERVISOR, "list"],
+            capture_output=True, text=True, timeout=10)
         local = (json.loads(out.stdout or "{}").get("sessions") or []) \
             if out.returncode == 0 else []
     except Exception:

@@ -118,6 +118,10 @@ ok("--idle-seconds" in cmd, "inbox-only command stays alive for readiness check"
 
 cmd, mode = agent_host.launch_command(lane_wake, inventory)
 ok(mode == "claim_next", "lane-scoped wake selects claim_next mode")
+separator = cmd.index("--")
+ok(cmd[0] == agent_host.sys.executable
+   and cmd[separator + 1] == agent_host.sys.executable,
+   "supervisor and delegated worker inherit the Agent Host virtualenv interpreter")
 ok("--lanes" in cmd and "ADAPTER" in cmd and "--dry" in cmd,
    "lane-scoped dry wake enters claim_next with an explicit lane")
 ok("--idle-seconds" in cmd, "lane-scoped dry wake stays alive for readiness check")
