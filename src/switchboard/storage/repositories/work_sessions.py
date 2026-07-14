@@ -35,6 +35,7 @@ from switchboard.storage.repositories.tasks import (  # noqa: F401
     _task_looks_like_code_work,
     get_task,
 )
+from switchboard.storage.repositories.activity import append_activity  # noqa: F401 — ARCH-MS-55
 
 # Kept next to work-session helpers (moved with ARCH-MS-46 verbatim surface).
 PR_BACKED_STATUSES = frozenset({"In Review", "Done"})
@@ -45,10 +46,6 @@ def _store_facade():
     """Resolve transitional store helpers after store.py is initialized."""
     import store
     return store
-
-
-def append_activity(*args, **kwargs):
-    return _store_facade().append_activity(*args, **kwargs)
 
 
 def check_resources(*args, **kwargs):

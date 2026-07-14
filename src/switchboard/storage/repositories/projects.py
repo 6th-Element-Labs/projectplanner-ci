@@ -41,24 +41,17 @@ from switchboard.storage.repositories.access import (  # noqa: F401
     set_project_access,
 )
 from switchboard.storage.repositories.provenance import _normalize_repo_slug  # noqa: F401
+from switchboard.storage.repositories.activity import (  # noqa: F401 — ARCH-MS-55
+    append_activity,
+    get_meta,
+    set_meta,
+)
 
 
 def _store_facade():
     """Resolve transitional store helpers after store.py is initialized."""
     import store
     return store
-
-
-def get_meta(*args, **kwargs):
-    return _store_facade().get_meta(*args, **kwargs)
-
-
-def set_meta(*args, **kwargs):
-    return _store_facade().set_meta(*args, **kwargs)
-
-
-def append_activity(*args, **kwargs):
-    return _store_facade().append_activity(*args, **kwargs)
 
 
 def list_boards(*args, **kwargs):

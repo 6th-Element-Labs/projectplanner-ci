@@ -74,6 +74,11 @@ from switchboard.storage.repositories.external_effects import (  # noqa: F401
     StoreExternalEffectsRepository,
     default_external_effects_repository,
 )  # ARCH-MS-54
+from switchboard.storage.repositories.activity import *  # noqa: F401,F403 — ARCH-MS-55
+from switchboard.storage.repositories.activity import (  # noqa: F401
+    StoreActivityRepository,
+    default_activity_repository,
+)  # ARCH-MS-55
 from switchboard.storage.repositories.publication import *  # noqa: F401,F403 — ARCH-MS-47
 from switchboard.storage.repositories.publication import (  # noqa: F401
     StorePublicationRepository,
@@ -174,6 +179,7 @@ deliverables_repository = default_deliverables_repository()
 work_sessions_repository = default_work_sessions_repository()
 external_ci_repository = default_external_ci_repository()
 external_effects_repository = default_external_effects_repository()
+activity_repository = default_activity_repository()
 publication_repository = default_publication_repository()
 projects_repository = default_projects_repository()
 kpis_economics_repository = default_kpis_economics_repository()
@@ -329,11 +335,6 @@ def _control_plane_unavailable(operation: str, project: str, started_at: float,
         "timeout_ms": int(_control_plane_timeout_s() * 1000),
         "message": str(exc),
     }
-
-
-def _activity_cursor(project: str = DEFAULT_PROJECT) -> int:
-    with _control_plane_conn(project) as c:
-        return int(c.execute("SELECT COALESCE(MAX(id), 0) FROM activity").fetchone()[0] or 0)
 
 
 def bug_intake_policy() -> Dict[str, Any]:
@@ -583,51 +584,6 @@ def submit_bug(data: Dict[str, Any], actor: str = "agent",
     bug = get_task(task["task_id"], project=project)
     return {"submitted": True, "bug": bug, "bug_report": report,
             "agent_state": full_state}
-
-
-def get_activity_delta(since_cursor: int = 0, lane: str = "",
-                       project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
-    """Return activity newer than since_cursor (activity.id rowid — monotonic, clock-skew-safe).
-    lane filters to one workstream (e.g. 'ENGINE'). Returns
-    {cursor, updates: [{task_id, status, title, workstream_id, kinds}]}.
-    Use this for polling instead of list_tasks/board_summary — empty updates = zero tokens wasted."""
-    lane_upper = lane.strip().upper() if lane else ""
-    with _conn(project) as c:
-        if lane_upper:
-            rows = c.execute(
-                """SELECT a.id, a.task_id, a.kind, a.actor,
-                          t.status, t.title, t.workstream_id
-                   FROM activity a
-                   JOIN tasks t ON t.task_id = a.task_id
-                   WHERE a.id > ? AND t.workstream_id = ?
-                   ORDER BY a.id""",
-                (since_cursor, lane_upper),
-            ).fetchall()
-        else:
-            rows = c.execute(
-                """SELECT a.id, a.task_id, a.kind, a.actor,
-                          t.status, t.title, t.workstream_id
-                   FROM activity a
-                   JOIN tasks t ON t.task_id = a.task_id
-                   WHERE a.id > ?
-                   ORDER BY a.id""",
-                (since_cursor,),
-            ).fetchall()
-        git_states = {r["task_id"]: _load_git_state(c, r["task_id"]) for r in rows}
-    if not rows:
-        return {"cursor": since_cursor, "updates": []}
-    new_cursor = rows[-1]["id"]
-    by_task: Dict[str, Any] = {}
-    for row in rows:
-        tid = row["task_id"]
-        if tid not in by_task:
-            by_task[tid] = {"task_id": tid, "status": row["status"],
-                            "title": row["title"], "workstream_id": row["workstream_id"],
-                            "kinds": [], "git_state": git_states.get(tid, {})}
-        by_task[tid]["status"] = row["status"]
-        if row["kind"] not in by_task[tid]["kinds"]:
-            by_task[tid]["kinds"].append(row["kind"])
-    return {"cursor": new_cursor, "updates": list(by_task.values())}
 
 
 def _merge_gate_finding(code: str, message: str, failure_class: str,
@@ -1042,18 +998,6 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         project=project,
     )
     return result
-
-
-def append_activity(kind: str, actor: str, payload: Optional[Dict[str, Any]] = None,
-                    task_id: Optional[str] = None,
-                    project: str = DEFAULT_PROJECT) -> int:
-    with _conn(project) as c:
-        cur = c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) "
-                        "VALUES (?,?,?,?,?)",
-                        (task_id, actor, kind, json.dumps(payload or {}, sort_keys=True), time.time()))
-        return cur.lastrowid
-
-
 
 
 def _repo_preflight_finding(code: str, message: str, failure_class: str,
@@ -2638,17 +2582,6 @@ def apply_cleanup(project: str = DEFAULT_PROJECT,
             "summary": _cleanup_summary(candidates)}
 
 
-def get_meta(key: str, default=None, project: str = DEFAULT_PROJECT):
-    with _conn(project) as c:
-        r = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-        return json.loads(r[0]) if r else default
-
-
-def set_meta(key: str, value, project: str = DEFAULT_PROJECT):
-    with _conn(project) as c:
-        c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, json.dumps(value)))
-
-
 def get_working_agreement(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     """Canonical connect-time rules for agents in this workspace."""
     override = get_meta("working_agreement", {}, project=project) or {}
@@ -2850,35 +2783,6 @@ def latest_dispatch(task_id: str) -> Optional[Dict[str, Any]]:
         return {"job_id": r["job_id"], "created_at": r["created_at"]} if r else None
 
 
-# ---- contacts (email -> display name) for inbound-reply routing ----------
-# Seeded with the known TEEP participants so the email agent can resolve "Sahir",
-# "Darko", "Steve" -> the right address; auto-learned from every inbound From/To/Cc.
-_SEED_CONTACTS = {
-    "steve@taikunai.com": "Steve Ridder",
-    "sahir.shah@totalenergies.com": "Sahir Shah",
-    "darko.jankovic@totalenergies.com": "Darko Jankovic",
-}
-
-
-def get_contacts() -> Dict[str, str]:
-    c = get_meta("contacts")
-    if not c:
-        c = dict(_SEED_CONTACTS)
-        set_meta("contacts", c)
-    return c
-
-
-def upsert_contact(email: str, name: Optional[str] = None):
-    email = (email or "").strip().lower()
-    if not email or "@" not in email:
-        return
-    c = get_contacts()
-    name = (name or "").strip()
-    if email not in c or (name and not c.get(email)):
-        c[email] = name or c.get(email) or email
-        set_meta("contacts", c)
-
-
 # ---- plan-wide chat (the global "Ask Taikun" session) --------------------
 def add_chat(session: str, role: str, content: str, payload: Optional[Dict[str, Any]] = None,
              project: str = DEFAULT_PROJECT):
@@ -2901,17 +2805,6 @@ def recent_chat(session: str, limit: int = 20, project: str = DEFAULT_PROJECT) -
             "payload": json.loads(r["payload"] or "{}"), "created_at": r["created_at"]} for r in rows]
     out.reverse()
     return out
-
-
-# ---- activity deltas + digests (Phase 3.5) -------------------------------
-def activity_since(ts: float) -> List[Dict[str, Any]]:
-    """Every activity event across all tasks since `ts` — the delta substrate."""
-    with _conn() as c:
-        rows = c.execute(
-            "SELECT task_id, actor, kind, payload, created_at FROM activity WHERE created_at > ? ORDER BY created_at",
-            (ts,)).fetchall()
-    return [{"task_id": r["task_id"], "actor": r["actor"], "kind": r["kind"],
-             "payload": json.loads(r["payload"] or "{}"), "created_at": r["created_at"]} for r in rows]
 
 
 # ---- incremental RAG corpus (Phase 5) — ingested artifacts, persisted + shared --------
