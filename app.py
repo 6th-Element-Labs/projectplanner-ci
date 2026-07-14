@@ -68,6 +68,7 @@ from switchboard.api.routers.projects import create_router as _create_project_ro
 from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
 from switchboard.api.routers.claims import create_router as _create_claims_router  # noqa: E402
 from switchboard.api.routers.wakes import create_router as _create_wakes_router  # noqa: E402
+from switchboard.api.routers.agents import create_router as _create_agents_router  # noqa: E402
 from switchboard.application.commands import request_wake as request_wake_command  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
@@ -183,6 +184,12 @@ app.include_router(_create_claims_router(
     resolve_body_project=_body_project,
 ))
 app.include_router(_create_wakes_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
+    control_plane_http=_control_plane_http,
+))
+app.include_router(_create_agents_router(
     resolve_project=_proj,
     resolve_principal=_principal,
     resolve_body_project=_body_project,
@@ -1847,23 +1854,6 @@ async def ocr_pdf(file: UploadFile = File(...)):
 
 # ---- Switchboard runtime protocol (IXP core + first TXP/OXP slices) ---------
 
-@app.post("/ixp/v1/register_agent")
-async def ixp_register_agent(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "agent")
-    agent_id = (body.get("agent_id") or "").strip()
-    runtime = (body.get("runtime") or "").strip()
-    if not agent_id or not runtime:
-        raise HTTPException(400, "agent_id and runtime required")
-    return store.register_agent(
-        agent_id=agent_id, runtime=runtime, model=body.get("model") or "",
-        lane=body.get("lane") or "", task_id=body.get("task") or body.get("task_id") or "",
-        ttl_s=int(body.get("ttl_s") or 120), control=body.get("control") or {},
-        protocol=body.get("protocol") or {},
-        principal_id=principal["id"], actor=auth.actor(principal), project=project)
-
-
 @app.post("/ixp/v1/heartbeat")
 async def ixp_heartbeat(request: Request, body: dict = Body(...)):
     project = _body_project(body)
@@ -2030,15 +2020,6 @@ async def api_ack_message(request: Request, body: dict = Body(...)):
         raise HTTPException(400, "message_id is required")
     return store.ack_message(int(mid), response=body.get("response") or "",
                              actor=auth.actor(principal), project=project)
-
-
-@app.post("/ixp/v1/register_host")
-async def ixp_register_host(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("host_id") or "agent-host")
-    return _control_plane_http(store.register_host(
-        body, principal_id=principal["id"], actor=auth.actor(principal), project=project))
 
 
 @app.post("/ixp/v1/heartbeat_host")

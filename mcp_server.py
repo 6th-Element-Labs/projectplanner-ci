@@ -39,6 +39,7 @@ from switchboard.mcp.tools import projects as project_tools
 from switchboard.mcp.tools import tasks as task_tools
 from switchboard.mcp.tools import claims as claim_tools  # noqa: E402
 from switchboard.mcp.tools import wakes as wake_tools  # noqa: E402
+from switchboard.mcp.tools import agents as agent_tools  # noqa: E402
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -215,6 +216,15 @@ _wake_tool_functions = wake_tools.register_wake_tools(
     ),
 )
 globals().update(_wake_tool_functions)
+
+_agent_tool_functions = agent_tools.register_agent_tools(
+    mcp,
+    agent_tools.AgentToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_agent_tool_functions)
 
 # Compatibility aliases for direct Python callers while the monolith is strangled.
 _dep_ids = task_tools.dep_ids
@@ -913,29 +923,6 @@ def list_active_leases(project: str = "maxwell") -> str:
 
 # ---- IXP-core runtime lifecycle -----------------------------------------
 @mcp.tool()
-def register_agent(agent_id: str, runtime: str, ctx: Context, model: str = "",
-                   lane: str = "", task_id: str = "", ttl_s: int = 120,
-                   control_json: str = "{}", protocol_json: str = "{}",
-                   project: str = "maxwell") -> str:
-    """Register a live agent session. Call at session start before claiming work.
-    control_json advertises truthful control fidelity, e.g. {"mode":"advisory_poll"}.
-    protocol_json advertises the adapter protocol envelope returned by get_working_agreement."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        control = json.loads(control_json or "{}")
-    except Exception:
-        return _dumps({"error": "control_json must be a JSON object string"})
-    try:
-        protocol = json.loads(protocol_json or "{}")
-    except Exception:
-        return _dumps({"error": "protocol_json must be a JSON object string"})
-    return _dumps(store.register_agent(
-        agent_id=agent_id, runtime=runtime, model=model, lane=lane, task_id=task_id,
-        ttl_s=ttl_s, control=control, protocol=protocol, principal_id=principal["id"],
-        actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
 def heartbeat(agent_id: str, ctx: Context, project: str = "maxwell") -> str:
     """Renew presence for a registered agent session."""
     principal = _require_write(ctx, project, ("write:ixp",))
@@ -946,30 +933,6 @@ def heartbeat(agent_id: str, ctx: Context, project: str = "maxwell") -> str:
 def list_active_agents(project: str = "maxwell", lane: str = "") -> str:
     """List active registered agents and their advertised control fidelity."""
     return _dumps(store.list_active_agents(lane=lane, project=project))
-
-
-@mcp.tool()
-def register_host(host_id: str, runtimes_json: str, ctx: Context,
-                  hostname: str = "", repo_root: str = "",
-                  agent_host_version: str = "0.1.0",
-                  limits_json: str = "{}", heartbeat_ttl_s: int = 60,
-                  project: str = "maxwell") -> str:
-    """Register an always-on Agent Host that can wake/start runtimes.
-
-    runtimes_json is a JSON list, e.g. [{"runtime":"claude-code","lanes":["ADAPTER"],
-    "capabilities":["python","docs"]}]. limits_json can include {"max_sessions":2}.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        runtimes = json.loads(runtimes_json or "[]")
-        limits = json.loads(limits_json or "{}")
-    except Exception:
-        return _dumps({"error": "runtimes_json and limits_json must be valid JSON"})
-    return _dumps(store.register_host(
-        {"host_id": host_id, "hostname": hostname, "repo_root": repo_root,
-         "agent_host_version": agent_host_version, "runtimes": runtimes,
-         "limits": limits, "heartbeat_ttl_s": heartbeat_ttl_s},
-        principal_id=principal["id"], actor=auth.actor(principal), project=project))
 
 
 @mcp.tool()

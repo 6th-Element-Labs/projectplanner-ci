@@ -1,5 +1,5 @@
 """Versioned Pydantic contracts shared by REST, MCP, and events (ARCH-MS-25)."""
-from . import claims, projects, registry, tasks, wakes
+from . import agents, claims, projects, registry, tasks, wakes
 from .base import (
     SCHEMA_ID_PREFIX,
     VersionedModel,
@@ -7,6 +7,12 @@ from .base import (
     validation_error_message,
 )
 from .registry import get_schema, list_schemas, register
+from .agents import (
+    REGISTER_AGENT_COMMAND_SCHEMA,
+    REGISTER_HOST_COMMAND_SCHEMA,
+    RegisterAgentCommand,
+    RegisterHostCommand,
+)
 from .projects import (
     ARCHIVE_PROJECT_COMMAND_SCHEMA,
     PROJECT_CONSOLIDATION_APPLY_COMMAND_SCHEMA,
@@ -86,6 +92,8 @@ __all__ = [
     "PROJECT_IMPACT_RECEIPT_SCHEMA",
     "PROJECT_RECORD_SCHEMA",
     "PROJECT_UPDATE_COMMAND_SCHEMA",
+    "REGISTER_AGENT_COMMAND_SCHEMA",
+    "REGISTER_HOST_COMMAND_SCHEMA",
     "REQUEST_WAKE_COMMAND_SCHEMA",
     "RESTORE_PROJECT_COMMAND_SCHEMA",
     "CLEANUP_REVIEW_COMMAND_SCHEMA",
@@ -110,6 +118,8 @@ __all__ = [
     "ProjectImpactReceipt",
     "ProjectRecord",
     "ProjectUpdateCommand",
+    "RegisterAgentCommand",
+    "RegisterHostCommand",
     "RequestWakeCommand",
     "RestoreProjectCommand",
     "CreatePurgeIntentCommand",
@@ -124,6 +134,7 @@ __all__ = [
     "get_schema",
     "list_schemas",
     "normalize_dependency_ids",
+    "agents",
     "claims",
     "projects",
     "register",
