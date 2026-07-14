@@ -37,6 +37,14 @@ from switchboard.storage.repositories.work_sessions import (
     StoreWorkSessionsRepository,
     default_work_sessions_repository,
 )
+from switchboard.storage.repositories.external_ci import (
+    StoreExternalCiRepository,
+    default_external_ci_repository,
+)
+from switchboard.storage.repositories.publication import (
+    StorePublicationRepository,
+    default_publication_repository,
+)
 
 __all__ = [
     "AccessRepository",
@@ -45,7 +53,9 @@ __all__ = [
     "StoreClaimsRepository",
     "StoreCoordinationRepository",
     "StoreDeliverablesRepository",
+    "StoreExternalCiRepository",
     "StoreProvenanceRepository",
+    "StorePublicationRepository",
     "StoreWorkSessionsRepository",
     "CredentialVaultError",
     "ProviderCredentialRepository",
@@ -55,8 +65,10 @@ __all__ = [
     "default_claims_repository",
     "default_coordination_repository",
     "default_deliverables_repository",
+    "default_external_ci_repository",
     "default_provenance_repository",
     "default_provider_credential_repository",
+    "default_publication_repository",
     "default_task_repository",
     "default_work_sessions_repository",
 ]
