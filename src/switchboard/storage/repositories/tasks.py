@@ -43,6 +43,10 @@ from switchboard.storage.repositories.access import (
     projects,
 )
 from switchboard.storage.repositories.review_verdicts import review_verdict_summary_in
+from switchboard.storage.repositories.narration import (  # noqa: F401 — ARCH-MS-56
+    _narration_state,
+    enqueue_narration,
+)
 
 EDITABLE = list(EDITABLE_TASK_FIELDS)
 
@@ -363,7 +367,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
             "SELECT narration, source_fingerprint, generated_at FROM task_narrations "
             "WHERE task_id=?", (task_id,)).fetchone()
         if n:
-            narration_state = _store_facade()._narration_state(dict(n), t)
+            narration_state = _narration_state(dict(n), t)
             t["narration_state"] = narration_state
             if narration_state["stale"]:
                 t["narration_raw"] = n["narration"]
@@ -438,7 +442,7 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
         return result
     changed = result.get("changed", {}) if isinstance(result, dict) else {}
     if "status" in changed:
-        s.enqueue_narration(task_id, status=str(changed.get("status") or ""),
+        enqueue_narration(task_id, status=str(changed.get("status") or ""),
                           reason="status_change", project=project)
     # NARRATE-11: when the task's narration source actually moved, invalidate ONLY the
     # deliverables directly linked to it whose narrative inputs changed (bounded, no full scan).
@@ -504,7 +508,7 @@ def create_task(data: Dict[str, Any], actor: str = "user",
     if not tid:
         return None
     # NARRATE-2: a newly created task is a meaningful transition — enqueue its first narration.
-    s.enqueue_narration(tid, status=(data.get("status") or "Not Started"),
+    enqueue_narration(tid, status=(data.get("status") or "Not Started"),
                       reason="create", project=project)
     # NARRATE-11: bounded fan-out to any deliverables this new task is already linked to
     # (usually none at creation) — post-commit, idempotent, no full-project scan.

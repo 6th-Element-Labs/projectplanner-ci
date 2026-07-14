@@ -2,6 +2,7 @@
 import sqlite3
 
 import store
+from switchboard.storage.repositories import tasks as tasks_repo
 
 
 CASES = [
@@ -32,10 +33,14 @@ def check(name, condition):
 real_get_task = store.get_task
 real_get_deliverable = store.get_deliverable
 real_enqueue_narration = store.enqueue_narration
+real_tasks_enqueue_narration = tasks_repo.enqueue_narration
 real_finalize_complete_claim = store._finalize_complete_claim_response
+_noop_enqueue = lambda *_args, **_kwargs: None
 store.get_task = lambda task_id, project=None: {"task_id": task_id}
 store.get_deliverable = lambda deliverable_id, project=None: {"id": deliverable_id}
-store.enqueue_narration = lambda *_args, **_kwargs: None
+store.enqueue_narration = _noop_enqueue
+# ARCH-MS-56: create_task/update_task call the tasks-module binding directly.
+tasks_repo.enqueue_narration = _noop_enqueue
 store._finalize_complete_claim_response = lambda response, *_args: response
 try:
     for public_name, kwargs in CASES:
@@ -65,6 +70,7 @@ finally:
     store.get_task = real_get_task
     store.get_deliverable = real_get_deliverable
     store.enqueue_narration = real_enqueue_narration
+    tasks_repo.enqueue_narration = real_tasks_enqueue_narration
     store._finalize_complete_claim_response = real_finalize_complete_claim
 
 

@@ -84,6 +84,11 @@ from switchboard.storage.repositories.lifecycle_cleanup import (  # noqa: F401
     StoreLifecycleCleanupRepository,
     default_lifecycle_cleanup_repository,
 )  # ARCH-MS-62
+from switchboard.storage.repositories.narration import *  # noqa: F401,F403 — ARCH-MS-56
+from switchboard.storage.repositories.narration import (  # noqa: F401
+    StoreNarrationRepository,
+    default_narration_repository,
+)  # ARCH-MS-56
 from switchboard.storage.repositories.publication import *  # noqa: F401,F403 — ARCH-MS-47
 from switchboard.storage.repositories.publication import (  # noqa: F401
     StorePublicationRepository,
@@ -185,6 +190,8 @@ work_sessions_repository = default_work_sessions_repository()
 external_ci_repository = default_external_ci_repository()
 external_effects_repository = default_external_effects_repository()
 activity_repository = default_activity_repository()
+lifecycle_cleanup_repository = default_lifecycle_cleanup_repository()
+narration_repository = default_narration_repository()
 publication_repository = default_publication_repository()
 projects_repository = default_projects_repository()
 kpis_economics_repository = default_kpis_economics_repository()
@@ -1699,8 +1706,6 @@ def pre_tool_check(payload: Dict[str, Any], actor: str = "system",
     )
 
 
-
-
 def control_plane_probe(project: str = DEFAULT_PROJECT, lane: str = "",
                         include_heavy: bool = False) -> Dict[str, Any]:
     """Tiny read-only timing probe for separating server work from bridge/client time."""
@@ -1780,13 +1785,6 @@ def control_plane_probe(project: str = DEFAULT_PROJECT, lane: str = "",
     }
     result["approx_response_bytes"] = _json_size_bytes(result)
     return result
-
-
-
-
-
-
-
 
 
 _AUDIT_REDACT_KEYS = {
@@ -2109,97 +2107,6 @@ def audit_export(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "archives": {"tasks": archived_tasks},
     }
     return _audit_redact(bundle)
-
-
-
-
-
-
-# --- NARRATE-2: CEO-voice task narration (docs/CEO-NARRATOR-CONTRACT.md) ---
-
-def _max_activity_cursor(task: Dict[str, Any]) -> int:
-    return max((a.get("id", 0) for a in (task.get("activity") or [])), default=0)
-
-
-def task_narration_fingerprint(task: Dict[str, Any]) -> str:
-    """Stable stamp of the source state a narration was written from. Recomputed on read;
-    a mismatch means the narration is stale (see _narration_state). Shared by the narrator
-    (write) and get_task (read) so both sides agree."""
-    prov = task.get("provenance") or {}
-    parts = [
-        str(task.get("status") or ""),
-        str(prov.get("type") or ""),
-        str(_max_activity_cursor(task)),
-    ]
-    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
-
-
-def _narration_state(stored: Dict[str, Any], task: Dict[str, Any]) -> Dict[str, Any]:
-    """Flag a narration stale when current task state has moved past the fingerprint it was
-    written from. Discipline carried over from BUG-13/BUG-17/HARDEN-30: derived prose is never
-    shown as current truth once it contradicts the fingerprint."""
-    current_fp = task_narration_fingerprint(task)
-    stored_fp = stored.get("source_fingerprint")
-    stale = bool(stored_fp) and stored_fp != current_fp
-    state = {
-        "stale": stale,
-        "source_fingerprint": current_fp,
-        "stored_fingerprint": stored_fp,
-        "message": (
-            "CEO narration is regenerating; trust status, provenance, and progress."
-        ) if stale else None,
-    }
-    if stale:
-        state["failure_class"] = "missing_data"
-        state["expected_signal"] = "Narration should be regenerated from current task state."
-    return state
-
-
-def set_task_narration(task_id: str, narration: str, activity_cursor: int,
-                       source_fingerprint: str = "", model: str = "",
-                       project: str = DEFAULT_PROJECT) -> None:
-    """Upsert the CEO-voice narration for a task (separate store from task_summaries)."""
-    with _conn(project) as c:
-        c.execute(
-            "INSERT OR REPLACE INTO task_narrations"
-            "(task_id, narration, generated_at, activity_cursor, source_fingerprint, model) "
-            "VALUES (?,?,?,?,?,?)",
-            (task_id, narration, time.time(), activity_cursor, source_fingerprint, model),
-        )
-
-
-def get_task_narration(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
-    with _conn(project) as c:
-        r = c.execute("SELECT * FROM task_narrations WHERE task_id=?", (task_id,)).fetchone()
-        return dict(r) if r else None
-
-
-def enqueue_narration(task_id: str, status: str = "", reason: str = "",
-                      project: str = DEFAULT_PROJECT) -> None:
-    """Mark a task for (re)narration after a meaningful transition. Idempotent per task —
-    a burst of transitions collapses into one pending row. Called post-commit from the write
-    path; never triggers a synchronous LLM call."""
-    with _conn(project) as c:
-        c.execute(
-            "INSERT OR REPLACE INTO pending_narrations(task_id, status, reason, enqueued_at) "
-            "VALUES (?,?,?,?)",
-            (task_id, status or "", reason or "", time.time()),
-        )
-
-
-def list_pending_narrations(project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
-    with _conn(project) as c:
-        rows = c.execute(
-            "SELECT task_id, status, reason, enqueued_at FROM pending_narrations "
-            "ORDER BY enqueued_at"
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def clear_pending_narration(task_id: str, project: str = DEFAULT_PROJECT) -> None:
-    with _conn(project) as c:
-        c.execute("DELETE FROM pending_narrations WHERE task_id=?", (task_id,))
-
 
 
 
