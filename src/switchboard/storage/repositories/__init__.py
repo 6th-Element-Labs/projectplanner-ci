@@ -49,6 +49,10 @@ from switchboard.storage.repositories.projects import (
     StoreProjectsRepository,
     default_projects_repository,
 )
+from switchboard.storage.repositories.kpis_economics import (
+    StoreKpisEconomicsRepository,
+    default_kpis_economics_repository,
+)
 
 __all__ = [
     "AccessRepository",
@@ -58,6 +62,7 @@ __all__ = [
     "StoreCoordinationRepository",
     "StoreDeliverablesRepository",
     "StoreExternalCiRepository",
+    "StoreKpisEconomicsRepository",
     "StoreProjectsRepository",
     "StoreProvenanceRepository",
     "StorePublicationRepository",
@@ -71,6 +76,7 @@ __all__ = [
     "default_coordination_repository",
     "default_deliverables_repository",
     "default_external_ci_repository",
+    "default_kpis_economics_repository",
     "default_projects_repository",
     "default_provenance_repository",
     "default_provider_credential_repository",
