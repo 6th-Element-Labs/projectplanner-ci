@@ -564,7 +564,8 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
     started_at = time.time()
     now = time.time()
     result = dict(result or {})
-    success = bool(result.get("started") or runner_session_id or agent_id)
+    success = (result.get("started") is True if "started" in result
+               else bool(runner_session_id or agent_id))
     status = "completed" if success else "failed"
     if "reason" not in result:
         result["reason"] = "started" if success else "launch_failed"
