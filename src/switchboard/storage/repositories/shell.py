@@ -89,6 +89,11 @@ from switchboard.storage.repositories.narration import (  # noqa: F401
     StoreNarrationRepository,
     default_narration_repository,
 )  # ARCH-MS-56
+from switchboard.storage.repositories.plan_chat import *  # noqa: F401,F403 — ARCH-MS-57
+from switchboard.storage.repositories.plan_chat import (  # noqa: F401
+    StorePlanChatRepository,
+    default_plan_chat_repository,
+)  # ARCH-MS-57
 from switchboard.storage.repositories.publication import *  # noqa: F401,F403 — ARCH-MS-47
 from switchboard.storage.repositories.publication import (  # noqa: F401
     StorePublicationRepository,
@@ -192,6 +197,7 @@ external_effects_repository = default_external_effects_repository()
 activity_repository = default_activity_repository()
 lifecycle_cleanup_repository = default_lifecycle_cleanup_repository()
 narration_repository = default_narration_repository()
+plan_chat_repository = default_plan_chat_repository()
 publication_repository = default_publication_repository()
 projects_repository = default_projects_repository()
 kpis_economics_repository = default_kpis_economics_repository()
@@ -429,47 +435,6 @@ def _bug_report_description(report: Dict[str, Any]) -> str:
         "Evidence:",
         evidence_text,
     ])
-
-
-def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
-                project: str = DEFAULT_PROJECT,
-                hydrate_task: bool = True) -> Optional[Dict[str, Any]]:
-    """Append task activity, optionally skipping the expensive task-detail readback.
-
-    REST comment creation returns the updated task and keeps the default hydration.
-    Acknowledgement-only callers such as the MCP ``add_comment`` tool can pass
-    ``hydrate_task=False``: they still validate the task and commit the exact same
-    activity/audit rows, but avoid loading provenance, sessions, CI, publication,
-    and project context only to discard them.
-    """
-    now = time.time()
-    with _conn(project) as c:
-        if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
-            return None
-        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (task_id, actor, kind, json.dumps({"text": text}), now))
-        if is_unbound_system_actor(actor):
-            active_agents = _active_agent_ids_for_task(c, task_id, now)
-            if not active_agents:
-                payload = {
-                    "actor": actor,
-                    "failure_class": "unbound_identity",
-                    "expected_signal": FAIL_FIX_FAILURE_CLASSES["unbound_identity"]["expected_signal"],
-                    "reason": "system_principal_write_without_active_agent",
-                    "message": (
-                        "This write came from a shared system token, but no active "
-                        "agent session is registered on this task. Directed inbox "
-                        "delivery to a named agent may not reach the runtime until "
-                        "that runtime handshakes and drains its inbox."
-                    ),
-                }
-                c.execute(
-                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
-                    "VALUES (?,?,?,?,?)",
-                    (task_id, "switchboard/identity", "principal.unbound_write",
-                     json.dumps(payload, sort_keys=True), now),
-                )
-    return get_task(task_id, project) if hydrate_task else {"task_id": task_id}
 
 
 def submit_bug(data: Dict[str, Any], actor: str = "agent",
@@ -2291,49 +2256,6 @@ SEVERITY_VALUE = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 def _severity_value(severity: str) -> int:
     return SEVERITY_VALUE.get((severity or "").strip().lower(), 0)
-
-
-# ---- dev dispatches (Claude Code runner) — so the UI can show the latest run per task ----
-def add_dispatch(task_id: str, job_id: str):
-    with _conn() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS dispatches (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                  "task_id TEXT, job_id TEXT, created_at REAL)")
-        c.execute("INSERT INTO dispatches(task_id, job_id, created_at) VALUES (?,?,?)",
-                  (task_id, job_id, time.time()))
-
-
-def latest_dispatch(task_id: str) -> Optional[Dict[str, Any]]:
-    with _conn() as c:
-        try:
-            r = c.execute("SELECT job_id, created_at FROM dispatches WHERE task_id=? ORDER BY id DESC LIMIT 1",
-                          (task_id,)).fetchone()
-        except sqlite3.OperationalError:
-            return None
-        return {"job_id": r["job_id"], "created_at": r["created_at"]} if r else None
-
-
-# ---- plan-wide chat (the global "Ask Taikun" session) --------------------
-def add_chat(session: str, role: str, content: str, payload: Optional[Dict[str, Any]] = None,
-             project: str = DEFAULT_PROJECT):
-    with _conn(project) as c:
-        c.execute("INSERT INTO chat(session, role, content, payload, created_at) VALUES (?,?,?,?,?)",
-                  (session, role, content, json.dumps(payload or {}), time.time()))
-
-
-def clear_chat(session: str, project: str = DEFAULT_PROJECT):
-    with _conn(project) as c:
-        c.execute("DELETE FROM chat WHERE session=?", (session,))
-
-
-def recent_chat(session: str, limit: int = 20, project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
-    with _conn(project) as c:
-        rows = c.execute(
-            "SELECT role, content, payload, created_at FROM chat WHERE session=? ORDER BY id DESC LIMIT ?",
-            (session, limit)).fetchall()
-    out = [{"role": r["role"], "content": r["content"],
-            "payload": json.loads(r["payload"] or "{}"), "created_at": r["created_at"]} for r in rows]
-    out.reverse()
-    return out
 
 
 # ---- incremental RAG corpus (Phase 5) — ingested artifacts, persisted + shared --------

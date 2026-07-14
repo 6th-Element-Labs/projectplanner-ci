@@ -36,12 +36,14 @@ from switchboard.domain.provenance.git import (
     has_done_provenance as _has_done_provenance,
     provenance_summary as _provenance_summary,
 )
+from switchboard.domain.access.identity import is_unbound_system_actor
 from switchboard.storage.repositories.access import (
     _task_identity_state_in,
     has_project,
     project_access,
     projects,
 )
+from switchboard.storage.repositories.coordination import _active_agent_ids_for_task
 from switchboard.storage.repositories.review_verdicts import review_verdict_summary_in
 from switchboard.storage.repositories.narration import (  # noqa: F401 — ARCH-MS-56
     _narration_state,
@@ -67,6 +69,7 @@ __all__ = [
     "list_tasks_for_board",
     "board_rollups",
     "get_task",
+    "add_comment",
     "_update_task_impl",
     "update_task",
     "_create_task_impl",
@@ -317,6 +320,48 @@ def board_rollups(project: str = DEFAULT_PROJECT,
         "status_counts": dict(sorted(status_counts.items())),
         "workstream_counts": dict(sorted(workstream_counts.items())),
     }
+
+def add_comment(task_id: str, actor: str, text: str, kind: str = "comment",
+                project: str = DEFAULT_PROJECT,
+                hydrate_task: bool = True) -> Optional[Dict[str, Any]]:
+    """Append task activity, optionally skipping the expensive task-detail readback.
+
+    REST comment creation returns the updated task and keeps the default hydration.
+    Acknowledgement-only callers such as the MCP ``add_comment`` tool can pass
+    ``hydrate_task=False``: they still validate the task and commit the exact same
+    activity/audit rows, but avoid loading provenance, sessions, CI, publication,
+    and project context only to discard them.
+    """
+    now = time.time()
+    with _conn(project) as c:
+        if not c.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
+            return None
+        c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (task_id, actor, kind, json.dumps({"text": text}), now))
+        if is_unbound_system_actor(actor):
+            active_agents = _active_agent_ids_for_task(c, task_id, now)
+            if not active_agents:
+                fail_fix = _store_facade().FAIL_FIX_FAILURE_CLASSES
+                payload = {
+                    "actor": actor,
+                    "failure_class": "unbound_identity",
+                    "expected_signal": fail_fix["unbound_identity"]["expected_signal"],
+                    "reason": "system_principal_write_without_active_agent",
+                    "message": (
+                        "This write came from a shared system token, but no active "
+                        "agent session is registered on this task. Directed inbox "
+                        "delivery to a named agent may not reach the runtime until "
+                        "that runtime handshakes and drains its inbox."
+                    ),
+                }
+                c.execute(
+                    "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (task_id, "switchboard/identity", "principal.unbound_write",
+                     json.dumps(payload, sort_keys=True), now),
+                )
+    return _store_facade().get_task(task_id, project) if hydrate_task else {"task_id": task_id}
+
 
 def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     now = time.time()
@@ -1054,6 +1099,9 @@ class StoreTaskRepository:
 
     def get_task(self, task_id: str, project: str = DEFAULT_PROJECT) -> Optional[dict[str, Any]]:
         return get_task(task_id, project=project)
+
+    def add_comment(self, *args, **kwargs):
+        return add_comment(*args, **kwargs)
 
     def create_task(
             self,

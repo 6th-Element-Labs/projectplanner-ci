@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 import store
+from switchboard.storage.repositories import plan_chat as plan_chat_repo
 
 
 ProjectResolver = Callable[[str], str]
@@ -44,10 +45,10 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
         session = body.get("session") or "plan"
         history = [
             {"role": item["role"], "content": item["content"]}
-            for item in store.recent_chat(session, 16, project=selected)
+            for item in plan_chat_repo.recent_chat(session, 16, project=selected)
             if item.get("content")
         ]
-        store.add_chat(session, "user", message, project=selected)
+        plan_chat_repo.add_chat(session, "user", message, project=selected)
         try:
             run = store.enqueue_background_job(
                 project=selected,
@@ -61,7 +62,7 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
                 actor="api/ask_plan",
             )
         except Exception as exc:
-            store.add_chat(
+            plan_chat_repo.add_chat(
                 session, "assistant", f"(agent queue error: {exc})", project=selected
             )
             raise HTTPException(503, f"agent queue error: {exc}") from exc
@@ -81,7 +82,7 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
         session: str = "plan", project: str = Query(store.DEFAULT_PROJECT)
     ):
         return {
-            "messages": store.recent_chat(
+            "messages": plan_chat_repo.recent_chat(
                 session, 100, project=resolve_project(project)
             )
         }
@@ -90,7 +91,7 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
     async def clear_plan_chat(
         session: str = "plan", project: str = Query(store.DEFAULT_PROJECT)
     ):
-        store.clear_chat(session, project=resolve_project(project))
+        plan_chat_repo.clear_chat(session, project=resolve_project(project))
         return {"cleared": session}
 
     @router.get("/api/chat/runs/latest")
