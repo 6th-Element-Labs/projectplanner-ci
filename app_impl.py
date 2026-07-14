@@ -40,7 +40,6 @@ import digest  # noqa: E402
 import transcribe  # noqa: E402
 import dispatch  # noqa: E402
 import export  # noqa: E402
-import external_ci_mirror  # noqa: E402
 import inbox as inbox_mod  # noqa: E402
 import intake  # noqa: E402
 import github_sync  # noqa: E402
@@ -74,6 +73,8 @@ from switchboard.api.routers.messaging import create_router as _create_messaging
 from switchboard.api.routers.access import create_router as _create_access_router  # noqa: E402
 from switchboard.api.routers.health import create_router as _create_health_router  # noqa: E402
 from switchboard.api.routers.tally import create_router as _create_tally_router  # noqa: E402
+from switchboard.api.routers.runner import create_router as _create_runner_router  # noqa: E402
+from switchboard.api.routers.external_effects import create_router as _create_external_effects_router  # noqa: E402
 from switchboard.application.commands import request_wake as request_wake_command  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
@@ -233,6 +234,17 @@ app.include_router(_create_health_router(
     resolve_principal=_principal,
     saturation_snapshot=lambda project: _saturation_snapshot(project),
     project_init_failures=lambda: _PROJECT_INIT_FAILURES,
+))
+
+app.include_router(_create_runner_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
+))
+app.include_router(_create_external_effects_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
 ))
 
 
@@ -1738,27 +1750,6 @@ def ixp_saturation_signals(project: str = Query(store.DEFAULT_PROJECT)):
 
 
 
-@app.get("/ixp/v1/runner_sessions")
-async def ixp_runner_sessions(project: str = Query(store.DEFAULT_PROJECT),
-                              host_id: str = "", runtime: str = "",
-                              task_id: str = "", status: str = "",
-                              include_stale: bool = False):
-    return {"sessions": store.list_runner_sessions(
-        host_id=host_id, runtime=runtime, task_id=task_id, status=status,
-        include_stale=include_stale, project=_proj(project))}
-
-
-@app.post("/ixp/v1/register_runner_session")
-async def ixp_register_runner_session(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("host_id") or body.get("agent_id") or "runner")
-    record = dict(body)
-    record.pop("project", None)
-    return store.upsert_runner_session(
-        record, principal_id=principal["id"], actor=auth.actor(principal), project=project)
-
-
 @app.get("/ixp/v1/work_sessions")
 async def ixp_work_sessions(project: str = Query(store.DEFAULT_PROJECT),
                             task_id: str = "", agent_id: str = "", status: str = "",
@@ -1910,305 +1901,6 @@ async def ixp_pre_tool_check(request: Request, body: dict = Body(...)):
     return store.pre_tool_check(
         payload, actor=auth.actor(principal), principal_id=principal["id"],
         project=project)
-
-
-@app.post("/ixp/v1/heartbeat_runner_session")
-async def ixp_heartbeat_runner_session(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("host_id") or body.get("agent_id") or "runner")
-    record = dict(body)
-    record.pop("project", None)
-    return store.upsert_runner_session(
-        record, principal_id=principal["id"], actor=auth.actor(principal), project=project)
-
-
-@app.post("/ixp/v1/request_runner_snapshot")
-async def ixp_request_runner_snapshot(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
-    result = store.request_runner_control(
-        body.get("runner_session_id") or body.get("id") or "",
-        "snapshot",
-        reason=body.get("reason") or "",
-        options=body.get("options") or {},
-        actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/request_runner_kill")
-async def ixp_request_runner_kill(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
-    result = store.request_runner_control(
-        body.get("runner_session_id") or body.get("id") or "",
-        "kill",
-        reason=body.get("reason") or "",
-        options={"grace_seconds": body.get("grace_seconds"),
-                 "signal": body.get("signal") or "TERM"},
-        actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/request_runner_restart")
-async def ixp_request_runner_restart(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
-    result = store.request_runner_control(
-        body.get("runner_session_id") or body.get("id") or "",
-        "restart",
-        reason=body.get("reason") or "",
-        options=body.get("options") or {},
-        actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/request_runner_health")
-async def ixp_request_runner_health(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
-    result = store.request_runner_control(
-        body.get("runner_session_id") or body.get("id") or "",
-        "health",
-        reason=body.get("reason") or "",
-        options=body.get("options") or {},
-        actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/request_runner_logs")
-async def ixp_request_runner_logs(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
-    result = store.request_runner_control(
-        body.get("runner_session_id") or body.get("id") or "",
-        "logs",
-        reason=body.get("reason") or "",
-        options=body.get("options") or {},
-        actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/request_runner_open")
-async def ixp_request_runner_open(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
-    result = store.request_runner_control(
-        body.get("runner_session_id") or body.get("id") or "",
-        "open",
-        reason=body.get("reason") or "",
-        options=body.get("options") or {},
-        actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.get("/ixp/v1/runner_controls")
-async def ixp_runner_controls(project: str = Query(store.DEFAULT_PROJECT),
-                              status: str = "", host_id: str = "",
-                              runner_session_id: str = ""):
-    return {"requests": store.list_runner_control_requests(
-        status=status, host_id=host_id, runner_session_id=runner_session_id,
-        project=_proj(project))}
-
-
-@app.get("/ixp/v1/external_effects")
-async def ixp_external_effects(project: str = Query(store.DEFAULT_PROJECT),
-                               effect_type: str = "", status: str = "",
-                               task_id: str = "", target: str = ""):
-    return {"effects": store.list_external_effects(
-        effect_type=effect_type, status=status, task_id=task_id,
-        target=target, project=_proj(project))}
-
-
-@app.get("/ixp/v1/external_ci_runs")
-async def ixp_external_ci_runs(project: str = Query(store.DEFAULT_PROJECT),
-                               task_id: str = "", source_project: str = "",
-                               source_sha: str = "", status: str = ""):
-    return {"runs": store.list_external_ci_runs(
-        task_id=task_id, source_project=source_project,
-        source_sha=source_sha, status=status, project=_proj(project))}
-
-
-@app.get("/ixp/v1/external_ci_runs/{run_id}")
-async def ixp_external_ci_run(run_id: str, project: str = Query(store.DEFAULT_PROJECT)):
-    run = store.get_external_ci_run(run_id, project=_proj(project))
-    if not run:
-        raise HTTPException(404, "external_ci_run not found")
-    return run
-
-
-@app.get("/ixp/v1/publication_evidence")
-async def ixp_publication_evidence(project: str = Query(store.DEFAULT_PROJECT),
-                                   task_id: str = "", source_project: str = "",
-                                   source_sha: str = "", public_repo: str = ""):
-    return {"publication_evidence": store.list_publication_evidence(
-        task_id=task_id, source_project=source_project,
-        source_sha=source_sha, public_repo=public_repo, project=_proj(project))}
-
-
-@app.post("/ixp/v1/publication_evidence")
-async def ixp_record_publication_evidence(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "agent")
-    payload = dict(body.get("publication") or body)
-    payload["principal_id"] = principal["id"]
-    result = store.create_publication_evidence(
-        payload, actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result)
-    return result
-
-
-@app.post("/ixp/v1/external_ci_mirror/request")
-async def ixp_request_external_ci_mirror(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "agent")
-    source_path = (body.get("source_path") or body.get("source_checkout") or "").strip()
-    payload = dict(body.get("run") or body)
-    payload.pop("source_path", None)
-    payload.pop("source_checkout", None)
-    result = external_ci_mirror.request_external_ci_mirror_run(
-        payload, source_path, actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result)
-    return result
-
-
-@app.post("/ixp/v1/external_ci_mirror/poll")
-async def ixp_poll_external_ci_mirror(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "agent")
-    source_path = (body.get("source_path") or body.get("source_checkout") or "").strip()
-    result = external_ci_mirror.poll_external_ci_mirror_run(
-        body.get("run_id") or "", source_path, actor=auth.actor(principal), project=project,
-        poll_interval_seconds=float(body.get("poll_interval_seconds") or 15),
-        timeout_seconds=float(body.get("timeout_seconds") or 1800))
-    if result.get("error"):
-        raise HTTPException(400, result)
-    return result
-
-
-@app.post("/ixp/v1/merge_gate")
-async def ixp_merge_gate(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "agent")
-    result = store.merge_gate(
-        body,
-        actor=auth.actor(principal),
-        principal_id=principal["id"],
-        project=project,
-    )
-    if result.get("status") == "blocked":
-        return result
-    return result
-
-
-@app.post("/ixp/v1/claim_external_effect")
-async def ixp_claim_external_effect(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("agent_id") or "agent")
-    result = store.claim_external_effect(
-        body.get("effect_type") or "",
-        body.get("target") or "",
-        body.get("resource") or "",
-        body.get("payload") or {},
-        task_id=body.get("task_id") or body.get("task"),
-        claim_id=body.get("claim_id") or "",
-        agent_id=body.get("agent_id") or "",
-        idem_key=body.get("idem_key") or "",
-        idempotency_window_seconds=int(body.get("idempotency_window_seconds") or 0),
-        actor=auth.actor(principal), principal_id=principal["id"], project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/mark_external_effect_issued")
-async def ixp_mark_external_effect_issued(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    result = store.mark_external_effect_issued(
-        body.get("effect_key") or body.get("id") or "",
-        readback=body.get("readback") or {},
-        actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/verify_external_effect")
-async def ixp_verify_external_effect(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    result = store.verify_external_effect(
-        body.get("effect_key") or body.get("id") or "",
-        readback=body.get("readback") or {},
-        actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/fail_external_effect")
-async def ixp_fail_external_effect(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",), dev_actor="agent")
-    result = store.fail_external_effect(
-        body.get("effect_key") or body.get("id") or "",
-        error=body.get("error") or "effect_failed",
-        readback=body.get("readback") or {},
-        dead_letter=bool(body.get("dead_letter")),
-        actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/claim_runner_control")
-async def ixp_claim_runner_control(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("host_id") or "agent-host")
-    result = store.claim_runner_control_request(
-        (body.get("host_id") or "").strip(),
-        (body.get("request_id") or body.get("id") or "").strip(),
-        actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
-
-
-@app.post("/ixp/v1/complete_runner_control")
-async def ixp_complete_runner_control(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("host_id") or "agent-host")
-    result = store.complete_runner_control_request(
-        (body.get("request_id") or body.get("id") or "").strip(),
-        result=body.get("result") or {},
-        snapshot=body.get("snapshot") or {},
-        status=body.get("status") or "",
-        actor=auth.actor(principal), project=project)
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-    return result
 
 
 @app.post("/ixp/v1/claim")

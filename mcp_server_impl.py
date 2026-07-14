@@ -19,7 +19,6 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import auth
 import digest as digest_mod
-import external_ci_mirror
 import intake as intake_mod
 import notify as notify_mod
 import project_contract as project_contract_service
@@ -47,6 +46,8 @@ from switchboard.mcp.tools import leases as lease_tools  # noqa: E402
 from switchboard.mcp.tools import work_sessions as work_session_tools  # noqa: E402
 from switchboard.mcp.tools import resources as resource_tools  # noqa: E402
 from switchboard.mcp.tools import tally as tally_tools  # noqa: E402
+from switchboard.mcp.tools import runner as runner_tools  # noqa: E402
+from switchboard.mcp.tools import external_effects as external_effects_tools  # noqa: E402
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -289,6 +290,24 @@ _tally_tool_functions = tally_tools.register_tally_tools(
 )
 globals().update(_tally_tool_functions)
 
+_runner_tool_functions = runner_tools.register_runner_tools(
+    mcp,
+    runner_tools.RunnerToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_runner_tool_functions)
+
+_external_effects_tool_functions = external_effects_tools.register_external_effects_tools(
+    mcp,
+    external_effects_tools.ExternalEffectsToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_external_effects_tool_functions)
+
 # Compatibility aliases for direct Python callers while the monolith is strangled.
 _dep_ids = task_tools.dep_ids
 _unknown_ids = task_tools.unknown_ids
@@ -457,383 +476,9 @@ def ask_plan(question: str, project: str = "maxwell") -> str:
     })
 
 
-# ---- file lease tools (open — advisory, no token required) ---------------
-@mcp.tool()
-def list_runner_sessions(project: str = "maxwell", host_id: str = "", runtime: str = "",
-                         task_id: str = "", status: str = "",
-                         include_stale: bool = False) -> str:
-    """List live runner sessions with host/runtime/task/claim/fidelity and available actions."""
-    return _dumps(store.list_runner_sessions(
-        host_id=host_id, runtime=runtime, task_id=task_id, status=status,
-        include_stale=include_stale, project=project))
-
-
-@mcp.tool()
-def register_runner_session(runner_session_json: str, ctx: Context,
-                            project: str = "maxwell") -> str:
-    """Register or heartbeat one supervised runner session.
-
-    runner_session_json should include runner_session_id, host_id, agent_id, runtime,
-    task_id/claim_id when known, status, and control. runner_kill is accepted only for
-    host-owned managed_process sessions.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        record = json.loads(runner_session_json or "{}")
-    except Exception:
-        return _dumps({"error": "runner_session_json must be a JSON object string"})
-    return _dumps(store.upsert_runner_session(
-        record, principal_id=principal["id"], actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def request_runner_snapshot(runner_session_id: str, ctx: Context,
-                            reason: str = "", project: str = "maxwell") -> str:
-    """Request a host-side snapshot for a managed runner session."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.request_runner_control(
-        runner_session_id, "snapshot", reason=reason,
-        actor=auth.actor(principal), principal_id=principal["id"], project=project))
-
-
-@mcp.tool()
-def request_runner_kill(runner_session_id: str, ctx: Context,
-                        reason: str = "", grace_seconds: float = 5.0,
-                        signal: str = "TERM", project: str = "maxwell") -> str:
-    """Request a host-side runner kill. The request is audited and carries a pre-kill snapshot."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.request_runner_control(
-        runner_session_id, "kill", reason=reason,
-        options={"grace_seconds": grace_seconds, "signal": signal or "TERM"},
-        actor=auth.actor(principal), principal_id=principal["id"], project=project))
-
-
-@mcp.tool()
-def request_runner_health(runner_session_id: str, ctx: Context,
-                          reason: str = "", project: str = "maxwell") -> str:
-    """Request host-side runner health from an environment that supports it.
-
-    Unsupported runtimes return a refused control request with reason=not_supported.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.request_runner_control(
-        runner_session_id, "health", reason=reason,
-        actor=auth.actor(principal), principal_id=principal["id"], project=project))
-
-
-@mcp.tool()
-def request_runner_logs(runner_session_id: str, ctx: Context,
-                        reason: str = "", project: str = "maxwell") -> str:
-    """Request host-side runner logs from an environment that supports it.
-
-    Unsupported runtimes return a refused control request with reason=not_supported.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.request_runner_control(
-        runner_session_id, "logs", reason=reason,
-        actor=auth.actor(principal), principal_id=principal["id"], project=project))
-
-
-@mcp.tool()
-def request_runner_open(runner_session_id: str, ctx: Context,
-                        reason: str = "", project: str = "maxwell") -> str:
-    """Request a host-side open action when the runtime explicitly advertises runner_open.
-
-    Unsupported runtimes return a refused control request with reason=not_supported.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.request_runner_control(
-        runner_session_id, "open", reason=reason,
-        actor=auth.actor(principal), principal_id=principal["id"], project=project))
-
-
-@mcp.tool()
-def list_runner_control_requests(project: str = "maxwell", status: str = "",
-                                 host_id: str = "",
-                                 runner_session_id: str = "") -> str:
-    """List pending/completed runner snapshot/kill/restart/health/log/open control requests."""
-    return _dumps(store.list_runner_control_requests(
-        status=status, host_id=host_id, runner_session_id=runner_session_id,
-        project=project))
-
-
-@mcp.tool()
-def claim_external_effect(effect_type: str, target: str, resource: str,
-                          payload_json: str, ctx: Context,
-                          project: str = "maxwell", task_id: str = "",
-                          claim_id: str = "", agent_id: str = "",
-                          idem_key: str = "",
-                          idempotency_window_seconds: int = 0) -> str:
-    """Atomically claim an external side effect before touching a provider.
-
-    Replays return the existing effect. If the existing effect is not verified, callers
-    must read back provider state before issuing it again.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        payload = json.loads(payload_json or "{}")
-    except Exception:
-        return _dumps({"error": "payload_json must be a JSON object string"})
-    return _dumps(store.claim_external_effect(
-        effect_type, target, resource, payload,
-        task_id=task_id or None, claim_id=claim_id, agent_id=agent_id,
-        idem_key=idem_key, idempotency_window_seconds=idempotency_window_seconds,
-        actor=auth.actor(principal), principal_id=principal["id"], project=project))
-
-
-@mcp.tool()
-def mark_external_effect_issued(effect_key: str, ctx: Context,
-                                readback_json: str = "{}",
-                                project: str = "maxwell") -> str:
-    """Mark an already-claimed external side effect as issued to the provider."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        readback = json.loads(readback_json or "{}")
-    except Exception:
-        return _dumps({"error": "readback_json must be a JSON object string"})
-    return _dumps(store.mark_external_effect_issued(
-        effect_key, readback=readback, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def verify_external_effect(effect_key: str, ctx: Context,
-                           readback_json: str = "{}",
-                           project: str = "maxwell") -> str:
-    """Confirm an external side effect only after provider readback or explicit proof."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        readback = json.loads(readback_json or "{}")
-    except Exception:
-        return _dumps({"error": "readback_json must be a JSON object string"})
-    return _dumps(store.verify_external_effect(
-        effect_key, readback=readback, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def fail_external_effect(effect_key: str, error: str, ctx: Context,
-                         readback_json: str = "{}", dead_letter: bool = False,
-                         project: str = "maxwell") -> str:
-    """Record a failed or dead-lettered external side effect with visible error state."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        readback = json.loads(readback_json or "{}")
-    except Exception:
-        return _dumps({"error": "readback_json must be a JSON object string"})
-    return _dumps(store.fail_external_effect(
-        effect_key, error=error, readback=readback, dead_letter=dead_letter,
-        actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def list_external_effects(project: str = "maxwell", effect_type: str = "",
-                          status: str = "", task_id: str = "",
-                          target: str = "") -> str:
-    """List external side effects by type/status/task/target."""
-    return _dumps(store.list_external_effects(
-        effect_type=effect_type, status=status, task_id=task_id,
-        target=target, project=project))
-
-
-@mcp.tool()
-def list_external_ci_runs(project: str = "maxwell", task_id: str = "",
-                          source_project: str = "", source_sha: str = "",
-                          status: str = "") -> str:
-    """List public CI mirror runs tracked by Switchboard."""
-    return _dumps(store.list_external_ci_runs(
-        task_id=task_id, source_project=source_project,
-        source_sha=source_sha, status=status, project=project))
-
-
-@mcp.tool()
-def get_external_ci_run(run_id: str, project: str = "maxwell") -> str:
-    """Read one public CI mirror run by Switchboard run id."""
-    run = store.get_external_ci_run(run_id, project=project)
-    return _dumps(run) if run else _dumps({"error": "external_ci_run not found", "run_id": run_id})
-
-
-@mcp.tool()
-def list_publication_evidence(project: str = "maxwell", task_id: str = "",
-                              source_project: str = "", source_sha: str = "",
-                              public_repo: str = "") -> str:
-    """List public mirror publication evidence tracked by Switchboard."""
-    return _dumps(store.list_publication_evidence(
-        task_id=task_id, source_project=source_project,
-        source_sha=source_sha, public_repo=public_repo, project=project))
-
-
-@mcp.tool()
-def merge_gate(task_id: str, ctx: Context, project: str = "maxwell",
-               agent_id: str = "", claim_id: str = "", work_session_id: str = "",
-               pr_url: str = "", pr_number: int = 0, repo: str = "",
-               target_branch: str = "", branch: str = "", head_sha: str = "",
-               required_status_contexts: str = "", status_contexts_json: str = "{}",
-               github_pr_json: str = "{}", require_work_session: bool = False) -> str:
-    """Evaluate safe-merge readiness before an agent runs or requests PR merge.
-
-    This records a merge.gate activity event and returns pass/blocked findings. It does
-    not merge and cannot mark Done; GitHub webhook/reconcile provenance remains the Done
-    authority."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        status_contexts = json.loads(status_contexts_json or "{}")
-    except Exception:
-        return _dumps({"error": "status_contexts_json must be a JSON object or array string"})
-    try:
-        github_pr = json.loads(github_pr_json or "{}")
-    except Exception:
-        return _dumps({"error": "github_pr_json must be a JSON object string"})
-    payload = {
-        "task_id": task_id,
-        "agent_id": agent_id,
-        "claim_id": claim_id,
-        "work_session_id": work_session_id,
-        "pr_url": pr_url,
-        "pr_number": pr_number or None,
-        "repo": repo,
-        "target_branch": target_branch,
-        "branch": branch,
-        "head_sha": head_sha,
-        "required_status_contexts": required_status_contexts,
-        "status_contexts": status_contexts,
-        "github_pr": github_pr,
-        "require_work_session": bool(require_work_session),
-    }
-    return _dumps(store.merge_gate(
-        payload, actor=auth.actor(principal), principal_id=principal["id"],
-        project=project))
-
-
-@mcp.tool()
-def record_publication_evidence(ctx: Context, source_sha: str, public_ref: str,
-                                project: str = "maxwell", source_project: str = "",
-                                source_repo: str = "", public_repo: str = "",
-                                public_sha: str = "", public_tag: str = "",
-                                script: str = "", guard_status: str = "unknown",
-                                guard_json: str = "{}", artifact_url: str = "",
-                                task_id: str = "", claim_id: str = "",
-                                agent_id: str = "", publication_id: str = "",
-                                published_at: float = 0.0) -> str:
-    """Record public mirror publication evidence for a canonical source SHA."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        guard = json.loads(guard_json or "{}")
-    except Exception:
-        return _dumps({"error": "guard_json must be a JSON object string"})
-    if not isinstance(guard, dict):
-        return _dumps({"error": "guard_json must be a JSON object string"})
-    payload = {
-        "publication_id": publication_id,
-        "source_project": source_project or project,
-        "source_repo": source_repo,
-        "source_sha": source_sha,
-        "public_repo": public_repo,
-        "public_ref": public_ref,
-        "public_sha": public_sha,
-        "public_tag": public_tag,
-        "script": script,
-        "guard_status": guard_status,
-        "guard": guard,
-        "artifact_url": artifact_url,
-        "task_id": task_id,
-        "claim_id": claim_id,
-        "agent_id": agent_id,
-        "principal_id": principal["id"],
-    }
-    if published_at:
-        payload["published_at"] = published_at
-    return _dumps(store.create_publication_evidence(
-        payload, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def request_external_ci_mirror_run(source_path: str, mirror_repo: str, workflow: str,
-                                   ctx: Context, source_project: str = "",
-                                   source_repo: str = "", source_branch: str = "",
-                                   source_sha: str = "", mirror_branch: str = "",
-                                   mirror_remote_url: str = "", task_id: str = "",
-                                   claim_id: str = "", agent_id: str = "",
-                                   status_context: str = "",
-                                   workflow_inputs_json: str = "{}",
-                                   poll_interval_seconds: float = 15.0,
-                                   timeout_seconds: float = 1800.0,
-                                   idem_key: str = "",
-                                   project: str = "maxwell") -> str:
-    """Mirror an exact private source SHA to a disposable public CI branch and poll Actions.
-
-    Agents should request this from their private/source-of-truth checkout. They must not
-    edit or develop in the public CI repo. Switchboard records sync/trigger/poll/test
-    failures with distinct failure_class values on the external_ci_run.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        workflow_inputs = json.loads(workflow_inputs_json or "{}")
-    except Exception:
-        return _dumps({"error": "workflow_inputs_json must be a JSON object string"})
-    payload = {
-        "source_project": source_project or project,
-        "source_repo": source_repo,
-        "source_branch": source_branch,
-        "source_sha": source_sha,
-        "mirror_repo": mirror_repo,
-        "mirror_branch": mirror_branch,
-        "mirror_remote_url": mirror_remote_url,
-        "workflow": workflow,
-        "status_context": status_context,
-        "workflow_inputs": workflow_inputs,
-        "task_id": task_id,
-        "claim_id": claim_id,
-        "agent_id": agent_id,
-        "principal_id": principal["id"],
-        "poll_interval_seconds": poll_interval_seconds,
-        "timeout_seconds": timeout_seconds,
-        "idem_key": idem_key,
-        "request": {
-            "workflow_inputs": workflow_inputs,
-            "poll_interval_seconds": poll_interval_seconds,
-            "timeout_seconds": timeout_seconds,
-        },
-    }
-    return _dumps(external_ci_mirror.request_external_ci_mirror_run(
-        payload, source_path, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def poll_external_ci_mirror_run(run_id: str, source_path: str, ctx: Context,
-                                poll_interval_seconds: float = 15.0,
-                                timeout_seconds: float = 1800.0,
-                                project: str = "maxwell") -> str:
-    """Resume polling one external CI mirror run after trigger or agent/session interruption."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(external_ci_mirror.poll_external_ci_mirror_run(
-        run_id, source_path, actor=auth.actor(principal), project=project,
-        poll_interval_seconds=poll_interval_seconds,
-        timeout_seconds=timeout_seconds))
-
-
-@mcp.tool()
-def claim_runner_control(host_id: str, request_id: str, ctx: Context,
-                         project: str = "maxwell") -> str:
-    """Agent Host claims a pending runner control request for one of its sessions."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.claim_runner_control_request(
-        host_id, request_id, actor=auth.actor(principal), project=project))
-
-
-@mcp.tool()
-def complete_runner_control(request_id: str, ctx: Context, result_json: str = "{}",
-                            snapshot_json: str = "{}", status: str = "",
-                            project: str = "maxwell") -> str:
-    """Agent Host completes a runner control request after snapshot/kill execution."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        result = json.loads(result_json or "{}")
-        snapshot = json.loads(snapshot_json or "{}")
-    except Exception:
-        return _dumps({"error": "result_json and snapshot_json must be JSON object strings"})
-    return _dumps(store.complete_runner_control_request(
-        request_id, result=result, snapshot=snapshot, status=status,
-        actor=auth.actor(principal), project=project))
-
+# Runner / external-effects / CI / merge_gate MCP tools live in
+# switchboard.mcp.tools.runner and switchboard.mcp.tools.external_effects
+# (ARCH-MS-67).
 
 @mcp.tool()
 def run_background_job(ctx: Context, job_name: str, project: str = "maxwell",
