@@ -67,6 +67,8 @@ from switchboard.api.routers.plan_chat import create_router as _create_plan_chat
 from switchboard.api.routers.projects import create_router as _create_project_router  # noqa: E402
 from switchboard.api.routers.tasks import create_router as _create_task_router  # noqa: E402
 from switchboard.api.routers.claims import create_router as _create_claims_router  # noqa: E402
+from switchboard.api.routers.wakes import create_router as _create_wakes_router  # noqa: E402
+from switchboard.application.commands import request_wake as request_wake_command  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
 _auth_store.init()
@@ -179,6 +181,12 @@ app.include_router(_create_claims_router(
     resolve_project=_proj,
     resolve_principal=_principal,
     resolve_body_project=_body_project,
+))
+app.include_router(_create_wakes_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
+    control_plane_http=_control_plane_http,
 ))
 app.include_router(_create_project_router(
     resolve_project=_proj,
@@ -2606,15 +2614,12 @@ async def ixp_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
 async def ixp_request_wake(request: Request, body: dict = Body(...)):
     project = _body_project(body)
     principal = _principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
-    selector = body.get("selector") or {}
-    if not isinstance(selector, dict):
-        raise HTTPException(400, "selector must be an object")
-    result = store.request_wake(
-        selector=selector, reason=body.get("reason") or "",
-        source=body.get("source") or auth.actor(principal),
-        policy=body.get("policy") or {}, task_id=(body.get("task_id") or None),
-        principal_id=principal["id"], actor=auth.actor(principal),
-        idem_key=body.get("idem_key") or "", project=project)
+    payload = dict(body or {})
+    payload["project"] = project
+    if not payload.get("source"):
+        payload["source"] = auth.actor(principal)
+    result = request_wake_command.execute_mapping_result(
+        payload, actor=auth.actor(principal), principal_id=principal["id"])
     if result.get("error"):
         raise HTTPException(400, result["error"])
     return result
@@ -2755,21 +2760,6 @@ async def ixp_submit_bug(request: Request, body: dict = Body(...)):
 
 
 
-@app.post("/txp/v1/request_wake")
-async def txp_request_wake(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("source") or "agent")
-    return _control_plane_http(store.request_wake(
-        selector=body.get("selector") or {},
-        reason=body.get("reason") or "",
-        source=body.get("source") or auth.actor(principal),
-        policy=body.get("policy") or {},
-        task_id=body.get("task") or body.get("task_id"),
-        principal_id=principal["id"], actor=auth.actor(principal),
-        idem_key=body.get("idem_key") or "", project=project))
-
-
 @app.get("/txp/v1/list_wake_intents")
 async def txp_list_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
                                 status: str = "", host_id: str = "",
@@ -2778,30 +2768,6 @@ async def txp_list_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
                                     runtime=runtime, project=_proj(project))
     _control_plane_http(wakes)
     return {"wake_intents": wakes}
-
-
-@app.post("/txp/v1/claim_wake")
-async def txp_claim_wake(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("host_id") or "agent-host")
-    return _control_plane_http(store.claim_wake(
-        (body.get("host_id") or "").strip(),
-        (body.get("wake_id") or body.get("id") or "").strip(),
-        actor=auth.actor(principal), project=project))
-
-
-@app.post("/txp/v1/complete_wake")
-async def txp_complete_wake(request: Request, body: dict = Body(...)):
-    project = _body_project(body)
-    principal = _principal(request, project, ("write:ixp",),
-                           dev_actor=body.get("host_id") or body.get("agent_id") or "agent-host")
-    return _control_plane_http(store.complete_wake(
-        (body.get("wake_id") or body.get("id") or "").strip(),
-        runner_session_id=body.get("runner_session_id") or "",
-        agent_id=body.get("agent_id") or "",
-        result=body.get("result") or {},
-        actor=auth.actor(principal), project=project))
 
 
 @app.post("/txp/v1/cancel_wake")

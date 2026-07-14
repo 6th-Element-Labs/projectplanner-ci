@@ -38,6 +38,7 @@ from switchboard.mcp.tools import decisions as decision_tools
 from switchboard.mcp.tools import projects as project_tools
 from switchboard.mcp.tools import tasks as task_tools
 from switchboard.mcp.tools import claims as claim_tools  # noqa: E402
+from switchboard.mcp.tools import wakes as wake_tools  # noqa: E402
 
 store.init_project_registry()
 for _pid in store.project_ids():  # ensure every project's schema exists (the web app normally seeds them)
@@ -205,6 +206,15 @@ _claim_tool_functions = claim_tools.register_claim_tools(
     ),
 )
 globals().update(_claim_tool_functions)
+
+_wake_tool_functions = wake_tools.register_wake_tools(
+    mcp,
+    wake_tools.WakeToolServices(
+        dumps=_dumps,
+        require_write=_require_write,
+    ),
+)
+globals().update(_wake_tool_functions)
 
 # Compatibility aliases for direct Python callers while the monolith is strangled.
 _dep_ids = task_tools.dep_ids
@@ -1540,56 +1550,11 @@ def complete_runner_control(request_id: str, ctx: Context, result_json: str = "{
 
 
 @mcp.tool()
-def request_wake(selector_json: str, reason: str, ctx: Context,
-                 source: str = "", policy_json: str = "{}", task_id: str = "",
-                 idem_key: str = "", project: str = "maxwell") -> str:
-    """Create a durable wake intent for an absent runtime/session.
-
-    selector_json includes runtime/agent_id/lane/capabilities. Example:
-    {"runtime":"claude-code","agent_id":"claude-code","lane":"ADAPTER"}.
-    """
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        selector = json.loads(selector_json or "{}")
-        policy = json.loads(policy_json or "{}")
-    except Exception:
-        return _dumps({"error": "selector_json and policy_json must be valid JSON"})
-    return _dumps(store.request_wake(
-        selector=selector, reason=reason, source=source or auth.actor(principal),
-        policy=policy, task_id=task_id or None, principal_id=principal["id"],
-        actor=auth.actor(principal), idem_key=idem_key, project=project))
-
-
-@mcp.tool()
 def list_wake_intents(project: str = "maxwell", status: str = "", host_id: str = "",
                       runtime: str = "") -> str:
     """List durable wake intents. status can be pending|claimed|completed|failed|cancelled."""
     return _dumps(store.list_wake_intents(status=status, host_id=host_id,
                                          runtime=runtime, project=project))
-
-
-@mcp.tool()
-def claim_wake(host_id: str, wake_id: str, ctx: Context,
-               project: str = "maxwell") -> str:
-    """Atomically assign one pending wake intent to an eligible Agent Host."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    return _dumps(store.claim_wake(host_id, wake_id, actor=auth.actor(principal),
-                                  project=project))
-
-
-@mcp.tool()
-def complete_wake(wake_id: str, ctx: Context, runner_session_id: str = "",
-                  agent_id: str = "", result_json: str = "{}",
-                  project: str = "maxwell") -> str:
-    """Record wake success/failure after the host daemon starts or fails to start a runtime."""
-    principal = _require_write(ctx, project, ("write:ixp",))
-    try:
-        result = json.loads(result_json or "{}")
-    except Exception:
-        return _dumps({"error": "result_json must be a JSON object string"})
-    return _dumps(store.complete_wake(
-        wake_id, runner_session_id=runner_session_id, agent_id=agent_id,
-        result=result, actor=auth.actor(principal), project=project))
 
 
 @mcp.tool()

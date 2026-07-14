@@ -1,5 +1,5 @@
 """Versioned Pydantic contracts shared by REST, MCP, and events (ARCH-MS-25)."""
-from . import claims, projects, registry, tasks
+from . import claims, projects, registry, tasks, wakes
 from .base import (
     SCHEMA_ID_PREFIX,
     VersionedModel,
@@ -58,6 +58,14 @@ from .claims import (
     ClaimTaskCommand,
     CompleteClaimCommand,
 )
+from .wakes import (
+    CLAIM_WAKE_COMMAND_SCHEMA,
+    COMPLETE_WAKE_COMMAND_SCHEMA,
+    REQUEST_WAKE_COMMAND_SCHEMA,
+    ClaimWakeCommand,
+    CompleteWakeCommand,
+    RequestWakeCommand,
+)
 
 __all__ = [
     "ARCHIVE_PROJECT_COMMAND_SCHEMA",
@@ -68,7 +76,9 @@ __all__ = [
     "PROJECT_CONSOLIDATION_ROLLBACK_COMMAND_SCHEMA",
     "CLAIM_NEXT_COMMAND_SCHEMA",
     "CLAIM_TASK_COMMAND_SCHEMA",
+    "CLAIM_WAKE_COMMAND_SCHEMA",
     "COMPLETE_CLAIM_COMMAND_SCHEMA",
+    "COMPLETE_WAKE_COMMAND_SCHEMA",
     "CREATE_TASK_COMMAND_SCHEMA",
     "GET_TASK_QUERY_SCHEMA",
     "MOVE_TASK_COMMAND_SCHEMA",
@@ -76,6 +86,7 @@ __all__ = [
     "PROJECT_IMPACT_RECEIPT_SCHEMA",
     "PROJECT_RECORD_SCHEMA",
     "PROJECT_UPDATE_COMMAND_SCHEMA",
+    "REQUEST_WAKE_COMMAND_SCHEMA",
     "RESTORE_PROJECT_COMMAND_SCHEMA",
     "CLEANUP_REVIEW_COMMAND_SCHEMA",
     "PURGE_EXECUTE_COMMAND_SCHEMA",
@@ -89,7 +100,9 @@ __all__ = [
     "PlanProjectConsolidationCommand",
     "ClaimNextCommand",
     "ClaimTaskCommand",
+    "ClaimWakeCommand",
     "CompleteClaimCommand",
+    "CompleteWakeCommand",
     "CreateTaskCommand",
     "GetTaskQuery",
     "MoveTaskCommand",
@@ -97,6 +110,7 @@ __all__ = [
     "ProjectImpactReceipt",
     "ProjectRecord",
     "ProjectUpdateCommand",
+    "RequestWakeCommand",
     "RestoreProjectCommand",
     "CreatePurgeIntentCommand",
     "ExecutePurgeCommand",
@@ -115,5 +129,6 @@ __all__ = [
     "register",
     "registry",
     "tasks",
+    "wakes",
     "validation_error_message",
 ]
