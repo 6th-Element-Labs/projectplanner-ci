@@ -102,6 +102,12 @@ def default_inventory():
     cloud_enabled = runtime == "codex" and bool(os.environ.get("PM_CODEX_CLOUD_ENVIRONMENT_ID"))
     profiles = ["ixp.v1", "txp.dispatch.v0"]
     capabilities = ["docs", "python", "github", "tests"]
+    # Fleet workers advertise a host-owned capability profile.  The wake payload may
+    # select from this inventory, but it cannot add capabilities to the host.  Keeping
+    # this in configuration lets co-general/co-build use the same immutable AMI while
+    # still failing closed when a heavy-build wake lands on a general worker.
+    capabilities.extend(_csv(os.environ.get("PM_HOST_CAPABILITIES", "")))
+    capabilities = list(dict.fromkeys(capabilities))
     if cloud_enabled:
         profiles.append("cloud_execution")
         capabilities.append("cloud_execution")
@@ -157,6 +163,19 @@ def eligible_runtime(wake, inventory):
             continue
         return rt
     return None
+
+
+def wakes_bound_to_host(wakes):
+    """Restrict an ephemeral fleet host to the exact wake that launched it.
+
+    Persistent Agent Hosts do not set ``PM_WAKE_ID`` and retain the shared eligible
+    queue behavior. A fleet worker does set it; accepting another same-lane wake would
+    break the provisioner's task/runtime/credential affinity guarantee.
+    """
+    bound_wake_id = str(os.environ.get("PM_WAKE_ID") or "").strip()
+    if not bound_wake_id:
+        return list(wakes or [])
+    return [wake for wake in (wakes or []) if wake.get("wake_id") == bound_wake_id]
 
 
 def wake_mode(wake, inventory=None):
@@ -486,7 +505,7 @@ def run_once(inventory):
                                     "active_sessions": active_session_count(inventory)})
     controls = handle_runner_controls(inventory)
     listed = _try("GET", f"{P_LIST_WAKES}?project={PROJECT}&status=pending") or {}
-    wakes = listed.get("wake_intents") or listed.get("wakes") or []
+    wakes = wakes_bound_to_host(listed.get("wake_intents") or listed.get("wakes") or [])
     acted = []
     cap = inventory["limits"]["max_sessions"]
     for w in wakes:

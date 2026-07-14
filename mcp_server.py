@@ -2800,6 +2800,32 @@ def dispatch_to_codex_cloud(task_id: str, ctx: Context,
 
 
 @mcp.tool()
+def dispatch_to_co_fleet(task_id: str, runtime_config_ref: str, ctx: Context,
+                         project: str = "switchboard", runtime: str = "claude-code",
+                         capabilities: str = "", allow_on_demand: bool = False,
+                         account_binding_json: str = "") -> str:
+    """Queue a task for zero-to-one elastic CO Fleet capacity.
+
+    ``runtime_config_ref`` must be an SSM/Secrets Manager reference, never a token.
+    Optional ``account_binding_json`` carries the non-secret BYOA account-affinity
+    contract; incomplete or inconsistent bindings fail closed. On-Demand is an
+    explicit infrastructure fallback only and never authorizes metered model/API use.
+    """
+    principal = _require_write(ctx, project)
+    try:
+        account_binding = json.loads(account_binding_json) if account_binding_json else None
+    except json.JSONDecodeError as exc:
+        return _dumps({"dispatched": False, "error": "invalid_account_binding",
+                       "reason": f"invalid JSON: {exc.msg}"})
+    import dispatch as dispatch_mod
+    return _dumps(dispatch_mod.dispatch_to_co_fleet(
+        task_id, actor=auth.actor(principal), project=project, runtime=runtime,
+        capabilities=[item.strip() for item in capabilities.split(",") if item.strip()],
+        runtime_config_ref=runtime_config_ref, allow_on_demand=allow_on_demand,
+        account_binding=account_binding))
+
+
+@mcp.tool()
 def ingest_and_triage(kind: str, title: str, text: str, ctx: Context, project: str = "maxwell") -> str:
     """Ingest an artifact (email / transcript / document / note) into `project`'s RAG corpus AND
     triage it against that board. Returns {summary, proposals, new_tasks, sources} — proposals are

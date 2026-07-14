@@ -1,0 +1,40 @@
+[Unit]
+Description=Switchboard CO Fleet coordination-plane provisioner
+After=network-online.target projectplanner-mcp.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+EnvironmentFile=-/etc/switchboard-co-fleet.env
+Environment=PM_PROJECT=switchboard
+Environment=AWS_REGION=us-east-1
+Environment=CO_IDLE_SECONDS=720
+Environment=CO_GENERAL_LT_ID=lt-06e82fa3ce11f96a8
+Environment=CO_GENERAL_LT_VERSION=5
+Environment=CO_BUILD_LT_ID=lt-04205361bf23f5fe6
+Environment=CO_BUILD_LT_VERSION=5
+Environment=CO_STATE_PATH=/var/lib/switchboard-co-fleet/state.json
+Environment=CO_LOCK_PATH=/var/lib/switchboard-co-fleet/provisioner.lock
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/co_fleet.py daemon
+Restart=always
+RestartSec=5
+StateDirectory=switchboard-co-fleet
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/switchboard-co-fleet
+
+[Install]
+WantedBy=multi-user.target

@@ -4,7 +4,10 @@ The UI dispatch controls and MCP tools call `dispatch()` here. Claude uses the o
 ``claude --cloud`` bridge (``vendor_cloud`` capability). Codex uses the ADAPTER-19
 ``cloud_execution`` envelope consumed by ``adapters/codex/cloud_adapter.py``.
 """
+import hashlib
+import json
 import os
+import re
 import time
 
 import store
@@ -13,6 +16,57 @@ _RUNTIME = "claude-code"
 _CODEX_RUNTIME = "codex"
 _CODEX_VENDOR = "openai-codex-cloud"
 _CLOUD_CAPABILITY = "vendor_cloud"
+_CO_FLEET_CAPABILITY = "co_fleet"
+_BINDING_FIELD = re.compile(r"^[A-Za-z0-9._:/@+\-]{1,240}$")
+_BINDING_REQUIRED = (
+    "tenant_id", "user_id", "provider", "provider_account_id",
+    "credential_reference", "work_session_id",
+)
+
+
+def _co_account_binding(task_id, project, account_binding):
+    """Validate and normalize the non-secret BYOA account-affinity contract."""
+    if not account_binding:
+        return None
+    if not isinstance(account_binding, dict):
+        raise ValueError("account_binding must be an object")
+    allowed = set(_BINDING_REQUIRED) | {"credential_lease_id", "auth_lane"}
+    unknown = set(account_binding) - allowed - {"project", "task_id"}
+    if unknown:
+        raise ValueError(f"unsupported account binding fields: {sorted(unknown)}")
+    if account_binding.get("project") not in (None, "", project):
+        raise ValueError("account binding project does not match dispatch project")
+    if account_binding.get("task_id") not in (None, "", task_id):
+        raise ValueError("account binding task does not match dispatch task")
+    normalized = {}
+    for key in allowed:
+        value = str(account_binding.get(key) or "").strip()
+        if key in _BINDING_REQUIRED and not value:
+            raise ValueError(f"account binding missing {key}")
+        if value and not _BINDING_FIELD.fullmatch(value):
+            raise ValueError(f"unsafe account binding field {key}")
+        if value:
+            normalized[key] = value
+    reference = normalized["credential_reference"]
+    if not reference.startswith(("credential:", "vault:", "ssm:/", "secretsmanager:arn:")):
+        raise ValueError("credential_reference must be an opaque credential/vault/secret reference")
+    normalized.update({
+        "schema": "switchboard.co_account_binding.v1",
+        "project": project,
+        "task_id": task_id,
+        # The exact ephemeral host and runner are bound by durable wake claim and
+        # completion. They must never be guessed by the dispatcher.
+        "host_id": None,
+        "runner_session_id": None,
+    })
+    affinity_source = {key: normalized.get(key) for key in (
+        "tenant_id", "user_id", "project", "provider", "provider_account_id",
+        "credential_reference", "credential_lease_id", "auth_lane",
+    )}
+    normalized["account_affinity_id"] = hashlib.sha256(
+        json.dumps(affinity_source, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return normalized
 
 
 def _host_is_work_capable(host):
@@ -153,6 +207,82 @@ def dispatch(task_id, actor="user", project=store.DEFAULT_PROJECT, runtime=_RUNT
             "vendor_id": _CODEX_VENDOR if selected_runtime == _CODEX_RUNTIME else None,
             "branch": branch, "execution_mode": policy.get("mode"),
             "work_hosts_online": len(hosts)}
+
+
+def dispatch_to_co_fleet(task_id, actor="user", project=store.DEFAULT_PROJECT,
+                         runtime=_RUNTIME, capabilities=None,
+                         runtime_config_ref="", allow_on_demand=False,
+                         account_binding=None):
+    """Queue a task for the elastic CO worker fleet.
+
+    ``runtime_config_ref`` is an SSM parameter or Secrets Manager *reference*.
+    Credential values are deliberately not accepted by this API and never enter a
+    wake payload or EC2 user data.
+    """
+    task = store.get_task(task_id, project=project)
+    if not task:
+        return {"dispatched": False, "error": "task not found",
+                "task_id": task_id, "project": project}
+    selected_runtime = _normalize_runtime(runtime)
+    if not selected_runtime:
+        return {"dispatched": False, "error": "unsupported runtime",
+                "task_id": task_id, "project": project, "runtime": runtime}
+    config_ref = (runtime_config_ref or os.environ.get("PM_CO_RUNTIME_CONFIG_REF") or "").strip()
+    if not (config_ref.startswith("ssm:/") or config_ref.startswith("secretsmanager:arn:")):
+        return {"dispatched": False, "error": "runtime_config_ref required",
+                "reason": "use ssm:/path or secretsmanager:arn:...; raw credentials are forbidden",
+                "task_id": task_id, "project": project}
+    try:
+        binding = _co_account_binding(task_id, project, account_binding)
+    except ValueError as exc:
+        return {"dispatched": False, "error": "invalid_account_binding",
+                "reason": str(exc), "task_id": task_id, "project": project}
+    lane = task.get("_wsId") or ""
+    required = [_CO_FLEET_CAPABILITY]
+    for capability in capabilities or []:
+        value = str(capability or "").strip()
+        if value and value not in required:
+            required.append(value)
+    selector = {
+        "runtime": selected_runtime,
+        "lane": lane,
+        "agent_id": f"{selected_runtime}/{task_id}",
+        "capabilities": required,
+        "task_id": task_id,
+    }
+    policy = {
+        "mode": "co_fleet",
+        "continuity": "fresh_switchboard_state",
+        "runtime_config_ref": config_ref,
+        "allow_on_demand": bool(allow_on_demand),
+        "registration_timeout_s": 180,
+        "account_binding_required": binding is not None,
+    }
+    if binding is not None:
+        policy["account_binding"] = binding
+    wake = store.request_wake(
+        selector=selector,
+        reason=f"CO Fleet dispatch {task_id} — {task.get('title') or ''}".strip(),
+        source=f"co-fleet:{actor}", policy=policy, task_id=task_id,
+        actor=actor, project=project,
+        idem_key=f"co-fleet-dispatch:{project}:{task_id}:{selected_runtime}",
+    )
+    if wake.get("error") or not wake.get("wake_id"):
+        return {"dispatched": False, "task_id": task_id, "project": project,
+                "error": wake.get("error") or wake.get("reason") or "wake not created"}
+    store.add_comment(
+        task_id, "Switchboard (CO Fleet)",
+        f"Queued elastic {selected_runtime} worker wake {wake['wake_id']} for lane "
+        f"{lane or '—'} with capabilities {', '.join(required)}. Runtime credentials "
+        "remain behind opaque references. Any BYOA account binding is preserved "
+        "on the durable wake and omitted from host metadata and activity text.",
+        project=project,
+    )
+    return {"dispatched": True, "task_id": task_id, "project": project,
+            "wake_id": wake["wake_id"], "wake_status": wake.get("status"),
+            "lane": lane, "runtime": selected_runtime, "capabilities": required,
+            "execution_mode": "co_fleet", "allow_on_demand": bool(allow_on_demand),
+            "account_affinity_id": (binding or {}).get("account_affinity_id")}
 
 
 def latest(task_id, project=store.DEFAULT_PROJECT):

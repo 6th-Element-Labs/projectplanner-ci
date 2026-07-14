@@ -1,0 +1,52 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadCOControlParameters",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": [
+        "arn:aws:ssm:us-east-1:584673484283:parameter/switchboard/co/guardrails",
+        "arn:aws:ssm:us-east-1:584673484283:parameter/switchboard/co/launch-enabled"
+      ]
+    },
+    {
+      "Sid": "ReadCOBudgets",
+      "Effect": "Allow",
+      "Action": "budgets:ViewBudget",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadCOFleetFoundation",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeLaunchTemplateVersions",
+        "ec2:DescribeSubnets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OperateCOFleet",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateFleet",
+        "ec2:CreateLaunchTemplateVersion",
+        "ec2:CreateTags",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEqualsIfExists": {
+          "aws:RequestTag/Project": "switchboard-co"
+        }
+      }
+    },
+    {
+      "Sid": "PassOnlyCOWorkerRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::584673484283:role/SwitchboardCOWorkerRole"
+    }
+  ]
+}
