@@ -285,6 +285,142 @@ def record_project_cleanup_review(ctx: Context, project: str, decision: str,
         repo_topology_provider=store.get_project_repo_topology))
 
 
+def create_project(name: str, ctx: Context, project_id: str = "", label: str = "",
+                   pretitle: str = "", github_repo: str = "",
+                   purpose: str = "", boundary: str = "",
+                   org_id: str = "", visibility: str = "private") -> str:
+    """Create a new isolated project board and make it routable by all board tools.
+
+    Authenticates against project='switchboard' with write:projects (contributors and up).
+    `name` is the human name; `project_id` is optional and defaults to a lowercase slug, e.g.
+    name='Vulkan' creates project='vulkan'. `github_repo` is optional owner/repo provenance
+    config, e.g. github_repo='StevenRidder/Helm'. `visibility` is 'private' (default — only
+    the creator, invitees, and org admins see it) or 'org' (all org members). Returns the
+    created/existing project record.
+    """
+    services = _services()
+    principal = services.require_write(ctx, "switchboard", ("write:projects",))
+    result = store.create_project(name=name, project_id=project_id, label=label,
+                                  pretitle=pretitle, github_repo=github_repo,
+                                  owner_principal_id=principal["id"],
+                                  org_id=org_id or store.DEFAULT_ORG_ID,
+                                  purpose=purpose, boundary=boundary,
+                                  visibility=(visibility or "private").strip().lower(),
+                                  actor=services.principal_actor(principal))
+    return services.dumps(result)
+
+
+def set_project_github_repo(repo: str, ctx: Context, project: str = "maxwell") -> str:
+    """Set the GitHub owner/repo used by reconcile to verify PR merge provenance for a board.
+
+    Use this when a project board maps to a different repository than Switchboard itself, e.g.
+    project='helm' -> repo='StevenRidder/Helm'. Requires system write scope because it changes
+    the board's trust boundary for Done stamping.
+    """
+    services = _services()
+    principal = services.require_write(ctx, "switchboard", ("write:system",))
+    result = store.set_project_github_repo(repo=repo, project=project)
+    if not result.get("error"):
+        store.append_activity("project.github_repo_configured", services.principal_actor(principal),
+                              {"project": project, "github_repo": repo},
+                              task_id=None, project=project)
+    return services.dumps(result)
+
+
+def set_project_repo_topology(ctx: Context, project: str = "maxwell",
+                              canonical_repo: str = "", public_ci_repo: str = "",
+                              public_repo: str = "", release_repo: str = "",
+                              topology_type: str = "",
+                              canonical_default_branch: str = "",
+                              canonical_claim_gate: str = "",
+                              public_ci_required_status_contexts: str = "",
+                              public_ci_sync_scripts: str = "",
+                              public_publish_scripts: str = "",
+                              release_publish_scripts: str = "",
+                              ci_repo: str = "", ci_required_status_contexts: str = "",
+                              ci_sync_scripts: str = "") -> str:
+    """Configure first-class repository roles for a project.
+
+    canonical_repo is the only code-truth / Done authority. public_ci_repo is a
+    shared public CI sandbox for verification evidence only. public_repo and
+    release_repo are publication/release evidence roles only. canonical_claim_gate
+    sets off|warn|enforce for the SESSION-12 fleet PR provenance gate on that repo.
+    ci_* arguments are accepted as aliases for public_ci_* during migration.
+    """
+    services = _services()
+    principal = services.require_write(ctx, "switchboard", ("write:system",))
+    result = store.set_project_repo_topology(
+        project=project,
+        canonical_repo=canonical_repo,
+        public_ci_repo=public_ci_repo,
+        public_repo=public_repo,
+        release_repo=release_repo,
+        topology_type=topology_type,
+        canonical_default_branch=canonical_default_branch,
+        canonical_claim_gate=canonical_claim_gate,
+        public_ci_required_status_contexts=public_ci_required_status_contexts,
+        public_ci_sync_scripts=public_ci_sync_scripts,
+        public_publish_scripts=public_publish_scripts,
+        release_publish_scripts=release_publish_scripts,
+        ci_repo=ci_repo,
+        ci_required_status_contexts=ci_required_status_contexts,
+        ci_sync_scripts=ci_sync_scripts,
+    )
+    if not result.get("error"):
+        store.append_activity("project.repo_topology_configured", services.principal_actor(principal),
+                              {"project": project, "repo_topology": result.get("repo_topology")},
+                              task_id=None, project=project)
+    return services.dumps(result)
+
+
+def create_project_board(title: str, ctx: Context, project: str = "maxwell",
+                         board_id: str = "", mission_id: str = "",
+                         kind: str = "mission", status: str = "active",
+                         purpose: str = "", end_state: str = "",
+                         description: str = "", owner_org: str = "",
+                         owner_person_or_role: str = "",
+                         metadata_json: str = "") -> str:
+    """Create/update a first-class Board/Mission child under one Project.
+
+    Project remains the repo/trust/policy/access/CI/model/budget/Done boundary.
+    Boards/Missions are live outcome cockpits under that Project. Unknown projects fail closed.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:tasks",))
+    result = store.create_project_board({
+        "id": board_id or mission_id,
+        "title": title,
+        "kind": kind,
+        "status": status,
+        "purpose": purpose,
+        "end_state": end_state,
+        "description": description,
+        "owner_org": owner_org,
+        "owner_person_or_role": owner_person_or_role,
+        "metadata": metadata_json,
+    }, actor=services.principal_actor(principal), project=project)
+    return services.dumps(result)
+
+
+def get_project_board(board_id: str, project: str = "maxwell") -> str:
+    """Fetch one Board/Mission child by id from one Project."""
+    services = _services()
+    if not store.has_project(project):
+        return services.dumps({"error": f"unknown project: {project}", "project": project})
+    result = store.get_project_board(board_id, project=project)
+    return services.dumps(result or {"error": "unknown board", "board_id": board_id, "project": project})
+
+
+def list_project_boards(project: str = "maxwell", kind: str = "",
+                        status: str = "") -> str:
+    """List Board/Mission children under one Project, optionally filtered by kind/status."""
+    services = _services()
+    if not store.has_project(project):
+        return services.dumps({"error": f"unknown project: {project}", "project": project})
+    return services.dumps({"project": project, "boards": store.list_project_boards(
+        project=project, kind=kind, status=status)})
+
+
 PROJECT_TOOL_NAMES = (
     "get_project", "update_project", "get_project_impact_report",
     "archive_project", "restore_project",
@@ -292,6 +428,8 @@ PROJECT_TOOL_NAMES = (
     "verify_project_consolidation", "rollback_project_consolidation",
     "create_project_purge_intent", "verify_project_purge_intent",
     "execute_project_purge", "record_project_cleanup_review",
+    "create_project", "set_project_github_repo", "set_project_repo_topology",
+    "create_project_board", "get_project_board", "list_project_boards",
 )
 
 

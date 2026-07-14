@@ -1,14 +1,17 @@
-"""Wake REST routes (TXP wake surface).
+"""Wake REST routes (TXP + IXP wake surface).
 
-The router owns ``/txp/v1/request_wake``, ``/txp/v1/claim_wake``, and
-``/txp/v1/complete_wake`` while the composition root supplies project and
-principal boundaries. Domain persistence stays behind application commands.
+The router owns ``/txp/v1/request_wake``, ``/txp/v1/claim_wake``,
+``/txp/v1/complete_wake``, ``/txp/v1/list_wake_intents``,
+``/txp/v1/cancel_wake``, and their IXP fleet-control mirrors
+(``/ixp/v1/wake_intents``, ``/ixp/v1/request_wake``, ``/ixp/v1/cancel_wake``)
+while the composition root supplies project and principal boundaries. Domain
+persistence stays behind application commands.
 """
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import APIRouter, Body, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
 import store
@@ -88,5 +91,38 @@ def create_router(*, resolve_project: ProjectResolver,
             (body.get("wake_id") or body.get("id") or "").strip(),
             reason=body.get("reason") or "cancelled",
             actor=auth.actor(principal), project=project))
+
+    # UI-8 Fleet control: wake-intent read/write over REST (hosts + runners already have
+    # their routes above). Mirrors the request_wake / list_wake_intents / cancel_wake tools.
+    @router.get("/ixp/v1/wake_intents")
+    async def ixp_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
+                               status: str = "", host_id: str = "", runtime: str = ""):
+        return {"wake_intents": store.list_wake_intents(
+            status=status, host_id=host_id, runtime=runtime, project=resolve_project(project))}
+
+    @router.post("/ixp/v1/request_wake")
+    async def ixp_request_wake(request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+        payload = dict(body or {})
+        payload["project"] = project
+        if not payload.get("source"):
+            payload["source"] = auth.actor(principal)
+        result = request_wake_command.execute_mapping_result(
+            payload, actor=auth.actor(principal), principal_id=principal["id"])
+        if result.get("error"):
+            raise HTTPException(400, result["error"])
+        return result
+
+    @router.post("/ixp/v1/cancel_wake")
+    async def ixp_cancel_wake(request: Request, body: dict = Body(...)):
+        project = resolve_body_project(body)
+        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="switchboard/operator")
+        result = store.cancel_wake(
+            (body.get("wake_id") or "").strip(), reason=body.get("reason") or "cancelled",
+            actor=auth.actor(principal), project=project)
+        if result.get("error"):
+            raise HTTPException(400, result["error"])
+        return result
 
     return router

@@ -1,9 +1,10 @@
-"""Messaging REST routes (operator API + IXP send/ack).
+"""Messaging REST routes (operator API + IXP send/ack/inbox).
 
 The router owns ``/api/agent_messages/send``, ``/api/agent_messages/ack``,
-``/ixp/v1/send``, and ``/ixp/v1/ack`` while the composition root supplies
-project and principal boundaries. Domain persistence stays behind application
-commands.
+``/ixp/v1/send``, ``/ixp/v1/ack``, ``/ixp/v1/inbox``,
+``/ixp/v1/message_status``, and ``/ixp/v1/pending_acks`` while the
+composition root supplies project and principal boundaries. Domain
+persistence stays behind application commands.
 """
 from __future__ import annotations
 
@@ -128,5 +129,25 @@ def create_router(*, resolve_project: ProjectResolver,
         if not msg:
             raise HTTPException(404, "message not found")
         return msg
+
+    @router.get("/ixp/v1/inbox")
+    async def ixp_inbox(project: str = Query(store.DEFAULT_PROJECT),
+                        to_agent: str = "", unacked: bool = True, signal: str = ""):
+        msgs = store.list_unacked_messages(to_agent, project=resolve_project(project)) if unacked else []
+        if signal:
+            msgs = [m for m in msgs if m.get("signal") == signal]
+        return {"messages": msgs}
+
+    @router.get("/ixp/v1/message_status")
+    async def ixp_message_status(message_id: int, project: str = Query(store.DEFAULT_PROJECT)):
+        msg = store.get_message_status(message_id, project=resolve_project(project))
+        if not msg:
+            raise HTTPException(404, "message not found")
+        return msg
+
+    @router.get("/ixp/v1/pending_acks")
+    async def ixp_pending_acks(project: str = Query(store.DEFAULT_PROJECT), agent_id: str = ""):
+        return {"pending_acks": store.list_pending_acks(
+            agent_id=agent_id, project=resolve_project(project))}
 
     return router

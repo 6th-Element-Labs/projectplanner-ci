@@ -12,6 +12,7 @@ from typing import Any, Callable
 from mcp.server.fastmcp import Context
 
 import auth
+import store
 from switchboard.application.commands import ack_message as ack_message_command
 from switchboard.application.commands import send_agent_message as send_agent_message_command
 
@@ -98,7 +99,36 @@ def ack_message(message_id: int, ctx: Context, project: str = "maxwell",
     ))
 
 
-MESSAGING_TOOL_NAMES = ("send_agent_message", "ack_message")
+def list_unacked_messages(to_agent: str, project: str = "maxwell") -> str:
+    """Your incoming message inbox — messages directed to you that have not been acked.
+    Call at session start and after completing a task to check for coordination messages
+    from other agents. to_agent: your agent-session id (e.g. 'claude/CHART-8').
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
+    services = _services()
+    return services.dumps(store.list_unacked_messages(to_agent, project=project))
+
+
+def get_message_status(message_id: int, project: str = "maxwell") -> str:
+    """Check whether a message you sent has been acked. Returns the full message record
+    including acked_at and ack_response if the recipient has responded.
+    project selects the board ('maxwell' default, 'helm', or 'switchboard')."""
+    services = _services()
+    r = store.get_message_status(message_id, project=project)
+    return services.dumps(r) if r else "message not found"
+
+
+def list_pending_acks(project: str = "maxwell", agent_id: str = "") -> str:
+    """List unacked requires_ack messages plus durable monitor state. agent_id filters to
+    messages either sent by or addressed to that agent. This is the protocol-native way to see
+    what is still waiting on another agent."""
+    services = _services()
+    return services.dumps(store.list_pending_acks(agent_id=agent_id, project=project))
+
+
+MESSAGING_TOOL_NAMES = (
+    "send_agent_message", "ack_message",
+    "list_unacked_messages", "get_message_status", "list_pending_acks",
+)
 
 
 def register_messaging_tools(

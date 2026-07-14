@@ -246,6 +246,9 @@ try:
 
     mcp_host = entrypoint_source("mcp_server")
     app_host = entrypoint_source("app")
+    # ARCH-MS-70 finished draining the inline IXP wake routes (request_wake/cancel_wake/
+    # wake_intents) out of app_impl.py into the wakes router alongside their TXP siblings —
+    # the shared command call is proven against wakes_router above, not the composition root.
     ok("register_wake_tools" in mcp_host
        and "def request_wake(" not in mcp_host
        and "def claim_wake(" not in mcp_host
@@ -254,7 +257,9 @@ try:
        and "def txp_request_wake" not in app_host
        and "def txp_claim_wake" not in app_host
        and "def txp_complete_wake" not in app_host
-       and "request_wake_command.execute_mapping_result" in app_host,
+       and "def ixp_request_wake" not in app_host
+       and "def ixp_cancel_wake" not in app_host
+       and "request_wake_command.execute_mapping_result" not in app_host,
        "monolith hosts register thin wake adapters only")
 
     body_helper = app_host.find("def _body_project(")

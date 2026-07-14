@@ -140,7 +140,40 @@ def host_status(host_id: str, project: str = "maxwell") -> str:
 
 
 
-AGENT_TOOL_NAMES = ("register_agent", "register_host", 'heartbeat', 'list_active_agents', 'heartbeat_host', 'list_agent_hosts', 'host_status')
+def set_agent_state(task_id: str, agent_id: str, state: str,
+                    ctx: Context, project: str = "maxwell") -> str:
+    """Write your working state for a task — a small JSON object (max ~500 chars)
+    capturing what you're doing, where you are, and what you plan next. Stored inside
+    the task and visible to all agents via get_agent_state. Good keys to include:
+      "files_open": which files you have staged or modified
+      "next_step": what you're about to do next
+      "blocked_on": what you're waiting for (or null)
+      "progress": e.g. "3/7 tests passing"
+    state: JSON-string object. agent_id: your stable session id (e.g. 'claude/ENGINE-11').
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
+    services = _services()
+    try:
+        state_obj = json.loads(state)
+    except Exception:
+        return services.dumps({"error": "state must be a valid JSON object string"})
+    services.require_write(ctx, project, ("write:ixp",))
+    return services.dumps(store.set_agent_state(task_id, agent_id, state_obj, project=project))
+
+
+
+def get_agent_state(task_id: str, project: str = "maxwell") -> str:
+    """Read the working-state blobs for all agents currently on a task.
+    Returns {agent_id: {state fields}, ...}. Call this before starting work on a
+    task to see if another agent is already active, what files it has open, and what
+    it plans next — complements list_unacked_messages for live coordination.
+    project: 'maxwell' (default), 'helm', or 'switchboard'."""
+    services = _services()
+    return services.dumps(store.get_agent_state(task_id, project=project))
+
+
+AGENT_TOOL_NAMES = ("register_agent", "register_host", 'heartbeat', 'list_active_agents',
+                    'heartbeat_host', 'list_agent_hosts', 'host_status',
+                    'set_agent_state', 'get_agent_state')
 
 
 def register_agent_tools(mcp: Any, services: AgentToolServices) -> dict[str, Callable[..., str]]:

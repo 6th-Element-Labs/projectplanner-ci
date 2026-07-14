@@ -6,13 +6,22 @@ taikun_session cookie.
 from __future__ import annotations
 
 import os
+from typing import Callable
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+
+import auth as _auth
+import store as _store
 
 from . import contracts, service, session
 
 router = APIRouter()
+
+ProjectResolver = Callable[[str], str]
+PrincipalResolver = Callable[..., dict]
+GlobalUserScopes = Callable[[dict, str], list]
+GlobalPrincipal = Callable[[dict, list], dict]
 
 
 def _is_secure(request: Request) -> bool:
@@ -129,3 +138,28 @@ async def reset_password(request: Request, body: contracts.ResetPasswordBody):
 # /api/auth/session["user"]["projects"] today. Overriding the monolith's
 # /api/projects route also requires teaching its HTTP auth middleware about the
 # taikun_session JWT — that's the cutover step, not this flag-gated increment.
+
+
+def create_me_router(*, resolve_project: ProjectResolver,
+                     resolve_principal: PrincipalResolver,
+                     global_user_scopes: GlobalUserScopes,
+                     global_principal: GlobalPrincipal) -> APIRouter:
+    """Build the ``/api/auth/me`` router — maps the global session (or a bearer
+    token) to per-project effective scopes for UI compatibility."""
+    me_router = APIRouter()
+
+    @me_router.get("/api/auth/me")
+    async def auth_me(request: Request, project: str = Query(_store.DEFAULT_PROJECT)):
+        """UI compatibility: map the global session to per-project effective scopes."""
+        user = service.current_user(request.cookies.get(session.COOKIE_NAME, ""))
+        if user:
+            proj = resolve_project(project)
+            scopes = global_user_scopes(user, proj)
+            principal = global_principal(user, scopes)
+            principal["project_roles"] = _store.principal_project_roles(proj, user["id"])
+            return {"principal": principal, "mode": _auth.auth_mode(), "project": proj}
+        principal = resolve_principal(request, project, ("read",), dev_actor="web")
+        return {"principal": _auth.public_principal(principal),
+                "mode": _auth.auth_mode(), "project": resolve_project(project)}
+
+    return me_router
