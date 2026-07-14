@@ -979,7 +979,8 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
     """
     principal = _require_write(ctx, project, ("write:bug_intake",))
     actor_name = auth.actor(principal)
-    result = store.submit_bug({
+    from switchboard.application.commands.submit_bug import execute_mapping_result
+    result = execute_mapping_result({
         "source_task": source_task,
         "source_agent": source_agent or actor_name,
         "observed_behavior": observed_behavior,

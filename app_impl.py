@@ -857,10 +857,11 @@ async def ixp_working_agreement(project: str = Query(store.DEFAULT_PROJECT)):
 
 @app.post("/ixp/v1/bugs/submit")
 async def ixp_submit_bug(request: Request, body: dict = Body(...)):
+    from switchboard.application.commands.submit_bug import execute_mapping_result
     project = _body_project(body)
     principal = _principal(request, project, ("write:bug_intake",),
                            dev_actor=body.get("source_agent") or "bug-intake")
-    result = store.submit_bug(
+    result = execute_mapping_result(
         body,
         actor=auth.actor(principal),
         project=project,

@@ -100,17 +100,7 @@ def _repo_remote_slug(*args, **kwargs):
     return _store_facade()._repo_remote_slug(*args, **kwargs)
 
 
-class _FailFixFailureClassesProxy:
-    """Lazy view of shell.FAIL_FIX_FAILURE_CLASSES (still owned by residual)."""
-
-    def get(self, key, default=None):
-        return _store_facade().FAIL_FIX_FAILURE_CLASSES.get(key, default)
-
-    def __getitem__(self, key):
-        return _store_facade().FAIL_FIX_FAILURE_CLASSES[key]
-
-
-FAIL_FIX_FAILURE_CLASSES = _FailFixFailureClassesProxy()
+from switchboard.domain.bug_intake.policy import FAIL_FIX_FAILURE_CLASSES  # ARCH-MS-59
 
 
 
