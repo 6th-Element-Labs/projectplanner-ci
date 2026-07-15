@@ -498,7 +498,13 @@ def run_executed_tests(workspace_path, work_session_id, task_id, claim_id, agent
     for cmd in cmds:
         argv += ["--command", cmd]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s)
+        env = os.environ.copy()
+        interpreter_bin = os.path.dirname(os.path.abspath(sys.executable))
+        current_path = env.get("PATH", "")
+        env["PATH"] = (interpreter_bin if not current_path else
+                       os.pathsep.join((interpreter_bin, current_path)))
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout_s, env=env)
         return json.loads(proc.stdout)
     except Exception as e:  # runner missing, bad JSON, timeout — fail closed with detail
         return {"schema": "switchboard.executed_test_run.v1", "status": "error",
