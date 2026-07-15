@@ -326,9 +326,12 @@ def compute_saturation_signals(
     *,
     mcp_obs_provider: Optional[Callable[[], dict]] = None,
     request_obs_provider: Optional[Callable[[], dict]] = None,
+    psi_provider: Optional[Callable[[], dict]] = None,
     slo_budgets: Optional[dict] = None,
 ) -> dict:
-    psi = psi_pressure.read_all_psi()
+    # psi_provider lets hermetic tests inject calm/high PSI without reading live /proc
+    # (BUG-67: busy CI hosts otherwise flake load_shed.should_shed).
+    psi = (psi_provider or psi_pressure.read_all_psi)()
     mcp_obs = (mcp_obs_provider or (lambda: {}))()
     request_obs = (request_obs_provider or (lambda: {}))()
     store_lock_waits = 0

@@ -67,10 +67,23 @@ ok(shed["should_shed"] is True, "load shed triggers on high cpu PSI")
 ok(shed["retry_after_s"] == 3, "load shed carries retry_after_s for Retry-After header")
 
 store.init_db("switchboard")
+# BUG-67: stub PSI so this "benign" case does not read live host /proc (CI runners
+# under load otherwise trip load_shed thresholds and flake the suite).
+_CALM_PSI = {
+    "schema": "switchboard.psi_pressure.v1",
+    "available": True,
+    "proc_root": "/fixture",
+    "resources": {
+        "cpu": {"available": True, "stall": {"some": {"avg10": 0.0}, "full": {"avg10": 0.0}}},
+        "memory": {"available": True, "stall": {"some": {"avg10": 0.0}}},
+        "io": {"available": True, "stall": {"some": {"avg10": 0.0}}},
+    },
+}
 payload = saturation_signals.compute_saturation_signals(
     "switchboard",
     mcp_obs_provider=lambda: {"sqlite_lock_waits": 2},
     request_obs_provider=obs.snapshot,
+    psi_provider=lambda: _CALM_PSI,
 )
 ok(payload["schema"] == "switchboard.saturation_signals.v1", "saturation snapshot schema")
 ok(payload["mcp_observability"]["sqlite_lock_waits"] == 2, "saturation includes lock waits")
@@ -79,6 +92,27 @@ ok(payload["slos"]["checks"]["webhook_ingest_p99_ms"]["status"] == "fail",
    "webhook ingest p99 SLO fails on 60ms sample under 50ms budget")
 ok(any(a["kind"] == "slo" for a in payload["alerts"]), "SLO violations surface as alerts")
 ok(payload["load_shed"]["should_shed"] is False, "benign fixture does not recommend shed without PSI pressure")
+ok(payload["psi"] is _CALM_PSI, "benign fixture uses injected calm PSI (not live /proc)")
+
+# Injected high PSI still recommends shed through the same provider hook.
+_HOT_PSI = {
+    "schema": "switchboard.psi_pressure.v1",
+    "available": True,
+    "proc_root": "/fixture",
+    "resources": {
+        "cpu": {"available": True, "stall": {"some": {"avg10": 99.0}, "full": {"avg10": 0.0}}},
+        "memory": {"available": True, "stall": {"some": {"avg10": 0.0}}},
+        "io": {"available": True, "stall": {"some": {"avg10": 0.0}}},
+    },
+}
+hot_payload = saturation_signals.compute_saturation_signals(
+    "switchboard",
+    mcp_obs_provider=lambda: {"sqlite_lock_waits": 0},
+    request_obs_provider=lambda: {"routes": {}, "dropped_webhook_deliveries": 0},
+    psi_provider=lambda: _HOT_PSI,
+)
+ok(hot_payload["load_shed"]["should_shed"] is True,
+   "injected high PSI still recommends shed via psi_provider")
 
 # --- Pressure badge: alert must key off the trailing WINDOW, not the lifetime counter ---
 # Regression: a huge lifetime count with an empty window must NOT alert — the badge returns
