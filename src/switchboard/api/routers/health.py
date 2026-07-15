@@ -28,8 +28,11 @@ InitFailures = Callable[[], Dict[str, str]]
 # handlers. One worker is enough because probes are cheap, and the router shares one
 # in-flight task so repeated monitor polls cannot fan out when a probe stalls.
 _READINESS_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="health-deep")
+_SATURATION_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="health-sat")
 _DEFAULT_READINESS_TIMEOUT_SECONDS = 2.0
 _MAX_READINESS_TIMEOUT_SECONDS = 4.0  # Caddy's /health* response-header timeout is 5s.
+_DEFAULT_SATURATION_TIMEOUT_SECONDS = 2.0
+_MAX_SATURATION_TIMEOUT_SECONDS = 4.0
 
 
 def _readiness_timeout_seconds() -> float:
@@ -39,6 +42,15 @@ def _readiness_timeout_seconds() -> float:
     except ValueError:
         configured = _DEFAULT_READINESS_TIMEOUT_SECONDS
     return min(_MAX_READINESS_TIMEOUT_SECONDS, max(0.05, configured))
+
+
+def _saturation_timeout_seconds() -> float:
+    raw = (os.environ.get("PM_HEALTH_SATURATION_TIMEOUT_SECONDS") or "").strip()
+    try:
+        configured = float(raw) if raw else _DEFAULT_SATURATION_TIMEOUT_SECONDS
+    except ValueError:
+        configured = _DEFAULT_SATURATION_TIMEOUT_SECONDS
+    return min(_MAX_SATURATION_TIMEOUT_SECONDS, max(0.05, configured))
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -141,9 +153,56 @@ def create_router(*, resolve_project: ProjectResolver,
 
 
     @router.get("/health/saturation")
-    def health_saturation(project: str = Query(store.DEFAULT_PROJECT)):
-        """Cheap saturation/alerts probe for external monitors (PERF-7)."""
-        snap = saturation_snapshot(project)
+    async def health_saturation(project: str = Query(store.DEFAULT_PROJECT)):
+        """Cheap saturation/alerts probe for external monitors (PERF-7).
+
+        Bounded below Caddy's /health* timeout so a locked store or slow PSI
+        never 504s the Settings "Box pressure" poller (Playwright BUG-A4).
+        """
+        timeout_seconds = _saturation_timeout_seconds()
+        loop = asyncio.get_running_loop()
+        try:
+            snap = await asyncio.wait_for(
+                loop.run_in_executor(_SATURATION_EXECUTOR, saturation_snapshot, project),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            return {
+                "status": "degraded",
+                "reason": "probe_timeout",
+                "timeout_seconds": timeout_seconds,
+                "project": project,
+                "alert_count": 0,
+                "alerts": [],
+                "slos_ok": None,
+                "load_shed": None,
+                "psi_available": None,
+                "sqlite_lock_waits": 0,
+                "sqlite_lock_waits_window": 0,
+                "webhook_inbox_pending": 0,
+                "concurrency_inflight": 0,
+                "concurrency_limit": 0,
+                "concurrency_saturated": False,
+            }
+        except Exception as exc:  # noqa: BLE001 — fail soft for monitors/UI
+            print(f"[saturation] probe failed: {type(exc).__name__}: {exc}", flush=True)
+            return {
+                "status": "degraded",
+                "reason": "probe_error",
+                "error": type(exc).__name__,
+                "project": project,
+                "alert_count": 0,
+                "alerts": [],
+                "slos_ok": None,
+                "load_shed": None,
+                "psi_available": None,
+                "sqlite_lock_waits": 0,
+                "sqlite_lock_waits_window": 0,
+                "webhook_inbox_pending": 0,
+                "concurrency_inflight": 0,
+                "concurrency_limit": 0,
+                "concurrency_saturated": False,
+            }
         return {
             "status": snap.get("status") or "healthy",
             "as_of": snap.get("as_of"),

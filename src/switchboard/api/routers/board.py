@@ -29,13 +29,16 @@ def create_router(*, resolve_project: ProjectResolver,
     router = APIRouter()
 
     @router.get("/api/board")
-    def board(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    def board(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+              view: str = Query("")):
         # Sync (def, not async) on purpose: FastAPI runs it in the threadpool, so the
         # board's SQLite I/O doesn't block the single worker's event loop — other
         # requests (incl. /health) stay responsive while a board builds (HARDEN-36).
         # lite: drop heavy per-task fields the board UI never renders (re-fetched by
         # the task-detail modal); the store also serves a short-TTL cached copy.
-        payload = store.board_payload(resolve_project(project), lite=True)
+        # view=cards: further omit description (largest wire cost) for kanban paint (BUG-A2).
+        cards = (view or "").strip().lower() == "cards"
+        payload = store.board_payload(resolve_project(project), lite=True, cards=cards)
         # HARDEN-37: ETag + short max-age so a tab refocus / reload that finds the
         # board unchanged gets a bodyless 304 instead of re-downloading ~250KB.
         return etag_json(request, payload, max_age=5)

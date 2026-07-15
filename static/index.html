@@ -884,6 +884,14 @@
         </div>
     </div>
 
+      (function () {
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(function () { document.documentElement.classList.add('fonts-ready'); });
+        } else {
+          document.documentElement.classList.add('fonts-ready');
+        }
+      })();
+    </script>
     <script>
       // BUG-45: hydrate the two navigation pickers while the parser is still
       // downloading Bootstrap/app.js. A slow CDN or large app bundle must not
@@ -953,8 +961,9 @@
       // parent hub before showing the nested sub-pane.
       (function () {
         function ctrlFor(href) {
-          // the real tab control lives inside a .nav; in-content links do not.
-          return document.querySelector('.nav [data-bs-toggle="tab"][href="' + href + '"]');
+          // Top tabs live in #main-nav (.navbar-nav), nested panes in .nav / .tk-subnav (BUG-A6).
+          return document.querySelector('#main-nav [data-bs-toggle="tab"][href="' + href + '"]')
+              || document.querySelector('.nav [data-bs-toggle="tab"][href="' + href + '"]');
         }
         function showTab(href) {
           if (!href || !window.bootstrap) return;
@@ -968,9 +977,18 @@
         window.TAIKUN_showTab = showTab;
         document.addEventListener('click', function (e) {
           var a = e.target.closest('[data-bs-toggle="tab"]');
-          if (!a || a.closest('.nav')) return; // nav controls (top + sub) drive themselves
+          if (!a) return;
+          var href = a.getAttribute('href');
+          var pane = href && document.querySelector(href);
+          var parent = pane && pane.parentElement && pane.parentElement.closest('.tab-pane');
+          if (parent && parent.id && !parent.classList.contains('active') && !parent.classList.contains('show')) {
+            e.preventDefault();
+            showTab(href);
+            return;
+          }
+          if (a.closest('.nav') || a.closest('#main-nav')) return;
           e.preventDefault();
-          showTab(a.getAttribute('href'));
+          showTab(href);
         });
         // Deep-link: honor a #tab-<name> hash on load (e.g. ?project=vulkan#tab-board),
         // resolving through the hub for nested sub-panes. #tab-mission has its own richer
@@ -1155,14 +1173,17 @@
           var p = window.PM_PROJECT || 'switchboard';
           window.location.href = '/coordination?project=' + encodeURIComponent(p);
         });
-        fetch('/api/auth/session').then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (data) {
-            if (!data || !data.user) return;
-            var menu = document.getElementById('user-menu');
-            if (menu) menu.style.display = '';
-            var email = document.getElementById('user-menu-email');
-            if (email && data.user.email) email.textContent = data.user.email;
-          }).catch(function () {});
+        // BUG-A5: session is cookie-only; skip when Bearer/token UI has no taikun_session.
+        if (/(?:^|;\s*)taikun_session=/.test(document.cookie || '')) {
+          fetch('/api/auth/session', { credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+              if (!data || !data.user) return;
+              var menu = document.getElementById('user-menu');
+              if (menu) menu.style.display = '';
+              var email = document.getElementById('user-menu-email');
+              if (email && data.user.email) email.textContent = data.user.email;
+            }).catch(function () {});
+        }
       })();
     </script>
     <div id="fleet-dock"></div>

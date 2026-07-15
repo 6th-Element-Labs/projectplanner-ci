@@ -68,7 +68,8 @@ const TeepPlan = {
             // once the project is known, so the critical path isn't 3 serial round-trips.
             // HARDEN-35: project_context is no longer bundled in /api/board; fetch it
             // in parallel from its own (browser-cached) endpoint.
-            const boardReq = fetch('api/board');
+            const boardReq = fetch('api/board?view=cards', { cache: 'no-cache' });
+            // BUG-A9: do not block first paint on people / tally / project_context.
             const peopleReq = fetch('api/people').then((r) => r.json()).then((d) => d.people || []).catch(() => []);
             const tallyReq = fetch(`tally/v1/project?project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}`)
                 .then((r) => r.json()).catch(() => null);
@@ -76,9 +77,18 @@ const TeepPlan = {
             const res = await boardReq;
             if (!res.ok) throw new Error(`HTTP ${res.status} loading the board`);
             this.plan = await res.json();
-            this.people = await peopleReq;
-            this.tally = await tallyReq;
-            this.projectContext = await ctxReq;
+            this.people = [];
+            this.tally = null;
+            this.projectContext = null;
+            // Fill non-critical data after first paint.
+            Promise.all([peopleReq, tallyReq, ctxReq]).then(([people, tally, ctx]) => {
+                this.people = people;
+                this.tally = tally;
+                this.projectContext = ctx;
+                const dl = document.getElementById('people-list');
+                if (dl) dl.innerHTML = (this.people || []).map((p) => `<option value="${this.esc(p)}"></option>`).join('');
+                this.renderTallyPulse();
+            }).catch(() => {});
         } catch (err) {
             this.showError(err.message);
             return;
@@ -150,11 +160,21 @@ const TeepPlan = {
         // Global auth: the list is filtered to the projects this user can access.
         // Fall back to the first accessible one if the stored project isn't in it;
         // if there are none, flag an empty workspace so init() shows a message.
+        // Never rewrite away from an intentional ?project= when the list failed /
+        // only has the offline Maxwell stub (BUG-A7).
+        const urlProject = (() => {
+            try { return (new URL(window.location.href).searchParams.get('project') || '').trim(); }
+            catch (e) { return ''; }
+        })();
         this._noProjects = list.length === 0;
         if (list.length && !list.some((p) => p.id === cur)) {
-            cur = list[0].id;
-            window.PM_PROJECT = cur;
-            try { localStorage.setItem('pm_project', cur); } catch (e) {}
+            if (urlProject && urlProject === cur) {
+                // Keep the URL project even if the picker list is empty/stale.
+            } else {
+                cur = list[0].id;
+                window.PM_PROJECT = cur;
+                try { localStorage.setItem('pm_project', cur); } catch (e) {}
+            }
         }
         const sel = document.getElementById('project-switcher');
         if (sel) {
@@ -171,12 +191,14 @@ const TeepPlan = {
                 });
             }
         }
-        // Data-drive the header for non-default projects; leave Maxwell's static header pixel-identical.
-        const meta = list.find((p) => p.id === cur);
-        if (meta && cur !== 'maxwell') {
+        // Always brand from the intentional project id, even if /api/projects failed (BUG-A7).
+        const meta = list.find((p) => p.id === cur) || {};
+        const titleBase = meta.label
+            || (cur === 'maxwell' ? 'Project Maxwell Plan' : cur);
+        document.title = `${titleBase} | Taikun Atlas`;
+        if (meta.label && cur !== 'maxwell') {
             const t = document.querySelector('.page-title'); if (t) t.textContent = meta.label;
             const pt = document.querySelector('.page-pretitle'); if (pt && meta.pretitle) pt.textContent = meta.pretitle;
-            document.title = `${meta.label} | Taikun Atlas`;
         }
     },
 
@@ -1299,7 +1321,7 @@ const TeepPlan = {
         if (this._boardLiveBusy) return;
         this._boardLiveBusy = true;
         try {
-            this.plan = await (await fetch('api/board', { cache: 'no-store' })).json();
+            this.plan = await (await fetch('api/board?view=cards', { cache: 'no-cache' })).json();
             this.flatten();
         } catch (e) { this._boardLiveBusy = false; return; }   // transient (network blip / agent mid-write) — retry next tick
         this._boardLiveBusy = false;

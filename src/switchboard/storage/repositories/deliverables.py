@@ -1772,41 +1772,95 @@ def _find_deliverable_links_for_task(task_project: str, task_id: str,
 
 
 def _enriched_mission_task_link(link: Dict[str, Any]) -> Dict[str, Any]:
-    enriched = dict(link)
-    task_project = link.get("project_id")
-    task_id = link.get("task_id")
-    if not _store_facade().has_project(task_project):
-        enriched["task_detail"] = {"error": "unknown project", "project_id": task_project}
-        return enriched
-    task = _store_facade().get_task(task_id, project=task_project)
-    if not task:
-        enriched["task_detail"] = {"error": "unknown task", "project_id": task_project,
-                                   "task_id": task_id}
-        return enriched
-    with _store_facade()._conn(task_project) as c:
-        claims = _store_facade()._active_task_claims_in(c, task_id)
-    enriched["task_detail"] = {
-        "task_id": task["task_id"],
-        "title": task.get("title"),
-        "status": task.get("status"),
-        "assignee": task.get("assignee"),
-        "workstream": task.get("_wsId"),
-        "depends_on": task.get("depends_on") or [],
-        "dependency_state": task.get("dependency_state"),
-        "provenance": task.get("provenance"),
-        "git_state": task.get("git_state"),
-        "external_ci": task.get("external_ci"),
-        "publication": task.get("publication"),
-        "human_gate": _store_facade()._task_human_gate_state(task),
-        "session_health": task.get("session_health"),
-        "active_claims": claims,
-        # CEO-voice summary for map-node hover tooltips. narration is None while a live task
-        # is transiently stale; narration_raw keeps the last prose so the tooltip still shows.
-        "narration": task.get("narration"),
-        "narration_raw": task.get("narration_raw"),
-        "narration_stale": (task.get("narration_state") or {}).get("stale"),
-    }
-    return enriched
+    """Enrich one link (fallback / tests). Prefer ``_batch_enrich_mission_links``."""
+    return _batch_enrich_mission_links([link])[0]
+
+
+def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Mission cockpit enrichment without N× full ``get_task`` round-trips (BUG-A3).
+
+    Loads one slim SELECT + provenance + active claims per linked project, then
+    projects the fields the Mission UI / blockers / active_work rollups need.
+    """
+    by_project: Dict[str, List[str]] = {}
+    for link in links:
+        proj = (link.get("project_id") or "").strip()
+        tid = (link.get("task_id") or "").strip()
+        if proj and tid:
+            by_project.setdefault(proj, []).append(tid)
+
+    tasks_by_key: Dict[tuple, Dict[str, Any]] = {}
+    claims_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
+    for proj, tids in by_project.items():
+        if not _store_facade().has_project(proj):
+            continue
+        uniq = list(dict.fromkeys(tids))
+        placeholders = ",".join("?" for _ in uniq)
+        with _store_facade()._conn(proj) as c:
+            rows = c.execute(
+                f"SELECT * FROM tasks WHERE task_id IN ({placeholders})", uniq,
+            ).fetchall()
+            for row in rows:
+                task = _task_row(row)
+                git_state = _store_facade()._load_git_state(c, task["task_id"])
+                task["git_state"] = git_state
+                task["provenance"] = _store_facade()._provenance_summary(git_state)
+                task["human_gate"] = _store_facade()._task_human_gate_state(task)
+                task["dependency_state"] = _store_facade()._dependency_state_in(c, task)
+                tasks_by_key[(proj, task["task_id"])] = task
+            for tid in uniq:
+                claims = _store_facade()._active_task_claims_in(c, tid)
+                claims_by_key[(proj, tid)] = claims
+                task = tasks_by_key.get((proj, tid))
+                if task is not None:
+                    task["session_health"] = _store_facade()._task_session_health_in(
+                        c, task, project=proj, active_claims=claims,
+                        git_state=task.get("git_state"))
+
+    out: List[Dict[str, Any]] = []
+    for link in links:
+        enriched = dict(link)
+        proj = (link.get("project_id") or "").strip()
+        tid = (link.get("task_id") or "").strip()
+        if not _store_facade().has_project(proj):
+            enriched["task_detail"] = {"error": "unknown project", "project_id": proj}
+            out.append(enriched)
+            continue
+        task = tasks_by_key.get((proj, tid))
+        if not task:
+            enriched["task_detail"] = {
+                "error": "unknown task", "project_id": proj, "task_id": tid,
+            }
+            out.append(enriched)
+            continue
+        narration = task.get("narration")
+        narration_raw = task.get("narration_raw")
+        narration_state = task.get("narration_state") or {}
+        # Prefer CEO prose already on the row if the rich decorator never ran.
+        if not narration and not narration_raw:
+            # Task rows don't always carry narration until full get_task; leave nulls.
+            pass
+        enriched["task_detail"] = {
+            "task_id": task["task_id"],
+            "title": task.get("title"),
+            "status": task.get("status"),
+            "assignee": task.get("assignee"),
+            "workstream": task.get("_wsId"),
+            "depends_on": task.get("depends_on") or [],
+            "dependency_state": task.get("dependency_state"),
+            "provenance": task.get("provenance"),
+            "git_state": task.get("git_state"),
+            "external_ci": None,
+            "publication": None,
+            "human_gate": task.get("human_gate"),
+            "session_health": task.get("session_health"),
+            "active_claims": claims_by_key.get((proj, tid)) or [],
+            "narration": narration,
+            "narration_raw": narration_raw,
+            "narration_stale": narration_state.get("stale") if isinstance(narration_state, dict) else None,
+        }
+        out.append(enriched)
+    return out
 
 
 def _mission_blockers(deliverable: Dict[str, Any],
@@ -2047,8 +2101,7 @@ def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = 
     deliverable = scope["deliverable"]
     board = scope.get("board") or deliverable.get("board")
     metadata = deliverable.get("metadata") or {}
-    linked_tasks = [_enriched_mission_task_link(link)
-                      for link in (deliverable.get("task_links") or [])]
+    linked_tasks = _batch_enrich_mission_links(deliverable.get("task_links") or [])
     milestone_task_counts: Dict[str, int] = {}
     for link in deliverable.get("task_links") or []:
         mid = link.get("milestone_id")
@@ -2533,9 +2586,15 @@ def deliverable_tally(deliverable_id: str, project: str = DEFAULT_PROJECT) -> Di
         milestone_id = link.get("milestone_id") or ""
         if not _store_facade().has_project(task_project):
             continue
-        task = _store_facade().get_task(task_id, project=task_project)
-        if not task:
-            continue
+        # Slim status/title/provenance for proof bucket — avoid full get_task (BUG-A3).
+        with _store_facade()._conn(task_project) as c:
+            row = c.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            if not row:
+                continue
+            task = _task_row(row)
+            git_state = _store_facade()._load_git_state(c, task_id)
+            task["git_state"] = git_state
+            task["provenance"] = _store_facade()._provenance_summary(git_state)
         tally = _store_facade().task_tally(task_id, project=task_project)
         proof_bucket = _store_facade()._task_proof_bucket(task)
         _store_facade()._merge_task_tally_into_totals(combined, tally)

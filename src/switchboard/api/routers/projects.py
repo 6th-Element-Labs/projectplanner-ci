@@ -39,25 +39,54 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.get("/api/projects")
     def list_projects(request: Request, include_archived: bool = Query(False)):
-        """Active picker by default; explicit admin discovery may include archived records."""
+        """Active picker by default; explicit admin discovery may include archived records.
+
+        Cookie sessions stay deny-by-default (grants only). Bearer principals — env MCP/auth
+        tokens and scoped agent tokens — must also work here so the boot picker matches
+        ``/api/board`` and MCP ``list_projects`` (Playwright audit BUG-A1 / ACCESS-25).
+        """
         if auth.auth_mode() == auth.DEV_OPEN and not request.cookies.get(cookie_name, ""):
             projects = (store.list_registry_projects(include_archived=True)
                         if include_archived else store.projects())
             return {"projects": projects, "default": store.DEFAULT_PROJECT,
                     "include_archived": include_archived}
         user = current_user(request.cookies.get(cookie_name, ""))
-        if not user:
+        if user:
+            if not include_archived:
+                return {"projects": user.get("projects", []), "default": "",
+                        "include_archived": False}
+            accessible = set(accessible_project_ids(
+                user["id"], bool(user.get("is_superadmin"))))
+            projects = [
+                record for record in store.list_registry_projects(include_archived=True)
+                if record.get("id") in accessible
+            ]
+            return {"projects": projects, "default": "", "include_archived": True}
+
+        # Prefer the principal the auth gate already attached (Bearer path).
+        principal = getattr(request.state, "principal", None)
+        if not isinstance(principal, dict):
+            principal = auth.principal_for_token_any_project(auth.bearer_from_request(request))
+        if not principal:
             raise HTTPException(401, "not authenticated")
+        binding = (principal.get("project") or "").strip()
+        broad = (
+            principal.get("id") in ("env-mcp-token", "env-auth-token")
+            or binding in ("", "*")
+        )
         if not include_archived:
-            return {"projects": user.get("projects", []), "default": "",
-                    "include_archived": False}
-        accessible = set(accessible_project_ids(
-            user["id"], bool(user.get("is_superadmin"))))
-        projects = [
-            record for record in store.list_registry_projects(include_archived=True)
-            if record.get("id") in accessible
-        ]
-        return {"projects": projects, "default": "", "include_archived": True}
+            projects = store.projects()
+            if not broad:
+                projects = [p for p in projects if p.get("id") == binding]
+            return {
+                "projects": projects,
+                "default": store.DEFAULT_PROJECT if broad else "",
+                "include_archived": False,
+            }
+        records = store.list_registry_projects(include_archived=True)
+        if not broad:
+            records = [r for r in records if r.get("id") == binding]
+        return {"projects": records, "default": "", "include_archived": True}
 
     @router.post("/api/projects")
     async def create_project(request: Request, body: dict = Body(...)):

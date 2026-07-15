@@ -125,6 +125,7 @@ AUTOINCREMENT_TASK_TABLES = {"activity", "llm_spend", "decisions"}
 
 _BOARD_LITE_DROP = ("session_health", "external_ci", "publication",
                     "entry_criteria", "exit_criteria", "deliverable", "agent_state")
+_BOARD_CARDS_DROP = _BOARD_LITE_DROP + ("description", "rationale")
 
 def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
     d = dict(r)
@@ -1058,7 +1059,7 @@ def project_task_stamp(project: str) -> Any:
             "SELECT COUNT(*), COALESCE(MAX(updated_at), 0) FROM tasks").fetchone()
         return (count, latest or 0)
 
-def _build_board_payload(project: str, lite: bool) -> Dict[str, Any]:
+def _build_board_payload(project: str, lite: bool, cards: bool = False) -> Dict[str, Any]:
     # The lite path uses the batched, enrichment-free loader (HARDEN-34); rollups
     # read only base fields (status/workstream/effort), so slim rows are enough.
     tasks = list_tasks_for_board(project) if lite else list_tasks(project=project)
@@ -1073,7 +1074,8 @@ def _build_board_payload(project: str, lite: bool) -> Dict[str, Any]:
     payload["rollups"] = board_rollups(project=project, tasks=tasks)
     ws_tasks = tasks
     if lite:
-        ws_tasks = [{k: v for k, v in t.items() if k not in _BOARD_LITE_DROP} for t in tasks]
+        drop = _BOARD_CARDS_DROP if cards else _BOARD_LITE_DROP
+        ws_tasks = [{k: v for k, v in t.items() if k not in drop} for t in tasks]
     by_ws: Dict[str, Dict[str, Any]] = {}
     for t in ws_tasks:
         ws = by_ws.setdefault(t["_wsId"], {"workstream_id": t["_wsId"], "name": t["_wsName"], "tasks": []})
@@ -1085,17 +1087,19 @@ def _build_board_payload(project: str, lite: bool) -> Dict[str, Any]:
     # fetches once and the browser caches; keep it out of the board payload.
     return payload
 
-def board_payload(project: str = DEFAULT_PROJECT, lite: bool = False) -> Dict[str, Any]:
+def board_payload(project: str = DEFAULT_PROJECT, lite: bool = False,
+                  cards: bool = False) -> Dict[str, Any]:
     s = _store_facade()
     if not lite:
         # Via facade so tests that monkeypatch store._build_board_payload are honored.
-        return s._build_board_payload(project, lite=False)
+        return s._build_board_payload(project, lite=False, cards=False)
     try:
         stamp = project_task_stamp(project)
     except Exception:
-        return s._build_board_payload(project, lite=True)
-    return s.ttl_read_cache("board", project, stamp,
-                          lambda: s._build_board_payload(project, lite=True))
+        return s._build_board_payload(project, lite=True, cards=cards)
+    cache_key = f"{project}\x00cards" if cards else project
+    return s.ttl_read_cache("board", cache_key, stamp,
+                          lambda: s._build_board_payload(project, lite=True, cards=cards))
 
 
 class StoreTaskRepository:

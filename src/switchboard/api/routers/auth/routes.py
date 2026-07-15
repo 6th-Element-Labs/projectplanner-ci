@@ -134,10 +134,10 @@ async def reset_password(request: Request, body: contracts.ResetPasswordBody):
         raise _http_error(e)
     return {"ok": True, "message": "Your password has been reset. You can now sign in."}
 
-# NOTE: /api/projects filtering (deny-by-default project list) is delivered via
-# /api/auth/session["user"]["projects"] today. Overriding the monolith's
-# /api/projects route also requires teaching its HTTP auth middleware about the
-# taikun_session JWT — that's the cutover step, not this flag-gated increment.
+# NOTE: Cookie sessions still get deny-by-default project lists via
+# /api/auth/session["user"]["projects"] and the cookie branch of GET /api/projects.
+# Bearer callers (env MCP/auth tokens, scoped agents) use the same route's
+# principal branch (ACCESS-25) so the boot picker matches /api/board.
 
 
 def create_me_router(*, resolve_project: ProjectResolver,

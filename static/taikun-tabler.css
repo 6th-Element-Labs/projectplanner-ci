@@ -31,5 +31,9 @@
   --tblr-border-radius-lg:.85rem;
 
   /* crisp type */
+  --tblr-font-sans-serif:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+/* BUG-A10: promote Inter only after the file is ready so first paint isn't blocked. */
+html.fonts-ready{
   --tblr-font-sans-serif:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
 }

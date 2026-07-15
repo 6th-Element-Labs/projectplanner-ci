@@ -84,25 +84,51 @@
     async loadMissionStatus(deliverableId) {
         const id = (deliverableId || '').trim();
         if (!id) { this.missionStatus = null; return null; }
-        // CONSOL-8: no-cache (not no-store) — the live poll still revalidates every tick so
-        // it never shows stale state, but the server's ETag lets an unchanged tick come back
-        // as a bodyless 304 (served from cache) instead of re-downloading the whole rollup.
-        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_status`, { cache: 'no-cache' });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
-        this.missionStatus = data;
-        return data;
+        // BUG-A11: share one in-flight promise per deliverable (same as loadDeliverables).
+        if (this._missionStatusPromise && this._missionStatusId === id) {
+            return this._missionStatusPromise;
+        }
+        const request = (async () => {
+            // CONSOL-8: no-cache (not no-store) — ETag lets unchanged ticks return 304.
+            const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/mission_status`, { cache: 'no-cache' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+            this.missionStatus = data;
+            return data;
+        })();
+        this._missionStatusId = id;
+        this._missionStatusPromise = request;
+        try { return await request; }
+        finally {
+            if (this._missionStatusPromise === request) {
+                this._missionStatusPromise = null;
+                this._missionStatusId = null;
+            }
+        }
     },
 
     async loadDependencyGraph(deliverableId) {
         const id = (deliverableId || '').trim();
         if (!id) { this.missionGraph = null; return null; }
-        // CONSOL-8: no-cache so the ETag/304 revalidation applies (see loadMissionStatus).
-        const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/dependency_graph`, { cache: 'no-cache' });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
-        this.missionGraph = data;
-        return data;
+        if (this._missionGraphPromise && this._missionGraphId === id) {
+            return this._missionGraphPromise;
+        }
+        const request = (async () => {
+            const res = await fetch(`api/deliverables/${encodeURIComponent(id)}/dependency_graph`, { cache: 'no-cache' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+            this.missionGraph = data;
+            return data;
+        })();
+        this._missionGraphId = id;
+        this._missionGraphPromise = request;
+        try { return await request; }
+        finally {
+            if (this._missionGraphPromise === request) {
+                this._missionGraphPromise = null;
+                this._missionGraphId = null;
+            }
+        }
     },
 
     async generateMissionBrief() {
@@ -565,7 +591,10 @@
             }
             this._missionDagRenderId += 1;
             const renderId = `mission-dag-${this._missionDagRenderId}`;
-            const { svg } = await window.mermaid.render(renderId, g.mermaid);
+            const { svg } = await Promise.race([
+                window.mermaid.render(renderId, g.mermaid),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('mermaid render timeout')), 12000)),
+            ]);
             host.innerHTML = svg;
             // Setting innerHTML resets the scroller to 0,0 — put the chart back where the user
             // had it (captured in renderMissionPage before the re-render).
