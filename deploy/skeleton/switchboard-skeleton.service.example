@@ -1,0 +1,42 @@
+# /etc/systemd/system/switchboard-skeleton.service
+# ARCH-MS-73 — dormant process-cut template. Do NOT enable in production until a
+# cutover task installs a real bounded-context service and proves the independence
+# gate. Default port 8120 avoids the live web (:8110) and MCP (:8111) units.
+[Unit]
+Description=Switchboard service skeleton (:8120, localhost) — DORMANT TEMPLATE
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Slice=projectplanner-interactive.slice
+Type=simple
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SWITCHBOARD_SKELETON_SERVICE_NAME=switchboard-skeleton
+Environment=SWITCHBOARD_SKELETON_HOST=127.0.0.1
+Environment=SWITCHBOARD_SKELETON_PORT=8120
+# PYTHONPATH must include repo root + src/ the same way the monolith does.
+Environment=PYTHONPATH=/opt/projectplanner:/opt/projectplanner/src
+ExecStart=/opt/projectplanner/.venv/bin/uvicorn switchboard.services._skeleton.app:app --host 127.0.0.1 --port 8120
+Restart=always
+RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=15
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner
+
+[Install]
+WantedBy=multi-user.target

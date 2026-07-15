@@ -1,0 +1,28 @@
+# ARCH-MS-73 — commented Caddy reverse_proxy snippet for a future service cut.
+# Paste into deploy/Caddyfile ONLY when a cutover task enables the matching
+# systemd unit. Until then, leave this file unused so live traffic stays on
+# the monolith (:8110).
+#
+# Suggested path prefix: /skeleton* (replace with /auth* etc. for a real cut).
+# Health stays on a short timeout so a hung cut-out process cannot stall the edge.
+
+# handle /skeleton/health* {
+#     reverse_proxy 127.0.0.1:8120 {
+#         transport http {
+#             dial_timeout 2s
+#             response_header_timeout 5s
+#         }
+#     }
+# }
+# handle /skeleton* {
+#     reverse_proxy 127.0.0.1:8120 {
+#         transport http {
+#             dial_timeout 5s
+#             response_header_timeout 90s
+#         }
+#         health_uri /health
+#         health_interval 5s
+#         health_timeout 3s
+#         fail_duration 10s
+#     }
+# }
