@@ -25,6 +25,7 @@ from switchboard.application.commands import move_task as move_task_command
 from switchboard.application.commands import review_verdicts as review_verdict_commands
 from switchboard.application.commands import update_task as update_task_command
 from switchboard.application.queries import get_task as get_task_query
+from switchboard.application.queries import review_remediations as review_remediation_queries
 from switchboard.application.queries import review_verdicts as review_verdict_queries
 from switchboard.contracts.tasks.v1 import (
     CREATE_TASK_FIELDS,
@@ -148,6 +149,7 @@ def create_router(*, resolve_project: ProjectResolver,
             "reviewer_not_independent",
             "review_head_unbound", "stale_review_head", "review_pr_mismatch",
             "review_verdict_conflict",
+            "adversarial_review_required",
         }:
             raise HTTPException(409, result)
         if result.get("error"):
@@ -220,6 +222,20 @@ def create_router(*, resolve_project: ProjectResolver,
         if result.get("resolved"):
             record_write_binding(task_id, binding, project)
         return result
+
+    @router.get("/api/tasks/{task_id}/review_remediations")
+    async def list_review_remediations(task_id: str, status: str = "",
+                                       project: str = Query(store.DEFAULT_PROJECT)):
+        project = resolve_project(project)
+        rows = review_remediation_queries.list_for(
+            project=project, task_id=task_id, status=status)
+        return {
+            "task_id": task_id,
+            "remediation_count": len(rows),
+            "remediations": rows,
+            "metrics": review_remediation_queries.metrics_for(
+                project=project, task_id=task_id),
+        }
 
     @router.post("/api/tasks")
     async def create_task(request: Request, body: dict = Body(...),

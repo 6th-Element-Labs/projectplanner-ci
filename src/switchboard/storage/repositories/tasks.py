@@ -49,6 +49,7 @@ from switchboard.storage.repositories.narration import (  # noqa: F401 — ARCH-
     _narration_state,
     enqueue_narration,
 )
+from switchboard.storage.repositories.review_remediations import review_remediation_summary_in
 
 EDITABLE = list(EDITABLE_TASK_FIELDS)
 
@@ -118,6 +119,7 @@ TASK_MOVE_TABLES = (
     "decisions",
     "review_verdicts",
     "review_findings",
+    "review_remediations",
 )
 AUTOINCREMENT_TASK_TABLES = {"activity", "llm_spend", "decisions"}
 
@@ -394,6 +396,7 @@ def get_task(task_id: str, project: str = DEFAULT_PROJECT) -> Optional[Dict[str,
             c, t, project=project, active_claims=t["active_claims"], git_state=t["git_state"])
         t["review_verdict"] = review_verdict_summary_in(
             c, task_id, str(t["git_state"].get("head_sha") or ""))
+        t["review_remediation"] = review_remediation_summary_in(c, task_id)
         # COORD-18: this is code-review finding count, not Work Session hygiene.
         # Current-head counts remain separately exposed inside review_verdict so
         # consumers never mistake historical findings for a current SHA verdict.
@@ -841,6 +844,7 @@ def _delete_task_related_in(c: sqlite3.Connection, task_id: str, snapshot: Dict[
         "decisions",
         "review_findings",
         "review_verdicts",
+        "review_remediations",
         "agent_messages",
         "coordination_monitors",
     ):

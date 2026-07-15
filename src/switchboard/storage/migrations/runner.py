@@ -113,6 +113,9 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "ALTER TABLE review_findings ADD COLUMN resolved_principal_id TEXT"),
     ("0039_review_findings_resolved_at", "review_findings", "resolved_at",
      "ALTER TABLE review_findings ADD COLUMN resolved_at REAL"),
+    # COORD-20 — force adversarial re-review after concurrency/lease findings.
+    ("0040_review_verdicts_review_mode", "review_verdicts", "review_mode",
+     "ALTER TABLE review_verdicts ADD COLUMN review_mode TEXT NOT NULL DEFAULT 'standard'"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
@@ -150,6 +153,26 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0036_ix_review_findings_task_state",
      "CREATE INDEX IF NOT EXISTS ix_review_findings_task_state "
      "ON review_findings(task_id, state, finding_id)"),
+    ("0041_review_remediations",
+     "CREATE TABLE IF NOT EXISTS review_remediations ("
+     "remediation_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+     "verdict_id TEXT NOT NULL UNIQUE, source_head_sha TEXT NOT NULL, "
+     "source_pr_url TEXT NOT NULL, round_no INTEGER NOT NULL, status TEXT NOT NULL, "
+     "acceptance_criteria_json TEXT NOT NULL DEFAULT '[]', "
+     "escalation_findings_json TEXT NOT NULL DEFAULT '[]', "
+     "original_exit_criteria TEXT, previous_status TEXT, previous_assignee TEXT, "
+     "worker_runtime TEXT, wake_id TEXT, requires_adversarial_review INTEGER NOT NULL DEFAULT 0, "
+     "human_intervention_required INTEGER NOT NULL DEFAULT 0, "
+     "resolved_without_human INTEGER NOT NULL DEFAULT 0, resolved_head_sha TEXT, "
+     "auto_finding_count INTEGER NOT NULL DEFAULT 0, "
+     "escalate_finding_count INTEGER NOT NULL DEFAULT 0, save_counted INTEGER NOT NULL DEFAULT 0, "
+     "decision_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL, resolved_at REAL)"),
+    ("0042_ix_review_remediations_task",
+     "CREATE INDEX IF NOT EXISTS ix_review_remediations_task "
+     "ON review_remediations(task_id, round_no)"),
+    ("0043_ix_review_remediations_status",
+     "CREATE INDEX IF NOT EXISTS ix_review_remediations_status "
+     "ON review_remediations(status, updated_at)"),
 ]
 
 

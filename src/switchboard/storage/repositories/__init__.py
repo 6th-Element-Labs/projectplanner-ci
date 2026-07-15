@@ -58,6 +58,10 @@ from switchboard.storage.repositories.review_verdicts import (
     ReviewVerdictRepository,
     default_review_verdict_repository,
 )
+from switchboard.storage.repositories.review_remediations import (
+    ReviewRemediationRepository,
+    default_review_remediation_repository,
+)
 
 __all__ = [
     "AccessRepository",
@@ -76,6 +80,7 @@ __all__ = [
     "ProviderCredentialRepository",
     "ReviewVerdictError",
     "ReviewVerdictRepository",
+    "ReviewRemediationRepository",
     "StoreTaskRepository",
     "TaskRepository",
     "default_access_repository",
@@ -88,6 +93,7 @@ __all__ = [
     "default_provenance_repository",
     "default_provider_credential_repository",
     "default_review_verdict_repository",
+    "default_review_remediation_repository",
     "default_publication_repository",
     "default_task_repository",
     "default_work_sessions_repository",

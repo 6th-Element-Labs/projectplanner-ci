@@ -174,6 +174,7 @@ def _verdict_from_row(c: sqlite3.Connection, row: sqlite3.Row,
         "head_sha": row["head_sha"],
         "reviewer_principal": row["reviewer_principal"],
         "reviewer_principal_id": row["reviewer_principal_id"],
+        "review_mode": row["review_mode"],
         "status": row["status"],
         "created_at": row["created_at"],
         "findings": findings,
@@ -192,6 +193,7 @@ def _canonical_command(data: Mapping[str, Any]) -> str:
         "head_sha": data.get("head_sha"),
         "reviewer_principal": data.get("reviewer_principal"),
         "reviewer_principal_id": data.get("reviewer_principal_id"),
+        "review_mode": data.get("review_mode") or "standard",
         "status": data.get("status"),
         "findings": sorted(
             [dict(item or {}) for item in data.get("findings") or []],
@@ -208,6 +210,7 @@ def _canonical_verdict(verdict: Mapping[str, Any]) -> str:
         "head_sha": verdict.get("head_sha"),
         "reviewer_principal": verdict.get("reviewer_principal"),
         "reviewer_principal_id": verdict.get("reviewer_principal_id"),
+        "review_mode": verdict.get("review_mode") or "standard",
         "status": verdict.get("status"),
         "findings": verdict.get("findings") or [],
     })
@@ -222,12 +225,13 @@ def _insert_verdict_row_in(c: sqlite3.Connection, data: Mapping[str, Any], *,
     c.execute(
         "INSERT INTO review_verdicts("
         "verdict_id, task_id, pr_url, head_sha, reviewer_principal, "
-        "reviewer_principal_id, status, source, created_at, recorded_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "reviewer_principal_id, review_mode, status, source, created_at, recorded_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
             verdict_id, data["task_id"], data["pr_url"], data["head_sha"],
-            data["reviewer_principal"], data["reviewer_principal_id"], data["status"],
-            source, created_at, recorded_at,
+            data["reviewer_principal"], data["reviewer_principal_id"],
+            data.get("review_mode") or "standard", data["status"], source,
+            created_at, recorded_at,
         ),
     )
     return verdict_id
@@ -303,6 +307,21 @@ class ReviewVerdictRepository:
                     status_code=409,
                     details={"expected_head_sha": current_head},
                 )
+            # Persistence is the authority boundary: internal callers through the
+            # store facade cannot bypass COORD-20's adversarial re-review fence.
+            from switchboard.storage.repositories.review_remediations import (
+                required_review_mode_in,
+            )
+            review_requirement = required_review_mode_in(c, task_id, current_head)
+            if (review_requirement.get("required")
+                    and payload.get("review_mode", "standard")
+                    != review_requirement.get("mode")):
+                raise ReviewVerdictError(
+                    "adversarial_review_required",
+                    "active concurrency/lease remediation requires review_mode=adversarial",
+                    status_code=409,
+                    details={"review_requirement": review_requirement},
+                )
             current_pr = git_state["pr_url"]
             if current_pr and payload.get("pr_url") != current_pr:
                 raise ReviewVerdictError(
@@ -362,6 +381,7 @@ class ReviewVerdictRepository:
                 "pr_url": payload["pr_url"],
                 "reviewer_principal": reviewer,
                 "reviewer_principal_id": reviewer_principal_id,
+                "review_mode": payload.get("review_mode") or "standard",
                 "status": payload["status"],
                 "finding_count": len(payload.get("findings") or []),
                 "principal_id": reviewer_principal_id,

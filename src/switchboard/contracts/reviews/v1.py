@@ -18,6 +18,7 @@ LIST_REVIEW_FINDINGS_QUERY_SCHEMA = "switchboard.review_finding.list_query.v1"
 RESOLVE_REVIEW_FINDING_COMMAND_SCHEMA = "switchboard.review_finding.resolve_command.v1"
 
 REVIEW_STATUSES = frozenset({"pass", "changes_requested"})
+REVIEW_MODES = frozenset({"standard", "adversarial"})
 REVIEW_FINDING_CLASSES = frozenset({"auto", "escalate"})
 REVIEW_FINDING_STATES = frozenset({"open", "fixed", "waived", "overridden"})
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -187,6 +188,7 @@ class ReviewVerdict(VersionedModel):
     head_sha: str
     reviewer_principal: str
     reviewer_principal_id: str | None = None
+    review_mode: str = "standard"
     status: str
     created_at: float
     findings: tuple[ReviewFinding, ...] = ()
@@ -198,7 +200,7 @@ class ReviewVerdict(VersionedModel):
 
     @field_validator(
         "verdict_id", "task_id", "pr_url", "head_sha", "reviewer_principal",
-        "status", "source", mode="before",
+        "review_mode", "status", "source", mode="before",
     )
     @classmethod
     def _strip_text(cls, value: Any) -> str:
@@ -210,7 +212,7 @@ class ReviewVerdict(VersionedModel):
         text = str(value or "").strip()
         return text or None
 
-    @field_validator("status", mode="after")
+    @field_validator("review_mode", "status", mode="after")
     @classmethod
     def _lower_status(cls, value: str) -> str:
         return value.lower()
@@ -227,17 +229,19 @@ class RecordReviewVerdictCommand(VersionedModel):
     pr_url: str
     head_sha: str
     reviewer_principal: str
+    review_mode: str = "standard"
     status: str
     findings: tuple[ReviewFinding, ...] = ()
 
     @field_validator(
-        "task_id", "pr_url", "head_sha", "reviewer_principal", "status", mode="before",
+        "task_id", "pr_url", "head_sha", "reviewer_principal", "review_mode", "status",
+        mode="before",
     )
     @classmethod
     def _strip_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
-    @field_validator("status", mode="after")
+    @field_validator("review_mode", "status", mode="after")
     @classmethod
     def _lower_status(cls, value: str) -> str:
         return value.lower()
@@ -252,6 +256,8 @@ class RecordReviewVerdictCommand(VersionedModel):
             raise ValueError("head_sha must be a 40-character lowercase git SHA")
         if self.status not in REVIEW_STATUSES:
             raise ValueError("status must be pass or changes_requested")
+        if self.review_mode not in REVIEW_MODES:
+            raise ValueError("review_mode must be standard or adversarial")
         ids = [finding.id for finding in self.findings]
         if len(ids) != len(set(ids)):
             raise ValueError("finding ids must be unique inside one verdict")
@@ -272,6 +278,7 @@ class RecordReviewVerdictCommand(VersionedModel):
             "pr_url": self.pr_url,
             "head_sha": self.head_sha,
             "reviewer_principal": self.reviewer_principal,
+            "review_mode": self.review_mode,
             "status": self.status,
             "findings": [finding.model_dump(by_alias=True) for finding in self.findings],
         }

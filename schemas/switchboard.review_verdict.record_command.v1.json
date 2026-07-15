@@ -136,6 +136,11 @@
       "title": "Pr Url",
       "type": "string"
     },
+    "review_mode": {
+      "default": "standard",
+      "title": "Review Mode",
+      "type": "string"
+    },
     "reviewer_principal": {
       "title": "Reviewer Principal",
       "type": "string"

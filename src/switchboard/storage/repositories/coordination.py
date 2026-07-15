@@ -326,6 +326,20 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             return _control_plane_unavailable("request_wake", project, started_at, exc)
         raise
 
+
+def deliver_coordination_escalation(plan: Dict[str, Any], *, actor: str,
+                                    notify_outbound: bool = False) -> Dict[str, Any]:
+    """Deliver a coordinator escalation through the established coordination seam."""
+    import coordinator_escalation
+
+    return coordinator_escalation.deliver_human_escalation(
+        plan,
+        store_mod=_store_facade(),
+        actor=actor,
+        notify_outbound=notify_outbound,
+    )
+
+
 def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
                       project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     started_at = time.time()
@@ -1747,6 +1761,7 @@ __all__ = [
     "_wake_row",
     "_insert_wake_intent",
     "request_wake",
+    "deliver_coordination_escalation",
     "list_wake_intents",
     "claim_wake",
     "complete_wake",

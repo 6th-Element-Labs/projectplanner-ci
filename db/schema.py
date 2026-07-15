@@ -302,6 +302,7 @@ def apply_schema(c):
             head_sha            TEXT NOT NULL,
             reviewer_principal  TEXT NOT NULL,
             reviewer_principal_id TEXT,
+            review_mode         TEXT NOT NULL DEFAULT 'standard',
             status              TEXT NOT NULL,
             source              TEXT NOT NULL DEFAULT 'review_command',
             created_at          REAL NOT NULL,
@@ -332,6 +333,40 @@ def apply_schema(c):
         );
         CREATE INDEX IF NOT EXISTS ix_review_findings_task_state
             ON review_findings(task_id, state, finding_id);
+        -- COORD-20: each changes_requested verdict becomes one durable,
+        -- bounded remediation round.  The row is the acceptance contract for
+        -- the next claim and the source for hands-off / save metrics.
+        CREATE TABLE IF NOT EXISTS review_remediations (
+            remediation_id                 TEXT PRIMARY KEY,
+            task_id                        TEXT NOT NULL,
+            verdict_id                     TEXT NOT NULL UNIQUE,
+            source_head_sha                TEXT NOT NULL,
+            source_pr_url                  TEXT NOT NULL,
+            round_no                       INTEGER NOT NULL,
+            status                         TEXT NOT NULL,
+            acceptance_criteria_json       TEXT NOT NULL DEFAULT '[]',
+            escalation_findings_json       TEXT NOT NULL DEFAULT '[]',
+            original_exit_criteria         TEXT,
+            previous_status                TEXT,
+            previous_assignee              TEXT,
+            worker_runtime                  TEXT,
+            wake_id                        TEXT,
+            requires_adversarial_review    INTEGER NOT NULL DEFAULT 0,
+            human_intervention_required    INTEGER NOT NULL DEFAULT 0,
+            resolved_without_human         INTEGER NOT NULL DEFAULT 0,
+            resolved_head_sha               TEXT,
+            auto_finding_count              INTEGER NOT NULL DEFAULT 0,
+            escalate_finding_count          INTEGER NOT NULL DEFAULT 0,
+            save_counted                    INTEGER NOT NULL DEFAULT 0,
+            decision_id                     TEXT,
+            created_at                      REAL NOT NULL,
+            updated_at                      REAL NOT NULL,
+            resolved_at                     REAL
+        );
+        CREATE INDEX IF NOT EXISTS ix_review_remediations_task
+            ON review_remediations(task_id, round_no);
+        CREATE INDEX IF NOT EXISTS ix_review_remediations_status
+            ON review_remediations(status, updated_at);
         CREATE TABLE IF NOT EXISTS idempotency_keys (
             idem_key      TEXT NOT NULL,
             operation     TEXT NOT NULL,

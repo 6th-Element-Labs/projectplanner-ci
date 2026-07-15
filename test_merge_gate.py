@@ -125,7 +125,7 @@ def review_finding(finding_id="COORD19-REVIEW-1"):
 
 
 def record_review(created, head_sha, *, status="pass", findings=None):
-    return store.record_review_verdict(
+    return review_commands.execute_mapping(
         {
             "task_id": created["task_id"],
             "pr_url": f"https://github.com/{REPO}/pull/61",
@@ -304,6 +304,20 @@ try:
     ok(not open_gate["ok"] and open_gate_finding is not None
        and open_gate_finding["message"].startswith("1 open review finding"),
        "merge_gate self-explains the exact open-finding count and head")
+    open_metrics = store.review_remediation_metrics(
+        task_id=open_task["task_id"], project=P)
+    ok(open_gate.get("review_remediation_save", {}).get("counted") is True
+       and open_gate["review_remediation_save"].get("already_counted") is False
+       and open_metrics.get("saves") == 1,
+       "production merge_gate counts a review-only block as one idempotent save")
+    open_gate_replay = store.merge_gate(
+        gate_payload(open_task, open_claim, open_branch, open_sha),
+        actor="test", project=P)
+    replay_metrics = store.review_remediation_metrics(
+        task_id=open_task["task_id"], project=P)
+    ok(open_gate_replay.get("review_remediation_save", {}).get("already_counted") is True
+       and replay_metrics.get("saves") == 1,
+       "replayed merge_gate evaluation does not double-count the save")
 
     resolution_payload = {
         "task_id": open_task["task_id"],

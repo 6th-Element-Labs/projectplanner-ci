@@ -36,6 +36,7 @@ _EXPORT_MODULES: Tuple[str, ...] = (
     "switchboard.storage.repositories.projects",
     "switchboard.storage.repositories.kpis_economics",
     "switchboard.storage.repositories.review_verdicts",
+    "switchboard.storage.repositories.review_remediations",
     "switchboard.domain.access.identity",
     "switchboard.domain.provenance.preflight",
     "switchboard.application.commands.pre_tool_check",
@@ -90,6 +91,7 @@ _EXPORT_ALIASES: Dict[str, _AttrSpec] = {
     "projects_repository": ("switchboard.storage.repositories.projects", "default_projects_repository", "call"),
     "kpis_economics_repository": ("switchboard.storage.repositories.kpis_economics", "default_kpis_economics_repository", "call"),
     "review_verdict_repository": ("switchboard.storage.repositories.review_verdicts", "default_review_verdict_repository"),
+    "review_remediation_repository": ("switchboard.storage.repositories.review_remediations", "default_review_remediation_repository"),
     "access_repository": ("switchboard.storage.repositories.access", "default_access_repository", "call"),
 }
 

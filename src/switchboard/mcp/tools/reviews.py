@@ -9,6 +9,7 @@ from mcp.server.fastmcp import Context
 
 from switchboard.application.commands import review_verdicts as review_commands
 from switchboard.application.queries import review_verdicts as review_queries
+from switchboard.application.queries import review_remediations as remediation_queries
 
 
 @dataclass(frozen=True)
@@ -34,8 +35,8 @@ def record_review_verdict(verdict_json: str, ctx: Context,
 
     verdict_json follows switchboard.review_verdict.record_command.v1 and includes
     task_id, pr_url, head_sha, reviewer_principal, status=pass|changes_requested,
-    and findings[]. The authenticated reviewer must be a different principal from
-    every recorded worker for the task.
+    review_mode=standard|adversarial, and findings[]. The authenticated reviewer
+    must be a different principal from every recorded worker for the task.
     """
     services = _services()
     principal = services.require_write(ctx, project, ("write:ixp",))
@@ -117,11 +118,32 @@ def resolve_review_finding(resolution_json: str, ctx: Context,
     return services.dumps(result)
 
 
+def list_review_remediations(task_id: str = "", status: str = "",
+                             project: str = "maxwell") -> str:
+    """List automatic remediation rounds and their exact finding acceptance criteria."""
+    rows = remediation_queries.list_for(
+        project=project, task_id=task_id, status=status)
+    return _services().dumps({
+        "task_id": task_id or None,
+        "remediation_count": len(rows),
+        "remediations": rows,
+    })
+
+
+def get_review_remediation_metrics(task_id: str = "",
+                                   project: str = "maxwell") -> str:
+    """Return hands-off exception resolution and would-have-merged save counters."""
+    return _services().dumps(
+        remediation_queries.metrics_for(project=project, task_id=task_id))
+
+
 REVIEW_TOOL_NAMES = (
     "record_review_verdict",
     "get_review_verdict",
     "list_review_findings",
     "resolve_review_finding",
+    "list_review_remediations",
+    "get_review_remediation_metrics",
 )
 
 

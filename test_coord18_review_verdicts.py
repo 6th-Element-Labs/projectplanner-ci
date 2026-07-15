@@ -196,7 +196,8 @@ try:
        "current-head finding query never leaks findings from stale code")
 
     pass_result = commands.execute_mapping(
-        verdict(task_id, head=HEAD_2, status="pass", findings=[]),
+        {**verdict(task_id, head=HEAD_2, status="pass", findings=[]),
+         "review_mode": "adversarial"},
         actor=REVIEWER, principal_id=REVIEWER_PRINCIPAL_ID, project=PROJECT)
     ok(pass_result.get("created") is True
        and pass_result.get("verdict", {}).get("status") == "pass",

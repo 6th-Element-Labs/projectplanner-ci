@@ -119,6 +119,10 @@ def _executed_test_run_gate(*args: Any, **kwargs: Any) -> Any:
     return _store_facade()._executed_test_run_gate(*args, **kwargs)
 
 
+def record_review_save(*args: Any, **kwargs: Any) -> Any:
+    return _store_facade().record_review_save(*args, **kwargs)
+
+
 def pr_backed_by_process(*args: Any, **kwargs: Any) -> Any:
     return _store_facade().pr_backed_by_process(*args, **kwargs)
 
@@ -402,9 +406,12 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             "failed_gate",
             details={"external_ci": external_ci}))
 
+    review_head_sha = str(
+        head_sha or merged_payload.get("head_sha")
+        or (task.get("git_state") or {}).get("head_sha") or ""
+    ).strip()
     review_gate, review_findings = review_merge_gate_findings(
-        task_id, str(head_sha or merged_payload.get("head_sha") or
-                     (task.get("git_state") or {}).get("head_sha") or "").strip(), project=project)
+        task_id, review_head_sha, project=project)
     findings.extend(review_findings)
 
     profile = _task_work_session_profile(
@@ -520,6 +527,7 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "work_session_id": (session or {}).get("work_session_id") or work_session_id or None,
         "pr_url": pr_url or None,
         "pr_number": pr_number or None,
+        "head_sha": review_head_sha or None,
         "repo": repo,
         "repo_role": role_info,
         "target_branch": target_branch,
@@ -538,6 +546,9 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "done_controlled_by_merge_provenance": True,
         "checked_at": now,
     }
+    if not ok and task_id and review_head_sha:
+        result["review_remediation_save"] = record_review_save(
+            task_id, review_head_sha, result, actor=actor, project=project)
     append_activity(
         "merge.gate",
         actor,
