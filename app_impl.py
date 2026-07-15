@@ -200,15 +200,26 @@ app.include_router(_create_me_router(
     public_principal=auth.public_principal,
     principal_project_roles=store.principal_project_roles,
 ))
-app.include_router(_create_task_router(
-    resolve_project=_proj,
-    resolve_principal=_principal,
-))
-app.include_router(_create_claims_router(
-    resolve_project=_proj,
-    resolve_principal=_principal,
-    resolve_body_project=_body_project,
-))
+# ARCH-MS-92: when production sets PM_TASKS_HTTP_PRIMARY=service, Mode A CRUD +
+# claim TXP are owned by switchboard-tasks (:8122) via Caddy. Monolith keeps only
+# sibling BC subpaths (dispatch/chat/review_*). Hermetic TestClient leaves unset.
+_TASKS_HTTP_PRIMARY = (os.environ.get("PM_TASKS_HTTP_PRIMARY") or "").strip().lower()
+if _TASKS_HTTP_PRIMARY == "service":
+    app.include_router(_create_task_router(
+        resolve_project=_proj,
+        resolve_principal=_principal,
+        sibling_bc_only=True,
+    ))
+else:
+    app.include_router(_create_task_router(
+        resolve_project=_proj,
+        resolve_principal=_principal,
+    ))
+    app.include_router(_create_claims_router(
+        resolve_project=_proj,
+        resolve_principal=_principal,
+        resolve_body_project=_body_project,
+    ))
 app.include_router(_create_wakes_router(
     resolve_project=_proj,
     resolve_principal=_principal,

@@ -1,7 +1,8 @@
 # Caddy auto-provisions a Let's Encrypt cert for plan.taikunai.com once DNS
 # points at this VM, and reverse-proxies to the app. That's the whole TLS story.
 # /mcp* -> MCP (:8111); /api/auth* -> Auth process-cut (:8121, ARCH-MS-76);
-# everything else -> the web app (:8110). Rollback Auth: remove /api/auth* handles.
+# /api/tasks* + claim-only TXP -> Tasks process-cut (:8122, ARCH-MS-92);
+# everything else -> the web app (:8110). Rollback Tasks/Auth: see runbooks.
 
 # CONSOL-8 (ADR-0007): the edge did TLS/compression/caching/proxying but shipped no
 # security headers and no access log. These snippets add both in the file we already own —
@@ -76,6 +77,138 @@ plan.taikunai.com {
     # keep/fix Auth on :8121; see docs/runbooks/auth-caddy-cutover-rollback.md.
     handle /api/auth* {
         reverse_proxy 127.0.0.1:8121 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    # ARCH-MS-92: Tasks sibling BCs stay on monolith (Mode A surface → :8122).
+    # Must precede the broad /api/tasks* handle below.
+    handle /api/tasks/*/dispatch* {
+        reverse_proxy 127.0.0.1:8110 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    handle /api/tasks/*/chat* {
+        reverse_proxy 127.0.0.1:8110 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    handle /api/tasks/*/review_* {
+        reverse_proxy 127.0.0.1:8110 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    # ARCH-MS-92: Tasks Mode A process cut — /api/tasks* → switchboard-tasks (:8122).
+    # Production monolith sets PM_TASKS_HTTP_PRIMARY=service (sibling BC only).
+    # Recovery: see docs/runbooks/tasks-caddy-cutover-rollback.md.
+    handle /api/tasks* {
+        reverse_proxy 127.0.0.1:8122 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    # ARCH-MS-92: claim-only TXP → :8122 (never blanket /txp/*).
+    handle /txp/v1/claim_next {
+        reverse_proxy 127.0.0.1:8122 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    handle /txp/v1/claim_task {
+        reverse_proxy 127.0.0.1:8122 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    handle /txp/v1/complete_claim {
+        reverse_proxy 127.0.0.1:8122 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    handle /txp/v1/abandon_claim {
+        reverse_proxy 127.0.0.1:8122 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    handle /txp/v1/revoke_claim {
+        reverse_proxy 127.0.0.1:8122 {
             transport http {
                 dial_timeout 5s
                 response_header_timeout 90s

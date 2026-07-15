@@ -249,13 +249,13 @@ ok(b_unauth.status_code != 403 and c_unauth.status_code != 403,
 os.environ["PM_AUTH_MODE"] = "dev-open"
 
 # --- side-by-side deploy surface; no live traffic ----------------------------
-unit_example = ROOT / "deploy" / "tasks" / "switchboard-tasks.service.example"
+unit = ROOT / "deploy" / "tasks" / "switchboard-tasks.service.example"
 unit_live = ROOT / "deploy" / "switchboard-tasks.service"
-caddy = ROOT / "deploy" / "Caddyfile"
 frag = ROOT / "deploy" / "skeleton" / "Caddyfile.tasks-fragment.example"
+caddy = ROOT / "deploy" / "Caddyfile"
 
-ok(unit_example.is_file(), "side-by-side systemd example exists")
-unit_text = unit_example.read_text(encoding="utf-8")
+ok(unit.is_file(), "side-by-side systemd example exists")
+unit_text = unit.read_text(encoding="utf-8")
 ok("switchboard.services.tasks.app:create_app" in unit_text,
    "systemd example points at Tasks create_app")
 ok("8122" in unit_text, "systemd example uses :8122")
@@ -264,26 +264,31 @@ ok(any(
     for line in unit_text.splitlines()
 ), "active ExecStart for side-by-side factory")
 
-ok(not unit_live.is_file(), "no production deploy/switchboard-tasks.service yet")
-ok(frag.is_file(), "Caddy tasks fragment remains drill-only")
+ok(unit_live.is_file(), "production deploy/switchboard-tasks.service present (ARCH-MS-92)")
+ok(frag.is_file(), "Caddy tasks fragment remains as historical drill reference")
 
 caddy_text = caddy.read_text(encoding="utf-8") if caddy.is_file() else ""
-ok("8122" not in caddy_text,
-   "live Caddyfile does not route to :8122 (no live traffic)")
-ok("/api/tasks" not in caddy_text or "reverse_proxy 127.0.0.1:8122" not in caddy_text,
-   "live Caddy does not reverse_proxy /api/tasks* → :8122")
+live = "\n".join(
+    line for line in caddy_text.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+)
+ok("8122" in live and "/api/tasks" in live,
+   "live Caddy routes Mode A Tasks to :8122 (ARCH-MS-92)")
+ok("handle /api/tasks/*/dispatch*" in live,
+   "live Caddy carves dispatch siblings to monolith")
 
 app_impl_src = entrypoint_source("app")
-ok("PM_TASKS_HTTP_PRIMARY" not in app_impl_src,
-   "monolith does not dual-strip Tasks yet (ARCH-MS-92)")
+ok("PM_TASKS_HTTP_PRIMARY" in app_impl_src,
+   "monolith dual-strips Tasks via PM_TASKS_HTTP_PRIMARY (ARCH-MS-92)")
 
 from switchboard.services.tasks.settings import TasksServiceSettings  # noqa: E402
 ok(TasksServiceSettings.from_env().port == 8122, "default Tasks port remains 8122")
 
 waive = ROOT / "docs" / "phase3" / "tasks_cut_waived.md"
-ok(waive.is_file(), "Path B waive artifact still present")
+ok(waive.is_file(), "Path B waive artifact retained (superseded)")
 waive_text = waive.read_text(encoding="utf-8")
-ok("ARCH-MS-91" in waive_text, "waive still names ARCH-MS-91 for live-cut scope")
+ok("ARCH-MS-91" in waive_text or "superseded" in waive_text.lower(),
+   "waive artifact still references ARCH-MS-91 lineage")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{passed} passed, {failed} failed")

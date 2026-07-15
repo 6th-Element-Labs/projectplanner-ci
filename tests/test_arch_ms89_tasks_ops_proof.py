@@ -49,8 +49,8 @@ ok(verdict.get("schema") == "switchboard.tasks_independence_verdict.v1",
 ok(verdict.get("verdict") in {"go", "nogo"},
    f"verdict is go|nogo (got {verdict.get('verdict')!r})")
 ok(
-    verdict.get("task_id") in {"ARCH-MS-89", "ARCH-MS-93"},
-    f"verdict task_id is ARCH-MS-89 or Path B close ARCH-MS-93 (got {verdict.get('task_id')!r})",
+    verdict.get("task_id") in {"ARCH-MS-89", "ARCH-MS-92", "ARCH-MS-93"},
+    f"verdict task_id is ARCH-MS-89/92/93 (got {verdict.get('task_id')!r})",
 )
 if verdict.get("verdict") == "nogo":
     ok(bool(verdict.get("notes") or (verdict.get("evidence") or {}).get("rationale")
@@ -58,21 +58,30 @@ if verdict.get("verdict") == "nogo":
        "No-Go verdict includes rationale")
     ok((verdict.get("inputs") or {}).get("G6_operator_go") is False,
        "No-Go does not claim operator G6")
+elif (verdict.get("inputs") or {}).get("G6_operator_go") is True:
+    ok(verdict.get("process_cut_authorized") is True,
+       "Go+G6 authorizes process cut")
+    ok((verdict.get("inputs") or {}).get("G5_ops_proof") is True,
+       "Go verdict records G5_ops_proof=true")
 else:
     ok(verdict.get("operator_g6_required") is True,
-       "Go verdict still requires operator G6 before process cut")
+       "Conditional Go still requires operator G6 before process cut")
     ok((verdict.get("inputs") or {}).get("G5_ops_proof") is True,
        "Go verdict records G5_ops_proof=true")
     ok((verdict.get("inputs") or {}).get("G6_operator_go") is False,
-       "Go verdict does not claim operator G6 yet")
+       "Conditional Go does not claim operator G6 yet")
 
-# Exit gate must not authorize process cut without operator G6 / Path A artifacts
+# Exit gate authorization follows G6 / Path A artifacts on the live tree.
 from scripts import arch_ms_phase3_exit_gate as phase3_gate  # noqa: E402
 live_exit = phase3_gate.build_report(ROOT, phase2_passed=True)
 ok(live_exit.get("independence", {}).get("verdict") in {"go", "nogo"},
    "live exit gate sees independence verdict go|nogo")
-ok(live_exit.get("independence", {}).get("process_cut_authorized") is False,
-   "live tree does not authorize Tasks process cut")
+authorized = bool(live_exit.get("independence", {}).get("process_cut_authorized"))
+if authorized:
+    ok(live_exit.get("checks", {}).get("path_a_tasks_cut") is True,
+       "authorized Go has Path A Tasks cut green")
+else:
+    ok(authorized is False, "live tree does not authorize Tasks process cut")
 ok(live_exit.get("checks", {}).get("no_half_cut_network_facade") is True,
    "live tree has no half-cut façade")
 
@@ -108,12 +117,17 @@ else:
     ok(bool(gng.get("recommendation")), "ops proof emits Go/No-Go recommendation")
     ok(gng.get("verdict") in {"go", "nogo"}, "ops proof emits verdict go|nogo")
     ok(gng.get("operator_g6_required") is True, "ops proof still requires operator G6")
-    # ARCH-MS-93 may supersede Conditional Go with Path B No-Go for Phase 3 exit.
+    # Later Phase 3 tasks may supersede ARCH-MS-89 Conditional Go.
     if verdict.get("task_id") == "ARCH-MS-93" and verdict.get("verdict") == "nogo":
         ok(True, "ARCH-MS-93 Path B No-Go supersedes Conditional Go for Phase 3 exit")
         ok(bool((verdict.get("supersedes") or {}).get("decision") or
                 (verdict.get("evidence") or {}).get("prior_conditional_go")),
            "Path B No-Go records prior Conditional Go provenance")
+    elif verdict.get("task_id") == "ARCH-MS-92" and verdict.get("verdict") == "go":
+        ok((verdict.get("inputs") or {}).get("G6_operator_go") is True,
+           "ARCH-MS-92 Path A Go records operator G6")
+        ok(bool((verdict.get("supersedes") or {}).get("decision")),
+           "Path A Go records supersedes provenance")
     elif gng.get("verdict") == "go":
         ok(verdict.get("verdict") == "go",
            "committed verdict matches harness go")

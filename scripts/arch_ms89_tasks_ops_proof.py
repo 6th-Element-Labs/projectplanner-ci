@@ -412,11 +412,21 @@ def run_caddy_drill_artifacts() -> Dict[str, Any]:
     live_caddy = ROOT / "deploy" / "Caddyfile"
     unit_example = ROOT / "deploy" / "tasks" / "switchboard-tasks.service.example"
     live_text = live_caddy.read_text(encoding="utf-8") if live_caddy.is_file() else ""
-    # Live Tasks cut must NOT be present yet (yellow light until Go + ARCH-MS-92).
+    # Live Tasks cut is only OK after independence Go authorizes process cut
+    # (ARCH-MS-92 Path A). Before that, live handles are a premature half-cut.
     live_has_tasks_cut = (
         "handle /api/tasks" in live_text and "8122" in live_text
         and "127.0.0.1:8122" in live_text
     )
+    verdict_path = ROOT / "docs" / "phase3" / "tasks_independence_verdict.json"
+    process_cut_authorized = False
+    if verdict_path.is_file():
+        try:
+            from scripts import arch_ms_phase3_exit_gate as phase3_gate
+            info = phase3_gate._independence_verdict(ROOT)
+            process_cut_authorized = bool(info.get("process_cut_authorized"))
+        except Exception:
+            process_cut_authorized = False
     checklist = [
         "Do not apply live Caddy Tasks cut until independence G6 + ARCH-MS-90/91 parity",
         "Fragment example under deploy/skeleton/Caddyfile.tasks-fragment.example",
@@ -424,12 +434,13 @@ def run_caddy_drill_artifacts() -> Dict[str, Any]:
         "Rollback drill documented in docs/runbooks/tasks-caddy-cutover-rollback.md",
         "Carve monolith siblings …/dispatch …/chat …/review_* (Auth me* analogue)",
     ]
+    premature = live_has_tasks_cut and not process_cut_authorized
     ok = (
         tasks_fragment.is_file()
         and runbook.is_file()
         and unit_example.is_file()
         and live_caddy.is_file()
-        and not live_has_tasks_cut  # fail if someone prematurely cut live traffic
+        and not premature
     )
     return {
         "ok": ok,
@@ -437,8 +448,11 @@ def run_caddy_drill_artifacts() -> Dict[str, Any]:
         "runbook": str(runbook.relative_to(ROOT)),
         "unit_example": str(unit_example.relative_to(ROOT)),
         "live_caddy_has_tasks_cut": live_has_tasks_cut,
+        "process_cut_authorized": process_cut_authorized,
         "checklist": checklist,
         "verdict": (
+            "pass_live_caddy_authorized_path_a"
+            if ok and live_has_tasks_cut else
             "pass_drill_artifacts_without_premature_live_cut"
             if ok else
             "missing_artifacts_or_premature_live_cut"

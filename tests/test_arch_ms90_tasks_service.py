@@ -156,8 +156,13 @@ ok(claim_next.status_code != 404, f"claim_next mounted (status {claim_next.statu
 app_impl_src = entrypoint_source("app")
 ok("switchboard.services.tasks" not in app_impl_src,
    "app_impl does not reference switchboard.services.tasks process package")
-ok("PM_TASKS_HTTP_PRIMARY" not in app_impl_src,
-   "monolith does not yet dual-strip Tasks (ARCH-MS-92)")
+ok("PM_TASKS_HTTP_PRIMARY" in app_impl_src,
+   "monolith gates Tasks HTTP mount on PM_TASKS_HTTP_PRIMARY (ARCH-MS-92)")
+ok(
+    '!= "service"' in app_impl_src or "!= 'service'" in app_impl_src
+    or '== "service"' in app_impl_src or "== 'service'" in app_impl_src,
+    "production service primary strips Mode A dual-mount",
+)
 
 unit = ROOT / "deploy" / "tasks" / "switchboard-tasks.service.example"
 frag = ROOT / "deploy" / "skeleton" / "Caddyfile.tasks-fragment.example"

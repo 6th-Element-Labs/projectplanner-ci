@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ARCH-MS-93: Phase 3 exit Path B is green on the live tree."""
+"""ARCH-MS-93: Phase 3 exit Path A is green on the live tree (after ARCH-MS-92)."""
 from __future__ import annotations
 
 import json
@@ -20,42 +20,39 @@ def ok(condition, message):
 
 
 verdict = ROOT / "docs/phase3/tasks_independence_verdict.json"
-nogo = ROOT / "docs/phase3/tasks_nogo_rationale.md"
-waived = ROOT / "docs/phase3/tasks_cut_waived.md"
 playbook = ROOT / "docs/phase3/tasks_cut_playbook.md"
+waived = ROOT / "docs/phase3/tasks_cut_waived.md"
+nogo = ROOT / "docs/phase3/tasks_nogo_rationale.md"
 
 ok(verdict.is_file(), "docs/phase3/tasks_independence_verdict.json present")
-ok(nogo.is_file(), "docs/phase3/tasks_nogo_rationale.md present")
-ok(waived.is_file(), "docs/phase3/tasks_cut_waived.md present")
 ok(playbook.is_file(), "docs/phase3/tasks_cut_playbook.md present")
+ok(waived.is_file(), "docs/phase3/tasks_cut_waived.md present (superseded note)")
+ok(nogo.is_file(), "docs/phase3/tasks_nogo_rationale.md retained for audit")
 
 data = json.loads(verdict.read_text(encoding="utf-8"))
 raw = str(data.get("verdict") or data.get("decision") or "").strip().lower()
-ok(raw in {"nogo", "no-go", "no_go", "keep-in-process", "keep_in_process"},
-   f"independence verdict is nogo (got {raw!r})")
-ok(data.get("inputs", {}).get("G6_operator_go") is False,
-   "operator G6 remains false (no process-cut authorization)")
+ok(raw in {"go", "yes", "cut"}, f"independence verdict is go (got {raw!r})")
+ok(data.get("inputs", {}).get("G6_operator_go") is True, "operator G6 is true")
+ok(data.get("process_cut_authorized") is True, "process_cut_authorized true")
 
-nogo_text = nogo.read_text(encoding="utf-8")
-ok("No-Go" in nogo_text or "nogo" in nogo_text.lower(), "No-Go rationale records decision")
-ok("ARCH-MS-89" in nogo_text, "No-Go cites ARCH-MS-89 measured evidence")
+ok((ROOT / "src/switchboard/services/tasks/app.py").is_file(),
+   "Tasks service package present")
+ok((ROOT / "deploy/switchboard-tasks.service").is_file(),
+   "production Tasks systemd unit present")
 
-waive_text = waived.read_text(encoding="utf-8")
-ok("Waived" in waive_text or "waived" in waive_text.lower(),
-   "waive artifact records Waived decision")
-ok("ARCH-MS-90" in waive_text and "ARCH-MS-91" in waive_text and "ARCH-MS-92" in waive_text,
-   "waive covers ARCH-MS-90…92")
-
-# Package factory may exist as a side-by-side / drill artifact (ARCH-MS-90).
-# Path B forbids *live* cut signals only: production systemd unit + Caddy routes.
-ok(not (ROOT / "deploy/switchboard-tasks.service").is_file(),
-   "no production Tasks systemd unit")
-
+caddy = (ROOT / "deploy/Caddyfile").read_text(encoding="utf-8")
+live = "\n".join(
+    line for line in caddy.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+)
+ok("8122" in live and "/api/tasks" in live, "live Caddy routes Tasks Mode A")
+ok("PM_TASKS_HTTP_PRIMARY=service" in
+   (ROOT / "deploy/projectplanner.service").read_text(encoding="utf-8"),
+   "monolith dual-strip env live")
 
 tracker = (ROOT / "docs/ARCH-MS-EXECUTION.md").read_text(encoding="utf-8")
 ok("ARCH-MS-93" in tracker, "execution tracker mentions ARCH-MS-93")
-ok("ARCH-MS-90" in tracker and ("Waived" in tracker or "waived" in tracker.lower()),
-   "execution tracker lists ARCH-MS-90…92 waive under Path B")
+ok("ARCH-MS-92" in tracker, "execution tracker mentions ARCH-MS-92")
 
 proc = subprocess.run(
     [sys.executable, str(ROOT / "scripts/arch_ms_phase3_exit_gate.py")],
@@ -70,7 +67,7 @@ except json.JSONDecodeError:
 
 ok(report.get("schema") == "switchboard.arch_ms_phase3_exit.v1", "exit report schema")
 ok(bool(report.get("passed")), "live Phase 3 exit gate passed=true")
-ok(bool(report.get("checks", {}).get("path_b_documented_nogo")), "Path B No-Go satisfied")
+ok(bool(report.get("checks", {}).get("path_a_tasks_cut")), "Path A Tasks cut satisfied")
 ok(bool(report.get("checks", {}).get("phase2_exit_green")), "Phase 2 exit still green")
 ok(
     bool(report.get("checks", {}).get("no_half_cut_network_facade")),
@@ -78,7 +75,6 @@ ok(
 )
 ok(proc.returncode == 0, f"exit gate CLI returncode 0 (got {proc.returncode})")
 
-# Prior ARCH-MS-86 harness still fail-closed on empty fixtures (import smoke).
 gate86 = ROOT / "tests/test_arch_ms86_phase3_exit_gate.py"
 ok(gate86.is_file(), "ARCH-MS-86 fail-closed harness still present")
 
