@@ -8,6 +8,11 @@ PYTHON="${PYTHON:-python3}"
 STRICT="${SWITCHBOARD_CI_STRICT:-0}"
 REQUIRE_NODE="${SWITCHBOARD_CI_REQUIRE_NODE:-0}"
 
+# The live service enables remote push verification for real claim completions.
+# Repository tests use synthetic refs and opt into that policy only when testing
+# it explicitly, so do not let the service host's operational setting leak in.
+unset PM_VERIFY_COMPLETION_PUSH
+
 section() {
   printf '\n== %s ==\n' "$1"
 }

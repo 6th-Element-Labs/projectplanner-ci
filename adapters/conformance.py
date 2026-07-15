@@ -34,6 +34,8 @@ P0_PROTOCOL = {
     "compatible_versions": ["ixp.v1"],
 }
 
+_ISOLATED_OPERATIONAL_ENV = ("PM_VERIFY_COMPLETION_PUSH",)
+
 
 @dataclass
 class CheckResult:
@@ -90,15 +92,25 @@ class LocalStoreClient:
         self.principal: Dict[str, Any] = {}
         self.store = None
         self.auth = None
+        self._saved_operational_env: Dict[str, Optional[str]] = {}
 
     def __enter__(self) -> "LocalStoreClient":
-        self.start()
+        try:
+            self.start()
+        except BaseException:
+            self.close()
+            raise
         return self
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
 
     def start(self) -> None:
+        # These checks use synthetic branch/SHA evidence against throwaway local
+        # stores.  A service host may enable remote push verification for real
+        # completions, but that operational policy must not leak into this fixture.
+        for key in _ISOLATED_OPERATIONAL_ENV:
+            self._saved_operational_env[key] = os.environ.pop(key, None)
         os.environ["PM_DB_PATH"] = os.path.join(self.tmpdir, "maxwell.db")
         os.environ["PM_HELM_DB_PATH"] = os.path.join(self.tmpdir, "helm.db")
         os.environ["PM_SWITCHBOARD_DB_PATH"] = os.path.join(self.tmpdir, "switchboard.db")
@@ -129,6 +141,12 @@ class LocalStoreClient:
         self.actor = self.auth.actor(self.principal)
 
     def close(self) -> None:
+        for key, value in self._saved_operational_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self._saved_operational_env.clear()
         if not self.keep_tmp:
             shutil.rmtree(self.tmpdir, ignore_errors=True)
 
