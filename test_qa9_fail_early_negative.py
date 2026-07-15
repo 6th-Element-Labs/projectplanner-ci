@@ -105,7 +105,7 @@ try:
         json={"workstream_id": "QA", "title": missing_project_title},
         headers=bearer(TASK_TOKEN),
     )
-    ok(missing_project.status_code in {401, 403, 422},
+    ok(missing_project.status_code in {400, 401, 403, 422},
        "missing project on REST write does not silently route to a board")
     ok(not title_exists(P, missing_project_title) and
        not title_exists(store.DEFAULT_PROJECT, missing_project_title),

@@ -299,7 +299,7 @@ app.include_router(_create_external_effects_router(
     resolve_body_project=_body_project,
 ))
 app.include_router(_create_intake_inbox_router(resolve_project=_proj))
-app.include_router(_create_digest_notify_router())
+app.include_router(_create_digest_notify_router(resolve_project=_proj))
 app.include_router(_create_ops_export_router(
     resolve_project=_proj,
     resolve_principal=_principal,

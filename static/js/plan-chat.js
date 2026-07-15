@@ -1,12 +1,23 @@
-/* BUG-60: project-native, queued Ask Taikun chat and reconnect behavior. */
+/* BUG-60 / SEG-4: project-native, queued Ask Taikun chat and reconnect behavior. */
 (function (global) {
     'use strict';
+
+    function projectQS(extra) {
+        const proj = (global.SwitchboardApi && global.SwitchboardApi.requireProject)
+            ? global.SwitchboardApi.requireProject()
+            : (global.PM_PROJECT || '').trim();
+        if (!proj) throw new Error('project required');
+        const params = new URLSearchParams(extra || {});
+        params.set('project', proj);
+        return params.toString();
+    }
+
     const methods = {
     async initAsk() {
         if (this._askLoaded) return;
         this._askLoaded = true;
         try {
-            const data = await (await fetch('api/chat/history?session=plan')).json();
+            const data = await (await fetch('api/chat/history?' + projectQS({ session: 'plan' }))).json();
             if ((data.messages || []).length) {
                 const empty = document.getElementById('ask-empty');
                 if (empty) empty.remove();
@@ -15,7 +26,7 @@
             }
         } catch (e) { /* leave the empty hint */ }
         try {
-            const latest = await (await fetch('api/chat/runs/latest?session=plan')).json();
+            const latest = await (await fetch('api/chat/runs/latest?' + projectQS({ session: 'plan' }))).json();
             const run = latest.run;
             if (run && (run.status === 'pending' || run.status === 'running')) {
                 const log = document.getElementById('ask-log');
@@ -28,7 +39,7 @@
                        && !(this._askSeenRuns || new Set()).has(run.run_id)) {
                 // A run can finish between the history and latest-run reads. Refresh from
                 // durable chat, but never resurrect a run removed by Clear.
-                const refreshed = await (await fetch('api/chat/history?session=plan')).json();
+                const refreshed = await (await fetch('api/chat/history?' + projectQS({ session: 'plan' }))).json();
                 const messages = refreshed.messages || [];
                 if (messages.some((m) => m.payload && m.payload.run_id === run.run_id)) {
                     const empty = document.getElementById('ask-empty');
@@ -62,7 +73,7 @@
     },
 
     async clearAsk() {
-        try { await fetch('api/chat?session=plan', { method: 'DELETE' }); } catch (e) { /* noop */ }
+        try { await fetch('api/chat?' + projectQS({ session: 'plan' }), { method: 'DELETE' }); } catch (e) { /* noop */ }
         const log = document.getElementById('ask-log');
         if (log) log.innerHTML = '<div class="text-secondary small">Cleared. Ask about the whole plan below.</div>';
     },
@@ -91,7 +102,7 @@
         const log = document.getElementById('ask-log');
         try {
             for (let attempt = 0; attempt < 600; attempt++) {
-                const res = await fetch('api/chat/runs/' + encodeURIComponent(runId));
+                const res = await fetch('api/chat/runs/' + encodeURIComponent(runId) + '?' + projectQS({ session: 'plan' }));
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
                 if (data.status === 'completed') {
@@ -127,7 +138,7 @@
         log.insertAdjacentHTML('beforeend', this._thinking('ask-thinking', thinkingText));
         this._askScroll();
         try {
-            const res = await fetch('api/chat', {
+            const res = await fetch('api/chat?' + projectQS(), {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: msg, session: 'plan' }),
             });

@@ -63,7 +63,7 @@ def create_router(*, resolve_project: ProjectResolver,
                                actor=auth.actor(principal), project=project)
 
     @router.get("/ixp/v1/agents")
-    async def ixp_agents(project: str = Query(store.DEFAULT_PROJECT), lane: str = ""):
+    async def ixp_agents(project: str = Query(...), lane: str = ""):
         return {"agents": store.list_active_agents(lane=lane, project=resolve_project(project))}
 
     @router.post("/ixp/v1/heartbeat_host")
@@ -82,7 +82,7 @@ def create_router(*, resolve_project: ProjectResolver,
             actor=auth.actor(principal), project=project))
 
     @router.get("/ixp/v1/agent_hosts")
-    async def ixp_agent_hosts(project: str = Query(store.DEFAULT_PROJECT), runtime: str = "",
+    async def ixp_agent_hosts(project: str = Query(...), runtime: str = "",
                               lane: str = "", capability: str = "",
                               include_stale: bool = False):
         hosts = store.list_agent_hosts(runtime=runtime, lane=lane,
@@ -93,14 +93,14 @@ def create_router(*, resolve_project: ProjectResolver,
         return {"hosts": hosts}
 
     @router.get("/ixp/v1/control_plane_probe")
-    async def ixp_control_plane_probe(project: str = Query(store.DEFAULT_PROJECT), lane: str = "",
+    async def ixp_control_plane_probe(project: str = Query(...), lane: str = "",
                                       include_heavy: bool = False):
         from switchboard.application.queries.control_plane_probe import execute
         return execute(
             project=resolve_project(project), lane=lane, include_heavy=include_heavy)
 
     @router.get("/ixp/v1/host_status")
-    async def ixp_host_status(host_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    async def ixp_host_status(host_id: str, project: str = Query(...)):
         status = control_plane_http(store.host_status(host_id, project=resolve_project(project)))
         if status.get("error"):
             raise HTTPException(404, status["error"])

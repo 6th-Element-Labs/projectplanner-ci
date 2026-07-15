@@ -39,8 +39,10 @@ def create_router(*, resolve_project: ProjectResolver,
         payload = {
             "message_id": body.get("message_id") if "message_id" in body else body.get("id"),
             "response": body.get("response") or "",
-            "project": body.get("project") or "maxwell",
+            "project": body.get("project"),
         }
+        if not (payload.get("project") or "").strip():
+            raise HTTPException(400, "project required")
         cmd_body = {k: v for k, v in body.items() if k != "idem_key"}
         result, _replayed = run_with_idempotency(
             project=str(payload["project"]),
@@ -59,7 +61,7 @@ def create_router(*, resolve_project: ProjectResolver,
         """Operator → live agent nudge/redirect."""
         body = inject_idem_key(request, body)
         project = resolve_project(
-            request.query_params.get("project") or body.get("project") or "maxwell")
+            request.query_params.get("project") or body.get("project"))
         principal = resolve_principal(
             request, project, ("write:tasks",), dev_actor="web")
         body["from_agent"] = auth.actor(principal)
@@ -75,7 +77,7 @@ def create_router(*, resolve_project: ProjectResolver,
         """Operator acks/dismisses a required message on the recipient's behalf."""
         body = inject_idem_key(request, body)
         project = resolve_project(
-            request.query_params.get("project") or body.get("project") or "maxwell")
+            request.query_params.get("project") or body.get("project"))
         principal = resolve_principal(
             request, project, ("write:tasks",), dev_actor="web")
         body["project"] = project
@@ -109,7 +111,7 @@ def create_router(*, resolve_project: ProjectResolver,
             _ack_with_idempotency(body, actor=auth.actor(principal)))
 
     @router.get("/api/agent_messages/pending")
-    async def api_pending_acks(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+    async def api_pending_acks(request: Request, project: str = Query(...),
                                agent_id: str = ""):
         """The operator's ack inbox: required messages they are party to that are still
         unacked (defaults to the caller's own identity so it survives a reload)."""
@@ -121,7 +123,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.get("/api/agent_messages/{message_id}/status")
     async def api_message_status(request: Request, message_id: int,
-                                 project: str = Query(store.DEFAULT_PROJECT)):
+                                 project: str = Query(...)):
         """Poll one message to see whether the recipient has acked it (and delivery state)."""
         proj = resolve_project(project)
         resolve_principal(request, proj, ("read",), dev_actor="web")
@@ -131,7 +133,7 @@ def create_router(*, resolve_project: ProjectResolver,
         return msg
 
     @router.get("/ixp/v1/inbox")
-    async def ixp_inbox(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_inbox(project: str = Query(...),
                         to_agent: str = "", unacked: bool = True, signal: str = ""):
         msgs = store.list_unacked_messages(to_agent, project=resolve_project(project)) if unacked else []
         if signal:
@@ -139,14 +141,14 @@ def create_router(*, resolve_project: ProjectResolver,
         return {"messages": msgs}
 
     @router.get("/ixp/v1/message_status")
-    async def ixp_message_status(message_id: int, project: str = Query(store.DEFAULT_PROJECT)):
+    async def ixp_message_status(message_id: int, project: str = Query(...)):
         msg = store.get_message_status(message_id, project=resolve_project(project))
         if not msg:
             raise HTTPException(404, "message not found")
         return msg
 
     @router.get("/ixp/v1/pending_acks")
-    async def ixp_pending_acks(project: str = Query(store.DEFAULT_PROJECT), agent_id: str = ""):
+    async def ixp_pending_acks(project: str = Query(...), agent_id: str = ""):
         return {"pending_acks": store.list_pending_acks(
             agent_id=agent_id, project=resolve_project(project))}
 

@@ -29,10 +29,19 @@ ADMIN_SCOPES = [
 def resolve_project(project: str) -> str:
     """Validate a project id against the registry — fail closed (400) on anything
     unknown so a bad/stale id can never be silently routed to (or written into)
-    the wrong db."""
-    if not store.has_project(project):
-        raise HTTPException(400, f"unknown project: {project}")
-    return project
+    the wrong db. Empty/missing scope fails closed (SEG-4): never invent
+    DEFAULT_PROJECT on customer ingress."""
+    from switchboard.application.queries.project_scope import (
+        MissingProjectScope,
+        UnknownProjectScope,
+        require_explicit_project,
+    )
+    try:
+        return require_explicit_project(project, source="query").project_id
+    except MissingProjectScope as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except UnknownProjectScope as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def resolve_principal(request: Request, project: str, scopes=("write:ixp",),
@@ -50,7 +59,9 @@ def resolve_principal(request: Request, project: str, scopes=("write:ixp",),
 
 
 def resolve_body_project(body: dict) -> str:
-    return resolve_project((body or {}).get("project") or store.DEFAULT_PROJECT)
+    """Require an explicit body ``project`` — no Maxwell omission fallback (SEG-4)."""
+    from switchboard.api.project_scope import resolve_body_project_context
+    return resolve_body_project_context(body).project_id
 
 
 def control_plane_http(result: Any) -> Any:

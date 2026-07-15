@@ -48,7 +48,7 @@ def create_router(*, resolve_project: ProjectResolver,
         if auth.auth_mode() == auth.DEV_OPEN and not request.cookies.get(cookie_name, ""):
             projects = (store.list_registry_projects(include_archived=True)
                         if include_archived else store.projects())
-            return {"projects": projects, "default": store.DEFAULT_PROJECT,
+            return {"projects": projects, "default": "",
                     "include_archived": include_archived}
         user = current_user(request.cookies.get(cookie_name, ""))
         if user:
@@ -80,7 +80,7 @@ def create_router(*, resolve_project: ProjectResolver,
                 projects = [p for p in projects if p.get("id") == binding]
             return {
                 "projects": projects,
-                "default": store.DEFAULT_PROJECT if broad else "",
+                "default": "",
                 "include_archived": False,
             }
         records = store.list_registry_projects(include_archived=True)

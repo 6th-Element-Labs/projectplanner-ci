@@ -153,7 +153,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
 
     @router.get("/health/saturation")
-    async def health_saturation(project: str = Query(store.DEFAULT_PROJECT)):
+    async def health_saturation(project: str = Query(...)):
         """Cheap saturation/alerts probe for external monitors (PERF-7).
 
         Bounded below Caddy's /health* timeout so a locked store or slow PSI
@@ -223,7 +223,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
 
     @router.get("/api/saturation")
-    def api_saturation(project: str = Query(store.DEFAULT_PROJECT)):
+    def api_saturation(project: str = Query(...)):
         """Full saturation dashboard payload: PSI, lock-wait, inbox depth, SLOs, alerts."""
         return saturation_snapshot(project)
 
@@ -231,7 +231,7 @@ def create_router(*, resolve_project: ProjectResolver,
     # ---- NARRATE-13: narration queue health + authorized operator controls ----
 
     @router.get("/api/narration/health")
-    def api_narration_health(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    def api_narration_health(request: Request, project: str = Query(...)):
         """Bounded narration queue + receipt/cost snapshot with alert flags (read-only)."""
         resolve_principal(request, project, ("read",), dev_actor="web")
         return narration_ops.narration_health(resolve_project(project))
@@ -239,7 +239,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.post("/api/narration/narrate-now")
     async def api_narrate_now(request: Request, body: dict = Body(...),
-                              project: str = Query(store.DEFAULT_PROJECT)):
+                              project: str = Query(...)):
         """Force (re)generation of an entity's current narration revision — audited, deduped, and
         still subject to the generation budget (no silent bypass)."""
         principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
@@ -254,7 +254,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.post("/api/narration/reactivate")
     async def api_narration_reactivate(request: Request, body: dict = Body(...),
-                                       project: str = Query(store.DEFAULT_PROJECT)):
+                                       project: str = Query(...)):
         """Authorized retry / dead-letter recovery on a narration request (audited)."""
         principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
         result = narration_ops.reactivate_request(

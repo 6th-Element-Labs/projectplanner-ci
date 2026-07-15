@@ -68,13 +68,18 @@ def _write_required_scopes(path: str) -> tuple:
 
 
 def _request_project(request: Request, path: str) -> str:
+    """Resolve project for the auth gate — fail closed on omission (SEG-4).
+
+    Returns ``""`` when no explicit project is present so callers can reject
+    instead of inventing Maxwell via ``DEFAULT_PROJECT``.
+    """
     if path == "/api/projects":
         return "switchboard"
     if path.startswith("/api/projects/"):
         parts = path.split("/")
         if len(parts) > 3 and parts[3]:
             return parts[3]
-    return request.query_params.get("project") or store.DEFAULT_PROJECT
+    return (request.query_params.get("project") or "").strip()
 
 
 def _slow_request_log_ms() -> float:
@@ -122,6 +127,9 @@ def register_middleware(app, *, req_obs, saturation_snapshot: SaturationSnapshot
         # Agents / API tokens
         if auth.bearer_from_request(request):
             project = _request_project(request, path)
+            if not project:
+                return _attach_server_timing(
+                    JSONResponse({"detail": "project required"}, status_code=400), started_at)
             if not store.has_project(project):
                 return _attach_server_timing(
                     JSONResponse({"detail": f"unknown project: {project}"}, status_code=400), started_at)
@@ -142,6 +150,9 @@ def register_middleware(app, *, req_obs, saturation_snapshot: SaturationSnapshot
             request.state.principal = global_principal(user, list(admin_scopes))
             return _attach_server_timing(await call_next(request), started_at)
         project = _request_project(request, path)
+        if not project:
+            return _attach_server_timing(
+                JSONResponse({"detail": "project required"}, status_code=400), started_at)
         if not store.has_project(project):
             return _attach_server_timing(
                 JSONResponse({"detail": f"unknown project: {project}"}, status_code=400), started_at)
@@ -208,7 +219,7 @@ def register_middleware(app, *, req_obs, saturation_snapshot: SaturationSnapshot
         if request.method in {"GET", "HEAD", "OPTIONS"}:
             return await call_next(request)
         project = _request_project(request, path)
-        if not store.has_project(project):
+        if not project or not store.has_project(project):
             return await call_next(request)
         snap = await asyncio.to_thread(saturation_snapshot, project)
         shed = snap.get("load_shed") or {}

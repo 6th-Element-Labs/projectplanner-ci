@@ -28,7 +28,7 @@ def create_router(*, resolve_project: ProjectResolver,
     router = APIRouter()
 
     @router.get("/api/deliverables")
-    def list_deliverables(project: str = Query(store.DEFAULT_PROJECT), board_id: str = "",
+    def list_deliverables(project: str = Query(...), board_id: str = "",
                           view: str = ""):
         # def (not async): run the SQLite/deliverable work in the threadpool so a slow
         # deliverable read can't block the single worker's event loop (same as /api/board).
@@ -85,7 +85,7 @@ def create_router(*, resolve_project: ProjectResolver,
         return result
 
     @router.get("/api/deliverables/{deliverable_id}")
-    def get_deliverable(deliverable_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    def get_deliverable(deliverable_id: str, project: str = Query(...)):
         # def (not async): threadpool the deliverable read so it can't block the event loop.
         project = resolve_project(project)
         result = store.get_deliverable(deliverable_id, project=project)
@@ -192,7 +192,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.get("/api/deliverables/{deliverable_id}/closure_report")
     def get_deliverable_closure_report_route(deliverable_id: str, report_id: str = "",
-                                             project: str = Query(store.DEFAULT_PROJECT)):
+                                             project: str = Query(...)):
         project = resolve_project(project)
         result = store.get_deliverable_closure_report(
             deliverable_id, project=project, report_id=report_id)

@@ -1,4 +1,5 @@
 """Project registry domain rules."""
+from .context import ProjectContext
 from .lifecycle import (
     PROJECT_LIFECYCLE_STATUSES,
     PROJECT_LIFECYCLE_WRITE_BLOCK_SCHEMA,
@@ -12,6 +13,7 @@ from .lifecycle import (
 )
 
 __all__ = [
+    "ProjectContext",
     "PROJECT_LIFECYCLE_STATUSES",
     "PROJECT_LIFECYCLE_WRITE_BLOCK_SCHEMA",
     "ProjectLifecycleWriteBlocked",

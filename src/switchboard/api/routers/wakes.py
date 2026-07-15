@@ -75,7 +75,7 @@ def create_router(*, resolve_project: ProjectResolver,
                 body, actor=auth.actor(principal))))
 
     @router.get("/txp/v1/list_wake_intents")
-    async def txp_list_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
+    async def txp_list_wake_intents(project: str = Query(...),
                                     status: str = "", host_id: str = "",
                                     runtime: str = ""):
         wakes = store.list_wake_intents(status=status, host_id=host_id,
@@ -95,7 +95,7 @@ def create_router(*, resolve_project: ProjectResolver,
     # UI-8 Fleet control: wake-intent read/write over REST (hosts + runners already have
     # their routes above). Mirrors the request_wake / list_wake_intents / cancel_wake tools.
     @router.get("/ixp/v1/wake_intents")
-    async def ixp_wake_intents(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_wake_intents(project: str = Query(...),
                                status: str = "", host_id: str = "", runtime: str = ""):
         return {"wake_intents": store.list_wake_intents(
             status=status, host_id=host_id, runtime=runtime, project=resolve_project(project))}

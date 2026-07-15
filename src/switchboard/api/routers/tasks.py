@@ -121,12 +121,12 @@ def create_router(*, resolve_project: ProjectResolver,
     if not sibling_bc_only:
         @router.get("/api/tasks")
         async def list_tasks(workstream: str = None, status: str = None, assignee: str = None,
-                             project: str = Query(store.DEFAULT_PROJECT)):
+                             project: str = Query(...)):
             return {"tasks": store.list_tasks(workstream, status, assignee,
                                               project=resolve_project(project))}
 
         @router.get("/api/tasks/{task_id}")
-        async def get_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+        async def get_task(task_id: str, project: str = Query(...)):
             task = get_task_query.execute_for(task_id, project=resolve_project(project))
             if not task:
                 raise HTTPException(404, "task not found")
@@ -173,7 +173,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
         @router.get("/api/tasks/{task_id}/review_verdict")
         async def get_review_verdict(task_id: str, head_sha: str = "",
-                                     project: str = Query(store.DEFAULT_PROJECT)):
+                                     project: str = Query(...)):
             project = resolve_project(project)
             verdict = review_verdict_queries.get_for(
                 task_id, project=project, head_sha=head_sha)
@@ -186,7 +186,7 @@ def create_router(*, resolve_project: ProjectResolver,
                 task_id: str, head_sha: str = "", state: str = "",
                 finding_class: str = Query(default="", alias="class"), severity: str = "",
                 current_head_only: bool = False,
-                project: str = Query(store.DEFAULT_PROJECT)):
+                project: str = Query(...)):
             project = resolve_project(project)
             findings = review_verdict_queries.list_findings_for(
                 task_id, project=project, head_sha=head_sha, state=state,
@@ -238,7 +238,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
         @router.get("/api/tasks/{task_id}/review_remediations")
         async def list_review_remediations(task_id: str, status: str = "",
-                                           project: str = Query(store.DEFAULT_PROJECT)):
+                                           project: str = Query(...)):
             project = resolve_project(project)
             rows = review_remediation_queries.list_for(
                 project=project, task_id=task_id, status=status)
@@ -433,7 +433,7 @@ def create_router(*, resolve_project: ProjectResolver,
     if not thin_mode_a:
         @router.post("/api/tasks/{task_id}/dispatch")
         async def dispatch_task(task_id: str, body: dict = Body(default={})):
-            project = resolve_project((body or {}).get("project") or store.DEFAULT_PROJECT)
+            project = resolve_project((body or {}).get("project"))
             result = await asyncio.to_thread(
                 dispatch.dispatch, task_id, (body or {}).get("actor", "user"), project,
                 (body or {}).get("runtime") or "claude-code")
@@ -443,13 +443,13 @@ def create_router(*, resolve_project: ProjectResolver,
 
         @router.get("/api/tasks/{task_id}/dispatch/latest")
         async def task_dispatch_latest(task_id: str,
-                                       project: str = Query(store.DEFAULT_PROJECT)):
+                                       project: str = Query(...)):
             return await asyncio.to_thread(
                 dispatch.latest, task_id, resolve_project(project))
 
         @router.post("/api/tasks/{task_id}/chat")
         async def chat(task_id: str, body: dict = Body(...),
-                       project: str = Query(store.DEFAULT_PROJECT)):
+                       project: str = Query(...)):
             project = resolve_project(project)
             assistant = {"helm": "Helm", "switchboard": "Switchboard"}.get(project, "Maxwell")
             task = store.get_task(task_id, project=project)

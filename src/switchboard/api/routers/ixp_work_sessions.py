@@ -34,7 +34,7 @@ def create_router(*, resolve_project: ProjectResolver,
     router = APIRouter()
 
     @router.get("/ixp/v1/work_sessions")
-    async def ixp_work_sessions(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_work_sessions(project: str = Query(...),
                                 task_id: str = "", agent_id: str = "",
                                 status: str = "", repo_role: str = "",
                                 include_expired: bool = True):
@@ -81,7 +81,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.get("/ixp/v1/work_sessions/{work_session_id}")
     async def ixp_get_work_session(work_session_id: str,
-                                   project: str = Query(store.DEFAULT_PROJECT)):
+                                   project: str = Query(...)):
         session = store.get_work_session(
             work_session_id, project=resolve_project(project))
         if not session:
@@ -91,7 +91,7 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.get("/ixp/v1/work_sessions/{work_session_id}/health")
     async def ixp_get_work_session_health(
             work_session_id: str,
-            project: str = Query(store.DEFAULT_PROJECT)):
+            project: str = Query(...)):
         health = store.get_work_session_health(
             work_session_id, project=resolve_project(project))
         if not health:
@@ -99,7 +99,7 @@ def create_router(*, resolve_project: ProjectResolver,
         return health
 
     @router.get("/ixp/v1/session_health")
-    async def ixp_session_health(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_session_health(project: str = Query(...),
                                  task_id: str = "", agent_id: str = "",
                                  status: str = "", only_unsafe: bool = False):
         return store.list_session_health(

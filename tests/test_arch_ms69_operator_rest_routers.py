@@ -137,11 +137,11 @@ try:
     ok(inbox.status_code == 200 and "items" in inbox.json(),
        "extracted /api/inbox returns inbox items")
 
-    digests = client.get("/api/digests")
+    digests = client.get("/api/digests", params={"project": "maxwell"})
     ok(digests.status_code == 200 and "digests" in digests.json(),
        "extracted /api/digests lists digests")
 
-    notify = client.get("/api/notify/status")
+    notify = client.get("/api/notify/status", params={"project": "maxwell"})
     ok(notify.status_code == 200,
        "extracted /api/notify/status returns channel status")
 finally:

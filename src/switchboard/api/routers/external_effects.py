@@ -28,7 +28,7 @@ def create_router(*, resolve_project: ProjectResolver,
     router = APIRouter()
 
     @router.get("/ixp/v1/external_effects")
-    async def ixp_external_effects(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_external_effects(project: str = Query(...),
                                    effect_type: str = "", status: str = "",
                                    task_id: str = "", target: str = ""):
         return {"effects": effect_command.list_mapping_result(
@@ -36,7 +36,7 @@ def create_router(*, resolve_project: ProjectResolver,
             target=target, project=resolve_project(project))}
 
     @router.get("/ixp/v1/external_ci_runs")
-    async def ixp_external_ci_runs(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_external_ci_runs(project: str = Query(...),
                                    task_id: str = "", source_project: str = "",
                                    source_sha: str = "", status: str = ""):
         return {"runs": store.list_external_ci_runs(
@@ -45,14 +45,14 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.get("/ixp/v1/external_ci_runs/{run_id}")
     async def ixp_external_ci_run(run_id: str,
-                                  project: str = Query(store.DEFAULT_PROJECT)):
+                                  project: str = Query(...)):
         run = store.get_external_ci_run(run_id, project=resolve_project(project))
         if not run:
             raise HTTPException(404, "external_ci_run not found")
         return run
 
     @router.get("/ixp/v1/publication_evidence")
-    async def ixp_publication_evidence(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_publication_evidence(project: str = Query(...),
                                        task_id: str = "", source_project: str = "",
                                        source_sha: str = "", public_repo: str = ""):
         return {"publication_evidence": store.list_publication_evidence(

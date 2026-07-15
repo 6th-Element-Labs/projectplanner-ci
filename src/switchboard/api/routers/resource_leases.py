@@ -59,7 +59,7 @@ def create_router(*, resolve_project: ProjectResolver,
                                             actor=auth.actor(principal), project=project)
 
     @router.get("/ixp/v1/leases")
-    async def ixp_leases(project: str = Query(store.DEFAULT_PROJECT)):
+    async def ixp_leases(project: str = Query(...)):
         return {"leases": store.list_active_resource_leases(project=resolve_project(project))}
 
     return router

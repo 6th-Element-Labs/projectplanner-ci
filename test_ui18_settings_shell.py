@@ -154,7 +154,7 @@ try:
         ("members", f"/api/projects/{proj}"),
         ("comms", f"/api/projects/{proj}/comms"),
         ("github", f"/api/projects/{proj}/repo_topology"),
-        ("tokens", "/api/access/tokens"),
+        ("tokens", "/api/access/tokens?project=maxwell"),
         ("fleet", f"/ixp/v1/agent_hosts?project={proj}&include_stale=1"),
         ("capacity", f"/ixp/v1/saturation_signals?project={proj}"),
         ("narration", f"/api/narration/health?project={proj}"),
@@ -198,7 +198,7 @@ try:
        "narration health exposes queue + receipts + freshness + alerts")
     hosts = client.get(f"/ixp/v1/agent_hosts?project={proj}&include_stale=1").json()
     ok("hosts" in hosts and isinstance(hosts["hosts"], list), "agent_hosts exposes a hosts list")
-    toks = client.get("/api/access/tokens").json()
+    toks = client.get("/api/access/tokens", params={"project": "maxwell"}).json()
     ok("tokens" in toks and isinstance(toks["tokens"], list), "access tokens exposes a tokens list")
 
     # ---- the legacy surfaces still work; UI-20 retires their entry points -------

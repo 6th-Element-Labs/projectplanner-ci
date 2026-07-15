@@ -157,17 +157,33 @@ def create_me_router(*, resolve_project: ProjectResolver,
     me_router = APIRouter()
 
     @me_router.get("/api/auth/me")
-    async def auth_me(request: Request, project: str = Query(default_project)):
-        """UI compatibility: map the global session to per-project effective scopes."""
+    async def auth_me(request: Request, project: str | None = Query(None)):
+        """UI compatibility: map the global session to per-project effective scopes.
+
+        ``project`` is optional for identity-only reads (login shell / cutover).
+        When omitted, never invent ``default_project``/Maxwell (SEG-4) — return
+        the principal without project-bound scopes. When present, validate it.
+        """
+        _ = default_project  # retained for composition-root signature stability
         user = service.current_user(request.cookies.get(session.COOKIE_NAME, ""))
         if user:
-            proj = resolve_project(project)
+            raw = (project or "").strip()
+            if not raw:
+                principal = global_principal(user, [])
+                return {"principal": principal, "mode": auth_mode(), "project": None}
+            proj = resolve_project(raw)
             scopes = global_user_scopes(user, proj)
             principal = global_principal(user, scopes)
             principal["project_roles"] = principal_project_roles(proj, user["id"])
             return {"principal": principal, "mode": auth_mode(), "project": proj}
-        principal = resolve_principal(request, project, ("read",), dev_actor="web")
+        raw = (project or "").strip()
+        if not raw:
+            # Thin /api/auth/me stays mounted during Auth cutover (ARCH-MS-77).
+            # Without a session and without an explicit project, return identity-only
+            # metadata — never invent Maxwell (SEG-4).
+            return {"principal": None, "mode": auth_mode(), "project": None}
+        principal = resolve_principal(request, raw, ("read",), dev_actor="web")
         return {"principal": public_principal(principal),
-                "mode": auth_mode(), "project": resolve_project(project)}
+                "mode": auth_mode(), "project": resolve_project(raw)}
 
     return me_router

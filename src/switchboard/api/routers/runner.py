@@ -43,7 +43,7 @@ def create_router(*, resolve_project: ProjectResolver,
     router = APIRouter()
 
     @router.get("/ixp/v1/runner_sessions")
-    async def ixp_runner_sessions(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_runner_sessions(project: str = Query(...),
                                   host_id: str = "", runtime: str = "",
                                   task_id: str = "", status: str = "",
                                   include_stale: bool = False,
@@ -60,7 +60,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.get("/ixp/v1/runner_sessions/watch")
     async def ixp_runner_sessions_watch(task_id: str = Query(...),
-                                        project: str = Query(store.DEFAULT_PROJECT),
+                                        project: str = Query(...),
                                         include_stale: bool = False):
         """Open gate for operator Watch/Chat (COORD-34). Fail closed on incomplete bind."""
         return runner_control_command.resolve_watch(
@@ -154,7 +154,7 @@ def create_router(*, resolve_project: ProjectResolver,
         return _request_control(request, payload, "inject", options=options)
 
     @router.get("/ixp/v1/runner_controls")
-    async def ixp_runner_controls(project: str = Query(store.DEFAULT_PROJECT),
+    async def ixp_runner_controls(project: str = Query(...),
                                   status: str = "", host_id: str = "",
                                   runner_session_id: str = ""):
         return {"requests": runner_control_command.list_control_requests(

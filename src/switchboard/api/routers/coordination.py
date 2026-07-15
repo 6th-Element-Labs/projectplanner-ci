@@ -18,7 +18,7 @@ def create_router(*, resolve_project: ProjectResolver,
     router = APIRouter()
 
     @router.get("/api/coordination")
-    async def api_coordination(project: str = Query(store.DEFAULT_PROJECT), limit: int = 500):
+    async def api_coordination(project: str = Query(...), limit: int = 500):
         """Read-only rollup for the Agent Coordination page: presence, the full directed
         message bus, and the decision log — one project's live coordination record."""
         proj = resolve_project(project)
@@ -33,7 +33,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.get("/api/coordinator_decisions")
     async def api_coordinator_decisions(
-        project: str = Query(store.DEFAULT_PROJECT),
+        project: str = Query(...),
         task_id: str = "",
         deliverable_id: str = "",
         decision_kind: str = "",
@@ -54,7 +54,7 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.get("/api/coordinator_dispatch/plan")
     async def api_coordinator_dispatch_plan(
         request: Request,
-        project: str = Query(store.DEFAULT_PROJECT),
+        project: str = Query(...),
         max_dispatches: int = 3,
         max_nudges: int = 3,
     ):
@@ -75,8 +75,7 @@ def create_router(*, resolve_project: ProjectResolver,
     async def api_coordinator_dispatch(request: Request, body: dict = Body(default={})):
         """COORD-4 T1 dispatch tick. Defaults to dry_run=true; set dry_run=false to act."""
         import coordinator_dispatch as coord_dispatch
-        proj = resolve_project(body.get("project") or request.query_params.get("project")
-                               or store.DEFAULT_PROJECT)
+        proj = resolve_project(body.get("project") or request.query_params.get("project"))
         principal = resolve_principal(request, proj, ("write:ixp",), dev_actor="web")
         policy = dict(body.get("policy") or {})
         if "dry_run" in body:

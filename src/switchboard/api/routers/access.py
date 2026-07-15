@@ -43,14 +43,14 @@ def create_router(*, resolve_project: ProjectResolver,
                 "email": subject_id if "@" in subject_id else None, "revoked": None}
 
     @router.get("/api/access/model")
-    async def access_model(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    async def access_model(request: Request, project: str = Query(...)):
         principal = resolve_principal(request, project, ("read",), dev_actor="web")
         return store.project_access_model(resolve_project(project), principal_id=principal["id"])
 
 
     @router.post("/api/access/project_role")
     async def access_grant_project_role(request: Request, body: dict = Body(...),
-                                        project: str = Query(store.DEFAULT_PROJECT)):
+                                        project: str = Query(...)):
         principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
         result = store.grant_project_role(
             resolve_project(project),
@@ -74,7 +74,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
 
     @router.get("/api/access/members")
-    async def access_members(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    async def access_members(request: Request, project: str = Query(...)):
         """Members table + private-visibility facts for the UI-5 Members screen (admin-gated).
         Decorates each role grant with a human-readable identity and the audit (granted-by/at)."""
         resolve_principal(request, project, ("write:system",), dev_actor="web")
@@ -100,7 +100,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.post("/api/access/project_role/revoke")
     async def access_revoke_project_role(request: Request, body: dict = Body(...),
-                                         project: str = Query(store.DEFAULT_PROJECT)):
+                                         project: str = Query(...)):
         principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
         result = store.revoke_project_role(
             resolve_project(project),
@@ -118,7 +118,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.post("/api/access/invite")
     async def access_invite(request: Request, body: dict = Body(...),
-                            project: str = Query(store.DEFAULT_PROJECT)):
+                            project: str = Query(...)):
         """Invite a human into this project by email + role. Under global auth this grants the
         role to their existing account (they see the project on next load); pending-invite email
         for not-yet-registered users is ACCESS-5's scope, so we return a clear next step instead."""
@@ -147,7 +147,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
 
     @router.get("/api/access/tokens")
-    async def access_tokens(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+    async def access_tokens(request: Request, project: str = Query(...),
                             include_revoked: bool = False, kind: str = ""):
         resolve_principal(request, project, ("write:system",), dev_actor="web")
         return {
@@ -161,7 +161,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.post("/api/access/tokens")
     async def access_create_token(request: Request, body: dict = Body(...),
-                                  project: str = Query(store.DEFAULT_PROJECT)):
+                                  project: str = Query(...)):
         principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
         target_project = resolve_project(project)
         resolved = store.resolve_principal_scopes(
@@ -196,7 +196,7 @@ def create_router(*, resolve_project: ProjectResolver,
 
     @router.post("/api/access/tokens/{principal_id}/revoke")
     async def access_revoke_token(principal_id: str, request: Request,
-                                  project: str = Query(store.DEFAULT_PROJECT)):
+                                  project: str = Query(...)):
         principal = resolve_principal(request, project, ("write:system",), dev_actor="web")
         result = store.revoke_principal_token(
             principal_id, project=resolve_project(project), actor=auth.actor(principal))

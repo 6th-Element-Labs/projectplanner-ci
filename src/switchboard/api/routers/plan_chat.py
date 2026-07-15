@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 import store
+from switchboard.api.project_scope import (
+    bind_ask_taikun_context,
+    create_ask_taikun_context,
+)
 from switchboard.storage.repositories import plan_chat as plan_chat_repo
 
 
@@ -35,14 +39,17 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
 
     @router.post("/api/chat")
     async def plan_chat(
-        body: dict = Body(...), project: str = Query(store.DEFAULT_PROJECT)
+        request: Request,
+        body: dict = Body(...),
+        project: str = Query(...),
     ):
         """Queue a project-native plan run and return immediately."""
-        selected = resolve_project(project)
         message = (body.get("message") or "").strip()
         if not message:
             raise HTTPException(400, "message required")
         session = body.get("session") or "plan"
+        ctx = create_ask_taikun_context(request, project=project, session=session)
+        selected = resolve_project(ctx.project_id)
         history = [
             {"role": item["role"], "content": item["content"]}
             for item in plan_chat_repo.recent_chat(session, 16, project=selected)
@@ -73,36 +80,49 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
                 "run_id": run_id,
                 "project": selected,
                 "status": "pending",
-                "poll_url": f"api/chat/runs/{run_id}",
+                "poll_url": f"api/chat/runs/{run_id}?project={selected}",
             },
         )
 
     @router.get("/api/chat/history")
     async def plan_chat_history(
-        session: str = "plan", project: str = Query(store.DEFAULT_PROJECT)
+        request: Request,
+        session: str = "plan",
+        project: str = Query(...),
     ):
+        ctx = bind_ask_taikun_context(request, project=project, session=session)
+        selected = resolve_project(ctx.project_id)
         return {
-            "messages": plan_chat_repo.recent_chat(
-                session, 100, project=resolve_project(project)
-            )
+            "messages": plan_chat_repo.recent_chat(session, 100, project=selected),
+            "project": selected,
+            "session": session,
         }
 
     @router.delete("/api/chat")
     async def clear_plan_chat(
-        session: str = "plan", project: str = Query(store.DEFAULT_PROJECT)
+        request: Request,
+        session: str = "plan",
+        project: str = Query(...),
     ):
-        plan_chat_repo.clear_chat(session, project=resolve_project(project))
-        return {"cleared": session}
+        ctx = bind_ask_taikun_context(request, project=project, session=session)
+        selected = resolve_project(ctx.project_id)
+        plan_chat_repo.clear_chat(session, project=selected)
+        return {"cleared": session, "project": selected}
 
     @router.get("/api/chat/runs/latest")
-    async def latest_plan_chat_run(project: str = Query(store.DEFAULT_PROJECT)):
-        selected = resolve_project(project)
+    async def latest_plan_chat_run(
+        request: Request,
+        session: str = "plan",
+        project: str = Query(...),
+    ):
+        ctx = bind_ask_taikun_context(request, project=project, session=session)
+        selected = resolve_project(ctx.project_id)
         listed = store.list_background_job_runs(
             project=selected, job_name="plan_agent_run", limit=1
         )
         rows = listed.get("runs") or []
         if not rows:
-            return {"run": None}
+            return {"run": None, "project": selected}
         manifest = store.get_background_job_run(
             project=selected, run_id=rows[0]["run_id"]
         )
@@ -110,13 +130,17 @@ def create_router(*, resolve_project: ProjectResolver) -> APIRouter:
             store.ensure_background_job_running(
                 project=selected, run_id=rows[0]["run_id"], actor="api/ask_plan/resume"
             )
-        return {"run": _public_run(manifest)}
+        return {"run": _public_run(manifest), "project": selected}
 
     @router.get("/api/chat/runs/{run_id}")
     async def get_plan_chat_run(
-        run_id: str, project: str = Query(store.DEFAULT_PROJECT)
+        request: Request,
+        run_id: str,
+        session: str = "plan",
+        project: str = Query(...),
     ):
-        selected = resolve_project(project)
+        ctx = bind_ask_taikun_context(request, project=project, session=session)
+        selected = resolve_project(ctx.project_id)
         manifest = store.get_background_job_run(project=selected, run_id=run_id)
         if manifest.get("error") == "run_not_found":
             raise HTTPException(404, manifest["error"])

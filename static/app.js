@@ -148,8 +148,11 @@ const TeepPlan = {
 
     // ---- multi-project: populate the switcher, drive the header -----------
     async applyProject() {
-        let cur = window.PM_PROJECT || 'maxwell';
-        let list = [{ id: 'maxwell', label: 'Project Maxwell', pretitle: '' }];
+        // SEG-4: never invent Maxwell in the fetch wrapper. Prefer URL/localStorage,
+        // else the first accessible project from /api/projects. Always write the
+        // chosen id back to window.PM_PROJECT before gated api/* calls fire.
+        let cur = (window.PM_PROJECT || '').trim();
+        let list = [];
         try {
             const boot = window.TAIKUN_PICKER_BOOT;
             const prefetched = boot && boot.projectId === cur ? await boot.projects : null;
@@ -167,14 +170,19 @@ const TeepPlan = {
             catch (e) { return ''; }
         })();
         this._noProjects = list.length === 0;
-        if (list.length && !list.some((p) => p.id === cur)) {
+        if (!cur && list.length) {
+            cur = list[0].id;
+        }
+        if (list.length && cur && !list.some((p) => p.id === cur)) {
             if (urlProject && urlProject === cur) {
                 // Keep the URL project even if the picker list is empty/stale.
             } else {
                 cur = list[0].id;
-                window.PM_PROJECT = cur;
-                try { localStorage.setItem('pm_project', cur); } catch (e) {}
             }
+        }
+        if (cur) {
+            window.PM_PROJECT = cur;
+            try { localStorage.setItem('pm_project', cur); } catch (e) {}
         }
         const sel = document.getElementById('project-switcher');
         if (sel) {
@@ -183,7 +191,8 @@ const TeepPlan = {
             if (!sel._wired) {
                 sel._wired = true;
                 sel.addEventListener('change', () => {
-                    const id = sel.value || 'maxwell';
+                    const id = (sel.value || window.PM_PROJECT || '').trim();
+                    if (!id) return;
                     try { localStorage.setItem('pm_project', id); } catch (e) {}
                     const u = new URL(window.location.href);
                     u.searchParams.set('project', id);

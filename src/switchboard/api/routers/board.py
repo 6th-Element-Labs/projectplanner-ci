@@ -29,7 +29,7 @@ def create_router(*, resolve_project: ProjectResolver,
     router = APIRouter()
 
     @router.get("/api/board")
-    def board(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+    def board(request: Request, project: str = Query(...),
               view: str = Query("")):
         # Sync (def, not async) on purpose: FastAPI runs it in the threadpool, so the
         # board's SQLite I/O doesn't block the single worker's event loop — other
@@ -44,17 +44,17 @@ def create_router(*, resolve_project: ProjectResolver,
         return etag_json(request, payload, max_age=5)
 
     @router.get("/api/people")
-    async def people(project: str = Query(store.DEFAULT_PROJECT)):
+    async def people(project: str = Query(...)):
         return {"people": store.get_meta(
             "people", store.DEFAULT_PEOPLE, project=resolve_project(project))}
 
     @router.get("/api/dispatch/status")
-    async def dispatch_status(project: str = Query(store.DEFAULT_PROJECT)):
+    async def dispatch_status(project: str = Query(...)):
         """Is dispatch wired, and is a work-capable agent host online for this project?"""
         return await asyncio.to_thread(dispatch.status, resolve_project(project))
 
     @router.get("/api/signals")
-    def plan_signals(project: str = Query(store.DEFAULT_PROJECT)):
+    def plan_signals(project: str = Query(...)):
         """Derived plan health: overdue / due-soon / blocked / ready / critical-slip /
         past-due decisions + each owner's next-best 1-2 tasks.
 
@@ -65,7 +65,7 @@ def create_router(*, resolve_project: ProjectResolver,
         return signals.compute_plan_signals(project=resolve_project(project))
 
     @router.get("/ixp/v1/saturation_signals")
-    def ixp_saturation_signals(project: str = Query(store.DEFAULT_PROJECT)):
+    def ixp_saturation_signals(project: str = Query(...)):
         """REST parity for PERF-7 saturation dashboard (PSI + lock-wait + inbox + SLOs)."""
         return saturation_snapshot(project)
 

@@ -135,34 +135,34 @@ def create_router(*, resolve_project: ProjectResolver,
 
 
     @router.get("/tally/v1/kpis")
-    async def tally_list_kpis(project: str = Query(store.DEFAULT_PROJECT)):
+    async def tally_list_kpis(project: str = Query(...)):
         return {"kpis": store.list_kpis(project=resolve_project(project))}
 
 
     @router.get("/tally/v1/outcomes")
-    async def tally_list_outcomes(project: str = Query(store.DEFAULT_PROJECT),
+    async def tally_list_outcomes(project: str = Query(...),
                                   status: str = Query(""), limit: int = Query(200)):
         return {"outcomes": store.list_outcomes(project=resolve_project(project),
                                                 status=status, limit=limit)}
 
 
     @router.get("/tally/v1/task/{task_id}")
-    async def tally_task(task_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    async def tally_task(task_id: str, project: str = Query(...)):
         return store.task_tally(task_id, project=resolve_project(project))
 
 
     @router.get("/tally/v1/kpi/{kpi_id}")
-    async def tally_kpi(kpi_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    async def tally_kpi(kpi_id: str, project: str = Query(...)):
         return store.kpi_tally(kpi_id, project=resolve_project(project))
 
 
     @router.get("/tally/v1/project")
-    async def tally_project(project: str = Query(store.DEFAULT_PROJECT)):
+    async def tally_project(project: str = Query(...)):
         return store.project_tally(project=resolve_project(project))
 
 
     @router.get("/tally/v1/deliverable/{deliverable_id}")
-    async def tally_deliverable(deliverable_id: str, project: str = Query(store.DEFAULT_PROJECT)):
+    async def tally_deliverable(deliverable_id: str, project: str = Query(...)):
         result = store.deliverable_tally(deliverable_id, project=resolve_project(project))
         if result.get("error"):
             raise HTTPException(404, result["error"])

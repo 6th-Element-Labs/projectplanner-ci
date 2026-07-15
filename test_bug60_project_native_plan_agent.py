@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import time
+import types
 
 _TMP = tempfile.mkdtemp(prefix="bug60-plan-agent-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -228,8 +229,10 @@ try:
         for route in router.routes
         if route.path == "/api/chat" and "POST" in route.methods
     )
+    request = types.SimpleNamespace(state=types.SimpleNamespace(principal=None))
     response = asyncio.run(
         post(
+            request,
             body={"message": "make the Maxwell-style project plan", "session": "plan"},
             project=PROJECT,
         )

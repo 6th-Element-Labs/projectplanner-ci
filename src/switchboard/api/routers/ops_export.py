@@ -33,8 +33,10 @@ def _people_of(t, people):
 
 
 def _filtered_payload(workstream=None, owner=None, risk=None, blocking=0, q=None, person=None,
-                      project="maxwell", *, _resolve_project: ProjectResolver):
+                      project="", *, _resolve_project: ProjectResolver):
     """Same filter semantics as the board UI, so 'export = what you see'."""
+    if not (project or "").strip():
+        raise HTTPException(400, "project required")
     p = store.board_payload(_resolve_project(project))
     ql = (q or "").lower()
     people = store.get_meta("people", store.DEFAULT_PEOPLE, project=project) if person else []
@@ -67,20 +69,20 @@ def create_router(*, resolve_project: ProjectResolver,
     router = APIRouter()
 
     @router.get("/api/export.xlsx")
-    async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None, project: str = Query(store.DEFAULT_PROJECT)):
+    async def export_xlsx(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None, project: str = Query(...)):
         data = export.export_xlsx(_filtered_payload(workstream, owner, risk, blocking, q, person, resolve_project(project), _resolve_project=resolve_project))
         return Response(content=data,
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": 'attachment; filename="project-plan.xlsx"'})
 
     @router.get("/api/export.xml")
-    async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None, project: str = Query(store.DEFAULT_PROJECT)):
+    async def export_xml(workstream: str = None, owner: str = None, risk: str = None, blocking: int = 0, q: str = None, person: str = None, project: str = Query(...)):
         xml = export.export_mspdi(_filtered_payload(workstream, owner, risk, blocking, q, person, resolve_project(project), _resolve_project=resolve_project))
         return Response(content=xml, media_type="text/xml",
                         headers={"Content-Disposition": 'attachment; filename="project-plan.xml"'})
 
     @router.get("/api/audit/export")
-    async def audit_export(request: Request, project: str = Query(store.DEFAULT_PROJECT)):
+    async def audit_export(request: Request, project: str = Query(...)):
         from switchboard.application.queries.audit_export import execute
         project = resolve_project(project)
         resolve_principal(request, project, ("write:system",), dev_actor="auditor")
@@ -91,7 +93,7 @@ def create_router(*, resolve_project: ProjectResolver,
         )
 
     @router.get("/api/cleanup/candidates")
-    async def cleanup_candidates(request: Request, project: str = Query(store.DEFAULT_PROJECT),
+    async def cleanup_candidates(request: Request, project: str = Query(...),
                                  kinds: str = "", proof_task_age_days: float = 14):
         project = resolve_project(project)
         resolve_principal(request, project, ("write:system",), dev_actor="switchboard/operator")
