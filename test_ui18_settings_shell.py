@@ -57,10 +57,14 @@ try:
 
     # ---- the Settings entry is open to every signed-in user --------------------
     print("\n[2] Role visibility")
-    ok('id="nav-settings"' in html and 'id="nav-settings" style="display:none"' not in html,
-       "the Settings nav entry is not hidden at the tab level")
+    # UI-23 moved the visible entry to the top-right user menu; the #main-nav entry
+    # remains as the (hidden) tab controller. Either way the point stands: the entry is
+    # never gated on the caller's scopes.
+    ok('id="menu-settings"' in html, "a Settings entry exists for every signed-in user")
     ok("nav.style.display = this.canWriteProjects" not in js,
        "loadPrincipal no longer hides the whole Settings tab from non-editors")
+    ok('style="display:none"' not in html.split('id="user-menu"')[1][:400],
+       "the Settings entry does not wait on a session probe to become visible")
     # personal sections carry no scope; project/system sections do
     for section, scope in (("'profile'", "null"), ("'ai-accounts'", "null"), ("'appearance'", "null")):
         ok(re.search(rf"id: {section}.*scope: {scope}", settings_js),

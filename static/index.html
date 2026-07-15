@@ -159,6 +159,28 @@
                                 <li><h6 class="dropdown-header text-secondary fw-normal" id="plan-generated"></h6></li>
                             </ul>
                         </div>
+                        <!-- UI-23: top-right user menu — the demo.taikunai.com / ActionEngine
+                             navbar.js:752-816 component, and now the canonical way into Settings.
+                             Always rendered: the old rail copy only appeared once a taikun_session
+                             cookie resolved (BUG-A5), which would have hidden Settings from anyone
+                             without one. The email/name fill in on session; the menu does not wait
+                             for it. -->
+                        <div class="nav-item dropdown" id="user-menu">
+                            <a href="#dropdown-user" class="nav-link d-flex lh-1 text-reset p-0" data-bs-toggle="dropdown" aria-label="Open user menu">
+                                <span class="avatar avatar-sm bg-primary-lt"><i class="ti ti-user"></i></span>
+                                <div class="d-none d-xl-block ps-2">
+                                    <div id="user-menu-email" class="small fw-bold text-truncate" style="max-width:14rem">Account</div>
+                                    <div class="small text-muted">Settings</div>
+                                </div>
+                            </a>
+                            <div class="dropdown-menu dropdown-menu-end dropdown-menu-arrow">
+                                <a href="#tab-settings" class="dropdown-item" id="menu-settings"><i class="ti ti-settings me-2"></i>Settings</a>
+                                <a href="/account" class="dropdown-item"><i class="ti ti-key me-2"></i>Account &amp; password</a>
+                                <a href="/coordination" class="dropdown-item" id="menu-coordination"><i class="ti ti-messages me-2"></i>Agent coordination</a>
+                                <div class="dropdown-divider"></div>
+                                <a href="#" class="dropdown-item" id="user-menu-signout"><i class="ti ti-logout me-2"></i>Sign out</a>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </header>
@@ -182,9 +204,15 @@
                         <li class="nav-item"><a class="nav-link" id="toptab-fleet" data-bs-toggle="tab" href="#tab-fleet" role="tab"><span class="nav-link-icon"><i class="ti ti-server-bolt"></i></span><span class="nav-link-title">Fleet</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span></a></li>
-                        <!-- UI-18: Settings is open to every signed-in user — personal sections are
-                             always available and project/system sections gate themselves per section. -->
-                        <li class="nav-item" id="nav-settings"><a class="nav-link" id="toptab-settings" data-bs-toggle="tab" href="#tab-settings" role="tab"><span class="nav-link-icon"><i class="ti ti-settings"></i></span><span class="nav-link-title">Settings</span></a></li>
+                        <!-- UI-23: Settings is reached from the top-right user menu (demo parity),
+                             so this rail entry is hidden — but it must still EXIST. Bootstrap's Tab
+                             plugin only works on a toggle inside .nav/[role=tablist], and ctrlFor(),
+                             activeTop() (breadcrumb) and app.js _renderActiveTop() (deep-link
+                             rendering) all resolve top tabs through #main-nav. Keeping the
+                             controller here means the dropdown item, the breadcrumb, rail
+                             de-activation and #tab-settings/<section> deep links all keep using one
+                             mechanism instead of a Settings-shaped special case. -->
+                        <li class="nav-item d-none" id="nav-settings" aria-hidden="true"><a class="nav-link" id="toptab-settings" data-bs-toggle="tab" href="#tab-settings" role="tab" tabindex="-1"><span class="nav-link-icon"><i class="ti ti-settings"></i></span><span class="nav-link-title">Settings</span></a></li>
                     </ul>
                     <div class="mt-auto px-2 pb-2 tk-rail-full">
                         <button id="btn-new-project" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button"><i class="ti ti-folder-plus me-1"></i>New project</button>
@@ -192,18 +220,9 @@
                         <button id="btn-project-comms" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" title="Communications: inbound domains + outbound recipients"><i class="ti ti-mail-cog me-1"></i>Communications</button>
                         <button id="btn-project-members" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" title="Members &amp; access for this project"><i class="ti ti-users me-1"></i>Members</button>
                         <button id="btn-project-apikeys" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button" title="API keys: create, list, and revoke scoped tokens"><i class="ti ti-key me-1"></i>API keys</button>
-                        <div class="dropdown w-100" id="user-menu" style="display:none">
-                            <a href="#" class="d-flex align-items-center text-reset text-decoration-none px-2 py-1" data-bs-toggle="dropdown" aria-label="Account menu">
-                                <i class="ti ti-user me-2"></i><span id="user-menu-email" class="small text-truncate"></span>
-                                <i class="ti ti-dots-vertical ms-auto"></i>
-                            </a>
-                            <ul class="dropdown-menu">
-                                <li><a class="dropdown-item" href="/account"><i class="ti ti-key me-2"></i>Account &amp; password</a></li>
-                                <li><a class="dropdown-item" href="/coordination" id="menu-coordination"><i class="ti ti-messages me-2"></i>Agent coordination</a></li>
-                                <li><hr class="dropdown-divider"></li>
-                                <li><a class="dropdown-item" href="#" id="user-menu-signout"><i class="ti ti-logout me-2"></i>Sign out</a></li>
-                            </ul>
-                        </div>
+                        <!-- UI-23: the account menu moved to the top-right user dropdown in the
+                             header (demo parity). Its ids travelled with it, so the handlers below
+                             are unchanged. -->
                     </div>
                 </div>
             </div>
@@ -1207,8 +1226,17 @@
       })();
     </script>
     <script>
-      // Reveal the account menu only under global auth (a live taikun_session).
+      // Top-right user menu. UI-23: the menu itself is always rendered — it is the only
+      // way into Settings, so it must not wait on a session probe. Only the identity
+      // label fills in under global auth (a live taikun_session).
       (function () {
+        // Settings opens the tab via its (hidden) #main-nav controller, so the rail
+        // de-activates and the breadcrumb updates exactly as for any other top tab.
+        var settings = document.getElementById('menu-settings');
+        if (settings) settings.addEventListener('click', function (e) {
+          e.preventDefault();
+          if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-settings');
+        });
         var out = document.getElementById('user-menu-signout');
         if (out) out.addEventListener('click', function (e) {
           e.preventDefault();
@@ -1226,8 +1254,8 @@
           fetch('/api/auth/session', { credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : null; })
             .then(function (data) {
               if (!data || !data.user) return;
-              var menu = document.getElementById('user-menu');
-              if (menu) menu.style.display = '';
+              // The menu is already visible; only name it. It keeps the "Account"
+              // placeholder when there is no global session (bearer/dev-open).
               var email = document.getElementById('user-menu-email');
               if (email && data.user.email) email.textContent = data.user.email;
             }).catch(function () {});
