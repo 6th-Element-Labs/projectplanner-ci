@@ -55,9 +55,11 @@ redeploy = (ROOT / "deploy" / "redeploy.sh").read_text(encoding="utf-8")
 ok("switchboard-auth" in redeploy, "redeploy.sh manages switchboard-auth")
 ok(re.search(r"8121/health", redeploy) is not None,
    "redeploy proves Auth /health before Caddy reload")
-# Auth restart must precede Caddy sync.
+# Auth restart must precede fail-closed Caddy sync (ARCH-MS-101 helper).
 restart_pos = redeploy.find('section "restart services"')
-caddy_pos = redeploy.find('section "Caddyfile"')
+caddy_pos = redeploy.find("sync_caddy_fail_closed.sh")
+if caddy_pos < 0:
+    caddy_pos = redeploy.find('section "Caddyfile"')
 ok(restart_pos >= 0 and caddy_pos > restart_pos,
    "redeploy starts Auth before Caddy reload")
 

@@ -17,6 +17,12 @@ TXP). Sibling BC paths and MCP stay on the monolith.
 3. Ensure monolith `PM_TASKS_HTTP_PRIMARY=service` then restart
    `projectplanner.service`.
 
+Prefer `bash deploy/redeploy.sh` (ARCH-MS-101): it enables/starts `switchboard-tasks`,
+proves `:8122` health, and only then syncs Caddy through
+`deploy/sync_caddy_fail_closed.sh`. A dead Tasks unit leaves the prior live
+`/etc/caddy/Caddyfile` untouched. Post-deploy exact-SHA / unit / listener / health /
+edge evidence: `scripts/verify_runtime_deploy.py`.
+
 Never reload Caddy Tasks handles while `:8122` is down (edge would 502 Mode A).
 
 ## Rollback

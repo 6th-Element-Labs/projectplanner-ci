@@ -94,11 +94,12 @@ sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-reconcile.timer deploy/projectplanner-coordinator-audit.service \
   deploy/projectplanner-coordinator-audit.timer deploy/projectplanner-claim-gate.service \
   deploy/projectplanner-claim-gate.timer deploy/projectplanner-agent-host.service \
-  deploy/switchboard-auth.service \
+  deploy/switchboard-auth.service deploy/switchboard-tasks.service \
   deploy/projectplanner-interactive.slice deploy/projectplanner-batch.slice \
   /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp switchboard-auth
+sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp \
+  switchboard-auth switchboard-tasks
 sudo systemctl enable --now projectplanner-monitors.timer
 sudo systemctl enable --now projectplanner-reconcile.timer
 sudo systemctl enable --now projectplanner-coordinator-audit.timer
@@ -106,8 +107,9 @@ sudo systemctl enable --now projectplanner-claim-gate.timer
 # Optional but recommended for Switchboard dogfood: consumes message-only wake intents.
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
 sudo systemctl enable --now projectplanner-agent-host
-# ARCH-MS-76: prove Auth is up on :8121 BEFORE reloading Caddy (which routes /api/auth*).
+# ARCH-MS-76 / ARCH-MS-101: prove Auth (:8121) and Tasks (:8122) BEFORE reloading Caddy.
 curl -sS http://127.0.0.1:8121/health   # expect {"status":"ok","service":"switchboard-auth"}
+curl -sS http://127.0.0.1:8122/health   # expect {"status":"ok","service":"switchboard-tasks"}
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 # PERF-3: zram compressed-RAM swap (fast) instead of disk swap (100000x slower page faults).
 sudo bash deploy/setup-zram-swap.sh
@@ -140,6 +142,23 @@ mount is stripped via `PM_AUTH_HTTP_PRIMARY=service` on the monolith (ARCH-MS-77
 **Recovery (post ARCH-MS-77):** Auth on `:8121` is the Auth HTTP source of truth —
 restart `switchboard-auth` / fix Caddy Auth handles. Do not expect monolith `:8110`
 to serve login/session without an emergency remount (see runbook).
+
+### Tasks process-cut cutover checklist (ARCH-MS-92 / ARCH-MS-101)
+
+Live edge routes Mode A `/api/tasks*` + claim-only TXP → `switchboard-tasks` on
+`127.0.0.1:8122`. Sibling dispatch/chat/review paths stay on `:8110`. Full drill:
+[`docs/runbooks/tasks-caddy-cutover-rollback.md`](../docs/runbooks/tasks-caddy-cutover-rollback.md).
+
+**First enable (or after a dead-unit recovery):**
+1. `sudo systemctl enable --now switchboard-tasks`
+2. `curl -sS http://127.0.0.1:8122/health` → `{"status":"ok","service":"switchboard-tasks"}`
+3. Confirm repo `deploy/Caddyfile` routes Mode A Tasks → `:8122`
+4. Prefer `bash deploy/redeploy.sh` — it enables/starts Tasks, proves `:8122` health,
+   and only then syncs Caddy (`deploy/sync_caddy_fail_closed.sh`). A failed Tasks
+   health check leaves the prior live `/etc/caddy/Caddyfile` untouched.
+5. Post-deploy exact-SHA / runtime evidence:
+   `python scripts/verify_runtime_deploy.py --service switchboard-tasks:8122 --edge-owns '/api/tasks*:8122'`
+
 ### Off-box backups (HARDEN-43)
 Prod SQLite lives only on this box's disk. Set up daily off-box snapshots + a
 tested restore path — full details in [`docs/BACKUP-RESTORE-RUNBOOK.md`](../docs/BACKUP-RESTORE-RUNBOOK.md).
@@ -163,8 +182,10 @@ remove `PM_BOOTSTRAP_ADMIN_PASSWORD` from `.env` and restart `projectplanner`.
 curl -s http://127.0.0.1:8110/health            # {"status":"ok","service":"taikun-pm"}  (cheap liveness)
 curl -s http://127.0.0.1:8110/health/deep      # ops readiness: task + project counts
 curl -s http://127.0.0.1:8121/health            # ARCH-MS-76 Auth process-cut
+curl -s http://127.0.0.1:8122/health            # ARCH-MS-101 Tasks process-cut
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
 systemctl is-active switchboard-auth
+systemctl is-active switchboard-tasks
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
 systemctl list-timers projectplanner-coordinator-audit.timer
@@ -258,12 +279,16 @@ cd /opt/projectplanner && bash deploy/redeploy.sh
 unit changes used to reach prod only if someone remembered the extra `cp` (that is how the
 Caddyfile drifted from the repo). It copies every `deploy/*.service`/`*.timer`, mirrors the
 Caddyfile (validating it first — a broken edge is never reloaded), restarts
-`projectplanner{,-gateway,-mcp}` **and** `switchboard-auth`, proves both `:8110` and `:8121`
-`/health` are 200, **then** reloads Caddy, and restarts any auxiliary timer/service that is
-currently active. Flags: `RUN_CI=1` runs the on-box strict CI gate first (CI otherwise runs
-off-box); `SKIP_CADDY=1` leaves the edge untouched. The post-restart health gate retries for a
-bounded 30-second window by default; set `HEALTH_TIMEOUT_SECONDS` and
-`HEALTH_INTERVAL_SECONDS` to tune that window without replacing the fail-closed final result.
+`projectplanner{,-gateway,-mcp}`, `switchboard-auth`, **and** `switchboard-tasks`, proves
+`:8110`, `:8121`, and `:8122` `/health` are 200, **then** reloads Caddy via
+`deploy/sync_caddy_fail_closed.sh` (a failed service health check preserves the prior live
+Caddyfile), runs `scripts/verify_runtime_deploy.py` for exact-SHA/runtime evidence, and
+restarts any auxiliary timer/service that is currently active. Flags: `RUN_CI=1` runs the
+on-box strict CI gate first (CI otherwise runs off-box); `SKIP_CADDY=1` leaves the edge
+untouched; `SKIP_RUNTIME_PROOF=1` skips the post-deploy evidence harness. The post-restart
+health gate retries for a bounded 30-second window by default; set `HEALTH_TIMEOUT_SECONDS`
+and `HEALTH_INTERVAL_SECONDS` to tune that window without replacing the fail-closed final
+result.
 
 It restarts only units that are **already active**, so it won't fight timers you stopped during
 a HARDEN-32 wedge. A brand-new unit still needs its one-time
@@ -345,6 +370,7 @@ implemented and verified:
 - `/var/lib/projectplanner`
 - `projectplanner*.service` and `projectplanner*.timer`
 - `switchboard-auth.service` (ARCH-MS-76 Auth process-cut)
+- `switchboard-tasks.service` (ARCH-MS-92 / ARCH-MS-101 Tasks process-cut)
 - `PM_*` environment variables
 - GitHub remote `6th-Element-Labs/projectplanner`
 

@@ -15,8 +15,10 @@
 #   PLAN_CADDY_UNIT   caddy systemd unit (default caddy)
 #   RUN_CI=1      run the local switchboard CI gate before restarting (CI normally runs off-box)
 #   SKIP_CADDY=1  don't touch the Caddyfile / caddy this run
+#   SKIP_RUNTIME_PROOF=1  skip post-deploy exact-SHA / runtime evidence check
 #   HEALTH_TIMEOUT_SECONDS=30  bounded post-restart health window
 #   HEALTH_INTERVAL_SECONDS=1  delay between health probes
+#   CANONICAL_SHA  expected master SHA for runtime proof (default: origin/master)
 set -euo pipefail
 
 ROOT="${PLAN_ROOT:-/opt/projectplanner}"
@@ -24,12 +26,20 @@ CADDY_UNIT="${PLAN_CADDY_UNIT:-caddy}"
 CADDY_LIVE="/etc/caddy/Caddyfile"
 # Core web tier — always on; a redeploy must restart these and they must come back healthy.
 # ARCH-MS-76: switchboard-auth is required once Caddy routes /api/auth* → :8121.
-APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp switchboard-auth)
+# ARCH-MS-101: switchboard-tasks is required once Caddy routes Mode A Tasks → :8122.
+APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp switchboard-auth switchboard-tasks)
+# Local health URLs that must be 200 BEFORE any live Caddyfile overwrite.
+# Order: monolith, then every process-cut routed by the edge.
+REQUIRED_HEALTH_URLS=(
+    http://127.0.0.1:8110/health
+    http://127.0.0.1:8121/health
+    http://127.0.0.1:8122/health
+)
 # Auxiliary units (timers + agent host). Restarted only if currently active, so unit-file
 # changes take effect without force-starting a unit an operator deliberately stopped (e.g.
 # timers halted during a HARDEN-32 wedge). A brand-new unit still needs a one-time
 # `sudo systemctl enable --now <unit>` — this is a redeploy, not first-time provisioning.
-# First Auth cutover: enable switchboard-auth BEFORE reloading Caddy (see PROVISION.md).
+# First Auth/Tasks cutover: enable cut units BEFORE reloading Caddy (see PROVISION.md).
 AUX_UNITS=(projectplanner-agent-host.service
     projectplanner-monitors.timer projectplanner-reconcile.timer
     projectplanner-coordinator-audit.timer projectplanner-claim-gate.timer
@@ -71,9 +81,9 @@ sudo bash deploy/apply-least-privilege.sh
 sudo systemctl daemon-reload
 
 # 5. Restart the web tier (strict) + any active auxiliary units so new code/units take effect.
-#    Auth (:8121) must be healthy BEFORE Caddy reloads /api/auth* onto it (ARCH-MS-76).
+#    Auth (:8121) and Tasks (:8122) must be healthy BEFORE Caddy reloads their edge handles.
 section "restart services"
-sudo systemctl enable switchboard-auth >/dev/null 2>&1 || true
+sudo systemctl enable switchboard-auth switchboard-tasks >/dev/null 2>&1 || true
 sudo systemctl restart "${APP_SERVICES[@]}"
 for u in "${AUX_UNITS[@]}"; do
     if systemctl is-active --quiet "$u"; then
@@ -81,32 +91,30 @@ for u in "${AUX_UNITS[@]}"; do
     fi
 done
 
-# 6. Prove Auth + monolith health before touching the edge.
-section "health (pre-Caddy)"
-if ! bash "$ROOT/deploy/wait-for-health.sh"; then
-    echo "!! /health is not 200 after restart — inspect: journalctl -u projectplanner -n 60 --no-pager" >&2
-    exit 1
-fi
-if ! HEALTH_URL=http://127.0.0.1:8121/health \
-    bash "$ROOT/deploy/wait-for-health.sh"; then
-    echo "!! Auth /health is not 200 — inspect: journalctl -u switchboard-auth -n 60 --no-pager" >&2
-    exit 1
-fi
+# 6–7. Prove every routed service healthy, then sync Caddy fail-closed.
+#     A failed health check preserves the prior live Caddyfile (ARCH-MS-101).
+section "Caddy (fail-closed)"
+export PLAN_ROOT="$ROOT"
+export PLAN_CADDY_UNIT="$CADDY_UNIT"
+export CADDY_LIVE
+bash "$ROOT/deploy/sync_caddy_fail_closed.sh" "${REQUIRED_HEALTH_URLS[@]}"
 
-# 7. Sync the Caddyfile into /etc and reload Caddy — the step a bare `git pull` skips.
-#    Validate the repo copy BEFORE overwriting the live one: never reload a broken edge.
-if [ "${SKIP_CADDY:-0}" != "1" ] && command -v caddy >/dev/null 2>&1; then
-    section "Caddyfile"
-    if caddy validate --adapter caddyfile --config deploy/Caddyfile; then
-        sudo cp deploy/Caddyfile "$CADDY_LIVE"
-        # reload is graceful (no dropped connections, no cert re-fetch); fall back to restart.
-        sudo systemctl reload "$CADDY_UNIT" || sudo systemctl restart "$CADDY_UNIT"
-    else
-        echo "!! deploy/Caddyfile failed validation — leaving live $CADDY_LIVE untouched" >&2
-        exit 1
+# 8. Exact-SHA / runtime evidence for subsequent service cuts (reusable harness).
+if [ "${SKIP_RUNTIME_PROOF:-0}" != "1" ]; then
+    section "runtime proof"
+    CANONICAL_SHA="${CANONICAL_SHA:-$(git rev-parse origin/master 2>/dev/null || git rev-parse HEAD)}"
+    PYTHON="${PYTHON:-$ROOT/.venv/bin/python}"
+    if [ ! -x "$PYTHON" ]; then
+        PYTHON=python3
     fi
-else
-    echo "-- skipping Caddy sync (SKIP_CADDY=1 or caddy not installed)"
+    "$PYTHON" "$ROOT/scripts/verify_runtime_deploy.py" \
+        --root "$ROOT" \
+        --canonical-sha "$CANONICAL_SHA" \
+        --caddy-live "$CADDY_LIVE" \
+        --service switchboard-auth:8121 \
+        --service switchboard-tasks:8122 \
+        --edge-owns '/api/auth*:8121' \
+        --edge-owns '/api/tasks*:8122'
 fi
 
 echo "redeploy complete."

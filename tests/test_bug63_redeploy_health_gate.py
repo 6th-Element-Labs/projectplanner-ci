@@ -13,6 +13,7 @@ from path_setup import ROOT
 
 GATE = ROOT / "deploy" / "wait-for-health.sh"
 REDEPLOY = ROOT / "deploy" / "redeploy.sh"
+SYNC_CADDY = ROOT / "deploy" / "sync_caddy_fail_closed.sh"
 
 passed = failed = 0
 
@@ -114,8 +115,17 @@ ok(invalid.returncode == 2 and "must be a positive integer" in invalid.stderr,
    "invalid retry configuration fails before probing")
 
 redeploy_text = REDEPLOY.read_text(encoding="utf-8")
-ok('bash "$ROOT/deploy/wait-for-health.sh"' in redeploy_text,
-   "the production redeploy path invokes the tested health gate")
+sync_text = SYNC_CADDY.read_text(encoding="utf-8") if SYNC_CADDY.is_file() else ""
+# ARCH-MS-101: health probes live in sync_caddy_fail_closed.sh; redeploy must call it
+# (or still invoke wait-for-health directly on older layouts).
+ok(
+    'bash "$ROOT/deploy/wait-for-health.sh"' in redeploy_text
+    or (
+        "sync_caddy_fail_closed.sh" in redeploy_text
+        and 'bash "$ROOT/deploy/wait-for-health.sh"' in sync_text
+    ),
+    "the production redeploy path invokes the tested health gate",
+)
 ok("sleep 2\ncode=" not in redeploy_text and "|| echo 000" not in redeploy_text,
    "the single fixed-delay probe and duplicate 000 fallback are removed")
 

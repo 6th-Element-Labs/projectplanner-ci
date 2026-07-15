@@ -63,8 +63,8 @@ curl -sS http://127.0.0.1:8121/health
 # then sync Caddy via redeploy.sh or the PROVISION.md checklist
 ```
 
-Prefer `bash deploy/redeploy.sh` — it starts Auth, proves `:8110` + `:8121` health, then
-reloads Caddy.
+Prefer `bash deploy/redeploy.sh` — it starts Auth (and Tasks), proves `:8110` + `:8121`
+(+ `:8122`) health, then reloads Caddy fail-closed.
 
 ## Recovery
 
