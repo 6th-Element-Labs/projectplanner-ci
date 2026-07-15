@@ -154,6 +154,11 @@ section "Concurrent agent-path SLO gate"
 CONCURRENT_LOAD_REPORT="${CONCURRENT_LOAD_REPORT:-${TMPDIR:-/tmp}/switchboard-concurrent-load-report.json}" \
   "$PYTHON" scripts/concurrent_load_gate.py
 
+section "CI hermeticity gate (tests must not read live host state)"
+# A flaky test blocks the whole merge-queue train, not just one PR. Fail before the suite runs
+# if any test_*.py reaches for live /proc, host load, psutil, or real network (BUG-67 class).
+"$PYTHON" scripts/ci_hermeticity_lint.py .
+
 run_discovered_tests
 
 section "Frontend JavaScript syntax"

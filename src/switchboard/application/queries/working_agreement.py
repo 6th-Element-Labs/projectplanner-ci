@@ -99,6 +99,12 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
                 "prefer the repository's configured squash/merge strategy",
                 "do not force-merge red checks, missing reviews, or unexpected file changes",
             ],
+            "merge_queue": [
+                "When a merge queue is active (GitHub says 'the merge strategy for <branch> is set by the merge queue'), the QUEUE — not you — rebases the PR onto the current tip, runs the suite on that merge commit, and squashes. So skip the pre_merge hand-rebase and DO NOT pass --squash or --delete-branch; the queue owns strategy and branch cleanup and will reject those flags.",
+                "Enqueue once the PR-head checks are green with a plain `gh pr merge <n>` (no strategy/branch flags) or the `enqueuePullRequest` GraphQL mutation.",
+                "PR-head green means 'safe to enqueue', NOT 'landed'. The merge-group check that the queue runs on its own commit is the real landing gate — a stale-tip pass on the PR head is not enough.",
+                "Wait on the PR's mergeQueueEntry state (QUEUED -> AWAITING_CHECKS -> MERGED); trust the recorded merged_sha on the target branch as done, never first-green.",
+            ],
             "post_merge": [
                 "fetch/pull the target branch after merge",
                 "record the resulting merged_sha or target branch head in evidence",

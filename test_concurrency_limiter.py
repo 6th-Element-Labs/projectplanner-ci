@@ -55,7 +55,20 @@ ok(concurrency_limiter.build_shed_headers(payload)["Retry-After"] == "3",
    "Retry-After header uses configured seconds")
 
 store.init_db("switchboard")
-sat = saturation_signals.compute_saturation_signals("switchboard")
+# BUG-67 / hermeticity: inject calm PSI so this test never reads live host /proc (which
+# flakes under CI-runner load and, with the merge queue, would block the whole train). We
+# only assert on the concurrency_limiter block, so a benign fixture is sufficient.
+_CALM_PSI = {
+    "schema": "switchboard.psi_pressure.v1",
+    "available": True,
+    "proc_root": "/fixture",
+    "resources": {
+        "cpu": {"available": True, "stall": {"some": {"avg10": 0.0}, "full": {"avg10": 0.0}}},
+        "memory": {"available": True, "stall": {"some": {"avg10": 0.0}}},
+        "io": {"available": True, "stall": {"some": {"avg10": 0.0}}},
+    },
+}
+sat = saturation_signals.compute_saturation_signals("switchboard", psi_provider=lambda: _CALM_PSI)
 ok("concurrency_limiter" in sat, "saturation snapshot includes concurrency_limiter")
 ok(sat["concurrency_limiter"]["schema"] == "switchboard.concurrency_limiter.v1",
    "saturation concurrency block schema")
