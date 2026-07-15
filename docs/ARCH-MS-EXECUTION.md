@@ -1,9 +1,10 @@
-# ARCH-MS execution tracker — platform modernization (Phase 0 → Phase 2)
+# ARCH-MS execution tracker — platform modernization (Phase 0 → Phase 3)
 
 **Phase 0 charter:** [ADR-0009](decisions/0009-microservices-modernization.md)  
 **Phase 2 charter:** [ADR-0011](decisions/0011-phase2-process-strangler.md)  
+**Phase 3 charter:** [ADR-0012](decisions/0012-phase3-tasks-process-strangler.md)  
 **Board:** `project=switchboard` · workstream **ARCH-MS**  
-**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2`
+**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2` · `arch-ms-phase-3`
 
 > **Ratchet retired 2026-07-12.** `test_size_ratchet.py` (the exact-match size gate) was deleted —
 > it forced every concurrent PR to compare-and-swap one shared integer against a moving `master`,
@@ -15,7 +16,44 @@
 
 **Canonical main (Phase 0 tracker baseline):** `5305090` (2026-07-12)  
 **Phase 0 view:** [`?project=switchboard&deliverable=arch-ms-phase-0#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-0#tab-mission)  
-**Phase 2 view:** [`?project=switchboard&deliverable=arch-ms-phase-2#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-2#tab-mission)
+**Phase 2 view:** [`?project=switchboard&deliverable=arch-ms-phase-2#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-2#tab-mission)  
+**Phase 3 view:** [`?project=switchboard&deliverable=arch-ms-phase-3#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-3#tab-mission)
+
+---
+
+## Phase 3 — Tasks process strangler (service #2, cut conditional) — Mode A
+
+**Charter:** [ADR-0012 — Phase 3 Tasks process strangler](decisions/0012-phase3-tasks-process-strangler.md)  
+**Deliverable:** `arch-ms-phase-3`  
+**Mission end state:** Tasks either runs as its own uvicorn behind Caddy (Path A) or stays
+in-process with documented No-Go (Path B). No half-cut. Phase 2 Auth cut remains green. Thin
+day-one surface only (`:8122`; `/api/tasks*` + claim-only TXP). Deploy stays FastAPI + uvicorn +
+Caddy; SQLite default (Postgres only via ARCH-19 SLO).
+
+| Milestone | Intent |
+|---|---|
+| `3a-charter-rails` | ADR-0012 + Phase 3 exit harness (ARCH-MS-85…86) |
+| `3b0-tasks-independence` | Ports, writers/Auth binding, ops proof + Go/No-Go (ARCH-MS-87…89) |
+| `3b-tasks-process-cut` | Conditional Tasks uvicorn cut (ARCH-MS-90…92) — **Go only** |
+| Exit | `arch_ms_phase3_exit_gate` — Tasks cut **or** documented No-Go; Auth Path A still green |
+
+**Hard rules (see ADR-0012):** one BC (Tasks); yellow-light cut; reuse Auth playbook; Mode A thin
+surface; explicit No-Go keep-in-process exit; no nginx; no MCP/other-BC cuts in this phase.
+
+| Task | Title | Tracker | Repo evidence |
+|---|---|---|---|
+| **ARCH-MS-85** | 3A: ADR — Phase 3 Tasks process strangler charter (Mode A) | 🟡 | `docs/decisions/0012-phase3-tasks-process-strangler.md` |
+| **ARCH-MS-86** | 3A: Phase 3 exit gate harness | ⬜ | — |
+| **ARCH-MS-87** | 3B0: Tasks ports — remove store/auth/dispatch imports | ⬜ | — |
+| **ARCH-MS-88** | 3B0: Tasks ownership, writers, Auth binding via ports | ⬜ | — |
+| **ARCH-MS-89** | 3B0: Tasks ops proof harness + Go/No-Go verdict | ⬜ | — |
+| **ARCH-MS-90** | 3B: Extract Tasks as standalone uvicorn (**Go only**) | ⬜ | Blocked until independence Go |
+| **ARCH-MS-91** | 3B: Tasks side-by-side `:8122` + parity (**Go only**) | ⬜ | Blocked until independence Go |
+| **ARCH-MS-92** | 3B: Caddy cutover + dual-strip for Tasks (**Go only**) | ⬜ | Blocked until independence Go |
+| **ARCH-MS-93** | Exit: Phase 3 close — Tasks cut conditional | ⬜ | Blocked on 3A/3B0 (+ 3B if Go) |
+
+Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
+rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
 
 ---
 
@@ -52,7 +90,7 @@ big-bang rewrite / frontend swap.
 | **ARCH-MS-77** | 2B: Auth cutover parity tests + strip dual impl (**Go only**) | ✅ | PR #505 — hermetic parity; `PM_AUTH_HTTP_PRIMARY=service`; `/api/auth/me*` → `:8110` |
 | **ARCH-MS-78** | 2C: Tasks service readiness — contracts + extract plan | ✅ | PR #506 — `docs/ARCH-MS-PHASE2-TASKS-READINESS.md` + `docs/phase2/tasks_readiness.md` (readiness-only) |
 | **ARCH-MS-79** | 2C: Tasks process cut (optional) | 🟡 | **Waived** — `docs/phase2/tasks_cut_waived.md`; exit via readiness (ADR-0011 2C) |
-| **ARCH-MS-81** | Exit: Phase 2 close — Path A evidence | 🟡 | `docs/phase2/auth_independence_verdict.json` (go) + `docs/phase2/auth_cut_playbook.md`; exit gate `passed=true` |
+| **ARCH-MS-81** | Exit: Phase 2 close — Path A evidence | ✅ | PR #510 — `docs/phase2/auth_independence_verdict.json` (go) + `docs/phase2/auth_cut_playbook.md`; exit gate `passed=true` |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
@@ -216,4 +254,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-15 | ARCH-MS-74 | Phase 2 exit harness: `scripts/arch_ms_phase2_exit_gate.py` (Path A Auth cut ∨ Path B No-Go); fixture proof in `tests/test_arch_ms74_phase2_exit_gate.py` |
 | 2026-07-15 | ARCH-MS-78 | Tasks readiness-only (no live Tasks cut); `docs/phase2/tasks_readiness.md` |
 | 2026-07-15 | ARCH-MS-81 | Path A exit evidence: independence verdict `go` + auth cut playbook; `arch_ms_phase2_exit_gate.py` → `passed=true` |
+| 2026-07-15 | ARCH-MS-85 | Phase 3 charter ADR-0012 (Tasks process strangler, Mode A); Phase 3 section linked from this tracker |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
