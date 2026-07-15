@@ -7,16 +7,76 @@ The report is side-effect-free (no ``git`` mutations; read-only subprocess and
 filesystem scans). ``merge_gate`` / ``pre_tool_check`` / work-session helpers
 consume the report via the store façade re-export. Lease-collision checks reach
 persistence through a lazy store façade so this module stays free of owning SQL.
+
+SESSION-14 extends findings with optional ``remediation`` (runnable fix hint)
+and a topology-driven co-change contract check (file A changed ⇒ file B must
+also change), evaluated against HEAD-vs-base plus dirty paths.
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import subprocess
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from constants import DEFAULT_PROJECT, GITHUB_REPO_RE, REPO_PREFLIGHT_SCHEMA
+
+# Built-in co-change contracts. Project ``repo_topology.co_change_contracts``
+# replaces this list when present (empty list disables). Each contract:
+#   id, when (path/glob list), require_any (path/glob list — at least one must
+#   also change), remediation, optional severity/blocking.
+DEFAULT_CO_CHANGE_CONTRACTS: List[Dict[str, Any]] = [
+    {
+        "id": "npm_lock",
+        "when": ["package.json"],
+        "require_any": ["package-lock.json", "yarn.lock", "pnpm-lock.yaml"],
+        "remediation": "run npm/yarn/pnpm install and commit the updated lockfile with package.json",
+        "severity": "high",
+        "blocking": True,
+    },
+    {
+        "id": "python_uv_lock",
+        "when": ["pyproject.toml"],
+        "require_any": ["uv.lock", "poetry.lock"],
+        "remediation": "run `uv lock` (or poetry lock) and commit the lockfile with pyproject.toml",
+        "severity": "high",
+        "blocking": True,
+    },
+    {
+        "id": "go_sum",
+        "when": ["go.mod"],
+        "require_any": ["go.sum"],
+        "remediation": "run `go mod tidy` and commit go.sum with go.mod",
+        "severity": "high",
+        "blocking": True,
+    },
+    {
+        "id": "nuget_lock",
+        "when": ["*.csproj", "*.vbproj"],
+        "require_any": ["packages.lock.json", "**/packages.lock.json"],
+        "remediation": "restore with locked mode and commit packages.lock.json with the project file",
+        "severity": "high",
+        "blocking": True,
+    },
+    {
+        "id": "django_migration",
+        "when": ["**/models.py", "**/models/*.py"],
+        "require_any": ["**/migrations/*.py"],
+        "remediation": "add or update a migration (`manage.py makemigrations`) and commit it with the model change",
+        "severity": "medium",
+        "blocking": True,
+    },
+    {
+        "id": "prisma_migration",
+        "when": ["**/schema.prisma", "prisma/schema.prisma"],
+        "require_any": ["**/migrations/**", "prisma/migrations/**"],
+        "remediation": "run `prisma migrate dev` (or equivalent) and commit the new migration with the schema change",
+        "severity": "medium",
+        "blocking": True,
+    },
+]
 
 
 def _store_facade():
@@ -37,8 +97,9 @@ def _json_obj(raw: Any, default: Any):
 
 def _repo_preflight_finding(code: str, message: str, failure_class: str,
                             severity: str = "high", blocking: bool = True,
+                            remediation: str = "",
                             details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    return {
+    finding: Dict[str, Any] = {
         "code": code,
         "failure_class": failure_class,
         "severity": severity,
@@ -46,6 +107,99 @@ def _repo_preflight_finding(code: str, message: str, failure_class: str,
         "message": message,
         **(details or {}),
     }
+    if remediation:
+        finding["remediation"] = remediation
+    return finding
+
+
+def _path_matches(path: str, patterns: Sequence[str]) -> bool:
+    text = (path or "").replace("\\", "/")
+    for pattern in patterns:
+        pat = (pattern or "").replace("\\", "/")
+        if not pat:
+            continue
+        if text == pat or fnmatch.fnmatch(text, pat) or fnmatch.fnmatch(os.path.basename(text), pat):
+            return True
+        # allow **/foo when path is foo/bar without leading **/
+        if not pat.startswith("**/") and fnmatch.fnmatch(text, f"**/{pat}"):
+            return True
+    return False
+
+
+def _any_path_matches(paths: Sequence[str], patterns: Sequence[str]) -> List[str]:
+    return [p for p in paths if _path_matches(p, patterns)]
+
+
+def _resolve_co_change_contracts(topology: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw = topology.get("co_change_contracts") if isinstance(topology, dict) else None
+    if raw is None:
+        return list(DEFAULT_CO_CHANGE_CONTRACTS)
+    if not isinstance(raw, list):
+        return list(DEFAULT_CO_CHANGE_CONTRACTS)
+    return [c for c in raw if isinstance(c, dict)]
+
+
+def _repo_changed_paths(repo_path: str, base_ref: str,
+                        dirty_files: Sequence[str],
+                        untracked_files: Sequence[str]) -> List[str]:
+    changed: List[str] = []
+    if base_ref:
+        diff = _repo_git(repo_path, ["diff", "--name-only", f"{base_ref}...HEAD"],
+                         timeout_seconds=20)
+        if diff.get("ok"):
+            changed.extend(
+                line.replace("\\", "/") for line in (diff.get("stdout") or "").splitlines()
+                if line.strip()
+            )
+    for path in list(dirty_files) + list(untracked_files):
+        normalized = str(path or "").replace("\\", "/")
+        if normalized and normalized not in changed:
+            changed.append(normalized)
+    return changed
+
+
+def _repo_eval_co_change_contracts(changed_paths: Sequence[str],
+                                   contracts: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    if not changed_paths or not contracts:
+        return findings
+    for contract in contracts:
+        when = contract.get("when") or contract.get("when_any") or []
+        require_any = (contract.get("require_any")
+                       or contract.get("require")
+                       or contract.get("require_all")
+                       or [])
+        if not when or not require_any:
+            continue
+        when_hits = _any_path_matches(changed_paths, list(when))
+        if not when_hits:
+            continue
+        require_hits = _any_path_matches(changed_paths, list(require_any))
+        if require_hits:
+            continue
+        contract_id = str(contract.get("id") or "co_change").strip() or "co_change"
+        remediation = str(contract.get("remediation") or "").strip()
+        if not remediation:
+            remediation = (
+                f"also change one of {', '.join(str(p) for p in require_any)} "
+                f"when modifying {', '.join(str(p) for p in when)}"
+            )
+        findings.append(_repo_preflight_finding(
+            f"co_change_{contract_id}",
+            (f"Co-change contract '{contract_id}' violated: "
+             f"{', '.join(when_hits[:5])} changed without a matching "
+             f"{', '.join(str(p) for p in require_any)} update."),
+            "co_change_contract",
+            severity=str(contract.get("severity") or "high"),
+            blocking=bool(contract.get("blocking", True)),
+            remediation=remediation,
+            details={
+                "contract_id": contract_id,
+                "when_hits": when_hits[:20],
+                "require_any": list(require_any),
+            },
+        ))
+    return findings
 
 
 def _repo_git(repo_path: str, args: List[str], timeout_seconds: int = 10) -> Dict[str, Any]:
@@ -241,6 +395,10 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
             "wrong_repo",
             f"origin repo {remote_slug} does not match project {project} {repo_role} repo {expected_slug}.",
             "wrong_repo",
+            remediation=(
+                f"use a worktree whose origin matches {expected_slug} "
+                f"(project {project} {repo_role} role)"
+            ),
             details={"actual_repo": remote_slug, "expected_repo": expected_slug}))
 
     branch = _repo_git(repo_path, ["branch", "--show-current"])
@@ -250,7 +408,8 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
     report["head_sha"] = head.get("stdout") if head.get("ok") else ""
     if not current_branch:
         findings.append(_repo_preflight_finding(
-            "detached_head", "Worktree is in detached HEAD state.", "detached_head"))
+            "detached_head", "Worktree is in detached HEAD state.", "detached_head",
+            remediation="checkout a named task-scoped branch before editing"))
 
     expected = (expected_branch or "").strip()
     if expected and current_branch != expected:
@@ -258,6 +417,7 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
             "wrong_branch",
             f"Current branch {current_branch or '(detached)'} does not match expected branch {expected}.",
             "wrong_branch",
+            remediation=f"git checkout {expected}",
             details={"actual_branch": current_branch, "expected_branch": expected}))
     elif not expected and task_id and agent_id and current_branch and not s._branch_matches_task(
             agent_id, task_id, current_branch):
@@ -265,6 +425,7 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
             "wrong_branch",
             f"Current branch {current_branch} is not task-scoped for {task_id}.",
             "wrong_branch",
+            remediation=f"checkout a branch that includes {task_id} (e.g. cursor/{task_id}-<slug>)",
             details={"actual_branch": current_branch, "task_id": task_id}))
 
     upstream = _repo_git(repo_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
@@ -273,7 +434,9 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
     if not upstream_ref:
         findings.append(_repo_preflight_finding(
             "missing_upstream", "Branch has no upstream tracking ref.", "missing_upstream",
-            severity="medium", blocking=False, details={"stderr": upstream.get("stderr") or ""}))
+            severity="medium", blocking=False,
+            remediation="git push -u origin HEAD",
+            details={"stderr": upstream.get("stderr") or ""}))
     else:
         upstream_sha = _repo_git(repo_path, ["rev-parse", f"{upstream_ref}^{{commit}}"])
         report["upstream_sha"] = upstream_sha.get("stdout") if upstream_sha.get("ok") else ""
@@ -305,6 +468,7 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
                             "stale_base",
                             f"Branch is {behind_base} commit(s) behind {base_ref}.",
                             "stale_base",
+                            remediation=f"git fetch && git rebase {base_ref} (or merge), then re-run tests",
                             details={"base_ref": base_ref, "behind": behind_base}))
                 except ValueError:
                     findings.append(_repo_preflight_finding(
@@ -316,6 +480,7 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
                 "missing_base_ref",
                 f"Base ref {base_ref!r} is not reachable in this checkout.",
                 "missing_base_ref", severity="medium", blocking=False,
+                remediation=f"git fetch origin so {base_ref} is reachable",
                 details={"stderr": base_sha.get("stderr") or ""}))
 
     status = _repo_git(repo_path, ["status", "--porcelain=v1", "-uall"], timeout_seconds=20)
@@ -330,6 +495,7 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
             "dirty_worktree",
             f"Worktree has {len(status_lines)} dirty or untracked file(s).",
             "dirty_worktree",
+            remediation="commit or stash changes before claim/complete/merge",
             details={"dirty_count": len(dirty_files), "untracked_count": len(untracked_files)}))
 
     merge_state = _repo_merge_state(git_dir)
@@ -339,6 +505,7 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
             "merge_or_rebase_in_progress",
             "Worktree has an active merge/rebase/cherry-pick/revert state.",
             "merge_or_rebase_in_progress",
+            remediation="finish or abort the in-progress git operation (git merge --abort / rebase --abort)",
             details={"states": merge_state.get("states") or []}))
 
     conflict_markers = _repo_scan_conflict_markers(repo_path, max_files=max_scan_files) if scan_conflicts else []
@@ -349,6 +516,7 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
             "conflict_markers",
             f"Found conflict markers in {len(conflict_markers)} file(s).",
             "conflict_markers",
+            remediation="resolve conflict markers (<<<<<<< / >>>>>>>) and commit the resolved files",
             details={"paths": [m.get("path") for m in conflict_markers[:20]]}))
 
     collisions = _repo_worktree_collisions(repo_path, report["agent_id"], project=project)
@@ -358,7 +526,20 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
             "shared_worktree_collision",
             "Worktree path is already leased by another active agent.",
             "shared_worktree_collision",
+            remediation="use a distinct worktree path, or wait for / release the other agent's lease",
             details={"collisions": collisions}))
+
+    contracts = _resolve_co_change_contracts(topology)
+    changed_paths = _repo_changed_paths(
+        repo_path, base_ref, dirty_files, untracked_files)
+    report["changed_paths"] = changed_paths[:200]
+    report["changed_path_count"] = len(changed_paths)
+    report["co_change_contracts"] = [
+        {"id": c.get("id"), "when": c.get("when"), "require_any": c.get("require_any") or c.get("require")}
+        for c in contracts
+    ]
+    co_change_findings = _repo_eval_co_change_contracts(changed_paths, contracts)
+    findings.extend(co_change_findings)
 
     blocking = [f for f in findings if f.get("blocking")]
     report["verdict"] = "deny" if blocking else ("warn" if findings else "pass")
@@ -367,6 +548,7 @@ def repo_preflight(worktree_path: str, project: str = DEFAULT_PROJECT,
 
 
 __all__ = [
+    "DEFAULT_CO_CHANGE_CONTRACTS",
     "_repo_preflight_finding",
     "_repo_git",
     "_repo_remote_slug",
@@ -376,5 +558,7 @@ __all__ = [
     "_repo_list_candidate_files",
     "_repo_scan_conflict_markers",
     "_repo_worktree_collisions",
+    "_resolve_co_change_contracts",
+    "_repo_eval_co_change_contracts",
     "repo_preflight",
 ]

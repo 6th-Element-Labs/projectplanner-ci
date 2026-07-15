@@ -502,7 +502,16 @@ def get_project_repo_topology(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "missing canonical repo; code-work Done cannot be proven by webhook/reconcile"
         ),
     }
-    return {
+    # SESSION-14: optional co-change contracts (file A changed ⇒ file B). When
+    # absent, repo_preflight applies DEFAULT_CO_CHANGE_CONTRACTS. An empty list
+    # in meta/builtin disables contracts for the project.
+    co_change_contracts = built_in.get("co_change_contracts")
+    if "co_change_contracts" in raw:
+        co_change_contracts = raw.get("co_change_contracts")
+    if co_change_contracts is not None and not isinstance(co_change_contracts, list):
+        warnings.append("repo_topology.co_change_contracts must be a list")
+        co_change_contracts = None
+    result = {
         "schema": REPO_TOPOLOGY_SCHEMA,
         "scope": "project",
         "project": project,
@@ -527,6 +536,11 @@ def get_project_repo_topology(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
             "public_ci/public/release repos are evidence roles and cannot mark code work Done",
         ],
     }
+    if co_change_contracts is not None:
+        result["co_change_contracts"] = [
+            c for c in co_change_contracts if isinstance(c, dict)
+        ]
+    return result
 
 
 def set_project_github_repo(repo: str, project: str = DEFAULT_PROJECT) -> Dict[str, Any]:

@@ -31,14 +31,18 @@ def _bool_env(value: str) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _finding(severity: str, code: str, detail: str, *, blocking: bool = True) -> Dict[str, Any]:
-    return {
+def _finding(severity: str, code: str, detail: str, *, blocking: bool = True,
+             remediation: str = "") -> Dict[str, Any]:
+    finding = {
         "severity": severity,
         "code": code,
         "failure_class": "stale_branch" if "stale" in code or "behind" in code else "failed_gate",
         "detail": detail,
         "blocking": blocking,
     }
+    if remediation:
+        finding["remediation"] = remediation
+    return finding
 
 
 def run_git_review_preflight(
@@ -70,6 +74,7 @@ def run_git_review_preflight(
         findings.append(_finding(
             "critical", "target_ref_not_found",
             f"Target ref {target_ref!r} is not reachable in this checkout.",
+            remediation=f"fetch or create the ref {target_ref!r} before review",
         ))
 
     dirty_lines = _git_out(repo, ["status", "--porcelain", "--untracked-files=all"], check=False).splitlines()
@@ -80,6 +85,7 @@ def run_git_review_preflight(
             "dirty_worktree",
             f"Review target has {len(dirty_files)} uncommitted/untracked file(s).",
             blocking=not allow_dirty,
+            remediation="commit or stash changes before spawning a review/audit agent",
         ))
 
     upstream_sha = ""
@@ -91,6 +97,7 @@ def run_git_review_preflight(
             findings.append(_finding(
                 "high", "upstream_ref_not_found",
                 f"Upstream ref {upstream_ref!r} is not reachable in this checkout.",
+                remediation=f"git fetch so {upstream_ref!r} is reachable",
             ))
         elif head_sha:
             merge_base = _git_out(repo, ["merge-base", upstream_sha, head_sha], check=False)
@@ -110,6 +117,7 @@ def run_git_review_preflight(
                     "target_branch_behind_upstream",
                     f"Target is {behind} commit(s) behind {upstream_ref!r}.",
                     blocking=not allow_behind,
+                    remediation=f"rebase or merge onto {upstream_ref!r} before review",
                 ))
 
     blocking = [f for f in findings if f.get("blocking")]
@@ -156,7 +164,10 @@ def format_preflight_header(report: Dict[str, Any]) -> str:
         f"dirty={report.get('dirty')} dirty_count={report.get('dirty_count')}",
     ]
     for finding in report.get("findings") or []:
-        lines.append(
+        line = (
             f"- [{finding.get('severity')}] {finding.get('code')}: {finding.get('detail')}"
         )
+        if finding.get("remediation"):
+            line += f" | fix: {finding.get('remediation')}"
+        lines.append(line)
     return "\n".join(lines) + "\n"

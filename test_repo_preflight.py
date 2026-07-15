@@ -170,6 +170,59 @@ try:
        updated["hygiene"]["repo_preflight"]["schema"] == store.REPO_PREFLIGHT_SCHEMA,
        "preflight_work_session writes hygiene, dirty status, and typed schema")
 
+    # SESSION-14: remediation field + co-change contracts --------------------------
+    dirty_finding = next(
+        (f for f in dirty["findings"] if f.get("failure_class") == "dirty_worktree"), None)
+    ok(bool(dirty_finding and dirty_finding.get("remediation")),
+       "dirty_worktree finding includes remediation")
+
+    lock_repo, _ = make_repo("lock-contract")
+    commit(lock_repo, "package.json", '{"name":"demo","version":"1.0.0"}\n', "add package.json")
+    # Establish a lockfile at the shared base, then change package.json alone.
+    commit(lock_repo, "package-lock.json", '{"lockfileVersion":3}\n', "add lock")
+    run(lock_repo, "checkout", "master")
+    run(lock_repo, "merge", "--ff-only", "codex/PREFLIGHT-1-clean")
+    run(lock_repo, "push", "origin", "master")
+    run(lock_repo, "checkout", "codex/PREFLIGHT-1-clean")
+    commit(lock_repo, "package.json",
+           '{"name":"demo","version":"1.0.1"}\n', "bump package without lock")
+    lock_denied = store.repo_preflight(
+        str(lock_repo), project=P, task_id="PREFLIGHT-1", agent_id=AGENT,
+        expected_branch="codex/PREFLIGHT-1-clean")
+    lock_finding = next(
+        (f for f in lock_denied["findings"]
+         if f.get("failure_class") == "co_change_contract"
+         and f.get("contract_id") == "npm_lock"),
+        None)
+    ok(lock_denied["verdict"] == "deny" and lock_finding is not None,
+       "package.json without lockfile update denies via co_change_contract")
+    ok(bool(lock_finding and "npm" in (lock_finding.get("remediation") or "").lower()),
+       "co-change finding carries lockfile remediation")
+
+    commit(lock_repo, "package-lock.json", '{"lockfileVersion":3,"packages":{}}\n',
+           "update lock with package")
+    lock_ok = store.repo_preflight(
+        str(lock_repo), project=P, task_id="PREFLIGHT-1", agent_id=AGENT,
+        expected_branch="codex/PREFLIGHT-1-clean")
+    ok(not any(f.get("failure_class") == "co_change_contract" for f in lock_ok["findings"]),
+       "package.json + package-lock.json co-change satisfies contract")
+
+    # Topology can disable defaults with an empty co_change_contracts list.
+    store.set_meta("repo_topology", {
+        "schema": "switchboard.project_repo_topology.v1",
+        "roles": {"canonical": {"repo": "6th-Element-Labs/projectplanner"}},
+        "co_change_contracts": [],
+    }, project=P)
+    disabled_repo, _ = make_repo("lock-disabled")
+    commit(disabled_repo, "package.json", '{"name":"x"}\n', "package only")
+    disabled = store.repo_preflight(
+        str(disabled_repo), project=P, task_id="PREFLIGHT-1", agent_id=AGENT,
+        expected_branch="codex/PREFLIGHT-1-clean")
+    ok(not any(f.get("failure_class") == "co_change_contract" for f in disabled["findings"]),
+       "empty topology.co_change_contracts disables default contracts")
+    # Restore switchboard topology so later env use isn't polluted.
+    store.set_meta("repo_topology", {}, project=P)
+
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
