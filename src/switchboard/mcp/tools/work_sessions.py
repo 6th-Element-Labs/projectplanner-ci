@@ -205,11 +205,44 @@ def pre_tool_check(ctx: Context, tool_name: str = "", tool_input_json: str = "",
     ))
 
 
+def get_preflight_calibration(code: str = "", since: float = 0.0,
+                              min_outcomes: int = 3,
+                              project: str = "maxwell") -> str:
+    """SESSION-15: join preflight predictions to merge/CI/merge-gate outcomes per finding code."""
+    from switchboard.application.queries import preflight_calibration as calibration_q
+    services = _services()
+    return services.dumps(calibration_q.calibration(
+        project=project, code=code, since=since, min_outcomes=min_outcomes))
+
+
+def list_preflight_runs(task_id: str = "", head_sha: str = "",
+                        work_session_id: str = "", limit: int = 50,
+                        project: str = "maxwell") -> str:
+    """SESSION-15: list durable preflight prediction runs."""
+    from switchboard.application.queries import preflight_calibration as calibration_q
+    services = _services()
+    rows = calibration_q.list_runs(
+        project=project, task_id=task_id, head_sha=head_sha,
+        work_session_id=work_session_id, limit=limit)
+    return services.dumps({"run_count": len(rows), "runs": rows})
+
+
+def get_preflight_run(run_id: str, project: str = "maxwell") -> str:
+    """SESSION-15: fetch one durable preflight run with findings."""
+    from switchboard.application.queries import preflight_calibration as calibration_q
+    services = _services()
+    row = calibration_q.get_run(run_id, project=project)
+    if not row:
+        return services.dumps({"error": "preflight_run_not_found", "run_id": run_id})
+    return services.dumps(row)
+
+
 WORK_SESSION_TOOL_NAMES = (
     'create_work_session', 'create_managed_work_session', 'get_work_session',
     'get_work_session_health', 'list_work_sessions', 'list_session_health',
     'update_work_session', 'archive_work_session_workspace', 'repo_preflight',
     'preflight_work_session', 'pre_tool_check',
+    'get_preflight_calibration', 'list_preflight_runs', 'get_preflight_run',
 )
 
 

@@ -173,6 +173,34 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0043_ix_review_remediations_status",
      "CREATE INDEX IF NOT EXISTS ix_review_remediations_status "
      "ON review_remediations(status, updated_at)"),
+    # SESSION-15: durable preflight prediction→outcome learning loop
+    ("0044_preflight_runs",
+     "CREATE TABLE IF NOT EXISTS preflight_runs ("
+     "run_id TEXT PRIMARY KEY, task_id TEXT, work_session_id TEXT, claim_id TEXT, "
+     "agent_id TEXT, head_sha TEXT NOT NULL, base_sha TEXT, branch TEXT, "
+     "repo_role TEXT NOT NULL DEFAULT 'canonical', repo_path TEXT, "
+     "verdict TEXT NOT NULL, ok INTEGER NOT NULL DEFAULT 0, "
+     "finding_count INTEGER NOT NULL DEFAULT 0, "
+     "blocking_count INTEGER NOT NULL DEFAULT 0, "
+     "source TEXT NOT NULL, actor TEXT NOT NULL, "
+     "created_at REAL NOT NULL)"),
+    ("0045_ix_preflight_runs_task_head",
+     "CREATE INDEX IF NOT EXISTS ix_preflight_runs_task_head "
+     "ON preflight_runs(task_id, head_sha, created_at)"),
+    ("0046_ix_preflight_runs_session",
+     "CREATE INDEX IF NOT EXISTS ix_preflight_runs_session "
+     "ON preflight_runs(work_session_id, created_at)"),
+    ("0047_preflight_findings",
+     "CREATE TABLE IF NOT EXISTS preflight_findings ("
+     "run_id TEXT NOT NULL, finding_seq INTEGER NOT NULL, "
+     "code TEXT NOT NULL, failure_class TEXT NOT NULL, "
+     "severity TEXT NOT NULL, blocking INTEGER NOT NULL DEFAULT 0, "
+     "message TEXT NOT NULL, remediation TEXT NOT NULL DEFAULT '', "
+     "details_json TEXT NOT NULL DEFAULT '{}', "
+     "PRIMARY KEY(run_id, finding_seq))"),
+    ("0048_ix_preflight_findings_code",
+     "CREATE INDEX IF NOT EXISTS ix_preflight_findings_code "
+     "ON preflight_findings(code, blocking)"),
 ]
 
 

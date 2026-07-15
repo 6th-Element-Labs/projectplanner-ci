@@ -1164,6 +1164,28 @@ def create_managed_work_session(payload: Dict[str, Any], actor: str = "system",
         return _managed_workspace_error("work_session_create_failed",
                                         "Managed workspace was created but Work Session persist failed.",
                                         "failed_gate", result=created)
+    try:
+        from switchboard.storage.repositories.preflight_runs import record_preflight_run
+        recorded = record_preflight_run(
+            preflight,
+            work_session_id=created["work_session"]["work_session_id"],
+            actor=actor,
+            source="managed_create",
+            project=project,
+        )
+        if isinstance(recorded, dict) and recorded.get("run"):
+            hygiene = dict(created["work_session"].get("hygiene") or {})
+            hygiene["repo_preflight"] = preflight
+            hygiene["preflight_run_id"] = recorded["run"].get("run_id")
+            update_work_session(
+                created["work_session"]["work_session_id"],
+                {"hygiene": hygiene},
+                actor=actor, project=project,
+            )
+            created["work_session"] = get_work_session(
+                created["work_session"]["work_session_id"], project=project) or created["work_session"]
+    except Exception:  # noqa: BLE001
+        recorded = {"recorded": False}
     append_activity(
         "work_session.managed_created",
         actor,
@@ -1177,6 +1199,7 @@ def create_managed_work_session(payload: Dict[str, Any], actor: str = "system",
             "branch": branch,
             "base_ref": base_ref,
             "lease_id": lease.get("lease_id"),
+            "preflight_run_id": (recorded.get("run") or {}).get("run_id") if isinstance(recorded, dict) else None,
         },
         task_id=task_id,
         project=project,
@@ -1195,6 +1218,7 @@ def create_managed_work_session(payload: Dict[str, Any], actor: str = "system",
         "lease": lease,
         "session_token": session_token,
         "work_session": created["work_session"],
+        "preflight_run": recorded if isinstance(recorded, dict) else {"recorded": False},
     }
 
 
@@ -1285,8 +1309,26 @@ def preflight_work_session(work_session_id: str, actor: str = "system",
         expected_branch=expected_branch or session.get("branch") or "",
         expected_base_ref=expected_base_ref,
     )
+    try:
+        from switchboard.storage.repositories.preflight_runs import record_preflight_run
+        recorded = record_preflight_run(
+            report,
+            work_session_id=work_session_id,
+            claim_id=str(session.get("claim_id") or ""),
+            actor=actor,
+            source="preflight_work_session",
+            project=project,
+        )
+    except Exception as exc:  # noqa: BLE001 — never hide preflight behind a write failure
+        recorded = {
+            "recorded": False,
+            "error": "preflight_run_persist_failed",
+            "message": str(exc),
+        }
     hygiene = dict(session.get("hygiene") or {})
     hygiene["repo_preflight"] = report
+    if isinstance(recorded, dict) and recorded.get("run"):
+        hygiene["preflight_run_id"] = recorded["run"].get("run_id")
     updates = {
         "hygiene": hygiene,
         "dirty_status": "dirty" if report.get("dirty") else "clean",
@@ -1301,6 +1343,7 @@ def preflight_work_session(work_session_id: str, actor: str = "system",
         "work_session_id": work_session_id,
         "project": project,
         "preflight": report,
+        "preflight_run": recorded,
         "updated": updated,
     }
 

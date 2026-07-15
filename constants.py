@@ -240,6 +240,9 @@ WORK_SESSION_STRICT_PROFILES = {
     if profile.get("work_session_required")
 }
 REPO_PREFLIGHT_SCHEMA = "switchboard.repo_preflight.v1"
+PREFLIGHT_RUN_SCHEMA = "switchboard.preflight_run.v1"
+PREFLIGHT_FINDING_SCHEMA = "switchboard.preflight_finding.v1"
+PREFLIGHT_CALIBRATION_SCHEMA = "switchboard.preflight_calibration.v1"
 PRE_TOOL_CHECK_SCHEMA = "switchboard.pre_tool_check.v1"
 MERGE_GATE_SCHEMA = "switchboard.merge_gate.v1"
 REPO_PREFLIGHT_VERDICTS = {"pass", "warn", "deny"}
@@ -252,6 +255,7 @@ REPO_PREFLIGHT_DENY_CLASSES = {
     "shared_worktree_collision",
     "detached_head",
     "merge_or_rebase_in_progress",
+    "co_change_contract",
 }
 REPO_PREFLIGHT_WARN_CLASSES = {
     "missing_upstream",

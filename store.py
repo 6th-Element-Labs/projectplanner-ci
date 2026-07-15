@@ -37,6 +37,7 @@ _EXPORT_MODULES: Tuple[str, ...] = (
     "switchboard.storage.repositories.kpis_economics",
     "switchboard.storage.repositories.review_verdicts",
     "switchboard.storage.repositories.review_remediations",
+    "switchboard.storage.repositories.preflight_runs",
     "switchboard.domain.access.identity",
     "switchboard.domain.provenance.preflight",
     "switchboard.application.commands.pre_tool_check",
@@ -52,6 +53,7 @@ _EXPORT_MODULES: Tuple[str, ...] = (
     "switchboard.application.queries.control_plane_probe",
     "switchboard.application.queries.audit_export",
     "switchboard.application.queries.working_agreement",
+    "switchboard.application.queries.preflight_calibration",
     "read_cache",
 )
 
