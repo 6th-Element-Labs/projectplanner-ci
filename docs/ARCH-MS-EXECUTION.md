@@ -6,8 +6,9 @@
 **Coord charter:** [ADR-0013](decisions/0013-coord-board-process-strangler.md)  
 **Deliverables charter:** [ADR-0014](decisions/0014-deliverables-mission-process-strangler.md)  
 **Tally charter:** [ADR-0015](decisions/0015-tally-economics-process-strangler.md)  
+**Ingest charter:** [ADR-0016](decisions/0016-ingest-inbox-process-strangler.md)  
 **Board:** `project=switchboard` · workstream **ARCH-MS**  
-**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2` · `arch-ms-phase-3` · `arch-ms-tasks-live-cut` (segmentation — **Tasks chart green** via ARCH-MS-100) · `arch-ms-coord-service` (Coord/board peel) · `arch-ms-deliverables-service` (Deliverables/mission peel) · `arch-ms-tally-service` (Tally/economics peel)
+**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2` · `arch-ms-phase-3` · `arch-ms-tasks-live-cut` (segmentation — **Tasks chart green** via ARCH-MS-100) · `arch-ms-coord-service` (Coord/board peel) · `arch-ms-deliverables-service` (Deliverables/mission peel) · `arch-ms-tally-service` (Tally/economics peel) · `arch-ms-ingest-service` (Ingest/inbox peel)
 
 > **Ratchet retired 2026-07-12.** `test_size_ratchet.py` (the exact-match size gate) was deleted —
 > it forced every concurrent PR to compare-and-swap one shared integer against a moving `master`,
@@ -23,7 +24,30 @@
 **Phase 3 view:** [`?project=switchboard&deliverable=arch-ms-phase-3#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-3#tab-mission)  
 **Coord view:** [`?project=switchboard&deliverable=arch-ms-coord-service#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-coord-service#tab-mission)  
 **Deliverables service view:** [`?project=switchboard&deliverable=arch-ms-deliverables-service#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-deliverables-service#tab-mission)  
-**Tally service view:** [`?project=switchboard&deliverable=arch-ms-tally-service#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-tally-service#tab-mission)
+**Tally service view:** [`?project=switchboard&deliverable=arch-ms-tally-service#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-tally-service#tab-mission)  
+**Ingest service view:** [`?project=switchboard&deliverable=arch-ms-ingest-service#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-ingest-service#tab-mission)
+
+---
+
+## Ingest / inbox process strangler (service #6 candidate) — Mode A
+
+**Charter:** [ADR-0016 — Ingest/inbox process strangler](decisions/0016-ingest-inbox-process-strangler.md)  
+**Deliverable:** `arch-ms-ingest-service` · mission `arch-ms-segmentation`  
+**Depends on:** Tally charter (ARCH-MS-98)  
+**Thin surface:** [`docs/ingest/thin_day_one_surface.md`](ingest/thin_day_one_surface.md) — port **`:8126`**
+
+| Milestone | Intent |
+|---|---|
+| Independence | Charter + ports/writers/ops + Go/No-Go before any cut |
+| Process cut | Conditional Ingest uvicorn + Caddy (**Go only**) |
+| Exit | Live cut **or** documented No-Go; prior BC cuts still green |
+
+| Task | Title | Tracker | Repo evidence |
+|---|---|---|---|
+| **ARCH-MS-99** | Ingest service: ADR charter + thin surface | 🟡 | ADR-0016; `docs/ingest/thin_day_one_surface.md`; `tests/test_arch_ms99_ingest_charter.py` |
+
+Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
+rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
 
 ---
 
@@ -42,7 +66,7 @@
 
 | Task | Title | Tracker | Repo evidence |
 |---|---|---|---|
-| **ARCH-MS-98** | Tally service: ADR charter + thin surface | 🟡 | ADR-0015; `docs/tally/thin_day_one_surface.md`; `tests/test_arch_ms98_tally_charter.py` |
+| **ARCH-MS-98** | Tally service: ADR charter + thin surface | ✅ | PR #535 — ADR-0015; `docs/tally/thin_day_one_surface.md` |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
@@ -341,4 +365,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-16 | ARCH-MS-96 | Coord/board charter ADR-0013 + Mode A thin surface (`:8123`); `docs/coord/thin_day_one_surface.md`; `tests/test_arch_ms96_coord_charter.py` |
 | 2026-07-16 | ARCH-MS-97 | Deliverables/mission charter ADR-0014 + Mode A thin surface (`:8124`); `docs/deliverables/thin_day_one_surface.md`; `tests/test_arch_ms97_deliverables_charter.py` |
 | 2026-07-16 | ARCH-MS-98 | Tally/economics charter ADR-0015 + Mode A thin surface (`:8125`); `docs/tally/thin_day_one_surface.md`; `tests/test_arch_ms98_tally_charter.py` |
+| 2026-07-16 | ARCH-MS-99 | Ingest/inbox charter ADR-0016 + Mode A thin surface (`:8126`); `docs/ingest/thin_day_one_surface.md`; `tests/test_arch_ms99_ingest_charter.py` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
