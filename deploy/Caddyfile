@@ -1,6 +1,7 @@
 # Caddy auto-provisions a Let's Encrypt cert for plan.taikunai.com once DNS
 # points at this VM, and reverse-proxies to the app. That's the whole TLS story.
-# /mcp* -> the MCP server (Streamable HTTP, :8111); everything else -> the web app (:8110).
+# /mcp* -> MCP (:8111); /api/auth* -> Auth process-cut (:8121, ARCH-MS-76);
+# everything else -> the web app (:8110). Rollback Auth: remove /api/auth* handles.
 
 # CONSOL-8 (ADR-0007): the edge did TLS/compression/caching/proxying but shipped no
 # security headers and no access log. These snippets add both in the file we already own —
@@ -51,6 +52,23 @@ plan.taikunai.com {
                 dial_timeout 2s
                 response_header_timeout 5s
             }
+        }
+    }
+    # ARCH-MS-76: Auth process cut — /api/auth* → switchboard-auth (:8121).
+    # Monolith (:8110) still mounts Auth for rollback. Revert = delete these two
+    # handle blocks and `caddy reload` (see docs/runbooks/auth-caddy-cutover-rollback.md).
+    handle /api/auth* {
+        reverse_proxy 127.0.0.1:8121 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
         }
     }
     handle {

@@ -398,32 +398,35 @@ def run_caddy_drill_artifacts() -> Dict[str, Any]:
     auth_fragment = ROOT / "deploy" / "skeleton" / "Caddyfile.auth-fragment.example"
     runbook = ROOT / "docs" / "runbooks" / "auth-caddy-cutover-rollback.md"
     live_caddy = ROOT / "deploy" / "Caddyfile"
+    live_unit = ROOT / "deploy" / "switchboard-auth.service"
     live_text = live_caddy.read_text(encoding="utf-8") if live_caddy.is_file() else ""
-    # Live Caddy must NOT yet route /api/auth* to a second port (cut is ARCH-MS-75).
-    live_has_auth_cut = "handle /api/auth" in live_text and "812" in live_text
+    # ARCH-MS-76 applied the live cut: /api/auth* → :8121. Artifacts + rollback path remain.
+    live_has_auth_cut = "handle /api/auth" in live_text and "8121" in live_text
     checklist = [
-        "Paste commented fragment into a staging Caddyfile (not production) first",
-        "Start second uvicorn on an unused localhost port",
-        "caddy reload; smoke /api/auth/session + /health",
+        "Confirm switchboard-auth is healthy on 127.0.0.1:8121",
+        "Live deploy/Caddyfile routes /api/auth* → :8121 (ARCH-MS-76)",
+        "Smoke /api/auth/session + login 401 contract through the edge",
         "Rollback: remove Auth handle block; caddy reload; confirm traffic on :8110",
-        "Do not enable production cut until ARCH-MS-75 Go",
+        "Fragment example retained as drill reference under deploy/skeleton/",
     ]
     ok = (
         auth_fragment.is_file()
         and runbook.is_file()
         and live_caddy.is_file()
-        and not live_has_auth_cut
+        and live_unit.is_file()
+        and live_has_auth_cut
     )
     return {
         "ok": ok,
         "auth_fragment": str(auth_fragment.relative_to(ROOT)),
         "runbook": str(runbook.relative_to(ROOT)),
+        "live_unit": str(live_unit.relative_to(ROOT)),
         "live_caddy_has_auth_cut": live_has_auth_cut,
         "checklist": checklist,
         "verdict": (
-            "pass_drill_artifacts_present_live_uncut"
+            "pass_live_auth_cut_with_rollback_artifacts"
             if ok else
-            "missing_artifacts_or_premature_live_cut"
+            "missing_artifacts_or_incomplete_live_cut"
         ),
     }
 

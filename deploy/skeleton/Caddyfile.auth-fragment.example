@@ -1,20 +1,13 @@
-# ARCH-MS-84 — commented Caddy reverse_proxy snippet for a future Auth process cut.
-# Paste into deploy/Caddyfile ONLY after independence Go (ARCH-MS-75) and a soak on
-# a second uvicorn. Until then, leave unused so live `/api/auth*` stays on the
-# monolith (:8110). Rollback = delete these handle blocks and `caddy reload`.
+# Auth Caddy reverse_proxy fragment (ARCH-MS-84 drill → applied in ARCH-MS-76).
 #
-# Pair with: docs/runbooks/auth-caddy-cutover-rollback.md
-# Port: replace 8121 with the Auth unit's localhost port (skeleton default is 8120;
-# keep Auth on a distinct port when both are present).
+# Live production cut lives in deploy/Caddyfile (handle /api/auth* → 127.0.0.1:8121).
+# Keep this file as the rollback/re-cut reference snippet. Pair with:
+#   docs/runbooks/auth-caddy-cutover-rollback.md
+#   deploy/switchboard-auth.service
+#
+# Rollback = delete the Auth handle blocks from the live Caddyfile and `caddy reload`
+# (monolith :8110 still mounts Auth).
 
-# handle /api/auth/health* {
-#     reverse_proxy 127.0.0.1:8121 {
-#         transport http {
-#             dial_timeout 2s
-#             response_header_timeout 5s
-#         }
-#     }
-# }
 # handle /api/auth* {
 #     reverse_proxy 127.0.0.1:8121 {
 #         transport http {
@@ -25,5 +18,7 @@
 #         health_interval 5s
 #         health_timeout 3s
 #         fail_duration 10s
+#         lb_try_duration 5s
+#         lb_try_interval 250ms
 #     }
 # }

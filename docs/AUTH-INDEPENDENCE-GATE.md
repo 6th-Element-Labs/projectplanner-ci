@@ -86,7 +86,8 @@ Measured by ARCH-MS-84 harnesses (`scripts/arch_ms84_architecture_ratchets.py`,
 | G6 | Operator decision | Explicit Go recorded on board | ✅ Operator requested ARCH-MS-75 via Switchboard (2026-07-15); board comment on ARCH-MS-75 records G6 Go. |
 
 **Harness recommendation (not G6):** ~~**Conditional Go**~~ → **Operator Go recorded** for ARCH-MS-75
-(side-by-side Auth process). Production Caddy `/api/auth*` cutover remains **ARCH-MS-76**.
+(side-by-side Auth process). **ARCH-MS-76** applied the production Caddy `/api/auth*` → `:8121`
+cutover (rollback via runbook).
 
 **No-Go (keep Auth in-process)** if any of G1–G5 fail, or if cutting would create two writers /
 network-wrap unresolved coupling. No-Go is a valid Phase 2 exit path (ADR-0011 Decision 4).
@@ -117,7 +118,7 @@ Executable: `python scripts/arch_ms84_auth_ops_proof.py`.
 | Multi-process SQLite contention | **Pass** | Auth worker + Access worker, 40 rounds each on one `project_registry.db`: **0** lock errors, 80/80 ops ok (~1.5s Auth / ~0.4s Access on laptop). Short-load only — production soak still required before G6. |
 | Second uvicorn RSS budget | **Pass** | Skeleton uvicorn ~**51 MiB** RSS vs soft budget **80 MiB**; ~**199 MiB** headroom vs interactive `MemoryLow=250M`. |
 | 401/403 parity | **Pass** | Unauthenticated session / bad login / change-password → **401** (never 403); authenticated session → 200. Contract for a future remote Auth process. |
-| Caddy cutover/rollback drill | **Artifacts ready** | [`docs/runbooks/auth-caddy-cutover-rollback.md`](runbooks/auth-caddy-cutover-rollback.md) + [`deploy/skeleton/Caddyfile.auth-fragment.example`](../deploy/skeleton/Caddyfile.auth-fragment.example). Live `deploy/Caddyfile` still has **no** Auth path cut. |
+| Caddy cutover/rollback drill | **Live (ARCH-MS-76)** | [`docs/runbooks/auth-caddy-cutover-rollback.md`](runbooks/auth-caddy-cutover-rollback.md); live `deploy/Caddyfile` routes `/api/auth*` → `:8121`; fragment retained under [`deploy/skeleton/Caddyfile.auth-fragment.example`](../deploy/skeleton/Caddyfile.auth-fragment.example). |
 
 ### Caveats before G6
 

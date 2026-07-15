@@ -94,10 +94,11 @@ sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-reconcile.timer deploy/projectplanner-coordinator-audit.service \
   deploy/projectplanner-coordinator-audit.timer deploy/projectplanner-claim-gate.service \
   deploy/projectplanner-claim-gate.timer deploy/projectplanner-agent-host.service \
+  deploy/switchboard-auth.service \
   deploy/projectplanner-interactive.slice deploy/projectplanner-batch.slice \
   /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp
+sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp switchboard-auth
 sudo systemctl enable --now projectplanner-monitors.timer
 sudo systemctl enable --now projectplanner-reconcile.timer
 sudo systemctl enable --now projectplanner-coordinator-audit.timer
@@ -105,6 +106,8 @@ sudo systemctl enable --now projectplanner-claim-gate.timer
 # Optional but recommended for Switchboard dogfood: consumes message-only wake intents.
 # It uses PM_HOST_LANES=__MESSAGE_ONLY__ so it will not claim lane-scoped work.
 sudo systemctl enable --now projectplanner-agent-host
+# ARCH-MS-76: prove Auth is up on :8121 BEFORE reloading Caddy (which routes /api/auth*).
+curl -sS http://127.0.0.1:8121/health   # expect {"status":"ok","service":"switchboard-auth"}
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 # PERF-3: zram compressed-RAM swap (fast) instead of disk swap (100000x slower page faults).
 sudo bash deploy/setup-zram-swap.sh
@@ -114,6 +117,27 @@ bash scripts/verify_cgroup_slices.sh
 bash scripts/verify_memory_isolation.sh
 ```
 
+### Auth process-cut cutover checklist (ARCH-MS-76)
+
+Live edge routes `/api/auth*` → `switchboard-auth` on `127.0.0.1:8121`. The monolith still
+mounts the Auth router for **rollback** (green façade). Full drill:
+[`docs/runbooks/auth-caddy-cutover-rollback.md`](../docs/runbooks/auth-caddy-cutover-rollback.md).
+
+**First enable (or after a No-Go skip was reversed):**
+1. `sudo systemctl enable --now switchboard-auth`
+2. `curl -sS http://127.0.0.1:8121/health` → 200
+3. Confirm repo `deploy/Caddyfile` contains `handle /api/auth*` → `:8121`
+4. `sudo caddy validate --adapter caddyfile --config deploy/Caddyfile`
+5. `sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy`
+6. Smoke through the public edge:
+   - `curl -sS -o /dev/null -w '%{http_code}\n' https://plan.taikunai.com/api/auth/session` → 401
+   - bad password `POST /api/auth/login` → **401** (never 403)
+   - register / login / logout happy path
+7. Prefer `bash deploy/redeploy.sh` thereafter — it starts Auth **before** reloading Caddy.
+
+**Rollback (< ~60s):** remove the `/api/auth*` handle blocks from `/etc/caddy/Caddyfile`
+(or restore the pre-cut file), `sudo systemctl reload caddy`, re-smoke against monolith
+`:8110`, then optionally `sudo systemctl stop switchboard-auth`.
 ### Off-box backups (HARDEN-43)
 Prod SQLite lives only on this box's disk. Set up daily off-box snapshots + a
 tested restore path — full details in [`docs/BACKUP-RESTORE-RUNBOOK.md`](../docs/BACKUP-RESTORE-RUNBOOK.md).
@@ -136,7 +160,9 @@ remove `PM_BOOTSTRAP_ADMIN_PASSWORD` from `.env` and restart `projectplanner`.
 ```bash
 curl -s http://127.0.0.1:8110/health            # {"status":"ok","service":"taikun-pm"}  (cheap liveness)
 curl -s http://127.0.0.1:8110/health/deep      # ops readiness: task + project counts
+curl -s http://127.0.0.1:8121/health            # ARCH-MS-76 Auth process-cut
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
+systemctl is-active switchboard-auth
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
 systemctl list-timers projectplanner-coordinator-audit.timer
@@ -230,11 +256,12 @@ cd /opt/projectplanner && bash deploy/redeploy.sh
 unit changes used to reach prod only if someone remembered the extra `cp` (that is how the
 Caddyfile drifted from the repo). It copies every `deploy/*.service`/`*.timer`, mirrors the
 Caddyfile (validating it first — a broken edge is never reloaded), restarts
-`projectplanner{,-gateway,-mcp}`, and restarts any auxiliary timer/service that is currently
-active. Flags: `RUN_CI=1` runs the on-box strict CI gate first (CI otherwise runs off-box);
-`SKIP_CADDY=1` leaves the edge untouched. The post-restart health gate retries for a bounded
-30-second window by default; set `HEALTH_TIMEOUT_SECONDS` and `HEALTH_INTERVAL_SECONDS` to tune
-that window without replacing the fail-closed final result.
+`projectplanner{,-gateway,-mcp}` **and** `switchboard-auth`, proves both `:8110` and `:8121`
+`/health` are 200, **then** reloads Caddy, and restarts any auxiliary timer/service that is
+currently active. Flags: `RUN_CI=1` runs the on-box strict CI gate first (CI otherwise runs
+off-box); `SKIP_CADDY=1` leaves the edge untouched. The post-restart health gate retries for a
+bounded 30-second window by default; set `HEALTH_TIMEOUT_SECONDS` and
+`HEALTH_INTERVAL_SECONDS` to tune that window without replacing the fail-closed final result.
 
 It restarts only units that are **already active**, so it won't fight timers you stopped during
 a HARDEN-32 wedge. A brand-new unit still needs its one-time
@@ -315,6 +342,7 @@ implemented and verified:
 - `/opt/projectplanner`
 - `/var/lib/projectplanner`
 - `projectplanner*.service` and `projectplanner*.timer`
+- `switchboard-auth.service` (ARCH-MS-76 Auth process-cut)
 - `PM_*` environment variables
 - GitHub remote `6th-Element-Labs/projectplanner`
 

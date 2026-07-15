@@ -1,6 +1,3 @@
-# Live cutover unit lives at deploy/switchboard-auth.service (ARCH-MS-76).
-# This copy stays under deploy/auth/ for soak/docs parity.
-
 # /etc/systemd/system/switchboard-auth.service
 # ARCH-MS-76 — Auth process-cut unit. Caddy routes /api/auth* → :8121.
 # Monolith (:8110) keeps the Auth router mounted for rollback (green façade).

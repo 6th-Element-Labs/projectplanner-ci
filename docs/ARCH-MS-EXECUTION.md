@@ -47,7 +47,8 @@ big-bang rewrite / frontend swap.
 | **ARCH-MS-82** | 2B0: Auth ports — remove store/auth/notify imports | ✅ | PR #492 — ports + adapters; `tests/test_arch_ms82_auth_ports.py` |
 | **ARCH-MS-83** | 2B0: Auth ownership, outage policy, secrets fail-fast | ✅ | PR #495 — `docs/AUTH-INDEPENDENCE-GATE.md`; `ensure_identity`; JWT secret fail-fast |
 | **ARCH-MS-84** | 2B0: Architecture ratchets + Auth cut ops proof | ✅ | PR #498 — `scripts/arch_ms84_*`; gate G2/G5 measured |
-| **ARCH-MS-75** | 2B: Extract Auth as standalone uvicorn (**Go only**) | 🟡 | `src/switchboard/services/auth/`; `deploy/auth/*.example` (side-by-side :8121; Caddy cut = ARCH-MS-76) |
+| **ARCH-MS-75** | 2B: Extract Auth as standalone uvicorn (**Go only**) | ✅ | PR #501 — `src/switchboard/services/auth/`; side-by-side `:8121` |
+| **ARCH-MS-76** | 2B: Caddy + systemd cutover for Auth (**Go only**) | 🟡 | Live `deploy/Caddyfile` `/api/auth*` → `:8121`; `deploy/switchboard-auth.service`; PROVISION + rollback runbook |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.

@@ -150,42 +150,30 @@ ok(logout.status_code == 200, f"logout status {logout.status_code}")
 after = client.get("/api/auth/session")
 ok(after.status_code == 401, f"session after logout is 401 (got {after.status_code})")
 
-# --- dormancy: no live Caddy cut; monolith still owns Auth mount --------------
+# --- façade + package surface (Caddy cut lives in ARCH-MS-76) ---------------
 app_impl_src = entrypoint_source("app")
 ok(
     "switchboard.services.auth" not in app_impl_src
     or "services.auth" not in app_impl_src.replace("services.auth_port", ""),
     "live app_impl does not import services.auth process package",
 )
-# Stronger: process package path should not appear
 ok("switchboard.services.auth" not in app_impl_src,
    "app_impl does not reference switchboard.services.auth")
 ok("_global_auth_router" in app_impl_src or "routers.auth" in app_impl_src
    or "auth.routes" in app_impl_src,
-   "monolith still mounts Auth router (side-by-side green façade)")
-
-caddy = (ROOT / "deploy" / "Caddyfile").read_text(encoding="utf-8")
-ok("8121" not in caddy, "production Caddyfile does not route :8121")
-ok("handle /api/auth" not in caddy or "8121" not in caddy,
-   "production Caddyfile has no Auth→8121 cut")
-
-live_units = [p.name for p in (ROOT / "deploy").glob("*.service")]
-ok("switchboard-auth.service" not in live_units,
-   "no enabled (non-.example) Auth systemd unit in deploy/")
+   "monolith still mounts Auth router (rollback green façade)")
 
 unit = ROOT / "deploy" / "auth" / "switchboard-auth.service.example"
 readme = ROOT / "deploy" / "auth" / "README.md"
 frag = ROOT / "deploy" / "skeleton" / "Caddyfile.auth-fragment.example"
 ok(unit.is_file(), "deploy/auth/switchboard-auth.service.example exists")
 ok(readme.is_file(), "deploy/auth/README.md exists")
-ok(frag.is_file(), "Caddyfile.auth-fragment.example still present for ARCH-MS-76")
+ok(frag.is_file(), "Caddyfile.auth-fragment.example retained as drill reference")
 unit_text = unit.read_text(encoding="utf-8")
 ok("switchboard.services.auth.app:create_app" in unit_text
    or "switchboard.services.auth.app:app" in unit_text,
    "systemd example points at Auth uvicorn app")
 ok("8121" in unit_text, "systemd example uses port 8121")
-ok("ARCH-MS-76" in unit_text or "SIDE-BY-SIDE" in unit_text or "Do NOT enable" in unit_text,
-   "systemd example warns about Caddy cutover / side-by-side")
 
 gate = (ROOT / "docs" / "AUTH-INDEPENDENCE-GATE.md").read_text(encoding="utf-8")
 ok("G6" in gate and ("Go" in gate or "operator" in gate.lower()),

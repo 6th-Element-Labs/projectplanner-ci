@@ -23,11 +23,13 @@ ROOT="${PLAN_ROOT:-/opt/projectplanner}"
 CADDY_UNIT="${PLAN_CADDY_UNIT:-caddy}"
 CADDY_LIVE="/etc/caddy/Caddyfile"
 # Core web tier — always on; a redeploy must restart these and they must come back healthy.
-APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp)
+# ARCH-MS-76: switchboard-auth is required once Caddy routes /api/auth* → :8121.
+APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp switchboard-auth)
 # Auxiliary units (timers + agent host). Restarted only if currently active, so unit-file
 # changes take effect without force-starting a unit an operator deliberately stopped (e.g.
 # timers halted during a HARDEN-32 wedge). A brand-new unit still needs a one-time
 # `sudo systemctl enable --now <unit>` — this is a redeploy, not first-time provisioning.
+# First Auth cutover: enable switchboard-auth BEFORE reloading Caddy (see PROVISION.md).
 AUX_UNITS=(projectplanner-agent-host.service
     projectplanner-monitors.timer projectplanner-reconcile.timer
     projectplanner-coordinator-audit.timer projectplanner-claim-gate.timer
@@ -68,7 +70,30 @@ sudo cp deploy/*.service deploy/*.timer /etc/systemd/system/
 sudo bash deploy/apply-least-privilege.sh
 sudo systemctl daemon-reload
 
-# 5. Sync the Caddyfile into /etc and reload Caddy — the step a bare `git pull` skips.
+# 5. Restart the web tier (strict) + any active auxiliary units so new code/units take effect.
+#    Auth (:8121) must be healthy BEFORE Caddy reloads /api/auth* onto it (ARCH-MS-76).
+section "restart services"
+sudo systemctl enable switchboard-auth >/dev/null 2>&1 || true
+sudo systemctl restart "${APP_SERVICES[@]}"
+for u in "${AUX_UNITS[@]}"; do
+    if systemctl is-active --quiet "$u"; then
+        sudo systemctl restart "$u"
+    fi
+done
+
+# 6. Prove Auth + monolith health before touching the edge.
+section "health (pre-Caddy)"
+if ! bash "$ROOT/deploy/wait-for-health.sh"; then
+    echo "!! /health is not 200 after restart — inspect: journalctl -u projectplanner -n 60 --no-pager" >&2
+    exit 1
+fi
+if ! HEALTH_URL=http://127.0.0.1:8121/health \
+    bash "$ROOT/deploy/wait-for-health.sh"; then
+    echo "!! Auth /health is not 200 — inspect: journalctl -u switchboard-auth -n 60 --no-pager" >&2
+    exit 1
+fi
+
+# 7. Sync the Caddyfile into /etc and reload Caddy — the step a bare `git pull` skips.
 #    Validate the repo copy BEFORE overwriting the live one: never reload a broken edge.
 if [ "${SKIP_CADDY:-0}" != "1" ] && command -v caddy >/dev/null 2>&1; then
     section "Caddyfile"
@@ -84,19 +109,4 @@ else
     echo "-- skipping Caddy sync (SKIP_CADDY=1 or caddy not installed)"
 fi
 
-# 6. Restart the web tier (strict) + any active auxiliary units so new code/units take effect.
-section "restart services"
-sudo systemctl restart "${APP_SERVICES[@]}"
-for u in "${AUX_UNITS[@]}"; do
-    if systemctl is-active --quiet "$u"; then
-        sudo systemctl restart "$u"
-    fi
-done
-
-# 7. Prove the box is serving; fail the deploy loudly if it isn't.
-section "health"
-if ! bash "$ROOT/deploy/wait-for-health.sh"; then
-    echo "!! /health is not 200 after restart — inspect: journalctl -u projectplanner -n 60 --no-pager" >&2
-    exit 1
-fi
 echo "redeploy complete."
