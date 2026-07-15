@@ -30,6 +30,8 @@ import subprocess
 import sys
 import time
 import urllib.parse
+import urllib.request
+import urllib.error
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -648,6 +650,100 @@ def supervisor_action(action, runner_session_id, options=None):
                 "transport": "http_chunked",
             },
         }
+    elif action == "inject":
+        try:
+            from codex.pty_stream import (
+                build_inject_url,
+                mint_inject_ticket,
+            )
+        except ModuleNotFoundError:
+            sys.path.insert(0, _HERE)
+            from codex.pty_stream import (
+                build_inject_url,
+                mint_inject_ticket,
+            )
+        status_cmd = [sys.executable, SUPERVISOR, "status", runner_session_id]
+        try:
+            out = subprocess.run(status_cmd, capture_output=True, text=True, timeout=15)
+            if out.returncode != 0:
+                return {"error": "supervisor_failed", "stderr": (out.stderr or "")[-4000:]}
+            meta = json.loads(out.stdout or "{}")
+        except Exception as e:
+            return {"error": type(e).__name__, "message": str(e)}
+        caller_task = str(options.get("task_id") or "").strip()
+        session_task = str(meta.get("task_id") or "").strip()
+        if not caller_task or not session_task or caller_task != session_task:
+            return {
+                "error": "wrong_session",
+                "reason": "task_mismatch",
+                "runner_session_id": runner_session_id,
+                "expected_task_id": session_task or None,
+                "provided_task_id": caller_task or None,
+            }
+        text = options.get("text")
+        if text is None:
+            text = options.get("message")
+        if not isinstance(text, str) or not text:
+            return {"error": "invalid_input", "reason": "text_required"}
+        kind = str(options.get("kind") or "freeform").strip().lower() or "freeform"
+        control = meta.get("control") or {}
+        streamer_pid = int(meta.get("streamer_pid") or 0)
+        stream_port = int(meta.get("stream_port") or 0)
+        stream_bind = str(meta.get("stream_bind") or "127.0.0.1")
+        streamer_alive = bool(streamer_pid and _pid_alive(streamer_pid))
+        port_listening = _tcp_port_open(stream_bind, stream_port) if stream_port else False
+        if not (meta.get("pty") and control.get("runner_inject") and stream_port
+                and meta.get("alive") and streamer_alive and port_listening):
+            return {
+                "error": "not_supported",
+                "reason": "runner_inject requires a live PTY-backed local session with an active streamer",
+            }
+        host_id = str(meta.get("host_id") or os.environ.get("PM_HOST_ID") or "")
+        ticket, expires_at = mint_inject_ticket(
+            runner_session_id=runner_session_id,
+            task_id=caller_task,
+            host_id=host_id,
+            ttl_seconds=int(options.get("ttl_seconds") or 120),
+        )
+        inject_url = build_inject_url(
+            bind_host=stream_bind,
+            port=stream_port,
+            runner_session_id=runner_session_id,
+            public_base=str(os.environ.get("PM_RUNNER_STREAM_PUBLIC_BASE") or ""),
+        )
+        payload = {
+            "ticket": ticket,
+            "task_id": caller_task,
+            "text": text,
+            "kind": kind,
+            "nl": bool(options.get("nl", options.get("newline", True))),
+        }
+        try:
+            req = urllib.request.Request(
+                inject_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8") or "{}")
+        except Exception as e:
+            return {"error": type(e).__name__, "message": str(e), "inject_url": inject_url}
+        if not body.get("injected"):
+            return {
+                "error": body.get("error") or "inject_failed",
+                "reason": body.get("reason") or "companion_refused",
+                "result": body,
+            }
+        return {
+            "injected": True,
+            "runner_session_id": runner_session_id,
+            "task_id": caller_task,
+            "kind": kind,
+            "bytes_written": body.get("bytes_written"),
+            "expires_at": expires_at,
+            "capabilities": {"inject": "supported"},
+        }
     else:
         return {"error": f"unsupported runner action {action}"}
     try:
@@ -714,7 +810,7 @@ def handle_runner_controls(inventory):
                 "host_id": host_id,
                 "status": "running",
                 "control": {"tier": "T3", "runner_kill": True, "managed_process": True,
-                            "runner_open": True, "runner_logs": True},
+                            "runner_open": True, "runner_inject": True, "runner_logs": True},
                 "metadata": {
                     "stream_url": result.get("stream_url"),
                     "stream_ticket_exp": result.get("expires_at"),
@@ -723,6 +819,15 @@ def handle_runner_controls(inventory):
                 },
                 "heartbeat_ttl_s": 60,
             })
+        if action == "inject" and result.get("injected"):
+            snapshot = {
+                "captured_at": time.time(),
+                "source": "runner_inject",
+                "runner_session_id": result.get("runner_session_id"),
+                "task_id": result.get("task_id"),
+                "kind": result.get("kind"),
+                "bytes_written": result.get("bytes_written"),
+            }
         status = "failed" if result.get("error") else "completed"
         _try("POST", P_COMPLETE_RUNNER_CONTROL,
              {"project": PROJECT, "host_id": host_id, "request_id": req_id,

@@ -84,7 +84,7 @@ def _register_bound_runner(task: dict[str, Any], body: dict[str, Any]) -> None:
         "status": "running",
         "cwd": (task.get("managed") or {}).get("workspace_path"),
         "control": {"tier": "T3", "runner_kill": True, "managed_process": True,
-                    "runner_open": True, "runner_logs": True},
+                    "runner_open": True, "runner_inject": True, "runner_logs": True},
         "metadata": {
             "wake_id": os.environ.get("PM_CO_WAKE_ID"),
             "work_session_id": body["work_session_id"],

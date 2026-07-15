@@ -15,17 +15,20 @@ from constants import DEFAULT_PROJECT
 from db.connection import _conn
 from db.core import _json_obj, _text_tail
 
-RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open"}
+RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open", "inject"}
 # COORD-34 / M4.6: operator Watch/Chat may open only when this bind is complete.
 # wake_id and work_session_id live in metadata_json; runner_sessions is SoT
 # (never add permanent EC2 instance_id columns on the task row).
+# CO-13: inject additionally requires matching task_id on the control request.
 RUNNER_BIND_FIELDS = ("task_id", "claim_id", "host_id", "wake_id", "work_session_id")
 RUNNER_WATCHABLE_STATUSES = frozenset({"ready", "running"})
 RUNNER_BIND_ERROR = "runner_bind_incomplete"
+RUNNER_INJECT_ERROR = "wrong_session"
 
 __all__ = [
     "RUNNER_BIND_FIELDS",
     "RUNNER_BIND_ERROR",
+    "RUNNER_INJECT_ERROR",
     "RUNNER_WATCHABLE_STATUSES",
     "_runner_session_row",
     "_upsert_runner_session_in",
@@ -91,6 +94,8 @@ def _runner_available_actions(session: Dict[str, Any]) -> List[str]:
         actions.append("logs")
     if has_host and control.get("runner_open"):
         actions.append("open")
+    if has_host and control.get("runner_inject"):
+        actions.append("inject")
     if control.get("runner_kill"):
         actions.append("kill")
     if control.get("runner_restart"):
@@ -533,6 +538,7 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
                            project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
     action = (action or "").strip().lower()
+    options = dict(options or {})
     if action not in RUNNER_CONTROL_ACTIONS:
         return {"requested": False, "error": "unsupported_action", "action": action}
     with _conn(project) as c:
@@ -542,12 +548,36 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
             return {"requested": False, "error": "runner_session_not_found",
                     "runner_session_id": runner_session_id}
         session = _runner_session_row(row, now=now, include_claim=True, c=c)
+        if action == "inject":
+            caller_task = str(options.get("task_id") or "").strip()
+            session_task = str(session.get("task_id") or "").strip()
+            if not caller_task or not session_task or caller_task != session_task:
+                return {
+                    "requested": False,
+                    "error": RUNNER_INJECT_ERROR,
+                    "error_code": RUNNER_INJECT_ERROR,
+                    "reason": "task_mismatch",
+                    "message": "runner_inject requires matching runner_session_id+task_id bind",
+                    "runner_session_id": runner_session_id,
+                    "expected_task_id": session_task or None,
+                    "provided_task_id": caller_task or None,
+                }
+            text = options.get("text")
+            if text is None:
+                text = options.get("message")
+            if not isinstance(text, str) or not text:
+                return {
+                    "requested": False,
+                    "error": "invalid_input",
+                    "reason": "text_required",
+                    "runner_session_id": runner_session_id,
+                }
         available = set(session.get("available_actions") or [])
         effect_payload = {
             "runner_session_id": runner_session_id,
             "host_id": session.get("host_id"),
             "action": action,
-            "options": options or {},
+            "options": options,
         }
         effect_claim = _store_facade()._claim_external_effect_in(
             c, "runner_control", session.get("host_id") or "agent_host",
@@ -592,7 +622,7 @@ def request_runner_control(runner_session_id: str, action: str, reason: str = ""
                 now,
                 json.dumps(snapshot, sort_keys=True),
                 json.dumps(result, sort_keys=True),
-                json.dumps(options or {}, sort_keys=True),
+                json.dumps(options, sort_keys=True),
                 effect_claim["effect_key"],
             ),
         )

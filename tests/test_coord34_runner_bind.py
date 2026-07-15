@@ -199,13 +199,16 @@ try:
         "runner_bind_incomplete",
         "/ixp/v1/runner_sessions/watch",
         "Watch / Chat",
+        "request_runner_inject",
+        "sendRunnerSessionChat",
     ):
-        ok(needle in app_js, f"app.js exposes UI-17 needle {needle}")
+        ok(needle in app_js, f"app.js exposes UI-17/CO-13 needle {needle}")
 
     mcp_src = (Path(ROOT) / "src/switchboard/mcp/tools/runner.py").read_text(encoding="utf-8")
     ok("resolve_runner_watch" in mcp_src
-       and "runner_bind_incomplete" in mcp_src,
-       "MCP runner tools advertise resolve_runner_watch + typed bind error")
+       and "runner_bind_incomplete" in mcp_src
+       and "request_runner_inject" in mcp_src,
+       "MCP runner tools advertise resolve_runner_watch + inject + typed bind error")
 
 finally:
     shutil.rmtree(TMP, ignore_errors=True)

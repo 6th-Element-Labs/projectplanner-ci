@@ -5,9 +5,10 @@ boundaries; shared runner_control commands own transport-neutral mapping.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 import auth
 import store
@@ -17,6 +18,22 @@ from switchboard.application.commands import runner_control as runner_control_co
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
+
+
+class RunnerInjectBody(BaseModel):
+    """Typed CO-13 inject request (keeps ARCH-MS-84 untyped-body ceiling flat)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    project: Optional[str] = None
+    runner_session_id: Optional[str] = None
+    id: Optional[str] = None
+    task_id: Optional[str] = None
+    text: Optional[str] = None
+    message: Optional[str] = None
+    kind: Optional[str] = None
+    reason: Optional[str] = None
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 def create_router(*, resolve_project: ProjectResolver,
@@ -121,6 +138,20 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.post("/ixp/v1/request_runner_open")
     async def ixp_request_runner_open(request: Request, body: dict = Body(...)):
         return _request_control(request, body, "open")
+
+    @router.post("/ixp/v1/request_runner_inject")
+    async def ixp_request_runner_inject(request: Request, body: RunnerInjectBody):
+        payload = body.model_dump(exclude_none=True)
+        options = dict(payload.get("options") or {})
+        if payload.get("task_id") and "task_id" not in options:
+            options["task_id"] = payload.get("task_id")
+        if payload.get("text") is not None and "text" not in options:
+            options["text"] = payload.get("text")
+        elif payload.get("message") is not None and "text" not in options and "message" not in options:
+            options["text"] = payload.get("message")
+        if payload.get("kind") and "kind" not in options:
+            options["kind"] = payload.get("kind")
+        return _request_control(request, payload, "inject", options=options)
 
     @router.get("/ixp/v1/runner_controls")
     async def ixp_runner_controls(project: str = Query(store.DEFAULT_PROJECT),

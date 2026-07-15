@@ -6,8 +6,9 @@ processes it launched or that registered a stable runner_session_id. The supervi
 session record, injects PM_RUNNER_SESSION_ID/PM_AGENT_ID into the child environment, and can
 terminate the child process group with a pre-kill snapshot.
 
-CO-12: local sessions launch under a real PTY by default. A companion pty_stream process holds
-the master fd, dual-writes stdout.log, and serves authenticated HTTP chunked streams.
+CO-12/CO-13: local sessions launch under a real PTY by default. A companion pty_stream process
+holds the master fd, dual-writes stdout.log, serves authenticated HTTP chunked streams, and
+accepts bound-session POST injects for Mission panel chat.
 """
 import argparse
 import json
@@ -172,6 +173,7 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
                     "--log-path", str(log_path),
                     "--master-fd", str(master_fd),
                     "--host-id", host_id,
+                    "--task-id", str(task_id or ""),
                     "--bind-host", os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1"),
                     "--port", str(int(os.environ.get("PM_RUNNER_STREAM_PORT", "0") or 0)),
                     "--ready-path", str(ready_path),
@@ -230,6 +232,7 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
             "runner_kill": True,
             "managed_process": True,
             "runner_open": True,
+            "runner_inject": True,
             "runner_logs": True,
         }
     else:

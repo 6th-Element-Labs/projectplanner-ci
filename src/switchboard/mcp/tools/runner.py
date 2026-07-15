@@ -144,10 +144,27 @@ def request_runner_open(runner_session_id: str, ctx: Context,
         actor=auth.actor(principal), principal_id=principal["id"]))
 
 
+def request_runner_inject(runner_session_id: str, ctx: Context,
+                          task_id: str, text: str, kind: str = "freeform",
+                          reason: str = "", project: str = "maxwell") -> str:
+    """Inject chat into a bound live Codex PTY (CO-13). Requires matching task_id.
+
+    Unsupported or mismatched-session requests are refused fail-closed.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    return services.dumps(runner_control_command.request_mapping_result(
+        {"runner_session_id": runner_session_id, "action": "inject",
+         "reason": reason,
+         "options": {"task_id": task_id, "text": text, "kind": kind or "freeform"},
+         "project": project},
+        actor=auth.actor(principal), principal_id=principal["id"]))
+
+
 def list_runner_control_requests(project: str = "maxwell", status: str = "",
                                  host_id: str = "",
                                  runner_session_id: str = "") -> str:
-    """List pending/completed runner snapshot/kill/restart/health/log/open control requests."""
+    """List pending/completed runner snapshot/kill/restart/health/log/open/inject control requests."""
     services = _services()
     return services.dumps(runner_control_command.list_control_requests(
         status=status, host_id=host_id, runner_session_id=runner_session_id,
@@ -191,6 +208,7 @@ RUNNER_TOOL_NAMES = (
     "request_runner_health",
     "request_runner_logs",
     "request_runner_open",
+    "request_runner_inject",
     "list_runner_control_requests",
     "claim_runner_control",
     "complete_runner_control",

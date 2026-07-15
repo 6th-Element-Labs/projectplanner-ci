@@ -25,6 +25,7 @@ modules = (
     ("plan-chat", "SwitchboardPlanChat"),
     ("closure", "SwitchboardClosure"),
     ("mission", "SwitchboardMission"),
+    ("runner-session", "SwitchboardRunnerSession"),
     ("project-admin", "SwitchboardProjectAdmin"),
 )
 positions = [INDEX.find(f'src="js/{name}.js?v=') for name, _ in modules]
