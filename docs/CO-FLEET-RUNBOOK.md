@@ -77,6 +77,24 @@ homes are purged after the managed process is interrupted; CO-7's active-lease f
 the writeback authority, so an interrupted or stale Codex process cannot overwrite newer
 auth state.
 
+## COORD-17 closure proof
+
+COORD-15 proves the first Claude personal-plan cold start; it is not sufficient evidence for
+COORD-17. Closure requires one redacted bundle covering Claude, Codex, and Cursor, both persistent
+and ephemeral host classes, the tenant/account negative matrix, lease replay and actor fencing,
+plan-exhaustion pause/resume, durable Work Session plus Git evidence for every provider, runtime
+purge, AWS scale-to-zero, and zero unauthorized metered spend.
+
+Validate that bundle without copying provider output or credential values into the result:
+
+```bash
+python3 scripts/coord17_acceptance.py /path/to/redacted-coord17-evidence.json
+```
+
+The command emits `switchboard.coord17_acceptance.v1` and exits non-zero for every missing gate.
+It deliberately rejects secret-shaped keys such as raw credentials, auth capsules, access tokens,
+and API keys. A green unit test or a single-provider smoke cannot substitute for the live bundle.
+
 ## Control and rollback
 
 The real-time launch switch is SSM `/switchboard/co/launch-enabled`:

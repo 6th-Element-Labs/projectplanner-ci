@@ -1,8 +1,8 @@
-"""CO Fleet / dedicated-host work function for Codex personal-subscription smoke.
+"""Cursor personal-account worker with one fenced Switchboard credential lease.
 
-Mirrors adapters/claude_personal_worker.py for the CO-11 path:
-claim → register_runner_session(task_id+claim_id+host_id) → exclusive credential lease →
-ChatGPT personal preflight → refuse metered API keys → short Codex smoke → purge/release.
+The worker mirrors the Claude/Codex BYOA lifecycle: bind the runner, acquire and
+admit one account-scoped lease, materialize the key only inside an isolated runtime,
+run the real Cursor Agent binary, publish redacted evidence, then purge and release.
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 from typing import Any
@@ -24,33 +25,11 @@ except ModuleNotFoundError:  # package import in tests and library callers
 from switchboard.integrations.provider_runtime_auth import ProviderRuntimeAuth
 from switchboard.integrations.worker_credential_envelope import decrypt_on_worker
 
-# Align with co_fleet.py forbidden personal-subscription fallback fields.
-_METERED_API_KEYS = ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN")
 
-
-def _account_attribution(provider: str, provider_account_id: str) -> str:
-    digest = hashlib.sha256(f"{provider}\x1f{provider_account_id}".encode()).hexdigest()
-    return f"acct-{digest[:16]}"
-
-
-def _redacted_binding(body: dict[str, Any], claim_id: str, lease_id: str) -> dict[str, Any]:
-    return {
-        "tenant_id": _binding().get("tenant_id"),
-        "user_id": body["user_id"],
-        "provider": body["provider"],
-        "provider_account_id": body["provider_account_id"],
-        "provider_account_attribution": _account_attribution(
-            body["provider"], body["provider_account_id"]),
-        "credential_reference": body["credential_reference"],
-        "credential_lease_id": lease_id,
-        "project": body["project"],
-        "task_id": body["task_id"],
-        "host_id": body["host_id"],
-        "runner_session_id": body["runner_session_id"],
-        "work_session_id": body["work_session_id"],
-        "claim_id": claim_id,
-        "credential_values_redacted": True,
-    }
+_FORBIDDEN_METERED_KEYS = (
+    "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+)
 
 
 def _binding() -> dict[str, Any]:
@@ -73,6 +52,11 @@ def _git(workspace: str, *args: str) -> str:
     return (completed.stdout or "").strip()
 
 
+def _account_attribution(provider: str, provider_account_id: str) -> str:
+    digest = hashlib.sha256(f"{provider}\x1f{provider_account_id}".encode()).hexdigest()
+    return f"acct-{digest[:16]}"
+
+
 def _lease_body(binding: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
     managed = task.get("managed") or {}
     values = {
@@ -93,24 +77,25 @@ def _lease_body(binding: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]
             "provider_account_id", "task_id", "host_id", "runner_session_id",
             "work_session_id", "account_affinity_id")):
         raise RuntimeError("CO runtime binding is incomplete")
+    if values["provider"] != "cursor":
+        raise RuntimeError("Cursor worker requires provider=cursor")
     return values
 
 
-def _register_bound_runner(task: dict[str, Any], body: dict[str, Any]) -> None:
+def _runner_body(task: dict[str, Any], body: dict[str, Any], status: str) -> dict[str, Any]:
     claim_id = str(task.get("claim_id") or task.get("id") or "")
     runtime_binding = _binding()
-    result = sb._http("POST", "/ixp/v1/register_runner_session", {
+    return {
         "project": body["project"],
         "runner_session_id": body["runner_session_id"],
         "host_id": body["host_id"],
         "agent_id": os.environ.get("PM_AGENT_ID"),
-        "runtime": "codex",
+        "runtime": "cursor-agent",
         "task_id": body["task_id"],
         "claim_id": claim_id,
-        "status": "running",
+        "status": status,
         "cwd": (task.get("managed") or {}).get("workspace_path"),
-        "control": {"tier": "T3", "runner_kill": True, "managed_process": True,
-                    "runner_open": True, "runner_inject": True, "runner_logs": True},
+        "control": {"tier": "T3", "runner_kill": True, "managed_process": True},
         "metadata": {
             "tenant_id": runtime_binding.get("tenant_id"),
             "user_id": body["user_id"],
@@ -128,79 +113,57 @@ def _register_bound_runner(task: dict[str, Any], body: dict[str, Any]) -> None:
             "provider": body["provider"],
             "account_affinity_id": body["account_affinity_id"],
             "credential_admission_phase": "claim_bound",
-            "auth_lane": "chatgpt_personal",
+            "auth_lane": "cursor_personal",
+            **({"terminal_reason": f"personal_subscription_worker_{status}"}
+               if status in {"completed", "failed"} else {}),
         },
         "heartbeat_ttl_s": 1800,
-    })
+    }
+
+
+def _register_runner(task: dict[str, Any], body: dict[str, Any], status: str) -> None:
+    result = sb._http("POST", "/ixp/v1/register_runner_session",
+                      _runner_body(task, body, status))
     if not result or result.get("error"):
-        raise RuntimeError("runner claim binding failed")
-    if not (result.get("task_id") or body["task_id"]):
-        raise RuntimeError("runner session missing task_id")
-    if not claim_id:
-        raise RuntimeError("runner session missing claim_id")
-    if not (result.get("host_id") or body["host_id"]):
-        raise RuntimeError("runner session missing host_id")
+        raise RuntimeError("runner binding update failed")
 
 
-def _terminalize_bound_runner(
-    task: dict[str, Any], body: dict[str, Any], *, succeeded: bool,
-) -> None:
-    claim_id = str(task.get("claim_id") or task.get("id") or "")
-    runtime_binding = _binding()
-    result = sb._http("POST", "/ixp/v1/register_runner_session", {
-        "project": body["project"],
-        "runner_session_id": body["runner_session_id"],
-        "host_id": body["host_id"],
-        "agent_id": os.environ.get("PM_AGENT_ID"),
-        "runtime": "codex",
-        "task_id": body["task_id"],
-        "claim_id": claim_id,
-        "status": "completed" if succeeded else "failed",
-        "cwd": (task.get("managed") or {}).get("workspace_path"),
-        "control": {"tier": "T3", "runner_kill": True, "managed_process": True,
-                    "runner_open": True, "runner_inject": True, "runner_logs": True},
-        "metadata": {
-            "tenant_id": runtime_binding.get("tenant_id"),
-            "user_id": body["user_id"],
-            "project": body["project"],
-            "task_id": body["task_id"],
-            "host_id": body["host_id"],
-            "runner_session_id": body["runner_session_id"],
-            "claim_id": claim_id,
-            "wake_id": os.environ.get("PM_CO_WAKE_ID"),
-            "work_session_id": body["work_session_id"],
-            "credential_reference": body["credential_reference"],
-            "provider_account_id": body["provider_account_id"],
-            "provider_account_attribution": _account_attribution(
-                body["provider"], body["provider_account_id"]),
-            "provider": body["provider"],
-            "account_affinity_id": body["account_affinity_id"],
-            "credential_admission_phase": "claim_bound",
-            "auth_lane": "chatgpt_personal",
-            "terminal_reason": (
-                "personal_subscription_worker_completed" if succeeded
-                else "personal_subscription_worker_failed"
-            ),
-        },
-        "heartbeat_ttl_s": 1800,
-    })
-    if not result or result.get("error"):
-        raise RuntimeError("runner terminal state update failed")
-
-
-def _refuse_metered_keys(env: dict[str, str]) -> None:
-    present = [key for key in _METERED_API_KEYS if env.get(key)]
+def _refuse_forbidden_keys(env: dict[str, str]) -> None:
+    present = [key for key in _FORBIDDEN_METERED_KEYS if env.get(key)]
     if present:
-        raise RuntimeError(
-            "metered Codex/OpenAI API key paths must be absent: " + ",".join(present)
-        )
+        raise RuntimeError("unrelated metered provider paths must be absent: " + ",".join(present))
+
+
+def _cursor_binary(path: str = "") -> str:
+    if path:
+        return path
+    return shutil.which("cursor-agent") or shutil.which("agent") or "cursor-agent"
 
 
 def _smoke_command() -> list[str]:
-    raw = str(os.environ.get("PM_CODEX_SMOKE_COMMAND") or "codex --version").strip()
-    if not raw:
-        return ["codex", "--version"]
-    return raw.split()
+    raw = str(os.environ.get("PM_CURSOR_SMOKE_COMMAND") or "").strip()
+    return shlex.split(raw) if raw else [_cursor_binary(), "--version"]
+
+
+def _redacted_binding(body: dict[str, Any], claim_id: str, lease_id: str) -> dict[str, Any]:
+    binding = _binding()
+    return {
+        "tenant_id": binding.get("tenant_id"),
+        "user_id": body["user_id"],
+        "provider": body["provider"],
+        "provider_account_id": body["provider_account_id"],
+        "provider_account_attribution": _account_attribution(
+            body["provider"], body["provider_account_id"]),
+        "credential_reference": body["credential_reference"],
+        "credential_lease_id": lease_id,
+        "project": body["project"],
+        "task_id": body["task_id"],
+        "host_id": body["host_id"],
+        "runner_session_id": body["runner_session_id"],
+        "work_session_id": body["work_session_id"],
+        "claim_id": claim_id,
+        "credential_values_redacted": True,
+    }
 
 
 def run(task: dict[str, Any]) -> dict[str, Any]:
@@ -210,7 +173,6 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
     claim_id = str(task.get("claim_id") or task.get("id") or "")
     wake_id = str(os.environ.get("PM_CO_WAKE_ID") or "")
     workspace = str((task.get("managed") or {}).get("workspace_path") or os.getcwd())
-    reference = lease_body["credential_reference"]
     lease_id = ""
     runtime_root: Path | None = None
     credential = ""
@@ -218,11 +180,12 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
     wake_completed = False
     runner_registered = False
     try:
-        _register_bound_runner(task, lease_body)
+        _register_runner(task, lease_body, "running")
         runner_registered = True
         lease = sb._http(
             "POST",
-            f"/api/projects/{project}/provider-connections/{reference}/leases",
+            f"/api/projects/{project}/provider-connections/"
+            f"{lease_body['credential_reference']}/leases",
             lease_body,
             timeout=30,
         )
@@ -262,15 +225,18 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
         private_pem = b""
         private_key = None
 
-        runtime = ProviderRuntimeAuth(base_environment=os.environ)
+        runtime = ProviderRuntimeAuth(
+            base_environment=os.environ,
+            cli_paths={"cursor": _cursor_binary()},
+        )
         provider = str(lease_body["provider"])
         runtime_root = runtime._runtime_root(provider)
         provider_env, _state = runtime._materialize(provider, credential, runtime_root)
-        _refuse_metered_keys(provider_env)
+        _refuse_forbidden_keys(provider_env)
         preflight = runtime._preflight(provider, provider_env, workspace)
         credential = ""
-        if not preflight.get("authenticated") or preflight.get("auth_mode") != "chatgpt_personal":
-            raise RuntimeError("Codex personal-subscription preflight failed")
+        if not preflight.get("authenticated") or preflight.get("auth_mode") != "personal_api_key":
+            raise RuntimeError("Cursor personal-account preflight failed")
 
         activated = sb._http(
             "POST",
@@ -282,20 +248,15 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
             raise RuntimeError("provider credential lease activation failed")
 
         completed = subprocess.run(
-            _smoke_command(),
-            cwd=workspace,
-            env=provider_env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=120,
-            check=False,
+            _smoke_command(), cwd=workspace, env=provider_env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=120, check=False,
         )
-        _refuse_metered_keys(provider_env)
+        _refuse_forbidden_keys(provider_env)
+        provider_env.pop("CURSOR_API_KEY", None)
         if completed.returncode != 0 or not (
                 (completed.stdout or "").strip() or (completed.stderr or "").strip()):
-            raise RuntimeError("Codex personal-subscription smoke failed")
+            raise RuntimeError("Cursor personal-account smoke failed")
         output = ((completed.stdout or "") + (completed.stderr or "")).encode()
         branch = _git(workspace, "branch", "--show-current")
         head_sha = _git(workspace, "rev-parse", "HEAD")
@@ -304,7 +265,7 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
             shutil.rmtree(purged_root, ignore_errors=True)
             runtime_root = None
             if purged_root.exists():
-                raise RuntimeError("Codex runtime residue purge failed")
+                raise RuntimeError("Cursor runtime residue purge failed")
         sb._http("POST", "/txp/v1/complete_wake", {
             "project": project,
             "wake_id": wake_id,
@@ -312,11 +273,11 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
             "agent_id": os.environ.get("PM_AGENT_ID"),
             "result": {
                 "started": True,
-                "reason": "codex_personal_subscription_smoke_completed",
+                "reason": "cursor_personal_account_smoke_completed",
                 "provider": provider,
                 "auth_mode": preflight.get("auth_mode"),
                 "credential_values_redacted": True,
-                "metered_api_key_paths_absent": True,
+                "metered_fallback": False,
             },
         })
         wake_completed = True
@@ -325,35 +286,26 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
             "head_sha": head_sha,
             "git_diff_check": "clean" if not _git(workspace, "status", "--porcelain") else "dirty",
             "verification": {
-                "schema": "switchboard.co11_codex_personal_smoke.v1",
+                "schema": "switchboard.cursor_personal_smoke.v1",
                 "started": True,
                 "provider": provider,
                 "auth_mode": preflight.get("auth_mode"),
                 "personal_subscription": True,
                 "api_key_fallback": False,
                 "metered_fallback": False,
-                "metered_api_key_paths_absent": True,
-                "wake_id": wake_id,
-                "host_id": lease_body["host_id"],
-                "runner_session_id": lease_body["runner_session_id"],
-                "work_session_id": lease_body["work_session_id"],
-                "task_id": lease_body["task_id"],
-                "claim_id": claim_id,
-                "lease_id": lease_id,
-                "output_sha256": hashlib.sha256(output).hexdigest(),
-                "output_bytes": len(output),
                 "provider_output_redacted": True,
                 "credential_values_redacted": True,
-                "binding": _redacted_binding(lease_body, claim_id, lease_id),
+                "residue_purged": True,
+                "output_sha256": hashlib.sha256(output).hexdigest(),
+                "output_bytes": len(output),
                 "provider_account_attribution": _account_attribution(
                     provider, lease_body["provider_account_id"]),
-                "residue_purged": True,
+                "binding": _redacted_binding(lease_body, claim_id, lease_id),
             },
         }
     finally:
         credential = ""
-        for key in _METERED_API_KEYS:
-            provider_env.pop(key, None)
+        provider_env.pop("CURSOR_API_KEY", None)
         if runtime_root:
             shutil.rmtree(runtime_root, ignore_errors=True)
         if lease_id:
@@ -375,7 +327,7 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
                     "agent_id": os.environ.get("PM_AGENT_ID"),
                     "result": {
                         "started": False,
-                        "reason": "codex_personal_subscription_runtime_failed",
+                        "reason": "cursor_personal_account_runtime_failed",
                         "credential_values_redacted": True,
                     },
                 })
@@ -383,7 +335,7 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
                 pass
         if runner_registered:
             try:
-                _terminalize_bound_runner(task, lease_body, succeeded=wake_completed)
+                _register_runner(task, lease_body, "completed" if wake_completed else "failed")
             except Exception:
                 pass
 

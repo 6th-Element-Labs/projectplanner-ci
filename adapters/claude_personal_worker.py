@@ -20,6 +20,31 @@ from switchboard.integrations.provider_runtime_auth import ProviderRuntimeAuth
 from switchboard.integrations.worker_credential_envelope import decrypt_on_worker
 
 
+def _account_attribution(provider: str, provider_account_id: str) -> str:
+    digest = hashlib.sha256(f"{provider}\x1f{provider_account_id}".encode()).hexdigest()
+    return f"acct-{digest[:16]}"
+
+
+def _redacted_binding(body: dict[str, Any], claim_id: str, lease_id: str) -> dict[str, Any]:
+    return {
+        "tenant_id": _binding().get("tenant_id"),
+        "user_id": body["user_id"],
+        "provider": body["provider"],
+        "provider_account_id": body["provider_account_id"],
+        "provider_account_attribution": _account_attribution(
+            body["provider"], body["provider_account_id"]),
+        "credential_reference": body["credential_reference"],
+        "credential_lease_id": lease_id,
+        "project": body["project"],
+        "task_id": body["task_id"],
+        "host_id": body["host_id"],
+        "runner_session_id": body["runner_session_id"],
+        "work_session_id": body["work_session_id"],
+        "claim_id": claim_id,
+        "credential_values_redacted": True,
+    }
+
+
 def _binding() -> dict[str, Any]:
     try:
         value = json.loads(os.environ.get("PM_CO_ACCOUNT_BINDING_JSON", "{}"))
@@ -64,6 +89,8 @@ def _lease_body(binding: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]
 
 
 def _register_bound_runner(task: dict[str, Any], body: dict[str, Any]) -> None:
+    runtime_binding = _binding()
+    claim_id = str(task.get("claim_id") or task.get("id") or "")
     result = sb._http("POST", "/ixp/v1/register_runner_session", {
         "project": body["project"],
         "runner_session_id": body["runner_session_id"],
@@ -76,10 +103,19 @@ def _register_bound_runner(task: dict[str, Any], body: dict[str, Any]) -> None:
         "cwd": (task.get("managed") or {}).get("workspace_path"),
         "control": {"tier": "T3", "runner_kill": True, "managed_process": True},
         "metadata": {
+            "tenant_id": runtime_binding.get("tenant_id"),
+            "user_id": body["user_id"],
+            "project": body["project"],
+            "task_id": body["task_id"],
+            "host_id": body["host_id"],
+            "runner_session_id": body["runner_session_id"],
+            "claim_id": claim_id,
             "wake_id": os.environ.get("PM_CO_WAKE_ID"),
             "work_session_id": body["work_session_id"],
             "credential_reference": body["credential_reference"],
             "provider_account_id": body["provider_account_id"],
+            "provider_account_attribution": _account_attribution(
+                body["provider"], body["provider_account_id"]),
             "provider": body["provider"],
             "account_affinity_id": body["account_affinity_id"],
             "credential_admission_phase": "claim_bound",
@@ -98,6 +134,8 @@ def _terminalize_bound_runner(
     The runner registry is an audited drain input, so process exit must not leave it
     advertising ``running`` merely because an exception bypassed the happy path.
     """
+    runtime_binding = _binding()
+    claim_id = str(task.get("claim_id") or task.get("id") or "")
     result = sb._http("POST", "/ixp/v1/register_runner_session", {
         "project": body["project"],
         "runner_session_id": body["runner_session_id"],
@@ -110,10 +148,19 @@ def _terminalize_bound_runner(
         "status": "completed" if succeeded else "failed",
         "control": {"tier": "T3", "runner_kill": True, "managed_process": True},
         "metadata": {
+            "tenant_id": runtime_binding.get("tenant_id"),
+            "user_id": body["user_id"],
+            "project": body["project"],
+            "task_id": body["task_id"],
+            "host_id": body["host_id"],
+            "runner_session_id": body["runner_session_id"],
+            "claim_id": claim_id,
             "wake_id": os.environ.get("PM_CO_WAKE_ID"),
             "work_session_id": body["work_session_id"],
             "credential_reference": body["credential_reference"],
             "provider_account_id": body["provider_account_id"],
+            "provider_account_attribution": _account_attribution(
+                body["provider"], body["provider_account_id"]),
             "provider": body["provider"],
             "account_affinity_id": body["account_affinity_id"],
             "credential_admission_phase": "claim_bound",
@@ -240,6 +287,12 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
         output = (completed.stdout or "").encode()
         branch = _git(workspace, "branch", "--show-current")
         head_sha = _git(workspace, "rev-parse", "HEAD")
+        if runtime_root:
+            purged_root = runtime_root
+            shutil.rmtree(purged_root, ignore_errors=True)
+            runtime_root = None
+            if purged_root.exists():
+                raise RuntimeError("Claude runtime residue purge failed")
         sb._http("POST", "/txp/v1/complete_wake", {
             "project": project,
             "wake_id": wake_id,
@@ -260,10 +313,12 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
             "git_diff_check": "clean" if not _git(workspace, "status", "--porcelain") else "dirty",
             "verification": {
                 "schema": "switchboard.co_byoa_smoke.v1",
+                "started": True,
                 "provider": provider,
                 "auth_mode": preflight.get("auth_mode"),
                 "personal_subscription": True,
                 "api_key_fallback": False,
+                "metered_fallback": False,
                 "wake_id": wake_id,
                 "host_id": lease_body["host_id"],
                 "runner_session_id": lease_body["runner_session_id"],
@@ -273,6 +328,11 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
                 "output_sha256": hashlib.sha256(output).hexdigest(),
                 "output_bytes": len(output),
                 "provider_output_redacted": True,
+                "credential_values_redacted": True,
+                "binding": _redacted_binding(lease_body, claim_id, lease_id),
+                "provider_account_attribution": _account_attribution(
+                    provider, lease_body["provider_account_id"]),
+                "residue_purged": True,
             },
         }
     finally:

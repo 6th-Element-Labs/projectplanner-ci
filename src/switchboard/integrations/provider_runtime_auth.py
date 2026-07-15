@@ -41,6 +41,12 @@ _PROVIDER_CLI = {
     "anthropic-claude": "claude",
     "cursor": "cursor-agent",
 }
+_PROVIDER_CLI_CANDIDATES = {
+    # Cursor renamed the standalone binary from ``cursor-agent`` to ``agent``.
+    # Fleet images may carry either name while they roll forward, so discovery is
+    # explicit and bounded instead of silently falling back to an unrelated CLI.
+    "cursor": ("cursor-agent", "agent"),
+}
 _PROVIDER_PREFLIGHT = {
     "openai-codex": ("login", "status"),
     "anthropic-claude": ("auth", "status", "--json"),
@@ -301,7 +307,14 @@ class ProviderRuntimeAuth:
     def _preflight_once(
         self, provider: str, env: Mapping[str, str], cwd: str | None,
     ) -> dict[str, Any]:
-        executable = self.cli_paths.get(provider) or _PROVIDER_CLI[provider]
+        executable = self.cli_paths.get(provider)
+        if not executable:
+            candidates = _PROVIDER_CLI_CANDIDATES.get(provider) or (_PROVIDER_CLI[provider],)
+            executable = next(
+                (resolved for candidate in candidates
+                 if (resolved := shutil.which(candidate, path=env.get("PATH")))),
+                candidates[0],
+            )
         command = [executable, *_PROVIDER_PREFLIGHT[provider]]
         try:
             completed = self.command_runner(
