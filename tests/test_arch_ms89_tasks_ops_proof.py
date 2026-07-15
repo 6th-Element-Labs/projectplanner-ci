@@ -49,8 +49,8 @@ ok(verdict.get("schema") == "switchboard.tasks_independence_verdict.v1",
 ok(verdict.get("verdict") in {"go", "nogo"},
    f"verdict is go|nogo (got {verdict.get('verdict')!r})")
 ok(
-    verdict.get("task_id") in {"ARCH-MS-89", "ARCH-MS-92", "ARCH-MS-93"},
-    f"verdict task_id is ARCH-MS-89/92/93 (got {verdict.get('task_id')!r})",
+    verdict.get("task_id") in {"ARCH-MS-89", "ARCH-MS-92", "ARCH-MS-93", "ARCH-MS-94"},
+    f"verdict task_id is ARCH-MS-89/92/93/94 (got {verdict.get('task_id')!r})",
 )
 if verdict.get("verdict") == "nogo":
     ok(bool(verdict.get("notes") or (verdict.get("evidence") or {}).get("rationale")
@@ -123,9 +123,9 @@ else:
         ok(bool((verdict.get("supersedes") or {}).get("decision") or
                 (verdict.get("evidence") or {}).get("prior_conditional_go")),
            "Path B No-Go records prior Conditional Go provenance")
-    elif verdict.get("task_id") == "ARCH-MS-92" and verdict.get("verdict") == "go":
+    elif verdict.get("task_id") in {"ARCH-MS-92", "ARCH-MS-94"} and verdict.get("verdict") == "go":
         ok((verdict.get("inputs") or {}).get("G6_operator_go") is True,
-           "ARCH-MS-92 Path A Go records operator G6")
+           f"{verdict.get('task_id')} Path A Go records operator G6")
         ok(bool((verdict.get("supersedes") or {}).get("decision")),
            "Path A Go records supersedes provenance")
     elif gng.get("verdict") == "go":

@@ -2,10 +2,10 @@
   "schema": "switchboard.tasks_independence_verdict.v1",
   "verdict": "go",
   "decision": "go",
-  "task_id": "ARCH-MS-92",
+  "task_id": "ARCH-MS-94",
   "recorded_at": "2026-07-16",
-  "recorded_by": "cursor/ARCH-MS-92-3b-caddy-cutover-dual-strip-tasks-go-only",
-  "deliverable_id": "arch-ms-phase-3",
+  "recorded_by": "cursor/ARCH-MS-94-tasks-live-cut-operator-g6-reopen-path-a",
+  "deliverable_id": "arch-ms-tasks-live-cut",
   "charter": "ADR-0012 Decision 4–5",
   "inputs": {
     "G1_exclusive_writers": true,
@@ -20,9 +20,10 @@
     "ports": "ARCH-MS-87 / PR #516",
     "ownership_writers_binding": "ARCH-MS-88 / PR #517",
     "ops_proof": "ARCH-MS-89 / PR #520 — scripts/arch_ms89_tasks_ops_proof.py",
+    "operator_g6": "ARCH-MS-94 — formal operator reopen of Path A (this verdict)",
     "package_extract": "ARCH-MS-90 / PR #522",
     "side_by_side_parity": "ARCH-MS-91 / PR #524",
-    "caddy_cutover": "ARCH-MS-92 — deploy/Caddyfile + deploy/switchboard-tasks.service",
+    "caddy_cutover": "ARCH-MS-92 / PR #525 — deploy/Caddyfile + deploy/switchboard-tasks.service",
     "dual_strip": "PM_TASKS_HTTP_PRIMARY=service on deploy/projectplanner.service",
     "rollback": "docs/runbooks/tasks-caddy-cutover-rollback.md",
     "phase3_exit": "scripts/arch_ms_phase3_exit_gate.py Path A"
@@ -33,7 +34,7 @@
   "supersedes": {
     "task_id": "ARCH-MS-93",
     "decision": "nogo",
-    "note": "Operator continued ARCH-MS-90→92 Go path after Path B provisional exit; G6 recorded with live Mode A Caddy cut + dual-strip."
+    "note": "ARCH-MS-94 records operator G6 and authorizes Path A. Provisional Path B No-Go from ARCH-MS-93 is superseded. Live Mode A Caddy cut + dual-strip already shipped via ARCH-MS-92 (#525)."
   },
-  "notes": "Phase 3 Path A: Tasks Mode A uvicorn behind Caddy on :8122. Sibling dispatch/chat/review_* remain on monolith. MCP stays on :8111. Deploy order: start switchboard-tasks before Caddy reload."
+  "notes": "Operator G6 (ARCH-MS-94): Path A reopened. Tasks Mode A uvicorn behind Caddy on :8122. Sibling dispatch/chat/review_* remain on monolith. MCP stays on :8111. Deploy order: start switchboard-tasks before Caddy reload."
 }

@@ -1,7 +1,13 @@
 # Tasks process cut — No-Go rationale (ARCH-MS-93 / Path B)
 
-**Decision:** **No-Go** for a live Tasks uvicorn / Caddy cut in Phase 3.
-Tasks remains **in-process**. This is a valid Phase 3 exit under
+> **SUPERSEDED (2026-07-16):** ARCH-MS-94 recorded operator G6 and reopened Path A
+> (`verdict=go`, `process_cut_authorized=true`). Live Mode A cut shipped via ARCH-MS-92
+> (#525). Keep this file for audit only — see
+> [`tasks_independence_verdict.json`](tasks_independence_verdict.json) and
+> [`tasks_cut_waived.md`](tasks_cut_waived.md).
+
+**Historical decision (ARCH-MS-93):** **No-Go** for a live Tasks uvicorn / Caddy cut
+in Phase 3. Tasks remained **in-process** under the provisional Path B exit of
 [ADR-0012](../decisions/0012-phase3-tasks-process-strangler.md) Decision 4–5.
 
 | Field | Value |
