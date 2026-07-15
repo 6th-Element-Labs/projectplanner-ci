@@ -15,11 +15,11 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-import store  # monolith: reuse the registry path + connection settings
+from . import deps as auth_deps
 
 
 def _conn() -> sqlite3.Connection:
-    return store._registry_conn()
+    return auth_deps.registry().registry_conn()
 
 
 def _exec_write(sql: str, params: tuple = ()) -> None:
@@ -43,7 +43,7 @@ def _exec_write(sql: str, params: tuple = ()) -> None:
 
 def init() -> None:
     """Ensure the base registry + the two auth-owned tables exist."""
-    store.init_project_registry()  # creates users / project_role_grants / etc.
+    auth_deps.registry().init_project_registry()  # creates users / project_role_grants / etc.
     with _conn() as c:
         c.executescript(
             """
@@ -264,7 +264,7 @@ def consume_reset_token(raw_token: str) -> Optional[str]:
 # ---- access resolution (deny-by-default) ------------------------------------
 def accessible_project_ids(user_id: str, is_superadmin: bool) -> List[str]:
     """Which projects this user may see. Superadmin → all; else grants + owned + org."""
-    all_ids = store.project_ids()
+    all_ids = auth_deps.registry().project_ids()
     if is_superadmin:
         return all_ids
     allow: set = set()
@@ -287,7 +287,7 @@ def accessible_project_ids(user_id: str, is_superadmin: bool) -> List[str]:
             "WHERE om.user_id=? AND (COALESCE(pa.visibility, 'org') != 'private' "
             "                        OR om.role IN ('admin', 'owner'))", (user_id,)):
             allow.add(r["project_id"])
-    # preserve store.project_ids() ordering / allowlist
+    # preserve registry project_ids() ordering / allowlist
     return [pid for pid in all_ids if pid in allow]
 
 

@@ -11,9 +11,6 @@ from typing import Callable
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-import auth as _auth
-import store as _store
-
 from . import contracts, service, session
 
 router = APIRouter()
@@ -22,6 +19,9 @@ ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 GlobalUserScopes = Callable[[dict, str], list]
 GlobalPrincipal = Callable[[dict, list], dict]
+AuthModeFn = Callable[[], str]
+PublicPrincipalFn = Callable[[dict], dict]
+PrincipalProjectRolesFn = Callable[[str, str], list]
 
 
 def _is_secure(request: Request) -> bool:
@@ -143,23 +143,31 @@ async def reset_password(request: Request, body: contracts.ResetPasswordBody):
 def create_me_router(*, resolve_project: ProjectResolver,
                      resolve_principal: PrincipalResolver,
                      global_user_scopes: GlobalUserScopes,
-                     global_principal: GlobalPrincipal) -> APIRouter:
+                     global_principal: GlobalPrincipal,
+                     default_project: str,
+                     auth_mode: AuthModeFn,
+                     public_principal: PublicPrincipalFn,
+                     principal_project_roles: PrincipalProjectRolesFn) -> APIRouter:
     """Build the ``/api/auth/me`` router — maps the global session (or a bearer
-    token) to per-project effective scopes for UI compatibility."""
+    token) to per-project effective scopes for UI compatibility.
+
+    Monolith auth/store helpers are injected by the composition root so this
+    package never imports root ``auth`` / ``store`` (ARCH-MS-82).
+    """
     me_router = APIRouter()
 
     @me_router.get("/api/auth/me")
-    async def auth_me(request: Request, project: str = Query(_store.DEFAULT_PROJECT)):
+    async def auth_me(request: Request, project: str = Query(default_project)):
         """UI compatibility: map the global session to per-project effective scopes."""
         user = service.current_user(request.cookies.get(session.COOKIE_NAME, ""))
         if user:
             proj = resolve_project(project)
             scopes = global_user_scopes(user, proj)
             principal = global_principal(user, scopes)
-            principal["project_roles"] = _store.principal_project_roles(proj, user["id"])
-            return {"principal": principal, "mode": _auth.auth_mode(), "project": proj}
+            principal["project_roles"] = principal_project_roles(proj, user["id"])
+            return {"principal": principal, "mode": auth_mode(), "project": proj}
         principal = resolve_principal(request, project, ("read",), dev_actor="web")
-        return {"principal": _auth.public_principal(principal),
-                "mode": _auth.auth_mode(), "project": resolve_project(project)}
+        return {"principal": public_principal(principal),
+                "mode": auth_mode(), "project": resolve_project(project)}
 
     return me_router

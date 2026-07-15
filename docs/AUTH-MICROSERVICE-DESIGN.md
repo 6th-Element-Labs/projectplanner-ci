@@ -16,22 +16,35 @@ The monolith keeps running. We extract **one bounded context at a time** into a 
 ## Auth package structure (mirrors ActionEngine)
 ```
 src/switchboard/api/routers/auth/
+  ports.py       # Protocols: PasswordHasher, AuthNotifier, AuthRegistry (ARCH-MS-82)
+  deps.py        # Port holders; configured from outside the package
   routes.py      # FastAPI routes: /api/auth/* — thin, calls service
   contracts.py   # Pydantic request/response models (RegisterBody, LoginBody, UserOut, SessionOut)
-  service.py     # AuthService: business logic (hashing, user CRUD, access resolution) — no HTTP
+  service.py     # AuthService: business logic — uses ports, no root store/auth/notify imports
   session.py     # SessionManager: issue/verify the session cookie
-  store.py       # auth persistence over the shared project registry
+  store.py       # auth persistence over the shared project registry (via AuthRegistry port)
+src/switchboard/api/auth_port_adapters.py
+  # Monolith adapters (PBKDF2 hasher, SMTP notifier, registry) — outside the auth package
 ```
-The routes are thin; all logic lives in `AuthService`; storage stays in `store.py` behind service methods (so we can later split the DB without touching callers).
+The routes are thin; all logic lives in `AuthService`; storage stays in `store.py` behind
+service methods and the `AuthRegistry` port (so we can later split the DB without touching
+callers). Password hashing and reset email are injected adapters — not direct monolith imports.
 
 ## Data model — **global** users, sessions, grants (in `project_registry.db`, the shared DB)
 ```
-users            (id, email UNIQUE, display_name, password_hash bcrypt,
-                  is_superadmin BOOL, status, created_at, last_login, login_count)
-auth_sessions    (token_hash, user_id, expires_at, created_at, ip, user_agent)   # global, not per-project
-project_grants   (user_id, project_id, role, scopes, granted_by, granted_at)     # deny-by-default
+users            (id, email UNIQUE, display_name, …)
+user_auth        (user_id PK, password_hash pbkdf2_sha256$…, is_superadmin, status,
+                  last_login, login_count, created_at, updated_at)
+auth_sessions_v2 (token_hash, user_id, expires_at, created_at, ip, user_agent, revoked_at)
+password_resets  (token_hash, user_id, created_at, expires_at, used_at)
+project_grants   (via project_role_grants — deny-by-default access)
 ```
-Reuses the existing `grant_project_role` semantics but keyed by global `user_id`. Migration seeds `users` from existing per-project password principals and marks **you** `is_superadmin=true`.
+**Password hashing (current reality):** PBKDF2-SHA256 (`pbkdf2_sha256$…` wire format via root
+`auth.password_hash` / `verify_password`, 210k iterations) — **not bcrypt**. Older drafts of
+this doc said bcrypt; that never shipped. Adapters wrap the PBKDF2 helpers (ARCH-MS-82).
+Reuses the existing `grant_project_role` semantics but keyed by global `user_id`. Migration
+seeds `users` from existing per-project password principals and marks **you**
+`is_superadmin=true`.
 
 ## Endpoints (ActionEngine-parity)
 | Method | Path | Body | Notes |

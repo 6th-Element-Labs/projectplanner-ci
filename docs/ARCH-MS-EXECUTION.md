@@ -43,7 +43,7 @@ big-bang rewrite / frontend swap.
 |---|---|---|---|
 | **ARCH-MS-72** | 2A: ADR — Phase 2 process strangler charter | 🟡 | This section + `docs/decisions/0011-phase2-process-strangler.md` |
 | **ARCH-MS-73** | 2A: Service skeleton — FastAPI + health + systemd/Caddy | ⬜ | — |
-| **ARCH-MS-82** | 2B0: Auth ports — remove store/auth/notify imports | ⬜ | — |
+| **ARCH-MS-82** | 2B0: Auth ports — remove store/auth/notify imports | 🟡 | ports + adapters; `tests/test_arch_ms82_auth_ports.py` |
 | **ARCH-MS-83** | 2B0: Auth ownership, outage policy, secrets fail-fast | ⬜ | — |
 | **ARCH-MS-84** | 2B0: Architecture ratchets + Auth cut ops proof | ⬜ | — |
 | **ARCH-MS-75** | 2B: Extract Auth as standalone uvicorn (**Go only**) | ⬜ | Blocked until independence Go |

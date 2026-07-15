@@ -37,6 +37,7 @@ _req_obs = request_observability.RequestObservability()
 # taikun_session JWT; agents/API callers keep bearer-token principals.
 import scripts.switchboard_path  # noqa: E402,F401
 from switchboard.api import deps  # noqa: E402
+from switchboard.api.auth_port_adapters import configure_auth_ports  # noqa: E402
 from switchboard.api.middleware import _write_required_scopes  # noqa: E402,F401
 from switchboard.api.middleware import register_middleware  # noqa: E402
 from switchboard.api.routers.auth import service as _auth_service, session as _auth_session, store as _auth_store  # noqa: E402
@@ -72,6 +73,7 @@ from switchboard.api.routers.spa import _asset_version  # noqa: E402,F401
 from switchboard.api.routers.spa import register_spa  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
+configure_auth_ports()
 _auth_store.init()
 app.include_router(_global_auth_router)
 
@@ -186,6 +188,10 @@ app.include_router(_create_me_router(
     resolve_principal=_principal,
     global_user_scopes=deps.global_user_scopes,
     global_principal=deps.global_principal,
+    default_project=store.DEFAULT_PROJECT,
+    auth_mode=auth.auth_mode,
+    public_principal=auth.public_principal,
+    principal_project_roles=store.principal_project_roles,
 ))
 app.include_router(_create_task_router(
     resolve_project=_proj,

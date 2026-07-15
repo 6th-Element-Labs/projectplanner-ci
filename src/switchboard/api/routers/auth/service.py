@@ -1,18 +1,16 @@
 """AuthService — global login / self-service signup / access resolution.
 
 Thin, HTTP-free business logic. Storage is AuthStore (registry DB); password
-hashing reuses the monolith's pbkdf2 helpers; sessions are JWT cookies.
+hashing and notifications arrive via injected ports (ARCH-MS-82); sessions are
+JWT cookies.
 """
 from __future__ import annotations
 
 import secrets
 from typing import Any, Dict, List, Optional, Tuple
 
-import auth as pw  # monolith: password_hash / verify_password (pbkdf2_sha256)
-import notify  # monolith: SMTP/Slack sender (dry-runs if SMTP unset)
-import store
-
 from . import contracts
+from . import deps as auth_deps
 from . import rate_limit
 from . import session
 from . import store as auth_store
@@ -37,7 +35,7 @@ class AuthError(Exception):
 
 def _accessible_projects(account: Dict[str, Any]) -> List[Dict[str, Any]]:
     ids = set(auth_store.accessible_project_ids(account["id"], account.get("is_superadmin")))
-    return [p for p in store.projects() if p.get("id") in ids]
+    return [p for p in auth_deps.registry().projects() if p.get("id") in ids]
 
 
 def register(email: str, display_name: str, password: str,
@@ -53,7 +51,7 @@ def register(email: str, display_name: str, password: str,
         raise AuthError("email_taken", "An account with this email already exists.", 409)
     account = auth_store.create_user(
         email, display_name or email.split("@")[0],
-        pw.password_hash(password), is_superadmin=False)
+        auth_deps.hasher().hash(password), is_superadmin=False)
     auth_store.record_login(account["id"])
     token, exp = session.issue(account, ip=ip, user_agent=user_agent)
     # projects is [] for a brand-new user — nothing to see until granted.
@@ -84,7 +82,7 @@ def login(email: str, password: str, *, remember_me: bool = False,
                           user_id=account.get("id"), user_agent=user_agent,
                           reason="account_disabled")
         raise AuthError("account_disabled", "This account is disabled.", 403)
-    if not pw.verify_password(password or "", account["password_hash"]):
+    if not auth_deps.hasher().verify(password or "", account["password_hash"]):
         rate_limit.record("login", "failure", ip=ip, email=email_norm,
                           user_id=account.get("id"), user_agent=user_agent,
                           reason="invalid_credentials")
@@ -119,28 +117,20 @@ def change_password(token: str, current_password: str, new_password: str) -> Dic
     account = session.verify(token or "")  # raw account incl. password_hash, or None
     if not account:
         raise AuthError("not_authenticated", "You are not signed in.", 401)
-    if not account.get("password_hash") or not pw.verify_password(current_password or "", account["password_hash"]):
+    hasher = auth_deps.hasher()
+    if not account.get("password_hash") or not hasher.verify(current_password or "", account["password_hash"]):
         raise AuthError("invalid_current_password", "Your current password is incorrect.", 403)
     if len(new_password or "") < 8:
         raise AuthError("weak_password", "New password must be at least 8 characters.", 422)
-    if pw.verify_password(new_password, account["password_hash"]):
+    if hasher.verify(new_password, account["password_hash"]):
         raise AuthError("password_unchanged", "New password must be different from the current one.", 422)
-    auth_store.set_password(account["id"], pw.password_hash(new_password))
+    auth_store.set_password(account["id"], hasher.hash(new_password))
     auth_store.revoke_user_sessions(account["id"], keep_token=session.sid_of(token) or "")
     return contracts.public_user(account, _accessible_projects(account))
 
 
 def _send_reset_email(to_email: str, reset_url: str) -> None:
-    notify.reply(
-        to=to_email,
-        subject="Reset your Taikun password",
-        text=(
-            "We received a request to reset your Taikun password.\n\n"
-            f"Create a new password:\n{reset_url}\n\n"
-            "This link expires in 1 hour and can be used once. "
-            "If you didn't request it, you can safely ignore this email."
-        ),
-    )
+    auth_deps.notifier().send_password_reset(to_email, reset_url)
 
 
 def request_password_reset(email: str, base_url: str,
@@ -201,7 +191,7 @@ def reset_password(token: str, new_password: str,
         rate_limit.record("reset_consume", "failure", ip=ip,
                           user_agent=user_agent, reason="invalid_token")
         raise AuthError("invalid_token", "This reset link is invalid or has expired.", 400)
-    auth_store.set_password(user_id, pw.password_hash(new_password))
+    auth_store.set_password(user_id, auth_deps.hasher().hash(new_password))
     auth_store.revoke_user_sessions(user_id)  # a reset signs out everywhere
     rate_limit.record("reset_consume", "success", ip=ip, user_id=user_id,
                       user_agent=user_agent)
