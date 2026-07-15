@@ -3,8 +3,9 @@
 **Phase 0 charter:** [ADR-0009](decisions/0009-microservices-modernization.md)  
 **Phase 2 charter:** [ADR-0011](decisions/0011-phase2-process-strangler.md)  
 **Phase 3 charter:** [ADR-0012](decisions/0012-phase3-tasks-process-strangler.md)  
+**Coord charter:** [ADR-0013](decisions/0013-coord-board-process-strangler.md)  
 **Board:** `project=switchboard` · workstream **ARCH-MS**  
-**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2` · `arch-ms-phase-3` · `arch-ms-tasks-live-cut` (segmentation — **Tasks chart green** via ARCH-MS-100)
+**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2` · `arch-ms-phase-3` · `arch-ms-tasks-live-cut` (segmentation — **Tasks chart green** via ARCH-MS-100) · `arch-ms-coord-service` (Coord/board peel)
 
 > **Ratchet retired 2026-07-12.** `test_size_ratchet.py` (the exact-match size gate) was deleted —
 > it forced every concurrent PR to compare-and-swap one shared integer against a moving `master`,
@@ -17,7 +18,30 @@
 **Canonical main (Phase 0 tracker baseline):** `5305090` (2026-07-12)  
 **Phase 0 view:** [`?project=switchboard&deliverable=arch-ms-phase-0#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-0#tab-mission)  
 **Phase 2 view:** [`?project=switchboard&deliverable=arch-ms-phase-2#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-2#tab-mission)  
-**Phase 3 view:** [`?project=switchboard&deliverable=arch-ms-phase-3#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-3#tab-mission)
+**Phase 3 view:** [`?project=switchboard&deliverable=arch-ms-phase-3#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-3#tab-mission)  
+**Coord view:** [`?project=switchboard&deliverable=arch-ms-coord-service#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-coord-service#tab-mission)
+
+---
+
+## Coord / board process strangler (service #3 candidate) — Mode A
+
+**Charter:** [ADR-0013 — Coord/board process strangler](decisions/0013-coord-board-process-strangler.md)  
+**Deliverable:** `arch-ms-coord-service` · mission `arch-ms-segmentation`  
+**Depends on:** Tasks live cut (ARCH-MS-95 / ARCH-MS-100)  
+**Thin surface:** [`docs/coord/thin_day_one_surface.md`](coord/thin_day_one_surface.md) — port **`:8123`**
+
+| Milestone | Intent |
+|---|---|
+| Independence | Charter + ports/writers/ops + Go/No-Go before any cut |
+| Process cut | Conditional Coord uvicorn + Caddy (**Go only**) |
+| Exit | Live cut **or** documented No-Go; Auth + Tasks still green |
+
+| Task | Title | Tracker | Repo evidence |
+|---|---|---|---|
+| **ARCH-MS-96** | Coord service: ADR charter + thin surface | 🟡 | ADR-0013; `docs/coord/thin_day_one_surface.md`; `tests/test_arch_ms96_coord_charter.py` |
+
+Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
+rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
 
 ---
 
@@ -266,4 +290,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-16 | ARCH-MS-94 | Operator G6 — formal reopen of Path A (`verdict=go`, `process_cut_authorized=true`); board comment on ARCH-MS-93 Path B superseded; `tests/test_arch_ms94_operator_g6.py` |
 | 2026-07-16 | ARCH-MS-95 | Post-G6 Path A live-cut closeout for `arch-ms-tasks-live-cut` (Caddy→:8122, dual-strip, gate green); close doc supersedes 91/92 as live-traffic gates; `tests/test_arch_ms95_tasks_live_cut.py` |
 | 2026-07-16 | ARCH-MS-100 | Exit: Tasks live cut proven — chart Tasks green; exit packet ready for deliverable closure verification; `tests/test_arch_ms100_tasks_live_cut_exit.py` |
+| 2026-07-16 | ARCH-MS-96 | Coord/board charter ADR-0013 + Mode A thin surface (`:8123`); `docs/coord/thin_day_one_surface.md`; `tests/test_arch_ms96_coord_charter.py` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
