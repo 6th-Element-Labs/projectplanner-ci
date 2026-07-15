@@ -1,9 +1,9 @@
-# ARCH-MS execution tracker — Phase 0 platform modernization
+# ARCH-MS execution tracker — platform modernization (Phase 0 → Phase 2)
 
-**Charter:** [ADR-0009](decisions/0009-microservices-modernization.md)  
-**Board:** `project=switchboard` · workstream **ARCH-MS** · deliverable **`arch-ms-phase-0`**  
-**Mission end state:** ADR-007 rails complete; `src/switchboard/` scaffold live; one REST+MCP pair
-uses `application/` commands; new feature code lands in `src/switchboard/`, not the monoliths.
+**Phase 0 charter:** [ADR-0009](decisions/0009-microservices-modernization.md)  
+**Phase 2 charter:** [ADR-0011](decisions/0011-phase2-process-strangler.md)  
+**Board:** `project=switchboard` · workstream **ARCH-MS**  
+**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2`
 
 > **Ratchet retired 2026-07-12.** `test_size_ratchet.py` (the exact-match size gate) was deleted —
 > it forced every concurrent PR to compare-and-swap one shared integer against a moving `master`,
@@ -13,10 +13,50 @@ uses `application/` commands; new feature code lands in `src/switchboard/`, not 
 > (HARDEN-69 / ADR-0010 Lever 1) — no shared counter. See ADR-0007 Decision 2 (retired) and
 > ADR-0009 Decision 5 #4.
 
-**Canonical main (tracker baseline):** `5305090` (2026-07-12)  
-**View:** [`?project=switchboard&deliverable=arch-ms-phase-0#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-0#tab-mission)
+**Canonical main (Phase 0 tracker baseline):** `5305090` (2026-07-12)  
+**Phase 0 view:** [`?project=switchboard&deliverable=arch-ms-phase-0#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-0#tab-mission)  
+**Phase 2 view:** [`?project=switchboard&deliverable=arch-ms-phase-2#tab-mission`](https://plan.taikunai.com/?project=switchboard&deliverable=arch-ms-phase-2#tab-mission)
 
 ---
+
+## Phase 2 — process strangler (auth-first, cut conditional)
+
+**Charter:** [ADR-0011 — Phase 2 process strangler](decisions/0011-phase2-process-strangler.md)  
+**Deliverable:** `arch-ms-phase-2`  
+**Mission end state:** Safe service-cut playbook proven. Auth process cut only if the
+independence gate (ARCH-MS-82…84) records Go; otherwise Auth stays in-process. Never convert
+in-process coupling into network coupling. Deploy stays FastAPI + uvicorn + Caddy; SQLite
+default (Postgres only via ARCH-19 SLO).
+
+| Milestone | Intent |
+|---|---|
+| `2a-charter-rails` | ADR-0011 + reusable service skeleton (ARCH-MS-72, ARCH-MS-73) |
+| `2b0-auth-independence-gate` | Ports, ownership/outage/secrets, ratchets + ops proof (ARCH-MS-82…84) |
+| `2b-auth-process-cut` | Conditional Auth uvicorn cut (ARCH-MS-75+) — **Go only** |
+| Exit | `arch_ms_phase2_exit_gate` — Auth cut **or** documented No-Go + ratchets + Tasks readiness |
+
+**Hard rules (see ADR-0011):** one bounded context per cut; green façade always; Auth = service
+#1, Tasks = #2; yellow-light Auth cut; explicit No-Go keep-in-process exit; no nginx; no
+big-bang rewrite / frontend swap.
+
+| Task | Title | Tracker | Repo evidence |
+|---|---|---|---|
+| **ARCH-MS-72** | 2A: ADR — Phase 2 process strangler charter | 🟡 | This section + `docs/decisions/0011-phase2-process-strangler.md` |
+| **ARCH-MS-73** | 2A: Service skeleton — FastAPI + health + systemd/Caddy | ⬜ | — |
+| **ARCH-MS-82** | 2B0: Auth ports — remove store/auth/notify imports | ⬜ | — |
+| **ARCH-MS-83** | 2B0: Auth ownership, outage policy, secrets fail-fast | ⬜ | — |
+| **ARCH-MS-84** | 2B0: Architecture ratchets + Auth cut ops proof | ⬜ | — |
+| **ARCH-MS-75** | 2B: Extract Auth as standalone uvicorn (**Go only**) | ⬜ | Blocked until independence Go |
+
+Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
+rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
+
+---
+
+## Phase 0 — platform modernization
+
+**Mission end state:** ADR-007 rails complete; `src/switchboard/` scaffold live; one REST+MCP pair
+uses `application/` commands; new feature code lands in `src/switchboard/`, not the monoliths.
 
 ## How to use this doc
 
@@ -166,4 +206,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-12 | ARCH-MS-9 | Added `tests/test_arch_ms0_scaffold.py` Phase-0 proof gate (package imports + `create_task` callable + REST/MCP shared handler); deps ARCH-MS-7/8 merged |
 | 2026-07-12 | ARCH-MS-24 | Added the fixed-baseline Phase 0 exit audit; moved project/access persistence into `src/switchboard/storage/repositories/access.py`; measured all exit criteria green |
 | 2026-07-14 | ARCH-MS-45 | Phase 1 exit gate: `store.py` / `app.py` / `mcp_server.py` thinned to absolute ceilings; residual in `repositories/shell.py`, `app_impl.py`, `mcp_server_impl.py`; `scripts/arch_ms_phase1_exit_gate.py` + `tests/test_arch_ms45_phase1_exit_gate.py` |
+| 2026-07-15 | ARCH-MS-72 | Phase 2 charter ADR-0011 (process strangler; Auth cut conditional); Phase 2 section linked from this tracker |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
