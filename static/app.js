@@ -196,9 +196,14 @@ const TeepPlan = {
         const titleBase = meta.label
             || (cur === 'maxwell' ? 'Project Maxwell Plan' : cur);
         document.title = `${titleBase} | Taikun Atlas`;
-        if (meta.label && cur !== 'maxwell') {
-            const t = document.querySelector('.page-title'); if (t) t.textContent = meta.label;
-            const pt = document.querySelector('.page-pretitle'); if (pt && meta.pretitle) pt.textContent = meta.pretitle;
+        // BUG-68: never write the project label into a bare document-wide `.page-title`
+        // — the only match today is the Fleet tab heading. Branding already lives in
+        // document.title, #project-switcher, and #toolbar-context. If a dedicated
+        // project header is added later, scope writes to it only.
+        const header = document.getElementById('project-header');
+        if (header && meta.label && cur !== 'maxwell') {
+            const t = header.querySelector('.page-title'); if (t) t.textContent = meta.label;
+            const pt = header.querySelector('.page-pretitle'); if (pt && meta.pretitle) pt.textContent = meta.pretitle;
         }
     },
 

@@ -117,6 +117,17 @@ try:
     ok("window.prompt" in app_js and "Kill is destructive" in app_js,
        "runner kill is human-gated with a typed confirm")
 
+    # BUG-68: applyProject must not clobber Fleet's .page-title via a document-wide
+    # querySelector — only a dedicated #project-header (if present) may be branded.
+    ok("document.querySelector('.page-title')" not in app_js
+       and 'document.querySelector(".page-title")' not in app_js,
+       "app.js does not use a document-wide .page-title querySelector (BUG-68)")
+    ok("getElementById('project-header')" in app_js
+       or 'getElementById("project-header")' in app_js,
+       "applyProject scopes optional branding to #project-header")
+    ok('>Fleet</h2>' in index.text and 'id="tab-fleet"' in index.text,
+       "Fleet tab keeps its own page-title heading")
+
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
 
