@@ -1,0 +1,46 @@
+{
+  "$id": "switchboard.agent.complete_host_enrollment_command.v1",
+  "additionalProperties": false,
+  "description": "Single-use device bootstrap completion from a macOS or Linux host.",
+  "properties": {
+    "agent_host_version": {
+      "default": "",
+      "title": "Agent Host Version",
+      "type": "string"
+    },
+    "bootstrap_code": {
+      "title": "Bootstrap Code",
+      "type": "string"
+    },
+    "hostname": {
+      "title": "Hostname",
+      "type": "string"
+    },
+    "platform": {
+      "title": "Platform",
+      "type": "string"
+    },
+    "project": {
+      "default": "switchboard",
+      "title": "Project",
+      "type": "string"
+    },
+    "public_key_fingerprint": {
+      "title": "Public Key Fingerprint",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.complete_host_enrollment_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "bootstrap_code",
+    "hostname",
+    "platform",
+    "public_key_fingerprint"
+  ],
+  "title": "CompleteHostEnrollmentCommand",
+  "type": "object"
+}

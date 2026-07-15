@@ -151,6 +151,20 @@ Required operations:
 A stale host must not be selected for a wake intent. Stale host state is evidence, not failure:
 it tells the operator no always-on worker is currently listening.
 
+### Personal host enrollment (ADAPTER-18)
+
+User-owned macOS and Linux hosts enroll through the signed, versioned lifecycle in
+[`AGENT-HOST-ENROLLMENT.md`](AGENT-HOST-ENROLLMENT.md). An operator issues a short-lived,
+single-use bootstrap; completion returns a narrow rotatable host bearer once and binds the
+`host_id` to its exact principal and public-key fingerprint. The host's provider login remains
+local. Revoked or uninstalled identities cannot register or heartbeat even if their old host id
+is replayed.
+
+The installer provisions a per-user launchd or systemd service, atomically updates signed
+releases, preserves a visible `revocation_pending` state while offline, and purges identity and
+provider-runtime residue only after Switchboard confirms revocation. It never starts a cloud/API
+lane as a fallback for a sleeping, offline, or revoked personal host.
+
 ### Hybrid placement inventory
 
 Work-capable hosts also publish a `switchboard.agent_host_placement.v1` object in `capacity`.
@@ -162,6 +176,11 @@ required project, tenant, provider account, repository, isolation, credential-le
 runtime, capability, or resource headroom must be explicitly compatible. The lease itself is
 acquired only after host selection and is validated against the exact host and runner when the
 wake is claimed.
+
+Enrolled personal hosts additionally publish redacted identity generation, owner
+user/tenant/project/provider allowlists, local-auth availability, drain state, and session
+headroom. Host bearer, raw account proof, and provider credential material are forbidden from
+registration and heartbeat payloads.
 
 Host capacity and provider subscription capacity are different admission gates. A free CPU
 slot cannot override a personal-plan cooldown, and a ready provider subscription does not make
@@ -248,6 +267,10 @@ one-time session token, and worktree lease; the host performs the returned launc
 workspace. If the managed creation returns an error, the host must not fall back silently to the
 shared checkout. It should surface the failure as `failed_gate`, `wrong_repo`, `stale_branch`, or
 the supplied failure class.
+
+A personal-host wake that opts into exact binding is refused before claim unless task, claim,
+Work Session, runner, host, wake, source SHA, and execution-connection fields are present. The
+Codex personal worker registers and rechecks that binding before native CLI launch.
 
 The host daemon may also proactively keep warm sessions:
 

@@ -1587,6 +1587,10 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
     host_id = (inventory.get("host_id") or "").strip()
     if not host_id:
         return {"error": "host_id required"}
+    identity = _store_facade().check_agent_host_identity(
+        host_id, principal_id, project=project)
+    if not identity.get("allowed"):
+        return identity
     runtimes = inventory.get("runtimes") or []
     limits = inventory.get("limits") or {}
     capacity = inventory.get("capacity") or {}
@@ -1627,10 +1631,15 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
 def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                    capacity: Optional[Dict[str, Any]] = None,
                    status: str = "online", last_error: str = "",
+                   principal_id: str = "",
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
+    identity = _store_facade().check_agent_host_identity(
+        host_id, principal_id, project=project)
+    if not identity.get("allowed"):
+        return identity
     try:
         with _control_plane_conn(project) as c:
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()

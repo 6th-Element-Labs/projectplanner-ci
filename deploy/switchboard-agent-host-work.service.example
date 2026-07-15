@@ -1,6 +1,8 @@
 # /etc/systemd/system/switchboard-agent-host-work.service
-# Example work-capable Agent Host. Install this only on a machine that has the
-# repo checkout, runtime credentials, build tools, and operator approval to run agents.
+# Legacy/manual work-capable Agent Host example. For user-owned macOS/Linux Codex hosts,
+# prefer the signed lifecycle in docs/AGENT-HOST-ENROLLMENT.md. Install this template only
+# when a machine already has the repo checkout, runtime credentials, build tools, and
+# operator approval to run agents.
 [Unit]
 Description=Switchboard Agent Host (lane-scoped work wakes)
 After=network-online.target

@@ -13,7 +13,14 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 import auth
 import store
 from switchboard.application.commands import register_agent as register_agent_command
+from switchboard.application.commands import agent_host_enrollment as enrollment_command
 from switchboard.application.commands import register_host as register_host_command
+from switchboard.application.contracts.agents import (
+    BeginHostEnrollmentCommand,
+    CompleteHostEnrollmentCommand,
+    RevokeHostIdentityCommand,
+    RotateHostIdentityCommand,
+)
 
 
 ProjectResolver = Callable[[str], str]
@@ -79,7 +86,70 @@ def create_router(*, resolve_project: ProjectResolver,
             capacity=body.get("capacity") or {},
             status=body.get("status") or "online",
             last_error=body.get("last_error") or "",
-            actor=auth.actor(principal), project=project))
+            principal_id=principal["id"], actor=auth.actor(principal), project=project))
+
+    @router.post("/ixp/v1/agent-host-enrollments")
+    async def ixp_begin_agent_host_enrollment(
+            request: Request, body: BeginHostEnrollmentCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_principal(
+            request, project, ("write:system",), dev_actor="agent-host-enrollment")
+        payload["project"] = project
+        return control_plane_http(enrollment_command.begin_mapping_result(
+            payload, actor=auth.actor(principal), principal_id=principal["id"]))
+
+    @router.post("/ixp/v1/agent-host-enrollments/complete")
+    async def ixp_complete_agent_host_enrollment(
+            body: CompleteHostEnrollmentCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        payload["project"] = resolve_body_project(payload)
+        return control_plane_http(enrollment_command.complete_mapping_result(payload))
+
+    @router.post("/ixp/v1/agent-host-enrollments/rotate")
+    async def ixp_rotate_agent_host_identity(
+            request: Request, body: RotateHostIdentityCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        host_id = body.host_id
+        principal = resolve_principal(
+            request, project, ("write:ixp",), dev_actor=host_id)
+        payload["host_id"] = host_id
+        payload["project"] = project
+        return control_plane_http(enrollment_command.rotate_mapping_result(
+            payload, actor=auth.actor(principal), principal_id=principal["id"]))
+
+    @router.post("/ixp/v1/agent-host-enrollments/revoke")
+    async def ixp_revoke_agent_host_identity(
+            request: Request, body: RevokeHostIdentityCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        host_id = body.host_id
+        principal = resolve_principal(
+            request, project, ("write:ixp",), dev_actor=host_id)
+        enrollment = store.get_agent_host_enrollment(host_id, project=project)
+        scopes = set(principal.get("effective_scopes") or principal.get("scopes") or [])
+        owns_identity = enrollment.get("principal_id") == principal.get("id")
+        is_operator = "admin" in scopes or "write:system" in scopes
+        if not owns_identity and not is_operator:
+            raise HTTPException(403, "host identity may be revoked only by its owner or an operator")
+        payload["project"] = project
+        return control_plane_http(enrollment_command.revoke_mapping_result(
+            payload, actor=auth.actor(principal)))
+
+    @router.get("/ixp/v1/agent-host-enrollment")
+    async def ixp_agent_host_enrollment_status(
+            request: Request, host_id: str,
+            project: str = Query(store.DEFAULT_PROJECT)):
+        resolved = resolve_project(project)
+        principal = resolve_principal(
+            request, resolved, ("read",), dev_actor=host_id)
+        enrollment = store.get_agent_host_enrollment(host_id, project=resolved)
+        scopes = set(principal.get("effective_scopes") or principal.get("scopes") or [])
+        if (enrollment.get("principal_id") != principal.get("id")
+                and "admin" not in scopes and "write:system" not in scopes):
+            raise HTTPException(403, "host enrollment is private to its owner")
+        return control_plane_http(enrollment)
 
     @router.get("/ixp/v1/agent_hosts")
     async def ixp_agent_hosts(project: str = Query(...), runtime: str = "",

@@ -51,11 +51,34 @@ ok("PM_RUNNER_DIR=/var/lib/projectplanner/runner" in service_text,
 
 for key in ("PM_HOST_LANES", "PM_AGENT_HOST_ALLOW_WORK", "PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM"):
     os.environ.pop(key, None)
+os.environ["PM_RUNTIME"] = "codex"
+os.environ["PM_HOST_ENROLLMENT_ID"] = "hostenroll-test"
+os.environ["PM_HOST_IDENTITY_GENERATION"] = "3"
+os.environ["PM_HOST_PUBLIC_KEY_FINGERPRINT"] = "sha256:" + "a" * 64
+os.environ["PM_HOST_OWNER_USER_ID"] = "user-test"
+os.environ["PM_HOST_TENANTS"] = "tenant-test"
+os.environ["PM_HOST_PROJECTS"] = "switchboard"
+os.environ["PM_HOST_PROVIDERS"] = "openai-codex"
+os.environ["PM_HOST_LOCAL_AUTH_AVAILABLE"] = "1"
+os.environ["PM_HOST_LOCAL_AUTH_MODE"] = "chatgpt_personal"
+os.environ["PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF"] = "raw-proof-never-exported"
+os.environ["PM_MCP_TOKEN"] = "secret-host-token-never-exported"
 default_inventory = agent_host.default_inventory()
 ok(default_inventory["policy"]["mode"] == "message_only",
    "default Agent Host policy is message-only")
 ok(default_inventory["runtimes"][0]["lanes"] == [agent_host.MESSAGE_ONLY_LANE],
    "default Agent Host inventory fails closed with sentinel lane")
+default_inventory_text = json.dumps(default_inventory, sort_keys=True)
+ok(default_inventory["agent_host_version"] == "0.2.0"
+   and default_inventory["capacity"]["identity"]["identity_generation"] == 3,
+   "enrolled Agent Host publishes versioned redacted identity proof")
+ok(default_inventory["capacity"]["owner"]["tenant_allowlist"] == ["tenant-test"]
+   and default_inventory["capacity"]["local_auth"]["auth_mode"] == "chatgpt_personal",
+   "inventory advertises owner allowlists and local-auth availability")
+ok("raw-proof-never-exported" not in default_inventory_text
+   and "secret-host-token-never-exported" not in default_inventory_text
+   and default_inventory["capacity"]["local_auth"]["credential_values_redacted"] is True,
+   "host inventory cannot expose local account proof or bearer material")
 
 inventory = {
     "host_id": "host/test",
@@ -90,6 +113,20 @@ global_claim_wake = {
     "selector": {"runtime": "claude-code", "agent_id": "claude/test"},
     "policy": {"mode": "claim_next"},
 }
+incomplete_personal_wake = {
+    "wake_id": "wake-personal-incomplete",
+    "task_id": "ADAPTER-18",
+    "selector": {"runtime": "codex", "agent_id": "codex/ADAPTER-18", "lane": "ADAPTER"},
+    "policy": {"execution_mode": "personal_agent_host", "account_binding": {
+        "claim_id": "taskclaim-test", "work_session_id": "worksession-test",
+    }},
+}
+complete_personal_wake = json.loads(json.dumps(incomplete_personal_wake))
+complete_personal_wake["policy"]["execution_binding"] = {
+    "host_id": "host/test",
+    "source_sha": "a" * 40,
+    "execution_connection_id": "execconn-test",
+}
 message_only_inventory = {
     "host_id": "host/message-only",
     "repo_root": str(ROOT),
@@ -107,6 +144,55 @@ message_only_inventory = {
         "capabilities": ["docs", "python"],
     }],
 }
+
+incomplete_binding = agent_host.validate_personal_wake_binding(
+    incomplete_personal_wake, inventory)
+complete_binding = agent_host.validate_personal_wake_binding(
+    complete_personal_wake, inventory)
+ok(incomplete_binding["valid"] is False
+   and "source_sha" in incomplete_binding["missing"]
+   and "execution_connection_id" in incomplete_binding["missing"],
+   "personal host wake refuses incomplete source/connection binding before claim")
+ok(complete_binding["valid"] is True and complete_binding["binding"]["task_id"] == "ADAPTER-18",
+   "personal host wake accepts exact task/claim/session/host/source/connection binding")
+
+personal_inventory = json.loads(json.dumps(inventory))
+personal_inventory["runtimes"][0]["runtime"] = "codex"
+personal_calls = []
+
+
+def fake_try_personal(method, path, body=None):
+    personal_calls.append((method, path, body or {}))
+    if path.startswith(agent_host.P_LIST_WAKES):
+        return {"wake_intents": [incomplete_personal_wake, complete_personal_wake]}
+    if path == agent_host.P_CLAIM_WAKE:
+        return {"claimed": True, "wake": complete_personal_wake}
+    return {"ok": True}
+
+
+personal_launch_envs = []
+original_preclaim_registration = agent_host._register_preclaim_runner
+agent_host._try = fake_try_personal
+agent_host.active_session_count = lambda inv: 0
+agent_host._register_preclaim_runner = lambda wake, inv, runner_id: {"ok": True}
+agent_host.launch = lambda wake, inv, runner_session_id="", extra_env=None: (
+    personal_launch_envs.append(dict(extra_env or {})) or {
+        "runner_session_id": runner_session_id,
+        "pid": 12344,
+        "wake_mode": agent_host.wake_mode(wake),
+    })
+agent_host.confirm_started = lambda rec: True
+personal_summary = agent_host.run_once(personal_inventory)
+agent_host._register_preclaim_runner = original_preclaim_registration
+personal_claims = [call for call in personal_calls if call[1] == agent_host.P_CLAIM_WAKE]
+ok(len(personal_claims) == 1
+   and personal_claims[0][2]["wake_id"] == complete_personal_wake["wake_id"]
+   and personal_summary["refused"][0]["wake_id"] == incomplete_personal_wake["wake_id"],
+   "daemon refuses an unbound personal wake and claims only the exact-bound wake")
+ok(bool(personal_launch_envs)
+   and personal_launch_envs[0]["PM_SOURCE_SHA"] == "a" * 40
+   and personal_launch_envs[0]["PM_EXECUTION_CONNECTION_ID"] == "execconn-test",
+   "native launch receives the exact source SHA and execution-connection binding")
 
 cmd, mode = agent_host.launch_command(message_wake, inventory)
 ok(mode == "inbox_only", "lane-less wake selects inbox-only mode")

@@ -777,6 +777,35 @@ def apply_schema(c):
         );
         CREATE INDEX IF NOT EXISTS ix_agent_hosts_heartbeat
             ON agent_hosts(status, heartbeat_at);
+        CREATE TABLE IF NOT EXISTS agent_host_enrollments (
+            enrollment_id          TEXT PRIMARY KEY,
+            project_id             TEXT NOT NULL,
+            requested_host_id      TEXT,
+            host_id                TEXT,
+            owner_user_id          TEXT NOT NULL,
+            tenant_allowlist_json  TEXT NOT NULL DEFAULT '[]',
+            project_allowlist_json TEXT NOT NULL DEFAULT '[]',
+            provider_allowlist_json TEXT NOT NULL DEFAULT '[]',
+            bootstrap_hash         TEXT NOT NULL UNIQUE,
+            bootstrap_expires_at   REAL NOT NULL,
+            bootstrap_consumed_at  REAL,
+            principal_id           TEXT,
+            public_key_fingerprint TEXT,
+            identity_generation    INTEGER NOT NULL DEFAULT 0,
+            package_version        TEXT,
+            platform               TEXT,
+            hostname               TEXT,
+            status                 TEXT NOT NULL DEFAULT 'pending',
+            created_by_principal_id TEXT,
+            created_at             REAL NOT NULL,
+            updated_at             REAL NOT NULL,
+            revoked_at             REAL,
+            UNIQUE(project_id, host_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_agent_host_enrollments_status
+            ON agent_host_enrollments(status, bootstrap_expires_at);
+        CREATE INDEX IF NOT EXISTS ix_agent_host_enrollments_principal
+            ON agent_host_enrollments(principal_id);
         CREATE TABLE IF NOT EXISTS wake_intents (
             wake_id           TEXT PRIMARY KEY,
             source            TEXT NOT NULL,
