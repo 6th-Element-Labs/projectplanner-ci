@@ -160,4 +160,4 @@ Mirror Auth; keep dormant. Port hint: Auth `:8121`, skeleton `:8120` → Tasks *
 | ARCH-MS-73 | Service skeleton template |
 | ARCH-MS-74 | Phase 2 exit gate (Tasks cut **or** readiness) |
 | ARCH-MS-75…77 | Auth process cut playbook (service #1) |
-| ARCH-MS-79 (board) | Optional future full Tasks cut — **not** started by this package |
+| ARCH-MS-79 (board) | **Waived** for Phase 2 — see [`phase2/tasks_cut_waived.md`](phase2/tasks_cut_waived.md); future cut needs independence gate |
