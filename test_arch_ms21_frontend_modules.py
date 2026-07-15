@@ -28,6 +28,7 @@ modules = (
     ("runner-session", "SwitchboardRunnerSession"),
     ("proof-console", "SwitchboardProofConsole"),
     ("project-admin", "SwitchboardProjectAdmin"),
+    ("settings", "SwitchboardSettings"),
 )
 positions = [INDEX.find(f'src="js/{name}.js?v=') for name, _ in modules]
 app_position = INDEX.find('src="app.js?v=')
@@ -46,6 +47,8 @@ for _, namespace in modules[1:]:
 ok(len(APP.splitlines()) < 5_000, "app.js composition root stays below 5,000 lines")
 ok("    _missionDeliverableFromUrl() {" not in APP and "    renderBoard() {" not in APP,
    "mission and board implementations no longer live in app.js")
+ok("    _settingsRepoCard(" not in APP and "    renderSettings() {" not in APP,
+   "the settings shell no longer lives in app.js")
 
 print(f"\nARCH-MS-21 frontend modules: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

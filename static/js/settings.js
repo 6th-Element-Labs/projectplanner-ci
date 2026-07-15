@@ -1,0 +1,720 @@
+/* UI-18: the unified Settings shell — one canonical surface for every setting.
+ *
+ * The structure is ported from the ActionEngine Taikun/Tabler settings page: a
+ * left-hand category card (card > list-group-flush) beside a focused right-hand
+ * content card with a header / body / footer-action rhythm.
+ *
+ * Two deliberate departures from that source, both required here:
+ *
+ *   1. Routing is ours, not `data-bs-toggle="list"`. Bootstrap's Tab plugin
+ *      preventDefault()s the click and never writes location.hash, so the
+ *      ActionEngine page cannot deep-link — settings.html#api always lands on
+ *      Account. We need `#tab-settings/<section>` to survive a reload, and we
+ *      want per-section lazy fetches rather than populating twelve panes up
+ *      front, so selection is driven here and the panel renders on demand.
+ *   2. The left nav collapses on mobile instead of stacking above the content.
+ *      Twelve categories stacked would push the panel off-screen.
+ *
+ * Sections are gated individually: the Settings entry is open to every signed-in
+ * user, personal sections are always available, and a section the caller cannot
+ * use still renders — as a named lock naming the missing scope — rather than
+ * vanishing from the nav. The server remains the enforcement point; this is
+ * legibility, not security.
+ */
+(function () {
+    'use strict';
+
+    // The information architecture. `scope` is the coarse gate for a section as a
+    // whole; individual actions inside re-check server-side.
+    const SECTIONS = [
+        {
+            id: 'my', group: 'My settings', items: [
+                { id: 'profile', label: 'Profile & security', icon: 'ti-user-shield', scope: null },
+                { id: 'ai-accounts', label: 'Personal AI accounts', icon: 'ti-plug-connected', scope: null },
+                { id: 'appearance', label: 'Appearance', icon: 'ti-palette', scope: null },
+            ],
+        },
+        {
+            id: 'project', group: 'Project settings', items: [
+                { id: 'members', label: 'Members & access', icon: 'ti-users', scope: 'write:projects' },
+                { id: 'comms', label: 'Communications', icon: 'ti-mail-cog', scope: 'write:projects' },
+                { id: 'github', label: 'GitHub & repositories', icon: 'ti-brand-github', scope: 'write:system' },
+                { id: 'tokens', label: 'Access tokens', icon: 'ti-key', scope: 'write:system' },
+            ],
+        },
+        {
+            id: 'ops', group: 'Operations', items: [
+                { id: 'fleet', label: 'Fleet & runners', icon: 'ti-server-bolt', scope: 'write:system' },
+                { id: 'capacity', label: 'Capacity & box pressure', icon: 'ti-gauge', scope: 'write:system' },
+                { id: 'narration', label: 'Narration', icon: 'ti-broadcast', scope: 'write:system' },
+                { id: 'provenance', label: 'Reconcile & provenance', icon: 'ti-refresh-dot', scope: 'write:system' },
+                { id: 'advanced', label: 'Advanced', icon: 'ti-adjustments', scope: 'write:system' },
+            ],
+        },
+    ];
+
+    const DEFAULT_SECTION = 'profile';
+    const SCOPE_LABEL = {
+        'write:projects': 'Project editor access (write:projects)',
+        'write:system': 'System administrator access (write:system)',
+    };
+
+    const methods = {
+
+        /* ---- shell ------------------------------------------------------- */
+
+        _settingsSections() { return SECTIONS; },
+
+        _settingsFind(id) {
+            for (const group of SECTIONS) {
+                for (const item of group.items) if (item.id === id) return item;
+            }
+            return null;
+        },
+
+        // Personal sections are always available. Project/system sections reuse the
+        // flags loadPrincipal() already derives, so the nav can never disagree with
+        // the rest of the app about what the caller can do.
+        _settingsCan(section) {
+            const need = section && section.scope;
+            if (!need) return true;
+            if (need === 'write:projects') return !!this.canWriteProjects;
+            if (need === 'write:system') return !!this.isAdmin;
+            return ((this.principal && this.principal.effective_scopes) || []).includes(need);
+        },
+
+        _settingsHashSection() {
+            const m = /^#tab-settings\/([a-z0-9-]+)$/i.exec(window.location.hash || '');
+            return m ? m[1].toLowerCase() : '';
+        },
+
+        _settingsCurrentId() {
+            const fromHash = this._settingsHashSection();
+            if (fromHash && this._settingsFind(fromHash)) return fromHash;
+            if (this._settingsSectionId && this._settingsFind(this._settingsSectionId)) return this._settingsSectionId;
+            return DEFAULT_SECTION;
+        },
+
+        // Keep the section in the URL so a Settings link is copyable and survives a
+        // reload. replaceState, not pushState: moving between sections is not a
+        // navigation the back button should have to walk through. The project half of
+        // the context stays in ?project=, where the rest of the app already reads it —
+        // so `?project=vulkan#tab-settings/members` restores both halves.
+        _settingsWriteHash(id) {
+            try {
+                window.history.replaceState(null, '', window.location.pathname + window.location.search + '#tab-settings/' + id);
+            } catch (e) { /* history unavailable in some embedded contexts; the panel still renders */ }
+        },
+
+        _settingsNavHtml(activeId) {
+            return SECTIONS.map((group) => {
+                const items = group.items.map((item) => {
+                    const allowed = this._settingsCan(item);
+                    const active = item.id === activeId;
+                    const lock = allowed ? '' : '<i class="ti ti-lock ms-auto text-secondary" aria-hidden="true"></i>';
+                    const title = allowed ? '' : ` title="${this.esc(SCOPE_LABEL[item.scope] || item.scope)} is required"`;
+                    return `<a class="list-group-item list-group-item-action d-flex align-items-center${active ? ' active' : ''}" href="#tab-settings/${item.id}" id="settings-tab-${item.id}" role="tab" data-settings-section="${item.id}" data-settings-locked="${allowed ? '0' : '1'}" aria-selected="${active ? 'true' : 'false'}" aria-controls="settings-panel"${title}><i class="ti ${item.icon} me-2" aria-hidden="true"></i><span>${this.esc(item.label)}</span>${lock}</a>`;
+                }).join('');
+                return `<div class="list-group-item py-1 px-3 text-secondary text-uppercase fw-bold settings-nav-group" role="presentation">${this.esc(group.group)}</div>${items}`;
+            }).join('');
+        },
+
+        async renderSettings() {
+            const page = document.getElementById('settings-page');
+            if (!page) return;
+            // loadPrincipal() is kicked off unawaited during init, so without this a
+            // deep-linked Settings tab can render before effective_scopes land and show
+            // every gated section as spuriously locked.
+            if (this._principalReady) { try { await this._principalReady; } catch (e) { /* gating falls back to locked */ } }
+            const id = this._settingsCurrentId();
+            this._settingsSectionId = id;
+            const nav = document.getElementById('settings-nav');
+            if (nav) nav.innerHTML = this._settingsNavHtml(id);
+            const section = this._settingsFind(id);
+            const current = document.getElementById('settings-nav-current');
+            if (current) current.textContent = (section && section.label) || 'Settings menu';
+            await this._settingsRenderPanel(id);
+        },
+
+        // Select a section: route, re-render, and on mobile close the nav so the panel
+        // the operator asked for is what they land on.
+        async _settingsSelect(id) {
+            if (!this._settingsFind(id)) return;
+            this._settingsSectionId = id;
+            this._settingsWriteHash(id);
+            await this.renderSettings();
+            const panel = document.getElementById('settings-panel');
+            if (panel) panel.focus({ preventScroll: true });
+            const collapse = document.getElementById('settings-nav-collapse');
+            if (collapse && window.bootstrap && collapse.classList.contains('show')) {
+                window.bootstrap.Collapse.getOrCreateInstance(collapse).hide();
+            }
+        },
+
+        // A pasted or hand-edited #tab-settings/<section> should land correctly. Our own
+        // replaceState writes do not fire hashchange, so this only sees real external
+        // navigation.
+        _settingsOnHashChange() {
+            const page = document.getElementById('settings-page');
+            if (!page || !page.closest('.tab-pane.active')) return;
+            const id = this._settingsHashSection();
+            if (id && id !== this._settingsSectionId) this.renderSettings();
+        },
+
+        async _settingsRenderPanel(id) {
+            const host = document.getElementById('settings-panel');
+            const section = this._settingsFind(id);
+            if (!host || !section) return;
+            host.setAttribute('aria-labelledby', `settings-tab-${id}`);
+            if (!this._settingsCan(section)) { host.innerHTML = this._settingsLockedCard(section); return; }
+            host.innerHTML = `<div class="card"><div class="card-body text-secondary small">Loading ${this.esc(section.label)}…</div></div>`;
+            let html;
+            try {
+                html = await this._settingsSectionHtml(section);
+            } catch (e) {
+                html = this._settingsErrCard(section.label, (e && e.message) ? e.message : String(e));
+            }
+            // Another section may have been selected while this one was fetching.
+            if (this._settingsSectionId === id) host.innerHTML = html;
+        },
+
+        _settingsSectionHtml(section) {
+            switch (section.id) {
+                case 'profile': return this._settingsProfileSection();
+                case 'ai-accounts': return this._settingsAiAccountsSection();
+                case 'appearance': return this._settingsAppearanceSection();
+                case 'members': return this._settingsMembersSection();
+                case 'comms': return this._settingsCommsSection();
+                case 'github': return this._settingsGithubSection();
+                case 'tokens': return this._settingsTokensSection();
+                case 'fleet': return this._settingsFleetSection();
+                case 'capacity': return this._settingsCapacitySection();
+                case 'narration': return this._settingsNarrationSection();
+                case 'provenance': return this._settingsProvenanceSection();
+                case 'advanced': return this._settingsAdvancedSection();
+                default: return Promise.resolve(this._settingsErrCard(section.label, 'No renderer is registered for this section.'));
+            }
+        },
+
+        /* ---- shared card chrome ------------------------------------------ */
+
+        _settingsCard(opts) {
+            const actions = opts.actions ? `<div class="card-actions btn-list">${opts.actions}</div>` : '';
+            const subtitle = opts.subtitle ? `<div class="text-secondary small">${this.esc(opts.subtitle)}</div>` : '';
+            const footer = opts.footer ? `<div class="card-footer d-flex align-items-center">${opts.footer}</div>` : '';
+            const icon = opts.icon ? `<i class="ti ${opts.icon} me-2" aria-hidden="true"></i>` : '';
+            return `<div class="card mb-3"${opts.id ? ` id="${opts.id}"` : ''}>
+                <div class="card-header"><div><h3 class="card-title">${icon}${this.esc(opts.title)}</h3>${subtitle}</div>${actions}</div>
+                <div class="card-body">${opts.body}</div>${footer}</div>`;
+        },
+
+        _settingsLockedCard(section) {
+            // Tabler's .alert is a flex row, so keep the copy in one child or the
+            // sentence lays itself out in columns.
+            const need = SCOPE_LABEL[section.scope] || section.scope;
+            return this._settingsCard({
+                id: 'settings-locked', title: section.label, icon: section.icon,
+                body: `<div class="alert alert-warning mb-0" role="note"><div>
+                    <i class="ti ti-lock me-1" aria-hidden="true"></i><strong>${this.esc(need)}</strong> is required to view or change this section.
+                    <div class="small mt-1">Ask a project administrator to grant it. Your personal settings stay available.</div>
+                    </div></div>`,
+            });
+        },
+
+        _settingsRows(rows) {
+            return `<dl class="row small mb-0">${rows.map(([k, v]) =>
+                `<dt class="col-5 col-lg-4 text-secondary fw-normal">${this.esc(k)}</dt><dd class="col-7 col-lg-8 mb-1">${v}</dd>`).join('')}</dl>`;
+        },
+
+        /* ---- My settings -------------------------------------------------- */
+
+        async _settingsProfileSection() {
+            // /api/auth/session answers 401 when there is no global session — which is the
+            // normal state under PM_AUTH_MODE=dev-open. Distinguish that from a signed-in
+            // user rather than reading {} and reporting "superadmin: no", which would be a
+            // fabricated answer to a question we never got to ask.
+            const session = await this._sfetch('api/auth/session');
+            const signedIn = !session.error && !!session.authenticated;
+            const user = (signedIn && session.user) || {};
+            const p = this.principal || {};
+            const scopes = (p.effective_scopes || []).map((s) => `<span class="badge bg-azure-lt me-1">${this.esc(s)}</span>`).join('') || '<span class="text-secondary">—</span>';
+            const rows = [
+                ['Signed in as', signedIn
+                    ? `<strong>${this.esc(user.email || user.id || 'unknown')}</strong>`
+                    : `<span class="text-secondary">No global session — acting as the <code>${this.esc(this.authMode || 'local')}</code> principal.</span>`],
+                ['Principal', `<code>${this.esc(p.id || '—')}</code>`],
+                ['Kind', this.esc(p.kind || '—')],
+            ];
+            if (signedIn) {
+                rows.push(['Superadmin', user.is_superadmin
+                    ? '<span class="badge bg-green-lt">yes</span>'
+                    : '<span class="badge bg-secondary-lt">no</span>']);
+            }
+            rows.push(['Auth mode', `<code>${this.esc(this.authMode || '—')}</code>`]);
+            rows.push([`Scopes on ${window.PM_PROJECT || 'this project'}`, scopes]);
+            return this._settingsCard({
+                id: 'settings-profile', title: 'Profile & security', icon: 'ti-user-shield',
+                subtitle: 'Your identity, session, and effective permissions',
+                body: this._settingsRows(rows),
+                footer: signedIn
+                    ? `<span class="text-secondary small">Password changes open the account page.</span>
+                       <a class="btn btn-primary btn-sm ms-auto" href="/account"><i class="ti ti-key me-1" aria-hidden="true"></i>Change password</a>`
+                    : '<span class="text-secondary small">Sign in with a global account to manage a password.</span>',
+            });
+        },
+
+        async _settingsAiAccountsSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const data = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-connections`);
+            if (data.error) return this._settingsErrCard('Personal AI accounts', data.error);
+            const conns = data.connections || data.provider_connections || [];
+            const rows = conns.length ? conns.map((c) => `<div class="list-group-item px-0"><div class="row align-items-center">
+                <div class="col-auto"><span class="status-dot ${c.status === 'active' ? 'status-dot-animated bg-green' : 'bg-secondary'}"></span></div>
+                <div class="col"><div class="fw-semibold">${this.esc(c.provider || c.provider_id || 'provider')}</div>
+                <div class="text-secondary small"><code>${this.esc(c.connection_id || c.id || '—')}</code></div></div>
+                <div class="col-auto"><span class="badge ${c.status === 'active' ? 'bg-green-lt' : 'bg-secondary-lt'}">${this.esc(c.status || 'unknown')}</span></div>
+                </div></div>`).join('') : '<div class="text-secondary small">No provider connections are enrolled for this project.</div>';
+            return this._settingsCard({
+                id: 'settings-ai-accounts', title: 'Personal AI accounts', icon: 'ti-plug-connected',
+                subtitle: 'Provider connections available to your agent runtimes',
+                body: `<div class="alert alert-info py-2 px-3 small" role="note"><i class="ti ti-tool me-1" aria-hidden="true"></i>Enroll, verify, bind, and revoke land in <strong>UI-19</strong>. This section reads the current connections.</div>
+                    <div class="list-group list-group-flush">${rows}</div>`,
+            });
+        },
+
+        _settingsAppearanceSection() {
+            // Switchboard is deliberately a single clean light theme and the sidebar is
+            // pinned expanded (see static/taikun-ui.js), so there is nothing user-tunable
+            // to offer yet. Say that plainly rather than reviving the legacy theme
+            // offcanvas or shipping a toggle that changes nothing.
+            return Promise.resolve(this._settingsCard({
+                id: 'settings-appearance', title: 'Appearance', icon: 'ti-palette',
+                subtitle: 'How Switchboard looks for you',
+                body: `<div class="alert alert-secondary py-2 px-3 small mb-3" role="note"><i class="ti ti-info-circle me-1" aria-hidden="true"></i>Switchboard ships one deliberate light theme, so there are no per-user appearance options today. These are the current fixed values.</div>`
+                    + this._settingsRows([
+                        ['Theme', '<span class="badge bg-secondary-lt">single light theme</span>'],
+                        ['Navigation', '<span class="badge bg-secondary-lt">always expanded</span>'],
+                        ['Density', '<span class="badge bg-secondary-lt">comfortable</span>'],
+                    ]),
+            }));
+        },
+
+        /* ---- Project settings --------------------------------------------- */
+
+        async _settingsMembersSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const detail = await this._sfetch(`api/projects/${encodeURIComponent(proj)}`);
+            if (detail.error) return this._settingsErrCard('Members & access', detail.error);
+            const summary = detail.access_summary || {};
+            const access = summary.access || {};
+            const counts = summary.role_counts || {};
+            const roleText = Object.keys(counts).sort().map((r) => `<span class="badge bg-azure-lt me-1">${this.esc(r)} ${counts[r]}</span>`).join('') || '<span class="text-secondary">no explicit grants</span>';
+            return this._settingsCard({
+                id: 'settings-members', title: 'Members & access', icon: 'ti-users',
+                subtitle: `Who can reach ${proj}, and with which role`,
+                body: this._settingsRows([
+                    ['Visibility', `<span class="badge bg-secondary-lt">${this.esc(access.visibility || 'org')}</span>`],
+                    ['Organization', `<code>${this.esc(access.org_id || '—')}</code>`],
+                    ['Owner', `<code>${this.esc(access.owner_user_id || '—')}</code>`],
+                    ['Grants', roleText],
+                ]),
+                footer: `<span class="text-secondary small">Invite people and change roles.</span>
+                    <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="open-members"><i class="ti ti-users me-1" aria-hidden="true"></i>Manage members</button>`,
+            });
+        },
+
+        async _settingsCommsSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const cfg = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/comms`);
+            if (cfg.error) return this._settingsErrCard('Communications', cfg.error);
+            const inbound = cfg.inbound || {};
+            const outbound = cfg.outbound || {};
+            const domains = inbound.domains || [];
+            const digest = outbound.digest_recipients || [];
+            const notify = outbound.notify_recipients || [];
+            const domainHtml = domains.length
+                ? domains.map((d) => `<code class="me-1">${this.esc(typeof d === 'string' ? d : (d.domain || d.id || ''))}</code>`).join('')
+                : '<span class="text-secondary">none associated</span>';
+            return this._settingsCard({
+                id: 'settings-comms', title: 'Communications', icon: 'ti-mail-cog',
+                subtitle: 'Inbound intake domains and outbound digest recipients',
+                body: this._settingsRows([
+                    ['Plus address', inbound.plus_address ? `<code>${this.esc(inbound.plus_address)}</code>` : '<span class="text-secondary">—</span>'],
+                    ['Inbound domains', domainHtml],
+                    ['Digest recipients', digest.length ? `<span class="badge bg-azure-lt">${digest.length}</span>` : '<span class="text-secondary">none</span>'],
+                    ['Notify recipients', notify.length ? `<span class="badge bg-azure-lt">${notify.length}</span>` : '<span class="text-secondary">none</span>'],
+                    ['Cadence', `<code>${this.esc(outbound.cadence || '—')}</code>`],
+                ]),
+                footer: cfg.can_edit
+                    ? `<span class="text-secondary small">Edit domains, recipients, and cadence.</span>
+                       <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="open-comms"><i class="ti ti-mail-cog me-1" aria-hidden="true"></i>Edit communications</button>`
+                    : `<span class="text-secondary small"><i class="ti ti-lock me-1" aria-hidden="true"></i>Editing communications needs <code>write:system</code>.</span>`,
+            });
+        },
+
+        async _settingsGithubSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const topology = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/repo_topology`);
+            const connect = '<button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="open-github"><i class="ti ti-brand-github me-1" aria-hidden="true"></i>Connect repo</button>';
+            return this._settingsRepoCard(topology, connect);
+        },
+
+        async _settingsTokensSection() {
+            const data = await this._sfetch('api/access/tokens');
+            if (data.error) return this._settingsErrCard('Access tokens', data.error);
+            const tokens = data.tokens || [];
+            const rows = tokens.length ? tokens.map((t) => `<tr>
+                <td><span class="fw-semibold">${this.esc(t.display_name || t.id || '')}</span></td>
+                <td><span class="badge bg-secondary-lt">${this.esc(t.kind || '—')}</span></td>
+                <td>${(t.scopes || []).map((s) => `<span class="badge bg-azure-lt me-1">${this.esc(s)}</span>`).join('') || '<span class="text-secondary">—</span>'}</td>
+                </tr>`).join('') : '<tr><td colspan="3" class="text-secondary text-center py-3">No active tokens.</td></tr>';
+            return this._settingsCard({
+                id: 'settings-tokens', title: 'Access tokens', icon: 'ti-key',
+                subtitle: 'Scoped API tokens for agents, hosts, and CI',
+                body: `<div class="table-responsive"><table class="table table-vcenter table-sm mb-0"><thead><tr><th>Name</th><th>Kind</th><th>Scopes</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+                footer: `<span class="text-secondary small">A new token's secret is shown once, at creation.</span>
+                    <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="open-tokens"><i class="ti ti-key me-1" aria-hidden="true"></i>Manage tokens</button>`,
+            });
+        },
+
+        /* ---- Operations ---------------------------------------------------- */
+
+        // Fleet, capacity, and narration each already have a live operational surface.
+        // Duplicating them here would mean two places to keep correct, so Settings
+        // states the current posture and routes to the real one. UI-20 owns
+        // rationalizing those docks.
+        async _settingsFleetSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const data = await this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=1`);
+            if (data.error) return this._settingsErrCard('Fleet & runners', data.error);
+            const hosts = data.hosts || [];
+            const live = hosts.filter((h) => !h.stale);
+            const rows = hosts.length ? hosts.slice(0, 10).map((h) => `<tr>
+                <td><code>${this.esc(h.host_id || '—')}</code></td>
+                <td class="small">${(h.runtimes || []).map((r) => this.esc(r.runtime || r.name || String(r))).join(', ') || '—'}</td>
+                <td><span class="badge ${h.stale ? 'bg-secondary-lt' : 'bg-green-lt'}">${h.stale ? 'stale' : 'live'}</span></td>
+                </tr>`).join('') : '<tr><td colspan="3" class="text-secondary text-center py-3">No agent hosts registered.</td></tr>';
+            return this._settingsCard({
+                id: 'settings-fleet', title: 'Fleet & runners', icon: 'ti-server-bolt',
+                subtitle: 'Agent hosts, wake intents, and runner control',
+                body: `<div class="mb-2"><span class="badge bg-green-lt me-1">${live.length} live</span><span class="badge bg-secondary-lt">${hosts.length - live.length} stale</span></div>
+                    <div class="table-responsive"><table class="table table-vcenter table-sm mb-0"><thead><tr><th>Host</th><th>Runtimes</th><th>State</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+                footer: `<span class="text-secondary small">Live host and runner control lives on the Fleet screen.</span>
+                    <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="goto-fleet"><i class="ti ti-external-link me-1" aria-hidden="true"></i>Open Fleet</button>`,
+            });
+        },
+
+        async _settingsCapacitySection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const snap = await this._sfetch(`ixp/v1/saturation_signals?project=${encodeURIComponent(proj)}`);
+            if (snap.error) return this._settingsErrCard('Capacity & box pressure', snap.error);
+            const status = snap.status || 'healthy';
+            const tone = { healthy: 'bg-green-lt', warning: 'bg-yellow-lt', critical: 'bg-red-lt' }[status] || 'bg-secondary-lt';
+            const alerts = snap.alerts || [];
+            const alertHtml = alerts.length
+                ? `<div class="list-group list-group-flush">${alerts.map((a) => `<div class="list-group-item px-0 py-2">
+                    <span class="badge ${{ high: 'bg-red-lt', medium: 'bg-yellow-lt' }[a.severity] || 'bg-secondary-lt'} me-2 text-uppercase">${this.esc(a.severity || '?')}</span>
+                    ${this.esc(a.message || a.code || '')}</div>`).join('')}</div>`
+                : '<div class="text-secondary small">No active saturation alerts.</div>';
+            return this._settingsCard({
+                id: 'settings-capacity', title: 'Capacity & box pressure', icon: 'ti-gauge',
+                subtitle: 'PSI, lock waits, inbox depth, and SLO alerts',
+                body: `<div class="mb-2">Pressure <span class="badge ${tone} text-uppercase">${this.esc(status)}</span>
+                    · SLOs ${snap.slos_ok === false ? '<span class="text-danger fw-semibold">failing</span>' : '<span class="text-success fw-semibold">ok</span>'}</div>${alertHtml}`,
+            });
+        },
+
+        async _settingsNarrationSection() {
+            const health = await this._sfetch('api/narration/health');
+            if (health.error) return this._settingsErrCard('Narration', health.error);
+            const q = health.queue || {};
+            const r = health.receipts || {};
+            const flags = health.alerts || {};
+            const firing = Object.keys(flags).filter((k) => flags[k]);
+            return this._settingsCard({
+                id: 'settings-narration', title: 'Narration', icon: 'ti-broadcast',
+                subtitle: 'Narration queue depth, freshness, and delivery outcomes',
+                body: `<div class="mb-2"><span class="badge ${health.alerting ? 'bg-yellow-lt' : 'bg-green-lt'}">${health.alerting ? 'attention' : 'healthy'}</span>
+                    ${firing.length ? ` <span class="text-secondary small">alerts: ${this.esc(firing.join(', '))}</span>` : ''}</div>`
+                    + this._settingsRows([
+                        ['Queued', `${q.pending || 0} pending / ${q.retry_wait || 0} retry`],
+                        ['Running', `${q.claimed || 0} claimed (${q.expired_leases || 0} lease-expired)`],
+                        ['Dead letters', `${q.dead_letter || 0}`],
+                        ['Oldest pending', `${Math.round((health.freshness || {}).oldest_pending_age_seconds || 0)}s`],
+                        ['Outcomes', `${r.delivered || 0} ok / ${r.failed || 0} err / ${r.fallback || 0} fallback`],
+                        ['Failure rate', `${Math.round((r.failure_rate || 0) * 100)}%`],
+                    ]),
+            });
+        },
+
+        async _settingsProvenanceSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const [ciRuns, pubs] = await Promise.all([
+                this._sfetch(`ixp/v1/external_ci_runs?project=${encodeURIComponent(proj)}`),
+                this._sfetch(`ixp/v1/publication_evidence?project=${encodeURIComponent(proj)}`),
+            ]);
+            return this._settingsReconcileCard() + this._settingsVerifyCard()
+                + this._settingsCiRunsCard(ciRuns) + this._settingsPublicationCard(pubs);
+        },
+
+        async _settingsAdvancedSection() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const projects = await this._sfetch('api/projects?include_archived=1');
+            this._settingsAdminProjects = (projects && projects.projects) || [];
+            this._settingsProjectFilter = this._settingsProjectFilter || 'all';
+            const candidates = this._paProjectsForFilter();
+            this._settingsProjectId = this._settingsProjectId || (candidates.some((p) => p.id === proj) ? proj : (candidates[0]?.id || ''));
+            const selected = this._settingsProjectId;
+            const [detail, impact] = selected ? await Promise.all([
+                this._sfetch(`api/projects/${encodeURIComponent(selected)}`),
+                this._sfetch(`api/projects/${encodeURIComponent(selected)}/impact`),
+            ]) : [{ error: 'No accessible projects match this lifecycle filter.' }, {}];
+            this._settingsProjects = this._settingsAdminProjects.filter((p) => p.lifecycle_status !== 'archived');
+            this._projectAdminSyncSwitcher();
+            return this._projectAdminCard(detail, impact) + this._settingsMoveCard();
+        },
+
+        /* ---- settings helpers (shared with project-admin.js) --------------- */
+
+    _sv(id) { return (document.getElementById(id)?.value || '').trim(); },
+    _sFlash(id, msg, cls) { const el = document.getElementById(id); if (el) { el.textContent = msg || ''; el.className = `small ${cls || 'text-secondary'}`; } },
+    async _sfetch(url) {
+        try { const r = await fetch(url, { cache: 'no-store' }); const d = await r.json().catch(() => ({})); return r.ok ? d : { error: (d && (d.detail || d.error)) || `HTTP ${r.status}` }; }
+        catch (e) { return { error: e.message }; }
+    },
+    async _sSend(url, method, body) {
+        const opt = { method };
+        if (body !== undefined) { opt.headers = { 'Content-Type': 'application/json' }; opt.body = JSON.stringify(body); }
+        const res = await fetch(url, opt);
+        let data = {}; try { data = await res.json(); } catch (e) { /* empty */ }
+        if (!res.ok) {
+            if (res.status === 403 || res.status === 401) throw new Error('Admin (write:system) access required.');
+            const d = data && (data.detail || data.error);
+            throw new Error(typeof d === 'string' ? d : (d && (d.error || d.message || d.hint)) || `HTTP ${res.status}`);
+        }
+        return data;
+    },
+
+    _settingsErrCard(title, err) {
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title">${this.esc(title)}</h3></div><div class="card-body"><div class="alert alert-danger mb-0">${this.esc(err)}</div></div></div>`;
+    },
+    _authorityChips(list) {
+        return (list || []).map((a) => `<span class="badge bg-azure-lt me-1">${this.esc(a)}</span>`).join('') || '<span class="text-secondary small">—</span>';
+    },
+
+    _settingsRepoCard(topo, extraActions) {
+        topo = topo || {};
+        if (topo.error) return this._settingsErrCard('Repository & roles', topo.error);
+        const roles = topo.roles || {};
+        const order = ['canonical', 'public_ci', 'public', 'release'];
+        const rows = order.map((k) => {
+            const r = roles[k] || {};
+            return `<tr>
+                <td><span class="fw-semibold text-capitalize">${this.esc(k.replace('_', ' '))}</span></td>
+                <td>${r.repo ? `<code>${this.esc(r.repo)}</code>` : '<span class="text-secondary">— not set —</span>'}</td>
+                <td>${this.esc(r.default_branch || '—')}</td>
+                <td>${this._authorityChips(r.authority)}</td>
+                <td>${r.configured ? '<span class="badge bg-green-lt">configured</span>' : '<span class="badge bg-secondary-lt">unset</span>'}</td>
+            </tr>`;
+        }).join('');
+        const warn = (topo.warnings || []).length ? `<div class="alert alert-warning py-2 px-3 small mt-2 mb-0">${(topo.warnings || []).map((w) => this.esc(w)).join('<br>')}</div>` : '';
+        const c = roles.canonical || {}, ci = roles.public_ci || {}, pub = roles.public || {}, rel = roles.release || {};
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-git-branch me-2"></i>Repository &amp; roles</h3>
+            <div class="card-actions btn-list"><span class="badge ${topo.valid ? 'bg-green-lt' : 'bg-red-lt'}">${topo.valid ? 'valid' : 'invalid'}</span>
+            ${extraActions || ''}
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="repo-edit"><i class="ti ti-pencil me-1"></i>Edit topology</button></div></div>
+            <div class="card-body">
+            <div class="text-secondary small mb-2">Topology: <code>${this.esc(topo.topology_type || '—')}</code></div>
+            <div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+                <thead><tr><th>Role</th><th>Repo</th><th>Default branch</th><th>Authority</th><th></th></tr></thead>
+                <tbody>${rows}</tbody></table></div>${warn}
+            <form id="repo-edit-form" class="mt-3" style="display:none">
+                <div class="row g-2">
+                    <div class="col-md-6"><label class="form-label">Canonical repo <span class="text-secondary">(owner/name)</span></label><input id="rt-canonical" class="form-control" value="${this.esc(c.repo || '')}" placeholder="owner/name" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Canonical default branch</label><input id="rt-branch" class="form-control" value="${this.esc(c.default_branch || '')}" placeholder="master" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Public CI repo</label><input id="rt-ci" class="form-control" value="${this.esc(ci.repo || '')}" placeholder="owner/name" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Public mirror repo</label><input id="rt-public" class="form-control" value="${this.esc(pub.repo || '')}" placeholder="owner/name" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Release repo</label><input id="rt-release" class="form-control" value="${this.esc(rel.repo || '')}" placeholder="owner/name" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Topology type</label><input id="rt-type" class="form-control" value="${this.esc(topo.topology_type || '')}" placeholder="private_canonical_public_ci" autocomplete="off"></div>
+                </div>
+                <div class="d-flex align-items-center mt-2"><span id="repo-flash" class="small text-secondary"></span>
+                <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="repo-save"><i class="ti ti-device-floppy me-1"></i>Save topology</button></div>
+            </form></div></div>`;
+    },
+
+    _settingsReconcileCard() {
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-refresh-dot me-2"></i>Reconcile &amp; provenance drift</h3>
+            <div class="card-actions btn-list">
+                <select id="rc-severity" class="form-select form-select-sm" style="width:auto"><option value="high">high only</option><option value="medium" selected>medium +</option><option value="low">low +</option></select>
+                <button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="reconcile-alerts">Send alerts</button>
+                <button class="btn btn-sm btn-primary" type="button" data-set-action="reconcile"><i class="ti ti-refresh me-1"></i>Reconcile now</button>
+            </div></div>
+            <div class="card-body"><span id="reconcile-flash" class="small text-secondary"></span>
+            <div id="reconcile-results" class="mt-2"><div class="text-secondary small">Run reconcile to surface provenance drift — orphan merges, stale branches, missing evidence.</div></div>
+            </div></div>`;
+    },
+    _reconcileFindingsHtml(rec) {
+        rec = rec || {};
+        const findings = rec.findings || [];
+        const sevColor = { high: 'red', medium: 'yellow', low: 'secondary' };
+        const stamp = rec.checked_at ? new Date(rec.checked_at * 1000).toLocaleTimeString() : '';
+        const head = `<div class="d-flex align-items-center mb-2"><span class="badge ${rec.ok ? 'bg-green-lt' : 'bg-yellow-lt'} me-2">${rec.ok ? 'clean' : `${findings.length} finding${findings.length === 1 ? '' : 's'}`}</span>
+            <span class="text-secondary small">checked ${stamp}${(rec.backfilled || []).length ? ` · backfilled ${rec.backfilled.length}` : ''}</span></div>`;
+        if (!findings.length) return head + '<div class="text-secondary small">No provenance drift detected.</div>';
+        return head + `<div class="list-group list-group-flush">${findings.map((f) => `<div class="list-group-item px-0"><div class="d-flex gap-2">
+            <span class="badge bg-${sevColor[f.severity] || 'secondary'}-lt text-uppercase">${this.esc(f.severity || '?')}</span>
+            <div><div><span class="fw-semibold">${this.esc(f.code || 'finding')}</span>${f.task_id ? ` · <code>${this.esc(f.task_id)}</code>` : ''}</div>
+            <div class="text-secondary small">${this.esc(f.detail || '')}</div></div></div></div>`).join('')}</div>`;
+    },
+
+    _settingsVerifyCard() {
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-clipboard-check me-2"></i>Verify offline completion</h3></div>
+            <div class="card-body"><div class="text-secondary small mb-3">Stamp a non-PR task Done with recorded evidence — verifier-attributed and audited.</div>
+            <div class="row g-2">
+                <div class="col-md-4"><label class="form-label">Task id</label><input id="vo-task" class="form-control text-uppercase" placeholder="e.g. HARDEN-44" autocomplete="off"></div>
+                <div class="col-md-8"><label class="form-label">Artifact / evidence URL</label><input id="vo-url" class="form-control" placeholder="https://…" autocomplete="off"></div>
+                <div class="col-md-6"><label class="form-label">Verifier <span class="text-secondary">(optional)</span></label><input id="vo-verifier" class="form-control" placeholder="defaults to you" autocomplete="off"></div>
+                <div class="col-md-6"><label class="form-label">Evidence note</label><input id="vo-note" class="form-control" placeholder="what was verified" autocomplete="off"></div>
+            </div>
+            <div class="d-flex align-items-center mt-2"><span id="vo-flash" class="small text-secondary"></span>
+            <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="verify-offline"><i class="ti ti-check me-1"></i>Verify &amp; stamp Done</button></div>
+            </div></div>`;
+    },
+
+    _settingsMoveCard() {
+        const opts = (this._settingsProjects || []).map((p) => `<option value="${this.esc(p.id)}">${this.esc(p.label || p.id)}</option>`).join('');
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-arrows-transfer-up me-2"></i>Move task <span class="badge bg-red-lt ms-2">admin</span></h3></div>
+            <div class="card-body"><div class="text-secondary small mb-3">Move a task out of <strong>${this.esc(window.PM_PROJECT || '')}</strong> into another project — cross-project and audited.</div>
+            <div class="row g-2">
+                <div class="col-md-4"><label class="form-label">Task id</label><input id="mv-task" class="form-control text-uppercase" placeholder="e.g. UI-3" autocomplete="off"></div>
+                <div class="col-md-4"><label class="form-label">Destination project</label><select id="mv-to" class="form-select">${opts}</select></div>
+                <div class="col-md-4"><label class="form-label">Cross-project deps</label><select id="mv-dep" class="form-select"><option value="fail" selected>fail if any</option><option value="clear">clear them</option></select></div>
+                <div class="col-md-8"><label class="form-label">New task id <span class="text-secondary">(optional)</span></label><input id="mv-newid" class="form-control text-uppercase" placeholder="keep same id" autocomplete="off"></div>
+            </div>
+            <div class="d-flex align-items-center mt-2"><span id="mv-flash" class="small text-secondary"></span>
+            <button class="btn btn-danger btn-sm ms-auto" type="button" data-set-action="move-task"><i class="ti ti-arrow-right me-1"></i>Move task</button></div>
+            </div></div>`;
+    },
+
+    _ciStatusColor(status, conclusion) {
+        const s = String(conclusion || status || '').toLowerCase();
+        if (['success', 'passed'].includes(s)) return 'bg-green-lt';
+        if (['failure', 'failed', 'error', 'cancelled'].includes(s)) return 'bg-red-lt';
+        if (['running', 'triggered', 'requested', 'mirrored', 'pending'].includes(s)) return 'bg-blue-lt';
+        return 'bg-secondary-lt';
+    },
+    _settingsCiRunsCard(data) {
+        data = data || {};
+        if (data.error) return this._settingsErrCard('External CI mirror runs', data.error);
+        const runs = data.runs || [];
+        const rows = runs.length ? runs.slice(0, 25).map((r) => `<tr>
+            <td>${r.task_id ? `<code>${this.esc(r.task_id)}</code>` : '—'}</td>
+            <td><span class="badge ${this._ciStatusColor(r.status, r.conclusion)}">${this.esc(r.conclusion || r.status || '?')}</span></td>
+            <td class="font-monospace small">${this.esc((r.source_sha || '').slice(0, 8) || '—')}</td>
+            <td class="small">${this.esc(r.mirror_repo || r.source_repo || '—')}</td>
+            <td>${r.run_url ? `<a href="${this.esc(r.run_url)}" target="_blank" rel="noopener">run</a>` : '—'}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="text-secondary text-center py-3">No external CI mirror runs.</td></tr>';
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-checkup-list me-2"></i>External CI mirror runs</h3>
+            <div class="card-actions"><button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="refresh"><i class="ti ti-refresh me-1"></i>Refresh</button></div></div>
+            <div class="table-responsive"><table class="table table-vcenter card-table mb-0"><thead><tr><th>Task</th><th>Result</th><th>SHA</th><th>Repo</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    },
+    _settingsPublicationCard(data) {
+        data = data || {};
+        if (data.error) return this._settingsErrCard('Publication evidence', data.error);
+        const pubs = data.publication_evidence || [];
+        const rows = pubs.length ? pubs.slice(0, 25).map((p) => `<tr>
+            <td>${p.task_id ? `<code>${this.esc(p.task_id)}</code>` : '—'}</td>
+            <td class="small">${this.esc(p.public_repo || '—')}</td>
+            <td class="small">${this.esc(p.public_ref || p.public_tag || '—')}</td>
+            <td class="font-monospace small">${this.esc((p.public_sha || '').slice(0, 8) || '—')}</td>
+            <td>${p.artifact_url ? `<a href="${this.esc(p.artifact_url)}" target="_blank" rel="noopener">artifact</a>` : '—'}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="text-secondary text-center py-3">No publication evidence recorded.</td></tr>';
+        return `<div class="card mb-4"><div class="card-header"><h3 class="card-title"><i class="ti ti-file-certificate me-2"></i>Publication evidence</h3></div>
+            <div class="table-responsive"><table class="table table-vcenter card-table mb-0"><thead><tr><th>Task</th><th>Public repo</th><th>Ref</th><th>SHA</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    },
+
+    _settingsAction(action) {
+        if (String(action || '').startsWith('project-')) return this._projectAdminAction(action);
+        switch (action) {
+            case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
+            case 'repo-save': return this.saveRepoTopology();
+            case 'reconcile': return this.reconcileNow();
+            case 'reconcile-alerts': return this.sendReconcileAlerts();
+            case 'verify-offline': return this.verifyOffline();
+            case 'move-task': return this.moveTask();
+            case 'refresh': return this.renderSettings();
+            // Launchers into the surfaces that still live in modals. Settings is already
+            // the canonical way to reach them; UI-20 folds them in and retires the rail.
+            case 'open-members': return this.openMembers();
+            case 'open-comms': return this.openComms(window.PM_PROJECT);
+            case 'open-github': return this.openGithubAssoc(window.PM_PROJECT);
+            case 'open-tokens': return this.openApiKeys(window.PM_PROJECT);
+            case 'goto-fleet': { if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-fleet'); return; }
+        }
+    },
+    async saveRepoTopology() {
+        const proj = window.PM_PROJECT;
+        const body = {
+            canonical_repo: this._sv('rt-canonical'), canonical_default_branch: this._sv('rt-branch'),
+            public_ci_repo: this._sv('rt-ci'), public_repo: this._sv('rt-public'),
+            release_repo: this._sv('rt-release'), topology_type: this._sv('rt-type'),
+        };
+        this._sFlash('repo-flash', 'Saving…', 'text-secondary');
+        try {
+            await this._sSend(`api/projects/${encodeURIComponent(proj)}/repo_topology`, 'POST', body);
+            this._sFlash('repo-flash', 'Saved — refreshing…', 'text-success');
+            await this.renderSettings();
+        } catch (e) { this._sFlash('repo-flash', e.message, 'text-danger'); }
+    },
+    async reconcileNow() {
+        const proj = window.PM_PROJECT;
+        this._sFlash('reconcile-flash', 'Reconciling…', 'text-secondary');
+        const res = document.getElementById('reconcile-results');
+        try {
+            const rec = await this._sSend(`ixp/v1/reconcile?project=${encodeURIComponent(proj)}`, 'GET');
+            this._sFlash('reconcile-flash', '', 'text-secondary');
+            if (res) res.innerHTML = this._reconcileFindingsHtml(rec);
+        } catch (e) { this._sFlash('reconcile-flash', e.message, 'text-danger'); }
+    },
+    async sendReconcileAlerts() {
+        const proj = window.PM_PROJECT;
+        const sev = document.getElementById('rc-severity')?.value || 'medium';
+        this._sFlash('reconcile-flash', 'Sending alerts…', 'text-secondary');
+        try {
+            const r = await this._sSend('ixp/v1/reconcile_alerts', 'POST', { project: proj, min_severity: sev });
+            const msg = r.alert_sent ? `Alert sent · ${r.finding_count} finding(s)` : (r.deduped ? 'Deduped — a recent alert already covers this' : `No alert · ${r.finding_count || 0} finding(s) ≥ ${sev}`);
+            this._sFlash('reconcile-flash', msg, r.alert_sent ? 'text-success' : 'text-secondary');
+        } catch (e) { this._sFlash('reconcile-flash', e.message, 'text-danger'); }
+    },
+    async verifyOffline() {
+        const task = this._sv('vo-task').toUpperCase();
+        if (!task) { this._sFlash('vo-flash', 'Enter a task id.', 'text-danger'); return; }
+        const body = { artifact_url: this._sv('vo-url'), verifier: this._sv('vo-verifier') };
+        const note = this._sv('vo-note');
+        if (note) body.evidence = { note };
+        this._sFlash('vo-flash', 'Verifying…', 'text-secondary');
+        try {
+            const r = await this._sSend(`api/tasks/${encodeURIComponent(task)}/verify_offline`, 'POST', body);
+            this._sFlash('vo-flash', `${task} → ${r.status || 'Done'}${r.idempotent ? ' (already Done)' : ''}`, 'text-success');
+        } catch (e) { this._sFlash('vo-flash', e.message, 'text-danger'); }
+    },
+    async moveTask() {
+        const task = this._sv('mv-task').toUpperCase();
+        const to = document.getElementById('mv-to')?.value || '';
+        if (!task || !to) { this._sFlash('mv-flash', 'Task id and destination are required.', 'text-danger'); return; }
+        if (to === window.PM_PROJECT) { this._sFlash('mv-flash', 'Destination is the current project.', 'text-danger'); return; }
+        if (!confirm(`Move ${task} from ${window.PM_PROJECT} to ${to}? This is audited.`)) return;
+        const body = { project_to: to, dependency_policy: document.getElementById('mv-dep')?.value || 'fail' };
+        const newid = this._sv('mv-newid').toUpperCase();
+        if (newid) body.new_task_id = newid;
+        this._sFlash('mv-flash', 'Moving…', 'text-secondary');
+        try {
+            const r = await this._sSend(`api/tasks/${encodeURIComponent(task)}/move`, 'POST', body);
+            // _sFlash writes via textContent, so pass raw values (esc() would double-encode).
+            this._sFlash('mv-flash', `Moved to ${r.project_to || to} as ${r.new_task_id || r.task_id || task}`, 'text-success');
+        } catch (e) { this._sFlash('mv-flash', e.message, 'text-danger'); }
+    },
+    };
+
+    window.SwitchboardSettings = Object.freeze({ methods, SECTIONS });
+})();

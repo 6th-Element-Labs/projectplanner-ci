@@ -66,6 +66,13 @@
         .nav-tabs::-webkit-scrollbar{display:none}
         .nav-tabs .nav-link{white-space:nowrap;padding-left:.6rem;padding-right:.6rem}
       }
+      /* UI-18 Settings shell: group headings inside the category list-group. Not
+         list items — they label the run of sections beneath them. */
+      #settings-nav .settings-nav-group{font-size:.6875rem;letter-spacing:.04em;
+        background:var(--tblr-bg-surface-secondary,#f6f7f9);cursor:default}
+      #settings-nav .list-group-item-action .ti-lock{font-size:.875rem}
+      #settings-nav .list-group-item-action.active .ti-lock{color:#fff!important;opacity:.75}
+      #settings-panel:focus{outline:none}
       /* ⌘K command palette — one keyboard surface for jump / filter / act / switch. */
       #cmdk-backdrop{position:fixed;inset:0;z-index:1090;background:rgba(20,22,28,.45);
         display:none;align-items:flex-start;justify-content:center;padding-top:11vh}
@@ -175,7 +182,9 @@
                         <li class="nav-item"><a class="nav-link" id="toptab-fleet" data-bs-toggle="tab" href="#tab-fleet" role="tab"><span class="nav-link-icon"><i class="ti ti-server-bolt"></i></span><span class="nav-link-title">Fleet</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-ask" data-bs-toggle="tab" href="#tab-ask" role="tab"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-inbox" data-bs-toggle="tab" href="#tab-inbox-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span></a></li>
-                        <li class="nav-item" id="nav-settings" style="display:none"><a class="nav-link" id="toptab-settings" data-bs-toggle="tab" href="#tab-settings" role="tab"><span class="nav-link-icon"><i class="ti ti-settings"></i></span><span class="nav-link-title">Settings</span></a></li>
+                        <!-- UI-18: Settings is open to every signed-in user — personal sections are
+                             always available and project/system sections gate themselves per section. -->
+                        <li class="nav-item" id="nav-settings"><a class="nav-link" id="toptab-settings" data-bs-toggle="tab" href="#tab-settings" role="tab"><span class="nav-link-icon"><i class="ti ti-settings"></i></span><span class="nav-link-title">Settings</span></a></li>
                     </ul>
                     <div class="mt-auto px-2 pb-2 tk-rail-full">
                         <button id="btn-new-project" class="btn btn-sm btn-outline-secondary w-100 mb-2" type="button"><i class="ti ti-folder-plus me-1"></i>New project</button>
@@ -394,10 +403,39 @@
                             </div>
                         </div>
 
-                        <!-- UI-9: admin-gated project & provenance settings (rendered by app.js on tab show) -->
+                        <!-- UI-18: the unified Settings shell — left category card + focused content
+                             card, ported from the ActionEngine Taikun/Tabler settings page. The nav
+                             and the panel are filled by static/js/settings.js (the nav depends on the
+                             caller's scopes; the panel loads per section). -->
                         <div class="tab-pane" id="tab-settings" role="tabpanel">
                             <div id="settings-page" class="mt-3">
-                                <div class="text-secondary small">Loading settings…</div>
+                                <!-- No page-header here on purpose. ActionEngine's settings page is
+                                     standalone and needs its own title; inside this SPA tab the rail
+                                     entry and the category card already say "Settings", and a
+                                     .page-title/.page-pretitle here would be claimed by app.js's
+                                     document-wide querySelector for the project header. -->
+                                <div class="row">
+                                    <div class="col-12 col-md-3 mb-3">
+                                        <button class="btn btn-outline-secondary w-100 d-md-none mb-2" type="button"
+                                                id="settings-nav-toggle" data-bs-toggle="collapse"
+                                                data-bs-target="#settings-nav-collapse" aria-expanded="false"
+                                                aria-controls="settings-nav-collapse">
+                                            <i class="ti ti-menu-2 me-2" aria-hidden="true"></i><span id="settings-nav-current">Settings menu</span>
+                                        </button>
+                                        <div class="collapse d-md-block" id="settings-nav-collapse">
+                                            <div class="card">
+                                                <div class="card-header"><h3 class="card-title">Settings</h3></div>
+                                                <div class="list-group list-group-flush" id="settings-nav"
+                                                     role="tablist" aria-orientation="vertical" aria-label="Settings categories"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12 col-md-9">
+                                        <div id="settings-panel" role="tabpanel" tabindex="-1">
+                                            <div class="text-secondary small">Loading settings…</div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -950,6 +988,7 @@
     <script src="js/runner-session.js?v=1"></script>
     <script src="js/proof-console.js?v=1"></script>
     <script src="js/project-admin.js?v=1"></script>
+    <script src="js/settings.js?v=1"></script>
     <script src="app.js?v=45"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script src="saturation-panel.js?v=1"></script>
@@ -995,8 +1034,11 @@
         // Deep-link: honor a #tab-<name> hash on load (e.g. ?project=vulkan#tab-board),
         // resolving through the hub for nested sub-panes. #tab-mission has its own richer
         // handler in app.js (it also resolves the selected deliverable), so skip it here.
+        // An optional /<section> suffix (UI-18's #tab-settings/members) addresses a pane
+        // *inside* a tab: open the tab here, and the tab's own module reads the suffix.
         var h = (location.hash || '').trim();
-        if (/^#tab-[a-z0-9-]+$/i.test(h) && h !== '#tab-mission') showTab(h);
+        var deep = /^#(tab-[a-z0-9-]+)(?:\/[a-z0-9-]+)?$/i.exec(h);
+        if (deep && deep[1].toLowerCase() !== 'tab-mission') showTab('#' + deep[1]);
         // Deep-link the Deliverable board: a ?deliverable= / ?mission= query param means
         // the operator was on the Deliverable board, so activate that top tab now — during
         // page parse, before app.js init or the board fetch — so a refresh lands there on

@@ -9,6 +9,7 @@ FRONTEND_SOURCES = (
     "static/js/mission.js",
     "static/js/runner-session.js",
     "static/js/proof-console.js",
+    "static/js/settings.js",
     "static/app.js",
 )
 

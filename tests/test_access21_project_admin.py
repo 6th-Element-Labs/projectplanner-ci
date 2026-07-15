@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from path_setup import ROOT
+from scripts.frontend_test_source import read_frontend_source
 
 
 TMP = tempfile.mkdtemp(prefix="access21-project-admin-")
@@ -168,6 +169,10 @@ try:
     index = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     ui = (ROOT / "static" / "js" / "project-admin.js").read_text(encoding="utf-8")
     app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    # The settings surface that drives the project-admin card is its own module
+    # (UI-18), so assert call-sites against the composed frontend rather than
+    # app.js alone — otherwise the check pins a file, not the behaviour.
+    composed = read_frontend_source(str(ROOT))
     ok('src="js/project-admin.js?v=' in index
        and "window.SwitchboardProjectAdmin.methods" in app_js,
        "operator screen composes the project administration frontend boundary")
@@ -187,7 +192,7 @@ try:
     ok("element.checked && archive.dataset.archiveAllowed" not in ui
        and "element.checked && restore.dataset.restoreAllowed" not in ui,
        "confirmation no longer makes an available action look permanently disabled")
-    ok("this._projectAdminSyncSwitcher();" in app_js,
+    ok("this._projectAdminSyncSwitcher();" in composed,
        "lifecycle refresh synchronizes the active-only project switcher")
     ok("await this._sSend" in ui and "catch (e)" in ui,
        "destructive-looking UI actions wait for server success and preserve visible failures")
