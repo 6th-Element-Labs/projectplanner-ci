@@ -1,11 +1,13 @@
-# Example systemd unit for Switchboard Tasks (ARCH-MS-89 drill / ARCH-MS-90+)
+# Example systemd unit for Switchboard Tasks (ARCH-MS-90 side-by-side)
 #
-# Install only after independence Go. Listen on 127.0.0.1:8122.
-# Factory entrypoint lands with ARCH-MS-90 (`switchboard.services.tasks.app:create_app`).
-# Until then this file is a drill artifact for the ARCH-MS-89 ops harness.
+# Install only after independence Go + G6 for *live* edge traffic (ARCH-MS-92).
+# This example is the side-by-side process on 127.0.0.1:8122 — Caddy stays on
+# the monolith until ARCH-MS-92 dual-strip.
+#
+# Factory: switchboard.services.tasks.app:create_app
 
 [Unit]
-Description=Switchboard Tasks service (Mode A — :8122)
+Description=Switchboard Tasks service (Mode A — :8122, side-by-side)
 After=network.target
 PartOf=projectplanner.service
 
@@ -15,10 +17,14 @@ User=projectplanner
 Group=projectplanner
 WorkingDirectory=/opt/projectplanner
 Environment=PYTHONUNBUFFERED=1
+Environment=SWITCHBOARD_TASKS_SERVICE_NAME=switchboard-tasks
+Environment=SWITCHBOARD_TASKS_HOST=127.0.0.1
+Environment=SWITCHBOARD_TASKS_PORT=8122
+# PYTHONPATH must include repo root + src/ the same way the monolith does.
+Environment=PYTHONPATH=/opt/projectplanner:/opt/projectplanner/src
+# Live cutover dual-strip (ARCH-MS-92) — leave commented until Caddy points here:
 # Environment=PM_TASKS_HTTP_PRIMARY=service
-# ExecStart=/opt/projectplanner/.venv/bin/uvicorn --factory switchboard.services.tasks.app:create_app --host 127.0.0.1 --port 8122
-# Placeholder until ARCH-MS-90:
-ExecStart=/bin/false
+ExecStart=/opt/projectplanner/.venv/bin/uvicorn --factory switchboard.services.tasks.app:create_app --host 127.0.0.1 --port 8122
 Restart=on-failure
 RestartSec=3
 MemoryMax=250M

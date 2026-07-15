@@ -40,8 +40,14 @@ PrincipalResolver = Callable[..., dict]
 
 
 def create_router(*, resolve_project: ProjectResolver,
-                  resolve_principal: PrincipalResolver) -> APIRouter:
-    """Build the task router against the monolith's shared trust boundaries."""
+                  resolve_principal: PrincipalResolver,
+                  thin_mode_a: bool = False) -> APIRouter:
+    """Build the task router against the monolith's shared trust boundaries.
+
+    When ``thin_mode_a`` is True (Tasks process cut, ADR-0012 Mode A), omit
+    sibling-BC subpaths ``…/review_*``, ``…/dispatch``, and ``…/chat`` so
+    ``:8122`` does not dual-mount review/dispatch/plan-chat surfaces.
+    """
     router = APIRouter()
 
     def resolve_write_actor(request: Request, project: str, body: dict,
@@ -119,123 +125,124 @@ def create_router(*, resolve_project: ProjectResolver,
             raise HTTPException(404, "task not found")
         return task
 
-    @router.post("/api/tasks/{task_id}/review_verdict")
-    async def record_review_verdict(request: Request, task_id: str,
-                                    body: dict = Body(...), project: str = Query(...)):
-        """Persist independent review judgment for exactly one current PR head."""
-        project = resolve_project(project)
-        payload = dict(body or {})
-        payload["task_id"] = task_id
-        reviewer = str(payload.get("reviewer_principal") or "").strip()
-        binding = resolve_write_actor(
-            request, project, {**payload, "agent_id": reviewer}, task_id=task_id,
-            scopes=("write:ixp",),
-        )
-        payload["reviewer_principal"] = binding["actor"]
-        result = review_verdict_commands.execute_mapping(
-            payload, actor=binding["actor"],
-            # The resolver is the transport's authenticated source of truth.  In
-            # dev-open mode it authenticates inside resolve_write_actor() without
-            # middleware populating request.state, while its returned binding still
-            # carries the principal ID.  Reading from request.state here therefore
-            # made legitimate dev-open reviews fail closed as falsely unbound.
-            principal_id=binding.get("principal_id") or "",
-            project=project,
-        )
-        if result.get("error_code") == "review_task_not_found":
-            raise HTTPException(404, result)
-        if result.get("error_code") in {
-            "reviewer_principal_mismatch", "reviewer_principal_unbound",
-            "reviewer_not_independent",
-            "review_head_unbound", "stale_review_head", "review_pr_mismatch",
-            "review_verdict_conflict",
-            "adversarial_review_required",
-        }:
-            raise HTTPException(409, result)
-        if result.get("error"):
-            raise HTTPException(400, result)
-        if result.get("created"):
-            record_write_binding(task_id, binding, project)
-        return result
+    if not thin_mode_a:
+        @router.post("/api/tasks/{task_id}/review_verdict")
+        async def record_review_verdict(request: Request, task_id: str,
+                                        body: dict = Body(...), project: str = Query(...)):
+            """Persist independent review judgment for exactly one current PR head."""
+            project = resolve_project(project)
+            payload = dict(body or {})
+            payload["task_id"] = task_id
+            reviewer = str(payload.get("reviewer_principal") or "").strip()
+            binding = resolve_write_actor(
+                request, project, {**payload, "agent_id": reviewer}, task_id=task_id,
+                scopes=("write:ixp",),
+            )
+            payload["reviewer_principal"] = binding["actor"]
+            result = review_verdict_commands.execute_mapping(
+                payload, actor=binding["actor"],
+                # The resolver is the transport's authenticated source of truth.  In
+                # dev-open mode it authenticates inside resolve_write_actor() without
+                # middleware populating request.state, while its returned binding still
+                # carries the principal ID.  Reading from request.state here therefore
+                # made legitimate dev-open reviews fail closed as falsely unbound.
+                principal_id=binding.get("principal_id") or "",
+                project=project,
+            )
+            if result.get("error_code") == "review_task_not_found":
+                raise HTTPException(404, result)
+            if result.get("error_code") in {
+                "reviewer_principal_mismatch", "reviewer_principal_unbound",
+                "reviewer_not_independent",
+                "review_head_unbound", "stale_review_head", "review_pr_mismatch",
+                "review_verdict_conflict",
+                "adversarial_review_required",
+            }:
+                raise HTTPException(409, result)
+            if result.get("error"):
+                raise HTTPException(400, result)
+            if result.get("created"):
+                record_write_binding(task_id, binding, project)
+            return result
 
-    @router.get("/api/tasks/{task_id}/review_verdict")
-    async def get_review_verdict(task_id: str, head_sha: str = "",
-                                 project: str = Query(store.DEFAULT_PROJECT)):
-        project = resolve_project(project)
-        verdict = review_verdict_queries.get_for(
-            task_id, project=project, head_sha=head_sha)
-        if not verdict:
-            raise HTTPException(404, "review verdict not found")
-        return verdict
+        @router.get("/api/tasks/{task_id}/review_verdict")
+        async def get_review_verdict(task_id: str, head_sha: str = "",
+                                     project: str = Query(store.DEFAULT_PROJECT)):
+            project = resolve_project(project)
+            verdict = review_verdict_queries.get_for(
+                task_id, project=project, head_sha=head_sha)
+            if not verdict:
+                raise HTTPException(404, "review verdict not found")
+            return verdict
 
-    @router.get("/api/tasks/{task_id}/review_findings")
-    async def list_review_findings(
-            task_id: str, head_sha: str = "", state: str = "",
-            finding_class: str = Query(default="", alias="class"), severity: str = "",
-            current_head_only: bool = False,
-            project: str = Query(store.DEFAULT_PROJECT)):
-        project = resolve_project(project)
-        findings = review_verdict_queries.list_findings_for(
-            task_id, project=project, head_sha=head_sha, state=state,
-            finding_class=finding_class, severity=severity,
-            current_head_only=current_head_only,
-        )
-        return {"task_id": task_id, "finding_count": len(findings),
-                "findings": findings}
+        @router.get("/api/tasks/{task_id}/review_findings")
+        async def list_review_findings(
+                task_id: str, head_sha: str = "", state: str = "",
+                finding_class: str = Query(default="", alias="class"), severity: str = "",
+                current_head_only: bool = False,
+                project: str = Query(store.DEFAULT_PROJECT)):
+            project = resolve_project(project)
+            findings = review_verdict_queries.list_findings_for(
+                task_id, project=project, head_sha=head_sha, state=state,
+                finding_class=finding_class, severity=severity,
+                current_head_only=current_head_only,
+            )
+            return {"task_id": task_id, "finding_count": len(findings),
+                    "findings": findings}
 
-    @router.post("/api/tasks/{task_id}/review_findings/{finding_id}/resolution")
-    async def resolve_review_finding(
-            request: Request, task_id: str, finding_id: str,
-            body: dict = Body(...), project: str = Query(...)):
-        """Admin-authorized, audited waiver/override for one exact-head finding."""
-        project = resolve_project(project)
-        payload = dict(body or {})
-        payload["task_id"] = task_id
-        payload["finding_id"] = finding_id
-        resolver = str(payload.get("resolver_principal") or "").strip()
-        binding = resolve_write_actor(
-            request, project, {**payload, "agent_id": resolver}, task_id=task_id,
-            scopes=("admin",),
-        )
-        payload["resolver_principal"] = binding["actor"]
-        result = review_verdict_commands.resolve_finding_mapping(
-            payload, actor=binding["actor"],
-            principal_id=binding.get("principal_id") or "",
-            authorized=True, project=project,
-        )
-        if result.get("error_code") in {
-            "review_resolution_forbidden", "review_resolver_principal_mismatch",
-            "review_resolver_principal_unbound",
-        }:
-            raise HTTPException(403, result)
-        if result.get("error_code") in {
-            "stale_review_head", "review_head_unbound", "review_finding_not_open",
-        }:
-            raise HTTPException(409, result)
-        if result.get("error_code") in {
-            "review_task_not_found", "review_verdict_not_found",
-            "review_finding_not_found",
-        }:
-            raise HTTPException(404, result)
-        if result.get("error"):
-            raise HTTPException(400, result)
-        if result.get("resolved"):
-            record_write_binding(task_id, binding, project)
-        return result
+        @router.post("/api/tasks/{task_id}/review_findings/{finding_id}/resolution")
+        async def resolve_review_finding(
+                request: Request, task_id: str, finding_id: str,
+                body: dict = Body(...), project: str = Query(...)):
+            """Admin-authorized, audited waiver/override for one exact-head finding."""
+            project = resolve_project(project)
+            payload = dict(body or {})
+            payload["task_id"] = task_id
+            payload["finding_id"] = finding_id
+            resolver = str(payload.get("resolver_principal") or "").strip()
+            binding = resolve_write_actor(
+                request, project, {**payload, "agent_id": resolver}, task_id=task_id,
+                scopes=("admin",),
+            )
+            payload["resolver_principal"] = binding["actor"]
+            result = review_verdict_commands.resolve_finding_mapping(
+                payload, actor=binding["actor"],
+                principal_id=binding.get("principal_id") or "",
+                authorized=True, project=project,
+            )
+            if result.get("error_code") in {
+                "review_resolution_forbidden", "review_resolver_principal_mismatch",
+                "review_resolver_principal_unbound",
+            }:
+                raise HTTPException(403, result)
+            if result.get("error_code") in {
+                "stale_review_head", "review_head_unbound", "review_finding_not_open",
+            }:
+                raise HTTPException(409, result)
+            if result.get("error_code") in {
+                "review_task_not_found", "review_verdict_not_found",
+                "review_finding_not_found",
+            }:
+                raise HTTPException(404, result)
+            if result.get("error"):
+                raise HTTPException(400, result)
+            if result.get("resolved"):
+                record_write_binding(task_id, binding, project)
+            return result
 
-    @router.get("/api/tasks/{task_id}/review_remediations")
-    async def list_review_remediations(task_id: str, status: str = "",
-                                       project: str = Query(store.DEFAULT_PROJECT)):
-        project = resolve_project(project)
-        rows = review_remediation_queries.list_for(
-            project=project, task_id=task_id, status=status)
-        return {
-            "task_id": task_id,
-            "remediation_count": len(rows),
-            "remediations": rows,
-            "metrics": review_remediation_queries.metrics_for(
-                project=project, task_id=task_id),
-        }
+        @router.get("/api/tasks/{task_id}/review_remediations")
+        async def list_review_remediations(task_id: str, status: str = "",
+                                           project: str = Query(store.DEFAULT_PROJECT)):
+            project = resolve_project(project)
+            rows = review_remediation_queries.list_for(
+                project=project, task_id=task_id, status=status)
+            return {
+                "task_id": task_id,
+                "remediation_count": len(rows),
+                "remediations": rows,
+                "metrics": review_remediation_queries.metrics_for(
+                    project=project, task_id=task_id),
+            }
 
     @router.post("/api/tasks")
     async def create_task(request: Request, body: dict = Body(...),
@@ -416,54 +423,55 @@ def create_router(*, resolve_project: ProjectResolver,
             record_write_binding(task_id, binding, project)
         return task
 
-    @router.post("/api/tasks/{task_id}/dispatch")
-    async def dispatch_task(task_id: str, body: dict = Body(default={})):
-        project = resolve_project((body or {}).get("project") or store.DEFAULT_PROJECT)
-        result = await asyncio.to_thread(
-            dispatch.dispatch, task_id, (body or {}).get("actor", "user"), project,
-            (body or {}).get("runtime") or "claude-code")
-        if result.get("error") == "task not found":
-            raise HTTPException(404, "task not found")
-        return result
-
-    @router.get("/api/tasks/{task_id}/dispatch/latest")
-    async def task_dispatch_latest(task_id: str,
-                                   project: str = Query(store.DEFAULT_PROJECT)):
-        return await asyncio.to_thread(
-            dispatch.latest, task_id, resolve_project(project))
-
-    @router.post("/api/tasks/{task_id}/chat")
-    async def chat(task_id: str, body: dict = Body(...),
-                   project: str = Query(store.DEFAULT_PROJECT)):
-        project = resolve_project(project)
-        assistant = {"helm": "Helm", "switchboard": "Switchboard"}.get(project, "Maxwell")
-        task = store.get_task(task_id, project=project)
-        if not task:
-            raise HTTPException(404, "task not found")
-        message = (body.get("message") or "").strip()
-        if not message:
-            raise HTTPException(400, "message required")
-        history = []
-        for activity in task.get("activity", []):
-            if activity.get("kind") == "chat":
-                text = (activity.get("payload") or {}).get("text", "")
-                if text:
-                    history.append({
-                        "role": "user" if activity.get("actor") == "user" else "assistant",
-                        "content": text,
-                    })
-        history = history[-8:]
-        store.add_comment(task_id, "user", message, kind="chat", project=project)
-        try:
+    if not thin_mode_a:
+        @router.post("/api/tasks/{task_id}/dispatch")
+        async def dispatch_task(task_id: str, body: dict = Body(default={})):
+            project = resolve_project((body or {}).get("project") or store.DEFAULT_PROJECT)
             result = await asyncio.to_thread(
-                agent.run, task, message, history, project=project)
-        except Exception as exc:
-            store.add_comment(
-                task_id, assistant, f"(agent error: {exc})", kind="chat", project=project)
-            raise HTTPException(502, f"agent error: {exc}")
-        answer = result.get("answer") or ""
-        store.add_comment(task_id, assistant, answer, kind="chat", project=project)
-        return {"answer": answer, "proposal": result.get("proposal"),
-                "sources": result.get("sources", [])}
+                dispatch.dispatch, task_id, (body or {}).get("actor", "user"), project,
+                (body or {}).get("runtime") or "claude-code")
+            if result.get("error") == "task not found":
+                raise HTTPException(404, "task not found")
+            return result
+
+        @router.get("/api/tasks/{task_id}/dispatch/latest")
+        async def task_dispatch_latest(task_id: str,
+                                       project: str = Query(store.DEFAULT_PROJECT)):
+            return await asyncio.to_thread(
+                dispatch.latest, task_id, resolve_project(project))
+
+        @router.post("/api/tasks/{task_id}/chat")
+        async def chat(task_id: str, body: dict = Body(...),
+                       project: str = Query(store.DEFAULT_PROJECT)):
+            project = resolve_project(project)
+            assistant = {"helm": "Helm", "switchboard": "Switchboard"}.get(project, "Maxwell")
+            task = store.get_task(task_id, project=project)
+            if not task:
+                raise HTTPException(404, "task not found")
+            message = (body.get("message") or "").strip()
+            if not message:
+                raise HTTPException(400, "message required")
+            history = []
+            for activity in task.get("activity", []):
+                if activity.get("kind") == "chat":
+                    text = (activity.get("payload") or {}).get("text", "")
+                    if text:
+                        history.append({
+                            "role": "user" if activity.get("actor") == "user" else "assistant",
+                            "content": text,
+                        })
+            history = history[-8:]
+            store.add_comment(task_id, "user", message, kind="chat", project=project)
+            try:
+                result = await asyncio.to_thread(
+                    agent.run, task, message, history, project=project)
+            except Exception as exc:
+                store.add_comment(
+                    task_id, assistant, f"(agent error: {exc})", kind="chat", project=project)
+                raise HTTPException(502, f"agent error: {exc}")
+            answer = result.get("answer") or ""
+            store.add_comment(task_id, assistant, answer, kind="chat", project=project)
+            return {"answer": answer, "proposal": result.get("proposal"),
+                    "sources": result.get("sources", [])}
 
     return router

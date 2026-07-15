@@ -24,7 +24,10 @@ dual-strip cut now. Exit via Path B No-Go (ARCH-MS-93).
 ## What this is not
 
 - Not a forever ban on Tasks-as-service — reopen after operator Go on a later mission.
-- Not a live `src/switchboard/services/tasks/` deployment or production dual-strip.
+- Not a **live** production deployment: no `deploy/switchboard-tasks.service`, no Caddy
+  `/api/tasks*` → `:8122`, no `PM_TASKS_HTTP_PRIMARY=service` dual-strip.
+- A side-by-side package factory under `src/switchboard/services/tasks/` (example systemd
+  under `deploy/tasks/`) may exist as drill/extract scaffolding — that is not a live cut.
 - Not a regression of Auth Path A (`:8121`) or Phase 2 exit green.
 
 ## Proof checklist

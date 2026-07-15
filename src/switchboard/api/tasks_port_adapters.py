@@ -222,3 +222,17 @@ def configure_tasks_ports(
         claims=claims or MonolithClaimLifecycle(),
         work_sessions=work_sessions or MonolithWorkSessionLookup(),
     )
+
+
+def ensure_tasks_runtime() -> None:
+    """Initialize project-registry DDL needed by Tasks HTTP deps.
+
+    Composition roots (``services.tasks.app``) call this at process start so the
+    service package never imports root ``store`` directly. Uses ``db.schema`` /
+    Auth store — not root ``import store`` — to keep the ARCH-MS-84 ceiling.
+    """
+    from db.schema import init_project_registry
+    from switchboard.api.routers.auth import store as auth_store
+
+    auth_store.init()
+    init_project_registry()

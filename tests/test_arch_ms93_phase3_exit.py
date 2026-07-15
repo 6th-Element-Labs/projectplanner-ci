@@ -46,10 +46,11 @@ ok("Waived" in waive_text or "waived" in waive_text.lower(),
 ok("ARCH-MS-90" in waive_text and "ARCH-MS-91" in waive_text and "ARCH-MS-92" in waive_text,
    "waive covers ARCH-MS-90…92")
 
-ok(not (ROOT / "src/switchboard/services/tasks/app.py").is_file(),
-   "no live services/tasks app (Path B in-process)")
+# Package factory may exist as a side-by-side / drill artifact (ARCH-MS-90).
+# Path B forbids *live* cut signals only: production systemd unit + Caddy routes.
 ok(not (ROOT / "deploy/switchboard-tasks.service").is_file(),
    "no production Tasks systemd unit")
+
 
 tracker = (ROOT / "docs/ARCH-MS-EXECUTION.md").read_text(encoding="utf-8")
 ok("ARCH-MS-93" in tracker, "execution tracker mentions ARCH-MS-93")

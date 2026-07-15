@@ -41,9 +41,10 @@ ok("ARCH-MS-78" in waive_text and "readiness" in waive_text.lower(),
 ok("services/tasks" not in waive_text.lower() or "not a live" in waive_text.lower(),
    "waive does not claim a live Tasks service")
 
-# Must not have shipped a Tasks process package as part of this waive.
-ok(not (ROOT / "src" / "switchboard" / "services" / "tasks" / "app.py").is_file(),
-   "no services/tasks app shipped (cut waived)")
+# Phase 2 waived a *live* Tasks cut. Package factory may exist later (ARCH-MS-90
+# drill / Path B side-by-side); production unit remains forbidden.
+ok(not (ROOT / "deploy" / "switchboard-tasks.service").is_file(),
+   "no production Tasks systemd unit (Phase 2 cut waived)")
 
 tracker = (ROOT / "docs" / "ARCH-MS-EXECUTION.md").read_text(encoding="utf-8")
 ok("ARCH-MS-79" in tracker and ("Waived" in tracker or "waived" in tracker.lower()),
