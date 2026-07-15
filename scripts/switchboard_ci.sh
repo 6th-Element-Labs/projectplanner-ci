@@ -8,10 +8,11 @@ PYTHON="${PYTHON:-python3}"
 STRICT="${SWITCHBOARD_CI_STRICT:-0}"
 REQUIRE_NODE="${SWITCHBOARD_CI_REQUIRE_NODE:-0}"
 
-# The live service enables remote push verification for real claim completions.
-# Repository tests use synthetic refs and opt into that policy only when testing
-# it explicitly, so do not let the service host's operational setting leak in.
-unset PM_VERIFY_COMPLETION_PUSH
+# Managed CI can run inside a live Agent Host process.  Keep its routing, wake,
+# account, and credential context out of repository tests while preserving the
+# active interpreter and ordinary CI controls such as PATH and STRICT.
+# shellcheck source=ci_runtime_env.sh
+. "$ROOT/scripts/ci_runtime_env.sh"
 
 # Absolute path to this script so parallel test workers can re-invoke it (see __run_one).
 SELF="$ROOT/scripts/switchboard_ci.sh"
