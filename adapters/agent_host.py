@@ -171,6 +171,21 @@ def _try(method, path, body=None):
         return None
 
 
+def _require(method, path, body=None):
+    """Fail-closed REST used for COORD-34 claim-bound runner registration."""
+    try:
+        return sb._http(method, path, body)
+    except Exception as e:
+        print(f"[agent_host] {method} {path} failed ({type(e).__name__}): {e}", flush=True)
+        return {
+            "error": "runner_bind_incomplete",
+            "error_code": "runner_bind_incomplete",
+            "failure_class": "unbound_identity",
+            "refused": True,
+            "message": f"{method} {path} failed: {type(e).__name__}",
+        }
+
+
 def default_inventory():
     repo = os.environ.get("PM_REPO_ROOT") or _git_root()
     host_id = os.environ.get("PM_HOST_ID") or f"host/{socket.gethostname().split('.')[0]}"
@@ -462,14 +477,35 @@ def confirm_closure_verified(rec, grace_s=4.0):
 
 
 def register_runner_session(rec, wake, inventory):
-    """Publish the supervisor session to Switchboard's central runner registry."""
+    """Publish the supervisor session to Switchboard's central runner registry.
+
+    COORD-34: claimed/watchable registrations must carry task/claim/host/wake/
+    work_session bind fields. Incomplete bind returns a typed error payload.
+    """
     if not rec or not rec.get("runner_session_id"):
         return None
     binding = ((wake.get("policy") or {}).get("account_binding") or {})
+    metadata = {
+        "wake_id": wake.get("wake_id"),
+        "wake_mode": rec.get("wake_mode"),
+        "log_path": rec.get("log_path"),
+        "command": rec.get("command"),
+        "work_session_id": (
+            (rec.get("metadata") or {}).get("work_session_id")
+            or binding.get("work_session_id")
+            or rec.get("work_session_id")
+        ),
+        "credential_lease_id": binding.get("credential_lease_id"),
+        "provider": binding.get("provider"),
+        "account_affinity_id": binding.get("account_affinity_id"),
+        **(rec.get("metadata") or {}),
+    }
+    # Prefer explicit host/<instance-id> from inventory; never invent task-row EC2 ids.
+    host_id = inventory.get("host_id") or ""
     body = {
         "project": PROJECT,
         "runner_session_id": rec.get("runner_session_id"),
-        "host_id": inventory.get("host_id"),
+        "host_id": host_id,
         "agent_id": rec.get("agent_id") or (wake.get("selector") or {}).get("agent_id"),
         "runtime": rec.get("runtime") or (wake.get("selector") or {}).get("runtime"),
         "task_id": rec.get("task_id") or wake.get("task_id") or "",
@@ -479,19 +515,19 @@ def register_runner_session(rec, wake, inventory):
         "cwd": rec.get("cwd") or inventory.get("repo_root"),
         "control": rec.get("control") or {"tier": "T3", "runner_kill": True,
                                            "managed_process": True},
-        "metadata": {
-            "wake_id": wake.get("wake_id"),
-            "wake_mode": rec.get("wake_mode"),
-            "log_path": rec.get("log_path"),
-            "command": rec.get("command"),
-            "work_session_id": binding.get("work_session_id"),
-            "credential_lease_id": binding.get("credential_lease_id"),
-            "provider": binding.get("provider"),
-            "account_affinity_id": binding.get("account_affinity_id"),
-            **(rec.get("metadata") or {}),
-        },
+        "metadata": metadata,
         "heartbeat_ttl_s": 3600 if rec.get("cloud_session") else 60,
     }
+    # Use hard POST when this registration claims to be claim-bound / watchable so
+    # agent hosts fail closed instead of silently skipping (_try returns None).
+    require_bind = bool(
+        body.get("claim_id")
+        or metadata.get("credential_admission_phase") == "claim_bound"
+        or rec.get("require_task_bind")
+    )
+    if require_bind:
+        body["require_task_bind"] = True
+        return _require("POST", P_REGISTER_RUNNER, body)
     return _try("POST", P_REGISTER_RUNNER, body)
 
 
@@ -809,13 +845,31 @@ def run_once(inventory):
             runner_registration = (
                 register_runner_session(rec, claimed_wake, inventory) if started else None
             )
+            # COORD-34: non-BYOA claimed-task boots must publish a successful bind
+            # before Watch/Chat may open. Incomplete/failed register fails the wake.
+            if started and (rec or {}).get("claim_id"):
+                if (not runner_registration
+                        or runner_registration.get("error")
+                        or runner_registration.get("error_code") == "runner_bind_incomplete"):
+                    started = False
+                    result_reason = (
+                        (runner_registration or {}).get("error_code")
+                        or (runner_registration or {}).get("error")
+                        or "runner_bind_incomplete"
+                    )
+                else:
+                    result_reason = "started"
+            else:
+                result_reason = "started" if started else "launch_failed"
         usage_registration = report_cloud_usage(
             rec, claimed_wake) if started and rec.get("cloud_session") else None
+        if binding:
+            result_reason = "started" if started else "launch_failed"
         result = {"started": started,
                   "runner_session_id": ((rec or {}).get("runner_session_id")
                                         or runner_session_id or None),
                   "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
-                  "reason": "started" if started else "launch_failed",
+                  "reason": result_reason,
                   "pid": (rec or {}).get("pid"),
                   "cwd": (rec or {}).get("cwd"),
                   "task_id": (rec or {}).get("task_id") or w.get("task_id"),

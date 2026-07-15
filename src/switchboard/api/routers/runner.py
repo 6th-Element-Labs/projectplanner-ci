@@ -29,10 +29,26 @@ def create_router(*, resolve_project: ProjectResolver,
     async def ixp_runner_sessions(project: str = Query(store.DEFAULT_PROJECT),
                                   host_id: str = "", runtime: str = "",
                                   task_id: str = "", status: str = "",
-                                  include_stale: bool = False):
+                                  include_stale: bool = False,
+                                  for_watch: bool = False):
+        project_id = resolve_project(project)
+        if for_watch:
+            # COORD-34 / UI-17: list alone is not enough — Watch/Chat opens only
+            # through the typed bind gate.
+            return runner_control_command.resolve_watch(
+                task_id=task_id, include_stale=include_stale, project=project_id)
         return {"sessions": runner_control_command.list_sessions(
             host_id=host_id, runtime=runtime, task_id=task_id, status=status,
-            include_stale=include_stale, project=resolve_project(project))}
+            include_stale=include_stale, project=project_id)}
+
+    @router.get("/ixp/v1/runner_sessions/watch")
+    async def ixp_runner_sessions_watch(task_id: str = Query(...),
+                                        project: str = Query(store.DEFAULT_PROJECT),
+                                        include_stale: bool = False):
+        """Open gate for operator Watch/Chat (COORD-34). Fail closed on incomplete bind."""
+        return runner_control_command.resolve_watch(
+            task_id=task_id, include_stale=include_stale,
+            project=resolve_project(project))
 
     @router.post("/ixp/v1/register_runner_session")
     async def ixp_register_runner_session(request: Request, body: dict = Body(...)):

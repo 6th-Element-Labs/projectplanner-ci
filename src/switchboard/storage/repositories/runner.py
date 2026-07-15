@@ -16,13 +16,29 @@ from db.connection import _conn
 from db.core import _json_obj, _text_tail
 
 RUNNER_CONTROL_ACTIONS = {"snapshot", "kill", "restart", "health", "logs", "open"}
+# COORD-34 / M4.6: operator Watch/Chat may open only when this bind is complete.
+# wake_id and work_session_id live in metadata_json; runner_sessions is SoT
+# (never add permanent EC2 instance_id columns on the task row).
+RUNNER_BIND_FIELDS = ("task_id", "claim_id", "host_id", "wake_id", "work_session_id")
+RUNNER_WATCHABLE_STATUSES = frozenset({"ready", "running"})
+RUNNER_BIND_ERROR = "runner_bind_incomplete"
 
 __all__ = [
+    "RUNNER_BIND_FIELDS",
+    "RUNNER_BIND_ERROR",
+    "RUNNER_WATCHABLE_STATUSES",
     "_runner_session_row",
     "_upsert_runner_session_in",
     "upsert_runner_session",
     "list_runner_sessions",
     "get_runner_session",
+    "runner_bind_tuple",
+    "missing_runner_bind_fields",
+    "runner_bind_incomplete",
+    "is_preclaim_runner",
+    "requires_full_runner_bind",
+    "assert_runner_watchable",
+    "resolve_runner_watch",
     "request_runner_control",
     "list_runner_control_requests",
     "claim_runner_control_request",
@@ -172,17 +188,249 @@ def _runner_snapshot_from_session(session: Dict[str, Any],
     }
 
 
+def runner_bind_tuple(record: Dict[str, Any]) -> Dict[str, str]:
+    """Extract the COORD-34 autopilot bind fields from a runner session record."""
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    if not metadata and record.get("metadata_json"):
+        metadata = _json_obj(record.get("metadata_json"), {})
+    return {
+        "task_id": str(record.get("task_id") or "").strip(),
+        "claim_id": str(record.get("claim_id") or "").strip(),
+        "host_id": str(record.get("host_id") or "").strip(),
+        "wake_id": str(
+            metadata.get("wake_id") or record.get("wake_id") or "").strip(),
+        "work_session_id": str(
+            metadata.get("work_session_id") or record.get("work_session_id") or "").strip(),
+    }
+
+
+def missing_runner_bind_fields(record: Dict[str, Any]) -> List[str]:
+    """Return bind field names that are absent or malformed for Watch/Chat."""
+    bind = runner_bind_tuple(record)
+    missing = [name for name in RUNNER_BIND_FIELDS if not bind.get(name)]
+    host_id = bind.get("host_id") or ""
+    # Contract: host_id=host/<instance-id>. Reject blank host/ and non-host shapes.
+    if host_id and not (
+            host_id.startswith("host/") and len(host_id) > len("host/")
+    ) and "host_id" not in missing:
+        missing.append("host_id")
+    return missing
+
+
+def runner_bind_incomplete(missing: List[str], *,
+                           runner_session_id: str = "",
+                           task_id: str = "") -> Dict[str, Any]:
+    """Typed refusal used by UI-17 Watch/Chat when the bind contract is incomplete."""
+    return {
+        "error": RUNNER_BIND_ERROR,
+        "error_code": RUNNER_BIND_ERROR,
+        "failure_class": "unbound_identity",
+        "missing": list(missing),
+        "refused": True,
+        "watchable": False,
+        "runner_session_id": runner_session_id or None,
+        "task_id": task_id or None,
+        "message": (
+            "Runner session bind incomplete for Watch/Chat; "
+            f"missing: {', '.join(missing) or 'bind fields'}"
+        ),
+    }
+
+
+def is_preclaim_runner(record: Dict[str, Any]) -> bool:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    phase = str(metadata.get("credential_admission_phase") or "").strip().lower()
+    status = str(record.get("status") or "").strip().lower()
+    return phase in {"preclaim", "preclaim_failed"} or (
+        status == "starting" and phase != "claim_bound")
+
+
+def requires_full_runner_bind(record: Dict[str, Any]) -> bool:
+    """True when this registration must carry the full claim/host/wake bind.
+
+    Watch/Chat always uses ``assert_runner_watchable`` / ``resolve_runner_watch``.
+    Upsert fails closed for claim-bound Agent Host / BYOA registrations; advisory
+    registry rows that only publish claim_id for fleet UI remain allowed.
+    """
+    if record.get("require_task_bind") is False:
+        return False
+    if record.get("require_task_bind") is True:
+        return True
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    phase = str(metadata.get("credential_admission_phase") or "").strip().lower()
+    return phase == "claim_bound"
+
+
+def assert_runner_watchable(session: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Fail closed: Watch/Chat may open only for a fully bound live runner."""
+    if not session:
+        return runner_bind_incomplete(list(RUNNER_BIND_FIELDS))
+    if session.get("stale"):
+        return runner_bind_incomplete(
+            list(RUNNER_BIND_FIELDS),
+            runner_session_id=str(session.get("runner_session_id") or ""),
+            task_id=str(session.get("task_id") or ""),
+        ) | {"message": "Runner session is stale; Watch/Chat refused until a live bind exists"}
+    missing = missing_runner_bind_fields(session)
+    if missing:
+        return runner_bind_incomplete(
+            missing,
+            runner_session_id=str(session.get("runner_session_id") or ""),
+            task_id=str(session.get("task_id") or ""),
+        )
+    status = str(session.get("status") or "").strip().lower()
+    if status not in RUNNER_WATCHABLE_STATUSES:
+        return runner_bind_incomplete(
+            list(RUNNER_BIND_FIELDS),
+            runner_session_id=str(session.get("runner_session_id") or ""),
+            task_id=str(session.get("task_id") or ""),
+        ) | {
+            "message": (
+                f"Runner session status {status or 'unknown'} is not watchable; "
+                "need ready/running with full bind"
+            ),
+            "status": status or None,
+        }
+    bind = runner_bind_tuple(session)
+    return {
+        "watchable": True,
+        "refused": False,
+        "runner_session_id": session.get("runner_session_id"),
+        "task_id": bind["task_id"],
+        "bind": bind,
+        "session": session,
+    }
+
+
+def resolve_runner_watch(task_id: str, *, include_stale: bool = False,
+                         project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Pick a Watch/Chat-ready runner for a task, or return a typed refusal.
+
+    UI-17 and Mission panel open only through this gate: listing alone is not enough
+    when rows exist but the bind tuple is incomplete.
+    """
+    task_id = (task_id or "").strip()
+    if not task_id:
+        return runner_bind_incomplete(["task_id"]) | {
+            "message": "task_id is required to open Watch/Chat",
+        }
+    sessions = list_runner_sessions(
+        task_id=task_id, include_stale=include_stale, project=project)
+    if not sessions:
+        return runner_bind_incomplete(list(RUNNER_BIND_FIELDS), task_id=task_id) | {
+            "message": "No runner sessions are registered for this task",
+            "sessions": [],
+        }
+    refusals: List[Dict[str, Any]] = []
+    for session in sessions:
+        verdict = assert_runner_watchable(session)
+        if verdict.get("watchable"):
+            return {
+                **verdict,
+                "sessions": sessions,
+                "enough_for_panel": True,
+            }
+        refusals.append(verdict)
+    best = refusals[0] if refusals else runner_bind_incomplete(
+        list(RUNNER_BIND_FIELDS), task_id=task_id)
+    return {
+        **best,
+        "sessions": sessions,
+        "enough_for_panel": False,
+        "candidates": len(sessions),
+    }
+
+
+def _merge_existing_runner_record(c: sqlite3.Connection,
+                                  record: Dict[str, Any]) -> Dict[str, Any]:
+    """Preserve stronger claim/work bind fields across heartbeat / partial upserts."""
+    runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
+    if not runner_session_id:
+        return record
+    existing_row = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+        (runner_session_id,),
+    ).fetchone()
+    if not existing_row:
+        return record
+    existing = dict(existing_row)
+    existing_metadata = _json_obj(existing.get("metadata_json", "{}"), {})
+    merged = dict(record)
+    for key in ("host_id", "agent_id", "runtime", "task_id", "claim_id", "cwd"):
+        if not str(merged.get(key) or "").strip() and existing.get(key):
+            merged[key] = existing.get(key)
+    if merged.get("pid") is None and existing.get("pid") is not None:
+        merged["pid"] = existing.get("pid")
+    metadata = dict(existing_metadata)
+    incoming = merged.get("metadata") if isinstance(merged.get("metadata"), dict) else {}
+    metadata.update({k: v for k, v in incoming.items() if v is not None and v != ""})
+    for key in ("wake_id", "work_session_id", "wake_mode", "command", "log_path", "pgid"):
+        if key in merged and merged.get(key) not in (None, ""):
+            metadata.setdefault(key, merged.get(key))
+    for key in ("wake_id", "work_session_id"):
+        if not metadata.get(key) and existing_metadata.get(key):
+            metadata[key] = existing_metadata.get(key)
+    merged["metadata"] = metadata
+    if not merged.get("control") and existing.get("control_json"):
+        merged["control"] = _json_obj(existing.get("control_json"), {})
+    if merged.get("heartbeat_ttl_s") is None and existing.get("heartbeat_ttl_s"):
+        merged["heartbeat_ttl_s"] = existing.get("heartbeat_ttl_s")
+    return merged
+
+
+def _maybe_set_active_runner_pointer(c: sqlite3.Connection, record: Dict[str, Any],
+                                     now: float) -> None:
+    """Optional Mission UI pointer: agent_state.active_runner_session_id."""
+    task_id = str(record.get("task_id") or "").strip()
+    runner_session_id = str(
+        record.get("runner_session_id") or record.get("id") or "").strip()
+    if not task_id or not runner_session_id:
+        return
+    if missing_runner_bind_fields(record):
+        return
+    row = c.execute("SELECT agent_state FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    if not row:
+        return
+    current = _json_obj(row["agent_state"] if "agent_state" in row.keys() else "{}", {})
+    if not isinstance(current, dict):
+        current = {}
+    pointer = dict(current.get("switchboard/runner") or {})
+    pointer.update({
+        "active_runner_session_id": runner_session_id,
+        "host_id": record.get("host_id"),
+        "claim_id": record.get("claim_id"),
+        "updated_at": now,
+    })
+    current["switchboard/runner"] = pointer
+    # Legacy flat key for Mission UI readers that expect the optional field name.
+    current["active_runner_session_id"] = runner_session_id
+    c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
+              (json.dumps(current, sort_keys=True), now, task_id))
+
+
 def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                               principal_id: str, actor: str, now: float) -> Dict[str, Any]:
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
     if not runner_session_id:
         return {"error": "runner_session_id required"}
+    record = _merge_existing_runner_record(c, record)
     host_id = (record.get("host_id") or "").strip()
     control = _normalize_runner_control(record.get("control") or {}, host_id)
     metadata = dict(record.get("metadata") or {})
-    for key in ("command", "log_path", "pgid", "wake_id", "wake_mode", "alive"):
+    for key in ("command", "log_path", "pgid", "wake_id", "wake_mode", "alive",
+                "work_session_id"):
         if key in record and key not in metadata:
             metadata[key] = record.get(key)
+    record = {**record, "host_id": host_id, "metadata": metadata,
+              "runner_session_id": runner_session_id}
+    if requires_full_runner_bind(record):
+        missing = missing_runner_bind_fields(record)
+        if missing:
+            return runner_bind_incomplete(
+                missing,
+                runner_session_id=runner_session_id,
+                task_id=str(record.get("task_id") or ""),
+            )
     snapshot = record.get("last_snapshot") or record.get("snapshot") or {}
     heartbeat_ttl_s = max(10, int(record.get("heartbeat_ttl_s") or record.get("ttl_s") or 60))
     started_at = record.get("started_at") or now
@@ -234,6 +482,8 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                            })}, sort_keys=True), now))
     row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                     (runner_session_id,)).fetchone()
+    if not missing_runner_bind_fields(record):
+        _maybe_set_active_runner_pointer(c, record, now)
     return _runner_session_row(row, now=now, include_claim=True, c=c)
 
 

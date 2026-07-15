@@ -12,6 +12,7 @@ from switchboard.storage.repositories.runner import (  # noqa: E402
     list_runner_control_requests,
     list_runner_sessions,
     request_runner_control,
+    resolve_runner_watch,
     upsert_runner_session,
 )
 
@@ -19,6 +20,7 @@ __all__ = [
     "RUNNER_CONTROL_ACTIONS",
     "upsert_runner_session",
     "list_runner_sessions",
+    "resolve_runner_watch",
     "get_runner_session",
     "request_runner_control",
     "list_runner_control_requests",

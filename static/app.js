@@ -1599,9 +1599,12 @@ const TeepPlan = {
                     <i class="ti ti-player-play text-azure"></i>
                     <span class="fw-semibold">Runner sessions</span>
                     <span id="runner-control-count" class="badge bg-secondary-lt">loading</span>
+                    <button type="button" class="btn btn-sm btn-outline-azure ms-2" id="runner-watch-open"
+                        data-task-id="${this.esc(t.task_id)}">Watch / Chat</button>
                     <span id="runner-control-flash" class="small text-secondary ms-auto"></span>
                 </div>
             </div>
+            <div id="runner-watch-gate" class="px-3 pt-2" hidden></div>
             <div id="runner-control-body" class="card-body py-3">
                 <div class="text-secondary small">Loading runner sessions…</div>
             </div>
@@ -2425,6 +2428,8 @@ const TeepPlan = {
         this._initMergeGate(t.task_id);
         this._loadRunnerSessions(t.task_id);
         this._loadDispatch(t.task_id);
+        const watchBtn = document.getElementById('runner-watch-open');
+        if (watchBtn) watchBtn.addEventListener('click', () => this.openRunnerWatch(t.task_id));
         document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));
@@ -2711,6 +2716,47 @@ const TeepPlan = {
                 taskId,
             ));
         });
+    },
+
+    async openRunnerWatch(taskId) {
+        // UI-17 / COORD-34: fail closed unless list_runner_sessions(task_id) yields a
+        // fully bound live runner (task/claim/host/wake/work_session).
+        const gate = document.getElementById('runner-watch-gate');
+        const flash = document.getElementById('runner-control-flash');
+        const showGate = (html, cls) => {
+            if (gate) {
+                gate.hidden = false;
+                gate.innerHTML = html;
+                gate.className = `px-3 pt-2 small text-${cls || 'danger'}`;
+            }
+            if (flash) {
+                flash.textContent = '';
+                flash.className = 'small text-secondary ms-auto';
+            }
+        };
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}`;
+            const data = await (await fetch(`/ixp/v1/runner_sessions/watch?${q}`)).json();
+            if (data.error || data.error_code === 'runner_bind_incomplete' || data.watchable === false) {
+                const missing = (data.missing || []).join(', ') || 'bind fields';
+                showGate(
+                    `<span class="badge bg-red-lt me-1">${this.esc(data.error_code || data.error || 'runner_bind_incomplete')}</span>`
+                    + `${this.esc(data.message || 'Runner bind incomplete for Watch/Chat')}`
+                    + ` <span class="text-secondary">(missing: ${this.esc(missing)})</span>`,
+                    'danger',
+                );
+                return;
+            }
+            const sid = data.runner_session_id || (data.session || {}).runner_session_id || '';
+            showGate(
+                `<span class="badge bg-green-lt me-1">watchable</span>`
+                + `Bound runner ${this.esc(sid)} — Watch/Chat panel may open.`
+                + ` <span class="text-secondary font-monospace">${this.esc((data.bind || {}).host_id || '')}</span>`,
+                'green',
+            );
+        } catch (e) {
+            showGate(`Watch refused: ${this.esc(e.message)}`, 'danger');
+        }
     },
 
     _runnerSessionRow(s) {

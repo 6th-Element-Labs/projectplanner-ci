@@ -372,9 +372,17 @@ def run_coordinator_tick(
                 "requested": bool(wake.get("requested", wake.get("wake_id"))),
                 "wake_id": wake.get("wake_id"),
                 "reason": wake.get("reason"),
+                # COORD-34: wake alone is not Watch-ready. Agent Host must
+                # register_runner_session with full task/claim/host/wake/work_session
+                # bind before Mission UI may open the panel.
+                "watch_gate": "awaiting_runner_bind",
+                "watch_requires": [
+                    "task_id", "claim_id", "host_id", "wake_id", "work_session_id",
+                ],
             })
             result["dispatch"] = wake
             result["status"] = "wake_requested" if wake.get("wake_id") else "dispatch_blocked"
+            result["watch_gate"] = "awaiting_runner_bind"
         else:
             result["status"] = "dispatch_ready"
             result["dispatch"] = dispatch

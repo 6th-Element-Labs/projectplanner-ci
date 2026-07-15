@@ -90,6 +90,17 @@ def list_sessions(
     )
 
 
+def resolve_watch(
+        *,
+        task_id: str,
+        include_stale: bool = False,
+        project: Optional[str] = None) -> dict[str, Any]:
+    """Fail-closed Watch/Chat gate (COORD-34 / UI-17)."""
+    return runner_repo.resolve_runner_watch(
+        task_id, include_stale=include_stale,
+        project=project or DEFAULT_PROJECT)
+
+
 def list_control_requests(
         *,
         status: str = "",

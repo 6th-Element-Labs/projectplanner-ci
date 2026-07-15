@@ -42,12 +42,27 @@ def list_runner_sessions(project: str = "maxwell", host_id: str = "", runtime: s
         include_stale=include_stale, project=project))
 
 
+def resolve_runner_watch(task_id: str, project: str = "maxwell",
+                         include_stale: bool = False) -> str:
+    """Fail-closed Watch/Chat gate (COORD-34 / UI-17).
+
+    Returns a watchable session when task_id/claim_id/host_id/wake_id/work_session_id
+    are all present on a live runner. Incomplete bind returns typed
+    error_code=runner_bind_incomplete.
+    """
+    services = _services()
+    return services.dumps(runner_control_command.resolve_watch(
+        task_id=task_id, include_stale=include_stale, project=project))
+
+
 def register_runner_session(runner_session_json: str, ctx: Context,
                             project: str = "maxwell") -> str:
     """Register or heartbeat one supervised runner session.
 
-    runner_session_json should include runner_session_id, host_id, agent_id, runtime,
-    task_id/claim_id when known, status, and control. runner_kill is accepted only for
+    Claim-bound / ready / running sessions must include task_id, claim_id,
+    host_id=host/<instance-id>, wake_id, and work_session_id (COORD-34). Incomplete
+    bind returns error_code=runner_bind_incomplete. Preclaim starting rows may omit
+    claim/work_session until the worker rebinds. runner_kill is accepted only for
     host-owned managed_process sessions.
     """
     services = _services()
@@ -169,6 +184,7 @@ def complete_runner_control(request_id: str, ctx: Context, result_json: str = "{
 
 RUNNER_TOOL_NAMES = (
     "list_runner_sessions",
+    "resolve_runner_watch",
     "register_runner_session",
     "request_runner_snapshot",
     "request_runner_kill",

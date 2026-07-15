@@ -83,6 +83,7 @@ try:
         "control": {"managed_process": True, "runner_kill": True, "tier": "T3"},
         "metadata": {
             "credential_admission_phase": "claim_bound",
+            "wake_id": wake["wake_id"],
             "work_session_id": "worksession-coord32",
             "provider": "anthropic-claude",
         },
