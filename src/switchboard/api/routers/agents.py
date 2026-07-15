@@ -140,7 +140,7 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.get("/ixp/v1/agent-host-enrollment")
     async def ixp_agent_host_enrollment_status(
             request: Request, host_id: str,
-            project: str = Query(store.DEFAULT_PROJECT)):
+            project: str = Query(...)):
         resolved = resolve_project(project)
         principal = resolve_principal(
             request, resolved, ("read",), dev_actor=host_id)
