@@ -51,7 +51,8 @@ surface; explicit No-Go keep-in-process exit; no nginx; no MCP/other-BC cuts in 
 | **ARCH-MS-91** | 3B: Tasks side-by-side `:8122` + parity (**Go only**) | ✅ | PR #524 — `tests/test_arch_ms91_tasks_parity.py` |
 | **ARCH-MS-92** | 3B: Caddy cutover + dual-strip for Tasks (**Go only**) | ✅ | PR #525 — live `deploy/Caddyfile` Mode A → `:8122`; `deploy/switchboard-tasks.service`; dual-strip |
 | **ARCH-MS-93** | Exit: Phase 3 close — Tasks cut conditional | 🟡 | Path A exit (provisional Path B superseded by ARCH-MS-94 G6 + ARCH-MS-92 cut) |
-| **ARCH-MS-94** | Tasks live cut: Operator G6 — reopen Path A | 🟡 | `tasks_independence_verdict.json` (`go`+G6+`process_cut_authorized`); supersedes ARCH-MS-93 Path B |
+| **ARCH-MS-94** | Tasks live cut: Operator G6 — reopen Path A | ✅ | PR #526 — `tasks_independence_verdict.json` (`go`+G6+`process_cut_authorized`) |
+| **ARCH-MS-95** | Tasks live cut: Caddy cutover + dual-strip (Path A) | 🟡 | Post-G6 closeout; live edge/unit/dual-strip Path A green; `tests/test_arch_ms95_tasks_live_cut.py` |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
@@ -262,4 +263,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-16 | ARCH-MS-91 | Tasks side-by-side parity (in-process fat baseline vs Mode A `:8122` app); no live Caddy; `tests/test_arch_ms91_tasks_parity.py` |
 | 2026-07-16 | ARCH-MS-92 | Tasks Mode A Caddy cutover + dual-strip (`PM_TASKS_HTTP_PRIMARY=service`); Path A exit supersedes provisional Path B; `tests/test_arch_ms92_tasks_cutover.py` |
 | 2026-07-16 | ARCH-MS-94 | Operator G6 — formal reopen of Path A (`verdict=go`, `process_cut_authorized=true`); board comment on ARCH-MS-93 Path B superseded; `tests/test_arch_ms94_operator_g6.py` |
+| 2026-07-16 | ARCH-MS-95 | Post-G6 Path A live-cut closeout for `arch-ms-tasks-live-cut` (Caddy→:8122, dual-strip, gate green); close doc supersedes 91/92 as live-traffic gates; `tests/test_arch_ms95_tasks_live_cut.py` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
