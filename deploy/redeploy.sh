@@ -72,6 +72,119 @@ if [ "${RUN_CI:-0}" = "1" ]; then
         scripts/switchboard_ci.sh
 fi
 
+# BUG-70: snapshot the complete Tasks edge topology before changing unit files.
+# The authenticated proof runs after Caddy reload, so a failed proof must restore
+# both the prior edge and the monolith's prior PM_TASKS_HTTP_PRIMARY setting.
+ROLLBACK_DIR="$(mktemp -d /tmp/projectplanner-redeploy.XXXXXX)"
+TASKS_WAS_ACTIVE="$(systemctl is-active switchboard-tasks 2>/dev/null || true)"
+TASKS_WAS_ENABLED="$(systemctl is-enabled switchboard-tasks 2>/dev/null || true)"
+PROJECTPLANNER_UNIT_LIVE="${PROJECTPLANNER_UNIT_LIVE:-/etc/systemd/system/projectplanner.service}"
+TASKS_UNIT_LIVE="${TASKS_UNIT_LIVE:-/etc/systemd/system/switchboard-tasks.service}"
+for snapshot in \
+    "$CADDY_LIVE:Caddyfile" \
+    "$PROJECTPLANNER_UNIT_LIVE:projectplanner.service" \
+    "$TASKS_UNIT_LIVE:switchboard-tasks.service"
+do
+    source_path="${snapshot%%:*}"
+    snapshot_name="${snapshot#*:}"
+    if sudo test -f "$source_path"; then
+        sudo cp "$source_path" "$ROLLBACK_DIR/$snapshot_name"
+        touch "$ROLLBACK_DIR/$snapshot_name.present"
+    fi
+done
+
+cleanup_redeploy_snapshot() {
+    sudo rm -rf "$ROLLBACK_DIR"
+}
+
+restore_tasks_cut_topology() {
+    section "rollback failed runtime proof"
+    local rollback_rc=0
+    local monolith_ready=1
+    local edge_ready=0
+    set +e
+
+    # Restore the monolith unit first while the new edge still has healthy :8122.
+    if [ -f "$ROLLBACK_DIR/projectplanner.service.present" ]; then
+        sudo cp "$ROLLBACK_DIR/projectplanner.service" \
+            "$PROJECTPLANNER_UNIT_LIVE" || { rollback_rc=1; monolith_ready=0; }
+    else
+        rollback_rc=1
+        monolith_ready=0
+    fi
+    if [ -f "$ROLLBACK_DIR/switchboard-tasks.service.present" ]; then
+        sudo cp "$ROLLBACK_DIR/switchboard-tasks.service" \
+            "$TASKS_UNIT_LIVE" || rollback_rc=1
+    fi
+    sudo systemctl daemon-reload || { rollback_rc=1; monolith_ready=0; }
+    sudo systemctl restart projectplanner || { rollback_rc=1; monolith_ready=0; }
+    if ! HEALTH_URL=http://127.0.0.1:8110/health \
+        bash "$ROOT/deploy/wait-for-health.sh"
+    then
+        rollback_rc=1
+        monolith_ready=0
+    fi
+
+    # Only after the prior monolith mode is healthy, restore the previous edge.
+    if [ "$monolith_ready" -eq 1 ] && [ -f "$ROLLBACK_DIR/Caddyfile.present" ]; then
+        if sudo cp "$ROLLBACK_DIR/Caddyfile" "$CADDY_LIVE" \
+            && { sudo systemctl reload "$CADDY_UNIT" \
+                || sudo systemctl restart "$CADDY_UNIT"; }
+        then
+            edge_ready=1
+        else
+            rollback_rc=1
+            echo "!! prior Caddy edge could not be restored; preserving the current Tasks lifecycle" >&2
+        fi
+    elif [ -f "$ROLLBACK_DIR/Caddyfile.present" ]; then
+        echo "!! restored monolith is unhealthy; preserving the current Caddy edge" >&2
+    else
+        rollback_rc=1
+        echo "!! prior Caddy snapshot is missing; preserving the current edge and Tasks lifecycle" >&2
+    fi
+
+    # Restore the old Tasks lifecycle only after the old monolith/edge is safe.
+    # Otherwise the current edge may still depend on the live :8122 process.
+    if [ "$monolith_ready" -eq 1 ] && [ "$edge_ready" -eq 1 ]; then
+        case "$TASKS_WAS_ACTIVE" in
+            active)
+                sudo systemctl restart switchboard-tasks || rollback_rc=1
+                HEALTH_URL=http://127.0.0.1:8122/health \
+                    bash "$ROOT/deploy/wait-for-health.sh" || rollback_rc=1
+                ;;
+            *) sudo systemctl stop switchboard-tasks || rollback_rc=1 ;;
+        esac
+        case "$TASKS_WAS_ENABLED" in
+            enabled) sudo systemctl enable switchboard-tasks >/dev/null 2>&1 || rollback_rc=1 ;;
+            *) sudo systemctl disable switchboard-tasks >/dev/null 2>&1 || rollback_rc=1 ;;
+        esac
+        if [ ! -f "$ROLLBACK_DIR/switchboard-tasks.service.present" ]; then
+            sudo rm -f "$TASKS_UNIT_LIVE" || rollback_rc=1
+            sudo systemctl daemon-reload || rollback_rc=1
+        fi
+    fi
+
+    set -e
+    if [ "$rollback_rc" -ne 0 ]; then
+        echo "!! automatic Tasks topology rollback was incomplete" >&2
+        return 1
+    fi
+    echo "Tasks topology rollback complete."
+}
+
+fail_runtime_proof() {
+    local reason="$1"
+    echo "!! $reason; restoring the pre-deploy Tasks topology" >&2
+    exit 1
+}
+
+# Arm before the first unit mutation. Any error, INT, or TERM from here through
+# the authenticated proof restores the complete pre-deploy topology. The guard
+# clears its own traps before invoking rollback, so a rollback failure cannot recurse.
+# shellcheck source=deploy/redeploy_rollback_guard.sh
+source "$ROOT/deploy/redeploy_rollback_guard.sh"
+rollback_guard_arm restore_tasks_cut_topology cleanup_redeploy_snapshot
+
 # 4. Sync systemd units into /etc and pick up unit-file changes.
 section "systemd units"
 sudo cp deploy/*.service deploy/*.timer /etc/systemd/system/
@@ -107,14 +220,31 @@ if [ "${SKIP_RUNTIME_PROOF:-0}" != "1" ]; then
     if [ ! -x "$PYTHON" ]; then
         PYTHON=python3
     fi
-    "$PYTHON" "$ROOT/scripts/verify_runtime_deploy.py" \
-        --root "$ROOT" \
-        --canonical-sha "$CANONICAL_SHA" \
-        --caddy-live "$CADDY_LIVE" \
-        --service switchboard-auth:8121 \
-        --service switchboard-tasks:8122 \
-        --edge-owns '/api/auth*:8121' \
-        --edge-owns '/api/tasks*:8122'
+    # BUG-70: the final gate must exercise the authenticated public edge, not only
+    # parse intended Caddy ownership. Read the existing MCP bearer without printing it.
+    if [ -z "${PM_RUNTIME_PROOF_TOKEN:-}" ]; then
+        PM_RUNTIME_PROOF_TOKEN="$(sudo awk -F= '$1 == "PM_MCP_TOKEN" {
+            sub(/^[^=]*=/, ""); gsub(/^\"|\"$/, ""); print; exit
+        }' "$ROOT/.env" || true)"
+    fi
+    if [ -z "$PM_RUNTIME_PROOF_TOKEN" ]; then
+        fail_runtime_proof "PM_MCP_TOKEN unavailable for authenticated edge proof"
+    fi
+    if ! PM_RUNTIME_PROOF_TOKEN="$PM_RUNTIME_PROOF_TOKEN" \
+        "$PYTHON" "$ROOT/scripts/verify_runtime_deploy.py" \
+            --root "$ROOT" \
+            --canonical-sha "$CANONICAL_SHA" \
+            --caddy-live "$CADDY_LIVE" \
+            --service switchboard-auth:8121 \
+            --service switchboard-tasks:8122 \
+            --edge-owns '/api/auth*:8121' \
+            --edge-owns '/api/tasks*:8122' \
+            --edge-base-url "${PM_BASE:-https://plan.taikunai.com}" \
+            --probe-task-id "${RUNTIME_PROOF_TASK_ID:-}"
+    then
+        fail_runtime_proof "authenticated runtime proof failed"
+    fi
 fi
 
+rollback_guard_disarm
 echo "redeploy complete."

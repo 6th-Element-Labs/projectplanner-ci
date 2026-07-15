@@ -42,9 +42,10 @@ live = "\n".join(
 ok("handle /api/tasks*" in live or "handle /api/tasks" in live,
    "live Caddy routes /api/tasks*")
 ok("8122" in live, "live Caddy points Tasks at :8122")
-ok("handle /api/tasks/*/dispatch*" in live, "live Caddy carves dispatch to monolith")
-ok("handle /api/tasks/*/chat*" in live, "live Caddy carves chat to monolith")
-ok("handle /api/tasks/*/review_*" in live, "live Caddy carves review_* to monolith")
+ok("@tasks_sibling path_regexp tasks_sibling" in live,
+   "live Caddy carves dispatch/chat/review siblings with one anchored matcher")
+ok("dispatch|chat|review_" in live, "sibling matcher covers dispatch, chat, and review")
+ok("handle @tasks_sibling" in live, "sibling matcher routes through its own handle")
 ok("/txp/v1/claim_next" in live and "/txp/v1/complete_claim" in live,
    "live Caddy routes claim-only TXP")
 ok("handle /txp/v1/*" not in live, "no blanket /txp/v1/* handle")

@@ -274,8 +274,8 @@ live = "\n".join(
 )
 ok("8122" in live and "/api/tasks" in live,
    "live Caddy routes Mode A Tasks to :8122 (ARCH-MS-92)")
-ok("handle /api/tasks/*/dispatch*" in live,
-   "live Caddy carves dispatch siblings to monolith")
+ok("@tasks_sibling path_regexp tasks_sibling" in live and "handle @tasks_sibling" in live,
+   "live Caddy carves dispatch/chat/review siblings to monolith")
 
 app_impl_src = entrypoint_source("app")
 ok("PM_TASKS_HTTP_PRIMARY" in app_impl_src,

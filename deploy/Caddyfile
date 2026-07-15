@@ -89,37 +89,12 @@ plan.taikunai.com {
             lb_try_interval 250ms
         }
     }
-    # ARCH-MS-92: Tasks sibling BCs stay on monolith (Mode A surface → :8122).
-    # Must precede the broad /api/tasks* handle below.
-    handle /api/tasks/*/dispatch* {
-        reverse_proxy 127.0.0.1:8110 {
-            transport http {
-                dial_timeout 5s
-                response_header_timeout 90s
-            }
-            health_uri /health
-            health_interval 5s
-            health_timeout 3s
-            fail_duration 10s
-            lb_try_duration 5s
-            lb_try_interval 250ms
-        }
-    }
-    handle /api/tasks/*/chat* {
-        reverse_proxy 127.0.0.1:8110 {
-            transport http {
-                dial_timeout 5s
-                response_header_timeout 90s
-            }
-            health_uri /health
-            health_interval 5s
-            health_timeout 3s
-            fail_duration 10s
-            lb_try_duration 5s
-            lb_try_interval 250ms
-        }
-    }
-    handle /api/tasks/*/review_* {
+    # BUG-70: Tasks sibling BCs stay on monolith (Mode A surface → :8122).
+    # A Caddy path matcher with multiple `*` wildcards did not reliably match nested
+    # paths such as /dispatch/latest, which then fell through to the broad Tasks
+    # handle. Use one anchored regexp for the complete sibling surface instead.
+    @tasks_sibling path_regexp tasks_sibling ^/api/tasks/[^/]+/(dispatch|chat|review_[^/]+)(/.*)?$
+    handle @tasks_sibling {
         reverse_proxy 127.0.0.1:8110 {
             transport http {
                 dial_timeout 5s

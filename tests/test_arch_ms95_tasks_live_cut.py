@@ -48,7 +48,8 @@ ok("handle /api/tasks*" in live or "handle /api/tasks" in live,
 ok("8122" in live, "live Caddy points Tasks at :8122")
 ok("/txp/v1/claim_next" in live and "/txp/v1/complete_claim" in live,
    "live Caddy routes claim-only TXP")
-ok("handle /api/tasks/*/dispatch*" in live, "sibling dispatch carved to monolith")
+ok("@tasks_sibling path_regexp tasks_sibling" in live and "handle @tasks_sibling" in live,
+   "sibling dispatch/chat/review paths carved to monolith")
 
 # AC: day-one surface not on monolith
 ok((ROOT / "deploy/switchboard-tasks.service").is_file(),

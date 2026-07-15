@@ -26,6 +26,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -108,6 +109,145 @@ def local_health(
     if expect_service is not None:
         out["service_match"] = out.get("service") == expect_service
     return out
+
+
+def http_fingerprint(
+    url: str,
+    *,
+    token: str,
+    method: str = "GET",
+    json_body: bytes | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {token}"}
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url, data=json_body, headers=headers, method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = int(response.status)
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+        body = exc.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"url": url, "method": method, "error": str(exc)}
+    return {
+        "url": url,
+        "method": method,
+        "http_status": status,
+        "body_sha256": hashlib.sha256(body).hexdigest(),
+    }
+
+
+def check_live_route_owner(
+    *,
+    base_url: str,
+    path: str,
+    method: str,
+    token: str,
+    owner_port: int,
+    other_port: int,
+    json_body: bytes | None = None,
+) -> CheckResult:
+    edge = http_fingerprint(
+        f"{base_url.rstrip('/')}{path}", token=token, method=method,
+        json_body=json_body,
+    )
+    owner = http_fingerprint(
+        f"http://127.0.0.1:{owner_port}{path}", token=token, method=method,
+        json_body=json_body,
+    )
+    other = http_fingerprint(
+        f"http://127.0.0.1:{other_port}{path}", token=token, method=method,
+        json_body=json_body,
+    )
+    edge_status = edge.get("http_status")
+    owner_status = owner.get("http_status")
+    same_owner_body = edge.get("body_sha256") == owner.get("body_sha256")
+    owner_distinguished = edge_status == owner_status and same_owner_body
+    differs_from_other = (
+        edge_status != other.get("http_status")
+        or edge.get("body_sha256") != other.get("body_sha256")
+    )
+    ok = bool(edge_status is not None and owner_distinguished and differs_from_other)
+    return CheckResult(
+        name=f"live_edge:{method}:{path}->{owner_port}",
+        ok=ok,
+        detail={
+            "path": path,
+            "expected_owner_port": owner_port,
+            "other_port": other_port,
+            "edge": edge,
+            "owner": owner,
+            "other": other,
+        },
+        message=(
+            f"authenticated edge probe reaches :{owner_port}"
+            if ok else f"authenticated edge probe does not reach :{owner_port}"
+        ),
+    )
+
+
+def resolve_probe_task_id(
+    *, base_url: str, token: str, configured_task_id: str = "",
+) -> tuple[str, CheckResult]:
+    """Choose an existing task for read-only ownership probes.
+
+    An explicit task remains supported for drills.  Normal redeploys discover a
+    current task from the authenticated Tasks list so deploy liveness is not
+    coupled forever to one board record.
+    """
+    path = "/api/tasks?project=switchboard"
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    status: int | None = None
+    payload: Any = None
+    error = ""
+    try:
+        with urllib.request.urlopen(request, timeout=5.0) as response:
+            status = int(response.status)
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+        error = f"HTTP {status}"
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        error = str(exc)
+
+    tasks = payload.get("tasks") if isinstance(payload, dict) else None
+    candidates = sorted(
+        str(task.get("task_id") or "").strip()
+        for task in (tasks if isinstance(tasks, list) else [])
+        if isinstance(task, dict) and str(task.get("task_id") or "").strip()
+    )
+    configured = configured_task_id.strip()
+    selected = configured if configured and configured in candidates else ""
+    if not configured and candidates:
+        selected = candidates[0]
+    ok = bool(status == 200 and selected)
+    if configured and not selected and not error:
+        error = "configured probe task is not present in the authenticated task list"
+    return selected, CheckResult(
+        name="live_edge:probe_task",
+        ok=ok,
+        detail={
+            "path": path,
+            "http_status": status,
+            "configured": bool(configured),
+            "selected_task_id": selected or None,
+            "candidate_count": len(candidates),
+            "error": error or None,
+        },
+        message=(
+            f"selected existing task {selected} for read-only ownership probes"
+            if ok else "could not select an existing task for ownership probes"
+        ),
+    )
 
 
 _HANDLE_RE = re.compile(
@@ -241,6 +381,9 @@ def build_evidence(
     unit_fn: Callable[[str], CheckResult] | None = None,
     listener_fn: Callable[[str, int], CheckResult] | None = None,
     health_fn: Callable[[str, str, int], CheckResult] | None = None,
+    edge_base_url: str = "",
+    bearer_token: str = "",
+    probe_task_id: str = "",
 ) -> dict[str, Any]:
     repo_caddy = root / "deploy" / "Caddyfile"
     checks: list[CheckResult] = [check_sha(root, canonical_sha)]
@@ -270,6 +413,52 @@ def build_evidence(
 
     for path_pattern, port in edge_owns:
         checks.append(check_edge(caddy_text, path_pattern, port, source=source))
+
+    if edge_base_url or bearer_token or probe_task_id:
+        if not edge_base_url or not bearer_token:
+            checks.append(CheckResult(
+                name="live_edge:credentials",
+                ok=False,
+                detail={"edge_base_url_present": bool(edge_base_url),
+                        "bearer_token_present": bool(bearer_token)},
+                message="live edge probes require base URL and bearer token",
+            ))
+        else:
+            selected_task_id, selection_check = resolve_probe_task_id(
+                base_url=edge_base_url,
+                token=bearer_token,
+                configured_task_id=probe_task_id,
+            )
+            checks.append(selection_check)
+            task = urllib.parse.quote(selected_task_id, safe="")
+            project_qs = "?project=switchboard"
+            if selected_task_id:
+                checks.extend([
+                check_live_route_owner(
+                    base_url=edge_base_url,
+                    path=f"/api/tasks/{task}{project_qs}", method="GET",
+                    token=bearer_token, owner_port=8122, other_port=8110,
+                ),
+                check_live_route_owner(
+                    base_url=edge_base_url,
+                    path=f"/api/tasks/{task}/dispatch/latest{project_qs}", method="GET",
+                    token=bearer_token, owner_port=8110, other_port=8122,
+                ),
+                check_live_route_owner(
+                    base_url=edge_base_url,
+                    # Chat is POST-only. An empty JSON body reaches the monolith
+                    # handler and fails with "message required" before any write;
+                    # the thin Tasks app has no chat route and returns its generic 404.
+                    path=f"/api/tasks/{task}/chat{project_qs}", method="POST",
+                    token=bearer_token, owner_port=8110, other_port=8122,
+                    json_body=b"{}",
+                ),
+                check_live_route_owner(
+                    base_url=edge_base_url,
+                    path=f"/api/tasks/{task}/review_verdict{project_qs}", method="GET",
+                    token=bearer_token, owner_port=8110, other_port=8122,
+                ),
+                ])
 
     ok = all(c.ok for c in checks)
     return {
@@ -332,6 +521,8 @@ def main(argv: list[str] | None = None) -> int:
         help="path:port the edge must own (repeatable), e.g. '/api/tasks*:8122'",
     )
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--edge-base-url", default=os.environ.get("PM_BASE", ""))
+    parser.add_argument("--probe-task-id", default="")
     parser.add_argument(
         "--skip-live-probes",
         action="store_true",
@@ -367,6 +558,9 @@ def main(argv: list[str] | None = None) -> int:
         edge_owns=edge_owns,
         host=args.host,
         skip_live_probes=args.skip_live_probes,
+        edge_base_url=args.edge_base_url,
+        bearer_token=os.environ.get("PM_RUNTIME_PROOF_TOKEN", ""),
+        probe_task_id=args.probe_task_id,
     )
     text = json.dumps(evidence, indent=2, sort_keys=True)
     print(text)
