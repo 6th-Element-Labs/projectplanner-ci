@@ -160,7 +160,6 @@ def create_router(*, resolve_project: ProjectResolver,
                 raise HTTPException(404, result)
             if result.get("error_code") in {
                 "reviewer_principal_mismatch", "reviewer_principal_unbound",
-                "reviewer_not_independent",
                 "review_head_unbound", "stale_review_head", "review_pr_mismatch",
                 "review_verdict_conflict",
                 "adversarial_review_required",

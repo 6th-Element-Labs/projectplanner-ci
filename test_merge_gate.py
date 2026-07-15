@@ -393,6 +393,51 @@ try:
                for item in rounds_gate["findings"]),
        "bounded unresolved review rounds deterministically escalate through COORD-6")
 
+    # COORD-19 liveness: a change that NOBODY reviews must escalate, not block forever.
+    # Round-based escalation can never rescue this (the round counter stays 0), so the stall
+    # fence is the only way out when no verdict is recorded.
+    from switchboard.storage.repositories.review_verdicts import (  # noqa: E402
+        REVIEW_STALL_ESCALATION_S,
+        review_merge_gate as probe_gate,
+        review_merge_gate_findings as probe_findings,
+    )
+    stall_task, _stall_claim, _stall_branch, stall_sha = ready_task(
+        "unreviewed head escalates instead of deadlocking", record_passing_review=False)
+    with store._conn(P) as c:
+        stall_pushed_at = c.execute(
+            "SELECT pushed_at FROM task_git_state WHERE task_id=?",
+            (stall_task["task_id"],),
+        ).fetchone()["pushed_at"]
+
+    fresh_gate = probe_gate(
+        stall_task["task_id"], stall_sha, project=P, now=stall_pushed_at + 60)
+    ok(fresh_gate["ok"] is False
+       and fresh_gate["code"] == "review_required"
+       and fresh_gate["review_stalled"] is False
+       and fresh_gate["escalation_required"] is False,
+       "a freshly pushed unreviewed head blocks review but does not escalate yet")
+
+    stalled_at = stall_pushed_at + REVIEW_STALL_ESCALATION_S + 60
+    stalled_gate = probe_gate(
+        stall_task["task_id"], stall_sha, project=P, now=stalled_at)
+    ok(stalled_gate["escalation_required"] is True
+       and stalled_gate["escalation_reason"] == "review_stalled_no_verdict"
+       and stalled_gate["review_stalled"] is True
+       and stalled_gate["round"] == 0
+       and stalled_gate["escalation_task_id"] == "COORD-6",
+       "an unreviewed head past the stall fence escalates COORD-6 at round 0 (no deadlock)")
+
+    _stalled, stalled_findings = probe_findings(
+        stall_task["task_id"], stall_sha, project=P, now=stalled_at)
+    stall_finding = next(
+        (item for item in stalled_findings if item["code"] == "review_stalled_no_verdict"),
+        None,
+    )
+    ok(stall_finding is not None
+       and stall_finding["escalation_task_id"] == "COORD-6"
+       and "stall, not a queue" in stall_finding["message"],
+       "the stall escalation self-explains the silence instead of citing 0 rounds")
+
     ok_task, ok_claim, ok_branch, ok_sha = ready_task("clean merge gate passes")
     passed_gate = store.merge_gate(
         gate_payload(ok_task, ok_claim, ok_branch, ok_sha),

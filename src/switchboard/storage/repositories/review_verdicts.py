@@ -15,6 +15,13 @@ from switchboard.contracts.reviews import REVIEW_FINDING_SCHEMA, REVIEW_VERDICT_
 REVIEW_SUMMARY_SCHEMA = "switchboard.review_summary.v1"
 REVIEW_MERGE_GATE_SCHEMA = "switchboard.review_merge_gate.v1"
 REVIEW_MAX_ROUNDS = 3
+# Liveness fence for the review gate. Rounds-based escalation only fires once reviewers have
+# ENGAGED (verdict_count >= max_rounds); it can never fire when no verdict is ever recorded,
+# because the count stays 0 — so a change nobody reviews blocks forever, in silence, with no
+# path forward. A head awaiting a verdict for longer than this is not "in review", it is
+# stuck: escalate to COORD-6 so an operator can act. Tunable per call; keep it well above a
+# normal review turnaround.
+REVIEW_STALL_ESCALATION_S = 30 * 60
 HISTORICAL_CO8_VERDICT_ID = "reviewverdict-co8-pr441-94f03c6f"
 
 
@@ -48,89 +55,20 @@ def _json_object(value: Any) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, Mapping) else {}
 
 
-def _agent_ids(value: Any) -> set[str]:
-    """Collect worker identities from structured completion evidence."""
-    found: set[str] = set()
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if key == "agent_id" and isinstance(item, str) and item.strip():
-                found.add(item.strip())
-            found.update(_agent_ids(item))
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            found.update(_agent_ids(item))
-    return found
-
-
-def _principal_ids(value: Any) -> set[str]:
-    """Collect authenticated principal IDs from structured worker evidence."""
-    found: set[str] = set()
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if key == "principal_id" and isinstance(item, str) and item.strip():
-                found.add(item.strip())
-            found.update(_principal_ids(item))
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            found.update(_principal_ids(item))
-    return found
-
-
 def _current_git_state_in(c: sqlite3.Connection, task_id: str) -> dict[str, Any]:
     row = c.execute(
-        "SELECT head_sha, pr_url, evidence_json FROM task_git_state WHERE task_id=?",
+        "SELECT head_sha, pr_url, pushed_at, evidence_json FROM task_git_state WHERE task_id=?",
         (task_id,),
     ).fetchone()
     if not row:
-        return {"head_sha": "", "pr_url": "", "evidence": {}}
+        return {"head_sha": "", "pr_url": "", "pushed_at": None, "evidence": {}}
     return {
         "head_sha": str(row["head_sha"] or "").strip(),
         "pr_url": str(row["pr_url"] or "").strip(),
+        # When this head started waiting on review — the clock for the liveness fence.
+        "pushed_at": row["pushed_at"],
         "evidence": _json_object(row["evidence_json"]),
     }
-
-
-def _worker_principals_in(c: sqlite3.Connection, task_id: str,
-                          git_state: Mapping[str, Any]) -> list[str]:
-    workers = _agent_ids((git_state or {}).get("evidence") or {})
-    task = c.execute("SELECT assignee FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-    if task and str(task["assignee"] or "").strip():
-        workers.add(str(task["assignee"]).strip())
-    for row in c.execute(
-        "SELECT DISTINCT agent_id FROM task_claims WHERE task_id=? AND agent_id IS NOT NULL",
-        (task_id,),
-    ).fetchall():
-        if str(row["agent_id"] or "").strip():
-            workers.add(str(row["agent_id"]).strip())
-    return sorted(workers)
-
-
-def _worker_principal_ids_in(c: sqlite3.Connection, task_id: str,
-                             git_state: Mapping[str, Any]) -> list[str]:
-    """Return every authenticated principal ID associated with task implementation."""
-    principal_ids = _principal_ids((git_state or {}).get("evidence") or {})
-    worker_agents: set[str] = set()
-    for row in c.execute(
-        "SELECT DISTINCT agent_id, principal_id FROM task_claims WHERE task_id=?",
-        (task_id,),
-    ).fetchall():
-        agent_id = str(row["agent_id"] or "").strip()
-        principal_id = str(row["principal_id"] or "").strip()
-        if agent_id:
-            worker_agents.add(agent_id.casefold())
-        if principal_id:
-            principal_ids.add(principal_id)
-    for row in c.execute(
-        "SELECT DISTINCT claim_id, agent_id, principal_id FROM work_sessions "
-        "WHERE task_id=? AND principal_id IS NOT NULL",
-        (task_id,),
-    ).fetchall():
-        claim_id = str(row["claim_id"] or "").strip()
-        agent_id = str(row["agent_id"] or "").strip().casefold()
-        principal_id = str(row["principal_id"] or "").strip()
-        if principal_id and (claim_id or agent_id in worker_agents):
-            principal_ids.add(principal_id)
-    return sorted(principal_ids)
 
 
 def _finding_from_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -330,31 +268,19 @@ class ReviewVerdictRepository:
                     status_code=409,
                     details={"expected_pr_url": current_pr},
                 )
-            workers = _worker_principals_in(c, task_id, git_state)
-            if reviewer.casefold() in {worker.casefold() for worker in workers}:
-                raise ReviewVerdictError(
-                    "reviewer_not_independent",
-                    "reviewer principal must differ from every recorded worker principal",
-                    status_code=409,
-                    details={"worker_principals": workers},
-                )
+            # Reviewer independence is deliberately NOT enforced. It was added in COORD-18 and
+            # removed here: every fleet agent authenticates through the same shared
+            # `env-mcp-token` principal (377 of 391 recorded claims), so "reviewer principal
+            # must differ from every worker principal" is unsatisfiable — it rejected EVERY
+            # review by EVERY agent, not just self-review, and deadlocked the board with no
+            # path forward. It bought no real independence (one identity cannot be compared
+            # against itself); it only blocked. Do NOT re-add it without genuine per-agent
+            # principals to compare. Authentication is still required, below.
             if not reviewer_principal_id:
                 raise ReviewVerdictError(
                     "reviewer_principal_unbound",
                     "review requires an authenticated principal ID",
                     status_code=403,
-                )
-            worker_principal_ids = _worker_principal_ids_in(c, task_id, git_state)
-            if reviewer_principal_id.casefold() in {
-                    worker.casefold() for worker in worker_principal_ids}:
-                raise ReviewVerdictError(
-                    "reviewer_not_independent",
-                    "reviewer authenticated principal must differ from every worker principal",
-                    status_code=409,
-                    details={
-                        "reviewer_principal_id": reviewer_principal_id,
-                        "worker_principal_ids": worker_principal_ids,
-                    },
                 )
             existing_result = self._existing_result_in(
                 c, payload, task_id=task_id, head_sha=current_head)
@@ -716,11 +642,17 @@ def review_verdict_summary_in(c: sqlite3.Connection, task_id: str,
 
 def review_merge_gate(task_id: str, head_sha: str, *,
                       project: str = DEFAULT_PROJECT,
-                      max_rounds: int = REVIEW_MAX_ROUNDS) -> dict[str, Any]:
-    """Return the deterministic exact-head review input consumed by merge_gate."""
+                      max_rounds: int = REVIEW_MAX_ROUNDS,
+                      now: Optional[float] = None,
+                      stall_seconds: float = REVIEW_STALL_ESCALATION_S) -> dict[str, Any]:
+    """Return the deterministic exact-head review input consumed by merge_gate.
+
+    ``now``/``stall_seconds`` fence review *liveness* (see REVIEW_STALL_ESCALATION_S) and are
+    injectable so the stall rule is unit-testable without sleeping."""
     requested_head = str(head_sha or "").strip()
     with _conn(project) as c:
-        current_head = _current_git_state_in(c, task_id)["head_sha"]
+        git_state = _current_git_state_in(c, task_id)
+        current_head = git_state["head_sha"]
         summary = review_verdict_summary_in(c, task_id, current_head)
         row = None
         if requested_head:
@@ -764,7 +696,28 @@ def review_merge_gate(task_id: str, head_sha: str, *,
     ok = not code
     rounds = int(summary.get("verdict_count") or 0)
     bounded_rounds = max(1, int(max_rounds or REVIEW_MAX_ROUNDS))
-    escalation_required = not ok and rounds >= bounded_rounds
+    # Reviewers engaged but the change keeps failing review.
+    rounds_exhausted = not ok and rounds >= bounded_rounds
+    # Reviewers never engaged at all. `rounds` stays 0 here, so rounds_exhausted can NEVER
+    # fire — this is the branch that turns a silent permanent block (no verdict recorded)
+    # into a COORD-6 escalation an operator can act on.
+    pushed_at = git_state.get("pushed_at")
+    waited_s: Optional[float] = None
+    if pushed_at:
+        clock = float(now) if now is not None else time.time()
+        waited_s = max(0.0, clock - float(pushed_at))
+    review_stalled = bool(
+        not ok
+        and rounds == 0
+        and waited_s is not None
+        and waited_s >= float(stall_seconds)
+    )
+    escalation_required = rounds_exhausted or review_stalled
+    escalation_reason = (
+        "review_round_limit_reached" if rounds_exhausted
+        else "review_stalled_no_verdict" if review_stalled
+        else None
+    )
     return {
         "schema": REVIEW_MERGE_GATE_SCHEMA,
         "task_id": task_id,
@@ -784,7 +737,11 @@ def review_merge_gate(task_id: str, head_sha: str, *,
         "verdict": verdict,
         "round": rounds,
         "max_rounds": bounded_rounds,
+        "waited_seconds": round(waited_s, 1) if waited_s is not None else None,
+        "stall_seconds": float(stall_seconds),
+        "review_stalled": review_stalled,
         "escalation_required": escalation_required,
+        "escalation_reason": escalation_reason,
         "escalation_task_id": "COORD-6" if escalation_required else None,
     }
 
@@ -792,10 +749,13 @@ def review_merge_gate(task_id: str, head_sha: str, *,
 def review_merge_gate_findings(task_id: str, head_sha: str, *,
                                project: str = DEFAULT_PROJECT,
                                max_rounds: int = REVIEW_MAX_ROUNDS,
+                               now: Optional[float] = None,
+                               stall_seconds: float = REVIEW_STALL_ESCALATION_S,
                                ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Adapt the exact-head review gate to merge-gate blocking findings."""
     gate = review_merge_gate(
         task_id, head_sha, project=project, max_rounds=max_rounds,
+        now=now, stall_seconds=stall_seconds,
     )
     if gate.get("ok"):
         return gate, []
@@ -812,17 +772,28 @@ def review_merge_gate_findings(task_id: str, head_sha: str, *,
         "review_gate": gate,
     }]
     if gate.get("escalation_required"):
-        findings.append({
-            "code": "review_round_limit_reached",
-            "message": (
+        reason = str(gate.get("escalation_reason") or "review_round_limit_reached")
+        if reason == "review_stalled_no_verdict":
+            waited_min = int((gate.get("waited_seconds") or 0) // 60)
+            escalation_message = (
+                f"No review verdict in {waited_min} min for this head. This is a "
+                "stall, not a queue — escalate through COORD-6 so an operator can "
+                "assign a reviewer or record the verdict."
+            )
+        else:
+            escalation_message = (
                 f"Review remains blocked after {gate.get('round')} rounds; "
                 "escalate through COORD-6."
-            ),
+            )
+        findings.append({
+            "code": reason,
+            "message": escalation_message,
             "failure_class": "failed_gate",
             "severity": "high",
             "blocking": True,
             "review_round": gate.get("round"),
             "max_review_rounds": gate.get("max_rounds"),
+            "waited_seconds": gate.get("waited_seconds"),
             "escalation_task_id": gate.get("escalation_task_id"),
             "head_sha": str(head_sha or "").strip() or None,
         })

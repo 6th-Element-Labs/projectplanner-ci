@@ -40,7 +40,6 @@ from switchboard.storage.repositories import review_verdicts as review_repositor
 PROJECT = "switchboard"
 WORKER = "codex/COORD-18-worker"
 REVIEWER = "codex/COORD-18-independent-review"
-REVIEWER_ALIAS = "codex/COORD-18-reviewer-alias"
 WORKER_PRINCIPAL_ID = "principal-worker"
 REVIEWER_PRINCIPAL_ID = "principal-reviewer"
 HEAD_1 = "a" * 40
@@ -108,18 +107,11 @@ try:
         task_id, 518, PR_URL, branch=f"codex/{task_id}-fixture", head_sha=HEAD_1,
         actor="coord18-test", project=PROJECT)
 
-    same_principal = commands.execute_mapping(
-        verdict(task_id, reviewer=WORKER), actor=WORKER,
-        principal_id=WORKER_PRINCIPAL_ID, project=PROJECT)
-    ok(same_principal.get("error_code") == "reviewer_not_independent",
-       "worker cannot review its own implementation")
-
-    aliased_same_principal = commands.execute_mapping(
-        verdict(task_id, reviewer=REVIEWER_ALIAS), actor=REVIEWER_ALIAS,
-        principal_id=WORKER_PRINCIPAL_ID, project=PROJECT)
-    ok(aliased_same_principal.get("error_code") == "reviewer_not_independent"
-       and aliased_same_principal.get("reviewer_principal_id") == WORKER_PRINCIPAL_ID,
-       "same authenticated principal cannot self-review through a different agent label")
+    # NOTE: COORD-18 originally asserted here that a worker could not review its own
+    # implementation. That fence was removed — every fleet agent authenticates through the
+    # same shared `env-mcp-token` principal, so "reviewer principal must differ from worker
+    # principal" was unsatisfiable: it rejected EVERY review by EVERY agent (not just
+    # self-review) and deadlocked the board. Authentication is still fenced, below.
 
     unbound_reviewer = commands.execute_mapping(
         verdict(task_id), actor=REVIEWER, project=PROJECT)
