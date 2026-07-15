@@ -1,0 +1,121 @@
+# Off-box liveness monitor for the native merge queue (ruleset master-merge-queue / 18821466).
+#
+# The queue lands a PR only once `Switchboard CI / VM gate` posts on the merge-group head SHA,
+# which requires the Plan VM to process the `merge_group` webhook and drive the scratchpad
+# mirror. If the box is down/wedged (or the webhook subscription / wiring breaks), the gate
+# never posts and EVERY queued PR hangs until the 60-min check timeout — the box is a single
+# point of failure for all merges. This job runs on GitHub-hosted runners (NOT the box), so it
+# still fires when the box is dead, and pages via the same labelled-issue path as uptime-probe.
+#
+# (Could move to the public projectplanner-ci sandbox like uptime-probe if canonical scheduled
+# Actions are ever disabled; kept here for now since scheduled Actions run on the canonical repo
+# and github.token already has queue/status/issue access — no cross-repo token needed.)
+name: merge-queue-health
+
+on:
+  schedule:
+    - cron: "6,16,26,36,46,56 * * * *"   # ~every 10 min, offset from the other crons
+  workflow_dispatch:
+    inputs:
+      stuck_min:
+        description: "Override the stuck threshold (minutes) for a manual check"
+        default: ""
+
+concurrency:
+  group: merge-queue-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_LABEL: merge-queue-stuck
+      ALERT_ASSIGNEE: ${{ vars.UPTIME_ALERT_ASSIGNEE || 'StevenRidder' }}
+      MQ_STUCK_MIN: ${{ inputs.stuck_min || vars.MQ_STUCK_MIN || '15' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check merge-queue liveness
+        id: check
+        run: |
+          set +e
+          python scripts/merge_queue_health.py | tee mq.json
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "monitor exit code: $rc"
+
+      - name: Publish step summary
+        if: always()
+        run: |
+          {
+            echo "### Merge-queue liveness (threshold ${MQ_STUCK_MIN} min)"
+            echo '```json'
+            cat mq.json 2>/dev/null || echo '{"error":"monitor produced no output"}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or refresh stuck-queue issue (alert)
+        if: steps.check.outputs.rc != '0'
+        run: |
+          gh label create "$ISSUE_LABEL" --color B60205 \
+            --description "native merge queue not draining" 2>/dev/null || true
+          reasons=$(python -c "import json;print(chr(10).join('- '+r for r in json.load(open('mq.json')).get('reasons',[])))" 2>/dev/null || echo "- monitor produced no parseable output")
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            echo "🔴 **Native merge queue STUCK** ($(date -u +%Y-%m-%dT%H:%M:%SZ)) — queued PRs will hang to the 60-min timeout."
+            echo
+            echo "Most likely: the Plan VM isn't posting \`Switchboard CI / VM gate\` on merge-group SHAs (box down/wedged, or the merge_group webhook/wiring broke)."
+            echo
+            echo "Stuck merge groups:"
+            echo "$reasons"
+            echo
+            echo "<details><summary>mq.json</summary>"
+            echo
+            echo '```json'
+            cat mq.json 2>/dev/null || echo '{"error":"no output"}'
+            echo '```'
+            echo "</details>"
+            echo
+            echo "First checks: is plan.taikunai.com up? is webhook 647508776 still subscribed to \`merge_group\`? Fast rollback: set ruleset 18821466 enforcement=disabled to drain the queue."
+            echo
+            echo "Run: $run_url"
+            echo "cc @${ALERT_ASSIGNEE}"
+          } > issue_body.md
+          existing=$(gh issue list --label "$ISSUE_LABEL" --state open --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue_body.md
+            echo "refreshed existing stuck-queue issue #$existing"
+          else
+            gh issue create --title "🔴 Native merge queue stuck" \
+              --label "$ISSUE_LABEL" --assignee "$ALERT_ASSIGNEE" --body-file issue_body.md \
+            || gh issue create --title "🔴 Native merge queue stuck" \
+              --label "$ISSUE_LABEL" --body-file issue_body.md
+            echo "opened new stuck-queue issue"
+          fi
+
+      - name: Resolve stuck-queue issue on recovery
+        if: steps.check.outputs.rc == '0'
+        run: |
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          for n in $(gh issue list --label "$ISSUE_LABEL" --state open --json number -q '.[].number'); do
+            gh issue comment "$n" --body "✅ Recovered — queue draining again ($(date -u +%Y-%m-%dT%H:%M:%SZ)). Run: $run_url"
+            gh issue close "$n"
+            echo "closed recovered stuck-queue issue #$n"
+          done
+
+      - name: Fail the run so GitHub pages
+        if: steps.check.outputs.rc != '0'
+        run: |
+          echo "::error::native merge queue stuck — see the merge-queue-stuck issue"
+          exit 1
