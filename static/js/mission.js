@@ -7,7 +7,10 @@
             const u = new URL(window.location.href);
             const d = (u.searchParams.get('deliverable') || u.searchParams.get('mission') || '').trim();
             if (d) this.selectedDeliverableId = d;
-            if (u.hash === '#tab-mission' || d) {
+            const proof = (u.searchParams.get('proof') || '').trim().toLowerCase();
+            const mode = (u.searchParams.get('mode') || '').trim().toLowerCase();
+            const proofOn = mode === 'proof' || proof === '1' || proof === 'true' || proof === 'yes';
+            if (u.hash === '#tab-mission' || d || proofOn) {
                 // Target the TOP tab (in .nav-tabs) — that's the element Bootstrap fires
                 // shown.bs.tab on, which drives refreshMissionPage. The sidebar link shares
                 // href="#tab-mission" and would otherwise win document.querySelector.
@@ -31,7 +34,10 @@
         // no longer auto-switch the active tab to the Deliverable board on boot.
         try {
             const u = new URL(window.location.href);
-            if (u.hash === '#tab-mission' || u.searchParams.get('deliverable') || u.searchParams.get('mission')) return;
+            const proof = (u.searchParams.get('proof') || '').trim().toLowerCase();
+            const mode = (u.searchParams.get('mode') || '').trim().toLowerCase();
+            if (u.hash === '#tab-mission' || u.searchParams.get('deliverable') || u.searchParams.get('mission')
+                || mode === 'proof' || proof === '1' || proof === 'true' || proof === 'yes') return;
             await this.loadDeliverables();
             if (this.deliverables.length && !this.selectedDeliverableId) this.selectedDeliverableId = this.deliverables[0].id;
         } catch (e) { /* ignore */ }
@@ -323,7 +329,23 @@
                 this.loadKpisAndOutcomes(), this.loadClosureReport(this.selectedDeliverableId),
             ]);
             this._setMissionDeliverableInUrl(this.selectedDeliverableId);
+            // UI-17: when ?proof=1 / mode=proof, load bind + provider state before render.
+            if (typeof this._proofModeFromUrl === 'function' && this._proofModeFromUrl()) {
+                const s = this.missionStatus || {};
+                const taskIds = [
+                    ...((s.active_work || []).map((w) => w.task_id)),
+                    ...((s.linked_tasks || []).map((l) => l.task_id)),
+                ].filter(Boolean);
+                this._proofBind = typeof this._proofLoadBindState === 'function'
+                    ? await this._proofLoadBindState(taskIds)
+                    : null;
+            } else {
+                this._proofBind = null;
+            }
             this.renderMissionPage();
+            if (this._proofBind && typeof this._initProofConsole === 'function') {
+                await this._initProofConsole(this.missionStatus);
+            }
         } catch (e) {
             el.innerHTML = `<div class="alert alert-danger mb-0">Could not load mission status: ${this.esc(e.message)}</div>`;
         }
@@ -747,16 +769,22 @@
         const board = s.board || {};
         const prog = s.progress || {};
         const pctDone = Math.round((prog.done_with_proof_ratio || 0) * 100);
+        const proofOn = typeof this._proofModeFromUrl === 'function' && this._proofModeFromUrl();
+        const proofToggle = `<button type="button" class="btn btn-sm ${proofOn ? 'btn-primary' : 'btn-outline-secondary'}" id="mission-proof-toggle" title="Operator Proof Console deep link (?proof=1)">
+            <i class="ti ti-terminal-2 me-1"></i>${proofOn ? 'Exit proof' : 'Proof console'}</button>`;
         const header = `<div class="d-flex flex-wrap align-items-start gap-3 mb-4"><div class="flex-fill">
             <div class="text-secondary small mb-1">${this.esc(s.project_id || window.PM_PROJECT || '')}${s.board_id ? ' · ' + this.esc(s.board_id) : ''}</div>
             <h2 class="mb-2">${this.esc(d.title || s.deliverable_id || 'Mission')}</h2>
-            <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)}</div>
+            <div class="btn-list">${this._missionBadge(d.status, this.DELIVERABLE_STATUS_COLOR)} ${this._missionConfidence(board.confidence)} ${proofToggle}</div>
         </div>
         <div class="text-end"><div class="mb-2">${this._missionClosureActionHtml()}</div>
             <span class="badge bg-green-lt" title="Live — auto-refreshes as agents update tasks"><span class="status-dot status-dot-animated bg-green me-1"></span>Live</span>
             <div id="mission-live-stamp" class="text-secondary small mt-1"></div>
         </div></div>
         <div id="mission-session-health-strip" class="d-flex flex-wrap align-items-center gap-2 mb-4"></div>`;
+        const proofHtml = (proofOn && typeof this.proofConsoleHtml === 'function')
+            ? this.proofConsoleHtml(s, this._proofBind || {})
+            : '';
         const kpi = `<div class="row row-cards mb-4">${[
             ['Done with proof', prog.done_with_proof_count || 0, 'ti-circle-check', 'green'],
             ['In review', prog.in_review_count || 0, 'ti-eye-check', 'azure'],
@@ -805,7 +833,7 @@
         this._missionDetailOpen = detailOpen;
         // Lead with the story: headline → plain-English → what's blocked → the map →
         // breakdown/outcomes review → next action.
-        const essentials = header + this._missionClosureHtml() + this._missionCeoHeaderHtml(s) + blockerHtml
+        const essentials = header + proofHtml + this._missionClosureHtml() + this._missionCeoHeaderHtml(s) + blockerHtml
             + this._missionDependencyGraphHtml() + this._missionBreakdownHtml() + nextActions;
         // The rest (KPIs, brief, milestones, work tables, agents, linked tasks, policy) folds
         // into a disclosure so it's there when you want it, not a wall of ~15 cards up front.
@@ -830,6 +858,13 @@
         this._missionSig = this._missionSignature();
         this._missionLiveStamp(true);
         this.renderFleetDock({ mode: 'deliverable', taskIds: (s.linked_tasks || []).map((l) => l.task_id) });
+        const proofBtn = document.getElementById('mission-proof-toggle');
+        if (proofBtn && !proofBtn._bound) {
+            proofBtn.addEventListener('click', () => {
+                if (typeof this.toggleProofConsole === 'function') this.toggleProofConsole();
+            });
+            proofBtn._bound = true;
+        }
     },
 
     async openLinkedTask(taskId, projectId) {

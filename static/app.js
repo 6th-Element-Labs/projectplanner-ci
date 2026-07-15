@@ -4213,6 +4213,7 @@ const TeepPlan = {
     ...window.SwitchboardClosure.methods,
     ...window.SwitchboardMission.methods,
     ...window.SwitchboardRunnerSession.methods,
+    ...window.SwitchboardProofConsole.methods,
     ...window.SwitchboardProjectAdmin.methods,
 
     async loadPrincipal() {

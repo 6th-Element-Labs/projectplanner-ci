@@ -94,6 +94,14 @@
 - **Post-create “Wire your repo” panel:** copyable webhook URL **with the `?project=` pin pre-filled** (HARDEN-2 lesson), secret name, a `gh` one-liner, and a **Verify connection** button (reuses reconcile's reachability check; flips green on first delivery). Same panel reachable later from Settings for existing projects.
 - **Non-goal:** auto-creating repos / auto-installing webhooks — that arrives with the Bridge GitHub App (`docs/BRIDGE-IMPLEMENTATION-PLAN.md` §3, G-1); this panel adopts it then.
 
+## UI-17 · Browser Proof Console — *Mission deep link* · **depends on CO-12/13, COORD-34, UI-3, UI-8**
+
+- **Deep link / toggle:** `?proof=1` or `?mode=proof` on the Deliverable Mission page (header **Proof console** button). Same Tabler canvas + `static/taikun-tabler.css` tokens — no second frontend.
+- **Reuse only:** Mission header/timeline state, Fleet `runnerControlHtml` / Watch/Chat (`static/js/runner-session.js`), existing cards/`datagrid`/`badge bg-*-lt`/`table card-table`, Arm → `POST api/deliverables/{id}/coordinator_tick`.
+- **Identity KV:** task_id, claim_id, Work Session, runner_session_id, host, provider identity ref (never secrets), source SHA, CLI, placement — redacted.
+- **Provider rows:** Codex / Claude Code / Cursor with redacted auth + CO-14 MCP probe cells (`configured`…`cleanup`). Missing bind/MCP/cleanup/identity = **red** and blocks green proof.
+- **Module:** `static/js/proof-console.js` (`SwitchboardProofConsole`), composed after Mission + Runner Session.
+
 ---
 
-**Build frontier:** UI-3, UI-12, UI-13, UI-15 first (each unblocks others or is independently shippable); UI-2 waits on UI-12, UI-8 on UI-3, UI-14 on UI-13. UI-10 shipped (PR #213); UI-6 was an archived duplicate of UI-3.
+**Build frontier:** UI-3, UI-12, UI-13, UI-15 first (each unblocks others or is independently shippable); UI-2 waits on UI-12, UI-8 on UI-3, UI-14 on UI-13. UI-10 shipped (PR #213); UI-6 was an archived duplicate of UI-3. UI-17 is the browser-only acceptance surface for the session-terminal + coordinator dispatch dogfood.
