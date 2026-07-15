@@ -25,6 +25,7 @@
     "side_by_side_parity": "ARCH-MS-91 / PR #524",
     "caddy_cutover": "ARCH-MS-92 / PR #525 — deploy/Caddyfile + deploy/switchboard-tasks.service",
     "live_cut_close": "ARCH-MS-95 — post-G6 Path A closeout for arch-ms-tasks-live-cut (docs/phase3/tasks_live_cut_close.md)",
+    "live_cut_exit": "ARCH-MS-100 — exit packet; deliverable ready for closure verification (docs/phase3/tasks_live_cut_exit.md)",
     "dual_strip": "PM_TASKS_HTTP_PRIMARY=service on deploy/projectplanner.service",
     "rollback": "docs/runbooks/tasks-caddy-cutover-rollback.md",
     "phase3_exit": "scripts/arch_ms_phase3_exit_gate.py Path A"
@@ -37,5 +38,5 @@
     "decision": "nogo",
     "note": "ARCH-MS-94 records operator G6 and authorizes Path A. Provisional Path B No-Go from ARCH-MS-93 is superseded. Live Mode A Caddy cut + dual-strip already shipped via ARCH-MS-92 (#525)."
   },
-  "notes": "Operator G6 (ARCH-MS-94) + live-cut close (ARCH-MS-95): Path A authorized and closed. Tasks Mode A uvicorn behind Caddy on :8122 (execution ARCH-MS-92). Sibling dispatch/chat/review_* remain on monolith. MCP stays on :8111. Deploy order: start switchboard-tasks before Caddy reload."
+  "notes": "Operator G6 (ARCH-MS-94) + live-cut close (ARCH-MS-95) + exit readiness (ARCH-MS-100): Path A authorized, closed, and ready for deliverable closure verification. Tasks Mode A uvicorn behind Caddy on :8122 (execution ARCH-MS-92). Sibling dispatch/chat/review_* remain on monolith. MCP stays on :8111. Chart Tasks green for arch-ms-segmentation."
 }

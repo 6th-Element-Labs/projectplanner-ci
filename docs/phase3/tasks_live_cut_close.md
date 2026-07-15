@@ -14,6 +14,7 @@ after operator G6 (ARCH-MS-94).
 | Playbook | [`tasks_cut_playbook.md`](tasks_cut_playbook.md) |
 | Rollback | [`../runbooks/tasks-caddy-cutover-rollback.md`](../runbooks/tasks-caddy-cutover-rollback.md) |
 | Exit gate | `scripts/arch_ms_phase3_exit_gate.py` → Path A green |
+| **Exit / chart green** | [`tasks_live_cut_exit.md`](tasks_live_cut_exit.md) (**ARCH-MS-100**) |
 
 ## AC (ARCH-MS-95)
 

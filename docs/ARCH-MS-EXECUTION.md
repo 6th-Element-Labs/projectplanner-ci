@@ -4,7 +4,7 @@
 **Phase 2 charter:** [ADR-0011](decisions/0011-phase2-process-strangler.md)  
 **Phase 3 charter:** [ADR-0012](decisions/0012-phase3-tasks-process-strangler.md)  
 **Board:** `project=switchboard` · workstream **ARCH-MS**  
-**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2` · `arch-ms-phase-3`
+**Deliverables:** `arch-ms-phase-0` · `arch-ms-phase-1` (modular monolith exit) · `arch-ms-phase-2` · `arch-ms-phase-3` · `arch-ms-tasks-live-cut` (segmentation — **Tasks chart green** via ARCH-MS-100)
 
 > **Ratchet retired 2026-07-12.** `test_size_ratchet.py` (the exact-match size gate) was deleted —
 > it forced every concurrent PR to compare-and-swap one shared integer against a moving `master`,
@@ -52,7 +52,8 @@ surface; explicit No-Go keep-in-process exit; no nginx; no MCP/other-BC cuts in 
 | **ARCH-MS-92** | 3B: Caddy cutover + dual-strip for Tasks (**Go only**) | ✅ | PR #525 — live `deploy/Caddyfile` Mode A → `:8122`; `deploy/switchboard-tasks.service`; dual-strip |
 | **ARCH-MS-93** | Exit: Phase 3 close — Tasks cut conditional | 🟡 | Path A exit (provisional Path B superseded by ARCH-MS-94 G6 + ARCH-MS-92 cut) |
 | **ARCH-MS-94** | Tasks live cut: Operator G6 — reopen Path A | ✅ | PR #526 — `tasks_independence_verdict.json` (`go`+G6+`process_cut_authorized`) |
-| **ARCH-MS-95** | Tasks live cut: Caddy cutover + dual-strip (Path A) | 🟡 | Post-G6 closeout; live edge/unit/dual-strip Path A green; `tests/test_arch_ms95_tasks_live_cut.py` |
+| **ARCH-MS-95** | Tasks live cut: Caddy cutover + dual-strip (Path A) | ✅ | PR #528 — post-G6 closeout; live edge/unit/dual-strip Path A green |
+| **ARCH-MS-100** | Exit: Tasks live cut proven (chart Tasks green) | 🟡 | `docs/phase3/tasks_live_cut_exit.md`; ready for `arch-ms-tasks-live-cut` closure verification |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
@@ -264,4 +265,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-16 | ARCH-MS-92 | Tasks Mode A Caddy cutover + dual-strip (`PM_TASKS_HTTP_PRIMARY=service`); Path A exit supersedes provisional Path B; `tests/test_arch_ms92_tasks_cutover.py` |
 | 2026-07-16 | ARCH-MS-94 | Operator G6 — formal reopen of Path A (`verdict=go`, `process_cut_authorized=true`); board comment on ARCH-MS-93 Path B superseded; `tests/test_arch_ms94_operator_g6.py` |
 | 2026-07-16 | ARCH-MS-95 | Post-G6 Path A live-cut closeout for `arch-ms-tasks-live-cut` (Caddy→:8122, dual-strip, gate green); close doc supersedes 91/92 as live-traffic gates; `tests/test_arch_ms95_tasks_live_cut.py` |
+| 2026-07-16 | ARCH-MS-100 | Exit: Tasks live cut proven — chart Tasks green; exit packet ready for deliverable closure verification; `tests/test_arch_ms100_tasks_live_cut_exit.py` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
