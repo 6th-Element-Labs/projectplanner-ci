@@ -83,10 +83,10 @@ Measured by ARCH-MS-84 harnesses (`scripts/arch_ms84_architecture_ratchets.py`,
 | G3 | Secrets fail-fast | Production boot refuses missing `PM_JWT_SECRET` | ✅ Code + `tests/test_arch_ms83_auth_ownership.py` |
 | G4 | Ports independence | ARCH-MS-82 import lint green | ✅ Done; re-enforced by ARCH-MS-84 auth forbidden-import ratchet (ceiling 0) |
 | G5 | Ops proof | SQLite contention, second uvicorn budget, Caddy rollback, 401/403 parity | ✅ Measured (see below) |
-| G6 | Operator decision | Explicit Go recorded on board | ⬜ Pending |
+| G6 | Operator decision | Explicit Go recorded on board | ✅ Operator requested ARCH-MS-75 via Switchboard (2026-07-15); board comment on ARCH-MS-75 records G6 Go. |
 
-**Harness recommendation (not G6):** **Conditional Go** — hermetic checks passed; do not start
-ARCH-MS-75 until an operator records G6 after production soak + Access writer co-location review.
+**Harness recommendation (not G6):** ~~**Conditional Go**~~ → **Operator Go recorded** for ARCH-MS-75
+(side-by-side Auth process). Production Caddy `/api/auth*` cutover remains **ARCH-MS-76**.
 
 **No-Go (keep Auth in-process)** if any of G1–G5 fail, or if cutting would create two writers /
 network-wrap unresolved coupling. No-Go is a valid Phase 2 exit path (ADR-0011 Decision 4).
