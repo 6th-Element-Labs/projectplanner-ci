@@ -49,7 +49,8 @@ big-bang rewrite / frontend swap.
 | **ARCH-MS-84** | 2B0: Architecture ratchets + Auth cut ops proof | ✅ | PR #498 — `scripts/arch_ms84_*`; gate G2/G5 measured |
 | **ARCH-MS-75** | 2B: Extract Auth as standalone uvicorn (**Go only**) | ✅ | PR #501 — `src/switchboard/services/auth/`; side-by-side `:8121` |
 | **ARCH-MS-76** | 2B: Caddy + systemd cutover for Auth (**Go only**) | ✅ | PR #503 — live `deploy/Caddyfile` `/api/auth*` → `:8121`; `deploy/switchboard-auth.service` |
-| **ARCH-MS-77** | 2B: Auth cutover parity tests + strip dual impl (**Go only**) | 🟡 | Hermetic parity `tests/test_arch_ms77_*`; `PM_AUTH_HTTP_PRIMARY=service` on monolith; `/api/auth/me*` → `:8110` |
+| **ARCH-MS-77** | 2B: Auth cutover parity tests + strip dual impl (**Go only**) | ✅ | PR #505 — hermetic parity; `PM_AUTH_HTTP_PRIMARY=service`; `/api/auth/me*` → `:8110` |
+| **ARCH-MS-78** | 2C: Tasks service readiness — contracts + extract plan | 🟡 | `docs/ARCH-MS-PHASE2-TASKS-READINESS.md` + `docs/phase2/tasks_readiness.md` (readiness-only) |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
