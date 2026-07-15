@@ -8,6 +8,7 @@ from typing import Any, Callable
 from mcp.server.fastmcp import Context
 
 from switchboard.application.commands import provider_credentials as commands
+from switchboard.domain.provider_credentials import list_provider_auth_capabilities as capability_matrix
 from switchboard.storage.repositories.provider_credentials import (
     CredentialVaultError,
     default_provider_credential_repository,
@@ -96,6 +97,13 @@ def list_provider_connections(ctx: Context, project: str = "maxwell",
     return services.dumps(result)
 
 
+def list_provider_auth_capabilities(ctx: Context, project: str = "maxwell") -> str:
+    """Read the server-authoritative provider/auth/host policy matrix (CO-15)."""
+    services = _services()
+    services.require_read(ctx, project, ("read",))
+    return services.dumps(capability_matrix())
+
+
 def rotate_provider_connection(credential_reference: str, rotation_json: str,
                                ctx: Context, project: str = "maxwell") -> str:
     """Rotate an enrolled auth capsule and fence every lease on the prior version."""
@@ -163,6 +171,7 @@ PROVIDER_CREDENTIAL_TOOL_NAMES = (
     "enroll_provider_connection",
     "get_provider_connection",
     "list_provider_connections",
+    "list_provider_auth_capabilities",
     "rotate_provider_connection",
     "revoke_provider_connection",
     "delete_provider_connection",

@@ -24,7 +24,9 @@ from switchboard.application.commands.provider_credentials import (
 from switchboard.domain.provider_credentials import (
     CredentialPolicyError,
     CredentialPrincipal,
+    auth_host_classes_for_host,
     normalize_provider,
+    provider_auth_decision,
 )
 from switchboard.storage.repositories.provider_credentials import (
     CredentialVaultError,
@@ -212,7 +214,9 @@ class ProviderRuntimeAuth:
         finally:
             os.close(fd)
 
-    def _materialize(self, provider: str, credential: str, root: Path) -> tuple[dict[str, str], dict[str, Any]]:
+    def _materialize(
+        self, provider: str, credential: str, root: Path, *, auth_mode: str,
+    ) -> tuple[dict[str, str], dict[str, Any]]:
         env = {
             str(key): str(value)
             for key, value in self.base_environment.items()
@@ -230,7 +234,7 @@ class ProviderRuntimeAuth:
             "XDG_CACHE_HOME": str(cache),
         })
         state: dict[str, Any] = {}
-        if provider == "openai-codex":
+        if provider == "openai-codex" and auth_mode == "chatgpt_subscription":
             codex_home = root / "codex"
             self._secure_directory(codex_home)
             auth_path = codex_home / "auth.json"
@@ -240,6 +244,13 @@ class ProviderRuntimeAuth:
                 "auth_path": auth_path,
                 "initial_digest": hashlib.sha256(credential.encode()).hexdigest(),
             })
+        elif provider == "openai-codex" and auth_mode == "api_key":
+            env["OPENAI_API_KEY"] = credential
+        elif provider == "anthropic-claude" and auth_mode == "api_key":
+            claude_home = root / "claude"
+            self._secure_directory(claude_home)
+            env["CLAUDE_CONFIG_DIR"] = str(claude_home)
+            env["ANTHROPIC_API_KEY"] = credential
         elif provider == "anthropic-claude":
             claude_home = root / "claude"
             self._secure_directory(claude_home)
@@ -253,7 +264,9 @@ class ProviderRuntimeAuth:
         return env, state
 
     @staticmethod
-    def _preflight_result(provider: str, completed: Any) -> dict[str, Any]:
+    def _preflight_result(
+        provider: str, completed: Any, *, expected_auth_mode: str = "",
+    ) -> dict[str, Any]:
         if int(getattr(completed, "returncode", 1) or 0) != 0:
             return {"authenticated": False, "error_code": "provider_auth_preflight_failed"}
         stdout = str(getattr(completed, "stdout", "") or "")
@@ -263,7 +276,10 @@ class ProviderRuntimeAuth:
             authenticated = "logged in" in normalized and "not logged in" not in normalized
             return {
                 "authenticated": authenticated,
-                "auth_mode": "chatgpt_personal" if authenticated else "unknown",
+                "auth_mode": (
+                    "api_key" if authenticated and expected_auth_mode == "api_key"
+                    else "chatgpt_personal" if authenticated else "unknown"
+                ),
                 **({} if authenticated else {"error_code": "provider_auth_preflight_failed"}),
             }
         payload = _safe_json_object(stdout)
@@ -276,12 +292,19 @@ class ProviderRuntimeAuth:
         if provider == "anthropic-claude":
             method = str(payload.get("authMethod") or payload.get("auth_method") or "").lower()
             api_provider = str(payload.get("apiProvider") or payload.get("api_provider") or "").lower()
-            disallowed = any(value in f"{method} {api_provider}" for value in (
-                "api_key", "api key", "bedrock", "vertex"))
-            authenticated = authenticated and not disallowed
+            observed = f"{method} {api_provider}"
+            api_key_auth = any(value in observed for value in ("api_key", "api key"))
+            cloud_auth = any(value in observed for value in ("bedrock", "vertex"))
+            if expected_auth_mode == "api_key":
+                authenticated = authenticated and api_key_auth and not cloud_auth
+            else:
+                authenticated = authenticated and not api_key_auth and not cloud_auth
             return {
                 "authenticated": authenticated,
-                "auth_mode": "oauth_personal" if authenticated else "unknown",
+                "auth_mode": (
+                    "api_key" if authenticated and expected_auth_mode == "api_key"
+                    else "oauth_personal" if authenticated else "unknown"
+                ),
                 **({} if authenticated else {"error_code": "provider_auth_preflight_failed"}),
             }
         return {
@@ -306,6 +329,7 @@ class ProviderRuntimeAuth:
 
     def _preflight_once(
         self, provider: str, env: Mapping[str, str], cwd: str | None,
+        *, expected_auth_mode: str = "",
     ) -> dict[str, Any]:
         executable = self.cli_paths.get(provider)
         if not executable:
@@ -337,17 +361,22 @@ class ProviderRuntimeAuth:
                 "provider": provider,
                 "command": " ".join(_PROVIDER_PREFLIGHT[provider]),
             }
-        result = self._preflight_result(provider, completed)
+        result = self._preflight_result(
+            provider, completed, expected_auth_mode=expected_auth_mode)
         result.update(self._output_metadata(completed))
         result["provider"] = provider
         result["command"] = " ".join(_PROVIDER_PREFLIGHT[provider])
         return result
 
-    def _preflight(self, provider: str, env: Mapping[str, str], cwd: str | None) -> dict[str, Any]:
+    def _preflight(
+        self, provider: str, env: Mapping[str, str], cwd: str | None,
+        *, expected_auth_mode: str = "",
+    ) -> dict[str, Any]:
         """Run a bounded preflight retry loop and return only redacted evidence."""
         result: dict[str, Any] = {}
         for attempt in range(1, self.preflight_attempts + 1):
-            result = self._preflight_once(provider, env, cwd)
+            result = self._preflight_once(
+                provider, env, cwd, expected_auth_mode=expected_auth_mode)
             result["attempt_count"] = attempt
             if result.get("authenticated"):
                 return result
@@ -405,6 +434,53 @@ class ProviderRuntimeAuth:
                 "error_code": "provider_runtime_command_invalid",
             }
 
+        try:
+            connection = self.repository.get_metadata(
+                str(binding.get("credential_reference") or ""),
+                project=str(binding.get("project") or ""),
+                principal_user_id=str(binding.get("user_id") or ""),
+                admin=False,
+            )
+            auth_policy = provider_auth_decision(
+                provider,
+                str(connection.get("auth_type") or ""),
+                host_classes=auth_host_classes_for_host({
+                    "host_id": str(binding.get("host_id") or ""),
+                }),
+                operation="launch",
+            )
+        except CredentialVaultError:
+            auth_policy = {
+                "allowed": False,
+                "reason_code": "provider_auth_policy_unavailable",
+                "auth_mode": "",
+            }
+        auth_mode = str(auth_policy.get("auth_mode") or "")
+        if not auth_policy.get("allowed"):
+            lease_state = ""
+            if lease_id:
+                try:
+                    self.repository.release_lease(
+                        str(lease_id),
+                        project=str(binding.get("project") or ""),
+                        actor=actor,
+                        reason="provider_auth_policy_denied",
+                        principal=credential_principal,
+                    )
+                    lease_state = "released"
+                except Exception:
+                    lease_state = "release_failed"
+            return {
+                "schema": PROVIDER_RUNTIME_RECEIPT_SCHEMA,
+                "allowed": False,
+                "status": "denied",
+                "error_code": str(
+                    auth_policy.get("reason_code") or "provider_auth_policy_denied"),
+                "provider": provider,
+                "lease_id": str(lease_id or ""),
+                "lease_state": lease_state,
+            }
+
         state: dict[str, Any] = {"root": None, "process": None, "materialized": {}}
         receipt: dict[str, Any] = {
             "schema": PROVIDER_RUNTIME_RECEIPT_SCHEMA,
@@ -436,9 +512,11 @@ class ProviderRuntimeAuth:
                 return {"started": False, "status": "secret_in_argv_denied"}
             root = self._runtime_root(provider)
             state["root"] = root
-            env, materialized = self._materialize(provider, credential, root)
+            env, materialized = self._materialize(
+                provider, credential, root, auth_mode=auth_mode)
             state["materialized"] = materialized
-            preflight = self._preflight(provider, env, cwd)
+            preflight = self._preflight(
+                provider, env, cwd, expected_auth_mode=auth_mode)
             state["preflight"] = preflight
             if not preflight.get("authenticated"):
                 return {"started": False, "status": "auth_preflight_failed"}
@@ -452,7 +530,10 @@ class ProviderRuntimeAuth:
                     stderr=subprocess.DEVNULL,
                 )
             finally:
-                for key in ("CLAUDE_CODE_OAUTH_TOKEN", "CURSOR_API_KEY"):
+                for key in (
+                    "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+                    "CLAUDE_CODE_OAUTH_TOKEN", "CURSOR_API_KEY",
+                ):
                     env.pop(key, None)
             state["process"] = process
             return {
@@ -492,7 +573,8 @@ class ProviderRuntimeAuth:
                 else:
                     receipt["exit_code"] = exit_code
                     receipt["status"] = "completed" if exit_code == 0 else "failed"
-                    if provider == "openai-codex" and exit_code == 0:
+                    if (provider == "openai-codex"
+                            and auth_mode == "chatgpt_subscription" and exit_code == 0):
                         materialized = state.get("materialized") or {}
                         capsule = self._read_secure_codex_capsule(materialized["auth_path"])
                         digest = hashlib.sha256(capsule.encode()).hexdigest()

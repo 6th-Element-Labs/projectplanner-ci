@@ -109,6 +109,7 @@
             runners: [],
             workSessions: [],
             providerConnections: [],
+            providerAuthCapabilities: [],
             error: '',
         };
         if (!ids.length) return out;
@@ -119,6 +120,13 @@
                 out.providerConnections = connData.connections || connData.provider_connections || [];
             }
         } catch (e) { /* optional */ }
+        try {
+            const policyRes = await fetch(`api/projects/${encodeURIComponent(project)}/provider-auth-capabilities`, { cache: 'no-store' });
+            if (policyRes.ok) {
+                const policyData = await policyRes.json().catch(() => ({}));
+                out.providerAuthCapabilities = policyData.capabilities || [];
+            }
+        } catch (e) { /* fail closed below */ }
 
         for (const taskId of ids) {
             try {
@@ -206,20 +214,46 @@
         };
     },
 
+    _proofProviderPolicy(capabilities, providerId, runner) {
+        const canonical = {
+            codex: 'openai-codex',
+            claude_code: 'anthropic-claude',
+            cursor: 'cursor',
+        }[providerId] || providerId;
+        let matches = (capabilities || []).filter((row) =>
+            row.provider === canonical && row.auth_mode !== 'api_key');
+        const hostClass = String((runner?.metadata || {}).host_class || '').trim();
+        if (hostClass) {
+            const exact = matches.filter((row) => row.host_class === hostClass);
+            if (exact.length) matches = exact;
+        }
+        if (matches.length > 1) {
+            const denied = matches.filter((row) => row.allowed === false);
+            matches = denied.length ? denied : matches;
+        }
+        const row = matches.length === 1 ? matches[0] : null;
+        return {
+            ok: !!(row && row.allowed === true),
+            label: row ? (row.effective_state || row.state || 'unavailable') : 'policy missing',
+            reason: row ? (row.effective_disable_reason || row.disable_reason || '') : 'provider_auth_policy_missing',
+        };
+    },
+
     _proofProviderRowsHtml(bind) {
         const runner = bind.runner || {};
         const rows = PROVIDER_ROWS.map((p) => {
             const auth = this._proofAuthState(bind.providerConnections, p.id, runner);
+            const policy = this._proofProviderPolicy(bind.providerAuthCapabilities, p.id, runner);
             const probes = this._proofProbeFromRunner(runner, p.id);
             const cells = MCP_PROBE_KEYS.map((k) => {
                 const cell = probes[k];
                 return `<td>${this._proofChip(cell.ok, cell.label, k)}</td>`;
             }).join('');
-            const rowOk = auth.ok && MCP_PROBE_KEYS.every((k) => probes[k].ok);
+            const rowOk = policy.ok && auth.ok && MCP_PROBE_KEYS.every((k) => probes[k].ok);
             return `<tr class="${rowOk ? '' : 'table-danger'}">
                 <td class="fw-semibold">${this.esc(p.label)}<div class="text-secondary small font-monospace">${this.esc(p.cli)}</div></td>
-                <td>${this._proofChip(auth.ok, auth.label, 'provider auth (redacted)')}
-div class="font-monospace small text-secondary mt-1">${this.esc(auth.identityRef || '—')}</div></td>
+                <td>${this._proofChip(policy.ok, policy.label, policy.reason || 'server auth policy')}<div class="mt-1">${this._proofChip(auth.ok, auth.label, 'provider auth (redacted)')}</div>
+                <div class="font-monospace small text-secondary mt-1">${this.esc(auth.identityRef || '—')}</div></td>
                 ${cells}
             </tr>`;
         }).join('');
@@ -310,6 +344,8 @@ div class="font-monospace small text-secondary mt-1">${this.esc(auth.identityRef
             const probes = this._proofProbeFromRunner(runner, p.id);
             return MCP_PROBE_KEYS.every((k) => probes[k].ok);
         });
+        const providerPolicyOk = PROVIDER_ROWS.every((p) =>
+            this._proofProviderPolicy(bind.providerAuthCapabilities, p.id, runner).ok);
         const cleanupOk = this._proofCleanupPresent(meta.credential_cleanup || meta.runtime_cleanup)
             && this._proofCleanupPresent(meta.host_drain || meta.drain)
             && this._proofCleanupPresent(meta.aws_fleet_zero || meta.fleet_zero);        const missing = [];
@@ -317,6 +353,7 @@ div class="font-monospace small text-secondary mt-1">${this.esc(auth.identityRef
         if (!wsOk) missing.push('work session');
         if (!identityOk) missing.push('provider identity reference');
         if (!mcpOk) missing.push('CO-14 MCP probe evidence');
+        if (!providerPolicyOk) missing.push('CO-15 provider auth policy');
         if (!cleanupOk) missing.push('cleanup evidence');
         const green = missing.length === 0;
         return {

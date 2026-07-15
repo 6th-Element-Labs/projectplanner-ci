@@ -333,11 +333,12 @@ try:
     bootstrap_binding.pop("claim_id", None)
     bootstrap_binding.pop("work_session_id", None)
     bootstrap_binding["credential_admission_phase"] = "preclaim"
-    bootstrap_host = "host/i-co9-bootstrap"
+    # Personal Codex subscription (CO-15) requires a trusted-private / persistent host.
+    bootstrap_host = "host/co9-bootstrap"
     register(
-        bootstrap_host, "ephemeral", tenant=store.DEFAULT_ORG_ID,
+        bootstrap_host, "persistent", tenant=store.DEFAULT_ORG_ID,
         provider="openai-codex", affinity=bootstrap_binding["account_affinity_id"],
-        ttl=3600, cost="spot")
+        ttl=3600, cost="already_paid")
     bootstrap_wake = request(
         bootstrap_task["task_id"], "bootstrap",
         policy=hybrid_policy(binding=bootstrap_binding))
@@ -382,17 +383,19 @@ try:
     bound_work_session, bound_claim_id = claim_context(bound_task["task_id"], "bound")
     binding = account_binding(
         provider_connection, bound_task["task_id"], bound_claim_id, bound_work_session)
-    bound_host_id = "host/i-co9-bound"
+    bound_host_id = "host/co9-bound"
     register(
-        bound_host_id, "ephemeral", tenant=store.DEFAULT_ORG_ID,
+        bound_host_id, "persistent", tenant=store.DEFAULT_ORG_ID,
         provider="openai-codex", affinity=binding["account_affinity_id"],
-        ttl=10, cost="spot")
+        # Short TTL so the later host-loss sweep treats this claimed host as stale.
+        ttl=10, cost="already_paid")
     bound = request(
         bound_task["task_id"], "bound", policy=hybrid_policy(binding=binding))
-    register("host/i-co9-wrong-affinity", "ephemeral", tenant="wrong-tenant",
-             provider="openai-codex", affinity="a" * 64, ttl=3600, cost="spot")
+    register("host/co9-wrong-affinity", "persistent", tenant="wrong-tenant",
+             provider="openai-codex", affinity="a" * 64, ttl=3600,
+             cost="already_paid")
     wrong_claim = store.claim_wake(
-        "host/i-co9-wrong-affinity", bound["wake_id"],
+        "host/co9-wrong-affinity", bound["wake_id"],
         actor="co9-wrong", project=PROJECT)
     ok(not wrong_claim.get("claimed")
        and {"tenant_not_allowed", "provider_account_affinity_mismatch"}.issubset(
@@ -620,11 +623,15 @@ try:
     ok(pending["placement"]["selected_host_id"] == pending_host_id,
        "pending wake durably selects the short-lived host before claim")
     register("host/01-co9-pending-replacement", "persistent", ttl=3600)
-    bound_replacement = "host/i-co9-bound-replacement"
+    # Spare generic persistent hosts so unbound host-loss recoveries do not
+    # reserve the affinity-bound replacement needed by the BYOA wake.
+    register("host/02-co9-recovery-a", "persistent", ttl=3600)
+    register("host/03-co9-recovery-b", "persistent", ttl=3600)
+    bound_replacement = "host/co9-bound-replacement"
     register(
-        bound_replacement, "ephemeral", tenant=store.DEFAULT_ORG_ID,
+        bound_replacement, "persistent", tenant=store.DEFAULT_ORG_ID,
         provider="openai-codex", affinity=binding["account_affinity_id"],
-        ttl=3600, cost="spot")
+        ttl=3600, cost="already_paid")
 
     recovered = store.sweep_wake_intents(project=PROJECT, now=BASE + 30)
     wakes_after_loss = {

@@ -108,10 +108,22 @@ def placement_inventory(repo, runtime, policy):
     binaries = sorted(name for name in binary_names if name and shutil.which(name))
     bound_wake_id = str(os.environ.get("PM_WAKE_ID") or "").strip()
     ephemeral = bool(bound_wake_id)
+    scheduler_class = os.environ.get(
+        "PM_HOST_CLASS", "ephemeral" if ephemeral else "persistent")
+    supports_leases = _truthy(os.environ.get("PM_HOST_SUPPORTS_CREDENTIAL_LEASES"))
+    # Capability taxonomy (CO-15). Scheduler class stays persistent/ephemeral.
+    if os.environ.get("PM_AUTH_HOST_CLASSES"):
+        auth_host_classes = _csv(os.environ.get("PM_AUTH_HOST_CLASSES"))
+    elif ephemeral or scheduler_class == "ephemeral":
+        auth_host_classes = ["managed_or_ephemeral_worker"]
+    elif supports_leases:
+        auth_host_classes = ["trusted_private_worker", "user_owned_persistent"]
+    else:
+        auth_host_classes = ["managed_or_user_owned_worker"]
     return {
         "schema": "switchboard.agent_host_placement.v1",
-        "host_class": os.environ.get(
-            "PM_HOST_CLASS", "ephemeral" if ephemeral else "persistent"),
+        "host_class": scheduler_class,
+        "auth_host_classes": auth_host_classes,
         "cost_class": os.environ.get(
             "PM_HOST_COST_CLASS", "ephemeral_variable" if ephemeral else "already_paid"),
         "wakeable": True,
@@ -124,8 +136,7 @@ def placement_inventory(repo, runtime, policy):
         "projects": _csv(os.environ.get("PM_HOST_PROJECTS", PROJECT)),
         "providers": _csv(os.environ.get("PM_HOST_PROVIDERS", "")),
         "account_affinity_ids": _csv(os.environ.get("PM_HOST_ACCOUNT_AFFINITIES", "")),
-        "supports_credential_leases": _truthy(
-            os.environ.get("PM_HOST_SUPPORTS_CREDENTIAL_LEASES")),
+        "supports_credential_leases": supports_leases,
         "repositories": _csv(os.environ.get(
             "PM_HOST_REPOSITORIES", "6th-Element-Labs/projectplanner")),
         "session_policies": _csv(os.environ.get("PM_HOST_SESSION_POLICIES", "code_strict")),

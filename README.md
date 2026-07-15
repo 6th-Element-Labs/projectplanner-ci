@@ -79,6 +79,7 @@ two systemd units, Caddy, and a Route 53 A record.
 | [`docs/RUNTIME-WAKE-CAPABILITY-MATRIX.md`](docs/RUNTIME-WAKE-CAPABILITY-MATRIX.md) | Researched fresh-start vs exact-conversation/checkpoint resume matrix, host contracts, continuity receipts, and fail-closed rules |
 | [`docs/CLOUD-EXECUTION-ADAPTER-CONTRACT.md`](docs/CLOUD-EXECUTION-ADAPTER-CONTRACT.md) | Vendor-hosted Claude/Codex/Cursor trigger, session-binding receipt, concurrency, Dev status, Tally, and fail-closed contract |
 | [`docs/CLAUDE-CLOUD-EXECUTION.md`](docs/CLAUDE-CLOUD-EXECUTION.md) | Concrete Claude Code cloud trigger host, PTY launch, provider receipt, secure MCP setup, pricing/Tally semantics, and deployment |
+| [`docs/PROVIDER-AUTH-POLICY.md`](docs/PROVIDER-AUTH-POLICY.md) | Server-authoritative Codex/Claude/Cursor personal-vs-API authentication states, evidence freshness, host binding, LiteLLM boundary, and fail-closed gates |
 | [`docs/INTERRUPT-TIERS-SPEC.md`](docs/INTERRUPT-TIERS-SPEC.md) | Visible stop/redirect guarantees: advisory poll, hook-level deny, runner kill, and managed control |
 | [`docs/CLAIM-NEXT-SPEC.md`](docs/CLAIM-NEXT-SPEC.md) | `claim_next` / `+TXP` dispatch profile: atomic task assignment, task claims, budget/model guidance |
 | [`docs/BUG-INTAKE-CONTRACT.md`](docs/BUG-INTAKE-CONTRACT.md) | Bug Intake Agent contract: report schema, severity, dedupe, human gate, and conversion policy |

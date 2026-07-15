@@ -453,8 +453,9 @@ try:
             "allowed_providers": ["claude"],
         },
     )
-    ok(not no_substitute["allowed"] and allowed_substitute["allowed"],
-       "alternate providers require task policy and the same customer's enrollment")
+    ok(not no_substitute["allowed"] and not allowed_substitute["allowed"]
+       and allowed_substitute["reason_code"] == "provider_auth_vendor_confirmation_required",
+       "task substitution cannot override the server provider-auth approval gate")
     ok(not borrowed_denied["allowed"]
        and borrowed_denied["reason_code"] == "cross_customer_account_denied",
        "scheduler policy can never borrow another customer's provider account")

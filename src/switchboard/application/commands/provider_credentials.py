@@ -17,7 +17,13 @@ from switchboard.contracts.provider_credentials import (
     RevokeProviderConnectionCommand,
     RotateProviderConnectionCommand,
 )
-from switchboard.domain.provider_credentials import CredentialPolicyError, CredentialPrincipal
+from switchboard.domain.provider_credentials import (
+    CredentialPolicyError,
+    CredentialPrincipal,
+    auth_host_classes_for_host,
+    provider_auth_decision,
+    validate_auth_type,
+)
 from switchboard.storage.repositories.provider_credentials import (
     CredentialVaultError,
     ProviderCredentialRepository,
@@ -55,6 +61,66 @@ def _purge_safely(purge_runtime: Callable[[], Any] | None) -> None:
         pass
 
 
+def _authoritative_host_classes(
+        *, project: str, host_id: str = "",
+        host: dict[str, Any] | None = None) -> tuple[str, ...]:
+    """Classify from the live host record. Never trust a caller-supplied taxonomy."""
+    record = host
+    if record is None and host_id:
+        record = next((item for item in store.list_agent_hosts(
+            include_stale=True, project=project)
+            if item.get("host_id") == host_id), None)
+    return auth_host_classes_for_host(record)
+
+
+def _require_provider_auth_capability(
+        provider: str, auth_type: str, *, operation: str,
+        host_class: str = "",
+        host_classes: list[str] | tuple[str, ...] | None = None) -> dict[str, Any]:
+    """Apply CO-15 before any credential can advance to the next boundary."""
+    try:
+        validated_auth_type = validate_auth_type(auth_type)
+    except CredentialPolicyError as exc:
+        raise CredentialVaultError(exc.code, exc.message) from exc
+    decision = provider_auth_decision(
+        provider, validated_auth_type,
+        host_class=host_class,
+        host_classes=host_classes,
+        operation=operation,
+    )
+    if not decision.get("allowed"):
+        code = str(decision.get("reason_code") or "provider_auth_policy_denied")
+        raise CredentialVaultError(
+            code,
+            "provider authentication mode is disabled by the current server policy",
+            status_code=409,
+        )
+    return decision
+
+
+def _connection_auth_capability(
+        repository: ProviderCredentialRepository, command: Any, *, operation: str,
+        host_class: str = "",
+        host_classes: list[str] | tuple[str, ...] | None = None) -> dict[str, Any]:
+    metadata = repository.get_metadata(
+        command.credential_reference,
+        project=command.project,
+        principal_user_id=command.user_id,
+        admin=False,
+    )
+    classes = host_classes
+    if classes is None:
+        host_id = str(getattr(command, "host_id", "") or "")
+        classes = _authoritative_host_classes(project=command.project, host_id=host_id)
+    return _require_provider_auth_capability(
+        str(metadata.get("provider") or command.provider),
+        str(metadata.get("auth_type") or ""),
+        operation=operation,
+        host_class=host_class,
+        host_classes=classes,
+    )
+
+
 def _require_user_authority(requested_user_id: str,
                             principal: CredentialPrincipal | str,
                             *, admin: bool = False) -> None:
@@ -88,8 +154,21 @@ def enroll_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
                    repository: ProviderCredentialRepository = default_provider_credential_repository,
                    raise_errors: bool = False) -> dict[str, Any]:
     try:
-        command = EnrollProviderConnectionCommand.from_mapping(data)
+        raw = dict(data or {})
+        host_id = str(raw.pop("host_id", "") or "").strip()
+        # Drop legacy caller taxonomy fields — they are never authority.
+        raw.pop("host_class", None)
+        raw.pop("auth_host_class", None)
+        command = EnrollProviderConnectionCommand.from_mapping(raw)
         _require_user_authority(command.user_id, principal_user_id, admin=admin)
+        host_classes = _authoritative_host_classes(
+            project=command.project, host_id=host_id)
+        decision = _require_provider_auth_capability(
+            command.provider, command.auth_type, operation="enrollment",
+            host_classes=host_classes)
+        concurrency_policy = (
+            decision.get("forced_concurrency_policy") or command.concurrency_policy
+        )
         return repository.enroll(
             project=command.project,
             user_id=command.user_id,
@@ -101,7 +180,7 @@ def enroll_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
             actor=actor,
             expires_at=command.expires_at,
             refresh_state=command.refresh_state,
-            concurrency_policy=command.concurrency_policy,
+            concurrency_policy=concurrency_policy,
             audit_provenance={"credential_version": 1},
         )
     except (ValidationError, CredentialVaultError) as exc:
@@ -173,7 +252,7 @@ def delete_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
 
 
 def _validate_runtime_binding(command: AcquireProviderCredentialLeaseCommand,
-                              principal: CredentialPrincipal) -> None:
+                              principal: CredentialPrincipal) -> dict[str, Any]:
     task = store.get_task(command.task_id, project=command.project)
     if not task:
         raise CredentialVaultError(
@@ -265,6 +344,7 @@ def _validate_runtime_binding(command: AcquireProviderCredentialLeaseCommand,
             or (host.get("principal_id") or "") != principal.principal_id):
         raise CredentialVaultError(
             "credential_host_binding_invalid", "credential host binding is invalid", status_code=409)
+    return host
 
 
 def acquire_lease_mapping(data: dict[str, Any], *, actor: str,
@@ -276,8 +356,13 @@ def acquire_lease_mapping(data: dict[str, Any], *, actor: str,
         command = AcquireProviderCredentialLeaseCommand.model_validate(data)
         credential_principal = _credential_principal(principal)
         _require_user_authority(command.user_id, credential_principal)
+        host = None
         if validate_runtime:
-            _validate_runtime_binding(command, credential_principal)
+            host = _validate_runtime_binding(command, credential_principal)
+        host_classes = _authoritative_host_classes(
+            project=command.project, host_id=command.host_id, host=host)
+        _connection_auth_capability(
+            repository, command, operation="lease", host_classes=host_classes)
         return repository.acquire_lease(
             project=command.project,
             credential_reference=command.credential_reference,
@@ -291,6 +376,7 @@ def acquire_lease_mapping(data: dict[str, Any], *, actor: str,
             ttl_seconds=command.ttl_seconds,
             actor=actor,
             principal=credential_principal,
+            host_classes=host_classes,
         )
     except (ValidationError, CredentialVaultError) as exc:
         if raise_errors:
@@ -330,7 +416,11 @@ def materialize_worker_envelope_mapping(
         command = AcquireProviderCredentialLeaseCommand.model_validate(raw)
         credential_principal = _credential_principal(principal)
         _require_user_authority(command.user_id, credential_principal)
-        _validate_runtime_binding(command, credential_principal)
+        host = _validate_runtime_binding(command, credential_principal)
+        host_classes = _authoritative_host_classes(
+            project=command.project, host_id=command.host_id, host=host)
+        _connection_auth_capability(
+            repository, command, operation="materialize", host_classes=host_classes)
         credential = repository.materialize_for_runtime(
             lease_id,
             project=command.project,
@@ -378,7 +468,11 @@ def activate_worker_lease_mapping(
     try:
         command = AcquireProviderCredentialLeaseCommand.model_validate(data)
         credential_principal = _credential_principal(principal)
-        _validate_runtime_binding(command, credential_principal)
+        host = _validate_runtime_binding(command, credential_principal)
+        host_classes = _authoritative_host_classes(
+            project=command.project, host_id=command.host_id, host=host)
+        _connection_auth_capability(
+            repository, command, operation="activation", host_classes=host_classes)
         return repository.activate_materialized_lease(
             lease_id, actor=actor, principal=credential_principal,
             expected_binding=command.model_dump(),
@@ -404,8 +498,13 @@ def start_with_provider_credential(
     try:
         command = AcquireProviderCredentialLeaseCommand.model_validate(data)
         credential_principal = _credential_principal(principal)
+        host = None
         if validate_runtime:
-            _validate_runtime_binding(command, credential_principal)
+            host = _validate_runtime_binding(command, credential_principal)
+        host_classes = _authoritative_host_classes(
+            project=command.project, host_id=command.host_id, host=host)
+        _connection_auth_capability(
+            repository, command, operation="launch", host_classes=host_classes)
         credential = repository.materialize_for_runtime(
             lease_id,
             project=command.project,

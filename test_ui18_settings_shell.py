@@ -175,6 +175,15 @@ try:
     conns = client.get("/api/projects/ui18probe/provider-connections")
     ok(conns.status_code == 200, "ai-accounts source /provider-connections returns 200")
     ok("connections" in (conns.json() or {}), "provider-connections exposes a connections list")
+    policy = client.get("/api/projects/ui18probe/provider-auth-capabilities")
+    ok(policy.status_code == 200,
+       "ai-accounts source /provider-auth-capabilities returns 200")
+    ok(policy.json().get("fail_closed") is True and policy.json().get("capabilities"),
+       "AI accounts renders the authoritative fail-closed provider matrix")
+    ok("Promise.all([" in settings_js and "provider-auth-capabilities" in settings_js,
+       "AI accounts loads connections and CO-15 policy into the same section")
+    ok("LiteLLM personal-subscription broker" in settings_js,
+       "AI accounts labels LiteLLM as API/paygo rather than a personal-login broker")
 
     # /api/auth/session is 401 with no global session — the normal dev-open state. The
     # Profile section must report that honestly instead of reading {} and claiming the

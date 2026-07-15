@@ -409,8 +409,59 @@ try:
     ok(recovered == refreshed_codex_capsule,
        "a fresh exclusive lease recovers the latest fenced Codex auth-state writeback")
 
+    claude_connection = repository.enroll(
+        project=PROJECT, user_id=USER_ID, provider="claude",
+        provider_account_id="claude-personal-account",
+        auth_type="setup_token_oauth",
+        credential="co7-claude-" + uuid.uuid4().hex,
+        project_allowlist=[PROJECT], actor="co7-test",
+        expires_at=time.time() + 3600,
+        concurrency_policy={"mode": "exclusive", "max_parallel": 1},
+    )
+    claude_secret = "co7-claude-secret-should-not-leak"
+    claude_binding = {
+        "project": PROJECT,
+        "credential_reference": claude_connection["credential_reference"],
+        "user_id": USER_ID,
+        "provider": "anthropic-claude",
+        "provider_account_id": "claude-personal-account",
+        "task_id": TASK_ID,
+        "host_id": HOST_ID,
+        "runner_session_id": RUNNER_ID,
+        "work_session_id": WORK_SESSION_ID,
+        "ttl_seconds": 900,
+    }
+    try:
+        repository.acquire_lease(
+            project=PROJECT,
+            credential_reference=claude_connection["credential_reference"],
+            user_id=USER_ID, provider="anthropic-claude",
+            provider_account_id="claude-personal-account", task_id=TASK_ID,
+            host_id=HOST_ID, runner_session_id=RUNNER_ID,
+            work_session_id=WORK_SESSION_ID, ttl_seconds=900,
+            actor="co7-test", principal=PRINCIPAL,
+        )
+        ok(False, "Claude subscription lease acquire must fail closed under CO-15")
+    except CredentialVaultError as exc:
+        ok(exc.code == "provider_auth_vendor_confirmation_required",
+           "CO-15 denies Claude subscription leases before issuance")
+    before_claude = len(observed)
+    claude_receipt = adapter.run(
+        claude_binding,
+        lease_id="",
+        principal=PRINCIPAL,
+        actor="co7-runtime",
+        command=["agent-lane", "--task", TASK_ID],
+    )
+    ok(claude_receipt.get("allowed") is False
+       and claude_receipt.get("error_code") == "provider_auth_vendor_confirmation_required"
+       and len(observed) == before_claude,
+       "CO-15 denies Claude subscription routing before CLI preflight or process start")
+    ok(claude_secret not in json.dumps(claude_receipt, sort_keys=True)
+       and no_runtime_residue(),
+       "denied Claude subscription auth remains redacted and purged")
+
     for provider, account, auth_type, expected_command in (
-        ("claude", "claude-personal-account", "setup_token_oauth", ["auth", "status", "--json"]),
         ("cursor", "cursor-personal-account", "personal_api_key", ["status", "--format", "json"]),
     ):
         connection, binding, lease, secret = bound_connection(
@@ -425,7 +476,7 @@ try:
         text = json.dumps(receipt, sort_keys=True)
         ok(receipt.get("allowed") is True and receipt.get("status") == "completed"
            and receipt.get("auth_preflight", {}).get("authenticated") is True,
-           f"{provider} personal-plan CLI auth preflight succeeds before lane start")
+           f"{provider} explicit API-key CLI auth preflight succeeds before lane start")
         preflight = next(item for item in reversed(observed)
                          if item["kind"] == "preflight"
                          and item["provider"] == binding["provider"])
@@ -487,7 +538,7 @@ try:
        "revoked provider credentials fail before CLI preflight or process start")
 
     _expired, expired_binding, expired_lease, _ = bound_connection(
-        "claude", "claude-expired-account", "setup_token_oauth")
+        "cursor", "cursor-expired-account", "personal_api_key")
     with sqlite3.connect(os.environ["PM_PROJECT_REGISTRY_DB_PATH"]) as c:
         c.execute("UPDATE provider_credential_leases SET expires_at=? WHERE lease_id=?",
                   (time.time() - 1, expired_lease["lease_id"]))

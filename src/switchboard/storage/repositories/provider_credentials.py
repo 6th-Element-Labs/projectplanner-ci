@@ -19,10 +19,12 @@ from switchboard.domain.provider_credentials import (
     CredentialPrincipal,
     CredentialPolicyError,
     VaultKeyUnavailable,
+    auth_host_classes_for_host,
     decrypt_credential,
     encrypt_credential,
     normalize_concurrency_policy,
     normalize_provider,
+    provider_auth_decision,
     validate_auth_type,
 )
 
@@ -677,13 +679,29 @@ class ProviderCredentialRepository:
                     != int(lease["credential_version"] or 0)
                     or not connection["encrypted_credential"]):
                 return decision(False, "credential_not_usable", "provider_credential_not_active")
+            auth_policy = provider_auth_decision(
+                str(connection["provider"] or ""),
+                str(connection["auth_type"] or ""),
+                host_classes=auth_host_classes_for_host({
+                    "host_id": str(lease["host_id"] or ""),
+                }),
+                operation="lease_admission",
+            )
+            if not auth_policy.get("allowed"):
+                return decision(
+                    False,
+                    str(auth_policy.get("state") or "policy_blocked"),
+                    str(auth_policy.get("reason_code") or "provider_auth_policy_denied"),
+                )
             return decision(True, "issued", "credential_lease_ready")
 
     def acquire_lease(self, *, project: str, credential_reference: str, user_id: str,
                       provider: str, provider_account_id: str, task_id: str,
                       host_id: str, runner_session_id: str, work_session_id: str,
                       ttl_seconds: int, actor: str,
-                      principal: CredentialPrincipal) -> dict[str, Any]:
+                      principal: CredentialPrincipal,
+                      host_classes: list[str] | tuple[str, ...] | None = None,
+                      ) -> dict[str, Any]:
         self._prepare()
         try:
             provider_id = normalize_provider(provider)
@@ -751,8 +769,26 @@ class ProviderCredentialRepository:
                     "provider credential lease is already being used",
                     status_code=409,
                 )
+            classes = (
+                tuple(host_classes)
+                if host_classes is not None
+                else auth_host_classes_for_host({"host_id": binding["host_id"]})
+            )
+            auth_policy = provider_auth_decision(
+                str(row["provider"] or ""),
+                str(row["auth_type"] or ""),
+                host_classes=classes,
+                operation="lease",
+            )
+            if not auth_policy.get("allowed"):
+                raise CredentialVaultError(
+                    str(auth_policy.get("reason_code") or "provider_auth_policy_denied"),
+                    "provider authentication mode is disabled by the current server policy",
+                    status_code=409,
+                )
             policy = _json_object(row["concurrency_policy_json"])
-            maximum = int(policy.get("max_parallel") or 1)
+            forced = auth_policy.get("forced_concurrency_policy") or {}
+            maximum = int(forced.get("max_parallel") or policy.get("max_parallel") or 1)
             active_count = c.execute(
                 "SELECT COUNT(*) FROM provider_credential_leases "
                 "WHERE credential_reference=? "

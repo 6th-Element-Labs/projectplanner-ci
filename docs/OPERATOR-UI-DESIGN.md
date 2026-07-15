@@ -76,6 +76,13 @@
 - **Verify offline completion:** task + evidence URL → `verify_offline_completion` (verifier-attributed).
 - **Move task** (cross-project, admin 🔒, audited) → `move_task`.
 
+## CO-15 · Provider authentication policy — *settings, per-user readable*
+
+- **One source:** Settings reads `GET /api/projects/{project}/provider-auth-capabilities`; it does not maintain provider flags in JavaScript.
+- **Rows:** provider/auth mode, effective policy state, host/portability, bootstrap method, and LiteLLM API eligibility. Unknown or empty responses render a red fail-closed state.
+- **Access:** project readers can see the non-secret policy card; existing project/provenance mutation cards retain their `write:projects` / `write:system` gates.
+- **CO-14 reuse:** the Proof Console reads the same matrix and cannot turn three-provider evidence green when a provider is unavailable, host-mismatched, stale, or awaiting vendor confirmation.
+
 ## UI-13 · Multi-project intake + per-project corpus — *backend* · **unlocks UI-14**
 
 - Domain→project routing map applied in `src/switchboard/integrations/inbox_routing.py`; **plus-addressing** `plan+<project>@taikunai.com` as zero-config routing; unmatched senders fall back to today's allowlist→maxwell (Maxwell unchanged).
@@ -99,7 +106,7 @@
 - **Deep link / toggle:** `?proof=1` or `?mode=proof` on the Deliverable Mission page (header **Proof console** button). Same Tabler canvas + `static/taikun-tabler.css` tokens — no second frontend.
 - **Reuse only:** Mission header/timeline state, Fleet `runnerControlHtml` / Watch/Chat (`static/js/runner-session.js`), existing cards/`datagrid`/`badge bg-*-lt`/`table card-table`, Arm → `POST api/deliverables/{id}/coordinator_tick`.
 - **Identity KV:** task_id, claim_id, Work Session, runner_session_id, host, provider identity ref (never secrets), source SHA, CLI, placement — redacted.
-- **Provider rows:** Codex / Claude Code / Cursor with redacted auth + CO-14 MCP probe cells (`configured`…`cleanup`). Missing bind/MCP/cleanup/identity = **red** and blocks green proof.
+- **Provider rows:** Codex / Claude Code / Cursor with CO-15 policy, redacted auth, and CO-14 MCP probe cells (`configured`…`cleanup`). Missing/disabled policy, bind, MCP, cleanup, or identity = **red** and blocks green proof.
 - **Module:** `static/js/proof-console.js` (`SwitchboardProofConsole`), composed after Mission + Runner Session.
 
 ---

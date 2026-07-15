@@ -265,20 +265,48 @@
 
         async _settingsAiAccountsSection() {
             const proj = window.PM_PROJECT || 'maxwell';
-            const data = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-connections`);
-            if (data.error) return this._settingsErrCard('Personal AI accounts', data.error);
-            const conns = data.connections || data.provider_connections || [];
+            const [data, policy] = await Promise.all([
+                this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-connections`),
+                this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-auth-capabilities`),
+            ]);
+            const conns = data.error ? [] : (data.connections || data.provider_connections || []);
             const rows = conns.length ? conns.map((c) => `<div class="list-group-item px-0"><div class="row align-items-center">
                 <div class="col-auto"><span class="status-dot ${c.status === 'active' ? 'status-dot-animated bg-green' : 'bg-secondary'}"></span></div>
                 <div class="col"><div class="fw-semibold">${this.esc(c.provider || c.provider_id || 'provider')}</div>
                 <div class="text-secondary small"><code>${this.esc(c.connection_id || c.id || '—')}</code></div></div>
                 <div class="col-auto"><span class="badge ${c.status === 'active' ? 'bg-green-lt' : 'bg-secondary-lt'}">${this.esc(c.status || 'unknown')}</span></div>
                 </div></div>`).join('') : '<div class="text-secondary small">No provider connections are enrolled for this project.</div>';
+            const connectionBody = data.error
+                ? `<div class="alert alert-danger mb-0" role="alert">${this.esc(data.error)}</div>`
+                : `<div class="list-group list-group-flush">${rows}</div>`;
+            const stateBadge = (row) => {
+                const state = row.effective_state || row.state || 'unavailable';
+                const cls = state === 'supported' ? 'bg-green-lt'
+                    : state === 'supported_host_bound' ? 'bg-azure-lt'
+                        : state === 'vendor_confirmation_required' ? 'bg-yellow-lt' : 'bg-red-lt';
+                return `<span class="badge ${cls}">${this.esc(state.replace(/_/g, ' '))}</span>`;
+            };
+            const policyRows = (policy.capabilities || []).map((row) => `<tr>
+                <td><div class="fw-semibold">${this.esc(row.provider || '—')}</div><div class="font-monospace small text-secondary">${this.esc(row.auth_mode || '')}</div></td>
+                <td>${stateBadge(row)}<div class="small text-secondary mt-1">${this.esc(row.effective_disable_reason || row.disable_reason || 'Enabled by current policy')}</div></td>
+                <td><div>${this.esc((row.host_class || '').replace(/_/g, ' '))}</div><div class="small text-secondary">${this.esc((row.portability || '').replace(/_/g, ' '))}</div></td>
+                <td><code class="small">${this.esc(row.bootstrap_method || '—')}</code></td>
+                <td>${row.litellm && row.litellm.eligible ? '<span class="badge bg-purple-lt">API/paygo</span>' : '<span class="text-secondary small">No personal-login brokerage</span>'}</td>
+            </tr>`).join('');
+            const policyBody = policy.error
+                ? `<div class="alert alert-danger mb-0" role="alert"><strong>Provider execution is disabled.</strong> ${this.esc(policy.error)}</div>`
+                : `<div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th>Provider / mode</th><th>Effective state</th><th>Host / portability</th><th>Bootstrap</th><th>LiteLLM</th></tr></thead><tbody>${policyRows || '<tr><td colspan="5" class="text-danger">No authoritative capability records; execution fails closed.</td></tr>'}</tbody></table></div>`;
+            const broker = policy.personal_subscription_broker || {};
             return this._settingsCard({
                 id: 'settings-ai-accounts', title: 'Personal AI accounts', icon: 'ti-plug-connected',
-                subtitle: 'Provider connections available to your agent runtimes',
-                body: `<div class="alert alert-info py-2 px-3 small" role="note"><i class="ti ti-tool me-1" aria-hidden="true"></i>Enroll, verify, bind, and revoke land in <strong>UI-19</strong>. This section reads the current connections.</div>
-                    <div class="list-group list-group-flush">${rows}</div>`,
+                subtitle: 'Provider policy and connections available to your agent runtimes',
+                actions: `<span class="badge bg-secondary-lt">policy ${this.esc(policy.policy_version || 'unknown')}</span>`,
+                body: `<div class="alert alert-info py-2 px-3 small" role="note"><i class="ti ti-shield-check me-1" aria-hidden="true"></i>This server-authoritative matrix also gates enrollment, scheduling, runtime launch, MCP, and CO-14 proof. Unknown, stale, unapproved, or host-mismatched modes fail closed.</div>
+                    <h4 class="mb-2">Authentication policy</h4>${policyBody}
+                    <div class="small text-secondary mt-2 mb-4">LiteLLM personal-subscription broker: <strong>${broker.litellm === false ? 'disabled' : 'unknown'}</strong>. LiteLLM is eligible only for explicit API/paygo paths.</div>
+                    <h4 class="mb-2">Enrolled connections</h4>
+                    <div class="alert alert-secondary py-2 px-3 small" role="note"><i class="ti ti-tool me-1" aria-hidden="true"></i>Enroll, verify, bind, and revoke land in <strong>UI-19</strong>. This section currently reads connection state.</div>
+                    ${connectionBody}`,
             });
         },
 

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 import auth
 from switchboard.application.commands import provider_credentials as commands
+from switchboard.domain.provider_credentials import list_provider_auth_capabilities
 from switchboard.storage.repositories.provider_credentials import (
     CredentialVaultError,
     default_provider_credential_repository,
@@ -42,6 +43,14 @@ def _raise_http(exc: BaseException) -> None:
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/api/projects/{project}/provider-auth-capabilities")
+    def get_provider_auth_capabilities(request: Request, project: str):
+        """Return the same fail-closed CO-15 matrix used by server execution paths."""
+        project_id = resolve_project(project)
+        resolve_principal(
+            request, project_id, ("read",), dev_actor="provider-auth-policy")
+        return list_provider_auth_capabilities()
 
     @router.post("/api/projects/{project}/provider-connections")
     def enroll_provider_connection(request: Request, project: str,

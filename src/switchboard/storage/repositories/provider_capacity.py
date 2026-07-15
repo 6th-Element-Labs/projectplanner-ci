@@ -22,7 +22,9 @@ from switchboard.domain.provider_capacity import (
 )
 from switchboard.domain.provider_credentials import (
     CredentialPolicyError,
+    auth_host_classes_for_host,
     normalize_provider,
+    provider_auth_decision,
 )
 from switchboard.storage.repositories.provider_credentials import (
     CredentialVaultError,
@@ -474,6 +476,34 @@ class ProviderCapacityRepository:
                         or normalized["provider"] not in allowed_providers:
                     return decision(False, "policy_blocked", "provider_substitution_not_permitted")
 
+            host_id = str(normalized.get("host_id") or "").strip()
+            # Classify from host_id + optional placement advertisement in the binding.
+            # Do not trust a bare caller host_class field.
+            host_classes = auth_host_classes_for_host({
+                "host_id": host_id,
+                "capacity": {
+                    "placement": dict(
+                        dict(binding or {}).get("host_placement")
+                        or dict(binding or {}).get("placement")
+                        or {}),
+                },
+            })
+            auth_policy = provider_auth_decision(
+                str(connection.get("provider") or ""),
+                str(connection.get("auth_type") or ""),
+                host_classes=host_classes,
+                operation="schedule",
+                now=timestamp,
+            )
+            if not auth_policy.get("allowed"):
+                return decision(
+                    False,
+                    str(auth_policy.get("state") or "policy_blocked"),
+                    str(auth_policy.get("reason_code") or "provider_auth_policy_denied"),
+                    auth_mode=auth_policy.get("auth_mode"),
+                    approval_state=auth_policy.get("approval_state"),
+                )
+
             lane = evaluate_metered_lane_policy(
                 lane_policy, active_credential_reference=normalized["credential_reference"])
             if not lane["allowed"]:
@@ -514,7 +544,12 @@ class ProviderCapacityRepository:
                 )
 
             concurrency = _json_object(connection.get("concurrency_policy_json"))
-            maximum = int(concurrency.get("max_parallel") or 1)
+            forced = auth_policy.get("forced_concurrency_policy") or {}
+            maximum = int(
+                forced.get("max_parallel")
+                or concurrency.get("max_parallel")
+                or 1
+            )
             active = c.execute(
                 "SELECT COUNT(*), MIN(expires_at) FROM provider_credential_leases "
                 "WHERE credential_reference=? AND state IN ('issued','materializing','active') "

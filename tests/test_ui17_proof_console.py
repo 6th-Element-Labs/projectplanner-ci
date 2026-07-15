@@ -171,6 +171,11 @@ const probes = {};
 for (const k of window.SwitchboardProofConsole.MCP_PROBE_KEYS) probes[k] = { ok: true, status: 'ok' };
 const providers = {};
 for (const p of window.SwitchboardProofConsole.PROVIDER_ROWS) providers[p.id] = probes;
+const authPolicy = [
+  { provider: 'openai-codex', auth_mode: 'chatgpt_subscription', allowed: true, effective_state: 'supported' },
+  { provider: 'anthropic-claude', auth_mode: 'claude_subscription_oauth', allowed: true, effective_state: 'supported' },
+  { provider: 'cursor', auth_mode: 'cursor_personal_browser', host_class: 'user_owned_persistent', allowed: true, effective_state: 'supported_host_bound' },
+];
 const good = {
   selectedTaskId: 'T1',
   watch: { watchable: true, runner_session_id: 'rs1' },
@@ -182,6 +187,7 @@ const good = {
       source_sha: 'abc1234',
       provider_cli: 'codex',
       placement: 'dedicated_host',
+      host_class: 'user_owned_persistent',
       mcp_probe: providers,
       credential_cleanup: 'purged',
       host_drain: 'drained',
@@ -189,6 +195,7 @@ const good = {
     },
   },
   providerConnections: [{ provider: 'codex', id: 'conn1' }],
+  providerAuthCapabilities: authPolicy,
 };
 const ready = ctx._proofVerdict(good, { deliverable: { id: 'd1' }, done_with_proof: [{ provenance: { label: 'merged' } }] });
 if (!ready.green) {

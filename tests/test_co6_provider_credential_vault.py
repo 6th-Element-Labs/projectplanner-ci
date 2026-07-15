@@ -252,7 +252,7 @@ try:
             "user_id": USER_ID,
             "provider": "cursor",
             "provider_account_id": "acct-cursor-personal",
-            "auth_type": "session_capsule",
+            "auth_type": "personal_api_key",
             "credential": mcp_secret,
             "project_allowlist": [PROJECT],
         }),

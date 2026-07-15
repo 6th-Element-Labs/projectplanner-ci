@@ -266,12 +266,15 @@ bound_dispatch = dispatch.dispatch_to_co_fleet(
 bound_wake = next(item for item in store.list_wake_intents(project="switchboard")
                   if item.get("wake_id") == bound_dispatch.get("wake_id"))
 stored_binding = (bound_wake.get("policy") or {}).get("account_binding") or {}
-ok(bound_dispatch.get("dispatched") and stored_binding.get("provider_account_id") == "account-1"
+capacity_denial = (bound_wake.get("policy") or {}).get("provider_capacity") or {}
+ok(not bound_dispatch.get("dispatched") and bound_dispatch.get("wake_status") == "failed"
+   and capacity_denial.get("reason_code") == "provider_auth_vendor_confirmation_required"
+   and stored_binding.get("provider_account_id") == "account-1"
    and stored_binding.get("credential_reference") == provider_connection["credential_reference"]
    and stored_binding.get("host_id") is None and stored_binding.get("runner_session_id") is None
    and stored_binding.get("claim_id") is None
    and stored_binding.get("credential_admission_phase") == "preclaim",
-   "durable wake preserves non-secret BYOA affinity for later host/runner binding")
+   "unapproved Claude BYOA fails before launch while preserving non-secret audit affinity")
 ok(co_fleet.validate_account_binding(bound_wake) == stored_binding,
    "provisioner verifies the task/project/account affinity before launch")
 tampered_wake = json.loads(json.dumps(bound_wake))
