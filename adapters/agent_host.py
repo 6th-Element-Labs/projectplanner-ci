@@ -495,6 +495,9 @@ def register_runner_session(rec, wake, inventory):
         "wake_mode": rec.get("wake_mode"),
         "log_path": rec.get("log_path"),
         "command": rec.get("command"),
+        "pty": bool(rec.get("pty")),
+        "stream_bind": rec.get("stream_bind"),
+        "stream_port": rec.get("stream_port"),
         "work_session_id": (
             (rec.get("metadata") or {}).get("work_session_id")
             or binding.get("work_session_id")
@@ -558,6 +561,27 @@ def report_cloud_usage(rec, wake):
     })
 
 
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _tcp_port_open(host, port, timeout_s=0.5):
+    import socket
+    try:
+        with socket.create_connection((str(host), int(port)), timeout=float(timeout_s)):
+            return True
+    except OSError:
+        return False
+
+
 def supervisor_action(action, runner_session_id, options=None):
     options = options or {}
     if action == "snapshot":
@@ -571,7 +595,59 @@ def supervisor_action(action, runner_session_id, options=None):
                "--grace-seconds", str(options.get("grace_seconds") or 5.0),
                "--signal", options.get("signal") or "TERM"]
     elif action == "open":
-        return {"error": "not_supported", "reason": "runner_open is not implemented by this host"}
+        try:
+            from codex.pty_stream import build_stream_url, mint_ticket
+        except ModuleNotFoundError:
+            sys.path.insert(0, _HERE)
+            from codex.pty_stream import build_stream_url, mint_ticket
+        status_cmd = [sys.executable, SUPERVISOR, "status", runner_session_id]
+        try:
+            out = subprocess.run(status_cmd, capture_output=True, text=True, timeout=15)
+            if out.returncode != 0:
+                return {"error": "supervisor_failed", "stderr": (out.stderr or "")[-4000:]}
+            meta = json.loads(out.stdout or "{}")
+        except Exception as e:
+            return {"error": type(e).__name__, "message": str(e)}
+        control = meta.get("control") or {}
+        streamer_pid = int(meta.get("streamer_pid") or 0)
+        stream_port = int(meta.get("stream_port") or 0)
+        stream_bind = str(meta.get("stream_bind") or "127.0.0.1")
+        streamer_alive = bool(streamer_pid and _pid_alive(streamer_pid))
+        port_listening = _tcp_port_open(stream_bind, stream_port) if stream_port else False
+        if not (meta.get("pty") and control.get("runner_open") and stream_port
+                and meta.get("alive") and streamer_alive and port_listening):
+            return {
+                "error": "not_supported",
+                "reason": "runner_open requires a live PTY-backed local session with an active streamer",
+            }
+        host_id = str(meta.get("host_id") or os.environ.get("PM_HOST_ID") or "")
+        ticket, expires_at = mint_ticket(
+            runner_session_id=runner_session_id,
+            host_id=host_id,
+            ttl_seconds=int(options.get("ttl_seconds") or 900),
+        )
+        stream_url = build_stream_url(
+            bind_host=stream_bind,
+            port=stream_port,
+            runner_session_id=runner_session_id,
+            ticket=ticket,
+            public_base=str(os.environ.get("PM_RUNNER_STREAM_PUBLIC_BASE") or ""),
+        )
+        return {
+            "opened": True,
+            "runner_session_id": runner_session_id,
+            "transport": "http_chunked",
+            "stream_url": stream_url,
+            "ticket": ticket,
+            "expires_at": expires_at,
+            "capabilities": {"stream": "supported", "open": "supported"},
+            "metadata": {
+                "pty": True,
+                "stream_url": stream_url,
+                "stream_ticket_exp": expires_at,
+                "transport": "http_chunked",
+            },
+        }
     else:
         return {"error": f"unsupported runner action {action}"}
     try:
@@ -622,6 +698,31 @@ def handle_runner_controls(inventory):
             snapshot = {"captured_at": time.time(), "source": "supervisor_logs",
                         "log_tail": (result.get("logs") or {}).get("log_tail") or "",
                         "log_path": (result.get("logs") or {}).get("log_path")}
+        if action == "open" and result.get("opened"):
+            snapshot = {
+                "captured_at": time.time(),
+                "source": "runner_open",
+                "stream_url": result.get("stream_url"),
+                "transport": result.get("transport"),
+                "expires_at": result.get("expires_at"),
+                "pty": True,
+            }
+            # Advertise stream coordinates on the central runner_session metadata.
+            _try("POST", P_REGISTER_RUNNER, {
+                "project": PROJECT,
+                "runner_session_id": req.get("runner_session_id"),
+                "host_id": host_id,
+                "status": "running",
+                "control": {"tier": "T3", "runner_kill": True, "managed_process": True,
+                            "runner_open": True, "runner_logs": True},
+                "metadata": {
+                    "stream_url": result.get("stream_url"),
+                    "stream_ticket_exp": result.get("expires_at"),
+                    "transport": result.get("transport"),
+                    "pty": True,
+                },
+                "heartbeat_ttl_s": 60,
+            })
         status = "failed" if result.get("error") else "completed"
         _try("POST", P_COMPLETE_RUNNER_CONTROL,
              {"project": PROJECT, "host_id": host_id, "request_id": req_id,

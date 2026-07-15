@@ -5,10 +5,14 @@ This is the concrete T3 runner-kill half: Switchboard can only promise hard-stop
 processes it launched or that registered a stable runner_session_id. The supervisor persists a
 session record, injects PM_RUNNER_SESSION_ID/PM_AGENT_ID into the child environment, and can
 terminate the child process group with a pre-kill snapshot.
+
+CO-12: local sessions launch under a real PTY by default. A companion pty_stream process holds
+the master fd, dual-writes stdout.log, and serves authenticated HTTP chunked streams.
 """
 import argparse
 import json
 import os
+import pty
 import signal
 import subprocess
 import sys
@@ -17,6 +21,11 @@ import uuid
 from pathlib import Path
 
 DEFAULT_RUNNER_DIR = Path(os.environ.get("PM_RUNNER_DIR", ".switchboard/runner")).resolve()
+PTY_STREAM = Path(__file__).resolve().with_name("pty_stream.py")
+
+
+def _truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _now():
@@ -98,8 +107,20 @@ def _snapshot(meta):
     }
 
 
+def _await_stream_ready(ready_path: Path, timeout_s: float = 5.0) -> dict:
+    deadline = time.time() + max(0.5, float(timeout_s))
+    while time.time() < deadline:
+        if ready_path.exists():
+            try:
+                return json.loads(ready_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        time.sleep(0.05)
+    return {}
+
+
 def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_dir=None,
-                  runner_session_id="", extra_env=None):
+                  runner_session_id="", extra_env=None, use_pty=None):
     if not command:
         raise ValueError("command required")
     runner_session_id = runner_session_id or "run_" + uuid.uuid4().hex[:16]
@@ -118,16 +139,111 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         env["PM_TASK_ID"] = task_id
     if claim_id:
         env["PM_CLAIM_ID"] = claim_id
-    log = log_path.open("ab")
-    proc = subprocess.Popen(
-        command,
-        cwd=cwd or os.getcwd(),
-        env=env,
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    log.close()
+    if use_pty is None:
+        use_pty = _truthy(os.environ.get("PM_RUNNER_USE_PTY", "1"))
+    streamer_pid = None
+    stream_bind = None
+    stream_port = None
+    ready_path = root / "stream_ready.json"
+    host_id = str(env.get("PM_HOST_ID") or env.get("PM_CO_HOST_ID") or "")
+    if use_pty:
+        master_fd, slave_fd = pty.openpty()
+        env.setdefault("TERM", os.environ.get("TERM") or "xterm-256color")
+        proc = None
+        streamer = None
+        try:
+            proc = subprocess.Popen(
+                command,
+                cwd=cwd or os.getcwd(),
+                env=env,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            slave_fd = -1
+            streamer = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(PTY_STREAM),
+                    "--runner-session-id", runner_session_id,
+                    "--log-path", str(log_path),
+                    "--master-fd", str(master_fd),
+                    "--host-id", host_id,
+                    "--bind-host", os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1"),
+                    "--port", str(int(os.environ.get("PM_RUNNER_STREAM_PORT", "0") or 0)),
+                    "--ready-path", str(ready_path),
+                ],
+                pass_fds=(master_fd,),
+                start_new_session=True,
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            os.close(master_fd)
+            master_fd = -1
+            streamer_pid = streamer.pid
+            ready = _await_stream_ready(ready_path)
+            stream_bind = ready.get("bind_host") or os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1")
+            stream_port = ready.get("port")
+            if streamer.poll() is not None or not stream_port:
+                raise RuntimeError("pty_stream companion failed to become ready")
+        except Exception:
+            if slave_fd >= 0:
+                try:
+                    os.close(slave_fd)
+                except OSError:
+                    pass
+            if master_fd >= 0:
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+            if proc is not None and proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            if streamer is not None and streamer.poll() is None:
+                try:
+                    os.killpg(streamer.pid, signal.SIGKILL)
+                except Exception:
+                    try:
+                        streamer.kill()
+                    except Exception:
+                        pass
+            # Leave no orphaned session directory for a failed PTY launch.
+            try:
+                import shutil
+                shutil.rmtree(root, ignore_errors=True)
+            except Exception:
+                pass
+            raise
+        control = {
+            "tier": "T3",
+            "runner_kill": True,
+            "managed_process": True,
+            "runner_open": True,
+            "runner_logs": True,
+        }
+    else:
+        log = log_path.open("ab")
+        proc = subprocess.Popen(
+            command,
+            cwd=cwd or os.getcwd(),
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        log.close()
+        control = {"tier": "T3", "runner_kill": True, "managed_process": True}
     meta = {
         "runner_session_id": runner_session_id,
         "agent_id": agent_id,
@@ -140,7 +256,12 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         "log_path": str(log_path),
         "status": "running",
         "started_at": _now(),
-        "control": {"tier": "T3", "runner_kill": True, "managed_process": True},
+        "control": control,
+        "pty": bool(use_pty),
+        "streamer_pid": streamer_pid,
+        "stream_bind": stream_bind,
+        "stream_port": stream_port,
+        "host_id": host_id,
     }
     _write_json(_meta_path(runner_session_id, runner_dir), meta)
     return {**meta, "alive": True}
@@ -165,29 +286,48 @@ def snapshot_session(runner_session_id, runner_dir=None):
     return {**status_session(runner_session_id, runner_dir), "last_snapshot": snap}
 
 
+def _stop_pid(pid, grace_seconds=5.0, signal_name="TERM"):
+    sent = None
+    if not _pid_running(pid):
+        return sent
+    sig = signal.SIGTERM if signal_name.upper() in ("TERM", "SIGTERM") else signal.SIGINT
+    try:
+        os.killpg(int(pid), sig)
+        sent = sig.name
+    except ProcessLookupError:
+        return sent
+    except PermissionError:
+        try:
+            os.kill(int(pid), sig)
+            sent = sig.name
+        except ProcessLookupError:
+            return sent
+    deadline = time.time() + max(0.0, float(grace_seconds))
+    while time.time() < deadline and _pid_running(pid):
+        time.sleep(0.05)
+    if _pid_running(pid):
+        try:
+            os.killpg(int(pid), signal.SIGKILL)
+            sent = "SIGKILL"
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+                sent = "SIGKILL"
+            except ProcessLookupError:
+                pass
+    return sent
+
+
 def kill_session(runner_session_id, runner_dir=None, grace_seconds=5.0, signal_name="TERM"):
     meta = _read_meta(runner_session_id, runner_dir)
     snap = _snapshot(meta)
     meta["last_snapshot"] = snap
     meta["stop_requested_at"] = _now()
     pid = int(meta.get("pid") or 0)
-    sent = None
-    if _pid_running(pid):
-        sig = signal.SIGTERM if signal_name.upper() in ("TERM", "SIGTERM") else signal.SIGINT
-        try:
-            os.killpg(pid, sig)
-            sent = sig.name
-        except ProcessLookupError:
-            pass
-        deadline = time.time() + max(0.0, float(grace_seconds))
-        while time.time() < deadline and _pid_running(pid):
-            time.sleep(0.05)
-        if _pid_running(pid):
-            try:
-                os.killpg(pid, signal.SIGKILL)
-                sent = "SIGKILL"
-            except ProcessLookupError:
-                pass
+    streamer_pid = int(meta.get("streamer_pid") or 0)
+    sent = _stop_pid(pid, grace_seconds=grace_seconds, signal_name=signal_name)
+    if streamer_pid and streamer_pid != pid:
+        _stop_pid(streamer_pid, grace_seconds=min(2.0, float(grace_seconds)), signal_name="TERM")
     meta["status"] = "killed"
     meta["killed_at"] = _now()
     meta["last_signal"] = sent
