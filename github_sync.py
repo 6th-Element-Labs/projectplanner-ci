@@ -265,6 +265,42 @@ def _maybe_trigger_ci(repo: str, pr_number: Any, head_sha: str, project: str = "
     }
 
 
+def handle_merge_group(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
+    """Native merge-queue support: when GitHub forms a merge group it runs required checks on
+    the *temporary merge commit* and needs the required status reported on THAT SHA (not any
+    PR head), or the queue hangs. We mirror the merge-group head SHA to the scratchpad exactly
+    like a PR head; verify.yml then posts ``Switchboard CI / VM gate`` on it.
+
+    Dormant until the merge-queue ruleset is enabled — no ``merge_group`` events arrive until
+    then — so this is safe to ship ahead of the toggle. Provenance/Done stays with the PR-merge
+    path; a merge group only needs verification evidence on its head SHA."""
+    action = payload.get("action")
+    if action != "checks_requested":
+        return {"action": "ignored", "reason": f"unsupported merge_group action {action!r}"}
+    mg = payload.get("merge_group") or {}
+    head_sha = (mg.get("head_sha") or "").strip()
+    head_ref = (mg.get("head_ref") or "").strip()
+    repo = payload.get("repository", {}).get("full_name", "?")
+    role_info = _repo_role(repo, project)
+    if not role_info.get("canonical"):
+        return {"action": "skipped", "reason": "repo_role_not_canonical",
+                "repo": repo, "merge_group_head_sha": head_sha}
+    if not head_sha:
+        return {"action": "skipped", "reason": "missing_merge_group_head_sha", "repo": repo}
+    dispatch = ci_scratchpad_dispatch.try_dispatch_merge_group(
+        head_sha, head_ref, repo=repo, project=project)
+    return {
+        "action": ("merge_group_ci_dispatched" if dispatch.get("dispatched")
+                   else "merge_group_ci_skipped"),
+        "repo": repo,
+        "merge_group_head_sha": head_sha,
+        "merge_group_head_ref": head_ref,
+        "scratchpad_dispatched": bool(dispatch.get("dispatched")),
+        "scratchpad_skip_reason": dispatch.get("skip_reason"),
+        "scratchpad_run_id": dispatch.get("run_id"),
+    }
+
+
 def handle_pr(payload: Dict[str, Any], project: str) -> Dict[str, Any]:
     """PR lifecycle: open -> In Review; merge -> Done with merged_sha."""
     pr = payload.get("pull_request") or {}

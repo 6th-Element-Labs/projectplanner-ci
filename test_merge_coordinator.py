@@ -179,4 +179,18 @@ safe = mc.build_task_deps(collected, get_deps_fn=_raising_deps)
 ok(safe == {"E-1": [], "E-2": []}, "build_task_deps swallows a board error into no-deps")
 
 
+# ----- count_armed_prs (live in-flight backpressure, Move 2) -----------------------
+ok(mc.count_armed_prs([]) == 0, "count_armed_prs: no PRs -> 0 in flight")
+ok(mc.count_armed_prs([
+       {"number": 1, "auto_merge": None},
+       {"number": 2, "auto_merge": {"merge_method": "squash", "enabled_by": {"login": "bot"}}},
+       {"number": 3},
+       None,
+   ]) == 1, "count_armed_prs: only PRs with auto-merge armed count as in flight")
+ok(mc.count_armed_prs([
+       {"auto_merge": {"merge_method": "squash"}},
+       {"auto_merge": {"merge_method": "squash"}},
+   ]) == 2, "count_armed_prs: counts every armed PR")
+
+
 print("\nAll merge_coordinator tests passed.")

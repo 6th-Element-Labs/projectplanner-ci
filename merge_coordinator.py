@@ -295,6 +295,13 @@ def build_task_deps(candidates: Iterable[PRCandidate], *,
     return deps
 
 
+def count_armed_prs(prs: Iterable[Dict[str, Any]]) -> int:
+    """Open PRs with GitHub auto-merge already enabled = merges currently *in flight*
+    (armed but not yet landed). Used as the live backpressure ``in_flight`` count so the
+    lease is a true mutex sized by ``max_in_flight`` — not the static env guess it was."""
+    return sum(1 for pr in prs if (pr or {}).get("auto_merge"))
+
+
 def _load_gate():
     """Import scripts/switchboard_pr_gate.py for its GitHub helpers (one GitHub client for
     the whole gate — do not build a second one; ADR-0006 subtraction rule)."""
@@ -318,7 +325,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--repo", default="")
     parser.add_argument("--project", default=os.environ.get("SWITCHBOARD_CI_PROJECT", "switchboard"))
     parser.add_argument("--max-in-flight", type=int, default=max_in_flight_from_env())
-    parser.add_argument("--in-flight", type=int, default=0)
+    parser.add_argument("--in-flight", type=int, default=-1,
+                        help="Backpressure in-flight count. Default (-1) = auto: count open PRs "
+                             "with auto-merge already armed (a true landing mutex). Pass an "
+                             "explicit value to override.")
     parser.add_argument("--saturated", action="store_true",
                         help="Force backpressure hold (release nothing). Without it the box "
                              "saturation signal is consulted.")
@@ -340,6 +350,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     context = os.environ.get("SWITCHBOARD_CI_STATUS_CONTEXT", gate.DEFAULT_CONTEXT)
 
     prs = gate.list_open_prs(repo, token=token)
+    # Live backpressure: how many merges are already armed-and-unlanded. With max_in_flight=1
+    # this makes the coordinator a strict landing lease — exactly one PR is rebased-and-arming
+    # at a time, so the others stay at their base and never stampede the gate.
+    in_flight = count_armed_prs(prs) if args.in_flight < 0 else args.in_flight
 
     def gate_state_fn(pr, sha):
         st = gate.latest_status(repo, sha, context, token=token)
@@ -368,14 +382,21 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     arm_fn = None
     if args.arm:
-        # Enable GitHub native auto-merge (squash) on each released PR — it lands once its
-        # required checks pass, which the merge queue then serializes. We never force a red or
-        # unreviewed merge; auto-merge respects branch protection.
+        # Lease action for each released PR (<= capacity, dependency-ordered):
+        #   1. update-branch — rebase onto the base tip so the PR gets ONE fresh against-tip CI
+        #      run before it can land. Branch protection is strict:false, so without this a
+        #      behind PR could auto-merge untested against current master.
+        #   2. enable auto-merge (squash) — it lands the moment that fresh run is green.
+        # Only released PRs are rebased; held/deferred behind PRs stay put and never stampede
+        # the gate. This supersedes the blanket scripts/auto_update_prs.py sweep.
         def arm_fn(ref):  # noqa: E306 - local by design
-            return _enable_auto_merge(gate, repo, int(ref["pr"]), token)
+            number = int(ref["pr"])
+            updated = _update_branch(gate, repo, number, token)
+            armed = _enable_auto_merge(gate, repo, number, token)
+            return {"pr": number, "updated": updated, "armed": armed}
 
     plan = coordinate(candidates, task_deps=deps, open_task_ids=open_task_ids(candidates),
-                      max_in_flight=args.max_in_flight, in_flight=args.in_flight,
+                      max_in_flight=args.max_in_flight, in_flight=in_flight,
                       saturated=args.saturated, arm_fn=arm_fn, dry_run=not args.arm)
 
     print(json.dumps(plan, sort_keys=True) if args.json else format_plan(plan))
@@ -385,6 +406,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception:
         pass
     return 0
+
+
+def _update_branch(gate, repo: str, number: int, token: str) -> Dict[str, Any]:
+    """Rebase a released PR onto the base tip via GitHub 'update-branch' (merge base → head),
+    forcing a fresh against-tip CI run before it lands. Only the coordinator's released PRs
+    are rebased — that is the lease that replaces the blanket ``auto_update_prs`` sweep, so
+    behind PRs waiting their turn don't each burn a gate run. ``gh`` runs with check=False;
+    a benign 422 (already current / transient conflict) is reported in the returncode, not
+    raised — a genuinely conflicting PR is filtered out earlier by ``plan_merges`` (mergeable)."""
+    import subprocess
+    env = dict(os.environ, GH_TOKEN=token)
+    proc = subprocess.run(
+        ["gh", "api", "-X", "PUT", f"repos/{repo}/pulls/{number}/update-branch"],
+        text=True, capture_output=True, env=env, check=False)
+    return {"pr": number, "returncode": proc.returncode,
+            "stderr": (proc.stderr or "").strip()[:200]}
 
 
 def _enable_auto_merge(gate, repo: str, number: int, token: str) -> Dict[str, Any]:

@@ -13,13 +13,43 @@ REQUIRE_NODE="${SWITCHBOARD_CI_REQUIRE_NODE:-0}"
 # it explicitly, so do not let the service host's operational setting leak in.
 unset PM_VERIFY_COMPLETION_PUSH
 
+# Absolute path to this script so parallel test workers can re-invoke it (see __run_one).
+SELF="$ROOT/scripts/switchboard_ci.sh"
+
+# Parallelism for the Python suite. Every test file is hermetic — it points the store at its
+# own tempfile.mkdtemp DB (PM_*_DB_PATH) and binds no fixed port — so files run concurrently
+# with no shared-state contention. Override with SWITCHBOARD_CI_JOBS; default = CPU count.
+_cpu_count() {
+  if command -v nproc >/dev/null 2>&1; then nproc
+  elif command -v getconf >/dev/null 2>&1; then getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4
+  elif command -v sysctl >/dev/null 2>&1; then sysctl -n hw.ncpu 2>/dev/null || echo 4
+  else echo 4
+  fi
+}
+JOBS="${SWITCHBOARD_CI_JOBS:-$(_cpu_count)}"
+
 section() {
   printf '\n== %s ==\n' "$1"
 }
 
-run_test() {
-  section "$1"
-  "$PYTHON" "$1"
+# Worker: run one test file in its own process, buffering output so parallel logs stay
+# readable. A pass prints one PASS line; a failure is recorded as a .fail file (and echoed)
+# so the parent can list every failure at the end. Always exits 0 so xargs keeps scheduling
+# the remaining suite instead of aborting on the first red test.
+_run_one_test() {
+  local test_file="$1"
+  local safe out rc
+  safe="$(printf '%s' "$test_file" | tr '/.' '__')"
+  if out="$("$PYTHON" "$test_file" 2>&1)"; then
+    printf 'PASS  %s\n' "$test_file"
+  else
+    rc=$?
+    { printf '== FAIL %s (exit %s) ==\n' "$test_file" "$rc"
+      printf '%s\n' "$out"
+    } > "${SWITCHBOARD_CI_RESULTS:?SWITCHBOARD_CI_RESULTS must be set}/$safe.fail"
+    printf 'FAIL  %s (exit %s)\n' "$test_file" "$rc"
+  fi
+  return 0
 }
 
 # Every executable Python test is discovered automatically. A test may be skipped only by
@@ -29,44 +59,64 @@ TEST_DENYLIST=(
   # "test_example.py"  # Example: requires a provider fixture unavailable in hermetic CI.
 )
 
-is_denied_test() {
-  local candidate="$1"
-  local denied
+run_discovered_tests() {
+  local results_dir list total failed xrc=0 denied
+
+  results_dir="$(mktemp -d "${TMPDIR:-/tmp}/switchboard-ci-results.XXXXXX")"
+  list="$(mktemp "${TMPDIR:-/tmp}/switchboard-ci-tests.XXXXXX")"
+
+  # Discover every test file (repo-relative, stable order).
+  find . \
+    -path './.git' -prune -o \
+    -path './.venv' -prune -o \
+    -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print \
+    | sed 's#^\./##' | LC_ALL=C sort > "$list"
+
+  # Drop denylisted tests (announced — a skip is never silent).
   for denied in "${TEST_DENYLIST[@]}"; do
     [ -z "$denied" ] && continue
-    if [ "$candidate" = "$denied" ]; then
-      return 0
+    if grep -qxF "$denied" "$list"; then
+      printf 'SKIP  %s (documented in TEST_DENYLIST)\n' "$denied"
+      grep -vxF "$denied" "$list" > "$list.keep" && mv "$list.keep" "$list"
     fi
   done
-  return 1
-}
 
-run_discovered_tests() {
-  local discovered=0
-  local test_file
-
-  while IFS= read -r test_file; do
-    test_file="${test_file#./}"
-    if is_denied_test "$test_file"; then
-      printf 'SKIP  %s (documented in TEST_DENYLIST)\n' "$test_file"
-      continue
-    fi
-    run_test "$test_file"
-    discovered=$((discovered + 1))
-  done < <(
-    find . \
-      -path './.git' -prune -o \
-      -path './.venv' -prune -o \
-      -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print \
-      | LC_ALL=C sort
-  )
-
-  if [ "$discovered" -eq 0 ]; then
+  total="$(wc -l < "$list" | tr -d ' ')"
+  if [ "$total" -eq 0 ]; then
     echo "No Python tests discovered." >&2
+    rm -rf "$results_dir" "$list"
     return 1
   fi
-  printf '\nDiscovered and ran %d Python test files.\n' "$discovered"
+
+  section "Python tests — ${total} files, ${JOBS}-way parallel"
+  # One worker process per file, JOBS at a time. Workers self-report and always exit 0
+  # (recording failures as files), so the whole suite runs even when some tests are red.
+  SWITCHBOARD_CI_RESULTS="$results_dir" \
+    xargs -P "$JOBS" -I {} bash "$SELF" __run_one {} < "$list" || xrc=$?
+
+  failed="$(find "$results_dir" -name '*.fail' | wc -l | tr -d ' ')"
+  if [ "$failed" -ne 0 ] || [ "$xrc" -ne 0 ]; then
+    section "FAILED: ${failed} of ${total} Python test file(s)"
+    cat "$results_dir"/*.fail 2>/dev/null || true
+    if [ "$xrc" -ne 0 ] && [ "$failed" -eq 0 ]; then
+      printf 'tests: worker scheduler exited %s with no per-test failure recorded (crash/OOM?).\n' "$xrc" >&2
+    else
+      printf 'tests: %d of %d Python test file(s) FAILED (see above).\n' "$failed" "$total" >&2
+    fi
+    rm -rf "$results_dir" "$list"
+    return 1
+  fi
+
+  rm -rf "$results_dir" "$list"
+  printf '\nAll %d Python test files passed (%s-way parallel).\n' "$total" "$JOBS"
 }
+
+# Parallel-worker fast path: `switchboard_ci.sh __run_one <test_file>` runs a single test and
+# exits, without re-running the whole gate. Invoked by run_discovered_tests via xargs above.
+if [ "${1:-}" = "__run_one" ]; then
+  _run_one_test "${2:?usage: __run_one <test_file>}"
+  exit $?
+fi
 
 section "Python runtime"
 "$PYTHON" --version

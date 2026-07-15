@@ -156,6 +156,115 @@ def try_dispatch_scratchpad(
         }
 
 
+def dispatch_scratchpad_ref(
+    source_sha: str,
+    source_fetch_ref: str,
+    *,
+    label: str,
+    repo: str = "",
+    project: str = "switchboard",
+    source_path: str = "",
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Push an exact canonical SHA (identified by a fetch ref) to the public scratchpad.
+
+    Unlike ``dispatch_scratchpad`` this is NOT PR-bound — the SHA is authoritative (it comes
+    from a ``merge_group`` webhook, whose ``head_sha`` is the temporary merge commit), so
+    there is no PR-head resolution. verify.yml posts ``Switchboard CI / VM gate`` on exactly
+    this SHA, which is the merge-group head the native merge queue is waiting on."""
+    sha = (source_sha or "").strip()
+    if not sha:
+        raise cvd.CiVerifyDispatchError("dispatch_scratchpad_ref requires a source_sha.")
+    source_repo = cvd.canonical_repo(repo)
+    tok = cvd._token("")
+    if not tok:
+        raise cvd.CiVerifyDispatchError(
+            "A GitHub token is required to verify the merge-group SHA for scratchpad CI.")
+    cvd.verify_commit_exists(sha, repo=source_repo, token=tok)
+    checkout = (source_path or source_checkout_path()).strip()
+    mirror_branch = store.default_external_ci_mirror_branch(label, sha)
+    fetch_ref = (source_fetch_ref or "").strip()
+    result: Dict[str, Any] = {
+        "schema": SCHEMA,
+        "dispatched": False,
+        "dry_run": dry_run,
+        "canonical_repo": source_repo,
+        "ci_repo": cvd.ci_repo(),
+        "label": label,
+        "head_sha": sha,
+        "source_fetch_ref": fetch_ref,
+        "mirror_branch": mirror_branch,
+        "workflow": DEFAULT_WORKFLOW,
+        "source_path": checkout,
+    }
+    if dry_run:
+        result["message"] = "validated only — no scratchpad mirror push sent"
+        return result
+    if not os.path.isdir(checkout):
+        raise cvd.CiVerifyDispatchError(
+            f"scratchpad source checkout missing or not a directory: {checkout}")
+    request = {
+        "source_project": project,
+        "source_repo": source_repo,
+        "source_sha": sha,
+        "source_fetch_ref": fetch_ref,
+        "mirror_repo": cvd.ci_repo(),
+        "mirror_branch": mirror_branch,
+        "workflow": DEFAULT_WORKFLOW,
+        "push_triggered": True,
+        "poll_after_push": True,
+        "cleanup_mirror_branch": True,
+        "request": {
+            "label": label,
+            "schema": SCHEMA,
+            "push_triggered": True,
+            "cleanup_mirror_branch": True,
+            "source_fetch_ref": fetch_ref,
+        },
+    }
+    mirror = external_ci_mirror.request_external_ci_mirror_run(
+        request, checkout, actor="github-webhook", project=project)
+    result["mirror"] = mirror
+    result["run_id"] = mirror.get("run_id")
+    result["dispatched"] = bool(mirror.get("ok")) and not mirror.get("error")
+    if mirror.get("error"):
+        result["error"] = mirror["error"]
+        result["message"] = str(mirror["error"])
+    else:
+        result["message"] = (
+            f"scratchpad push sent to {cvd.ci_repo()}:{mirror_branch} "
+            f"(run_id={mirror.get('run_id')})")
+    return result
+
+
+def try_dispatch_merge_group(
+    head_sha: str,
+    head_ref: str = "",
+    *,
+    repo: str = "",
+    project: str = "switchboard",
+    source_path: str = "",
+) -> Dict[str, Any]:
+    """Best-effort scratchpad dispatch for a native merge-queue group — never raises.
+
+    Mirrors the merge-group head SHA so verify.yml reports the required status on it; without
+    this the queue would wait forever for a status that never arrives (the deadlock called out
+    in CI-STRATEGY → 'Native merge queue'). Dormant until the merge-queue ruleset is enabled."""
+    sha = (head_sha or "").strip()
+    if not is_scratchpad_enabled():
+        return {"dispatched": False, "skip_reason": "scratchpad_disabled", "head_sha": sha or None}
+    if not sha:
+        return {"dispatched": False, "skip_reason": "missing_merge_group_head_sha"}
+    try:
+        out = dispatch_scratchpad_ref(
+            sha, head_ref, label=f"mg-{sha[:12]}",
+            repo=repo, project=project, source_path=source_path, dry_run=False)
+        out["skip_reason"] = None
+        return out
+    except Exception as exc:
+        return {"dispatched": False, "skip_reason": str(exc), "head_sha": sha}
+
+
 def _cli(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Dispatch scratchpad CI (push ci/** branch on projectplanner-ci).",

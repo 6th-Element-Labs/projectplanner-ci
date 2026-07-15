@@ -3,6 +3,14 @@
 # "update-branch"). Paired with auto-merge, PRs then land the moment their gate is green.
 # Only touches clean-behind PRs; conflicting PRs are left for the author to resolve.
 #
+# SUPERSEDED by the merge-coordinator lease (merge_coordinator.py — rebase-on-release). Once
+# SWITCHBOARD_MERGE_COORDINATOR_ARM=1 is live on the Plan VM, ONLY the coordinator's released
+# PRs (<= max_in_flight, dependency-ordered) are rebased — the landing lease. This blanket
+# every-12-min sweep rebases *every* behind PR, which is the N-way stampede it was meant to
+# avoid. ROLLOUT: when the coordinator starts arming, disable the `schedule:` trigger below
+# (keep workflow_dispatch as a manual fallback). Left scheduled until then so there is no
+# no-rebase gap while the coordinator is still in dry-run.
+#
 # NOTE: if scheduled Actions are disabled on the canonical repo, run the same script from a
 # prod systemd timer instead (like scripts/switchboard_pr_gate.py):
 #   */12 * * * *  GH_TOKEN=... python scripts/auto_update_prs.py --repo 6th-Element-Labs/projectplanner

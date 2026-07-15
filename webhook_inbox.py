@@ -148,6 +148,8 @@ def _apply_row(row: Mapping[str, Any], project: str) -> Dict[str, Any]:
         return github_sync.handle_push(payload, project)
     if event == "pull_request":
         return github_sync.handle_pr(payload, project)
+    if event == "merge_group":
+        return github_sync.handle_merge_group(payload, project)
     return {"action": "ignored", "event": event}
 
 
