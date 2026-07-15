@@ -36,7 +36,15 @@
         },
         {
             id: 'project', group: 'Project settings', items: [
-                { id: 'members', label: 'Members & access', icon: 'ti-users', scope: 'write:projects' },
+                // members: every backing route is write:system (access.py members/
+                // project_role/revoke/invite), so write:projects here promised access the
+                // server refuses — the caller saw an unlocked section and a 403 on every
+                // action. The server is authoritative.
+                { id: 'members', label: 'Members & access', icon: 'ti-users', scope: 'write:system' },
+                // comms is genuinely read-for-anyone-who-can-read-the-project (projects.py
+                // "Readable to anyone who can read the project; edits below are admin-gated"),
+                // and the section already disables its own edit path from the server's
+                // can_edit probe — so a project editor legitimately sees this section.
                 { id: 'comms', label: 'Communications', icon: 'ti-mail-cog', scope: 'write:projects' },
                 { id: 'github', label: 'GitHub & repositories', icon: 'ti-brand-github', scope: 'write:system' },
                 { id: 'tokens', label: 'Access tokens', icon: 'ti-key', scope: 'write:system' },

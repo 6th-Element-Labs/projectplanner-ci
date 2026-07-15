@@ -69,7 +69,11 @@ try:
     for section, scope in (("'profile'", "null"), ("'ai-accounts'", "null"), ("'appearance'", "null")):
         ok(re.search(rf"id: {section}.*scope: {scope}", settings_js),
            f"personal section {section} is always available (scope: {scope})")
-    for section, scope in (("'members'", "'write:projects'"), ("'comms'", "'write:projects'"),
+    # UI-20: members is write:system — every backing route (access.py members /
+    # project_role / revoke / invite) requires it, so write:projects promised access the
+    # server refuses. comms stays write:projects: it is readable by anyone who can read the
+    # project and the section disables its own edit path from the server's can_edit probe.
+    for section, scope in (("'members'", "'write:system'"), ("'comms'", "'write:projects'"),
                            ("'github'", "'write:system'"), ("'tokens'", "'write:system'"),
                            ("'fleet'", "'write:system'"), ("'capacity'", "'write:system'"),
                            ("'narration'", "'write:system'"), ("'provenance'", "'write:system'"),
@@ -78,6 +82,14 @@ try:
            f"section {section} is gated on {scope}")
     ok("_settingsLockedCard" in settings_js and "is required to view or change this section" in settings_js,
        "a gated section renders a named lock instead of disappearing")
+    # UI-20: the nav's coarse gate must not promise access the routes refuse. Read the
+    # scope the server actually enforces and compare, so this can't drift back.
+    access_py = open("src/switchboard/api/routers/access.py", encoding="utf-8").read()
+    members_route = access_py.split('"/api/access/members"')[1][:400]
+    server_scope = "write:system" if '("write:system",)' in members_route else "write:projects"
+    nav_scope = re.search(r"id: 'members'.*?scope: '([a-z:]+)'", settings_js).group(1)
+    ok(nav_scope == server_scope,
+       f"the members nav gate ({nav_scope}) matches what the route enforces ({server_scope})")
     ok('data-settings-locked="${allowed ? \'0\' : \'1\'}"' in settings_js,
        "the nav marks locked sections rather than omitting them")
     ok("_settingsCan(section)" in settings_js and "if (!need) return true;" in settings_js,
