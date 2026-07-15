@@ -46,6 +46,24 @@ Reuses the existing `grant_project_role` semantics but keyed by global `user_id`
 seeds `users` from existing per-project password principals and marks **you**
 `is_superadmin=true`.
 
+## Ownership, Auth-down, and secrets (ARCH-MS-83)
+
+Plan-of-record detail (including the Go/No-Go checklist for ARCH-MS-75) lives in
+[`AUTH-INDEPENDENCE-GATE.md`](AUTH-INDEPENDENCE-GATE.md). Summary:
+
+1. **Exclusive writers:** Auth owns `users` / `user_auth` / `auth_sessions_v2` /
+   `password_resets` / Auth DDL. Access owns `project_role_grants` (Auth only reads for
+   access resolution). Access `ensure_user` delegates to Auth `ensure_identity` — no second
+   `INSERT INTO users` path in the monolith.
+2. **Auth-down = fail-closed:** `session.verify` always re-checks the session row in SQLite
+   after JWT crypto; offline JWT trust is rejected. Registry/Auth outage → unauthenticated /
+   5xx, never “JWT claims alone.”
+3. **Secrets fail-fast:** When `PM_AUTH_MODE=required`, `PM_JWT_SECRET` is mandatory for
+   issuing or verifying a non-empty session (`_secret()` / `require_production_secret()`).
+   Silent `"dev-insecure-…"` fallback and `PM_AUTH_TOKEN` substitutes are refused.
+   Empty cookies short-circuit as unauthenticated without needing a secret (so CI/tests can
+   import the app); production must set `PM_JWT_SECRET` before any login works.
+
 ## Endpoints (ActionEngine-parity)
 | Method | Path | Body | Notes |
 |---|---|---|---|

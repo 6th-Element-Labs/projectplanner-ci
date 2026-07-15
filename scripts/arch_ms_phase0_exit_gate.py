@@ -37,7 +37,7 @@ MOVED_ACCESS_FUNCTIONS = (
 # evolve deliberately.  Keep such exceptions explicit so the audit continues to
 # catch accidental changes to every other moved function without forcing fixes
 # back into the monolith or pretending the extracted repository is immutable.
-EVOLVED_ACCESS_FUNCTIONS = ("projects", "set_project_access")
+EVOLVED_ACCESS_FUNCTIONS = ("projects", "set_project_access", "ensure_user")
 
 REQUIRED_ARTIFACTS = (
     "pyproject.toml", ".python-version", "uv.lock",

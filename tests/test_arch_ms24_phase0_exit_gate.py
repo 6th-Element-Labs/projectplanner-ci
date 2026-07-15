@@ -41,7 +41,7 @@ ok(all(delta <= 0 for delta in report.get("line_deltas", {}).values()),
    "store.py, app.py, and mcp_server.py show no net growth from baseline")
 ok(report.get("checks", {}).get("verbatim_access_move") is True,
    "project/access functions remain extracted; intentional repository evolution is declared")
-ok(report.get("evolved_access_functions") == ["projects", "set_project_access"],
+ok(report.get("evolved_access_functions") == ["projects", "set_project_access", "ensure_user"],
    "the project discovery fix is an explicit post-extraction evolution")
 ok(store.has_project is access.has_project
    and store.project_access is access.project_access

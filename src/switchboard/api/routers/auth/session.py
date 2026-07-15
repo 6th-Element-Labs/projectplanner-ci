@@ -17,11 +17,45 @@ from . import store as auth_store
 
 COOKIE_NAME = os.environ.get("PM_SESSION_COOKIE_NAME", "taikun_session")
 
+# Hardcoded fallback is DEV_OPEN-only. Production (PM_AUTH_MODE=required) must set
+# PM_JWT_SECRET — ARCH-MS-83 forbids silent DEV JWT material in required mode.
+_DEV_JWT_FALLBACK = "dev-insecure-jwt-secret-change-me"
+
+
+class AuthSecretError(RuntimeError):
+    """Raised when production auth is missing a signing secret (fail-fast)."""
+
+
+def _auth_mode_is_required() -> bool:
+    """Mirror root ``auth.auth_mode()`` without importing the monolith (ARCH-MS-82)."""
+    mode = (os.environ.get("PM_AUTH_MODE") or "required").strip().lower()
+    if mode in {"dev", "open", "local", "dev-open"}:
+        return False
+    return True
+
 
 def _secret() -> str:
-    return (os.environ.get("PM_JWT_SECRET")
-            or os.environ.get("PM_AUTH_TOKEN")
-            or "dev-insecure-jwt-secret-change-me")
+    """Return the JWT HS256 signing secret.
+
+    * ``PM_AUTH_MODE=required`` (default / production): require non-empty
+      ``PM_JWT_SECRET``. No ``PM_AUTH_TOKEN`` fallback and no silent DEV string.
+    * ``PM_AUTH_MODE=dev-open``: allow ``PM_JWT_SECRET``, then ``PM_AUTH_TOKEN``,
+      then the explicit local DEV fallback (tests / laptop only).
+    """
+    jwt_secret = (os.environ.get("PM_JWT_SECRET") or "").strip()
+    if jwt_secret:
+        return jwt_secret
+    if _auth_mode_is_required():
+        raise AuthSecretError(
+            "PM_JWT_SECRET is required when PM_AUTH_MODE=required "
+            "(refusing silent DEV JWT fallback / PM_AUTH_TOKEN substitute)."
+        )
+    return (os.environ.get("PM_AUTH_TOKEN") or "").strip() or _DEV_JWT_FALLBACK
+
+
+def require_production_secret() -> str:
+    """Boot-time check: resolve the signing secret or raise ``AuthSecretError``."""
+    return _secret()
 
 
 def _ttl_seconds(remember_me: bool) -> int:
@@ -53,7 +87,9 @@ def issue(user: Dict[str, Any], *, remember_me: bool = False,
 
 def verify(token: str) -> Optional[Dict[str, Any]]:
     """Return the fresh user for a valid, unrevoked session, else None."""
-    payload, _reason = jwt_util.decode(token or "", _secret())
+    if not (token or "").strip():
+        return None  # unauthenticated; do not require JWT secret to reject empty cookies
+    payload, _reason = jwt_util.decode(token, _secret())
     if not payload:
         return None
     sid = payload.get("sid")
@@ -63,14 +99,18 @@ def verify(token: str) -> Optional[Dict[str, Any]]:
 
 
 def revoke(token: str) -> bool:
-    payload, _ = jwt_util.decode(token or "", _secret())
+    if not (token or "").strip():
+        return False
+    payload, _ = jwt_util.decode(token, _secret())
     sid = (payload or {}).get("sid")
     return auth_store.revoke_session(sid) if sid else False
 
 
 def sid_of(token: str) -> Optional[str]:
     """The server-side session id (sid) inside a token, or None if unparseable."""
-    payload, _ = jwt_util.decode(token or "", _secret())
+    if not (token or "").strip():
+        return None
+    payload, _ = jwt_util.decode(token, _secret())
     return (payload or {}).get("sid")
 
 

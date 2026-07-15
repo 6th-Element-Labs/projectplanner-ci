@@ -88,12 +88,14 @@ ADR-0006 control-plane freeze, ADR-0007's Caddy decision, or ARCH-19's Postgres 
 | #1 | Auth / access | **Conditional** | ARCH-MS-82 (ports) → ARCH-MS-83 (ownership, outage, secrets) → ARCH-MS-84 (ratchets + ops proof) → Go/No-Go → ARCH-MS-75 only on Go |
 | #2 | Tasks | Later / after Phase 2 readiness | Same strangler rules; not a Phase 2 mandatory second cut |
 
-Independence gate intent (detail lives on the board tasks):
+Independence gate intent (detail lives on the board tasks +
+[`AUTH-INDEPENDENCE-GATE.md`](../AUTH-INDEPENDENCE-GATE.md)):
 
 - **Ports:** Auth package must not import root monolith modules; repository + notification ports
   with injected adapters.
-- **Ownership:** Single exclusive writer for users / sessions / grants / migrations; documented
-  Auth-down behavior and production secrets fail-fast.
+- **Ownership / outage / secrets (ARCH-MS-83):** Exclusive writers per table (Auth owns
+  users/sessions/resets; Access owns grants); Auth-down fail-closed (no offline JWT trust);
+  production `PM_JWT_SECRET` fail-fast. Go/No-Go checklist documented for ARCH-MS-75.
 - **Ratchets + ops proof:** Import-direction CI, contention/memory/Caddy rollback drills, 401/403
   parity — measured inputs for the Go/No-Go checklist on ARCH-MS-75.
 

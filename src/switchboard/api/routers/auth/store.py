@@ -147,6 +147,31 @@ def create_user(email: str, display_name: str, password_hash: str,
     return get_user(uid)
 
 
+def ensure_identity(user_id: str, email: str = "", display_name: str = "") -> Dict[str, Any]:
+    """Auth-owned upsert of a ``users`` row (no password / no ``user_auth``).
+
+    Access / bootstrap paths must call this instead of inserting into ``users``
+    directly so Auth remains the exclusive writer for identity rows (ARCH-MS-83).
+    Returns the raw ``users`` projection (not the auth account view).
+    """
+    auth_deps.registry().init_project_registry()
+    user_id = (user_id or "").strip()
+    if not user_id:
+        raise ValueError("user_id required")
+    email_norm = (email or "").strip().lower() or None
+    display = (display_name or email_norm or user_id).strip()
+    now = time.time()
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO users(id, email, display_name, created_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET email=COALESCE(excluded.email, users.email), "
+            "display_name=excluded.display_name",
+            (user_id, email_norm, display, now),
+        )
+        row = c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    return dict(row)
+
+
 def set_password(user_id: str, password_hash: str) -> None:
     now = time.time()
     _exec_write(

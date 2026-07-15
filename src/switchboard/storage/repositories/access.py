@@ -449,22 +449,17 @@ def ensure_org(org_id: str, name: str, slug: str = "", created_by: str = "system
 
 def ensure_user(user_id: str, email: str = "", display_name: str = "",
                 created_by: str = "system") -> Dict[str, Any]:
-    init_project_registry()
-    user_id = (user_id or "").strip()
-    if not user_id:
-        raise ValueError("user_id required")
-    email = (email or "").strip().lower() or None
-    display_name = (display_name or email or user_id).strip()
-    now = time.time()
-    with _registry_conn() as c:
-        c.execute(
-            "INSERT INTO users(id, email, display_name, created_at) VALUES (?,?,?,?) "
-            "ON CONFLICT(id) DO UPDATE SET email=COALESCE(excluded.email, users.email), "
-            "display_name=excluded.display_name",
-            (user_id, email, display_name, now),
-        )
-        row = c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-    return dict(row)
+    """Ensure a global ``users`` row exists — Auth is the exclusive writer (ARCH-MS-83).
+
+    ``created_by`` is retained for call-site compatibility; identity upserts are
+    owned by ``switchboard.api.routers.auth.store.ensure_identity``.
+    """
+    del created_by  # Auth identity rows do not persist created_by today.
+    from switchboard.api.auth_port_adapters import configure_auth_ports
+    from switchboard.api.routers.auth import store as auth_store
+
+    configure_auth_ports()
+    return auth_store.ensure_identity(user_id, email=email, display_name=display_name)
 
 
 def add_org_member(org_id: str, user_id: str, role: str = "member",
