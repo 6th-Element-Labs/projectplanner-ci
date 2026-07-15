@@ -47,10 +47,10 @@ surface; explicit No-Go keep-in-process exit; no nginx; no MCP/other-BC cuts in 
 | **ARCH-MS-87** | 3B0: Tasks ports — remove store/auth/dispatch imports | 🟡 | `services/tasks` ports + `tasks_port_adapters`; `tests/test_arch_ms87_tasks_ports.py`; tasks forbidden-import ratchet |
 | **ARCH-MS-88** | 3B0: Tasks ownership, writers, Auth binding via ports | 🟡 | `docs/TASKS-INDEPENDENCE-GATE.md`; `services/tasks/binding.py`; `tests/test_arch_ms88_tasks_ownership.py` |
 | **ARCH-MS-89** | 3B0: Tasks ops proof harness + Go/No-Go verdict | 🟡 | `scripts/arch_ms89_tasks_ops_proof.py`; `docs/phase3/tasks_independence_verdict.json`; `tests/test_arch_ms89_tasks_ops_proof.py` |
-| **ARCH-MS-90** | 3B: Extract Tasks as standalone uvicorn (**Go only**) | ⬜ | Blocked until independence Go |
-| **ARCH-MS-91** | 3B: Tasks side-by-side `:8122` + parity (**Go only**) | ⬜ | Blocked until independence Go |
-| **ARCH-MS-92** | 3B: Caddy cutover + dual-strip for Tasks (**Go only**) | ⬜ | Blocked until independence Go |
-| **ARCH-MS-93** | Exit: Phase 3 close — Tasks cut conditional | ⬜ | Blocked on 3A/3B0 (+ 3B if Go) |
+| **ARCH-MS-90** | 3B: Extract Tasks as standalone uvicorn (**Go only**) | 🟡 | **Waived** — Path B No-Go (`docs/phase3/tasks_cut_waived.md`) |
+| **ARCH-MS-91** | 3B: Tasks side-by-side `:8122` + parity (**Go only**) | 🟡 | **Waived** — Path B No-Go (`docs/phase3/tasks_cut_waived.md`) |
+| **ARCH-MS-92** | 3B: Caddy cutover + dual-strip for Tasks (**Go only**) | 🟡 | **Waived** — Path B No-Go (`docs/phase3/tasks_cut_waived.md`) |
+| **ARCH-MS-93** | Exit: Phase 3 close — Tasks cut conditional | 🟡 | Path B — `docs/phase3/tasks_independence_verdict.json` (nogo) + `tasks_nogo_rationale.md`; exit gate `passed=true` |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
@@ -256,4 +256,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-15 | ARCH-MS-81 | Path A exit evidence: independence verdict `go` + auth cut playbook; `arch_ms_phase2_exit_gate.py` → `passed=true` |
 | 2026-07-15 | ARCH-MS-85 | Phase 3 charter ADR-0012 (Tasks process strangler, Mode A); Phase 3 section linked from this tracker |
 | 2026-07-15 | ARCH-MS-86 | Phase 3 exit harness: `scripts/arch_ms_phase3_exit_gate.py` (Path A Tasks cut ∨ Path B No-Go); fixture proof in `tests/test_arch_ms86_phase3_exit_gate.py` |
+| 2026-07-16 | ARCH-MS-93 | Phase 3 Path B exit: No-Go (G6 never recorded); ARCH-MS-90…92 waived; `arch_ms_phase3_exit_gate.py` → `passed=true`; proof `tests/test_arch_ms93_phase3_exit.py` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |

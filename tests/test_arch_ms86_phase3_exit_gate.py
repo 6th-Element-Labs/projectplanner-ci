@@ -4,7 +4,7 @@
 Proves ``scripts/arch_ms_phase3_exit_gate.py`` is importable, emits a versioned
 schema, implements Path A ∨ Path B with fail-closed half-cut / network-wrap
 detection, and stays CI-safe while the live tree may still report
-``passed=false`` until 3B0/3B evidence lands (board AC).
+``passed=false`` mid-phase until Path A or Path B evidence lands (board AC).
 """
 from __future__ import annotations
 
@@ -121,10 +121,6 @@ ok(
 ok(
     (proc.returncode == 0) == bool(live.get("passed")),
     "CLI exit code matches report.passed",
-)
-ok(
-    live.get("passed") is False,
-    "live tree is still red until 3B0/3B evidence (board AC for harness)",
 )
 
 # --- Fixture: neither path → fail ---
