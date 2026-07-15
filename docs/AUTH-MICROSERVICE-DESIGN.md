@@ -46,10 +46,14 @@ Reuses the existing `grant_project_role` semantics but keyed by global `user_id`
 seeds `users` from existing per-project password principals and marks **you**
 `is_superadmin=true`.
 
-## Ownership, Auth-down, and secrets (ARCH-MS-83)
+## Ownership, Auth-down, secrets, ratchets, ops proof (ARCH-MS-83 / 84)
 
 Plan-of-record detail (including the Go/No-Go checklist for ARCH-MS-75) lives in
-[`AUTH-INDEPENDENCE-GATE.md`](AUTH-INDEPENDENCE-GATE.md). Summary:
+[`AUTH-INDEPENDENCE-GATE.md`](AUTH-INDEPENDENCE-GATE.md). ARCH-MS-84 fills G2/G5 with
+measured harness results (`scripts/arch_ms84_architecture_ratchets.py`,
+`scripts/arch_ms84_auth_ops_proof.py`) and the Caddy drill runbook
+[`docs/runbooks/auth-caddy-cutover-rollback.md`](runbooks/auth-caddy-cutover-rollback.md).
+Summary:
 
 1. **Exclusive writers:** Auth owns `users` / `user_auth` / `auth_sessions_v2` /
    `password_resets` / Auth DDL. Access owns `project_role_grants` (Auth only reads for

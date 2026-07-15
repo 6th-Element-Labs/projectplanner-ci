@@ -1,0 +1,43 @@
+{
+  "schema": "switchboard.arch_ms84_architecture_ratchet.v1",
+  "task": "ARCH-MS-84",
+  "purpose": "Architecture ratchets for Auth independence (ADR-0011 / AUTH-INDEPENDENCE-GATE). Ceilings turn one way: a PR that lowers a measured count must lower the ceiling in the same change; raising a ceiling requires an explicit justification in the PR.",
+  "scopes": {
+    "auth_forbidden_imports": {
+      "description": "Auth package must not import root monolith modules (store, auth, notify, app_impl, mcp_server, mcp_server_impl).",
+      "package": "src/switchboard/api/routers/auth",
+      "forbidden_root_modules": [
+        "store",
+        "auth",
+        "notify",
+        "app_impl",
+        "mcp_server",
+        "mcp_server_impl"
+      ],
+      "ceiling": 0
+    },
+    "store_import_files_src": {
+      "description": "Files under src/ that contain `import store` or `from store ...`. Hard ceiling; prefer decreasing.",
+      "globs": ["src/**/*.py"],
+      "measured": 87,
+      "ceiling": 87
+    },
+    "wildcard_import_sites_src": {
+      "description": "AST ImportFrom sites under src/ that import `*`. No new wildcard imports.",
+      "globs": ["src/**/*.py"],
+      "measured": 25,
+      "ceiling": 25
+    },
+    "untyped_body_dict_routers": {
+      "description": "Router lines matching `body: dict = Body(...)`. Auth package must stay at 0; overall ceiling must not grow.",
+      "globs": ["src/switchboard/api/routers/**/*.py"],
+      "measured": 119,
+      "ceiling": 119,
+      "auth_package_ceiling": 0
+    }
+  },
+  "ruff": {
+    "description": "On changed .py files vs merge-base (or listed paths), `ruff check` must exit 0 when ruff is installed.",
+    "required_when_available": true
+  }
+}

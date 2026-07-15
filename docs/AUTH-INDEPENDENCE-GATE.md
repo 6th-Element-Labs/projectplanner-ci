@@ -73,16 +73,56 @@ Call `require_production_secret()` from ops/boot scripts if you want fail-closed
 
 ## Go / No-Go checklist (inputs for ARCH-MS-75)
 
-Fill with measured evidence from ARCH-MS-84 before starting ARCH-MS-75.
+Measured by ARCH-MS-84 harnesses (`scripts/arch_ms84_architecture_ratchets.py`,
+`scripts/arch_ms84_auth_ops_proof.py`). Operator still owns **G6**.
 
 | # | Input | Go requires | Status |
 |---|---|---|---|
-| G1 | Exclusive writers per Decision 1 | No dual `users` / session / reset writers; Access-only grants | Code: Auth `ensure_identity` + fail-fast secrets (ARCH-MS-83) |
-| G2 | Auth-down fail-closed | Verify never authorizes without DB; matrix above holds under fault injection | Pending ARCH-MS-84 harness |
-| G3 | Secrets fail-fast | Production boot refuses missing `PM_JWT_SECRET` | Code + `tests/test_arch_ms83_auth_ownership.py` |
-| G4 | Ports independence | ARCH-MS-82 import lint green | Done |
-| G5 | Ops proof | SQLite contention, second uvicorn budget, Caddy rollback, 401/403 parity | Pending ARCH-MS-84 |
-| G6 | Operator decision | Explicit Go recorded on board | Pending |
+| G1 | Exclusive writers per Decision 1 | No dual `users` / session / reset writers; Access-only grants | ✅ Code: Auth `ensure_identity` + fail-fast secrets (ARCH-MS-83) |
+| G2 | Auth-down fail-closed | Verify never authorizes without DB; matrix above holds under fault injection | ✅ Measured: empty-token short-circuit; non-empty verify always hits `auth_sessions_v2` (no offline JWT path). Harness check `auth_down_empty_token_fail_closed`. |
+| G3 | Secrets fail-fast | Production boot refuses missing `PM_JWT_SECRET` | ✅ Code + `tests/test_arch_ms83_auth_ownership.py` |
+| G4 | Ports independence | ARCH-MS-82 import lint green | ✅ Done; re-enforced by ARCH-MS-84 auth forbidden-import ratchet (ceiling 0) |
+| G5 | Ops proof | SQLite contention, second uvicorn budget, Caddy rollback, 401/403 parity | ✅ Measured (see below) |
+| G6 | Operator decision | Explicit Go recorded on board | ⬜ Pending |
+
+**Harness recommendation (not G6):** **Conditional Go** — hermetic checks passed; do not start
+ARCH-MS-75 until an operator records G6 after production soak + Access writer co-location review.
 
 **No-Go (keep Auth in-process)** if any of G1–G5 fail, or if cutting would create two writers /
 network-wrap unresolved coupling. No-Go is a valid Phase 2 exit path (ADR-0011 Decision 4).
+
+---
+
+## ARCH-MS-84 measured results
+
+### Architecture ratchets
+
+Committed baseline: [`perf/arch_ms84_ratchet_baseline.json`](../perf/arch_ms84_ratchet_baseline.json).
+Executable: `python scripts/arch_ms84_architecture_ratchets.py [--ruff-changed]`.
+
+| Ratchet | Measured | Ceiling | Notes |
+|---|---|---|---|
+| Auth forbidden monolith imports | 0 | 0 | `store` / `auth` / `notify` / `app_impl` / `mcp_server*` |
+| `src/` files importing root `store` | 87 | 87 | Tighten-only |
+| `src/` wildcard `import *` sites | 25 | 25 | No new wildcards |
+| Router `body: dict = Body(...)` | 119 (auth: 0) | 119 (auth: 0) | Auth routes stay typed |
+| Ruff on changed `.py` | skip-or-pass | pass when ruff installed | `--ruff-changed` |
+
+### Ops proof (hermetic)
+
+Executable: `python scripts/arch_ms84_auth_ops_proof.py`.
+
+| Proof | Result | Detail |
+|---|---|---|
+| Multi-process SQLite contention | **Pass** | Auth worker + Access worker, 40 rounds each on one `project_registry.db`: **0** lock errors, 80/80 ops ok (~1.5s Auth / ~0.4s Access on laptop). Short-load only — production soak still required before G6. |
+| Second uvicorn RSS budget | **Pass** | Skeleton uvicorn ~**51 MiB** RSS vs soft budget **80 MiB**; ~**199 MiB** headroom vs interactive `MemoryLow=250M`. |
+| 401/403 parity | **Pass** | Unauthenticated session / bad login / change-password → **401** (never 403); authenticated session → 200. Contract for a future remote Auth process. |
+| Caddy cutover/rollback drill | **Artifacts ready** | [`docs/runbooks/auth-caddy-cutover-rollback.md`](runbooks/auth-caddy-cutover-rollback.md) + [`deploy/skeleton/Caddyfile.auth-fragment.example`](../deploy/skeleton/Caddyfile.auth-fragment.example). Live `deploy/Caddyfile` still has **no** Auth path cut. |
+
+### Caveats before G6
+
+1. Contention harness is short-load / laptop; VM soak under real board write traffic may differ.
+2. Access `ensure_user` and Auth still share one SQLite file across processes in a cut — Decision 1
+   process-cut implication remains: confirm exclusive-table discipline or move grants behind a port.
+3. Second-uvicorn budget used the ARCH-MS-73 skeleton as a stand-in; Auth package RSS should be
+   re-measured when ARCH-MS-75 stands up the real unit.

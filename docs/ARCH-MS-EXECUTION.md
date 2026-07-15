@@ -41,13 +41,13 @@ big-bang rewrite / frontend swap.
 
 | Task | Title | Tracker | Repo evidence |
 |---|---|---|---|
-| **ARCH-MS-72** | 2A: ADR — Phase 2 process strangler charter | 🟡 | This section + `docs/decisions/0011-phase2-process-strangler.md` |
-| **ARCH-MS-73** | 2A: Service skeleton — FastAPI + health + systemd/Caddy | ✅ | `src/switchboard/services/_skeleton/`; `deploy/skeleton/`; `tests/test_arch_ms73_service_skeleton.py` |
-| **ARCH-MS-74** | 2A: Phase 2 exit gate harness | 🟡 | `scripts/arch_ms_phase2_exit_gate.py`; `tests/test_arch_ms74_phase2_exit_gate.py` (may stay red until 2B/2C) |
+| **ARCH-MS-72** | 2A: ADR — Phase 2 process strangler charter | ✅ | PR #490 — `docs/decisions/0011-phase2-process-strangler.md` |
+| **ARCH-MS-73** | 2A: Service skeleton — FastAPI + health + systemd/Caddy | ✅ | PR #493 — `src/switchboard/services/_skeleton/`; `deploy/skeleton/` |
+| **ARCH-MS-74** | 2A: Phase 2 exit gate harness | ✅ | PR #497 — `scripts/arch_ms_phase2_exit_gate.py`; `tests/test_arch_ms74_phase2_exit_gate.py` |
 | **ARCH-MS-82** | 2B0: Auth ports — remove store/auth/notify imports | ✅ | PR #492 — ports + adapters; `tests/test_arch_ms82_auth_ports.py` |
-| **ARCH-MS-83** | 2B0: Auth ownership, outage policy, secrets fail-fast | 🟡 | `docs/AUTH-INDEPENDENCE-GATE.md`; `ensure_identity`; JWT secret fail-fast |
-| **ARCH-MS-84** | 2B0: Architecture ratchets + Auth cut ops proof | ⬜ | — |
-| **ARCH-MS-75** | 2B: Extract Auth as standalone uvicorn (**Go only**) | ⬜ | Blocked until independence Go |
+| **ARCH-MS-83** | 2B0: Auth ownership, outage policy, secrets fail-fast | ✅ | PR #495 — `docs/AUTH-INDEPENDENCE-GATE.md`; `ensure_identity`; JWT secret fail-fast |
+| **ARCH-MS-84** | 2B0: Architecture ratchets + Auth cut ops proof | 🟡 | `scripts/arch_ms84_*`; `perf/arch_ms84_ratchet_baseline.json`; gate G2/G5 measured (Conditional Go; G6 pending) |
+| **ARCH-MS-75** | 2B: Extract Auth as standalone uvicorn (**Go only**) | ⬜ | Blocked until independence Go (operator G6) |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.

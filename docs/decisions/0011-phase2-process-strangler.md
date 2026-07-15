@@ -97,7 +97,8 @@ Independence gate intent (detail lives on the board tasks +
   users/sessions/resets; Access owns grants); Auth-down fail-closed (no offline JWT trust);
   production `PM_JWT_SECRET` fail-fast. Go/No-Go checklist documented for ARCH-MS-75.
 - **Ratchets + ops proof:** Import-direction CI, contention/memory/Caddy rollback drills, 401/403
-  parity — measured inputs for the Go/No-Go checklist on ARCH-MS-75.
+  parity — measured inputs for the Go/No-Go checklist on ARCH-MS-75 (landed as ARCH-MS-84:
+  `scripts/arch_ms84_*`, `perf/arch_ms84_ratchet_baseline.json`, gate doc measured section).
 
 ---
 
