@@ -590,7 +590,23 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                                    "result": result}, sort_keys=True), now))
             if status == "completed" and runner_session_id:
                 selector = wake.get("selector") or {}
-                runner_metadata = {"wake_id": wake_id, "wake_result": result}
+                # A delegated worker may have rebound the preclaim runner row to its
+                # exact task claim and Work Session before completing the wake.  Wake
+                # completion is a partial launch receipt, not a second authoritative
+                # runner registration: preserve that stronger binding unless the
+                # completion result explicitly supplies a replacement.
+                existing_row = c.execute(
+                    "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+                    (runner_session_id,),
+                ).fetchone()
+                existing = dict(existing_row) if existing_row else {}
+                existing_metadata = _json_obj(existing.get("metadata_json", "{}"), {})
+                existing_control = _json_obj(existing.get("control_json", "{}"), {})
+                runner_metadata = {
+                    **existing_metadata,
+                    "wake_id": wake_id,
+                    "wake_result": result,
+                }
                 for key in ("vendor_id", "provider_session_id", "session_url", "branch",
                             "head_sha", "billing_mode"):
                     if result.get(key) is not None:
@@ -599,18 +615,26 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                     c,
                     {
                         "runner_session_id": runner_session_id,
-                        "host_id": wake.get("claimed_by_host") or "",
-                        "agent_id": agent_id or selector.get("agent_id") or "",
-                        "runtime": selector.get("runtime") or "",
-                        "task_id": wake.get("task_id") or result.get("task_id") or "",
-                        "claim_id": result.get("claim_id") or "",
-                        "pid": result.get("pid"),
+                        "host_id": (wake.get("claimed_by_host")
+                                    or existing.get("host_id") or ""),
+                        "agent_id": (agent_id or existing.get("agent_id")
+                                     or selector.get("agent_id") or ""),
+                        "runtime": (existing.get("runtime")
+                                    or selector.get("runtime") or ""),
+                        "task_id": (wake.get("task_id") or result.get("task_id")
+                                    or existing.get("task_id") or ""),
+                        "claim_id": (result.get("claim_id")
+                                     or existing.get("claim_id") or ""),
+                        "pid": (result.get("pid") if result.get("pid") is not None
+                                else existing.get("pid")),
                         "status": "running" if result.get("started") else "unknown",
-                        "cwd": result.get("cwd") or "",
-                        "control": result.get("control") or {"managed_process": True,
-                                                              "runner_kill": bool(runner_session_id)},
+                        "cwd": result.get("cwd") or existing.get("cwd") or "",
+                        "control": (result.get("control") or existing_control
+                                    or {"managed_process": True,
+                                        "runner_kill": bool(runner_session_id)}),
                         "metadata": runner_metadata,
-                        "heartbeat_ttl_s": result.get("heartbeat_ttl_s") or 60,
+                        "heartbeat_ttl_s": (result.get("heartbeat_ttl_s")
+                                            or existing.get("heartbeat_ttl_s") or 60),
                     },
                     principal_id=actor,
                     actor=actor,
