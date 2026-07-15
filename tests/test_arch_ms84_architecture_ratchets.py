@@ -27,6 +27,7 @@ data = json.loads(baseline.read_text(encoding="utf-8")) if baseline.is_file() el
 ok(data.get("schema") == "switchboard.arch_ms84_architecture_ratchet.v1",
    "baseline schema is arch_ms84 ratchet v1")
 ok("auth_forbidden_imports" in data.get("scopes", {}), "baseline scopes auth forbidden imports")
+ok("tasks_forbidden_imports" in data.get("scopes", {}), "baseline scopes tasks forbidden imports")
 ok("store_import_files_src" in data.get("scopes", {}), "baseline scopes store import ceiling")
 ok("wildcard_import_sites_src" in data.get("scopes", {}), "baseline scopes wildcard ceiling")
 ok("untyped_body_dict_routers" in data.get("scopes", {}), "baseline scopes untyped body ceiling")
@@ -49,6 +50,7 @@ else:
     checks = report.get("checks") or {}
     for name in (
         "auth_forbidden_imports",
+        "tasks_forbidden_imports",
         "store_import_files_src",
         "wildcard_import_sites_src",
         "untyped_body_dict_routers",

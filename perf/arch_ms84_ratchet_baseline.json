@@ -16,6 +16,21 @@
       ],
       "ceiling": 0
     },
+    "tasks_forbidden_imports": {
+      "description": "Tasks service package must not import root monolith modules (store, auth, notify, dispatch, agent, app_impl, mcp_server, mcp_server_impl). ARCH-MS-87.",
+      "package": "src/switchboard/services/tasks",
+      "forbidden_root_modules": [
+        "store",
+        "auth",
+        "notify",
+        "dispatch",
+        "agent",
+        "app_impl",
+        "mcp_server",
+        "mcp_server_impl"
+      ],
+      "ceiling": 0
+    },
     "store_import_files_src": {
       "description": "Files under src/ that contain `import store` or `from store ...`. Hard ceiling; prefer decreasing.",
       "globs": ["src/**/*.py"],

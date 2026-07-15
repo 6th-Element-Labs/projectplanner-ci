@@ -40,6 +40,7 @@ _req_obs = request_observability.RequestObservability()
 import scripts.switchboard_path  # noqa: E402,F401
 from switchboard.api import deps  # noqa: E402
 from switchboard.api.auth_port_adapters import configure_auth_ports  # noqa: E402
+from switchboard.api.tasks_port_adapters import configure_tasks_ports  # noqa: E402
 from switchboard.api.middleware import _write_required_scopes  # noqa: E402,F401
 from switchboard.api.middleware import register_middleware  # noqa: E402
 from switchboard.api.routers.auth import service as _auth_service, session as _auth_session, store as _auth_store  # noqa: E402
@@ -76,6 +77,7 @@ from switchboard.api.routers.spa import register_spa  # noqa: E402
 from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E402
 
 configure_auth_ports()
+configure_tasks_ports()
 _auth_store.init()
 # ARCH-MS-77: when production sets PM_AUTH_HTTP_PRIMARY=service, do not dual-mount
 # Auth HTTP (Caddy → :8121). Unset/empty keeps the shared router for hermetic tests.

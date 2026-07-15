@@ -44,7 +44,7 @@ surface; explicit No-Go keep-in-process exit; no nginx; no MCP/other-BC cuts in 
 |---|---|---|---|
 | **ARCH-MS-85** | 3A: ADR — Phase 3 Tasks process strangler charter (Mode A) | 🟡 | `docs/decisions/0012-phase3-tasks-process-strangler.md` |
 | **ARCH-MS-86** | 3A: Phase 3 exit gate harness | 🟡 | `scripts/arch_ms_phase3_exit_gate.py`; `tests/test_arch_ms86_phase3_exit_gate.py` |
-| **ARCH-MS-87** | 3B0: Tasks ports — remove store/auth/dispatch imports | ⬜ | — |
+| **ARCH-MS-87** | 3B0: Tasks ports — remove store/auth/dispatch imports | 🟡 | `services/tasks` ports + `tasks_port_adapters`; `tests/test_arch_ms87_tasks_ports.py`; tasks forbidden-import ratchet |
 | **ARCH-MS-88** | 3B0: Tasks ownership, writers, Auth binding via ports | ⬜ | — |
 | **ARCH-MS-89** | 3B0: Tasks ops proof harness + Go/No-Go verdict | ⬜ | — |
 | **ARCH-MS-90** | 3B: Extract Tasks as standalone uvicorn (**Go only**) | ⬜ | Blocked until independence Go |

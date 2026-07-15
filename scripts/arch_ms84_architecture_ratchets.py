@@ -26,6 +26,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = ROOT / "perf" / "arch_ms84_ratchet_baseline.json"
 AUTH_PKG = ROOT / "src" / "switchboard" / "api" / "routers" / "auth"
+TASKS_PKG = ROOT / "src" / "switchboard" / "services" / "tasks"
 STORE_IMPORT_RE = re.compile(r"^\s*(import\s+store\b|from\s+store\b)")
 BODY_DICT_RE = re.compile(r"body:\s*dict\s*=\s*Body\b")
 
@@ -48,10 +49,12 @@ def _iter_py(paths: Iterable[Path]) -> Iterable[Path]:
             yield p
 
 
-def _auth_forbidden_hits(forbidden: Sequence[str]) -> List[str]:
+def _package_forbidden_hits(package: Path, forbidden: Sequence[str]) -> List[str]:
     forbidden_set = frozenset(forbidden)
     hits: List[str] = []
-    for path in sorted(AUTH_PKG.glob("*.py")):
+    if not package.is_dir():
+        return hits
+    for path in sorted(package.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -67,6 +70,14 @@ def _auth_forbidden_hits(forbidden: Sequence[str]) -> List[str]:
                 if root in forbidden_set:
                     hits.append(f"{path.relative_to(ROOT)}: from {mod} import …")
     return hits
+
+
+def _auth_forbidden_hits(forbidden: Sequence[str]) -> List[str]:
+    return _package_forbidden_hits(AUTH_PKG, forbidden)
+
+
+def _tasks_forbidden_hits(forbidden: Sequence[str]) -> List[str]:
+    return _package_forbidden_hits(TASKS_PKG, forbidden)
 
 
 def _store_import_files(src_root: Path) -> List[str]:
@@ -162,6 +173,21 @@ def build_report(*, ruff_changed: bool = False, base_ref: str = "origin/master")
         "count": len(auth_hits),
         "ceiling": scopes["auth_forbidden_imports"]["ceiling"],
         "hits": auth_hits,
+    }
+
+    tasks_scope = scopes.get("tasks_forbidden_imports") or {}
+    tasks_forbidden = tasks_scope.get("forbidden_root_modules") or [
+        "store", "auth", "notify", "dispatch", "agent",
+        "app_impl", "mcp_server", "mcp_server_impl",
+    ]
+    tasks_hits = _tasks_forbidden_hits(tasks_forbidden)
+    tasks_ceiling = int(tasks_scope.get("ceiling", 0))
+    tasks_ok = len(tasks_hits) <= tasks_ceiling
+    checks["tasks_forbidden_imports"] = tasks_ok
+    details["tasks_forbidden_imports"] = {
+        "count": len(tasks_hits),
+        "ceiling": tasks_ceiling,
+        "hits": tasks_hits,
     }
 
     store_files = _store_import_files(ROOT / "src")
