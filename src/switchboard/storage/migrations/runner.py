@@ -116,10 +116,10 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     # COORD-20 — force adversarial re-review after concurrency/lease findings.
     ("0040_review_verdicts_review_mode", "review_verdicts", "review_mode",
      "ALTER TABLE review_verdicts ADD COLUMN review_mode TEXT NOT NULL DEFAULT 'standard'"),
-    ("0046_agent_host_enrollments_completion_recovery_hash",
+    ("0051_agent_host_enrollments_completion_recovery_hash",
      "agent_host_enrollments", "completion_recovery_hash",
      "ALTER TABLE agent_host_enrollments ADD COLUMN completion_recovery_hash TEXT"),
-    ("0047_agent_host_enrollments_completion_recovery_expires_at",
+    ("0052_agent_host_enrollments_completion_recovery_expires_at",
      "agent_host_enrollments", "completion_recovery_expires_at",
      "ALTER TABLE agent_host_enrollments ADD COLUMN completion_recovery_expires_at REAL"),
 ]
@@ -225,6 +225,19 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0052_ix_agent_host_rotation_recovery_principal",
      "CREATE INDEX IF NOT EXISTS ix_agent_host_rotation_recovery_principal "
      "ON agent_host_rotation_recovery(principal_id, expires_at)"),
+    # ADAPTER-18 review remediation — personal wakes reserve one durable execution
+    # connection at request time and activate it only with the exact live runner.
+    ("0053_personal_execution_connections",
+     "CREATE TABLE IF NOT EXISTS personal_execution_connections ("
+     "execution_connection_id TEXT PRIMARY KEY, wake_id TEXT NOT NULL UNIQUE, "
+     "task_id TEXT NOT NULL, claim_id TEXT NOT NULL, work_session_id TEXT NOT NULL, "
+     "runner_session_id TEXT NOT NULL, host_id TEXT NOT NULL, agent_id TEXT NOT NULL, "
+     "source_sha TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'reserved', "
+     "created_at REAL NOT NULL, expires_at REAL NOT NULL, claimed_at REAL, "
+     "completed_at REAL, updated_at REAL NOT NULL)"),
+    ("0054_ix_personal_execution_connections_status",
+     "CREATE INDEX IF NOT EXISTS ix_personal_execution_connections_status "
+     "ON personal_execution_connections(status, expires_at)"),
 ]
 
 

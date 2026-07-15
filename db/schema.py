@@ -844,6 +844,25 @@ def apply_schema(c):
             ON wake_intents(claimed_by_host, status);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_wake_intents_idem
             ON wake_intents(idem_key) WHERE idem_key IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS personal_execution_connections (
+            execution_connection_id TEXT PRIMARY KEY,
+            wake_id                 TEXT NOT NULL UNIQUE,
+            task_id                 TEXT NOT NULL,
+            claim_id                TEXT NOT NULL,
+            work_session_id         TEXT NOT NULL,
+            runner_session_id       TEXT NOT NULL,
+            host_id                 TEXT NOT NULL,
+            agent_id                TEXT NOT NULL,
+            source_sha              TEXT NOT NULL,
+            status                  TEXT NOT NULL DEFAULT 'reserved',
+            created_at              REAL NOT NULL,
+            expires_at              REAL NOT NULL,
+            claimed_at              REAL,
+            completed_at            REAL,
+            updated_at              REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_personal_execution_connections_status
+            ON personal_execution_connections(status, expires_at);
         CREATE TABLE IF NOT EXISTS runner_sessions (
             runner_session_id TEXT PRIMARY KEY,
             host_id           TEXT,

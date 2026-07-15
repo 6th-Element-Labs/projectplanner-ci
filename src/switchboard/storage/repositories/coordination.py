@@ -268,10 +268,12 @@ def _bind_personal_wake_policy(
 
     runner_session_id = "run_" + hashlib.sha256(
         f"{wake_id}:{host_id}".encode()).hexdigest()[:16]
-    execution_connection_id = str(
-        updated.get("execution_connection_id") or
-        f"execconn-{uuid.uuid4().hex[:20]}"
-    ).strip()
+    host_row = c.execute(
+        "SELECT * FROM agent_hosts WHERE host_id=?", (host_id,),
+    ).fetchone()
+    if not host_row or _host_row(host_row, now=now).get("stale"):
+        return updated, ["host_not_live_for_personal_connection"]
+    execution_connection_id = f"execconn-{uuid.uuid4().hex[:20]}"
     exact = {
         "task_id": canonical_task_id,
         "claim_id": claim_id,
@@ -293,6 +295,19 @@ def _bind_personal_wake_policy(
             "execution_connection_id": execution_connection_id,
         },
     })
+    requested_ttl = float(
+        updated.get("deadline_seconds") or updated.get("claim_timeout_s")
+        or updated.get("ttl_s") or 300)
+    expires_at = min(float(claim["expires_at"]), now + max(10.0, requested_ttl))
+    c.execute(
+        "INSERT INTO personal_execution_connections("
+        "execution_connection_id, wake_id, task_id, claim_id, work_session_id, "
+        "runner_session_id, host_id, agent_id, source_sha, status, created_at, "
+        "expires_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,'reserved',?,?,?)",
+        (execution_connection_id, wake_id, canonical_task_id, claim_id,
+         work_session_id, runner_session_id, host_id, agent_id, source_sha,
+         now, expires_at, now),
+    )
     return updated, []
 
 def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
@@ -409,6 +424,13 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                 idem_key=idem_key, actor=actor, principal_id=principal_id,
                 project=project, now=now)
             if not effect_claim.get("claimed"):
+                execution = dict(policy.get("execution_binding") or {})
+                if execution.get("execution_connection_id"):
+                    c.execute(
+                        "DELETE FROM personal_execution_connections "
+                        "WHERE execution_connection_id=? AND status='reserved'",
+                        (execution["execution_connection_id"],),
+                    )
                 out = {"requested": False, "reason": effect_claim.get("reason"),
                        "effect": effect_claim.get("effect"),
                        "effect_key": effect_claim.get("effect_key"),
@@ -614,6 +636,56 @@ def _personal_exact_binding_error(
             or work_session["head_sha"] != source_sha
             or work_session["status"] != "active"):
         reasons.append("work_session_not_active_for_claim_source")
+    connection = c.execute(
+        "SELECT * FROM personal_execution_connections WHERE execution_connection_id=?",
+        (expected["execution_connection_id"],),
+    ).fetchone()
+    if not connection:
+        reasons.append("execution_connection_not_found")
+    else:
+        connection = dict(connection)
+        for field in (
+            "wake_id", "task_id", "claim_id", "work_session_id", "runner_session_id",
+            "host_id", "agent_id", "source_sha",
+        ):
+            if str(connection.get(field) or "") != expected[field]:
+                reasons.append(f"execution_connection_{field}_mismatch")
+        expected_connection_status = (
+            "active" if wake.get("status") == "claimed" else "reserved")
+        if connection.get("status") != expected_connection_status:
+            reasons.append(
+                f"execution_connection_not_{expected_connection_status}")
+        if float(connection.get("expires_at") or 0) <= now:
+            reasons.append("execution_connection_stale")
+    runner = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=?", (runner_id,),
+    ).fetchone()
+    if not runner:
+        reasons.append("execution_connection_runner_not_found")
+    else:
+        runner = dict(runner)
+        metadata = _json_obj(runner.get("metadata_json", "{}"), {})
+        runner_expected = {
+            "task_id": expected["task_id"], "claim_id": expected["claim_id"],
+            "host_id": expected["host_id"], "agent_id": expected["agent_id"],
+        }
+        for field, value in runner_expected.items():
+            if str(runner.get(field) or "") != value:
+                reasons.append(f"execution_connection_runner_{field}_mismatch")
+        metadata_expected = {
+            "wake_id": expected["wake_id"],
+            "work_session_id": expected["work_session_id"],
+            "source_sha": expected["source_sha"],
+            "execution_connection_id": expected["execution_connection_id"],
+        }
+        for field, value in metadata_expected.items():
+            if str(metadata.get(field) or "") != value:
+                reasons.append(f"execution_connection_runner_{field}_mismatch")
+        if str(runner.get("status") or "") not in {"starting", "ready", "running"}:
+            reasons.append("execution_connection_runner_not_active")
+        if float(runner.get("heartbeat_at") or 0) + float(
+                runner.get("heartbeat_ttl_s") or 60) <= now:
+            reasons.append("execution_connection_runner_stale")
     if reasons:
         return {
             "claimed": False,
@@ -647,7 +719,8 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                 return binding_error
             if wake["status"] == "claimed":
                 if personal:
-                    return {"claimed": False, "reason": "wake_already_claimed", "wake": wake}
+                    return {"claimed": True, "resumed": True, "reserved": False,
+                            "credential_admission_phase": None, "wake": wake}
                 same_reservation = (
                     wake.get("claimed_by_host") == host_id
                     and binding.get("host_id") == host_id
@@ -776,6 +849,25 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if cur.rowcount == 0:
                 row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
                 return {"claimed": False, "reason": "lost_race", "wake": _wake_row(row)}
+            if personal:
+                execution = dict(policy.get("execution_binding") or {})
+                activated = c.execute(
+                    "UPDATE personal_execution_connections SET status='active', "
+                    "claimed_at=?, updated_at=? WHERE execution_connection_id=? "
+                    "AND wake_id=? AND runner_session_id=? AND host_id=? "
+                    "AND status='reserved' AND expires_at>?",
+                    (now, now, execution.get("execution_connection_id"), wake_id,
+                     runner_session_id, host_id, now),
+                )
+                if activated.rowcount != 1:
+                    c.execute(
+                        "UPDATE wake_intents SET status='pending', claimed_at=NULL, "
+                        "claimed_by_host=NULL WHERE wake_id=? AND status='claimed'",
+                        (wake_id,),
+                    )
+                    return {"claimed": False, "reason": "exact_binding_denied",
+                            "reason_codes": ["execution_connection_activation_lost"],
+                            "host_id": host_id, "wake_id": wake_id}
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (wake.get("task_id"), actor, "wake.claimed",
                        json.dumps({"wake_id": wake_id, "host_id": host_id}, sort_keys=True), now))
@@ -823,6 +915,15 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                 (status, now, runner_session_id or None, agent_id or None,
                  json.dumps(result, sort_keys=True), wake_id),
             )
+            execution = dict((wake.get("policy") or {}).get("execution_binding") or {})
+            if execution.get("execution_connection_id"):
+                c.execute(
+                    "UPDATE personal_execution_connections SET status=?, completed_at=?, "
+                    "updated_at=? WHERE execution_connection_id=? AND wake_id=? "
+                    "AND runner_session_id=? AND status='active'",
+                    (status, now, now, execution["execution_connection_id"], wake_id,
+                     runner_session_id),
+                )
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (wake.get("task_id"), actor,
                        "wake.completed" if status == "completed" else "wake.failed",

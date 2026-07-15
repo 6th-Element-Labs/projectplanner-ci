@@ -6,6 +6,8 @@ Provider credentials never enter this surface: enrollment grants only the narrow
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 import secrets
@@ -25,6 +27,23 @@ ROTATION_RECOVERY_GRACE_SECONDS = 300
 ENROLLMENT_COMPLETION_RECOVERY_SECONDS = 600
 _FINGERPRINT_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 _COMPLETION_RECOVERY_RE = re.compile(r"^ahr-[A-Za-z0-9_-]{32,}$")
+
+
+def _completion_recovery_token(
+    *, project: str, enrollment_id: str, recovery_secret: str,
+) -> str:
+    """Derive one stable high-entropy bearer for every retry of one attempt.
+
+    The recovery secret is generated with 256 bits on the host and stored server-side
+    only as a hash. Domain separation plus enrollment/project binding makes duplicate
+    recovery requests converge on the same bearer instead of invalidating each other.
+    """
+    material = (
+        "switchboard-agent-host-completion-recovery-v1\0"
+        f"{project}\0{enrollment_id}\0{recovery_secret}"
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(hashlib.sha256(material).digest()).decode("ascii")
+    return "aht-" + encoded.rstrip("=")
 
 
 def _json_list(value: str) -> list[str]:
@@ -203,6 +222,11 @@ def complete_agent_host_enrollment(
             if not same_attempt:
                 return _error(
                     "bootstrap_code_consumed", "bootstrap code has already been consumed")
+            token = _completion_recovery_token(
+                project=project,
+                enrollment_id=str(current["enrollment_id"]),
+                recovery_secret=completion_recovery_secret,
+            )
             principal_id = str(current.get("principal_id") or "")
             changed = connection.execute(
                 "UPDATE principals SET token_hash=? WHERE id=? AND revoked_at IS NULL",

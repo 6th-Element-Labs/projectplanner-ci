@@ -280,8 +280,18 @@ def preflight_codex_local_auth(
         results.append(completed)
     version = ((results[0].stdout or results[0].stderr or "").strip().splitlines()
                or ["codex"])[0][:120]
-    proof_material = "\n".join(
-        (result.stdout or "") + (result.stderr or "") for result in results)
+    status_lines = [
+        line.strip() for line in (
+            (results[1].stdout or "") + "\n" + (results[1].stderr or "")
+        ).splitlines() if line.strip()
+    ]
+    # Codex currently exposes no JSON flag for `login status`; fail closed on its
+    # explicit mode line instead of treating any successful exit as ChatGPT auth.
+    if status_lines != ["Logged in using ChatGPT"]:
+        raise EnrollmentError(
+            "native Codex CLI must be logged in explicitly using ChatGPT; "
+            "API-key, unknown, and ambiguous login modes are not accepted")
+    proof_material = f"{version}\nchatgpt_personal"
     return {
         "schema": "switchboard.codex_local_auth_preflight.v1",
         "native_cli": True,
@@ -425,6 +435,80 @@ def control_service(target_platform: str, action: str, service_path: Path,
                 f"service {action} failed: {(result.stderr or result.stdout).strip()}")
 
 
+_FINALIZATION_STATUSES = {
+    "enrollment_completed_pending_finalize",
+    "install_finalization_retry_required",
+}
+
+
+def _finalize_install(
+    *, state: dict[str, Any], state_path: Path, identity_path: Path,
+    config_path: Path, target_platform: str, prefix: Path, service_path: Path,
+    log_root: Path, state_root: Path, entrypoint: str, start_service: bool,
+    service_runner: Callable[..., subprocess.CompletedProcess],
+) -> dict[str, Any]:
+    """Idempotently finish a journaled enrollment after server completion."""
+    identity = dict(state.get("pending_identity") or {})
+    config = dict(state.get("pending_config") or {})
+    if not identity.get("host_id") or not identity.get("host_token"):
+        raise EnrollmentError("pending enrollment finalization lacks host identity material")
+    if not config.get("base_url") or not config.get("project"):
+        raise EnrollmentError("pending enrollment finalization lacks endpoint configuration")
+    try:
+        _atomic_json(identity_path, identity, 0o600)
+        state["finalization_step"] = "identity_written"
+        _atomic_json(state_path, state, 0o600)
+        _atomic_json(config_path, config, 0o600)
+        state["finalization_step"] = "config_written"
+        _atomic_json(state_path, state, 0o600)
+        render_service(
+            target_platform,
+            python=sys.executable,
+            entrypoint=prefix / "current" / entrypoint,
+            identity_path=identity_path,
+            config_path=config_path,
+            service_path=service_path,
+            log_root=log_root,
+            writable_roots=(state_root,),
+        )
+        state["finalization_step"] = "service_rendered"
+        _atomic_json(state_path, state, 0o600)
+        if start_service:
+            # A retry may follow an ambiguous service-manager response. Stop is
+            # intentionally idempotent, then start establishes one known instance.
+            if state.get("finalization_attempted_service_start"):
+                control_service(
+                    target_platform, "stop", service_path, runner=service_runner)
+            state["finalization_attempted_service_start"] = True
+            _atomic_json(state_path, state, 0o600)
+            control_service(target_platform, "start", service_path, runner=service_runner)
+            state["finalization_step"] = "service_started"
+            _atomic_json(state_path, state, 0o600)
+    except Exception:
+        state["status"] = "install_finalization_retry_required"
+        state["finalization_failed_at"] = time.time()
+        _atomic_json(state_path, state, 0o600)
+        raise
+    host_id = identity["host_id"]
+    completion_recovered = bool(state.get("completion_recovered"))
+    state.pop("pending_identity", None)
+    state.pop("pending_config", None)
+    state.pop("finalization_attempted_service_start", None)
+    state.update({
+        "status": "installed",
+        "installed_at": time.time(),
+        "finalization_step": "complete",
+    })
+    _atomic_json(state_path, state, 0o600)
+    return {
+        "installed": True,
+        "host_id": host_id,
+        "version": state["version"],
+        "state_path": str(state_path),
+        "completion_recovered": completion_recovered,
+    }
+
+
 def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str,
                  base_url: str, project: str, owner_user_id: str,
                  target_platform: str, paths: dict[str, Path] | None = None,
@@ -459,10 +543,32 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
     bootstrap_fingerprint = "sha256:" + hashlib.sha256(bootstrap_code.encode()).hexdigest()
     retrying = identity_path.exists() or state_path.exists()
     if retrying:
-        if not identity_path.is_file() or not state_path.is_file():
+        if not state_path.is_file():
+            raise EnrollmentError("incomplete existing Agent Host state; revoke or uninstall first")
+        state = _read_json(state_path)
+        same_install = (
+            state.get("bootstrap_fingerprint") == bootstrap_fingerprint
+            and state.get("project") == project
+            and state.get("platform") == target_platform
+            and state.get("base_url") == base_url.rstrip("/")
+        )
+        if state.get("status") in _FINALIZATION_STATUSES:
+            if not same_install:
+                raise EnrollmentError(
+                    "existing Agent Host finalization does not match this enrollment")
+            state.update({"version": manifest["version"], "release": str(release),
+                          "finalization_resumed_at": time.time()})
+            _atomic_json(state_path, state, 0o600)
+            return _finalize_install(
+                state=state, state_path=state_path, identity_path=identity_path,
+                config_path=config_path, target_platform=target_platform, prefix=prefix,
+                service_path=service_path, log_root=log_root, state_root=state_root,
+                entrypoint=manifest["entrypoint"], start_service=start_service,
+                service_runner=service_runner,
+            )
+        if not identity_path.is_file():
             raise EnrollmentError("incomplete existing Agent Host state; revoke or uninstall first")
         pending_identity = _read_json(identity_path)
-        state = _read_json(state_path)
         retryable = (
             pending_identity.get("status") == "pending_enrollment"
             and state.get("status") in {
@@ -472,6 +578,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
             and state.get("bootstrap_fingerprint") == bootstrap_fingerprint
             and state.get("project") == project
             and state.get("platform") == target_platform
+            and state.get("base_url") == base_url.rstrip("/")
         )
         if not retryable:
             raise EnrollmentError(
@@ -504,6 +611,12 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
             "service_path": str(service_path),
             "identity_path": str(identity_path),
             "config_path": str(config_path),
+            "base_url": base_url.rstrip("/"),
+            "owner_user_id": owner_user_id,
+            "allow_work": bool(allow_work),
+            "lanes": sorted(set(lanes)),
+            "tenant_allowlist": sorted(set(tenant_allowlist)),
+            "provider_allowlist": sorted(set(provider_allowlist)),
             "prepared_at": time.time(),
         }
         # Prove the release and recovery-capable secret-storage path are durable
@@ -570,32 +683,24 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         "runtime_root": str(state_root / "provider-runtimes"),
         "agent_host_version": manifest["version"],
     }
-    state.update({"status": "installed", "installed_at": time.time()})
-    try:
-        _atomic_json(identity_path, identity, 0o600)
-        _atomic_json(config_path, config, 0o600)
-        _atomic_json(state_path, state, 0o600)
-        render_service(
-            target_platform,
-            python=sys.executable,
-            entrypoint=prefix / "current" / manifest["entrypoint"],
-            identity_path=identity_path,
-            config_path=config_path,
-            service_path=service_path,
-            log_root=log_root,
-            writable_roots=(state_root,),
-        )
-        if start_service:
-            control_service(target_platform, "start", service_path, runner=service_runner)
-    except Exception:
-        # The server identity already exists. Preserve local material so the operator
-        # can revoke/retry; never silently discard the only returned bearer.
-        state["status"] = "install_failed_identity_preserved"
-        _atomic_json(state_path, state, 0o600)
-        raise
-    return {"installed": True, "host_id": enrollment["host_id"],
-            "version": manifest["version"], "state_path": str(state_path),
-            "completion_recovered": bool(completed.get("completion_recovered"))}
+    # Journal the only returned bearer and all validated endpoint data before the
+    # first post-completion write. Any later boundary can resume or revoke locally.
+    state.update({
+        "status": "enrollment_completed_pending_finalize",
+        "completion_recovered": bool(completed.get("completion_recovered")),
+        "pending_identity": identity,
+        "pending_config": config,
+        "finalization_step": "journaled",
+        "enrollment_completed_at": time.time(),
+    })
+    _atomic_json(state_path, state, 0o600)
+    return _finalize_install(
+        state=state, state_path=state_path, identity_path=identity_path,
+        config_path=config_path, target_platform=target_platform, prefix=prefix,
+        service_path=service_path, log_root=log_root, state_root=state_root,
+        entrypoint=manifest["entrypoint"], start_service=start_service,
+        service_runner=service_runner,
+    )
 
 
 def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
@@ -656,9 +761,17 @@ def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path,
                 final_status: str = "revoked", stop_service: bool = True,
                 http: Callable[..., dict[str, Any]] = request_json,
                 service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict[str, Any]:
-    identity = _read_json(identity_path)
-    config = _read_json(config_path)
     state = _read_json(state_path)
+    identity = _read_json(identity_path) if identity_path.is_file() else {}
+    config = _read_json(config_path) if config_path.is_file() else {}
+    if not identity.get("host_token"):
+        identity = dict(state.get("pending_identity") or {})
+    if not config.get("base_url"):
+        config = dict(state.get("pending_config") or {})
+    if not identity.get("host_id") or not identity.get("host_token"):
+        raise EnrollmentError("no completed host identity is available to revoke")
+    if not config.get("base_url") or not config.get("project"):
+        raise EnrollmentError("no enrollment endpoint is available to revoke the host")
     if stop_service:
         control_service(
             state["platform"], "stop", Path(state["service_path"]), runner=service_runner)
@@ -682,6 +795,8 @@ def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path,
         shutil.rmtree(runtime_root)
     state.update({"status": final_status, "revoked_at": time.time(),
                   "post_revoke_denial": True})
+    state.pop("pending_identity", None)
+    state.pop("pending_config", None)
     _atomic_json(state_path, state, 0o600)
     return {"revoked": True, "status": final_status}
 

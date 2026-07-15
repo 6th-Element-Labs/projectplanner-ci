@@ -2,6 +2,7 @@
 """ADAPTER-18: signed macOS/Linux enrollment, rotation, revoke, and residue proof."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -87,6 +88,13 @@ def fake_codex(command, **kwargs):
     return subprocess.CompletedProcess(command, 0, output, "")
 
 
+def fake_api_key_codex(command, **kwargs):
+    del kwargs
+    output = ("codex-cli 1.2.3\n" if command[-1] == "--version"
+              else "Logged in using an API key\n")
+    return subprocess.CompletedProcess(command, 0, output, "")
+
+
 def begin(host_id: str):
     response = client.post("/ixp/v1/agent-host-enrollments", json={
         "project": PROJECT,
@@ -105,6 +113,14 @@ def begin(host_id: str):
 
 try:
     store.init_db(PROJECT)
+    try:
+        enrollment.preflight_codex_local_auth(
+            codex_executable="codex", runner=fake_api_key_codex)
+        api_key_mode_denied = False
+    except enrollment.EnrollmentError:
+        api_key_mode_denied = True
+    ok(api_key_mode_denied,
+       "local-auth preflight rejects a stored API-key login as non-personal auth")
     private_key = Ed25519PrivateKey.generate()
     private_path = TMP / "bundle-signing-private.pem"
     public_path = TMP / "bundle-signing-public.pem"
@@ -221,6 +237,156 @@ try:
        and response_identity.get("host_token")
        and "completion_recovery_secret" not in response_identity,
        "lost enrollment response reuses durable pending material and recovers without a new bootstrap")
+    recovery_secret = response_pending_identity["completion_recovery_secret"]
+    recovery_args = {
+        "bootstrap_code": response_loss_bootstrap["bootstrap_code"],
+        "hostname": "adapter18-response-loss.test",
+        "platform": "linux",
+        "public_key_fingerprint": response_identity["public_key_fingerprint"],
+        "completion_recovery_secret": recovery_secret,
+        "project": PROJECT,
+    }
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        duplicate_recoveries = list(pool.map(
+            lambda _: store.complete_agent_host_enrollment(**recovery_args), range(2)))
+    duplicate_tokens = [item.get("host_token") for item in duplicate_recoveries]
+    ok(all(item.get("completed") for item in duplicate_recoveries)
+       and len(set(duplicate_tokens)) == 1
+       and duplicate_tokens[0] == response_identity["host_token"]
+       and store.get_principal_by_token(PROJECT, duplicate_tokens[0]) is not None,
+       "concurrent completion retries converge on one still-usable recovered bearer")
+
+    def prove_finalization_resume(boundary: str) -> bool:
+        bootstrap = begin(f"host/adapter18-resume-{boundary}")
+        resume_paths = paths(f"resume-{boundary}")
+        completion_calls = [0]
+
+        def counted_http(*args, **kwargs):
+            completion_calls[0] += int(str(args[1]).endswith(
+                "/ixp/v1/agent-host-enrollments/complete"))
+            return http(*args, **kwargs)
+
+        original_atomic = enrollment._atomic_json
+        original_render = enrollment.render_service
+        failed = [False]
+        identity_path = resume_paths["config_root"] / "identity.json"
+        config_path = resume_paths["config_root"] / "config.json"
+        state_path = resume_paths["state_root"] / "state.json"
+
+        def injected_atomic(path, value, mode):
+            step = str((value or {}).get("finalization_step") or "")
+            matches = (
+                (boundary == "identity" and Path(path) == identity_path
+                 and bool((value or {}).get("host_token")))
+                or (boundary == "config" and Path(path) == config_path)
+                or (boundary == "identity_state" and Path(path) == state_path
+                    and step == "identity_written")
+                or (boundary == "config_state" and Path(path) == state_path
+                    and step == "config_written")
+                or (boundary == "render_state" and Path(path) == state_path
+                    and step == "service_rendered")
+                or (boundary == "start_state" and Path(path) == state_path
+                    and step == "service_started")
+            )
+            if matches and not failed[0]:
+                failed[0] = True
+                raise OSError(f"injected {boundary} finalization failure")
+            return original_atomic(path, value, mode)
+
+        def injected_render(*args, **kwargs):
+            if boundary == "render" and not failed[0]:
+                failed[0] = True
+                raise OSError("injected render failure")
+            return original_render(*args, **kwargs)
+
+        def injected_service(command, **kwargs):
+            if boundary == "start" and not failed[0]:
+                failed[0] = True
+                return subprocess.CompletedProcess(command, 1, "", "injected start failure")
+            return fake_service(command, **kwargs)
+
+        enrollment._atomic_json = injected_atomic
+        enrollment.render_service = injected_render
+        try:
+            enrollment.install_host(
+                bundle_dir=bundle_020, public_key_path=public_path,
+                bootstrap_code=bootstrap["bootstrap_code"],
+                base_url="https://switchboard.test", project=PROJECT,
+                owner_user_id="user-adapter18", target_platform="linux",
+                paths=resume_paths, lanes=["ADAPTER"], http=counted_http,
+                service_runner=injected_service, local_auth_runner=fake_codex,
+                codex_executable="codex", hostname=f"resume-{boundary}.test",
+                start_service=boundary in {"start", "start_state"},
+            )
+            first_failed = False
+        except (OSError, enrollment.EnrollmentError):
+            first_failed = True
+        finally:
+            enrollment._atomic_json = original_atomic
+            enrollment.render_service = original_render
+        pending = json.loads(state_path.read_text())
+        resumed = enrollment.install_host(
+            bundle_dir=bundle_020, public_key_path=public_path,
+            bootstrap_code=bootstrap["bootstrap_code"],
+            base_url="https://switchboard.test", project=PROJECT,
+            owner_user_id="user-adapter18", target_platform="linux",
+            paths=resume_paths, lanes=["ADAPTER"], http=counted_http,
+            service_runner=fake_service, local_auth_runner=fake_codex,
+            codex_executable="codex", hostname=f"resume-{boundary}.test",
+            start_service=boundary in {"start", "start_state"},
+        )
+        return bool(
+            first_failed and failed[0]
+            and pending.get("status") == "install_finalization_retry_required"
+            and (pending.get("pending_identity") or {}).get("host_token")
+            and resumed.get("installed")
+            and completion_calls[0] == 1
+        )
+
+    resume_boundaries = (
+        "identity", "identity_state", "config", "config_state",
+        "render", "render_state", "start", "start_state",
+    )
+    ok(all(prove_finalization_resume(boundary) for boundary in resume_boundaries),
+       "every post-completion write, render, and service-start boundary resumes without re-enrollment")
+
+    revoke_partial_bootstrap = begin("host/adapter18-revoke-partial")
+    revoke_partial_paths = paths("revoke-partial")
+    original_atomic = enrollment._atomic_json
+    partial_failed = [False]
+    partial_identity_path = revoke_partial_paths["config_root"] / "identity.json"
+
+    def fail_final_identity_once(path, value, mode):
+        if (Path(path) == partial_identity_path and (value or {}).get("host_token")
+                and not partial_failed[0]):
+            partial_failed[0] = True
+            raise OSError("injected partial revoke boundary")
+        return original_atomic(path, value, mode)
+
+    enrollment._atomic_json = fail_final_identity_once
+    try:
+        enrollment.install_host(
+            bundle_dir=bundle_020, public_key_path=public_path,
+            bootstrap_code=revoke_partial_bootstrap["bootstrap_code"],
+            base_url="https://switchboard.test", project=PROJECT,
+            owner_user_id="user-adapter18", target_platform="linux",
+            paths=revoke_partial_paths, http=http, service_runner=fake_service,
+            local_auth_runner=fake_codex, codex_executable="codex", start_service=False)
+    except OSError:
+        pass
+    finally:
+        enrollment._atomic_json = original_atomic
+    partial_revoked = enrollment.revoke_host(
+        identity_path=partial_identity_path,
+        config_path=revoke_partial_paths["config_root"] / "config.json",
+        state_path=revoke_partial_paths["state_root"] / "state.json",
+        http=http, service_runner=fake_service)
+    partial_record = store.get_agent_host_enrollment(
+        "host/adapter18-revoke-partial", project=PROJECT)
+    ok(partial_failed[0] and partial_revoked.get("revoked")
+       and partial_record.get("status") == "revoked"
+       and not partial_identity_path.exists(),
+       "a post-completion install can be revoked directly from its durable finalization journal")
 
     mac_bootstrap = begin("host/adapter18-macos")
     mac_paths = paths("macos")

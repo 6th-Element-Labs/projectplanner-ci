@@ -643,7 +643,9 @@ def register_runner_session(rec, wake, inventory):
     """
     if not rec or not rec.get("runner_session_id"):
         return None
-    binding = ((wake.get("policy") or {}).get("account_binding") or {})
+    policy = wake.get("policy") or {}
+    binding = (policy.get("account_binding") or {})
+    execution = policy.get("execution_binding") or {}
     metadata = {
         "wake_id": wake.get("wake_id"),
         "wake_mode": rec.get("wake_mode"),
@@ -661,6 +663,8 @@ def register_runner_session(rec, wake, inventory):
         "provider": binding.get("provider"),
         "account_affinity_id": binding.get("account_affinity_id"),
         **(rec.get("metadata") or {}),
+        "source_sha": execution.get("source_sha"),
+        "execution_connection_id": execution.get("execution_connection_id"),
     }
     # Prefer explicit host/<instance-id> from inventory; never invent task-row EC2 ids.
     host_id = inventory.get("host_id") or ""

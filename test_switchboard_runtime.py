@@ -17,6 +17,7 @@ os.environ["PM_AUTH_MODE"] = "required"
 
 import auth  # noqa: E402
 import store  # noqa: E402
+from db.connection import _conn  # noqa: E402
 
 P = "maxwell"
 TOKEN = "test-token"
@@ -289,6 +290,72 @@ try:
         policy=good_policy, task_id=personal_task["task_id"],
         principal_id=p["id"], actor=auth.actor(p), project=P)
     good_execution = (good_wake.get("policy") or {}).get("execution_binding") or {}
+    exact_runner_id = good_execution.get("runner_session_id") or ""
+    store.upsert_runner_session({
+        "runner_session_id": exact_runner_id,
+        "host_id": "host/test",
+        "agent_id": personal_agent,
+        "runtime": "codex",
+        "task_id": personal_task["task_id"],
+        "claim_id": personal_claim["claim_id"],
+        "status": "starting",
+        "cwd": os.getcwd(),
+        "metadata": {
+            "wake_id": good_wake["wake_id"],
+            "work_session_id": personal_session["work_session_id"],
+            "source_sha": personal_source_sha,
+            "execution_connection_id": good_execution["execution_connection_id"],
+        },
+    }, principal_id=p["id"], actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        connection_row = dict(connection.execute(
+            "SELECT * FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (good_execution["execution_connection_id"],),
+        ).fetchone())
+        connection.execute(
+            "DELETE FROM personal_execution_connections WHERE execution_connection_id=?",
+            (good_execution["execution_connection_id"],),
+        )
+    nonexistent_connection_claim = store.claim_wake(
+        "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
+        actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        columns = ",".join(connection_row)
+        placeholders = ",".join("?" for _ in connection_row)
+        connection.execute(
+            f"INSERT INTO personal_execution_connections({columns}) VALUES ({placeholders})",
+            tuple(connection_row.values()),
+        )
+        connection.execute(
+            "UPDATE personal_execution_connections SET expires_at=0 "
+            "WHERE execution_connection_id=?",
+            (good_execution["execution_connection_id"],),
+        )
+    stale_connection_claim = store.claim_wake(
+        "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
+        actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        connection.execute(
+            "UPDATE personal_execution_connections SET expires_at=?, host_id=? "
+            "WHERE execution_connection_id=?",
+            (connection_row["expires_at"], "host/cross-host",
+             good_execution["execution_connection_id"]),
+        )
+    cross_host_connection_claim = store.claim_wake(
+        "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
+        actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        connection.execute(
+            "UPDATE personal_execution_connections SET host_id=? "
+            "WHERE execution_connection_id=?",
+            (connection_row["host_id"], good_execution["execution_connection_id"]),
+        )
+    ok("execution_connection_not_found" in nonexistent_connection_claim.get("reason_codes", [])
+       and "execution_connection_stale" in stale_connection_claim.get("reason_codes", [])
+       and "execution_connection_host_id_mismatch"
+       in cross_host_connection_claim.get("reason_codes", []),
+       "personal wake claim rejects nonexistent, stale, and cross-host execution connections")
     wrong_runner_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id="run_wrong",
         actor=auth.actor(p), project=P)
@@ -297,12 +364,23 @@ try:
        "personal wake claim rejects a substituted runner session")
     good_personal_claim = store.claim_wake(
         "host/test", good_wake["wake_id"],
-        runner_session_id=good_execution.get("runner_session_id") or "",
+        runner_session_id=exact_runner_id,
         actor=auth.actor(p), project=P)
+    resumed_personal_claim = store.claim_wake(
+        "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
+        actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        active_connection_status = connection.execute(
+            "SELECT status FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (good_execution["execution_connection_id"],),
+        ).fetchone()["status"]
     ok(good_personal_claim.get("claimed") is True
        and good_personal_claim.get("reserved") is False
+       and resumed_personal_claim.get("resumed") is True
+       and active_connection_status == "active"
        and good_execution.get("source_sha") == personal_source_sha,
-       "personal wake proves live task/claim/session/source relations without a credential lease")
+       "personal wake atomically activates and idempotently resumes its exact live connection")
 
     failed_wake = store.request_wake(
         selector={"runtime": "claude-code", "agent_id": "claude/TEST#fail",
