@@ -421,6 +421,7 @@ cat >/etc/systemd/system/switchboard-co-agent-host.service.d/10-co-fleet-worktre
 ExecStart=
 ExecStart=/opt/projectplanner/.venv/bin/python ${{WORKTREE}}/adapters/agent_host.py --interval 10
 Environment=PYTHONPATH=${{WORKTREE}}:${{WORKTREE}}/src
+ReadWritePaths=/run/switchboard-co
 EOF
 systemctl daemon-reload
 systemctl enable --now switchboard-co-agent-host.service

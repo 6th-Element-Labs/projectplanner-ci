@@ -132,6 +132,19 @@ ok("SWITCHBOARD_CO_SOURCE_SHA=${SOURCE_SHA}" in rendered
    "Agent Host executes the exact checked mirror revision, not stale image code")
 ok("Environment=PYTHONPATH=${WORKTREE}:${WORKTREE}/src" in rendered,
    "fleet Agent Host exposes both the exact worktree and its src package root")
+ok("ReadWritePaths=/run/switchboard-co" in rendered,
+   "fleet Agent Host can atomically persist drain receipts under its strict sandbox")
+ok(rendered.index("install -d -m 0770 -o switchboard -g switchboard /run/switchboard-co")
+   < rendered.index("ReadWritePaths=/run/switchboard-co")
+   < rendered.index("systemctl enable --now switchboard-co-agent-host.service"),
+   "drain runtime directory ownership and write grant are ready before Agent Host starts")
+worktree_drop_in = rendered.split(
+    "cat >/etc/systemd/system/switchboard-co-agent-host.service.d/10-co-fleet-worktree.conf <<EOF\n",
+    1,
+)[1].split("\nEOF", 1)[0]
+ok(worktree_drop_in.count("ReadWritePaths=") == 1
+   and "ProtectSystem=" not in worktree_drop_in,
+   "fleet override adds only the narrow runtime write path and preserves base sandboxing")
 repo_root = Path(__file__).resolve().parent
 import_probe = subprocess.run(
     [sys.executable, "-c",
