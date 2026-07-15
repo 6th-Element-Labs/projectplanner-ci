@@ -101,7 +101,10 @@ Scopes: `write:ixp`. Completion evidence rules follow session policy (`code_stri
 | Fat router attachments | `tasks.py` mounts review, dispatch, and chat — those BCs do not belong in service #2 day one. |
 | Cross-repo imports | Tasks ↔ claims ↔ access ↔ coordination ↔ narrations enrichment. |
 
-**Independence prerequisite (future, before ARCH-MS-79 Go):** ports for store façade consumers; exclusive-writer matrix for tasks/claims/activity; strip or seam dispatch/chat/review; SQLite contention / rollback / 401–403-style contract proof (Auth G5 analogue).
+**Independence prerequisite (Phase 3 3B0, before ARCH-MS-90 Go):** ports for store façade consumers
+(ARCH-MS-87); exclusive-writer matrix + Auth/write-binding via ports
+([`TASKS-INDEPENDENCE-GATE.md`](TASKS-INDEPENDENCE-GATE.md), ARCH-MS-88); strip or seam
+dispatch/chat/review; SQLite contention / rollback / API parity proof (ARCH-MS-89; Auth G5 analogue).
 
 ---
 

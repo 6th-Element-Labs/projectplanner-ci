@@ -7,9 +7,11 @@
   proven) · [ADR-0009](0009-microservices-modernization.md) (Tasks = service #2) ·
   [ADR-0007](0007-application-shell-cleanup.md) (Caddy edge; no nginx) ·
   [`ARCH-MS-PHASE2-TASKS-READINESS.md`](../ARCH-MS-PHASE2-TASKS-READINESS.md) (Mode A surface +
-  coupling ledger) · [`tasks_cut_waived.md`](../phase2/tasks_cut_waived.md) (Phase 2 deferred the
-  live Tasks cut) · board deliverable **`arch-ms-phase-3`** · execution tracker
-  [`ARCH-MS-EXECUTION.md`](../ARCH-MS-EXECUTION.md) · workstream **`ARCH-MS`** (ARCH-MS-85+).
+  coupling ledger) · [`TASKS-INDEPENDENCE-GATE.md`](../TASKS-INDEPENDENCE-GATE.md) (ownership /
+  writers / Auth binding — ARCH-MS-88) · [`tasks_cut_waived.md`](../phase2/tasks_cut_waived.md)
+  (Phase 2 deferred the live Tasks cut) · board deliverable **`arch-ms-phase-3`** · execution
+  tracker [`ARCH-MS-EXECUTION.md`](../ARCH-MS-EXECUTION.md) · workstream **`ARCH-MS`**
+  (ARCH-MS-85+).
 
 > **Mode A** means: one BC (Tasks), yellow-light process cut, and a **thin day-one cut surface**
 > (`:8122`; `/api/tasks*` + claim-only TXP). It does **not** mean “cut MCP,” “cut every TXP
