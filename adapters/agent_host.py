@@ -58,6 +58,7 @@ P_LIST_RUNNERS = "/ixp/v1/runner_sessions"
 P_LIST_WORK_SESSIONS = "/ixp/v1/work_sessions"
 P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
+AGENT_HOST_VERSION = os.environ.get("PM_AGENT_HOST_VERSION", "0.2.0")
 
 
 def _csv(value):
@@ -90,6 +91,36 @@ def _memory_resources():
     return {
         "memory_mb_total": round(total / 1024 / 1024, 1) if total else None,
         "memory_mb_available": round(available / 1024 / 1024, 1) if available else None,
+    }
+
+
+def _redacted_local_auth(runtime):
+    """Advertise local personal-auth readiness without returning account material."""
+    available = _truthy(os.environ.get("PM_HOST_LOCAL_AUTH_AVAILABLE"))
+    mode = str(os.environ.get("PM_HOST_LOCAL_AUTH_MODE") or "").strip()
+    raw_proof = str(os.environ.get("PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF") or "").strip()
+    fingerprint = ""
+    if raw_proof:
+        fingerprint = "acct-" + hashlib.sha256(
+            f"switchboard-local-auth:{runtime}:{raw_proof}".encode()).hexdigest()[:16]
+    return {
+        "available": available,
+        "runtime": runtime,
+        "auth_mode": mode or ("local" if available else "unavailable"),
+        "account_fingerprint": fingerprint or None,
+        "credential_values_redacted": True,
+        "provider_credential_exported": False,
+    }
+
+
+def _identity_inventory():
+    generation = str(os.environ.get("PM_HOST_IDENTITY_GENERATION") or "").strip()
+    return {
+        "schema": "switchboard.agent_host_identity_proof.v1",
+        "enrollment_id": os.environ.get("PM_HOST_ENROLLMENT_ID") or None,
+        "identity_generation": int(generation) if generation.isdigit() else None,
+        "public_key_fingerprint": os.environ.get("PM_HOST_PUBLIC_KEY_FINGERPRINT") or None,
+        "credential_values_redacted": True,
     }
 
 
@@ -213,23 +244,87 @@ def default_inventory():
         profiles.append("cloud_execution")
         capabilities.append("cloud_execution")
     placement = placement_inventory(repo, runtime, policy)
+    local_auth = _redacted_local_auth(runtime)
+    owner = {
+        "user_id": os.environ.get("PM_HOST_OWNER_USER_ID") or None,
+        "tenant_allowlist": placement.get("tenant_ids") or [],
+        "project_allowlist": placement.get("projects") or [],
+        "provider_allowlist": placement.get("providers") or [],
+    }
     return {
         "project": PROJECT, "host_id": host_id, "hostname": socket.gethostname(),
-        "agent_host_version": "0.1.0", "repo_root": repo,
+        "agent_host_version": AGENT_HOST_VERSION, "repo_root": repo,
         "policy": policy,
         "runtimes": [{
             "runtime": runtime,
-            "launcher": "codex cloud exec" if cloud_enabled else sys.executable,
+            "launcher": "codex cloud exec" if cloud_enabled else (
+                "codex" if runtime == "codex" else sys.executable),
             "profiles": profiles,
             "control": {"mode": "hook_deny", "runner_kill": True, "host_policy": policy["mode"]},
             "policy": policy,
             "lanes": runtime_lanes,
             "capabilities": capabilities,
+            "local_auth": local_auth,
         }],
         "limits": {"max_sessions": int(os.environ.get("PM_HOST_MAX_SESSIONS", "2"))},
-        "capacity": {"active_sessions": 0, "placement": placement},
+        "capacity": {
+            "active_sessions": 0,
+            "headroom": int(os.environ.get("PM_HOST_MAX_SESSIONS", "2")),
+            "drain_state": placement.get("drain_state"),
+            "placement": placement,
+            "identity": _identity_inventory(),
+            "owner": owner,
+            "local_auth": local_auth,
+        },
         "heartbeat_ttl_s": 60,
     }
+
+
+def heartbeat_capacity(inventory):
+    """Return the full non-secret admission record for each heartbeat."""
+    active = active_session_count(inventory)
+    maximum = int((inventory.get("limits") or {}).get("max_sessions") or 0)
+    capacity = dict(inventory.get("capacity") or {})
+    capacity.update({
+        "active_sessions": active,
+        "headroom": max(0, maximum - active),
+        "allow_work": bool((inventory.get("policy") or {}).get("allow_work")),
+        "drain_state": ((capacity.get("placement") or {}).get("drain_state")
+                        or capacity.get("drain_state") or "accepting"),
+    })
+    return capacity
+
+
+def validate_personal_wake_binding(wake, inventory):
+    """Fail closed when a personal-host wake opts into the exact-bind contract."""
+    policy = (wake or {}).get("policy") or {}
+    personal = (policy.get("execution_mode") == "personal_agent_host"
+                or policy.get("require_exact_host_binding") is True)
+    if not personal:
+        return {"required": False, "valid": True}
+    selector = (wake or {}).get("selector") or {}
+    binding = policy.get("account_binding") or {}
+    execution = policy.get("execution_binding") or {}
+    values = {
+        "wake_id": (wake or {}).get("wake_id"),
+        "task_id": (wake or {}).get("task_id") or binding.get("task_id"),
+        "claim_id": binding.get("claim_id") or execution.get("claim_id"),
+        "work_session_id": binding.get("work_session_id") or execution.get("work_session_id"),
+        "source_sha": execution.get("source_sha") or policy.get("source_sha"),
+        "execution_connection_id": execution.get("execution_connection_id"),
+        "agent_id": selector.get("agent_id"),
+    }
+    missing = sorted(key for key, value in values.items() if not str(value or "").strip())
+    expected_host = str(execution.get("host_id") or "").strip()
+    if expected_host and expected_host != inventory.get("host_id"):
+        return {"required": True, "valid": False, "error": "host_binding_mismatch",
+                "failure_class": "unbound_identity"}
+    if selector.get("runtime") != "codex":
+        missing.append("selector.runtime=codex")
+    if missing:
+        return {"required": True, "valid": False, "error": "wake_binding_incomplete",
+                "failure_class": "unbound_identity", "missing": sorted(set(missing))}
+    return {"required": True, "valid": True, "binding": values}
 
 
 def _git_root():
@@ -983,17 +1078,24 @@ def run_once(inventory):
     if drain_request:
         return handle_drain(drain_request, inventory)
     host_id = inventory["host_id"]
+    capacity = heartbeat_capacity(inventory)
     _try("POST", P_HEARTBEAT_HOST, {"project": PROJECT, "host_id": host_id,
-                                    "active_sessions": active_session_count(inventory)})
+                                    "active_sessions": capacity["active_sessions"],
+                                    "capacity": capacity})
     controls = handle_runner_controls(inventory)
     listed = _try("GET", f"{P_LIST_WAKES}?project={PROJECT}&status=pending") or {}
     wakes = wakes_bound_to_host(listed.get("wake_intents") or listed.get("wakes") or [])
     acted = []
+    refused = []
     cap = inventory["limits"]["max_sessions"]
     for w in wakes:
         if active_session_count(inventory) + len(acted) >= cap:
             print("[agent_host] at capacity; leaving remaining wakes for other hosts", flush=True)
             break
+        exact_binding = validate_personal_wake_binding(w, inventory)
+        if not exact_binding.get("valid"):
+            refused.append({"wake_id": w.get("wake_id"), **exact_binding})
+            continue
         if not eligible_runtime(w, inventory):
             continue  # not ours — let an eligible host claim it (substrate records if none do)
         wake_id = w.get("wake_id")
@@ -1015,6 +1117,8 @@ def run_once(inventory):
         if not claimed or not (claimed.get("claimed", True)):
             continue  # another host won it (atomic claim)
         claimed_wake = claimed.get("wake") or w
+        execution_binding = ((claimed_wake.get("policy") or {}).get(
+            "execution_binding") or {})
         launch_env = ({
             "PM_CO_ACCOUNT_BINDING_JSON": json.dumps(
                 (claimed_wake.get("policy") or {}).get("account_binding") or {},
@@ -1025,6 +1129,9 @@ def run_once(inventory):
             "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
             "PM_AUTO_WORK_SESSION": "1",
             "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
+            "PM_SOURCE_SHA": str(execution_binding.get("source_sha") or ""),
+            "PM_EXECUTION_CONNECTION_ID": str(
+                execution_binding.get("execution_connection_id") or ""),
         } if binding else {})
         rec = (launch(claimed_wake, inventory, runner_session_id=runner_session_id,
                       extra_env=launch_env)
@@ -1104,6 +1211,7 @@ def run_once(inventory):
                                            "result": result})
         acted.append({"wake_id": wake_id, **result})
     return {"host_id": host_id, "pending": len(wakes), "acted": acted,
+            "refused": refused,
             "runner_controls": controls}
 
 

@@ -118,7 +118,41 @@ def heartbeat_host(host_id: str, ctx: Context, active_sessions: int = -1,
     return services.dumps(store.heartbeat_host(
         host_id, active_sessions=(None if active_sessions < 0 else active_sessions),
         capacity=capacity, status=status, last_error=last_error,
-        actor=auth.actor(principal), project=project))
+        principal_id=principal["id"], actor=auth.actor(principal), project=project))
+
+
+def begin_agent_host_enrollment(ctx: Context, owner_user_id: str,
+                                requested_host_id: str = "",
+                                tenant_allowlist: str = "",
+                                project_allowlist: str = "",
+                                provider_allowlist: str = "",
+                                package_version: str = "",
+                                ttl_seconds: int = 600,
+                                project: str = "switchboard") -> str:
+    """Issue one short-lived, single-use personal Agent Host bootstrap code."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    csv = store.coerce_csv_list
+    return services.dumps(store.begin_agent_host_enrollment(
+        owner_user_id=owner_user_id,
+        requested_host_id=requested_host_id,
+        tenant_allowlist=csv(tenant_allowlist),
+        project_allowlist=csv(project_allowlist) or [project],
+        provider_allowlist=csv(provider_allowlist),
+        package_version=package_version,
+        ttl_seconds=ttl_seconds,
+        created_by_principal_id=principal["id"],
+        actor=auth.actor(principal),
+        project=project,
+    ))
+
+
+def list_agent_host_enrollments(ctx: Context, project: str = "switchboard",
+                                status: str = "") -> str:
+    """List redacted Agent Host enrollment records; raw bootstrap/bearer values are absent."""
+    services = _services()
+    services.require_write(ctx, project, ("write:system",))
+    return services.dumps(store.list_agent_host_enrollments(status=status, project=project))
 
 
 
@@ -173,6 +207,7 @@ def get_agent_state(task_id: str, project: str = "maxwell") -> str:
 
 AGENT_TOOL_NAMES = ("register_agent", "register_host", 'heartbeat', 'list_active_agents',
                     'heartbeat_host', 'list_agent_hosts', 'host_status',
+                    'begin_agent_host_enrollment', 'list_agent_host_enrollments',
                     'set_agent_state', 'get_agent_state')
 
 

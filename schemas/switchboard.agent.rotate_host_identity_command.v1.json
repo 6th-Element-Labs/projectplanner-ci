@@ -1,0 +1,31 @@
+{
+  "$id": "switchboard.agent.rotate_host_identity_command.v1",
+  "additionalProperties": false,
+  "description": "Authenticated rotation of host bearer and key fingerprint.",
+  "properties": {
+    "host_id": {
+      "title": "Host Id",
+      "type": "string"
+    },
+    "project": {
+      "default": "switchboard",
+      "title": "Project",
+      "type": "string"
+    },
+    "public_key_fingerprint": {
+      "title": "Public Key Fingerprint",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.rotate_host_identity_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "host_id",
+    "public_key_fingerprint"
+  ],
+  "title": "RotateHostIdentityCommand",
+  "type": "object"
+}

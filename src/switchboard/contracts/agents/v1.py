@@ -11,6 +11,10 @@ from ..registry import register
 
 REGISTER_AGENT_COMMAND_SCHEMA = "switchboard.agent.register_agent_command.v1"
 REGISTER_HOST_COMMAND_SCHEMA = "switchboard.agent.register_host_command.v1"
+BEGIN_HOST_ENROLLMENT_COMMAND_SCHEMA = "switchboard.agent.begin_host_enrollment_command.v1"
+COMPLETE_HOST_ENROLLMENT_COMMAND_SCHEMA = "switchboard.agent.complete_host_enrollment_command.v1"
+ROTATE_HOST_IDENTITY_COMMAND_SCHEMA = "switchboard.agent.rotate_host_identity_command.v1"
+REVOKE_HOST_IDENTITY_COMMAND_SCHEMA = "switchboard.agent.revoke_host_identity_command.v1"
 
 
 def parse_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -206,5 +210,110 @@ class RegisterHostCommand(VersionedModel):
         return cls.model_validate(data)
 
 
+class BeginHostEnrollmentCommand(VersionedModel):
+    """Operator-authorized request for a short-lived bootstrap ceremony."""
+
+    SCHEMA: ClassVar[str] = BEGIN_HOST_ENROLLMENT_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(default=BEGIN_HOST_ENROLLMENT_COMMAND_SCHEMA, alias="schema")
+    project: str = "switchboard"
+    owner_user_id: str
+    requested_host_id: str = ""
+    tenant_allowlist: list[str] = Field(default_factory=list)
+    project_allowlist: list[str] = Field(default_factory=list)
+    provider_allowlist: list[str] = Field(default_factory=list)
+    package_version: str = ""
+    ttl_seconds: int = 600
+
+    @field_validator("project", "owner_user_id", "requested_host_id", "package_version",
+                     mode="before")
+    @classmethod
+    def _strip_enrollment_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("tenant_allowlist", "project_allowlist", "provider_allowlist",
+                     mode="before")
+    @classmethod
+    def _coerce_allowlist(cls, value: Any) -> list[str]:
+        return [str(item).strip() for item in parse_json_list(
+            value, field_name="allowlist") if str(item).strip()]
+
+    @field_validator("ttl_seconds", mode="before")
+    @classmethod
+    def _coerce_bootstrap_ttl(cls, value: Any) -> int:
+        try:
+            return min(900, max(60, int(value or 600)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ttl_seconds must be an integer") from exc
+
+
+class CompleteHostEnrollmentCommand(VersionedModel):
+    """Single-use device bootstrap completion from a macOS or Linux host."""
+
+    SCHEMA: ClassVar[str] = COMPLETE_HOST_ENROLLMENT_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(default=COMPLETE_HOST_ENROLLMENT_COMMAND_SCHEMA, alias="schema")
+    project: str = "switchboard"
+    bootstrap_code: str
+    hostname: str
+    platform: str
+    public_key_fingerprint: str
+    agent_host_version: str = ""
+
+    @field_validator("project", "bootstrap_code", "hostname", "platform",
+                     "public_key_fingerprint", "agent_host_version", mode="before")
+    @classmethod
+    def _strip_completion_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
+class RotateHostIdentityCommand(VersionedModel):
+    """Authenticated rotation of host bearer and key fingerprint."""
+
+    SCHEMA: ClassVar[str] = ROTATE_HOST_IDENTITY_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(default=ROTATE_HOST_IDENTITY_COMMAND_SCHEMA, alias="schema")
+    project: str = "switchboard"
+    host_id: str
+    public_key_fingerprint: str
+
+    @field_validator("project", "host_id", "public_key_fingerprint", mode="before")
+    @classmethod
+    def _strip_rotation_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
+class RevokeHostIdentityCommand(VersionedModel):
+    """Authenticated owner/operator revocation of a personal host identity."""
+
+    SCHEMA: ClassVar[str] = REVOKE_HOST_IDENTITY_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(default=REVOKE_HOST_IDENTITY_COMMAND_SCHEMA, alias="schema")
+    project: str = "switchboard"
+    host_id: str
+    reason: str = "host_revoke"
+    final_status: str = "revoked"
+
+    @field_validator("project", "host_id", "reason", "final_status", mode="before")
+    @classmethod
+    def _strip_revocation_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("final_status")
+    @classmethod
+    def _validate_final_status(cls, value: str) -> str:
+        if value not in {"revoked", "uninstalled"}:
+            raise ValueError("final_status must be revoked or uninstalled")
+        return value
+
+
 register(RegisterAgentCommand)
 register(RegisterHostCommand)
+register(BeginHostEnrollmentCommand)
+register(CompleteHostEnrollmentCommand)
+register(RotateHostIdentityCommand)
+register(RevokeHostIdentityCommand)
