@@ -52,6 +52,7 @@ big-bang rewrite / frontend swap.
 | **ARCH-MS-77** | 2B: Auth cutover parity tests + strip dual impl (**Go only**) | ✅ | PR #505 — hermetic parity; `PM_AUTH_HTTP_PRIMARY=service`; `/api/auth/me*` → `:8110` |
 | **ARCH-MS-78** | 2C: Tasks service readiness — contracts + extract plan | ✅ | PR #506 — `docs/ARCH-MS-PHASE2-TASKS-READINESS.md` + `docs/phase2/tasks_readiness.md` (readiness-only) |
 | **ARCH-MS-79** | 2C: Tasks process cut (optional) | 🟡 | **Waived** — `docs/phase2/tasks_cut_waived.md`; exit via readiness (ADR-0011 2C) |
+| **ARCH-MS-81** | Exit: Phase 2 close — Path A evidence | 🟡 | `docs/phase2/auth_independence_verdict.json` (go) + `docs/phase2/auth_cut_playbook.md`; exit gate `passed=true` |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
@@ -213,4 +214,6 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-14 | ARCH-MS-45 | Phase 1 exit gate: `store.py` / `app.py` / `mcp_server.py` thinned to absolute ceilings; residual in `repositories/shell.py`, `app_impl.py`, `mcp_server_impl.py`; `scripts/arch_ms_phase1_exit_gate.py` + `tests/test_arch_ms45_phase1_exit_gate.py` |
 | 2026-07-15 | ARCH-MS-72 | Phase 2 charter ADR-0011 (process strangler; Auth cut conditional); Phase 2 section linked from this tracker |
 | 2026-07-15 | ARCH-MS-74 | Phase 2 exit harness: `scripts/arch_ms_phase2_exit_gate.py` (Path A Auth cut ∨ Path B No-Go); fixture proof in `tests/test_arch_ms74_phase2_exit_gate.py` |
+| 2026-07-15 | ARCH-MS-78 | Tasks readiness-only (no live Tasks cut); `docs/phase2/tasks_readiness.md` |
+| 2026-07-15 | ARCH-MS-81 | Path A exit evidence: independence verdict `go` + auth cut playbook; `arch_ms_phase2_exit_gate.py` → `passed=true` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |

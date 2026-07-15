@@ -1,0 +1,28 @@
+{
+  "schema": "switchboard.auth_independence_verdict.v1",
+  "verdict": "go",
+  "decision": "go",
+  "task_id": "ARCH-MS-81",
+  "recorded_at": "2026-07-15",
+  "recorded_by": "cursor/ARCH-MS-81-phase2-exit",
+  "deliverable_id": "arch-ms-phase-2",
+  "charter": "ADR-0011 Decision 4–5",
+  "inputs": {
+    "G1_exclusive_writers": true,
+    "G2_auth_down_fail_closed": true,
+    "G3_secrets_fail_fast": true,
+    "G4_ports_independence": true,
+    "G5_ops_proof": true,
+    "G6_operator_go": true
+  },
+  "evidence": {
+    "independence_gate": "docs/AUTH-INDEPENDENCE-GATE.md",
+    "ports": "ARCH-MS-82 / PR #492",
+    "ownership_outage_secrets": "ARCH-MS-83 / PR #495",
+    "ratchets_ops": "ARCH-MS-84 / PR #498",
+    "side_by_side": "ARCH-MS-75 / PR #501",
+    "caddy_cutover": "ARCH-MS-76 / PR #503",
+    "parity_dual_strip": "ARCH-MS-77 / PR #505"
+  },
+  "notes": "Operator Go (G6) recorded on ARCH-MS-75 before process cut. Path A Auth cut shipped; Tasks remains readiness-only (ARCH-MS-78)."
+}
