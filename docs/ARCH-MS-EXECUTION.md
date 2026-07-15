@@ -30,7 +30,7 @@ default (Postgres only via ARCH-19 SLO).
 
 | Milestone | Intent |
 |---|---|
-| `2a-charter-rails` | ADR-0011 + reusable service skeleton (ARCH-MS-72, ARCH-MS-73) |
+| `2a-charter-rails` | ADR-0011 + reusable service skeleton + exit harness (ARCH-MS-72…74) |
 | `2b0-auth-independence-gate` | Ports, ownership/outage/secrets, ratchets + ops proof (ARCH-MS-82…84) |
 | `2b-auth-process-cut` | Conditional Auth uvicorn cut (ARCH-MS-75+) — **Go only** |
 | Exit | `arch_ms_phase2_exit_gate` — Auth cut **or** documented No-Go + ratchets + Tasks readiness |
@@ -42,7 +42,8 @@ big-bang rewrite / frontend swap.
 | Task | Title | Tracker | Repo evidence |
 |---|---|---|---|
 | **ARCH-MS-72** | 2A: ADR — Phase 2 process strangler charter | 🟡 | This section + `docs/decisions/0011-phase2-process-strangler.md` |
-| **ARCH-MS-73** | 2A: Service skeleton — FastAPI + health + systemd/Caddy | ⬜ | — |
+| **ARCH-MS-73** | 2A: Service skeleton — FastAPI + health + systemd/Caddy | ✅ | `src/switchboard/services/_skeleton/`; `deploy/skeleton/`; `tests/test_arch_ms73_service_skeleton.py` |
+| **ARCH-MS-74** | 2A: Phase 2 exit gate harness | 🟡 | `scripts/arch_ms_phase2_exit_gate.py`; `tests/test_arch_ms74_phase2_exit_gate.py` (may stay red until 2B/2C) |
 | **ARCH-MS-82** | 2B0: Auth ports — remove store/auth/notify imports | ✅ | PR #492 — ports + adapters; `tests/test_arch_ms82_auth_ports.py` |
 | **ARCH-MS-83** | 2B0: Auth ownership, outage policy, secrets fail-fast | 🟡 | `docs/AUTH-INDEPENDENCE-GATE.md`; `ensure_identity`; JWT secret fail-fast |
 | **ARCH-MS-84** | 2B0: Architecture ratchets + Auth cut ops proof | ⬜ | — |
@@ -207,4 +208,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-12 | ARCH-MS-24 | Added the fixed-baseline Phase 0 exit audit; moved project/access persistence into `src/switchboard/storage/repositories/access.py`; measured all exit criteria green |
 | 2026-07-14 | ARCH-MS-45 | Phase 1 exit gate: `store.py` / `app.py` / `mcp_server.py` thinned to absolute ceilings; residual in `repositories/shell.py`, `app_impl.py`, `mcp_server_impl.py`; `scripts/arch_ms_phase1_exit_gate.py` + `tests/test_arch_ms45_phase1_exit_gate.py` |
 | 2026-07-15 | ARCH-MS-72 | Phase 2 charter ADR-0011 (process strangler; Auth cut conditional); Phase 2 section linked from this tracker |
+| 2026-07-15 | ARCH-MS-74 | Phase 2 exit harness: `scripts/arch_ms_phase2_exit_gate.py` (Path A Auth cut ∨ Path B No-Go); fixture proof in `tests/test_arch_ms74_phase2_exit_gate.py` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
