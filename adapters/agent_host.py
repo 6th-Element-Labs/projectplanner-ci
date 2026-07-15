@@ -104,7 +104,8 @@ def placement_inventory(repo, runtime, policy):
     binary_names = {"git", "python3", "gh"}
     binary_names.add("claude" if runtime == "claude-code" else runtime)
     binaries = sorted(name for name in binary_names if name and shutil.which(name))
-    ephemeral = bool(str(os.environ.get("PM_WAKE_ID") or "").strip())
+    bound_wake_id = str(os.environ.get("PM_WAKE_ID") or "").strip()
+    ephemeral = bool(bound_wake_id)
     return {
         "schema": "switchboard.agent_host_placement.v1",
         "host_class": os.environ.get(
@@ -112,6 +113,10 @@ def placement_inventory(repo, runtime, policy):
         "cost_class": os.environ.get(
             "PM_HOST_COST_CLASS", "ephemeral_variable" if ephemeral else "already_paid"),
         "wakeable": True,
+        # A provisioned CO worker is launched for exactly one wake.  Advertising the
+        # non-secret wake id lets the coordinator exclude it from later placement;
+        # the host-side queue filter remains the final enforcement boundary.
+        "bound_wake_id": bound_wake_id or None,
         "drain_state": "accepting" if policy.get("allow_work") else "message_only",
         "tenant_ids": _csv(os.environ.get("PM_HOST_TENANTS", "")),
         "projects": _csv(os.environ.get("PM_HOST_PROJECTS", PROJECT)),

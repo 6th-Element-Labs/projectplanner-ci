@@ -15,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from typing import Any, Callable, Mapping, Sequence
 
 from switchboard.application.commands.provider_credentials import (
@@ -105,6 +106,9 @@ class ProviderRuntimeAuth:
         command_runner: Callable[..., Any] = subprocess.run,
         process_factory: Callable[..., Any] = subprocess.Popen,
         preflight_timeout_seconds: int = 20,
+        preflight_attempts: int = 3,
+        preflight_retry_delay_seconds: float = 0.5,
+        sleep_fn: Callable[[float], None] = time.sleep,
         base_environment: Mapping[str, str] | None = None,
     ) -> None:
         self.repository = repository
@@ -116,6 +120,10 @@ class ProviderRuntimeAuth:
         self.command_runner = command_runner
         self.process_factory = process_factory
         self.preflight_timeout_seconds = max(2, int(preflight_timeout_seconds))
+        self.preflight_attempts = max(1, min(5, int(preflight_attempts)))
+        self.preflight_retry_delay_seconds = max(
+            0.0, min(5.0, float(preflight_retry_delay_seconds)))
+        self.sleep_fn = sleep_fn
         self.base_environment = dict(
             os.environ if base_environment is None else base_environment)
 
@@ -276,7 +284,23 @@ class ProviderRuntimeAuth:
             **({} if authenticated else {"error_code": "provider_auth_preflight_failed"}),
         }
 
-    def _preflight(self, provider: str, env: Mapping[str, str], cwd: str | None) -> dict[str, Any]:
+    @staticmethod
+    def _output_metadata(completed: Any) -> dict[str, Any]:
+        """Return useful diagnostics without returning any provider output."""
+        stdout = str(getattr(completed, "stdout", "") or "").encode()
+        stderr = str(getattr(completed, "stderr", "") or "").encode()
+        return {
+            "exit_code": int(getattr(completed, "returncode", 1) or 0),
+            "stdout_bytes": len(stdout),
+            "stderr_bytes": len(stderr),
+            "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+            "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+            "provider_output_redacted": True,
+        }
+
+    def _preflight_once(
+        self, provider: str, env: Mapping[str, str], cwd: str | None,
+    ) -> dict[str, Any]:
         executable = self.cli_paths.get(provider) or _PROVIDER_CLI[provider]
         command = [executable, *_PROVIDER_PREFLIGHT[provider]]
         try:
@@ -291,11 +315,31 @@ class ProviderRuntimeAuth:
                 timeout=self.preflight_timeout_seconds,
                 check=False,
             )
-        except (OSError, subprocess.SubprocessError):
-            return {"authenticated": False, "error_code": "provider_auth_preflight_unavailable"}
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {
+                "authenticated": False,
+                "error_code": "provider_auth_preflight_unavailable",
+                "failure_kind": type(exc).__name__,
+                "provider_output_redacted": True,
+                "provider": provider,
+                "command": " ".join(_PROVIDER_PREFLIGHT[provider]),
+            }
         result = self._preflight_result(provider, completed)
+        result.update(self._output_metadata(completed))
         result["provider"] = provider
         result["command"] = " ".join(_PROVIDER_PREFLIGHT[provider])
+        return result
+
+    def _preflight(self, provider: str, env: Mapping[str, str], cwd: str | None) -> dict[str, Any]:
+        """Run a bounded preflight retry loop and return only redacted evidence."""
+        result: dict[str, Any] = {}
+        for attempt in range(1, self.preflight_attempts + 1):
+            result = self._preflight_once(provider, env, cwd)
+            result["attempt_count"] = attempt
+            if result.get("authenticated"):
+                return result
+            if attempt < self.preflight_attempts and self.preflight_retry_delay_seconds:
+                self.sleep_fn(self.preflight_retry_delay_seconds)
         return result
 
     @staticmethod

@@ -124,6 +124,7 @@ def evaluate_host(
     *,
     project: str,
     reserved_sessions: int = 0,
+    candidate_wake_id: str = "",
 ) -> dict[str, Any]:
     """Return one redacted, reason-coded host eligibility result."""
     scheduler = dict(policy.get("scheduler") or {})
@@ -155,6 +156,14 @@ def evaluate_host(
             reasons.append("persistent_capacity_disabled")
         if kind == "ephemeral" and scheduler.get("allow_ephemeral", True) is not True:
             reasons.append("ephemeral_capacity_disabled")
+        # Provisioned fleet hosts are single-wake resources.  General placement
+        # must not reuse them, while claim-time evaluation must still allow the
+        # exact wake that caused the host to be provisioned.
+        bound_wake_id = str(placement.get("bound_wake_id") or "").strip()
+        evaluated_wake_id = str(candidate_wake_id or "").strip()
+        if (kind == "ephemeral" and bound_wake_id
+                and bound_wake_id != evaluated_wake_id):
+            reasons.append("host_wake_bound")
 
         projects = _strings(placement.get("projects"))
         if project not in projects:
@@ -329,12 +338,17 @@ def claim_decision(
     """Validate a claimant against the persisted placement and current inventory."""
     policy = dict(wake.get("policy") or {})
     placement = dict(wake.get("placement") or {})
+    wake_id = str(wake.get("wake_id") or "").strip()
     if placement.get("scheduler_mode") != "hybrid":
-        candidate = evaluate_host(host, wake.get("selector") or {}, {}, project=project)
+        candidate = evaluate_host(
+            host, wake.get("selector") or {}, {}, project=project,
+            candidate_wake_id=wake_id,
+        )
         return {"allowed": candidate["eligible"], "candidate": candidate}
 
     candidate = evaluate_host(
         host, wake.get("selector") or {}, policy, project=project, reserved_sessions=0,
+        candidate_wake_id=wake_id,
     )
     expected = str(placement.get("selected_host_id") or "")
     action = str(placement.get("action") or "")

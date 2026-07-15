@@ -24,6 +24,7 @@ os.environ["PM_PROVIDER_VAULT_KEY"] = base64.urlsafe_b64encode(b"C" * 32).decode
 os.environ["PM_PROVIDER_VAULT_KEY_ID"] = "co9-test:v1"
 
 import co_fleet  # noqa: E402
+from adapters import agent_host  # noqa: E402
 import store  # noqa: E402
 from switchboard.domain.coordination.placement import (  # noqa: E402
     HOST_PLACEMENT_SCHEMA,
@@ -225,6 +226,81 @@ try:
         concurrency_policy={"mode": "exclusive", "max_parallel": 1},
     )
     capacity_repository = ProviderCapacityRepository()
+    old_bound_wake = os.environ.get("PM_WAKE_ID")
+    try:
+        os.environ["PM_WAKE_ID"] = "wake-co9-owned"
+        fleet_advertisement = agent_host.placement_inventory(
+            str(ROOT), "codex", {"allow_work": True})
+    finally:
+        if old_bound_wake is None:
+            os.environ.pop("PM_WAKE_ID", None)
+        else:
+            os.environ["PM_WAKE_ID"] = old_bound_wake
+    ok(fleet_advertisement.get("host_class") == "ephemeral"
+       and fleet_advertisement.get("bound_wake_id") == "wake-co9-owned",
+       "fleet Agent Host advertises its non-secret single-wake ownership")
+
+    own_wake_task = task("CO-9 provisioned host owns exact wake")
+    own_wake_policy = hybrid_policy(bucket="own-wake")
+    own_wake_policy["placement"]["runtime_binaries"] = []
+    own_wake_policy["placement"]["resources"] = {}
+    own_wake = store.request_wake(
+        selector={
+            "runtime": "codex", "lane": "CO_OWN_WAKE",
+            "agent_id": f"codex/{own_wake_task['task_id']}-own-wake",
+            "capabilities": ["co_fleet"],
+        },
+        reason="CO-9 exact provisioned-host ownership fixture", source="co9-test",
+        policy=own_wake_policy, task_id=own_wake_task["task_id"], actor="co9-test",
+        project=PROJECT, idem_key=f"co9:{own_wake_task['task_id']}:own-wake",
+    )
+    old_bound_wake = os.environ.get("PM_WAKE_ID")
+    try:
+        os.environ["PM_WAKE_ID"] = own_wake["wake_id"]
+        own_wake_advertisement = agent_host.placement_inventory(
+            str(ROOT), "codex", {"allow_work": True})
+    finally:
+        if old_bound_wake is None:
+            os.environ.pop("PM_WAKE_ID", None)
+        else:
+            os.environ["PM_WAKE_ID"] = old_bound_wake
+    own_wake_host_id = "host/i-co9-own-wake"
+    store.register_host({
+        "host_id": own_wake_host_id,
+        "hostname": "i-co9-own-wake",
+        "repo_root": str(ROOT),
+        "runtimes": [{
+            "runtime": "codex", "lanes": ["CO_OWN_WAKE"],
+            "capabilities": ["co_fleet"], "policy": {"allow_work": True},
+        }],
+        "limits": {"max_sessions": 1},
+        "capacity": {"active_sessions": 0, "placement": own_wake_advertisement},
+        "heartbeat_ttl_s": 3600,
+    }, actor="co9-test", project=PROJECT)
+    other_wake_task = task("CO-9 provisioned host refuses different wake")
+    other_wake = store.request_wake(
+        selector={
+            "runtime": "codex", "lane": "CO_OWN_WAKE",
+            "agent_id": f"codex/{other_wake_task['task_id']}-other-wake",
+            "capabilities": ["co_fleet"],
+        },
+        reason="CO-9 different-wake ownership fixture", source="co9-test",
+        policy=hybrid_policy(bucket="other-wake"), task_id=other_wake_task["task_id"],
+        actor="co9-test", project=PROJECT,
+        idem_key=f"co9:{other_wake_task['task_id']}:other-wake",
+    )
+    own_wake_claim = store.claim_wake(
+        own_wake_host_id, own_wake["wake_id"], actor="co9-own-wake", project=PROJECT)
+    other_wake_claim = store.claim_wake(
+        own_wake_host_id, other_wake["wake_id"], actor="co9-other-wake", project=PROJECT)
+    ok(own_wake["placement"]["action"] == "provision_ephemeral"
+       and own_wake_claim.get("claimed") is True,
+       "PM_WAKE_ID advertisement can register and claim its own provisioned wake")
+    ok(other_wake["placement"]["action"] == "provision_ephemeral"
+       and not other_wake_claim.get("claimed")
+       and "host_wake_bound" in set(other_wake_claim.get("reason_codes") or []),
+       "the same provisioned host refuses a different wake through the claim path")
+
     persistent = register("host/persistent-co9", "persistent", ttl=10)
     ok((persistent.get("capacity") or {}).get("placement", {}).get("host_class") == "persistent",
        "persistent Agent Host advertises placement, resource, policy, and cost inventory")
@@ -418,6 +494,18 @@ try:
     burst_plan = plan_hybrid_placement(
         [full_host], {"runtime": "codex", "lane": "CO", "capabilities": ["co_fleet"]},
         ready_provider, project=PROJECT)
+    bound_ephemeral = dict(ephemeral)
+    bound_ephemeral["capacity"] = {
+        **(bound_ephemeral.get("capacity") or {}),
+        "placement": {
+            **((bound_ephemeral.get("capacity") or {}).get("placement") or {}),
+            "bound_wake_id": "wake-already-owned",
+        },
+    }
+    bound_plan = plan_hybrid_placement(
+        [bound_ephemeral],
+        {"runtime": "codex", "lane": "CO", "capabilities": ["co_fleet"]},
+        ready_provider, project=PROJECT)
     provider_denied = hybrid_policy(provider_capacity={
         "allowed": False, "state": "waiting_for_plan_reset",
         "reason_code": "personal_plan_capacity_exhausted",
@@ -430,6 +518,10 @@ try:
        and denied_plan["action"] == "deny"
        and denied_plan["reason_code"] == "provider_subscription_capacity_denied",
        "provider subscription admission remains independent from physical host headroom")
+    ok(bound_plan["action"] == "provision_ephemeral"
+       and bound_plan["eligible_host_count"] == 0
+       and "host_wake_bound" in bound_plan["candidates"][0]["reason_codes"],
+       "single-wake ephemeral hosts are never reused for a different wake")
 
     fair = order_wakes_fairly([
         {"wake_id": "a1", "placement": {"scheduler_mode": "hybrid",

@@ -174,6 +174,67 @@ adapter = ProviderRuntimeAuth(
     },
 )
 
+retry_calls = []
+retry_secret = "provider-retry-output-must-not-escape"
+
+
+def retrying_preflight(args, **kwargs):
+    retry_calls.append(list(args))
+    if len(retry_calls) < 3:
+        return subprocess.CompletedProcess(
+            args, 1, stdout=retry_secret, stderr=retry_secret)
+    return subprocess.CompletedProcess(
+        args, 0,
+        stdout=json.dumps({
+            "loggedIn": True, "authMethod": "oauth_token", "apiProvider": "firstParty",
+        }),
+        stderr="",
+    )
+
+
+retry_adapter = ProviderRuntimeAuth(
+    cli_paths={"anthropic-claude": "claude-test"},
+    command_runner=retrying_preflight,
+    preflight_attempts=3,
+    preflight_retry_delay_seconds=0,
+    base_environment={},
+)
+retry_receipt = retry_adapter._preflight("anthropic-claude", {}, None)
+retry_text = json.dumps(retry_receipt, sort_keys=True)
+ok(retry_receipt.get("authenticated") is True
+   and retry_receipt.get("attempt_count") == 3
+   and len(retry_calls) == 3,
+   "provider preflight retries transient failures within a fixed bound")
+ok(retry_receipt.get("provider_output_redacted") is True
+   and retry_secret not in retry_text
+   and "stdout_sha256" in retry_receipt,
+   "preflight diagnostics expose only byte counts and output hashes")
+
+failed_calls = []
+
+
+def failed_preflight(args, **kwargs):
+    failed_calls.append(list(args))
+    return subprocess.CompletedProcess(
+        args, 9, stdout=retry_secret, stderr=retry_secret)
+
+
+failed_adapter = ProviderRuntimeAuth(
+    cli_paths={"anthropic-claude": "claude-test"},
+    command_runner=failed_preflight,
+    preflight_attempts=2,
+    preflight_retry_delay_seconds=0,
+    base_environment={},
+)
+failed_receipt = failed_adapter._preflight("anthropic-claude", {}, None)
+failed_text = json.dumps(failed_receipt, sort_keys=True)
+ok(failed_receipt.get("authenticated") is False
+   and failed_receipt.get("attempt_count") == 2
+   and failed_receipt.get("exit_code") == 9
+   and len(failed_calls) == 2
+   and retry_secret not in failed_text,
+   "exhausted preflight returns bounded redacted failure evidence")
+
 
 try:
     ok(ROOT.is_dir(), "shared test path shim resolves the repository root")

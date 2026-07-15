@@ -182,6 +182,9 @@ ok(lease_failure_closed
    and any(path == "/txp/v1/complete_wake" and not body["result"]["started"]
            for _method, path, body in failed_wake_calls),
    "lease/bootstrap failure closes the reserved wake with redacted failure evidence")
+ok(any(path == "/ixp/v1/register_runner_session" and body.get("status") == "failed"
+       for _method, path, body in failed_wake_calls),
+   "worker failure terminalizes the central runner record for audited drain")
 
 print(f"\nCOORD-21 BYOA bootstrap: {passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

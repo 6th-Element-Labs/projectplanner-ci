@@ -90,6 +90,56 @@ def _register_bound_runner(task: dict[str, Any], body: dict[str, Any]) -> None:
         raise RuntimeError("runner claim binding failed")
 
 
+def _terminalize_bound_runner(
+    task: dict[str, Any], body: dict[str, Any], *, succeeded: bool,
+) -> None:
+    """Persist a terminal central row after the supervised worker exits.
+
+    The runner registry is an audited drain input, so process exit must not leave it
+    advertising ``running`` merely because an exception bypassed the happy path.
+    """
+    result = sb._http("POST", "/ixp/v1/register_runner_session", {
+        "project": body["project"],
+        "runner_session_id": body["runner_session_id"],
+        "host_id": body["host_id"],
+        "agent_id": os.environ.get("PM_AGENT_ID"),
+        "runtime": "claude-code",
+        "task_id": body["task_id"],
+        "claim_id": task.get("claim_id") or task.get("id"),
+        "cwd": (task.get("managed") or {}).get("workspace_path"),
+        "status": "completed" if succeeded else "failed",
+        "control": {"tier": "T3", "runner_kill": True, "managed_process": True},
+        "metadata": {
+            "wake_id": os.environ.get("PM_CO_WAKE_ID"),
+            "work_session_id": body["work_session_id"],
+            "credential_reference": body["credential_reference"],
+            "provider_account_id": body["provider_account_id"],
+            "provider": body["provider"],
+            "account_affinity_id": body["account_affinity_id"],
+            "credential_admission_phase": "claim_bound",
+            "terminal_reason": (
+                "personal_subscription_worker_completed" if succeeded
+                else "personal_subscription_worker_failed"
+            ),
+        },
+        "heartbeat_ttl_s": 1800,
+    })
+    if not result or result.get("error"):
+        raise RuntimeError("runner terminal state update failed")
+
+
+def _safe_preflight_evidence(preflight: dict[str, Any]) -> dict[str, Any]:
+    allowed = (
+        "error_code", "attempt_count", "exit_code", "failure_kind",
+        "stdout_bytes", "stderr_bytes", "stdout_sha256", "stderr_sha256",
+        "provider_output_redacted",
+    )
+    return {
+        f"preflight_{key}": preflight[key]
+        for key in allowed if key in preflight
+    }
+
+
 def run(task: dict[str, Any]) -> dict[str, Any]:
     binding = _binding()
     lease_body = _lease_body(binding, task)
@@ -102,9 +152,12 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
     runtime_root: Path | None = None
     credential = ""
     provider_env: dict[str, str] = {}
+    preflight: dict[str, Any] = {}
     wake_completed = False
+    runner_registered = False
     try:
         _register_bound_runner(task, lease_body)
+        runner_registered = True
         lease = sb._http(
             "POST",
             f"/api/projects/{project}/provider-connections/{reference}/leases",
@@ -248,8 +301,14 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
                         "started": False,
                         "reason": "personal_subscription_runtime_failed",
                         "credential_values_redacted": True,
+                        **_safe_preflight_evidence(preflight),
                     },
                 })
+            except Exception:
+                pass
+        if runner_registered:
+            try:
+                _terminalize_bound_runner(task, lease_body, succeeded=wake_completed)
             except Exception:
                 pass
 
