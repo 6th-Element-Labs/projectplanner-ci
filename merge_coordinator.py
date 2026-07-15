@@ -347,7 +347,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not token:
         print("ERROR: set PM_GITHUB_TOKEN, GITHUB_TOKEN, or SWITCHBOARD_CI_GITHUB_TOKEN.")
         return 2
-    context = os.environ.get("SWITCHBOARD_CI_STATUS_CONTEXT", gate.DEFAULT_CONTEXT)
+    # The coordinator gates on the VM CI status (what verify.yml posts and the required
+    # check), NOT the claim gate. gate.DEFAULT_CONTEXT was removed when the gate module
+    # renamed its constant to DEFAULT_CLAIM_CONTEXT ("Switchboard / claim gate") — reusing
+    # that would make the coordinator read the wrong status. Default to the VM-gate context
+    # literal (matches verify.yml's STATUS_CONTEXT); SWITCHBOARD_CI_STATUS_CONTEXT overrides.
+    context = os.environ.get("SWITCHBOARD_CI_STATUS_CONTEXT", "Switchboard CI / VM gate")
 
     prs = gate.list_open_prs(repo, token=token)
     # Live backpressure: how many merges are already armed-and-unlanded. With max_in_flight=1
