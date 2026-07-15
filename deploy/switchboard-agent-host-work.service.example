@@ -19,12 +19,16 @@ Environment=PM_HOST_LANES=HARDEN,ADAPTER,DISPATCH,RECON
 Environment=PM_AGENT_HOST_ALLOW_WORK=1
 Environment=PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=0
 Environment=PM_HOST_MAX_SESSIONS=1
+Environment=PM_HOST_SUPPORTS_CREDENTIAL_LEASES=1
+Environment=PM_HOST_SESSION_POLICIES=code_strict
 Environment=PM_REPO_ROOT=/path/to/projectplanner
 Environment=PM_RUNNER_DIR=/var/lib/projectplanner/runner
+Environment=PM_PROVIDER_RUNTIME_ROOT=/var/lib/switchboard-provider-runtimes
 Environment=PM_AGENT_HOST_CLAIM_IDLE_SECONDS=6
 # Leave PM_AGENT_WORK_MODULE unset for a dry-run proof: claim_next is called, any
-# claimed task is abandoned, and no completion is fabricated. Set it to
-# package.module:work_fn only after the runtime can do real work safely.
+# claimed task is abandoned, and no completion is fabricated. For CO-11 Codex
+# personal-subscription smoke on a dedicated host (no OPENAI_API_KEY/CODEX_API_KEY):
+# Environment=PM_AGENT_WORK_MODULE=adapters.codex_personal_worker:run
 # Environment=PM_AGENT_WORK_MODULE=switchboard_agent.work:run_task
 ExecStart=/path/to/projectplanner/.venv/bin/python /path/to/projectplanner/adapters/agent_host.py --interval 10
 Restart=always
