@@ -250,6 +250,31 @@ with tempfile.TemporaryDirectory() as tmp:
         "Path B requires Tasks still in-process",
     )
 
+# --- Fixture: Conditional Go (G6 pending) must not authorize live cut ---
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    _seed_rails(root)
+    _write(
+        root / gate.INDEPENDENCE_VERDICT,
+        json.dumps({
+            "verdict": "go",
+            "decision": "conditional_go",
+            "operator_g6_required": True,
+            "inputs": {"G6_operator_go": False},
+            "recorded_by": "fixture",
+        }) + "\n",
+    )
+    _write(root / gate.TASKS_SERVICE_PACKAGE, "app = None\n")
+    _write(root / gate.TASKS_SERVICE_UNIT, "[Service]\nExecStart=/bin/true\n")
+    report = gate.build_report(root, phase2_passed=True)
+    ok(report["half_cut_detected"] is True,
+       "Conditional Go + live unit is still a half-cut")
+    ok(report["independence"].get("process_cut_authorized") is False,
+       "Conditional Go does not authorize process cut")
+    ok(report["path_a_checks"].get("independence_verdict_go") is False,
+       "Path A independence_verdict_go requires authorized Go")
+    ok(report["passed"] is False, "Conditional Go cannot pass Path A without G6")
+
 # --- Fixture: Phase 2 red blocks exit even with Path B docs ---
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)

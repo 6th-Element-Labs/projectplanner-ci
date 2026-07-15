@@ -1,0 +1,27 @@
+# Example systemd unit for Switchboard Tasks (ARCH-MS-89 drill / ARCH-MS-90+)
+#
+# Install only after independence Go. Listen on 127.0.0.1:8122.
+# Factory entrypoint lands with ARCH-MS-90 (`switchboard.services.tasks.app:create_app`).
+# Until then this file is a drill artifact for the ARCH-MS-89 ops harness.
+
+[Unit]
+Description=Switchboard Tasks service (Mode A — :8122)
+After=network.target
+PartOf=projectplanner.service
+
+[Service]
+Type=simple
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+Environment=PYTHONUNBUFFERED=1
+# Environment=PM_TASKS_HTTP_PRIMARY=service
+# ExecStart=/opt/projectplanner/.venv/bin/uvicorn --factory switchboard.services.tasks.app:create_app --host 127.0.0.1 --port 8122
+# Placeholder until ARCH-MS-90:
+ExecStart=/bin/false
+Restart=on-failure
+RestartSec=3
+MemoryMax=250M
+
+[Install]
+WantedBy=multi-user.target

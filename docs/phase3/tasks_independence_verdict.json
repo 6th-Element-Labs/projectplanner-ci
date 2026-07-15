@@ -1,0 +1,29 @@
+{
+  "schema": "switchboard.tasks_independence_verdict.v1",
+  "verdict": "go",
+  "decision": "conditional_go",
+  "task_id": "ARCH-MS-89",
+  "recorded_at": "2026-07-15",
+  "recorded_by": "cursor/ARCH-MS-89-3b0-tasks-ops-proof-harness-go-no-go-verdict",
+  "deliverable_id": "arch-ms-phase-3",
+  "charter": "ADR-0012 Decision 4–5",
+  "inputs": {
+    "G1_exclusive_writers": true,
+    "G2_auth_write_binding_fail_closed": true,
+    "G3_thin_mode_a_surface": true,
+    "G4_ports_independence": true,
+    "G5_ops_proof": true,
+    "G6_operator_go": false
+  },
+  "evidence": {
+    "independence_gate": "docs/TASKS-INDEPENDENCE-GATE.md",
+    "ports": "ARCH-MS-87 / PR #516",
+    "ownership_writers_binding": "ARCH-MS-88 / PR #517",
+    "ops_proof": "scripts/arch_ms89_tasks_ops_proof.py",
+    "caddy_drill": "docs/runbooks/tasks-caddy-cutover-rollback.md",
+    "harness_recommendation": "Conditional Go"
+  },
+  "operator_g6_required": true,
+  "path_b_nogo_valid": true,
+  "notes": "Hermetic ARCH-MS-89 harnesses passed (shared project SQLite short-load contention, second-uvicorn RSS budget via skeleton stand-in, day-one 401 parity + fail-closed binding, Caddy drill artifacts without premature live cut). decision=conditional_go with operator_g6_required=true — ARCH-MS-90+ HOLD until operator records G6; phase3 exit gate must not treat this as process-cut authorization. Path B No-Go remains a valid Phase 3 exit if production soak fails."
+}

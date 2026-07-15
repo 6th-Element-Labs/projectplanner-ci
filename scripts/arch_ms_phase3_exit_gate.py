@@ -11,7 +11,8 @@ Shared fail-closed checks (always required):
   - No half-cut network façade (live unit/Caddy without recorded Go)
 
 Path A — Tasks cut (Go):
-  - Independence verdict artifact records ``go``
+  - Independence verdict artifact records ``go`` **and** authorizes process cut
+    (operator G6 when ``operator_g6_required`` / Conditional Go)
   - Tasks service package + non-example systemd unit present
   - Production Caddy routes ``/api/tasks*`` (+ claim-only TXP)
   - Dual-strip: monolith sets ``PM_TASKS_HTTP_PRIMARY=service``
@@ -220,6 +221,7 @@ def _independence_verdict(root: Path) -> Dict[str, Any]:
         return {
             "present": False,
             "verdict": None,
+            "process_cut_authorized": False,
             "path": INDEPENDENCE_VERDICT,
         }
     try:
@@ -228,6 +230,7 @@ def _independence_verdict(root: Path) -> Dict[str, Any]:
         return {
             "present": True,
             "verdict": None,
+            "process_cut_authorized": False,
             "path": INDEPENDENCE_VERDICT,
             "error": f"{type(exc).__name__}: {exc}",
         }
@@ -238,12 +241,35 @@ def _independence_verdict(root: Path) -> Dict[str, Any]:
         verdict = "nogo"
     else:
         verdict = raw or None
+    authorized = _process_cut_authorized(data, verdict)
     return {
         "present": True,
         "verdict": verdict,
+        "process_cut_authorized": authorized,
         "path": INDEPENDENCE_VERDICT,
         "raw": data,
     }
+
+
+def _process_cut_authorized(data: Optional[Dict[str, Any]], verdict: Optional[str]) -> bool:
+    """True only when independence Go authorizes ARCH-MS-90+ traffic cut.
+
+    A Conditional Go (``operator_g6_required`` still true / ``decision=conditional_go``
+    without ``inputs.G6_operator_go``) must **not** authorize live unit/Caddy cuts —
+    otherwise ``no_half_cut_network_facade`` would fail open before operator G6.
+    Bare ``{"verdict":"go"}`` remains authorized (fixtures / full operator Go).
+    """
+    if verdict != "go":
+        return False
+    if not isinstance(data, dict):
+        return True
+    inputs = data.get("inputs") if isinstance(data.get("inputs"), dict) else {}
+    if data.get("operator_g6_required") is True and not inputs.get("G6_operator_go"):
+        return False
+    decision = str(data.get("decision") or "").strip().lower().replace("_", "-")
+    if decision == "conditional-go" and not inputs.get("G6_operator_go"):
+        return False
+    return True
 
 
 def _tasks_process_artifacts(root: Path) -> Dict[str, Any]:
@@ -264,15 +290,15 @@ def _half_cut_detected(
     *,
     tasks_artifacts: Dict[str, Any],
     caddy: Dict[str, Any],
-    verdict: Optional[str],
+    process_cut_authorized: bool,
 ) -> bool:
-    """True when Tasks looks process-cut without a recorded Go (forbidden)."""
+    """True when Tasks looks process-cut without authorized Go (forbidden)."""
     live_cut_signals = bool(
         tasks_artifacts.get("unit_present") or caddy.get("routes_api_tasks")
     )
     if not live_cut_signals:
         return False
-    return verdict != "go"
+    return not process_cut_authorized
 
 
 def _network_wrap_with_store(
@@ -302,6 +328,7 @@ def build_report(
     root = root or ROOT
     verdict_info = _independence_verdict(root)
     verdict = verdict_info.get("verdict")
+    process_cut_authorized = bool(verdict_info.get("process_cut_authorized"))
     tasks_artifacts = _tasks_process_artifacts(root)
     caddy = _caddy_routes_tasks(root)
     dual_strip = _dual_strip_present(root)
@@ -309,7 +336,7 @@ def build_report(
     half_cut = _half_cut_detected(
         tasks_artifacts=tasks_artifacts,
         caddy=caddy,
-        verdict=verdict if isinstance(verdict, str) else None,
+        process_cut_authorized=process_cut_authorized,
     )
     network_wrap = _network_wrap_with_store(
         store_import_hits=store_hits,
@@ -342,7 +369,7 @@ def build_report(
     }
 
     path_a_checks = {
-        "independence_verdict_go": verdict == "go",
+        "independence_verdict_go": process_cut_authorized,
         "tasks_service_artifacts_present": bool(tasks_artifacts["ok_for_path_a"]),
         "caddy_routes_api_tasks": bool(caddy.get("routes_api_tasks")),
         "caddy_routes_claim_txp": bool(caddy.get("routes_claim_txp")),

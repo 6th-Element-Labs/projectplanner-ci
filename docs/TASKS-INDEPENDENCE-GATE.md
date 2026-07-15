@@ -88,14 +88,39 @@ Measured by ARCH-MS-89 harnesses (ops proof) and ARCH-MS-87/88 ratchets/docs. Op
 | G2 | Auth/write-binding fail-closed (Decision 2) | Ports-only; unbound env-token denied | ✅ Code: `require_write_binding` + ARCH-MS-87 ports |
 | G3 | Thin Mode A surface (Decision 3) | No review/dispatch/chat in Tasks process | ✅ Charter (ADR-0012); re-check at cut |
 | G4 | Ports independence | ARCH-MS-87 import lint / `tasks_forbidden_imports` ceiling 0 | ✅ Done (ARCH-MS-87) |
-| G5 | Ops proof | SQLite contention, second uvicorn budget, Caddy rollback, API parity | ⬜ ARCH-MS-89 |
-| G6 | Operator decision | Explicit Go recorded on board | ⬜ After G1–G5 |
+| G5 | Ops proof | SQLite contention, second uvicorn budget, Caddy rollback, API parity | ✅ Measured (see below) |
+| G6 | Operator decision | Explicit Go recorded on board before ARCH-MS-90 | ⬜ After G1–G5 |
 
-**Harness recommendation (not G6):** deferred until ARCH-MS-89. This doc alone does **not**
-authorize ARCH-MS-90+.
+**Harness recommendation (not G6):** **Conditional Go** — hermetic ARCH-MS-89 harnesses
+passed. Verdict artifact:
+[`docs/phase3/tasks_independence_verdict.json`](phase3/tasks_independence_verdict.json)
+(`verdict=go`, `operator_g6_required=true`). This does **not** authorize ARCH-MS-90+ until
+the operator records G6.
 
 **No-Go (keep Tasks in-process)** if any of G1–G5 fail, or if cutting would create two writers /
 network-wrap unresolved Auth binding. No-Go is a valid Phase 3 exit path (ADR-0012 Decision 4).
+
+---
+
+## ARCH-MS-89 measured results
+
+### Ops proof (hermetic)
+
+Executable: `python scripts/arch_ms89_tasks_ops_proof.py`.
+
+| Proof | Result | Detail |
+|---|---|---|
+| Multi-process project SQLite contention | **Pass** | Tasks worker + monolith sibling (activity/meta), 40 rounds each on one switchboard DB: **0** lock errors, 80/80 ops ok (~0.7s Tasks / ~0.1s monolith on laptop). Short-load only — production soak still required before G6. |
+| Second uvicorn RSS budget | **Pass** | Skeleton uvicorn ~**51 MiB** RSS vs soft budget **80 MiB**; ~**199 MiB** headroom vs interactive `MemoryLow=250M`. Re-measure when ARCH-MS-90 stands up real Tasks `create_app`. |
+| Day-one API parity | **Pass** | Unauthenticated `POST /api/tasks` → **401** (never 403); authenticated path ≠ 403; `require_write_binding` denies naked `env-*-token`. |
+| Caddy cutover/rollback drill | **Pass (artifacts only)** | Fragment + runbook + unit example present; live `deploy/Caddyfile` has **no** premature `/api/tasks*` → `:8122` cut. |
+
+### Caveats before G6
+
+1. Contention harness is short-load / laptop; VM soak under real board write traffic may differ.
+2. Second-uvicorn budget used the ARCH-MS-73 skeleton as a stand-in; Tasks package RSS should be
+   re-measured when ARCH-MS-90 stands up the real unit.
+3. Live Caddy Tasks cut remains forbidden until operator G6 + ARCH-MS-90…92.
 
 ---
 
@@ -109,4 +134,6 @@ network-wrap unresolved Auth binding. No-Go is a valid Phase 3 exit path (ADR-00
 | `perf/arch_ms84_ratchet_baseline.json` → `tasks_forbidden_imports` | Import-direction ceiling 0 |
 | `tests/test_arch_ms87_tasks_ports.py` | Ports proof |
 | `tests/test_arch_ms88_tasks_ownership.py` | Ownership + fail-closed binding proof |
-| ARCH-MS-89 (future) | Ops proof + recorded Go/No-Go verdict |
+| `scripts/arch_ms89_tasks_ops_proof.py` | Ops proof harness (ARCH-MS-89) |
+| `docs/phase3/tasks_independence_verdict.json` | Recorded Go/No-Go verdict |
+| `tests/test_arch_ms89_tasks_ops_proof.py` | Executable proof |
