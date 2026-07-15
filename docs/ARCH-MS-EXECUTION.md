@@ -43,7 +43,7 @@ surface; explicit No-Go keep-in-process exit; no nginx; no MCP/other-BC cuts in 
 | Task | Title | Tracker | Repo evidence |
 |---|---|---|---|
 | **ARCH-MS-85** | 3A: ADR — Phase 3 Tasks process strangler charter (Mode A) | 🟡 | `docs/decisions/0012-phase3-tasks-process-strangler.md` |
-| **ARCH-MS-86** | 3A: Phase 3 exit gate harness | ⬜ | — |
+| **ARCH-MS-86** | 3A: Phase 3 exit gate harness | 🟡 | `scripts/arch_ms_phase3_exit_gate.py`; `tests/test_arch_ms86_phase3_exit_gate.py` |
 | **ARCH-MS-87** | 3B0: Tasks ports — remove store/auth/dispatch imports | ⬜ | — |
 | **ARCH-MS-88** | 3B0: Tasks ownership, writers, Auth binding via ports | ⬜ | — |
 | **ARCH-MS-89** | 3B0: Tasks ops proof harness + Go/No-Go verdict | ⬜ | — |
@@ -255,4 +255,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-15 | ARCH-MS-78 | Tasks readiness-only (no live Tasks cut); `docs/phase2/tasks_readiness.md` |
 | 2026-07-15 | ARCH-MS-81 | Path A exit evidence: independence verdict `go` + auth cut playbook; `arch_ms_phase2_exit_gate.py` → `passed=true` |
 | 2026-07-15 | ARCH-MS-85 | Phase 3 charter ADR-0012 (Tasks process strangler, Mode A); Phase 3 section linked from this tracker |
+| 2026-07-15 | ARCH-MS-86 | Phase 3 exit harness: `scripts/arch_ms_phase3_exit_gate.py` (Path A Tasks cut ∨ Path B No-Go); fixture proof in `tests/test_arch_ms86_phase3_exit_gate.py` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
