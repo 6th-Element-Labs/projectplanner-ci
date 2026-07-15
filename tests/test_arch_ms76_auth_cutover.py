@@ -69,13 +69,22 @@ ok("reload" in runbook.lower(), "runbook uses caddy reload for rollback")
 ok("8110" in runbook and "8121" in runbook, "runbook names both ports")
 
 gate = (ROOT / "docs" / "AUTH-INDEPENDENCE-GATE.md").read_text(encoding="utf-8")
-ok("ARCH-MS-76" in gate, "independence gate mentions ARCH-MS-76")
+ok("ARCH-MS-76" in gate or "ARCH-MS-77" in gate, "independence gate mentions Auth cut")
 
-# Green façade: monolith still mounts Auth so rollback needs no app restart.
+# ARCH-MS-77: production dual-strip via PM_AUTH_HTTP_PRIMARY=service (+ Caddy me carve-out).
 app_impl_src = entrypoint_source("app")
-ok("_global_auth_router" in app_impl_src or "routers.auth" in app_impl_src
-   or "auth.routes" in app_impl_src,
-   "monolith still mounts Auth router (rollback façade)")
+ok("PM_AUTH_HTTP_PRIMARY" in app_impl_src,
+   "monolith gates Auth HTTP mount on PM_AUTH_HTTP_PRIMARY (ARCH-MS-77)")
+ok(
+    "_create_me_router" in app_impl_src or "create_me_router" in app_impl_src,
+    "monolith keeps /api/auth/me thin surface",
+)
+web_unit = (ROOT / "deploy" / "projectplanner.service").read_text(encoding="utf-8")
+ok("PM_AUTH_HTTP_PRIMARY=service" in web_unit,
+   "live monolith unit sets PM_AUTH_HTTP_PRIMARY=service")
+ok("handle /api/auth/me" in caddy or "handle /api/auth/me*" in caddy,
+   "Caddy carves /api/auth/me* to monolith")
+ok("ARCH-MS-77" in caddy, "Caddyfile documents ARCH-MS-77 dual-strip")
 
 frag = ROOT / "deploy" / "skeleton" / "Caddyfile.auth-fragment.example"
 ok(frag.is_file(), "Caddyfile.auth-fragment.example retained as drill reference")

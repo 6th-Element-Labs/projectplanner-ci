@@ -1,13 +1,18 @@
 # Auth Caddy reverse_proxy fragment (ARCH-MS-84 drill → applied in ARCH-MS-76).
 #
-# Live production cut lives in deploy/Caddyfile (handle /api/auth* → 127.0.0.1:8121).
-# Keep this file as the rollback/re-cut reference snippet. Pair with:
+# Live production cut lives in deploy/Caddyfile:
+#   handle /api/auth/me* → 127.0.0.1:8110  (ARCH-MS-77 monolith thin me)
+#   handle /api/auth*    → 127.0.0.1:8121  (Auth service)
+# Keep this file as the re-cut reference snippet. Pair with:
 #   docs/runbooks/auth-caddy-cutover-rollback.md
 #   deploy/switchboard-auth.service
 #
-# Rollback = delete the Auth handle blocks from the live Caddyfile and `caddy reload`
-# (monolith :8110 still mounts Auth).
+# Post ARCH-MS-77 recovery = keep/fix Auth on :8121 (monolith does not
+# dual-mount Auth HTTP when PM_AUTH_HTTP_PRIMARY=service).
 
+# handle /api/auth/me* {
+#     reverse_proxy 127.0.0.1:8110 { ... }
+# }
 # handle /api/auth* {
 #     reverse_proxy 127.0.0.1:8121 {
 #         transport http {

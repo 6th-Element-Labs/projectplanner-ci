@@ -60,8 +60,12 @@ for path in auth_runtime_paths:
 app_source = (ROOT / "app.py").read_text(encoding="utf-8") + (
     ("\n" + (ROOT / "app_impl.py").read_text(encoding="utf-8"))
     if (ROOT / "app_impl.py").is_file() else "")
-ok("app.include_router(_global_auth_router)" in app_source,
-   "global auth router remains mounted unconditionally")
+ok("PM_AUTH_HTTP_PRIMARY" in app_source,
+   "ARCH-MS-77 gates Auth HTTP mount (production dual-strip)")
+ok("_create_me_router" in app_source or "create_me_router" in app_source,
+   "monolith keeps /api/auth/me thin surface")
+ok("PM_AUTH_HTTP_PRIMARY=service" in (ROOT / "deploy" / "projectplanner.service").read_text(encoding="utf-8"),
+   "live monolith unit sets PM_AUTH_HTTP_PRIMARY=service")
 ok("/api/auth/bootstrap" not in app_source,
    "legacy per-project auth bootstrap route remains deleted")
 ok((ROOT / "static/login-global.html").exists(),

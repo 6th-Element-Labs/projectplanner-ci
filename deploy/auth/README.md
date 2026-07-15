@@ -1,16 +1,21 @@
-# Auth process-cut service (ARCH-MS-75 → ARCH-MS-76)
+# Auth process-cut service (ARCH-MS-75 → ARCH-MS-77)
 
 Standalone Auth uvicorn on **`127.0.0.1:8121`**.
 
 **ARCH-MS-76 (live):** production Caddy routes `/api/auth*` → `:8121` via
 `deploy/Caddyfile`. The systemd unit is `deploy/switchboard-auth.service`.
-Monolith (`:8110`) still mounts the Auth router for **rollback**.
+
+**ARCH-MS-77:** production dual-strip — `projectplanner.service` sets
+`PM_AUTH_HTTP_PRIMARY=service` so the monolith does not mount Auth HTTP
+(shared package + `/api/auth/me` only). Caddy carves `handle /api/auth/me*` → `:8110`.
+Hermetic TestClient suites leave the env unset and mount the same shared router
+in-process.
 
 ## Package
 
 ```
 src/switchboard/services/auth/
-  app.py           # FastAPI factory + module-level `app`
+  app.py           # FastAPI factory (`create_app`)
   health.py        # GET /health
   settings.py      # SWITCHBOARD_AUTH_* env
   __main__.py      # python -m switchboard.services.auth
@@ -44,8 +49,9 @@ curl -sS http://127.0.0.1:8121/health
 | `../switchboard-auth.service` | **Live** systemd unit (ARCH-MS-76) |
 | `switchboard-auth.service.example` | Copy under `deploy/auth/` for soak/docs parity |
 | `../skeleton/Caddyfile.auth-fragment.example` | Historical drill snippet (now applied in live Caddyfile) |
-| `../Caddyfile` | Live `/api/auth*` → `:8121` handles |
-| `../../docs/runbooks/auth-caddy-cutover-rollback.md` | Cutover + rollback drill |
+| `../Caddyfile` | Live `/api/auth/me*` → `:8110`, `/api/auth*` → `:8121` |
+| `../../docs/runbooks/auth-caddy-cutover-rollback.md` | Cutover + recovery drill |
+| `../../tests/test_arch_ms77_auth_cutover_parity.py` | Hermetic parity + dual-strip ratchet |
 
 Enable on the Plan VM (Auth **before** Caddy reload):
 
@@ -60,12 +66,14 @@ curl -sS http://127.0.0.1:8121/health
 Prefer `bash deploy/redeploy.sh` — it starts Auth, proves `:8110` + `:8121` health, then
 reloads Caddy.
 
-## Rollback
+## Recovery
 
-Remove the `/api/auth*` handle blocks from Caddy (traffic returns to monolith `:8110`),
-`caddy reload`, re-smoke, then optionally stop `switchboard-auth`. See the runbook.
+Auth on `:8121` is the Auth HTTP source of truth after ARCH-MS-77. Prefer
+restarting `switchboard-auth` / fixing Caddy over expecting monolith `:8110` to
+serve login/session. See the runbook for emergency remount.
 
 ## Independence gate
 
-Operator Go (G6) recorded for ARCH-MS-75; live edge cutover is ARCH-MS-76.
+Operator Go (G6) recorded for ARCH-MS-75; live edge cutover is ARCH-MS-76;
+parity + dual-strip is ARCH-MS-77.
 See [`docs/AUTH-INDEPENDENCE-GATE.md`](../../docs/AUTH-INDEPENDENCE-GATE.md).

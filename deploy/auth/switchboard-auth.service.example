@@ -3,7 +3,9 @@
 
 # /etc/systemd/system/switchboard-auth.service
 # ARCH-MS-76 — Auth process-cut unit. Caddy routes /api/auth* → :8121.
-# Monolith (:8110) keeps the Auth router mounted for rollback (green façade).
+# ARCH-MS-77 — production monolith sets PM_AUTH_HTTP_PRIMARY=service (no Auth
+# HTTP dual-mount). Recovery = keep/fix this unit; see
+# docs/runbooks/auth-caddy-cutover-rollback.md.
 #
 # Port 8121 avoids web (:8110), MCP (:8111), and skeleton (:8120).
 [Unit]

@@ -150,7 +150,7 @@ ok(logout.status_code == 200, f"logout status {logout.status_code}")
 after = client.get("/api/auth/session")
 ok(after.status_code == 401, f"session after logout is 401 (got {after.status_code})")
 
-# --- façade + package surface (Caddy cut lives in ARCH-MS-76) ---------------
+# --- package + deploy surface (ARCH-MS-77: production dual-strip via env) ----
 app_impl_src = entrypoint_source("app")
 ok(
     "switchboard.services.auth" not in app_impl_src
@@ -159,9 +159,19 @@ ok(
 )
 ok("switchboard.services.auth" not in app_impl_src,
    "app_impl does not reference switchboard.services.auth")
-ok("_global_auth_router" in app_impl_src or "routers.auth" in app_impl_src
-   or "auth.routes" in app_impl_src,
-   "monolith still mounts Auth router (rollback green façade)")
+ok("PM_AUTH_HTTP_PRIMARY" in app_impl_src,
+   "monolith gates Auth HTTP mount on PM_AUTH_HTTP_PRIMARY (ARCH-MS-77)")
+ok(
+    '!= "service"' in app_impl_src or "!= 'service'" in app_impl_src,
+    "production service primary skips dual Auth router mount",
+)
+ok(
+    "_create_me_router" in app_impl_src or "create_me_router" in app_impl_src,
+    "monolith keeps /api/auth/me thin surface",
+)
+unit_web = ROOT / "deploy" / "projectplanner.service"
+ok(unit_web.is_file() and "PM_AUTH_HTTP_PRIMARY=service" in unit_web.read_text(encoding="utf-8"),
+   "live monolith unit sets PM_AUTH_HTTP_PRIMARY=service")
 
 unit = ROOT / "deploy" / "auth" / "switchboard-auth.service.example"
 readme = ROOT / "deploy" / "auth" / "README.md"

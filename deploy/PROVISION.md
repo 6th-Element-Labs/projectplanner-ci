@@ -117,16 +117,18 @@ bash scripts/verify_cgroup_slices.sh
 bash scripts/verify_memory_isolation.sh
 ```
 
-### Auth process-cut cutover checklist (ARCH-MS-76)
+### Auth process-cut cutover checklist (ARCH-MS-76 / ARCH-MS-77)
 
-Live edge routes `/api/auth*` → `switchboard-auth` on `127.0.0.1:8121`. The monolith still
-mounts the Auth router for **rollback** (green façade). Full drill:
+Live edge routes `/api/auth*` → `switchboard-auth` on `127.0.0.1:8121`. Production dual
+mount is stripped via `PM_AUTH_HTTP_PRIMARY=service` on the monolith (ARCH-MS-77);
+`/api/auth/me*` stays on `:8110`. Full drill:
 [`docs/runbooks/auth-caddy-cutover-rollback.md`](../docs/runbooks/auth-caddy-cutover-rollback.md).
 
 **First enable (or after a No-Go skip was reversed):**
 1. `sudo systemctl enable --now switchboard-auth`
 2. `curl -sS http://127.0.0.1:8121/health` → 200
-3. Confirm repo `deploy/Caddyfile` contains `handle /api/auth*` → `:8121`
+3. Confirm repo `deploy/Caddyfile` contains `handle /api/auth/me*` → `:8110` and
+   `handle /api/auth*` → `:8121`
 4. `sudo caddy validate --adapter caddyfile --config deploy/Caddyfile`
 5. `sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy`
 6. Smoke through the public edge:
@@ -135,9 +137,9 @@ mounts the Auth router for **rollback** (green façade). Full drill:
    - register / login / logout happy path
 7. Prefer `bash deploy/redeploy.sh` thereafter — it starts Auth **before** reloading Caddy.
 
-**Rollback (< ~60s):** remove the `/api/auth*` handle blocks from `/etc/caddy/Caddyfile`
-(or restore the pre-cut file), `sudo systemctl reload caddy`, re-smoke against monolith
-`:8110`, then optionally `sudo systemctl stop switchboard-auth`.
+**Recovery (post ARCH-MS-77):** Auth on `:8121` is the Auth HTTP source of truth —
+restart `switchboard-auth` / fix Caddy Auth handles. Do not expect monolith `:8110`
+to serve login/session without an emergency remount (see runbook).
 ### Off-box backups (HARDEN-43)
 Prod SQLite lives only on this box's disk. Set up daily off-box snapshots + a
 tested restore path — full details in [`docs/BACKUP-RESTORE-RUNBOOK.md`](../docs/BACKUP-RESTORE-RUNBOOK.md).

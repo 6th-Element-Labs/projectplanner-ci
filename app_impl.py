@@ -33,8 +33,10 @@ import store  # noqa: E402
 app = FastAPI(title="Taikun PM", version="0.1.0")
 _req_obs = request_observability.RequestObservability()
 
-# Global auth router — always mounted. Browser users authenticate via
-# taikun_session JWT; agents/API callers keep bearer-token principals.
+# Auth HTTP routes: production monolith sets PM_AUTH_HTTP_PRIMARY=service so the
+# edge-owned Auth process (:8121) is the sole HTTP surface (ARCH-MS-77). Hermetic
+# TestClient suites leave the env unset and mount the *same* shared router
+# in-process — not a second implementation.
 import scripts.switchboard_path  # noqa: E402,F401
 from switchboard.api import deps  # noqa: E402
 from switchboard.api.auth_port_adapters import configure_auth_ports  # noqa: E402
@@ -75,7 +77,10 @@ from switchboard.domain.projects import ProjectLifecycleWriteBlocked  # noqa: E4
 
 configure_auth_ports()
 _auth_store.init()
-app.include_router(_global_auth_router)
+# ARCH-MS-77: when production sets PM_AUTH_HTTP_PRIMARY=service, do not dual-mount
+# Auth HTTP (Caddy → :8121). Unset/empty keeps the shared router for hermetic tests.
+if (os.environ.get("PM_AUTH_HTTP_PRIMARY") or "").strip().lower() != "service":
+    app.include_router(_global_auth_router)
 
 
 @app.exception_handler(ProjectLifecycleWriteBlocked)

@@ -21,11 +21,11 @@ from switchboard.services.auth.settings import AuthServiceSettings
 
 
 def create_app(settings: AuthServiceSettings | None = None) -> FastAPI:
-    """Build a standalone Auth FastAPI app (side-by-side with the monolith).
+    """Build the standalone Auth FastAPI app (primary Auth HTTP surface).
 
     Intentionally omits ``/api/auth/me`` (monolith Access/UI helpers), SPA,
-    MCP, and task routers. Caddy must not route live ``/api/auth*`` here until
-    ARCH-MS-76.
+    MCP, and task routers. Production Caddy routes ``/api/auth*`` here
+    (ARCH-MS-76); monolith dual-mount of this router was stripped in ARCH-MS-77.
     """
     cfg = settings or AuthServiceSettings.from_env()
     configure_auth_ports()
@@ -35,8 +35,8 @@ def create_app(settings: AuthServiceSettings | None = None) -> FastAPI:
         title=f"Switchboard — {cfg.service_name}",
         version="0.1.0",
         description=(
-            "Auth process-cut service (ARCH-MS-75). Side-by-side with the "
-            "monolith; production Caddy cutover is ARCH-MS-76."
+            "Auth process-cut service (ARCH-MS-75+). Live edge traffic via "
+            "Caddy → :8121 (ARCH-MS-76); dual monolith mount removed (ARCH-MS-77)."
         ),
     )
     application.state.auth_service_settings = cfg
