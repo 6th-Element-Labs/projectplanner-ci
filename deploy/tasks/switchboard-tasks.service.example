@@ -1,8 +1,9 @@
-# Example systemd unit for Switchboard Tasks (ARCH-MS-90 side-by-side)
+# Example systemd unit for Switchboard Tasks (ARCH-MS-90/91 side-by-side)
 #
-# Install only after independence Go + G6 for *live* edge traffic (ARCH-MS-92).
-# This example is the side-by-side process on 127.0.0.1:8122 — Caddy stays on
-# the monolith until ARCH-MS-92 dual-strip.
+# ARCH-MS-91: hermetic parity vs in-process is proven in
+# tests/test_arch_ms91_tasks_parity.py — install this unit only for local soak.
+# Live edge traffic / production dual-strip remains ARCH-MS-92 and still HOLD on
+# operator G6 (Phase 3 Path B waived live cut).
 #
 # Factory: switchboard.services.tasks.app:create_app
 
