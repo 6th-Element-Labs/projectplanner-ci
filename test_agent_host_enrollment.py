@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import store  # noqa: E402
 from adapters import agent_host_enrollment as enrollment  # noqa: E402
+from adapters import codex_local_worker, codex_personal_worker  # noqa: E402
 from app import app  # noqa: E402
 
 
@@ -166,10 +167,60 @@ try:
     durability_completion = store.complete_agent_host_enrollment(
         bootstrap_code=durability_bootstrap["bootstrap_code"],
         hostname="adapter18-durability.test", platform="linux",
-        public_key_fingerprint="sha256:" + "2" * 64, project=PROJECT)
+        public_key_fingerprint="sha256:" + "2" * 64,
+        completion_recovery_secret="ahr-" + "d" * 43, project=PROJECT)
     ok(durability_denied and not durability_http_calls
        and durability_completion.get("host_token"),
        "release and 0600 identity storage must be durable before bootstrap consumption")
+
+    response_loss_bootstrap = begin("host/adapter18-response-loss")
+    response_loss_paths = paths("response-loss")
+    response_loss_calls = [0]
+
+    def lose_enrollment_response(*args, **kwargs):
+        response = http(*args, **kwargs)
+        response_loss_calls[0] += 1
+        if response_loss_calls[0] == 1:
+            raise enrollment.EnrollmentError("simulated enrollment response loss")
+        return response
+
+    try:
+        enrollment.install_host(
+            bundle_dir=bundle_020, public_key_path=public_path,
+            bootstrap_code=response_loss_bootstrap["bootstrap_code"],
+            base_url="https://switchboard.test", project=PROJECT,
+            owner_user_id="user-adapter18", target_platform="linux",
+            paths=response_loss_paths, lanes=["ADAPTER"], http=lose_enrollment_response,
+            service_runner=fake_service, local_auth_runner=fake_codex,
+            codex_executable="codex", hostname="adapter18-response-loss.test",
+            start_service=False,
+        )
+        response_lost = False
+    except enrollment.EnrollmentError:
+        response_lost = True
+    response_pending_identity = json.loads(
+        (response_loss_paths["config_root"] / "identity.json").read_text())
+    response_pending_state = json.loads(
+        (response_loss_paths["state_root"] / "state.json").read_text())
+    response_recovered = enrollment.install_host(
+        bundle_dir=bundle_020, public_key_path=public_path,
+        bootstrap_code=response_loss_bootstrap["bootstrap_code"],
+        base_url="https://switchboard.test", project=PROJECT,
+        owner_user_id="user-adapter18", target_platform="linux",
+        paths=response_loss_paths, lanes=["ADAPTER"], http=http,
+        service_runner=fake_service, local_auth_runner=fake_codex,
+        codex_executable="codex", hostname="adapter18-response-loss.test",
+        start_service=False,
+    )
+    response_identity = json.loads(
+        (response_loss_paths["config_root"] / "identity.json").read_text())
+    ok(response_lost
+       and response_pending_state["status"] == "enrollment_retry_required"
+       and response_pending_identity["completion_recovery_secret"].startswith("ahr-")
+       and response_recovered["completion_recovered"] is True
+       and response_identity.get("host_token")
+       and "completion_recovery_secret" not in response_identity,
+       "lost enrollment response reuses durable pending material and recovers without a new bootstrap")
 
     mac_bootstrap = begin("host/adapter18-macos")
     mac_paths = paths("macos")
@@ -207,6 +258,7 @@ try:
     consumed = store.complete_agent_host_enrollment(
         bootstrap_code=mac_bootstrap["bootstrap_code"], hostname="replay",
         platform="darwin", public_key_fingerprint="sha256:" + "1" * 64,
+        completion_recovery_secret="ahr-" + "x" * 43,
         project=PROJECT)
     ok(consumed.get("error_code") == "bootstrap_code_consumed",
        "device bootstrap is single-use")
@@ -352,8 +404,92 @@ try:
     launched_env = captured_exec.get("environment") or {}
     ok("OPENAI_API_KEY" not in launched_env
        and launched_env.get("PM_MCP_TOKEN")
-       and launched_env.get("PM_AGENT_WORK_MODULE") == "adapters.codex_personal_worker:run",
+       and launched_env.get("PM_AGENT_WORK_MODULE") == "adapters.codex_local_worker:run",
        "service-run strips metered keys and binds only the narrow host identity")
+
+    local_workspace = TMP / "local-worker"
+    local_workspace.mkdir()
+    source_sha = "a" * 40
+    completed_sha = "b" * 40
+    local_task = {
+        "task_id": "ADAPTER-18",
+        "title": "Local native worker test",
+        "description": "Prove host-local Codex execution without a credential lease.",
+        "claim_id": "taskclaim-local-worker",
+        "managed": {
+            "workspace_path": str(local_workspace),
+            "work_session_id": "worksession-local-worker",
+        },
+    }
+    try:
+        codex_personal_worker._lease_body({}, local_task)
+        central_binding_required = False
+    except RuntimeError as exc:
+        central_binding_required = str(exc) == "CO runtime binding is incomplete"
+    original_local_git = codex_local_worker._git
+    original_binding_env = {key: os.environ.get(key) for key in (
+        "PM_CO_HOST_ID", "PM_RUNNER_SESSION_ID", "PM_CO_WAKE_ID", "PM_SOURCE_SHA",
+        "PM_EXECUTION_CONNECTION_ID", "PM_AGENT_ID", "PM_CLAIM_ID",
+        "PM_WORK_SESSION_ID", "PM_CO_ACCOUNT_BINDING_JSON", "OPENAI_API_KEY",
+    )}
+    local_git_heads = [source_sha, completed_sha]
+    captured_local_codex: dict[str, object] = {}
+
+    def fake_local_git(workspace, *args):
+        ok(workspace == str(local_workspace), "native local worker stays in its managed workspace")
+        if args == ("rev-parse", "HEAD"):
+            return local_git_heads.pop(0)
+        if args == ("branch", "--show-current"):
+            return "codex/ADAPTER-18-local-worker"
+        if args == ("status", "--porcelain"):
+            return ""
+        if args == ("rev-parse", "@{upstream}"):
+            return completed_sha
+        raise AssertionError(args)
+
+    def fake_local_codex(command, **kwargs):
+        captured_local_codex.update({"command": command, "kwargs": kwargs})
+        return subprocess.CompletedProcess(command, 0, "native codex completed", "")
+
+    try:
+        codex_local_worker._git = fake_local_git
+        os.environ.update({
+            "PM_CO_HOST_ID": "host/adapter18-linux",
+            "PM_RUNNER_SESSION_ID": "runner-local-worker",
+            "PM_CO_WAKE_ID": "wake-local-worker",
+            "PM_SOURCE_SHA": source_sha,
+            "PM_EXECUTION_CONNECTION_ID": "execconn-local-worker",
+            "PM_AGENT_ID": "codex/ADAPTER-18-local-worker",
+            "PM_CLAIM_ID": "taskclaim-local-worker",
+            "PM_WORK_SESSION_ID": "worksession-local-worker",
+            "PM_CO_ACCOUNT_BINDING_JSON": json.dumps({
+                "task_id": "ADAPTER-18",
+                "claim_id": "taskclaim-local-worker",
+                "work_session_id": "worksession-local-worker",
+                "host_id": "host/adapter18-linux",
+                "runner_session_id": "runner-local-worker",
+                "agent_id": "codex/ADAPTER-18-local-worker",
+            }),
+            "OPENAI_API_KEY": "must-not-cross-local-worker-boundary",
+        })
+        local_evidence = codex_local_worker.run(
+            local_task, runner=fake_local_codex, codex_executable="codex")
+    finally:
+        codex_local_worker._git = original_local_git
+        for key, value in original_binding_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    local_command = captured_local_codex.get("command") or []
+    local_environment = (captured_local_codex.get("kwargs") or {}).get("env") or {}
+    ok(central_binding_required
+       and local_evidence["head_sha"] == completed_sha
+       and local_evidence["verification"]["auth_mode"] == "chatgpt_personal"
+       and local_evidence["verification"]["provider_credential_exported"] is False
+       and "exec" in local_command and "ADAPTER-18" in str(local_command[-1])
+       and "OPENAI_API_KEY" not in local_environment,
+       "fresh enrollment selects a native local-auth worker with no central credential binding")
     uninstalled = enrollment.uninstall_host(
         identity_path=linux_identity, config_path=linux_config, state_path=linux_state,
         http=http, service_runner=fake_service)

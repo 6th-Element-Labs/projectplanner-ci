@@ -14,6 +14,10 @@ native Codex CLI; it does not wake or remote-drive the Codex desktop application
 - Bootstrap completion creates a stable `host/...` identity, an Ed25519 device key, and
   a narrow project bearer with `read` + `write:ixp`. Raw bearers are returned once and
   stored only in the user's `0600` identity file.
+- Before consuming the bootstrap, the installer also persists a one-install recovery
+  secret in the pending `0600` identity. For ten minutes, the same bootstrap plus that
+  secret can recover an ambiguous completion response by issuing a replacement bearer;
+  the first possibly-lost bearer is invalidated. The secret is removed after completion.
 - The Codex personal login and all provider credentials remain on the user-owned host.
   Registration and heartbeat expose only redacted readiness/account fingerprints.
 - Rotating the host identity invalidates the old bearer immediately. Revocation fences
@@ -91,8 +95,12 @@ Default paths:
 
 The service loads the bearer locally, advertises Codex `chatgpt_personal` readiness, and
 executes `adapters/agent_host.py`. Personal work uses
-`adapters.codex_personal_worker:run`, which refuses OpenAI/Codex metered API keys, binds the
-task/claim/Work Session/runner/host/wake, launches native `codex`, and purges runtime residue.
+`adapters.codex_local_worker:run`, which uses the already signed-in native Codex CLI directly,
+refuses inherited OpenAI/Codex metered API keys, and requires the exact managed workspace,
+task/claim/Work Session/runner/host/wake/source/connection binding. It does not request or
+materialize a centrally stored provider credential. The separate
+`adapters.codex_personal_worker:run` remains the CO credential-vault path and is not selected
+by fresh host-local enrollment.
 
 ## Update, rotate, revoke, and uninstall
 
@@ -136,9 +144,17 @@ A wake with `execution_mode=personal_agent_host` or
 `require_exact_host_binding=true` is refused before claim unless it contains the exact:
 
 - wake and task IDs;
-- claim and Work Session IDs;
+- claim, Work Session, and runner-session IDs;
 - target agent and `runtime=codex`;
 - exact host, source SHA, and typed execution-connection ID.
+
+The account binding, execution binding, wake, selector, and local inventory must repeat the
+same values; presence alone is insufficient. Source SHA must be a lowercase 40-character Git
+SHA and all opaque IDs must use the bounded identifier grammar. Any mismatch or malformed
+value is refused before the wake is claimed. Switchboard constructs this binding from the
+live active claim and Work Session, derives the runner identity from the wake and host, and
+revalidates those database relations atomically at claim time. The launched worker adopts
+that existing claim and Work Session; it never creates a replacement session behind the wake.
 
 The daemon heartbeat publishes `allow_work`, runtime capabilities/version, drain state,
 session headroom, owner user/tenant/project/provider allowlists, local-auth availability,
@@ -150,11 +166,16 @@ Install fails before consuming the one-time bootstrap unless both `codex --versi
 `0600` identity/state paths have been written durably. The preflight strips inherited
 metered-key variables and persists only a redacted account fingerprint. Operators can repeat
 that safe check independently with `python adapters/agent_host_enrollment.py preflight`.
+If completion returns ambiguously, rerun the same install command with the same bootstrap
+file within ten minutes. The installer reuses the pending key and recovery secret rather than
+generating a second identity or requiring a new bootstrap.
 
 ## Executable proof
 
 `test_agent_host_enrollment.py` builds and signs real bundles, tampers one to prove denial,
 performs fresh sandboxed macOS and Linux installs through the REST ceremony, registers the
 new host bearer, rotates and updates it, exercises offline and successful revoke, proves
-post-revoke denial, uninstalls Linux, and scans for residue. `test_agent_host.py` covers the
-redacted heartbeat/inventory and exact personal-wake admission contract.
+post-revoke denial, recovers a deliberately lost enrollment response, launches the
+host-local worker without a credential-vault binding, uninstalls Linux, and scans for residue.
+`test_agent_host.py` covers the redacted heartbeat/inventory and relational exact-wake
+admission contract.

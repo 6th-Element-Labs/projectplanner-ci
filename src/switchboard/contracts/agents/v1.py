@@ -249,7 +249,7 @@ class BeginHostEnrollmentCommand(VersionedModel):
 
 
 class CompleteHostEnrollmentCommand(VersionedModel):
-    """Single-use device bootstrap completion from a macOS or Linux host."""
+    """Single-use bootstrap completion with bounded response-loss recovery."""
 
     SCHEMA: ClassVar[str] = COMPLETE_HOST_ENROLLMENT_COMMAND_SCHEMA
     model_config = ConfigDict(frozen=True)
@@ -260,10 +260,12 @@ class CompleteHostEnrollmentCommand(VersionedModel):
     hostname: str
     platform: str
     public_key_fingerprint: str
+    completion_recovery_secret: str
     agent_host_version: str = ""
 
     @field_validator("project", "bootstrap_code", "hostname", "platform",
-                     "public_key_fingerprint", "agent_host_version", mode="before")
+                     "public_key_fingerprint", "completion_recovery_secret",
+                     "agent_host_version", mode="before")
     @classmethod
     def _strip_completion_text(cls, value: Any) -> str:
         return str(value or "").strip()

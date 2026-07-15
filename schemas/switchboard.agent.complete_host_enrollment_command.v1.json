@@ -1,7 +1,7 @@
 {
   "$id": "switchboard.agent.complete_host_enrollment_command.v1",
   "additionalProperties": false,
-  "description": "Single-use device bootstrap completion from a macOS or Linux host.",
+  "description": "Single-use bootstrap completion with bounded response-loss recovery.",
   "properties": {
     "agent_host_version": {
       "default": "",
@@ -10,6 +10,10 @@
     },
     "bootstrap_code": {
       "title": "Bootstrap Code",
+      "type": "string"
+    },
+    "completion_recovery_secret": {
+      "title": "Completion Recovery Secret",
       "type": "string"
     },
     "hostname": {
@@ -39,7 +43,8 @@
     "bootstrap_code",
     "hostname",
     "platform",
-    "public_key_fingerprint"
+    "public_key_fingerprint",
+    "completion_recovery_secret"
   ],
   "title": "CompleteHostEnrollmentCommand",
   "type": "object"

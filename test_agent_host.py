@@ -118,14 +118,28 @@ incomplete_personal_wake = {
     "task_id": "ADAPTER-18",
     "selector": {"runtime": "codex", "agent_id": "codex/ADAPTER-18", "lane": "ADAPTER"},
     "policy": {"execution_mode": "personal_agent_host", "account_binding": {
-        "claim_id": "taskclaim-test", "work_session_id": "worksession-test",
+        "task_id": "ADAPTER-18", "claim_id": "taskclaim-test",
+        "work_session_id": "worksession-test", "runner_session_id": "runner-test",
+        "host_id": "host/test", "agent_id": "codex/ADAPTER-18",
     }},
 }
+personal_runner_id = agent_host._runner_session_id_for_wake(
+    incomplete_personal_wake, "host/test")
+incomplete_personal_wake["policy"].update({
+    "source_sha": "a" * 40,
+    "execution_connection_id": "execconn-test",
+})
+incomplete_personal_wake["policy"]["account_binding"][
+    "runner_session_id"] = personal_runner_id
 complete_personal_wake = json.loads(json.dumps(incomplete_personal_wake))
 complete_personal_wake["policy"]["execution_binding"] = {
+    "wake_id": "wake-personal-incomplete", "task_id": "ADAPTER-18",
+    "claim_id": "taskclaim-test", "work_session_id": "worksession-test",
+    "runner_session_id": personal_runner_id,
     "host_id": "host/test",
     "source_sha": "a" * 40,
     "execution_connection_id": "execconn-test",
+    "agent_id": "codex/ADAPTER-18",
 }
 message_only_inventory = {
     "host_id": "host/message-only",
@@ -150,12 +164,21 @@ incomplete_binding = agent_host.validate_personal_wake_binding(
 complete_binding = agent_host.validate_personal_wake_binding(
     complete_personal_wake, inventory)
 ok(incomplete_binding["valid"] is False
-   and "host_id" in incomplete_binding["missing"]
-   and "source_sha" in incomplete_binding["missing"]
-   and "execution_connection_id" in incomplete_binding["missing"],
+   and incomplete_binding["error"] == "wake_binding_incomplete"
+   and "source_sha[1]" in incomplete_binding["missing"]
+   and "execution_connection_id[1]" in incomplete_binding["missing"],
    "personal host wake refuses incomplete source/connection binding before claim")
 ok(complete_binding["valid"] is True and complete_binding["binding"]["task_id"] == "ADAPTER-18",
    "personal host wake accepts exact task/claim/session/host/source/connection binding")
+inconsistent_personal_wake = json.loads(json.dumps(complete_personal_wake))
+inconsistent_personal_wake["policy"]["execution_binding"]["claim_id"] = "taskclaim-other"
+inconsistent_personal_wake["policy"]["execution_binding"]["source_sha"] = "not-a-sha"
+inconsistent_binding = agent_host.validate_personal_wake_binding(
+    inconsistent_personal_wake, inventory)
+ok(inconsistent_binding["valid"] is False
+   and "claim_id" in inconsistent_binding["mismatches"]
+   and "source_sha" in inconsistent_binding["malformed"],
+   "personal host wake refuses relationally inconsistent or malformed exact bindings")
 
 personal_inventory = json.loads(json.dumps(inventory))
 personal_inventory["runtimes"][0]["runtime"] = "codex"
@@ -192,7 +215,10 @@ ok(len(personal_claims) == 1
    "daemon refuses an unbound personal wake and claims only the exact-bound wake")
 ok(bool(personal_launch_envs)
    and personal_launch_envs[0]["PM_SOURCE_SHA"] == "a" * 40
-   and personal_launch_envs[0]["PM_EXECUTION_CONNECTION_ID"] == "execconn-test",
+   and personal_launch_envs[0]["PM_EXECUTION_CONNECTION_ID"] == "execconn-test"
+   and personal_launch_envs[0]["PM_PERSONAL_AGENT_HOST_EXECUTION"] == "1"
+   and personal_launch_envs[0]["PM_WORK_SESSION_ID"] == "worksession-test"
+   and personal_launch_envs[0]["PM_CLAIM_ID"] == "taskclaim-test",
    "native launch receives the exact source SHA and execution-connection binding")
 
 cmd, mode = agent_host.launch_command(message_wake, inventory)

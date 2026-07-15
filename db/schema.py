@@ -798,6 +798,8 @@ def apply_schema(c):
             bootstrap_hash         TEXT NOT NULL UNIQUE,
             bootstrap_expires_at   REAL NOT NULL,
             bootstrap_consumed_at  REAL,
+            completion_recovery_hash TEXT,
+            completion_recovery_expires_at REAL,
             principal_id           TEXT,
             public_key_fingerprint TEXT,
             identity_generation    INTEGER NOT NULL DEFAULT 0,

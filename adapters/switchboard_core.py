@@ -335,6 +335,21 @@ def claim_task(project, task_id, agent_id, base=None, token=None,
     return _http("POST", "/txp/v1/claim_task", body, base=base, token=token, timeout=30)
 
 
+def get_task(project, task_id, base=None, token=None):
+    task = urllib.parse.quote(str(task_id or "").strip(), safe="")
+    scope = urllib.parse.quote(str(project or "").strip(), safe="")
+    return _http("GET", f"/api/tasks/{task}?project={scope}", base=base, token=token)
+
+
+def get_work_session(project, work_session_id, base=None, token=None):
+    session = urllib.parse.quote(str(work_session_id or "").strip(), safe="")
+    scope = urllib.parse.quote(str(project or "").strip(), safe="")
+    return _http(
+        "GET", f"/ixp/v1/work_sessions/{session}?project={scope}",
+        base=base, token=token,
+    )
+
+
 def complete_claim(project, claim_id, evidence, base=None, token=None, final_status=""):
     ev = evidence if isinstance(evidence, str) else __import__("json").dumps(evidence or {})
     body = {"project": project, "claim_id": claim_id, "evidence": ev}
@@ -603,6 +618,63 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
         "PM_REMOTE_WORK_SESSION_REGISTRATION", "").strip().lower() in (
             "1", "true", "yes", "on")
     exact_task_id = str(os.environ.get("PM_TASK_ID") or "").strip().upper()
+    personal_bound = os.environ.get(
+        "PM_PERSONAL_AGENT_HOST_EXECUTION", "").strip().lower() in (
+            "1", "true", "yes", "on")
+    if personal_bound:
+        try:
+            binding = json.loads(os.environ.get("PM_CO_ACCOUNT_BINDING_JSON") or "{}")
+            claim_id = str(binding.get("claim_id") or "").strip()
+            work_session_id = str(binding.get("work_session_id") or "").strip()
+            if not exact_task_id or not claim_id or not work_session_id:
+                raise RuntimeError("personal execution binding is incomplete")
+            if str(binding.get("task_id") or "").strip().upper() != exact_task_id:
+                raise RuntimeError("personal task binding does not match the wake")
+            session = get_work_session(
+                project, work_session_id, base=base, token=token)
+            task = get_task(project, exact_task_id, base=base, token=token)
+            source_sha = str(os.environ.get("PM_SOURCE_SHA") or "").strip()
+            workspace_path = str(
+                session.get("worktree_path") or session.get("clone_path") or "").strip()
+            active_claims = task.get("active_claims") or []
+            claim = next(
+                (row for row in active_claims
+                 if str(row.get("claim_id") or row.get("id") or "") == claim_id),
+                None,
+            )
+            if (session.get("task_id") != exact_task_id
+                    or session.get("agent_id") != agent_id
+                    or session.get("claim_id") != claim_id
+                    or session.get("work_session_id") != work_session_id
+                    or session.get("status") != "active"
+                    or session.get("head_sha") != source_sha
+                    or not claim or claim.get("agent_id") != agent_id):
+                raise RuntimeError("personal claim and Work Session binding is not active")
+            if not workspace_path or not os.path.isdir(workspace_path):
+                raise RuntimeError("personal bound workspace is not present on this host")
+            head = subprocess.run(
+                ["git", "-C", workspace_path, "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=30, check=False)
+            if head.returncode != 0 or (head.stdout or "").strip() != source_sha:
+                raise RuntimeError("personal bound workspace is not at the exact source SHA")
+            return {
+                "claimed": True,
+                "claim_id": claim_id,
+                "task_id": exact_task_id,
+                "task": task,
+                "adopted_existing_claim": True,
+            }, {
+                "work_session_id": work_session_id,
+                "workspace_path": workspace_path,
+                "branch": session.get("branch") or "",
+                "head_sha": source_sha,
+                "profile": session.get("policy_profile") or "code_strict",
+                "external": True,
+                "bound_existing": True,
+            }
+        except Exception as exc:
+            return {"claimed": False,
+                    "reason": f"personal_execution_binding_error:{exc}"}, None
     if remote_registration and auto_work_session and exact_task_id:
         profile = os.environ.get("PM_WORK_SESSION_POLICY_PROFILE", "code_strict")
         try:
@@ -735,7 +807,7 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                 run = run_executed_tests(
                     managed["workspace_path"], managed["work_session_id"], task_id,
                     claim_id, agent_id, branch=managed.get("branch", ""),
-                    head_sha=managed.get("head_sha", ""))
+                    head_sha=evidence.get("head_sha") or managed.get("head_sha", ""))
                 evidence = {**evidence, "executed_test_run": run}
             evidence.setdefault("branch", managed.get("branch", ""))
             evidence.setdefault("head_sha", managed.get("head_sha", ""))

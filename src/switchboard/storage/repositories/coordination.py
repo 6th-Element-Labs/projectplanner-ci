@@ -9,7 +9,9 @@ stay reachable via ``_store_facade()``. ``store.py`` re-exports these symbols; r
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -203,11 +205,101 @@ def _clear_execution_credential_binding(policy: Dict[str, Any]) -> Dict[str, Any
         updated["account_binding"] = binding
     return updated
 
+
+def _bind_personal_wake_policy(
+    c: sqlite3.Connection,
+    *,
+    wake_id: str,
+    selector: Dict[str, Any],
+    policy: Dict[str, Any],
+    task_id: Optional[str],
+    now: float,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Create the server-authoritative relational binding for a personal wake."""
+    updated = dict(policy or {})
+    personal = (updated.get("execution_mode") == "personal_agent_host"
+                or updated.get("require_exact_host_binding") is True)
+    if not personal:
+        return updated, []
+    binding = dict(updated.get("account_binding") or {})
+    canonical_task_id = str(task_id or "").strip()
+    claim_id = str(binding.get("claim_id") or "").strip()
+    work_session_id = str(binding.get("work_session_id") or "").strip()
+    host_id = str(binding.get("host_id") or "").strip()
+    agent_id = str(selector.get("agent_id") or "").strip()
+    reasons: List[str] = []
+    claim = c.execute(
+        "SELECT id, task_id, agent_id, status, expires_at FROM task_claims WHERE id=?",
+        (claim_id,),
+    ).fetchone()
+    if (not claim or claim["task_id"] != canonical_task_id
+            or claim["agent_id"] != agent_id or claim["status"] != "active"
+            or float(claim["expires_at"] or 0) <= now):
+        reasons.append("claim_not_active_for_task_agent")
+    work_session = c.execute(
+        "SELECT task_id, agent_id, claim_id, head_sha, status FROM work_sessions "
+        "WHERE work_session_id=?",
+        (work_session_id,),
+    ).fetchone()
+    if (not work_session or work_session["task_id"] != canonical_task_id
+            or work_session["agent_id"] != agent_id
+            or work_session["claim_id"] != claim_id
+            or work_session["status"] != "active"):
+        reasons.append("work_session_not_active_for_claim")
+    if not host_id:
+        reasons.append("host_id_required")
+    if str(selector.get("runtime") or "") != "codex":
+        reasons.append("codex_runtime_required")
+    if reasons:
+        return updated, sorted(set(reasons))
+
+    source_sha = str(work_session["head_sha"] or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        return updated, ["work_session_source_sha_invalid"]
+    requested_source = str(updated.get("source_sha") or "").strip()
+    if requested_source and requested_source != source_sha:
+        return updated, ["source_sha_not_current_work_session_head"]
+    requested_task = str(binding.get("task_id") or "").strip()
+    requested_agent = str(binding.get("agent_id") or "").strip()
+    if requested_task and requested_task != canonical_task_id:
+        return updated, ["task_id_binding_mismatch"]
+    if requested_agent and requested_agent != agent_id:
+        return updated, ["agent_id_binding_mismatch"]
+
+    runner_session_id = "run_" + hashlib.sha256(
+        f"{wake_id}:{host_id}".encode()).hexdigest()[:16]
+    execution_connection_id = str(
+        updated.get("execution_connection_id") or
+        f"execconn-{uuid.uuid4().hex[:20]}"
+    ).strip()
+    exact = {
+        "task_id": canonical_task_id,
+        "claim_id": claim_id,
+        "work_session_id": work_session_id,
+        "runner_session_id": runner_session_id,
+        "host_id": host_id,
+        "agent_id": agent_id,
+    }
+    binding.update(exact)
+    updated.update({
+        "require_exact_host_binding": True,
+        "source_sha": source_sha,
+        "execution_connection_id": execution_connection_id,
+        "account_binding": binding,
+        "execution_binding": {
+            **exact,
+            "wake_id": wake_id,
+            "source_sha": source_sha,
+            "execution_connection_id": execution_connection_id,
+        },
+    })
+    return updated, []
+
 def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
                         reason: str, source: str, policy: Dict[str, Any],
                         task_id: Optional[str], principal_id: str, actor: str,
                         now: float, project: str, idem_key: str = "",
-                        effect_key: str = "") -> Dict[str, Any]:
+                        effect_key: str = "", wake_id: str = "") -> Dict[str, Any]:
     deadline_s = (policy.get("deadline_seconds") or policy.get("claim_timeout_s") or
                   policy.get("ttl_s"))
     deadline = now + float(deadline_s) if deadline_s else None
@@ -236,7 +328,7 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
         "reason": (placement.get("reason_code") if placement_denied else "no_eligible_host"),
         "eligible_host_count": 0,
     } if status == "failed" else {})
-    wake_id = "wake-" + uuid.uuid4().hex[:16]
+    wake_id = wake_id or "wake-" + uuid.uuid4().hex[:16]
     c.execute(
         "INSERT INTO wake_intents(wake_id, source, reason, selector_json, policy_json, "
         "status, requested_at, deadline, result_json, placement_json, task_id, principal_id, "
@@ -298,6 +390,19 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             hit = _store_facade()._idem_hit(c, "request_wake", idem_key, actor, payload)
             if hit is not None:
                 return hit
+            wake_id = "wake-" + uuid.uuid4().hex[:16]
+            policy, binding_errors = _bind_personal_wake_policy(
+                c, wake_id=wake_id, selector=selector, policy=policy,
+                task_id=task_id, now=now)
+            if binding_errors:
+                out = {
+                    "requested": False,
+                    "error": "invalid_personal_execution_binding",
+                    "reason_codes": binding_errors,
+                }
+                _store_facade()._idem_store(
+                    c, "request_wake", idem_key, actor, payload, out)
+                return out
             effect_claim = _store_facade()._claim_external_effect_in(
                 c, "wake", "agent_host", json.dumps(selector, sort_keys=True),
                 payload, task_id=task_id, agent_id=selector.get("agent_id") or "",
@@ -317,7 +422,8 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                 c, selector=selector, reason=reason or "wake requested",
                 source=source or actor, policy=policy, task_id=task_id,
                 principal_id=principal_id, actor=actor, now=now, idem_key=idem_key,
-                effect_key=effect_claim["effect_key"], project=project)
+                effect_key=effect_claim["effect_key"], project=project,
+                wake_id=wake_id)
             _store_facade()._update_external_effect_in(
                 c, effect_claim["effect_key"], "issued",
                 readback={"wake_id": wake["wake_id"], "wake_status": wake["status"]},
@@ -412,6 +518,112 @@ def _credential_admission_ready(
     updated["provider_capacity"] = capacity
     return updated, capacity, ""
 
+
+def _personal_exact_binding_error(
+    c: sqlite3.Connection,
+    wake: Dict[str, Any],
+    *,
+    host_id: str,
+    runner_session_id: str,
+    now: float,
+) -> Optional[Dict[str, Any]]:
+    """Prove a personal-host wake against live claim and Work Session rows."""
+    policy = dict(wake.get("policy") or {})
+    personal = (policy.get("execution_mode") == "personal_agent_host"
+                or policy.get("require_exact_host_binding") is True)
+    if not personal:
+        return None
+    binding = dict(policy.get("account_binding") or {})
+    execution = dict(policy.get("execution_binding") or {})
+    selector = dict(wake.get("selector") or {})
+    wake_id = str(wake.get("wake_id") or "").strip()
+    task_id = str(wake.get("task_id") or "").strip()
+    agent_id = str(selector.get("agent_id") or "").strip()
+    runner_id = str(runner_session_id or "").strip()
+    source_sha = str(execution.get("source_sha") or "").strip()
+    expected_runner = "run_" + hashlib.sha256(
+        f"{wake_id}:{host_id}".encode()).hexdigest()[:16]
+    expected = {
+        "wake_id": wake_id,
+        "task_id": task_id,
+        "claim_id": str(binding.get("claim_id") or "").strip(),
+        "work_session_id": str(binding.get("work_session_id") or "").strip(),
+        "runner_session_id": expected_runner,
+        "host_id": str(host_id or "").strip(),
+        "agent_id": agent_id,
+        "source_sha": source_sha,
+        "execution_connection_id": str(
+            execution.get("execution_connection_id") or "").strip(),
+    }
+    comparisons = {
+        "wake_id": execution.get("wake_id"),
+        "task_id.account": binding.get("task_id"),
+        "task_id.execution": execution.get("task_id"),
+        "claim_id.execution": execution.get("claim_id"),
+        "work_session_id.execution": execution.get("work_session_id"),
+        "runner_session_id.account": binding.get("runner_session_id"),
+        "runner_session_id.execution": execution.get("runner_session_id"),
+        "runner_session_id.argument": runner_id,
+        "host_id.account": binding.get("host_id"),
+        "host_id.execution": execution.get("host_id"),
+        "agent_id.account": binding.get("agent_id"),
+        "agent_id.execution": execution.get("agent_id"),
+        "source_sha.policy": policy.get("source_sha"),
+        "execution_connection_id.policy": policy.get("execution_connection_id"),
+    }
+    comparison_expected = {
+        "wake_id": expected["wake_id"],
+        "task_id.account": expected["task_id"],
+        "task_id.execution": expected["task_id"],
+        "claim_id.execution": expected["claim_id"],
+        "work_session_id.execution": expected["work_session_id"],
+        "runner_session_id.account": expected["runner_session_id"],
+        "runner_session_id.execution": expected["runner_session_id"],
+        "runner_session_id.argument": expected["runner_session_id"],
+        "host_id.account": expected["host_id"],
+        "host_id.execution": expected["host_id"],
+        "agent_id.account": expected["agent_id"],
+        "agent_id.execution": expected["agent_id"],
+        "source_sha.policy": expected["source_sha"],
+        "execution_connection_id.policy": expected["execution_connection_id"],
+    }
+    reasons = sorted(
+        key for key, value in comparisons.items()
+        if str(value or "").strip() != comparison_expected[key]
+    )
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        reasons.append("source_sha.invalid")
+    if not all(expected.values()) or selector.get("runtime") != "codex":
+        reasons.append("required_binding_missing")
+
+    claim = c.execute(
+        "SELECT id, task_id, agent_id, status, expires_at FROM task_claims WHERE id=?",
+        (expected["claim_id"],),
+    ).fetchone()
+    if (not claim or claim["task_id"] != task_id or claim["agent_id"] != agent_id
+            or claim["status"] != "active" or float(claim["expires_at"] or 0) <= now):
+        reasons.append("claim_not_active_for_task_agent")
+    work_session = c.execute(
+        "SELECT task_id, agent_id, claim_id, head_sha, status FROM work_sessions "
+        "WHERE work_session_id=?",
+        (expected["work_session_id"],),
+    ).fetchone()
+    if (not work_session or work_session["task_id"] != task_id
+            or work_session["agent_id"] != agent_id
+            or work_session["claim_id"] != expected["claim_id"]
+            or work_session["head_sha"] != source_sha
+            or work_session["status"] != "active"):
+        reasons.append("work_session_not_active_for_claim_source")
+    if reasons:
+        return {
+            "claimed": False,
+            "reason": "exact_binding_denied",
+            "reason_codes": sorted(set(reasons)),
+            "host_id": host_id,
+            "wake_id": wake_id,
+        }
+    return None
+
 def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                project: str = DEFAULT_PROJECT, runner_session_id: str = "",
                credential_lease_id: str = "", claim_id: str = "",
@@ -424,9 +636,18 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if not wake_row:
                 return {"claimed": False, "error": "wake not found", "wake_id": wake_id}
             wake = _wake_row(wake_row)
+            policy = dict(wake.get("policy") or {})
+            binding = dict(policy.get("account_binding") or {})
+            personal = (policy.get("execution_mode") == "personal_agent_host"
+                        or policy.get("require_exact_host_binding") is True)
+            binding_error = _personal_exact_binding_error(
+                c, wake, host_id=host_id,
+                runner_session_id=runner_session_id, now=now)
+            if binding_error:
+                return binding_error
             if wake["status"] == "claimed":
-                policy = dict(wake.get("policy") or {})
-                binding = dict(policy.get("account_binding") or {})
+                if personal:
+                    return {"claimed": False, "reason": "wake_already_claimed", "wake": wake}
                 same_reservation = (
                     wake.get("claimed_by_host") == host_id
                     and binding.get("host_id") == host_id
@@ -486,17 +707,16 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if not host_row:
                 return {"claimed": False, "reason": "host_not_registered", "host_id": host_id}
             host = _host_row(host_row, now=now)
-            policy = dict(wake.get("policy") or {})
-            binding = dict(policy.get("account_binding") or {})
+            credential_binding = bool(binding) and not personal
             placement_claim = claim_decision(
-                host, wake, project=project, credential_rebound=bool(binding),
+                host, wake, project=project, credential_rebound=credential_binding,
             )
             if not placement_claim.get("allowed"):
                 return {"claimed": False, "reason": "host_not_eligible",
                         "reason_codes": (placement_claim.get("candidate") or {}).get(
                             "reason_codes") or [],
                         "host_id": host_id, "wake_id": wake_id}
-            if binding:
+            if credential_binding:
                 runner_id = str(runner_session_id or "").strip()
                 lease_id = str(credential_lease_id or "").strip()
                 if not runner_id:
@@ -537,14 +757,14 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                     "selected_host_class": candidate.get("host_class"),
                     "cost_class": candidate.get("cost_class"),
                     "claimed_at": now,
-                    "credential_rebind_required": bool(binding and not lease_id),
+                    "credential_rebind_required": bool(credential_binding and not lease_id),
                     "credential_lease_state": (
                         ("issued" if lease_id else "pending_claim_binding")
-                        if binding else placement.get("credential_lease_state")
+                        if credential_binding else placement.get("credential_lease_state")
                     ),
                     "credential_admission_phase": (
                         "ready" if lease_id else "pending"
-                    ) if binding else None,
+                    ) if credential_binding else None,
                 })
             cur = c.execute(
                 "UPDATE wake_intents SET status='claimed', claimed_at=?, claimed_by_host=?, "

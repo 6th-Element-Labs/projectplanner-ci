@@ -216,6 +216,94 @@ try:
     ok(wake_done["status"] == "completed" and wake_done["runner_session_id"] == "run_test",
        "complete_wake records runtime start evidence")
 
+    personal_agent = "codex/PERSONAL-1"
+    personal_task = store.create_task({
+        "workstream_id": "TEST", "workstream_name": "Test",
+        "title": "Personal exact wake proof", "phase": "Build",
+    }, actor=auth.actor(p), project=P)
+    store.register_agent(
+        agent_id=personal_agent, runtime="codex", model="gpt-5",
+        lane="TEST", task_id=personal_task["task_id"],
+        control={"mode": "advisory_poll"}, protocol=agreement["protocol"],
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    personal_claim = store.claim_task(
+        personal_task["task_id"], personal_agent,
+        principal_id=p["id"], actor=auth.actor(p), ttl_seconds=600,
+        idem_key="personal-exact-wake-claim", project=P)
+    personal_source_sha = "c" * 40
+    personal_session = store.create_work_session({
+        "task_id": personal_task["task_id"],
+        "claim_id": personal_claim["claim_id"],
+        "agent_id": personal_agent,
+        "runtime": "codex",
+        "repo_role": "canonical",
+        "branch": "codex/personal-exact-wake",
+        "base_sha": personal_source_sha,
+        "head_sha": personal_source_sha,
+        "storage_mode": "external",
+        "status": "active",
+        "dirty_status": "clean",
+    }, principal_id=p["id"], actor=auth.actor(p), project=P)["work_session"]
+    store.register_host({
+        "host_id": "host/test",
+        "hostname": "testbox",
+        "agent_host_version": "0.2.0",
+        "repo_root": os.getcwd(),
+        "runtimes": [
+            {"runtime": "claude-code", "lanes": ["TEST"],
+             "capabilities": ["docs", "python"]},
+            {"runtime": "codex", "lanes": ["TEST"],
+             "capabilities": ["python"]},
+        ],
+        "limits": {"max_sessions": 2},
+        "heartbeat_ttl_s": 60,
+    }, principal_id=p["id"], actor=auth.actor(p), project=P)
+
+    def personal_policy(work_session_id):
+        return {
+            "execution_mode": "personal_agent_host",
+            "account_binding": {
+                "claim_id": personal_claim["claim_id"],
+                "work_session_id": work_session_id,
+                "host_id": "host/test",
+            },
+        }
+
+    bad_policy = personal_policy("worksession-unrelated")
+    bad_wake = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "TEST", "capabilities": ["python"]},
+        reason="reject unrelated exact binding", source="test",
+        policy=bad_policy, task_id=personal_task["task_id"],
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    ok(bad_wake.get("requested") is False
+       and bad_wake.get("error") == "invalid_personal_execution_binding"
+       and "work_session_not_active_for_claim" in bad_wake.get("reason_codes", []),
+       "personal wake request rejects an unrelated Work Session")
+
+    good_policy = personal_policy(personal_session["work_session_id"])
+    good_wake = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "TEST", "capabilities": ["python"]},
+        reason="accept exact personal binding", source="test",
+        policy=good_policy, task_id=personal_task["task_id"],
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    good_execution = (good_wake.get("policy") or {}).get("execution_binding") or {}
+    wrong_runner_claim = store.claim_wake(
+        "host/test", good_wake["wake_id"], runner_session_id="run_wrong",
+        actor=auth.actor(p), project=P)
+    ok(not wrong_runner_claim.get("claimed")
+       and "runner_session_id.argument" in wrong_runner_claim.get("reason_codes", []),
+       "personal wake claim rejects a substituted runner session")
+    good_personal_claim = store.claim_wake(
+        "host/test", good_wake["wake_id"],
+        runner_session_id=good_execution.get("runner_session_id") or "",
+        actor=auth.actor(p), project=P)
+    ok(good_personal_claim.get("claimed") is True
+       and good_personal_claim.get("reserved") is False
+       and good_execution.get("source_sha") == personal_source_sha,
+       "personal wake proves live task/claim/session/source relations without a credential lease")
+
     failed_wake = store.request_wake(
         selector={"runtime": "claude-code", "agent_id": "claude/TEST#fail",
                   "lane": "TEST", "capabilities": ["docs"]},

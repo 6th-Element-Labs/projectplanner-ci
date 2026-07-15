@@ -24,6 +24,7 @@ PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM.
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -319,27 +320,68 @@ def validate_personal_wake_binding(wake, inventory):
     selector = (wake or {}).get("selector") or {}
     binding = policy.get("account_binding") or {}
     execution = policy.get("execution_binding") or {}
-    values = {
-        "wake_id": (wake or {}).get("wake_id"),
-        "task_id": (wake or {}).get("task_id") or binding.get("task_id"),
-        "claim_id": binding.get("claim_id") or execution.get("claim_id"),
-        "work_session_id": binding.get("work_session_id") or execution.get("work_session_id"),
-        "host_id": execution.get("host_id"),
-        "source_sha": execution.get("source_sha") or policy.get("source_sha"),
-        "execution_connection_id": execution.get("execution_connection_id"),
-        "agent_id": selector.get("agent_id"),
+    expected_runner_session_id = _runner_session_id_for_wake(
+        wake or {}, str(inventory.get("host_id") or ""))
+    sources = {
+        "wake_id": [(wake or {}).get("wake_id"), execution.get("wake_id")],
+        "task_id": [
+            (wake or {}).get("task_id"), binding.get("task_id"), execution.get("task_id")],
+        "claim_id": [binding.get("claim_id"), execution.get("claim_id")],
+        "work_session_id": [
+            binding.get("work_session_id"), execution.get("work_session_id")],
+        "runner_session_id": [
+            binding.get("runner_session_id"), execution.get("runner_session_id"),
+            expected_runner_session_id],
+        "host_id": [
+            inventory.get("host_id"), binding.get("host_id"), execution.get("host_id")],
+        "agent_id": [selector.get("agent_id"), binding.get("agent_id"),
+                     execution.get("agent_id")],
+        "execution_connection_id": [
+            policy.get("execution_connection_id"),
+            execution.get("execution_connection_id")],
+        "source_sha": [policy.get("source_sha"), execution.get("source_sha")],
     }
-    missing = sorted(key for key, value in values.items() if not str(value or "").strip())
-    expected_host = str(execution.get("host_id") or "").strip()
-    if expected_host and expected_host != inventory.get("host_id"):
-        return {"required": True, "valid": False, "error": "host_binding_mismatch",
-                "failure_class": "unbound_identity"}
+    missing = sorted(
+        f"{key}[{index}]"
+        for key, candidates in sources.items()
+        for index, value in enumerate(candidates)
+        if not str(value or "").strip()
+    )
     if selector.get("runtime") != "codex":
         missing.append("selector.runtime=codex")
     if missing:
         return {"required": True, "valid": False, "error": "wake_binding_incomplete",
                 "failure_class": "unbound_identity", "missing": sorted(set(missing))}
-    return {"required": True, "valid": True, "binding": values}
+
+    normalized = {
+        key: [str(value).strip() for value in candidates]
+        for key, candidates in sources.items()
+    }
+    mismatches = sorted(
+        key for key, candidates in normalized.items() if len(set(candidates)) != 1)
+    opaque_fields = (
+        "wake_id", "task_id", "claim_id", "work_session_id", "runner_session_id",
+        "host_id", "agent_id", "execution_connection_id",
+    )
+    malformed = sorted(
+        key for key in opaque_fields
+        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}", value)
+               for value in normalized[key])
+    )
+    if any(not re.fullmatch(r"[0-9a-f]{40}", value)
+           for value in normalized["source_sha"]):
+        malformed.append("source_sha")
+    if mismatches or malformed:
+        return {
+            "required": True,
+            "valid": False,
+            "error": "wake_binding_inconsistent",
+            "failure_class": "unbound_identity",
+            "mismatches": mismatches,
+            "malformed": sorted(set(malformed)),
+        }
+    return {"required": True, "valid": True,
+            "binding": {key: candidates[0] for key, candidates in normalized.items()}}
 
 
 def _git_root():
@@ -1254,6 +1296,19 @@ def run_once(inventory):
         if not claimed or not (claimed.get("claimed", True)):
             continue  # another host won it (atomic claim)
         claimed_wake = claimed.get("wake") or w
+        claimed_exact_binding = validate_personal_wake_binding(
+            claimed_wake, inventory)
+        if not claimed_exact_binding.get("valid"):
+            refused.append({"wake_id": wake_id, "phase": "post_claim",
+                            **claimed_exact_binding})
+            _try("POST", P_COMPLETE_WAKE, {
+                "project": PROJECT,
+                "wake_id": wake_id,
+                "runner_session_id": runner_session_id,
+                "agent_id": ((claimed_wake.get("selector") or {}).get("agent_id") or ""),
+                "result": {"started": False, "reason": "exact_binding_denied"},
+            })
+            continue
         execution_binding = ((claimed_wake.get("policy") or {}).get(
             "execution_binding") or {})
         launch_env = ({
@@ -1266,6 +1321,10 @@ def run_once(inventory):
             "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
             "PM_AUTO_WORK_SESSION": "1",
             "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
+            "PM_PERSONAL_AGENT_HOST_EXECUTION": (
+                "1" if claimed_exact_binding.get("required") else "0"),
+            "PM_WORK_SESSION_ID": str(binding.get("work_session_id") or ""),
+            "PM_CLAIM_ID": str(binding.get("claim_id") or ""),
             "PM_SOURCE_SHA": str(execution_binding.get("source_sha") or ""),
             "PM_EXECUTION_CONNECTION_ID": str(
                 execution_binding.get("execution_connection_id") or ""),

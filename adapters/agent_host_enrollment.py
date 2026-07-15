@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 import platform as platform_module
 import plistlib
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -42,6 +43,7 @@ _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-
 _SECRET_MARKERS = (
     b"aht-",
     b"ahb-",
+    b"ahr-",
     b"OPENAI_API_KEY=",
     b"CODEX_API_KEY=",
     b"CODEX_ACCESS_TOKEN=",
@@ -437,6 +439,9 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
                  hostname: str = "") -> dict[str, Any]:
     """Prepare a durable local install, consume bootstrap once, then start."""
     manifest = verify_bundle(bundle_dir, public_key_path)
+    bootstrap_code = str(bootstrap_code or "").strip()
+    if not bootstrap_code:
+        raise EnrollmentError("bootstrap_code is required")
     if target_platform not in manifest.get("platforms", []):
         raise EnrollmentError(f"bundle does not support {target_platform}")
     local_auth = preflight_codex_local_auth(
@@ -451,27 +456,66 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
     identity_path = config_root / "identity.json"
     config_path = config_root / "config.json"
     state_path = state_root / "state.json"
-    private_key_pem, fingerprint = generate_host_identity()
-    state = {
-        "schema": LOCAL_STATE_SCHEMA,
-        "status": "prepared_for_enrollment",
-        "version": manifest["version"],
-        "platform": target_platform,
-        "prefix": str(prefix),
-        "release": str(release),
-        "service_path": str(service_path),
-        "identity_path": str(identity_path),
-        "config_path": str(config_path),
-        "prepared_at": time.time(),
-    }
-    # Prove the release and secret-storage path are durable before the one-time
-    # bootstrap can be consumed. The service is not rendered or started yet.
-    _atomic_json(identity_path, {
-        "schema": IDENTITY_SCHEMA,
-        "status": "pending_enrollment",
-        "public_key_fingerprint": fingerprint,
-        "private_key_pem": private_key_pem,
-    }, 0o600)
+    bootstrap_fingerprint = "sha256:" + hashlib.sha256(bootstrap_code.encode()).hexdigest()
+    retrying = identity_path.exists() or state_path.exists()
+    if retrying:
+        if not identity_path.is_file() or not state_path.is_file():
+            raise EnrollmentError("incomplete existing Agent Host state; revoke or uninstall first")
+        pending_identity = _read_json(identity_path)
+        state = _read_json(state_path)
+        retryable = (
+            pending_identity.get("status") == "pending_enrollment"
+            and state.get("status") in {
+                "prepared_for_enrollment", "enrollment_retry_required",
+                "enrollment_response_incomplete",
+            }
+            and state.get("bootstrap_fingerprint") == bootstrap_fingerprint
+            and state.get("project") == project
+            and state.get("platform") == target_platform
+        )
+        if not retryable:
+            raise EnrollmentError(
+                "existing Agent Host identity does not match this pending enrollment")
+        private_key_pem = str(pending_identity.get("private_key_pem") or "")
+        fingerprint = str(pending_identity.get("public_key_fingerprint") or "")
+        completion_recovery_secret = str(
+            pending_identity.get("completion_recovery_secret") or "")
+        if (not private_key_pem or not re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint)
+                or not re.fullmatch(r"ahr-[A-Za-z0-9_-]{32,}", completion_recovery_secret)):
+            raise EnrollmentError("pending Agent Host enrollment material is incomplete")
+        state.update({
+            "status": "prepared_for_enrollment",
+            "version": manifest["version"],
+            "release": str(release),
+            "retry_started_at": time.time(),
+        })
+    else:
+        private_key_pem, fingerprint = generate_host_identity()
+        completion_recovery_secret = "ahr-" + secrets.token_urlsafe(32)
+        state = {
+            "schema": LOCAL_STATE_SCHEMA,
+            "status": "prepared_for_enrollment",
+            "version": manifest["version"],
+            "platform": target_platform,
+            "project": project,
+            "bootstrap_fingerprint": bootstrap_fingerprint,
+            "prefix": str(prefix),
+            "release": str(release),
+            "service_path": str(service_path),
+            "identity_path": str(identity_path),
+            "config_path": str(config_path),
+            "prepared_at": time.time(),
+        }
+        # Prove the release and recovery-capable secret-storage path are durable
+        # before the one-time bootstrap can be consumed. The service is not
+        # rendered or started yet.
+        _atomic_json(identity_path, {
+            "schema": IDENTITY_SCHEMA,
+            "status": "pending_enrollment",
+            "public_key_fingerprint": fingerprint,
+            "private_key_pem": private_key_pem,
+            "completion_recovery_secret": completion_recovery_secret,
+        }, 0o600)
     _atomic_json(state_path, state, 0o600)
     try:
         completed = http(
@@ -484,6 +528,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
                 "hostname": hostname or platform_module.node(),
                 "platform": target_platform,
                 "public_key_fingerprint": fingerprint,
+                "completion_recovery_secret": completion_recovery_secret,
                 "agent_host_version": manifest["version"],
             },
         )
@@ -511,7 +556,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         "base_url": base_url.rstrip("/"),
         "project": project,
         "runtime": "codex",
-        "work_module": "adapters.codex_personal_worker:run",
+        "work_module": "adapters.codex_local_worker:run",
         "allow_work": bool(allow_work),
         "allow_global_claim": False,
         "lanes": sorted(set(lanes)),
@@ -549,7 +594,8 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         _atomic_json(state_path, state, 0o600)
         raise
     return {"installed": True, "host_id": enrollment["host_id"],
-            "version": manifest["version"], "state_path": str(state_path)}
+            "version": manifest["version"], "state_path": str(state_path),
+            "completion_recovered": bool(completed.get("completion_recovered"))}
 
 
 def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
@@ -706,7 +752,7 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_IDENTITY_GENERATION": identity.get("identity_generation") or 1,
         "PM_HOST_PUBLIC_KEY_FINGERPRINT": identity.get("public_key_fingerprint") or "",
         "PM_RUNTIME": config.get("runtime") or "codex",
-        "PM_AGENT_WORK_MODULE": config.get("work_module") or "adapters.codex_personal_worker:run",
+        "PM_AGENT_WORK_MODULE": config.get("work_module") or "adapters.codex_local_worker:run",
         "PM_AGENT_HOST_ALLOW_WORK": "1" if config.get("allow_work") else "0",
         "PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM": "0",
         "PM_HOST_LANES": ",".join(config.get("lanes") or []),

@@ -160,6 +160,11 @@ single-use bootstrap; completion returns a narrow rotatable host bearer once and
 local. Revoked or uninstalled identities cannot register or heartbeat even if their old host id
 is replayed.
 
+The installer durably creates a one-install recovery secret before bootstrap consumption. A
+bounded retry with the same bootstrap, recovery secret, platform, and key fingerprint rotates
+the bearer when the completion response was ambiguous; the server stores only the recovery
+hash and never extends the ten-minute recovery window.
+
 The installer provisions a per-user launchd or systemd service, atomically updates signed
 releases, preserves a visible `revocation_pending` state while offline, and purges identity and
 provider-runtime residue only after Switchboard confirms revocation. It never starts a cloud/API
@@ -270,7 +275,12 @@ the supplied failure class.
 
 A personal-host wake that opts into exact binding is refused before claim unless task, claim,
 Work Session, runner, host, wake, source SHA, and execution-connection fields are present. The
-Codex personal worker registers and rechecks that binding before native CLI launch.
+account binding, execution binding, wake, selector, and local inventory must agree on every
+repeated identifier, and the source SHA must be a 40-character lowercase Git SHA. Fresh
+host-local enrollment selects the native Codex local worker; the credential-vault personal
+worker is a separate centrally bound lane. Switchboard derives the stored execution binding
+from the active claim and Work Session, then validates the same live rows during wake claim;
+the host-local worker adopts the pre-bound session instead of creating a second one.
 
 The host daemon may also proactively keep warm sessions:
 

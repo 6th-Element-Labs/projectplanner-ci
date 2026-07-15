@@ -22,7 +22,9 @@ from db.core import hash_token
 ENROLLMENT_SCHEMA = "switchboard.agent_host_enrollment.v1"
 _ACTIVE = "active"
 ROTATION_RECOVERY_GRACE_SECONDS = 300
+ENROLLMENT_COMPLETION_RECOVERY_SECONDS = 600
 _FINGERPRINT_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+_COMPLETION_RECOVERY_RE = re.compile(r"^ahr-[A-Za-z0-9_-]{32,}$")
 
 
 def _json_list(value: str) -> list[str]:
@@ -40,6 +42,7 @@ def _normalized_list(values: Iterable[Any] | None) -> list[str]:
 def _public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     value = dict(row)
     value.pop("bootstrap_hash", None)
+    value.pop("completion_recovery_hash", None)
     for key in ("tenant_allowlist", "project_allowlist", "provider_allowlist"):
         value[key] = _json_list(value.pop(f"{key}_json", "[]"))
     value["schema"] = ENROLLMENT_SCHEMA
@@ -148,12 +151,14 @@ def complete_agent_host_enrollment(
     hostname: str,
     platform: str,
     public_key_fingerprint: str,
+    completion_recovery_secret: str,
     agent_host_version: str = "",
     actor: str = "agent-host-bootstrap",
     project: str = DEFAULT_PROJECT,
 ) -> dict[str, Any]:
-    """Consume a bootstrap code and return a narrow host bearer exactly once."""
+    """Consume a bootstrap or recover one ambiguous completion response."""
     bootstrap_code = str(bootstrap_code or "").strip()
+    completion_recovery_secret = str(completion_recovery_secret or "").strip()
     fingerprint = _fingerprint(public_key_fingerprint)
     if not bootstrap_code:
         return _error("bootstrap_code_required", "bootstrap_code is required")
@@ -162,6 +167,11 @@ def complete_agent_host_enrollment(
             "invalid_public_key_fingerprint",
             "public_key_fingerprint must be a SHA-256 fingerprint",
         )
+    if not _COMPLETION_RECOVERY_RE.fullmatch(completion_recovery_secret):
+        return _error(
+            "invalid_completion_recovery_secret",
+            "completion_recovery_secret must be a generated enrollment recovery secret",
+        )
     platform = str(platform or "").strip().lower()
     if platform not in {"darwin", "linux"}:
         return _error("unsupported_platform", "platform must be darwin or linux")
@@ -169,6 +179,7 @@ def complete_agent_host_enrollment(
     now = time.time()
     token = "aht-" + secrets.token_urlsafe(32)
     bootstrap_digest = hash_token(bootstrap_code)
+    recovery_digest = hash_token(completion_recovery_secret)
     with _conn(project) as connection:
         row = connection.execute(
             "SELECT * FROM agent_host_enrollments WHERE bootstrap_hash=?",
@@ -177,7 +188,61 @@ def complete_agent_host_enrollment(
         if not row:
             return _error("invalid_bootstrap_code", "bootstrap code is invalid")
         current = dict(row)
-        if current.get("status") != "pending" or current.get("bootstrap_consumed_at"):
+        consumed = bool(current.get("bootstrap_consumed_at"))
+        if current.get("status") == _ACTIVE and consumed:
+            recovery_matches = secrets.compare_digest(
+                str(current.get("completion_recovery_hash") or ""), recovery_digest)
+            recovery_unexpired = float(
+                current.get("completion_recovery_expires_at") or 0) > now
+            same_attempt = (
+                recovery_matches
+                and recovery_unexpired
+                and current.get("public_key_fingerprint") == fingerprint
+                and str(current.get("platform") or "") == platform
+            )
+            if not same_attempt:
+                return _error(
+                    "bootstrap_code_consumed", "bootstrap code has already been consumed")
+            principal_id = str(current.get("principal_id") or "")
+            changed = connection.execute(
+                "UPDATE principals SET token_hash=? WHERE id=? AND revoked_at IS NULL",
+                (hash_token(token), principal_id),
+            )
+            if changed.rowcount != 1:
+                return _error("host_identity_revoked", "host principal is not active")
+            connection.execute(
+                "UPDATE agent_host_enrollments SET updated_at=? WHERE enrollment_id=?",
+                (now, current["enrollment_id"]),
+            )
+            connection.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (
+                    None,
+                    actor,
+                    "agent_host.enrollment_completion_recovered",
+                    json.dumps({
+                        "enrollment_id": current["enrollment_id"],
+                        "host_id": current.get("host_id"),
+                        "principal_id": principal_id,
+                        "identity_generation": current.get("identity_generation"),
+                        "credential_values_redacted": True,
+                    }, sort_keys=True),
+                    now,
+                ),
+            )
+            completed = connection.execute(
+                "SELECT * FROM agent_host_enrollments WHERE enrollment_id=?",
+                (current["enrollment_id"],),
+            ).fetchone()
+            return {
+                "completed": True,
+                "completion_recovered": True,
+                "host_token": token,
+                "host_token_returned_once": True,
+                "enrollment": _public(completed),
+            }
+        if current.get("status") != "pending" or consumed:
             return _error("bootstrap_code_consumed", "bootstrap code has already been consumed")
         if float(current.get("bootstrap_expires_at") or 0) <= now:
             connection.execute(
@@ -211,7 +276,8 @@ def complete_agent_host_enrollment(
                 "UPDATE agent_host_enrollments SET host_id=?, principal_id=?, "
                 "public_key_fingerprint=?, identity_generation=1, platform=?, hostname=?, "
                 "package_version=COALESCE(NULLIF(?, ''), package_version), status='active', "
-                "bootstrap_consumed_at=?, updated_at=? "
+                "bootstrap_consumed_at=?, completion_recovery_hash=?, "
+                "completion_recovery_expires_at=?, updated_at=? "
                 "WHERE enrollment_id=? AND status='pending' AND bootstrap_consumed_at IS NULL",
                 (
                     host_id,
@@ -221,6 +287,8 @@ def complete_agent_host_enrollment(
                     str(hostname or "").strip(),
                     str(agent_host_version or "").strip(),
                     now,
+                    recovery_digest,
+                    now + ENROLLMENT_COMPLETION_RECOVERY_SECONDS,
                     now,
                     current["enrollment_id"],
                 ),
@@ -265,6 +333,7 @@ def complete_agent_host_enrollment(
         ).fetchone()
     return {
         "completed": True,
+        "completion_recovered": False,
         "host_token": token,
         "host_token_returned_once": True,
         "enrollment": _public(completed),
@@ -440,6 +509,7 @@ def revoke_agent_host_identity(
         )
         connection.execute(
             "UPDATE agent_host_enrollments SET status=?, revoked_at=COALESCE(revoked_at, ?), "
+            "completion_recovery_hash=NULL, completion_recovery_expires_at=NULL, "
             "updated_at=? WHERE enrollment_id=?",
             (final_status, now, now, enrollment["enrollment_id"]),
         )

@@ -56,6 +56,7 @@ def complete_mapping_result(data: Mapping[str, Any]) -> dict[str, Any]:
         hostname=command.hostname,
         platform=command.platform,
         public_key_fingerprint=command.public_key_fingerprint,
+        completion_recovery_secret=command.completion_recovery_secret,
         agent_host_version=command.agent_host_version,
         project=command.project,
     )

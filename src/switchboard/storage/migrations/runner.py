@@ -116,6 +116,12 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     # COORD-20 — force adversarial re-review after concurrency/lease findings.
     ("0040_review_verdicts_review_mode", "review_verdicts", "review_mode",
      "ALTER TABLE review_verdicts ADD COLUMN review_mode TEXT NOT NULL DEFAULT 'standard'"),
+    ("0046_agent_host_enrollments_completion_recovery_hash",
+     "agent_host_enrollments", "completion_recovery_hash",
+     "ALTER TABLE agent_host_enrollments ADD COLUMN completion_recovery_hash TEXT"),
+    ("0047_agent_host_enrollments_completion_recovery_expires_at",
+     "agent_host_enrollments", "completion_recovery_expires_at",
+     "ALTER TABLE agent_host_enrollments ADD COLUMN completion_recovery_expires_at REAL"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,

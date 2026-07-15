@@ -108,6 +108,63 @@ finally:
 ok(not lost_claim["claimed"] and lost_session["external"] and len(expired) == 1,
    "a lost exact-claim race expires the orphaned external Work Session")
 
+bound_head = subprocess.run(
+    ["git", "-C", str(repo), "rev-parse", "HEAD"],
+    check=True, capture_output=True, text=True).stdout.strip()
+real_get_task = sb.get_task
+real_get_work_session = sb.get_work_session
+bound_env = {key: os.environ.get(key) for key in (
+    "PM_REMOTE_WORK_SESSION_REGISTRATION", "PM_AUTO_WORK_SESSION", "PM_TASK_ID",
+    "PM_PERSONAL_AGENT_HOST_EXECUTION", "PM_CO_ACCOUNT_BINDING_JSON", "PM_SOURCE_SHA",
+)}
+try:
+    os.environ.update({
+        "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
+        "PM_AUTO_WORK_SESSION": "1",
+        "PM_TASK_ID": "COORD-21",
+        "PM_PERSONAL_AGENT_HOST_EXECUTION": "1",
+        "PM_CO_ACCOUNT_BINDING_JSON": json.dumps({
+            "task_id": "COORD-21",
+            "claim_id": "taskclaim-personal-bound",
+            "work_session_id": "worksession-personal-bound",
+        }),
+        "PM_SOURCE_SHA": bound_head,
+    })
+    sb.get_work_session = lambda *args, **kwargs: {
+        "work_session_id": "worksession-personal-bound",
+        "task_id": "COORD-21",
+        "claim_id": "taskclaim-personal-bound",
+        "agent_id": "codex/COORD-21",
+        "status": "active",
+        "head_sha": bound_head,
+        "branch": "codex/COORD-21-byoa",
+        "worktree_path": str(repo),
+        "policy_profile": "code_strict",
+    }
+    sb.get_task = lambda *args, **kwargs: {
+        "task_id": "COORD-21",
+        "active_claims": [{
+            "claim_id": "taskclaim-personal-bound",
+            "agent_id": "codex/COORD-21",
+        }],
+    }
+    adopted_claim, adopted_session = sb._acquire_claim(
+        "switchboard", "codex/COORD-21", ["COORD"], "https://example.test",
+        "test-token", 1800, True, str(repo),
+    )
+finally:
+    sb.get_task = real_get_task
+    sb.get_work_session = real_get_work_session
+    for key, value in bound_env.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+ok(adopted_claim.get("adopted_existing_claim") is True
+   and adopted_session.get("bound_existing") is True
+   and adopted_session.get("workspace_path") == str(repo),
+   "personal Agent Host adopts the exact pre-bound claim and Work Session without creating another")
+
 secret = "claude-setup-token-must-never-serialize"
 private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 private_pem = private_key.private_bytes(
