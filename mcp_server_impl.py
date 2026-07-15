@@ -24,6 +24,7 @@ from mcp_dispatch import MCPToolDispatcher
 from mcp_http_timing import MCPServerTimingMiddleware
 from mcp_observability_http import MCPObservabilityEndpoint
 from mcp_auth import MCPAuthMiddleware
+from switchboard.mcp import authorization as mcp_authorization
 from switchboard.mcp import deps
 from switchboard.mcp.tools import access as access_tools
 from switchboard.mcp.tools import background_jobs as background_job_tools
@@ -120,6 +121,7 @@ _mcp_dispatch = MCPToolDispatcher(
     # the event loop remains responsive while ordinary sync tools run in workers.
     inline_tools={"control_plane_probe", "get_mcp_observability"},
 )
+_mcp_authorization = mcp_authorization.MCPAuthorizationGuard()
 _register_mcp_tool = mcp.tool
 
 
@@ -127,7 +129,8 @@ def _observed_mcp_tool(*args, **kwargs):
     register = _register_mcp_tool(*args, **kwargs)
 
     def observed_register(fn):
-        observed = _mcp_observability.wrap(fn)
+        authorized = _mcp_authorization.wrap(fn)
+        observed = _mcp_observability.wrap(authorized)
         register(_mcp_dispatch.wrap(observed))
         # Keep direct Python callers and the existing hermetic tests synchronous;
         # only FastMCP's registered request handler needs worker dispatch.
@@ -389,6 +392,9 @@ _ops_tool_functions = ops_tools.register_ops_tools(
     ),
 )
 globals().update(_ops_tool_functions)
+
+# A new or removed MCP tool must update the explicit read/write/project census.
+_mcp_authorization.assert_complete()
 
 
 if __name__ == "__main__":

@@ -41,6 +41,7 @@ __all__ = [
     "validate_principal_scopes", "resolve_principal_scopes", "ensure_org",
     "ensure_user", "add_org_member", "set_project_access", "project_access",
     "grant_project_role", "revoke_project_role", "list_project_role_grants",
+    "principal_project_grants",
     "principal_project_roles", "effective_principal_scopes", "project_access_model",
     "ensure_bootstrap_project_owner",
     "get_project_record", "list_registry_projects", "update_project_metadata",
@@ -613,6 +614,34 @@ def list_project_role_grants(project_id: str, include_revoked: bool = False) -> 
     q += " ORDER BY subject_kind, subject_id, role"
     with _registry_conn() as c:
         rows = c.execute(q, params).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["scopes"] = json.loads(item.get("scopes") or "[]")
+        out.append(item)
+    return out
+
+
+def principal_project_grants(principal_id: str,
+                             include_revoked: bool = False) -> List[Dict[str, Any]]:
+    """Return one principal's grants across projects in a single registry read.
+
+    MCP project discovery uses this instead of opening every project database or
+    issuing one registry query per project.
+    """
+    principal_id = (principal_id or "").strip()
+    if not principal_id:
+        return []
+    init_project_registry()
+    query = (
+        "SELECT * FROM project_role_grants WHERE subject_id=? "
+        "AND subject_kind IN ('principal','user')")
+    params: List[Any] = [principal_id]
+    if not include_revoked:
+        query += " AND revoked_at IS NULL"
+    query += " ORDER BY project_id, subject_kind, role"
+    with _registry_conn() as c:
+        rows = c.execute(query, params).fetchall()
     out = []
     for row in rows:
         item = dict(row)

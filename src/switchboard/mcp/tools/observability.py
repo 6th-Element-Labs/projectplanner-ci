@@ -46,13 +46,15 @@ def control_plane_probe(project: str = "maxwell", lane: str = "",
     return services.dumps(probe)
 
 
-def get_mcp_observability(tool: str = "", slow_limit: int = 50) -> str:
+def get_mcp_observability(tool: str = "", slow_limit: int = 50,
+                          project: str = "switchboard") -> str:
     """Process-local MCP health: per-tool p50/p99/max latency, per-tool SQLite
     lock-wait counts, write-path latency p50/p99 (per tool and aggregate), failures,
     and a bounded slow-call log. No arguments, results, tokens, or other request
     content are retained. tool optionally filters by exact tool name; slow_limit is
     capped by PM_MCP_SLOW_LOG_LIMIT. The same snapshot is scrapeable over plain HTTP
     at GET /observability for operators/monitors that don't speak MCP."""
+    del project  # Authorization is enforced centrally; the metrics are process-local.
     services = _services()
     return services.dumps(services.observability.snapshot(tool=tool, slow_limit=slow_limit))
 

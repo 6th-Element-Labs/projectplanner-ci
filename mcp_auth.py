@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 import auth
+from switchboard.mcp.authorization import transport_principal_scope
 
 _UNAUTHORIZED_BODY = (
     b'{"jsonrpc":"2.0","id":null,"error":'
@@ -46,8 +47,13 @@ class MCPAuthMiddleware:
         # dev-open intentionally opens the surface for local/test runs, exactly as writes are.
         if auth.auth_mode() == auth.DEV_OPEN:
             return await self.app(scope, receive, send)
-        if auth.principal_for_token_any_project(_bearer_from_scope(scope)):
-            return await self.app(scope, receive, send)
+        principal = auth.principal_for_token_any_project(_bearer_from_scope(scope))
+        if principal:
+            # Preserve the authenticated principal across FastMCP dispatch and
+            # AnyIO's worker-thread hop. The dispatcher performs project
+            # authorization and installs the immutable ProjectContext.
+            with transport_principal_scope(principal):
+                return await self.app(scope, receive, send)
         return await self._reject(send)
 
     async def _reject(self, send):

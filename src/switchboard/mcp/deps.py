@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional
 
 import auth
 import store
+from switchboard.mcp import authorization
 
 _mark_write: Optional[Callable[[], None]] = None
 
@@ -34,8 +35,11 @@ def _dumps(obj) -> str:
 def _require_write(ctx, project: str = "maxwell", scopes=("write:tasks",)):
     """Gate writes through the shared Switchboard bearer-principal path."""
     try:
-        principal = auth.authenticate(project, auth.bearer_from_mcp_context(ctx),
-                                      scopes, dev_actor="MCP")
+        try:
+            principal = authorization.require_current_access(project, tuple(scopes))
+        except authorization.ProjectContextUnavailable:
+            principal = auth.authenticate(project, auth.bearer_from_mcp_context(ctx),
+                                          scopes, dev_actor="MCP")
     except PermissionError as e:
         raise ValueError(str(e))
     # HARDEN-63: this call took the write path — feed the write-latency histogram.
@@ -47,8 +51,11 @@ def _require_write(ctx, project: str = "maxwell", scopes=("write:tasks",)):
 def _require_read(ctx, project: str = "maxwell", scopes=("read",)):
     """Gate sensitive reads through the selected project's bearer scopes."""
     try:
-        return auth.authenticate(project, auth.bearer_from_mcp_context(ctx),
-                                 scopes, dev_actor="MCP")
+        try:
+            return authorization.require_current_access(project, tuple(scopes))
+        except authorization.ProjectContextUnavailable:
+            return auth.authenticate(project, auth.bearer_from_mcp_context(ctx),
+                                     scopes, dev_actor="MCP")
     except PermissionError as e:
         raise ValueError(str(e))
 

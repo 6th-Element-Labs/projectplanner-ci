@@ -112,10 +112,11 @@ def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "age
                         principal_id: str = "") -> str:
     """Create one project-scoped bearer token for REST/MCP callers.
 
-    Requires write:system on the target project. Pass project='*' for a global agent token that
-    can read/write every current and future board. `role` is a preset such as viewer,
-    contributor, operator, or admin; `scopes` can also be a comma/newline list. The raw token is
-    returned once and is never stored, so capture it immediately.
+    Requires write:system on the target project. Pass project='*' for an operator token that
+    receives explicit audited grants on every current board; future boards remain denied until
+    separately granted. `role` is a preset such as viewer, contributor, operator, or admin;
+    `scopes` can also be a comma/newline list. The raw token is returned once and is never stored,
+    so capture it immediately.
     """
     services = _services()
     binding = (project or "maxwell").strip()
@@ -140,16 +141,39 @@ def create_scoped_token(ctx: Context, project: str = "maxwell", kind: str = "age
     )
     if created.get("error"):
         return services.dumps(created)
+    operator_grants = []
+    if store.is_global_project_binding(binding):
+        grant_role = resolved.get("role") or "custom"
+        for project_row in store.projects():
+            grant = store.grant_project_role(
+                project_row["id"], "principal", created["id"], grant_role,
+                created_by=auth.actor(principal), scopes=resolved["scopes"])
+            if grant.get("error"):
+                store.revoke_principal_token(
+                    created["id"], project=auth_project, actor=auth.actor(principal))
+                return services.dumps({
+                    "error": "operator_grant_failed",
+                    "project": project_row["id"],
+                    "detail": grant,
+                })
+            operator_grants.append({
+                "project_id": grant.get("project_id"),
+                "role": grant.get("role"),
+                "scopes": grant.get("scopes") or [],
+                "created_at": grant.get("created_at"),
+                "created_by": grant.get("created_by"),
+            })
     public = store.public_principal_record(created, project=auth_project)
     store.append_activity(
         "access.token_created",
         auth.actor(principal),
-        {"principal": public, "role": resolved.get("role"), "token_returned_once": True},
+        {"principal": public, "role": resolved.get("role"),
+         "operator_grants": operator_grants, "token_returned_once": True},
         task_id=None,
         project=auth_project,
     )
     return services.dumps({"project": binding, "principal": public, "token": raw_token,
-                   "token_returned_once": True})
+                   "operator_grants": operator_grants, "token_returned_once": True})
 
 
 def revoke_scoped_token(principal_id: str, ctx: Context, project: str = "maxwell") -> str:

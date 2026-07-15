@@ -12,6 +12,7 @@ from typing import Any, Callable
 import agent
 import signals
 import store
+from switchboard.mcp.authorization import filter_authorized_projects
 
 
 @dataclass(frozen=True)
@@ -30,9 +31,18 @@ def _services() -> BoardToolServices:
     return _SERVICES
 
 
-def list_projects() -> str:
-    """List all routable project boards. Returns [{id,label,pretitle}] plus the default id."""
-    return _services().dumps({"projects": store.projects(), "default": store.DEFAULT_PROJECT})
+def list_projects(project: str = "") -> str:
+    """List only project boards authorized for the current MCP principal.
+
+    ``project`` is an optional discovery anchor. The dispatcher supplies the
+    principal's own binding when omitted; it is declared even though the result
+    may include multiple explicitly granted projects.
+    """
+    projects = filter_authorized_projects(store.projects())
+    anchor = project or store.DEFAULT_PROJECT
+    default = anchor if any(item.get("id") == anchor for item in projects) else (
+        projects[0]["id"] if projects else "")
+    return _services().dumps({"projects": projects, "default": default})
 
 
 def board_summary(project: str = "maxwell") -> str:

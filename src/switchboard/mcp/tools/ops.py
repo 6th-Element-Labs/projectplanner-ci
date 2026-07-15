@@ -67,18 +67,30 @@ def submit_bug(source_task: str, observed_behavior: str, expected_behavior: str,
     return services.dumps(result)
 
 
-def generate_digest(ctx: Context) -> str:
+def generate_digest(ctx: Context, project: str = "maxwell") -> str:
     """Generate + post the weekly chief-of-staff brief (plan signals + activity deltas since the
     last digest). Returns the brief text. Creates a digest record."""
     services = _services()
-    services.require_write(ctx)
+    if project != "maxwell":
+        return services.dumps({
+            "error": "project_not_supported",
+            "project": project,
+            "message": "generate_digest is still a Maxwell-only compatibility adapter",
+        })
+    services.require_write(ctx, project)
     return digest_mod.generate_digest().get("content", "")
 
 
-def notify(subject: str, text: str, ctx: Context) -> str:
+def notify(subject: str, text: str, ctx: Context, project: str = "maxwell") -> str:
     """Send a message to the wired channels (Slack + Email). Unconfigured channels are dry-run."""
     services = _services()
-    services.require_write(ctx)
+    if project != "maxwell":
+        return services.dumps({
+            "error": "project_not_supported",
+            "project": project,
+            "message": "notify is still a Maxwell-only compatibility adapter",
+        })
+    services.require_write(ctx, project)
     return services.dumps(notify_mod.send(subject, text))
 
 

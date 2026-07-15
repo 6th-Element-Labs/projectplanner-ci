@@ -121,8 +121,13 @@ def _env_principal(token: str, project: str) -> Optional[Dict[str, Any]]:
                 "id": principal_id,
                 "kind": "system",
                 "display_name": principal_id,
-                "project": project,
+                # This is an explicitly configured deployment operator credential,
+                # not a project-scoped customer token. SEG-5 owns its eventual
+                # rotation; SEG-3 makes the compatibility grant visible in the
+                # immutable ProjectContext instead of pretending it is project-bound.
+                "project": "*",
                 "scopes": ["read", "write:tasks", "write:ixp", "write:system", "admin"],
+                "environment_operator": True,
             }
     return None
 
@@ -137,17 +142,91 @@ def _effective_scopes(principal: Dict[str, Any], project: str) -> list:
 
 def _attach_effective_access(principal: Dict[str, Any], project: str) -> Dict[str, Any]:
     principal = dict(principal)
-    principal["effective_scopes"] = _effective_scopes(principal, project)
     try:
-        principal["project_roles"] = store.principal_project_roles(project, principal.get("id") or "")
+        roles = store.principal_project_roles(project, principal.get("id") or "")
     except Exception:
-        principal["project_roles"] = []
+        roles = []
+    principal["project_roles"] = roles
+    scopes = set(principal.get("scopes") or [])
+    for role in roles:
+        scopes.update(role.get("scopes") or [])
+    principal["effective_scopes"] = sorted(scopes)
     return principal
 
 
 def _has_scopes(principal: Dict[str, Any], required: Iterable[str], project: str) -> bool:
-    scopes = set(principal.get("effective_scopes") or _effective_scopes(principal, project))
+    if "effective_scopes" in principal:
+        scopes = set(principal.get("effective_scopes") or [])
+    else:
+        scopes = set(_effective_scopes(principal, project))
     return "admin" in scopes or set(required).issubset(scopes)
+
+
+def authorize_principal(principal: Dict[str, Any], project: str,
+                        required_scopes: Iterable[str] = ("read",)) -> Dict[str, Any]:
+    """Authorize an already-authenticated principal for exactly one project.
+
+    This is deliberately separate from bearer lookup. Project-bound principals
+    cannot reuse their base scopes on another project. Cross-project access is
+    allowed only through an active registry grant (whose creator/time remain in
+    ``project_roles``), a superadmin account, or the explicit environment operator
+    compatibility credential.
+    """
+    selected = (project or "").strip()
+    if not selected or not store.has_project(selected):
+        raise PermissionError(f"forbidden: unknown project: {selected or '<missing>'}")
+    principal = dict(principal or {})
+    if not principal.get("id"):
+        raise PermissionError("unauthorized: authenticated principal is missing")
+    if principal.get("revoked_at"):
+        raise PermissionError("unauthorized: principal revoked")
+
+    binding = str(principal.get("project") or "").strip()
+    try:
+        roles = store.principal_project_roles(selected, principal.get("id") or "")
+    except Exception:
+        roles = []
+    environment_operator = bool(principal.get("environment_operator"))
+    superadmin = bool(principal.get("is_superadmin"))
+    same_project = binding == selected
+    explicit_cross_project = bool(roles)
+    if not (same_project or environment_operator or superadmin or explicit_cross_project):
+        raise PermissionError("forbidden: token is not valid for this project")
+
+    # Base token scopes are valid only on the token's own project. A cross-project
+    # role grant contributes only its recorded scopes, so a global/admin base scope
+    # cannot silently widen a viewer grant.
+    scopes = set(principal.get("scopes") or []) if (
+        same_project or environment_operator or superadmin) else set()
+    for role in roles:
+        scopes.update(role.get("scopes") or [])
+    principal["effective_scopes"] = sorted(scopes)
+    principal["project_roles"] = roles
+    principal["authorized_project"] = selected
+    if not _has_scopes(principal, required_scopes, selected):
+        raise PermissionError("forbidden: token is missing required scope")
+    return principal
+
+
+def accessible_project_ids_for_principal(principal: Dict[str, Any]) -> list[str]:
+    """Filtered MCP discovery set from one principal + one registry query."""
+    principal = dict(principal or {})
+    if not principal.get("id") or principal.get("revoked_at"):
+        return []
+    all_ids = list(store.project_ids())
+    if (principal.get("environment_operator") or principal.get("is_superadmin") or
+            principal.get("dev_open")):
+        return all_ids
+    grants = store.principal_project_grants(principal.get("id") or "")
+    allowed = {str(grant.get("project_id") or "") for grant in grants
+               if "read" in set(grant.get("scopes") or []) or
+               "admin" in set(grant.get("scopes") or [])}
+    binding = str(principal.get("project") or "").strip()
+    if binding and binding != "*" and (
+            "read" in set(principal.get("scopes") or []) or
+            "admin" in set(principal.get("scopes") or [])):
+        allowed.add(binding)
+    return [project_id for project_id in all_ids if project_id in allowed]
 
 
 def authenticate(project: str, token: str,
@@ -178,12 +257,7 @@ def authenticate(project: str, token: str,
         raise PermissionError("unauthorized: provide Authorization: Bearer <token>")
     if principal.get("revoked_at"):
         raise PermissionError("unauthorized: principal revoked")
-    if principal.get("project") not in (project, "*"):
-        raise PermissionError("unauthorized: token is not valid for this project")
-    principal = _attach_effective_access(principal, project)
-    if not _has_scopes(principal, required_scopes, project):
-        raise PermissionError("forbidden: token is missing required scope")
-    return principal
+    return authorize_principal(principal, project, required_scopes)
 
 
 def principal_for_token_any_project(token: str) -> Optional[Dict[str, Any]]:
