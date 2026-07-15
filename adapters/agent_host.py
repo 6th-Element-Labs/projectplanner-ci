@@ -324,6 +324,7 @@ def validate_personal_wake_binding(wake, inventory):
         "task_id": (wake or {}).get("task_id") or binding.get("task_id"),
         "claim_id": binding.get("claim_id") or execution.get("claim_id"),
         "work_session_id": binding.get("work_session_id") or execution.get("work_session_id"),
+        "host_id": execution.get("host_id"),
         "source_sha": execution.get("source_sha") or policy.get("source_sha"),
         "execution_connection_id": execution.get("execution_connection_id"),
         "agent_id": selector.get("agent_id"),

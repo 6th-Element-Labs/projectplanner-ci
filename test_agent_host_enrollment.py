@@ -134,6 +134,43 @@ try:
     first_payload.write_bytes(original)
     ok(tamper_denied, "tampered bundle is denied before bootstrap consumption")
 
+    durability_bootstrap = begin("host/adapter18-durability")
+    durability_paths = paths("durability-failure")
+    durability_paths["config_root"].parent.mkdir(parents=True, exist_ok=True)
+    durability_paths["config_root"].write_text("blocks identity directory", encoding="utf-8")
+    durability_http_calls = []
+
+    def durability_http(*args, **kwargs):
+        durability_http_calls.append((args, kwargs))
+        return http(*args, **kwargs)
+
+    try:
+        enrollment.install_host(
+            bundle_dir=bundle_020,
+            public_key_path=public_path,
+            bootstrap_code=durability_bootstrap["bootstrap_code"],
+            base_url="https://switchboard.test",
+            project=PROJECT,
+            owner_user_id="user-adapter18",
+            target_platform="linux",
+            paths=durability_paths,
+            http=durability_http,
+            service_runner=fake_service,
+            local_auth_runner=fake_codex,
+            codex_executable="codex",
+            start_service=False,
+        )
+        durability_denied = False
+    except OSError:
+        durability_denied = True
+    durability_completion = store.complete_agent_host_enrollment(
+        bootstrap_code=durability_bootstrap["bootstrap_code"],
+        hostname="adapter18-durability.test", platform="linux",
+        public_key_fingerprint="sha256:" + "2" * 64, project=PROJECT)
+    ok(durability_denied and not durability_http_calls
+       and durability_completion.get("host_token"),
+       "release and 0600 identity storage must be durable before bootstrap consumption")
+
     mac_bootstrap = begin("host/adapter18-macos")
     mac_paths = paths("macos")
     mac_install = enrollment.install_host(
@@ -187,12 +224,36 @@ try:
     ok(register.status_code == 200 and register.json().get("host_id") == "host/adapter18-macos",
        "enrolled principal registers only its exact host identity")
 
+    def lose_rotation_response(*args, **kwargs):
+        http(*args, **kwargs)
+        raise enrollment.EnrollmentError("simulated response loss")
+
+    try:
+        enrollment.rotate_identity(
+            identity_path=mac_identity_path, config_path=mac_config_path,
+            http=lose_rotation_response)
+        rotation_response_lost = False
+    except enrollment.EnrollmentError:
+        rotation_response_lost = True
+    identity_after_loss = json.loads(mac_identity_path.read_text())
+    old_token_denied_elsewhere = client.post(
+        "/ixp/v1/register_host",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={"project": PROJECT, "host_id": "host/adapter18-macos", "runtimes": []},
+    )
+    recovery_principal = store.get_agent_host_rotation_recovery_principal(
+        token=initial_mac_token, host_id="host/adapter18-macos", project=PROJECT)
+    ok(rotation_response_lost
+       and identity_after_loss["host_token"] == initial_mac_token
+       and old_token_denied_elsewhere.status_code == 401
+       and recovery_principal and recovery_principal.get("kind") == "host",
+       "lost rotation response leaves local identity unchanged and old bearer denied elsewhere")
     rotated = enrollment.rotate_identity(
         identity_path=mac_identity_path, config_path=mac_config_path, http=http)
     mac_identity = json.loads(mac_identity_path.read_text())
     rotated_token = mac_identity["host_token"]
-    ok(rotated["identity_generation"] == 2 and rotated_token != initial_mac_token,
-       "identity rotation replaces bearer and public-key generation atomically")
+    ok(rotated["identity_generation"] == 3 and rotated_token != initial_mac_token,
+       "bounded rotation-only recovery retries after response loss and persists atomically")
     ok(store.get_principal_by_token(PROJECT, initial_mac_token) is None
        and store.get_principal_by_token(PROJECT, rotated_token) is not None,
        "rotated bearer invalidates the previous token immediately")

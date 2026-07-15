@@ -435,30 +435,12 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
                  local_auth_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
                  codex_executable: str = "",
                  hostname: str = "") -> dict[str, Any]:
-    """Verify package first, consume bootstrap once, install atomically, then start."""
+    """Prepare a durable local install, consume bootstrap once, then start."""
     manifest = verify_bundle(bundle_dir, public_key_path)
     if target_platform not in manifest.get("platforms", []):
         raise EnrollmentError(f"bundle does not support {target_platform}")
     local_auth = preflight_codex_local_auth(
         codex_executable=codex_executable, runner=local_auth_runner)
-    private_key_pem, fingerprint = generate_host_identity()
-    completed = http(
-        "POST",
-        base_url.rstrip("/") + "/ixp/v1/agent-host-enrollments/complete",
-        {
-            "schema": "switchboard.agent.complete_host_enrollment_command.v1",
-            "project": project,
-            "bootstrap_code": bootstrap_code,
-            "hostname": hostname or platform_module.node(),
-            "platform": target_platform,
-            "public_key_fingerprint": fingerprint,
-            "agent_host_version": manifest["version"],
-        },
-    )
-    enrollment = completed.get("enrollment") or {}
-    host_token = str(completed.get("host_token") or "")
-    if not enrollment.get("host_id") or not host_token:
-        raise EnrollmentError("enrollment completion omitted host identity material")
     selected = dict(paths or _default_paths(target_platform))
     prefix = Path(selected["prefix"])
     config_root = Path(selected["config_root"])
@@ -469,6 +451,52 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
     identity_path = config_root / "identity.json"
     config_path = config_root / "config.json"
     state_path = state_root / "state.json"
+    private_key_pem, fingerprint = generate_host_identity()
+    state = {
+        "schema": LOCAL_STATE_SCHEMA,
+        "status": "prepared_for_enrollment",
+        "version": manifest["version"],
+        "platform": target_platform,
+        "prefix": str(prefix),
+        "release": str(release),
+        "service_path": str(service_path),
+        "identity_path": str(identity_path),
+        "config_path": str(config_path),
+        "prepared_at": time.time(),
+    }
+    # Prove the release and secret-storage path are durable before the one-time
+    # bootstrap can be consumed. The service is not rendered or started yet.
+    _atomic_json(identity_path, {
+        "schema": IDENTITY_SCHEMA,
+        "status": "pending_enrollment",
+        "public_key_fingerprint": fingerprint,
+        "private_key_pem": private_key_pem,
+    }, 0o600)
+    _atomic_json(state_path, state, 0o600)
+    try:
+        completed = http(
+            "POST",
+            base_url.rstrip("/") + "/ixp/v1/agent-host-enrollments/complete",
+            {
+                "schema": "switchboard.agent.complete_host_enrollment_command.v1",
+                "project": project,
+                "bootstrap_code": bootstrap_code,
+                "hostname": hostname or platform_module.node(),
+                "platform": target_platform,
+                "public_key_fingerprint": fingerprint,
+                "agent_host_version": manifest["version"],
+            },
+        )
+    except Exception:
+        state["status"] = "enrollment_retry_required"
+        _atomic_json(state_path, state, 0o600)
+        raise
+    enrollment = completed.get("enrollment") or {}
+    host_token = str(completed.get("host_token") or "")
+    if not enrollment.get("host_id") or not host_token:
+        state["status"] = "enrollment_response_incomplete"
+        _atomic_json(state_path, state, 0o600)
+        raise EnrollmentError("enrollment completion omitted host identity material")
     identity = {
         "schema": IDENTITY_SCHEMA,
         "host_id": enrollment["host_id"],
@@ -497,18 +525,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         "runtime_root": str(state_root / "provider-runtimes"),
         "agent_host_version": manifest["version"],
     }
-    state = {
-        "schema": LOCAL_STATE_SCHEMA,
-        "status": "installed",
-        "version": manifest["version"],
-        "platform": target_platform,
-        "prefix": str(prefix),
-        "release": str(release),
-        "service_path": str(service_path),
-        "identity_path": str(identity_path),
-        "config_path": str(config_path),
-        "installed_at": time.time(),
-    }
+    state.update({"status": "installed", "installed_at": time.time()})
     try:
         _atomic_json(identity_path, identity, 0o600)
         _atomic_json(config_path, config, 0o600)

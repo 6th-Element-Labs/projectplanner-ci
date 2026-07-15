@@ -112,8 +112,21 @@ def create_router(*, resolve_project: ProjectResolver,
         payload = body.model_dump(by_alias=True)
         project = resolve_body_project(payload)
         host_id = body.host_id
-        principal = resolve_principal(
-            request, project, ("write:ixp",), dev_actor=host_id)
+        try:
+            principal = resolve_principal(
+                request, project, ("write:ixp",), dev_actor=host_id)
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise
+            recovery = store.get_agent_host_rotation_recovery_principal(
+                token=auth.bearer_from_request(request), host_id=host_id, project=project)
+            if not recovery:
+                raise
+            try:
+                principal = auth.authorize_principal(
+                    recovery, project, ("write:ixp",))
+            except PermissionError:
+                raise exc
         payload["host_id"] = host_id
         payload["project"] = project
         return control_plane_http(enrollment_command.rotate_mapping_result(

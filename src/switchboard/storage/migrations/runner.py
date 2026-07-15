@@ -210,6 +210,15 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0050_ix_runner_pty_revoked_jtis_expires",
      "CREATE INDEX IF NOT EXISTS ix_runner_pty_revoked_jtis_expires "
      "ON runner_pty_revoked_jtis(expires_at)"),
+    # ADAPTER-18 — a previous host bearer is accepted only by the rotation
+    # recovery endpoint during a short response-loss window. Values remain hashed.
+    ("0051_agent_host_rotation_recovery",
+     "CREATE TABLE IF NOT EXISTS agent_host_rotation_recovery ("
+     "token_hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL, host_id TEXT NOT NULL, "
+     "expires_at REAL NOT NULL, created_at REAL NOT NULL)"),
+    ("0052_ix_agent_host_rotation_recovery_principal",
+     "CREATE INDEX IF NOT EXISTS ix_agent_host_rotation_recovery_principal "
+     "ON agent_host_rotation_recovery(principal_id, expires_at)"),
 ]
 
 

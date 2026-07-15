@@ -211,6 +211,15 @@ def apply_schema(c):
             revoked_at    REAL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_principals_token ON principals(token_hash);
+        CREATE TABLE IF NOT EXISTS agent_host_rotation_recovery (
+            token_hash   TEXT PRIMARY KEY,
+            principal_id TEXT NOT NULL,
+            host_id      TEXT NOT NULL,
+            expires_at   REAL NOT NULL,
+            created_at   REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_agent_host_rotation_recovery_principal
+            ON agent_host_rotation_recovery(principal_id, expires_at);
         CREATE TABLE IF NOT EXISTS principal_passwords (
             login               TEXT PRIMARY KEY,
             principal_id        TEXT NOT NULL,

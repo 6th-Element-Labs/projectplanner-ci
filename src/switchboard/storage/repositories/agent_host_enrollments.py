@@ -21,6 +21,7 @@ from db.core import hash_token
 
 ENROLLMENT_SCHEMA = "switchboard.agent_host_enrollment.v1"
 _ACTIVE = "active"
+ROTATION_RECOVERY_GRACE_SECONDS = 300
 _FINGERPRINT_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 
 
@@ -293,6 +294,33 @@ def list_agent_host_enrollments(
     return [_public(row) for row in rows]
 
 
+def get_agent_host_rotation_recovery_principal(
+    *, token: str, host_id: str, project: str = DEFAULT_PROJECT
+) -> dict[str, Any] | None:
+    """Resolve an expired primary bearer only for a bounded rotation retry."""
+    digest = hash_token(str(token or "").strip())
+    if not token or not host_id:
+        return None
+    with _conn(project) as connection:
+        row = connection.execute(
+            "SELECT p.* FROM agent_host_rotation_recovery r "
+            "JOIN principals p ON p.id=r.principal_id "
+            "JOIN agent_host_enrollments e ON e.principal_id=p.id "
+            "WHERE r.token_hash=? AND r.host_id=? AND r.expires_at>? "
+            "AND p.revoked_at IS NULL AND e.project_id=? AND e.host_id=? "
+            "AND e.status='active'",
+            (digest, host_id, time.time(), project, host_id),
+        ).fetchone()
+    if not row:
+        return None
+    principal = dict(row)
+    try:
+        principal["scopes"] = json.loads(principal.get("scopes") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        principal["scopes"] = []
+    return principal
+
+
 def rotate_agent_host_identity(
     *,
     host_id: str,
@@ -322,6 +350,25 @@ def rotate_agent_host_identity(
             return _error("host_identity_revoked", "host identity is not active")
         if enrollment.get("principal_id") != str(principal_id or "").strip():
             return _error("host_identity_mismatch", "host principal does not own this enrollment")
+        principal = connection.execute(
+            "SELECT token_hash FROM principals WHERE id=? AND revoked_at IS NULL",
+            (principal_id,),
+        ).fetchone()
+        if not principal:
+            return _error("host_identity_revoked", "host principal is not active")
+        connection.execute(
+            "DELETE FROM agent_host_rotation_recovery WHERE expires_at<=?",
+            (now,),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO agent_host_rotation_recovery("
+            "token_hash, principal_id, host_id, expires_at, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (
+                principal["token_hash"], principal_id, host_id,
+                now + ROTATION_RECOVERY_GRACE_SECONDS, now,
+            ),
+        )
         principal_update = connection.execute(
             "UPDATE principals SET token_hash=? WHERE id=? AND revoked_at IS NULL",
             (hash_token(token), principal_id),
@@ -343,6 +390,7 @@ def rotate_agent_host_identity(
                     "host_id": host_id,
                     "principal_id": principal_id,
                     "identity_generation": int(enrollment.get("identity_generation") or 0) + 1,
+                    "response_loss_recovery_grace_seconds": ROTATION_RECOVERY_GRACE_SECONDS,
                     "credential_values_redacted": True,
                 }, sort_keys=True),
                 now,
@@ -385,6 +433,10 @@ def revoke_agent_host_identity(
         connection.execute(
             "UPDATE principals SET revoked_at=COALESCE(revoked_at, ?) WHERE id=?",
             (now, principal_id),
+        )
+        connection.execute(
+            "DELETE FROM agent_host_rotation_recovery WHERE principal_id=?",
+            (principal_id,),
         )
         connection.execute(
             "UPDATE agent_host_enrollments SET status=?, revoked_at=COALESCE(revoked_at, ?), "
@@ -472,10 +524,12 @@ def default_agent_host_enrollment_repository() -> AgentHostEnrollmentRepository:
 
 __all__ = [
     "ENROLLMENT_SCHEMA",
+    "ROTATION_RECOVERY_GRACE_SECONDS",
     "begin_agent_host_enrollment",
     "complete_agent_host_enrollment",
     "get_agent_host_enrollment",
     "list_agent_host_enrollments",
+    "get_agent_host_rotation_recovery_principal",
     "rotate_agent_host_identity",
     "revoke_agent_host_identity",
     "check_agent_host_identity",

@@ -117,6 +117,11 @@ python adapters/agent_host_enrollment.py uninstall \
   --state ~/.local/state/switchboard-agent-host/state.json
 ```
 
+Rotation invalidates the old bearer for ordinary host APIs immediately. For five minutes,
+that hash is accepted only by the same host's rotation endpoint, so a lost HTTP response can
+be retried without stranding the installation. A successful retry writes the replacement
+identity atomically; revoke/uninstall removes every outstanding recovery hash.
+
 After revoke/uninstall, confirm the identity and provider-runtime roots are clean:
 
 ```bash
@@ -133,7 +138,7 @@ A wake with `execution_mode=personal_agent_host` or
 - wake and task IDs;
 - claim and Work Session IDs;
 - target agent and `runtime=codex`;
-- host (when pinned), source SHA, and typed execution-connection ID.
+- exact host, source SHA, and typed execution-connection ID.
 
 The daemon heartbeat publishes `allow_work`, runtime capabilities/version, drain state,
 session headroom, owner user/tenant/project/provider allowlists, local-auth availability,
@@ -141,9 +146,10 @@ and identity generation. Host token, local account proof, provider credential, a
 profile contents never enter inventory, heartbeat, activity, or wake receipts.
 
 Install fails before consuming the one-time bootstrap unless both `codex --version` and
-`codex login status` succeed on the target host. The preflight strips inherited metered-key
-variables and persists only a redacted account fingerprint. Operators can repeat that safe
-check independently with `python adapters/agent_host_enrollment.py preflight`.
+`codex login status` succeed on the target host, the signed release is installed, and the
+`0600` identity/state paths have been written durably. The preflight strips inherited
+metered-key variables and persists only a redacted account fingerprint. Operators can repeat
+that safe check independently with `python adapters/agent_host_enrollment.py preflight`.
 
 ## Executable proof
 

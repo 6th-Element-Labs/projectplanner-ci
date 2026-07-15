@@ -150,6 +150,7 @@ incomplete_binding = agent_host.validate_personal_wake_binding(
 complete_binding = agent_host.validate_personal_wake_binding(
     complete_personal_wake, inventory)
 ok(incomplete_binding["valid"] is False
+   and "host_id" in incomplete_binding["missing"]
    and "source_sha" in incomplete_binding["missing"]
    and "execution_connection_id" in incomplete_binding["missing"],
    "personal host wake refuses incomplete source/connection binding before claim")
