@@ -70,6 +70,7 @@ def complete_mapping_result(
         result=result,
         snapshot=snapshot,
         status=data.get("status") or "",
+        host_id=(data.get("host_id") or "").strip(),
         actor=actor,
         project=data.get("project") or DEFAULT_PROJECT,
     )

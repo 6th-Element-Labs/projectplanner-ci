@@ -2,7 +2,8 @@
 
 The bootstrap code and host bearer are returned once and stored only as hashes.
 Provider credentials never enter this surface: enrollment grants only the narrow
-``read`` and ``write:ixp`` scopes needed by an Agent Host.
+``read`` and the least-privilege ``write:agent_host`` scope needed by an
+Agent Host.
 """
 from __future__ import annotations
 
@@ -307,7 +308,7 @@ def complete_agent_host_enrollment(
                     "host",
                     host_id,
                     project,
-                    json.dumps(["read", "write:ixp"], sort_keys=True),
+                    json.dumps(["read", "write:agent_host"], sort_keys=True),
                     hash_token(token),
                     now,
                 ),

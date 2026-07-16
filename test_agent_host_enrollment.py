@@ -36,6 +36,7 @@ from switchboard.storage.repositories import agent_host_enrollments as enrollmen
 from adapters import agent_host_enrollment as enrollment  # noqa: E402
 from adapters import codex_local_worker, codex_personal_worker, switchboard_core  # noqa: E402
 from app import app  # noqa: E402
+from switchboard.application.commands import complete_wake as complete_wake_command  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parent
@@ -498,7 +499,9 @@ try:
        and mac_config["lanes"] == ["ADAPTER"]
        and mac_config["capabilities"] == ["docs", "github", "python", "tests"]
        and mac_config["max_sessions"] == 1
-       and mac_config["personal_wakes_only"] is True,
+       and mac_config["personal_wakes_only"] is True
+       and mac_config["platform"] == "darwin"
+       and mac_config["service_path"] == str(mac_paths["service_path"]),
        "installed policy comes only from the server-issued enrollment record")
     ok(codex_calls[:2] == [[str(TEST_CODEX), "--version"],
                            [str(TEST_CODEX), "login", "status"]]
@@ -551,6 +554,65 @@ try:
         })
     ok(register.status_code == 200 and register.json().get("host_id") == "host/adapter18-macos",
        "enrolled principal registers only its exact host identity")
+    host_principal = store.get_principal_by_token(PROJECT, initial_mac_token)
+    generic_wake_write = client.post(
+        "/ixp/v1/request_wake",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={"project": PROJECT, "selector": {"runtime": "codex"},
+              "reason": "must be denied", "task_id": "ADAPTER-18"},
+    )
+    generic_wake = store.request_wake(
+        selector={"runtime": "codex", "lane": "ADAPTER"},
+        reason="narrow host must not complete generic wake", source="test",
+        actor="test", project=PROJECT)
+    generic_wake_completion = client.post(
+        "/txp/v1/complete_wake",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={"project": PROJECT, "wake_id": generic_wake["wake_id"],
+              "runner_session_id": "run-generic", "agent_id": "codex/generic",
+              "result": {"started": True}},
+    )
+    cross_host_runner = client.post(
+        "/ixp/v1/register_runner_session",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={"project": PROJECT, "runner_session_id": "run-cross-host",
+              "host_id": "host/not-owned", "agent_id": "codex/cross-host",
+              "runtime": "codex", "status": "running"},
+    )
+    spoofed_host_registration = client.post(
+        "/ixp/v1/register_host",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={"project": PROJECT, "host_id": "host/not-owned", "runtimes": []},
+    )
+    spoofed_host_heartbeat = client.post(
+        "/ixp/v1/heartbeat_host",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={"project": PROJECT, "host_id": "host/not-owned", "status": "online"},
+    )
+    with (patch.object(store, "list_wake_intents", return_value=[{
+            "wake_id": "wake-exact-only",
+            "policy": {
+                "require_exact_host_binding": True,
+                "execution_binding": {"host_principal_id": host_principal["id"]},
+            },
+          }]),
+          patch.object(complete_wake_command, "execute_mapping_result",
+                       return_value={"status": "completed"})):
+        exact_only_completion = client.post(
+            "/txp/v1/complete_wake",
+            headers={"Authorization": f"Bearer {initial_mac_token}"},
+            json={"project": PROJECT, "wake_id": "wake-exact-only",
+                  "runner_session_id": "run-exact-only",
+                  "agent_id": "codex/exact-only", "result": {"started": True}},
+        )
+    ok(host_principal.get("scopes") == ["read", "write:agent_host"]
+       and generic_wake_write.status_code == 403
+       and generic_wake_completion.status_code == 403
+       and cross_host_runner.status_code == 403
+       and spoofed_host_registration.status_code == 403
+       and spoofed_host_heartbeat.status_code == 403
+       and exact_only_completion.status_code == 200,
+       "enrolled host bearer is fenced to its host and every exact personal wake route")
     original_auth_mode = os.environ.get("PM_AUTH_MODE")
     os.environ["PM_AUTH_MODE"] = "required"
     try:
@@ -559,6 +621,18 @@ try:
         authenticated_wakes = client.get(
             "/txp/v1/list_wake_intents", params={"project": PROJECT},
             headers={"Authorization": f"Bearer {initial_mac_token}"})
+        anonymous_hosts = client.get(
+            "/ixp/v1/agent_hosts", params={"project": PROJECT})
+        authenticated_hosts = client.get(
+            "/ixp/v1/agent_hosts", params={"project": PROJECT},
+            headers={"Authorization": f"Bearer {initial_mac_token}"})
+        anonymous_host_status = client.get(
+            "/ixp/v1/host_status",
+            params={"project": PROJECT, "host_id": "host/adapter18-macos"})
+        authenticated_host_status = client.get(
+            "/ixp/v1/host_status",
+            params={"project": PROJECT, "host_id": "host/adapter18-macos"},
+            headers={"Authorization": f"Bearer {initial_mac_token}"})
     finally:
         if original_auth_mode is None:
             os.environ.pop("PM_AUTH_MODE", None)
@@ -566,6 +640,10 @@ try:
             os.environ["PM_AUTH_MODE"] = original_auth_mode
     ok(anonymous_wakes.status_code == 401 and authenticated_wakes.status_code == 200,
        "personal wake bindings cannot be enumerated without project read authority")
+    ok(anonymous_hosts.status_code == 401 and authenticated_hosts.status_code == 200
+       and anonymous_host_status.status_code == 401
+       and authenticated_host_status.status_code == 200,
+       "host inventory and status require project read authority")
 
     def lose_rotation_response(*args, **kwargs):
         http(*args, **kwargs)
@@ -574,7 +652,7 @@ try:
     try:
         enrollment.rotate_identity(
             identity_path=mac_identity_path, config_path=mac_config_path,
-            http=lose_rotation_response)
+            http=lose_rotation_response, service_runner=fake_service)
         rotation_response_lost = False
     except enrollment.EnrollmentError:
         rotation_response_lost = True
@@ -592,11 +670,14 @@ try:
        and recovery_principal and recovery_principal.get("kind") == "host",
        "lost rotation response leaves local identity unchanged and old bearer denied elsewhere")
     rotated = enrollment.rotate_identity(
-        identity_path=mac_identity_path, config_path=mac_config_path, http=http)
+        identity_path=mac_identity_path, config_path=mac_config_path, http=http,
+        service_runner=fake_service)
     mac_identity = json.loads(mac_identity_path.read_text())
     rotated_token = mac_identity["host_token"]
-    ok(rotated["identity_generation"] == 3 and rotated_token != initial_mac_token,
-       "bounded rotation-only recovery retries after response loss and persists atomically")
+    ok(rotated["identity_generation"] == 3 and rotated_token != initial_mac_token
+       and rotated["service_restarted"] is True
+       and service_calls[-1][:3] == ["launchctl", "kickstart", "-k"],
+       "bounded rotation recovery persists the bearer and restarts the live daemon")
     ok(store.get_principal_by_token(PROJECT, initial_mac_token) is None
        and store.get_principal_by_token(PROJECT, rotated_token) is not None,
        "rotated bearer invalidates the previous token immediately")
@@ -619,6 +700,21 @@ try:
        and json.loads(mac_config_path.read_text())["agent_host_version"] == "0.2.1"
        and corrupted_retry_denied,
        "signed update advances current/config and refuses mismatched pre-existing release bytes")
+    try:
+        enrollment.install_host(
+            bundle_dir=bundle_020, public_key_path=public_path,
+            bootstrap_code="ahb-rejected-install-must-not-switch-current",
+            base_url="https://switchboard.test", project=PROJECT,
+            owner_user_id="user-adapter18", target_platform="darwin",
+            paths=mac_paths, http=http, service_runner=fake_service,
+            local_auth_runner=fake_codex, codex_executable=str(TEST_CODEX),
+            start_service=False)
+        mismatched_reinstall_denied = False
+    except enrollment.EnrollmentError:
+        mismatched_reinstall_denied = True
+    ok(mismatched_reinstall_denied
+       and (mac_paths["prefix"] / "current").resolve().name == "0.2.1",
+       "a rejected existing-state install cannot change the selected release")
 
     def offline(*args, **kwargs):
         del args, kwargs
@@ -847,6 +943,19 @@ try:
             return {"status": "completed" if body["result"]["started"] else "failed"}
         return {"runner_session_id": body["runner_session_id"], "status": body["status"]}
 
+    failed_local_control_calls: list[tuple[str, dict]] = []
+
+    def fake_failed_local_control(method, path, body):
+        ok(method == "POST", "failed native local worker uses authenticated writes")
+        failed_local_control_calls.append((path, dict(body)))
+        if path == "/txp/v1/complete_wake":
+            return {"status": "failed"}
+        return {"runner_session_id": body["runner_session_id"], "status": body["status"]}
+
+    def fake_failed_local_codex(command, **kwargs):
+        del command, kwargs
+        return subprocess.CompletedProcess([], 1, "", "native failure")
+
     try:
         codex_local_worker._git = fake_local_git
         os.environ.update({
@@ -872,6 +981,14 @@ try:
         local_evidence = codex_local_worker.run(
             local_task, runner=fake_local_codex,
             http=fake_local_control)
+        local_git_heads[:] = [source_sha]
+        try:
+            codex_local_worker.run(
+                local_task, runner=fake_failed_local_codex,
+                http=fake_failed_local_control)
+            failed_local_visible = False
+        except RuntimeError as exc:
+            failed_local_visible = "native Codex execution failed" in str(exc)
     finally:
         codex_local_worker._git = original_local_git
         for key, value in original_binding_env.items():
@@ -902,6 +1019,15 @@ try:
                 if path == "/txp/v1/complete_wake"}) == 1
        and local_control_calls[-1][1]["status"] == "completed",
        "native local worker heartbeats and exactly retries/terminalizes its wake and runner")
+    failed_runner_index = next(
+        index for index, (path, body) in enumerate(failed_local_control_calls)
+        if path == "/ixp/v1/register_runner_session" and body.get("status") == "failed")
+    failed_wake_index = next(
+        index for index, (path, _body) in enumerate(failed_local_control_calls)
+        if path == "/txp/v1/complete_wake")
+    ok(failed_local_visible and failed_runner_index < failed_wake_index
+       and failed_local_control_calls[failed_wake_index][1]["result"]["started"] is False,
+       "native execution failure terminalizes its exact runner before the failed wake receipt")
     linux_runtime_root = Path(json.loads(linux_config.read_text())["runtime_root"])
     linux_runtime_root.mkdir(parents=True, exist_ok=True)
     (linux_runtime_root / "residue.txt").write_text("non-secret runtime residue")

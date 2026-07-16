@@ -518,6 +518,59 @@ def _clear_active_runner_pointer_in(c: sqlite3.Connection, task_id: str,
     return True
 
 
+def _renew_personal_claim_from_runner_in(
+        c: sqlite3.Connection, record: Dict[str, Any], principal_id: str,
+        now: float) -> bool:
+    """Extend only the claim behind an exact, live personal-host connection.
+
+    Native Codex runs may outlive the ordinary claim TTL. The authenticated
+    runner heartbeat is the renewal signal, but it may renew only the complete
+    tuple already fenced by ``personal_execution_connections`` and never revive
+    an expired claim or outlive the execution deadline.
+    """
+    status = str(record.get("status") or "").strip().lower()
+    if status not in {"starting", "ready", "running"}:
+        return False
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    connection_id = str(metadata.get("execution_connection_id") or "").strip()
+    if not connection_id or not principal_id:
+        return False
+    connection_row = c.execute(
+        "SELECT * FROM personal_execution_connections "
+        "WHERE execution_connection_id=? AND status='active' AND expires_at>?",
+        (connection_id, now),
+    ).fetchone()
+    if not connection_row:
+        return False
+    connection = dict(connection_row)
+    expected = {
+        "runner_session_id": str(
+            record.get("runner_session_id") or record.get("id") or "").strip(),
+        "host_id": str(record.get("host_id") or "").strip(),
+        "host_principal_id": str(principal_id or "").strip(),
+        "agent_id": str(record.get("agent_id") or "").strip(),
+        "task_id": str(record.get("task_id") or "").strip(),
+        "claim_id": str(record.get("claim_id") or "").strip(),
+        "wake_id": str(metadata.get("wake_id") or "").strip(),
+        "work_session_id": str(metadata.get("work_session_id") or "").strip(),
+        "source_sha": str(metadata.get("source_sha") or "").strip(),
+    }
+    if not all(expected.values()):
+        return False
+    if any(str(connection.get(field) or "") != value
+           for field, value in expected.items()):
+        return False
+    renewed = c.execute(
+        "UPDATE task_claims SET expires_at=? "
+        "WHERE id=? AND task_id=? AND agent_id=? AND status='active' "
+        "AND expires_at>? AND expires_at<?",
+        (float(connection["expires_at"]), expected["claim_id"],
+         expected["task_id"], expected["agent_id"], now,
+         float(connection["expires_at"])),
+    )
+    return renewed.rowcount == 1
+
+
 def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                               principal_id: str, actor: str, now: float) -> Dict[str, Any]:
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
@@ -578,6 +631,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             now,
         ),
     )
+    _renew_personal_claim_from_runner_in(c, record, principal_id, now)
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (record.get("task_id") or None, actor, "runner.session_registered",
                json.dumps({"runner_session_id": runner_session_id, "host_id": host_id or None,
@@ -815,6 +869,7 @@ def claim_runner_control_request(host_id: str, request_id: str,
 def complete_runner_control_request(request_id: str, result: Optional[Dict[str, Any]] = None,
                                     snapshot: Optional[Dict[str, Any]] = None,
                                     status: str = "",
+                                    host_id: str = "",
                                     actor: str = "system",
                                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
@@ -826,6 +881,11 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
         if not row:
             return {"error": "runner_control_not_found", "request_id": request_id}
         req = _runner_control_row(row)
+        if host_id and (req.get("status") != "claimed"
+                        or str(req.get("claimed_by_host") or "") != host_id):
+            return {"error": "runner_control_host_mismatch",
+                    "error_code": "runner_control_host_mismatch",
+                    "request_id": request_id}
         final_status = status or ("failed" if result.get("error") else "completed")
         if final_status not in {"completed", "failed", "cancelled"}:
             final_status = "completed"

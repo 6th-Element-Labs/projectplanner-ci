@@ -12,6 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import auth
 import store
+from switchboard.api.deps import (
+    is_narrow_agent_host_principal,
+    require_agent_host_identity,
+    resolve_agent_host_principal,
+)
 from switchboard.application.commands import runner_control as runner_control_command
 
 
@@ -70,9 +75,11 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.post("/ixp/v1/register_runner_session")
     async def ixp_register_runner_session(request: Request, body: dict = Body(...)):
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or body.get("agent_id") or "runner")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
         record = dict(body)
         record.pop("project", None)
         return runner_control_command.upsert_session_mapping_result(
@@ -82,9 +89,11 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.post("/ixp/v1/heartbeat_runner_session")
     async def ixp_heartbeat_runner_session(request: Request, body: dict = Body(...)):
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or body.get("agent_id") or "runner")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
         record = dict(body)
         record.pop("project", None)
         return runner_control_command.upsert_session_mapping_result(
@@ -164,9 +173,11 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.post("/ixp/v1/claim_runner_control")
     async def ixp_claim_runner_control(request: Request, body: dict = Body(...)):
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or "agent-host")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
         result = runner_control_command.claim_mapping_result(
             {
                 "host_id": (body.get("host_id") or "").strip(),
@@ -182,15 +193,19 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.post("/ixp/v1/complete_runner_control")
     async def ixp_complete_runner_control(request: Request, body: dict = Body(...)):
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or "agent-host")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
         result = runner_control_command.complete_mapping_result(
             {
                 "request_id": (body.get("request_id") or body.get("id") or "").strip(),
                 "result": body.get("result") or {},
                 "snapshot": body.get("snapshot") or {},
                 "status": body.get("status") or "",
+                "host_id": ((body.get("host_id") or "").strip()
+                            if is_narrow_agent_host_principal(principal) else ""),
                 "project": project,
             },
             actor=auth.actor(principal),

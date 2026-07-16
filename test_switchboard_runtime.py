@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 
 _TMP = tempfile.mkdtemp(prefix="switchboard-runtime-")
 os.environ["PM_DB_PATH"] = os.path.join(_TMP, "maxwell.db")
@@ -507,6 +508,41 @@ try:
        and good_execution.get("source_sha") == personal_source_sha,
        "personal wake atomically activates and idempotently resumes its exact live connection")
 
+    with _conn(P) as connection:
+        shortened_expiry = time.time() + 30
+        connection.execute(
+            "UPDATE task_claims SET expires_at=? WHERE id=?",
+            (shortened_expiry, personal_claim["claim_id"]),
+        )
+    store.upsert_runner_session({
+        "runner_session_id": exact_runner_id,
+        "host_id": "host/test",
+        "agent_id": personal_agent,
+        "runtime": "codex",
+        "task_id": personal_task["task_id"],
+        "claim_id": personal_claim["claim_id"],
+        "status": "running",
+        "cwd": os.getcwd(),
+        "metadata": {
+            "wake_id": good_wake["wake_id"],
+            "work_session_id": personal_session["work_session_id"],
+            "source_sha": personal_source_sha,
+            "execution_connection_id": good_execution["execution_connection_id"],
+        },
+    }, principal_id=p["id"], actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        renewed_expiry = connection.execute(
+            "SELECT expires_at FROM task_claims WHERE id=?",
+            (personal_claim["claim_id"],),
+        ).fetchone()["expires_at"]
+        execution_expiry = connection.execute(
+            "SELECT expires_at FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (good_execution["execution_connection_id"],),
+        ).fetchone()["expires_at"]
+    ok(renewed_expiry == execution_expiry and renewed_expiry > shortened_expiry,
+       "an exact authenticated personal-runner heartbeat renews its live claim to the execution deadline")
+
     attacker_completion = store.complete_wake(
         good_wake["wake_id"], runner_session_id=exact_runner_id,
         agent_id=personal_agent, result={"started": True},
@@ -545,6 +581,57 @@ try:
        and "completion_result_mismatch"
        in conflicting_completion_retry.get("reason_codes", []),
        "personal completion is principal-bound, idempotent, and rejects conflicts")
+
+    launch_failed_wake = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "ADAPTER", "capabilities": ["python"]},
+        reason="accept exact native launch-failure receipt", source="test",
+        policy=personal_policy(personal_session["work_session_id"]),
+        task_id=personal_task["task_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    failed_execution = (
+        (launch_failed_wake.get("policy") or {}).get("execution_binding") or {})
+    failed_runner_id = failed_execution["runner_session_id"]
+    failed_runner = {
+        "runner_session_id": failed_runner_id,
+        "host_id": "host/test",
+        "agent_id": personal_agent,
+        "runtime": "codex",
+        "task_id": personal_task["task_id"],
+        "claim_id": personal_claim["claim_id"],
+        "cwd": os.getcwd(),
+        "metadata": {
+            "wake_id": launch_failed_wake["wake_id"],
+            "work_session_id": personal_session["work_session_id"],
+            "source_sha": personal_source_sha,
+            "execution_connection_id": failed_execution["execution_connection_id"],
+        },
+    }
+    store.upsert_runner_session(
+        failed_runner | {"status": "starting"}, principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    failed_claim = store.claim_wake(
+        "host/test", launch_failed_wake["wake_id"],
+        runner_session_id=failed_runner_id, principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    store.upsert_runner_session(
+        failed_runner | {"status": "failed"}, principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    exact_failed_completion = store.complete_wake(
+        launch_failed_wake["wake_id"], runner_session_id=failed_runner_id,
+        agent_id=personal_agent,
+        result={"started": False, "reason": "native_launch_failed"},
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        failed_connection_status = connection.execute(
+            "SELECT status FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (failed_execution["execution_connection_id"],),
+        ).fetchone()["status"]
+    ok(failed_claim.get("claimed") is True
+       and exact_failed_completion.get("status") == "failed"
+       and failed_connection_status == "failed",
+       "an exact failed runner registration can terminalize its launch-failure wake")
 
     def connection_status(wake):
         connection_id = ((wake.get("policy") or {}).get("execution_binding") or {}).get(

@@ -652,7 +652,6 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
     workspace_root = Path(selected.get("workspace_root") or state_root / "workspaces")
     service_path = Path(selected["service_path"])
     log_root = Path(selected["log_root"])
-    release = _install_release(bundle_dir, manifest, prefix)
     identity_path = config_root / "identity.json"
     config_path = config_root / "config.json"
     state_path = state_root / "state.json"
@@ -672,6 +671,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
             if not same_install:
                 raise EnrollmentError(
                     "existing Agent Host finalization does not match this enrollment")
+            release = _install_release(bundle_dir, manifest, prefix)
             state.update({"version": manifest["version"], "release": str(release),
                           "finalization_resumed_at": time.time()})
             _atomic_json(state_path, state, 0o600)
@@ -707,6 +707,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         if (not private_key_pem or not re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint)
                 or not re.fullmatch(r"ahr-[A-Za-z0-9_-]{32,}", completion_recovery_secret)):
             raise EnrollmentError("pending Agent Host enrollment material is incomplete")
+        release = _install_release(bundle_dir, manifest, prefix)
         state.update({
             "status": "prepared_for_enrollment",
             "version": manifest["version"],
@@ -714,6 +715,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
             "retry_started_at": time.time(),
         })
     else:
+        release = _install_release(bundle_dir, manifest, prefix)
         private_key_pem, fingerprint = generate_host_identity()
         completion_recovery_secret = "ahr-" + secrets.token_urlsafe(32)
         state = {
@@ -803,6 +805,8 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         "provider_allowlist": sorted(set(enrollment.get("provider_allowlist") or [])),
         "local_auth_account_proof": local_auth["account_fingerprint"],
         "codex_executable": local_auth["codex_executable"],
+        "platform": target_platform,
+        "service_path": str(service_path),
         "repo_root": str(prefix / "current"),
         "runner_dir": str(state_root / "runner"),
         "runtime_root": str(state_root / "provider-runtimes"),
@@ -864,9 +868,16 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
 
 
 def rotate_identity(*, identity_path: Path, config_path: Path,
-                    http: Callable[..., dict[str, Any]] = request_json) -> dict[str, Any]:
+                    http: Callable[..., dict[str, Any]] = request_json,
+                    service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+                    ) -> dict[str, Any]:
     identity = _read_json(identity_path)
     config = _read_json(config_path)
+    target_platform = str(config.get("platform") or "").strip()
+    service_path = str(config.get("service_path") or "").strip()
+    if target_platform not in {"darwin", "linux"} or not service_path:
+        raise EnrollmentError(
+            "installed configuration lacks the service restart binding")
     private_key_pem, fingerprint = generate_host_identity()
     result = http(
         "POST",
@@ -887,7 +898,10 @@ def rotate_identity(*, identity_path: Path, config_path: Path,
         "rotated_at": time.time(),
     })
     _atomic_json(identity_path, identity, 0o600)
-    return {"rotated": True, "identity_generation": identity["identity_generation"]}
+    control_service(
+        target_platform, "restart", Path(service_path), runner=service_runner)
+    return {"rotated": True, "identity_generation": identity["identity_generation"],
+            "service_restarted": True}
 
 
 def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path,

@@ -15,6 +15,11 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
 import store
+from switchboard.api.deps import (
+    is_narrow_agent_host_principal,
+    require_agent_host_identity,
+    resolve_agent_host_principal,
+)
 from switchboard.api.idempotency import inject_idem_key, raise_if_idem_conflict
 from switchboard.application.commands import claim_wake as claim_wake_command
 from switchboard.application.commands import complete_wake as complete_wake_command
@@ -54,9 +59,11 @@ def create_router(*, resolve_project: ProjectResolver,
     async def txp_claim_wake(request: Request, body: dict = Body(...)):
         body = inject_idem_key(request, body)
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or "agent-host")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
         body["project"] = project
         return control_plane_http(raise_if_idem_conflict(
             claim_wake_command.execute_mapping_result(
@@ -66,9 +73,21 @@ def create_router(*, resolve_project: ProjectResolver,
     async def txp_complete_wake(request: Request, body: dict = Body(...)):
         body = inject_idem_key(request, body)
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or body.get("agent_id") or "agent-host")
+        if is_narrow_agent_host_principal(principal):
+            wake_id = str(body.get("wake_id") or body.get("id") or "").strip()
+            wake = next((item for item in store.list_wake_intents(project=project)
+                         if str(item.get("wake_id") or "") == wake_id), {})
+            policy = dict(wake.get("policy") or {})
+            execution = dict(policy.get("execution_binding") or {})
+            if ((policy.get("execution_mode") != "personal_agent_host"
+                    and not policy.get("require_exact_host_binding"))
+                    or str(execution.get("host_principal_id") or "")
+                    != str(principal.get("id") or "")):
+                raise HTTPException(
+                    403, "host bearer may complete only its exact personal wake")
         body["project"] = project
         return control_plane_http(raise_if_idem_conflict(
             complete_wake_command.execute_mapping_result(

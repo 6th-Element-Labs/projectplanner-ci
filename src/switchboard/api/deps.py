@@ -17,6 +17,8 @@ from fastapi import HTTPException, Request, Response
 
 import auth
 import store
+from switchboard.api.routers.auth import service as auth_service
+from switchboard.api.routers.auth import session as auth_session
 from switchboard.api.routers.auth import store as auth_store
 
 
@@ -46,16 +48,66 @@ def resolve_project(project: str) -> str:
 
 def resolve_principal(request: Request, project: str, scopes=("write:ixp",),
                       dev_actor: str = "web") -> dict:
+    resolved = resolve_project(project)
     pre = getattr(request.state, "principal", None)
     if isinstance(pre, dict):
-        if auth._has_scopes(pre, scopes, resolve_project(project)):
+        if auth._has_scopes(pre, scopes, resolved):
             return pre
         raise HTTPException(403, "forbidden: token is missing required scope")
+    if not auth.bearer_from_request(request):
+        cookies = getattr(request, "cookies", {}) or {}
+        user = auth_service.current_user(
+            cookies.get(auth_session.COOKIE_NAME, ""))
+        if user:
+            principal = global_principal(user, global_user_scopes(user, resolved))
+            if auth._has_scopes(principal, scopes, resolved):
+                return principal
+            raise HTTPException(403, "forbidden: token is missing required scope")
     try:
-        return auth.authenticate_request(request, resolve_project(project), scopes, dev_actor=dev_actor)
+        return auth.authenticate_request(request, resolved, scopes, dev_actor=dev_actor)
     except PermissionError as e:
         status = 403 if "forbidden" in str(e) else 401
         raise HTTPException(status, str(e))
+
+
+def resolve_agent_host_principal(resolve: Any, request: Request, project: str,
+                                 *, dev_actor: str) -> dict:
+    """Admit narrow Agent Host bearers plus legacy/operator IXP principals."""
+    try:
+        return resolve(
+            request, project, ("write:agent_host",), dev_actor=dev_actor)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        return resolve(request, project, ("write:ixp",), dev_actor=dev_actor)
+
+
+def authorize_agent_host_principal(principal: dict, project: str) -> dict:
+    """Authorize an already-resolved host principal for rotation recovery."""
+    try:
+        return auth.authorize_principal(
+            principal, project, ("write:agent_host",))
+    except PermissionError:
+        return auth.authorize_principal(principal, project, ("write:ixp",))
+
+
+def is_narrow_agent_host_principal(principal: dict) -> bool:
+    scopes = set(
+        principal.get("effective_scopes") or principal.get("scopes") or [])
+    return ("write:agent_host" in scopes and "write:ixp" not in scopes
+            and "admin" not in scopes)
+
+
+def require_agent_host_identity(principal: dict, host_id: str, project: str) -> None:
+    """Fence a narrow bearer to the active host identity that owns it."""
+    if not is_narrow_agent_host_principal(principal):
+        return
+    identity = store.check_agent_host_identity(
+        str(host_id or "").strip(), str(principal.get("id") or ""),
+        project=project)
+    if not identity.get("required") or not identity.get("allowed"):
+        raise HTTPException(
+            403, identity.get("error") or "host bearer is not bound to this host")
 
 
 def resolve_body_project(body: dict) -> str:

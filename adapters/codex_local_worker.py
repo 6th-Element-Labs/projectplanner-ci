@@ -340,8 +340,12 @@ def run(
             if successful_completion_intent:
                 raise
             try:
+                # A failed personal wake receipt is accepted only after the exact
+                # bound runner is terminal. Publish that state before completion so
+                # the repository can distinguish a real launch failure from a
+                # still-running worker trying to abandon its wake.
                 _update_runner(
-                    http, values, workspace=workspace, status="running", heartbeat=True)
+                    http, values, workspace=workspace, status="failed")
                 _complete_wake(http, values, {
                     "started": False,
                     "reason": "native_codex_execution_failed",
@@ -349,10 +353,9 @@ def run(
                 })
                 wake_completed = True
             except Exception:
-                # Preserve the active registry tuple while the terminal receipt is
-                # outcome-unknown; terminalizing first would make an exact retry fail.
+                # The terminal runner tuple is durable and the identical wake receipt
+                # remains safe to retry after an outcome-unknown response.
                 raise
-            _update_runner(http, values, workspace=workspace, status="failed")
         raise
 
 
