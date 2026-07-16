@@ -145,6 +145,7 @@ try:
                                "status": "success", "executed": True, "exit_code": 0},
         "checkpoint_personal_work_session": {"updated": True},
         "complete_claim": {"completed": True, "status": "In Review"},
+        "_cleanup_personal_bound_workspace": {"cleaned": True},
     })
     res4 = sb.run_session(
         "switchboard", "codex/TASK-PERSONAL", "codex",
@@ -170,11 +171,35 @@ finally:
     else:
         os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = old_personal
 ok(names4.index("checkpoint_personal_work_session") < names4.index("complete_claim")
-   and res4["completed"] and "archive_work_session_workspace" not in names4,
+   and res4["completed"] and "archive_work_session_workspace" not in names4
+   and "_cleanup_personal_bound_workspace" in names4,
    "personal host checkpoints its bound Work Session before completing the exact claim")
 ok(res5.get("stopped") == "checkpoint_rejected:TASK-PERSONAL"
    and "complete_claim" not in [call[0] for call in calls5],
    "a rejected personal checkpoint stops loudly without leaking the active claim")
+
+calls6 = _patch({
+    "_acquire_claim": (personal_claim, personal_managed),
+    "abandon_claim": {"abandoned": True},
+    "_cleanup_personal_bound_workspace": {"cleaned": True},
+    "archive_work_session_workspace": {"archived": True},
+})
+try:
+    os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = "1"
+    res6 = sb.run_session(
+        "switchboard", "codex/TASK-PERSONAL", "codex",
+        work_fn=lambda task: (_ for _ in ()).throw(RuntimeError("native failure")),
+        max_tasks=1, auto_work_session=True)
+finally:
+    if old_personal is None:
+        os.environ.pop("PM_PERSONAL_AGENT_HOST_EXECUTION", None)
+    else:
+        os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = old_personal
+names6 = [call[0] for call in calls6]
+ok(res6.get("stopped", "").startswith("work_error:TASK-PERSONAL")
+   and "_cleanup_personal_bound_workspace" in names6
+   and "archive_work_session_workspace" not in names6,
+   "failed personal adoption cleans only its host-local checkout after exact abandon")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

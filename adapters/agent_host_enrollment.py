@@ -878,6 +878,30 @@ def rotate_identity(*, identity_path: Path, config_path: Path,
     if target_platform not in {"darwin", "linux"} or not service_path:
         raise EnrollmentError(
             "installed configuration lacks the service restart binding")
+    if identity.get("rotation_pending_restart"):
+        # A previous rotation already persisted the only live bearer but service
+        # start failed or its response was lost. Resume that exact boundary without
+        # rotating again. Restart covers an already-running ambiguous outcome;
+        # start covers a service that is still unloaded.
+        try:
+            control_service(
+                target_platform, "restart", Path(service_path), runner=service_runner)
+        except EnrollmentError:
+            control_service(
+                target_platform, "start", Path(service_path), runner=service_runner)
+        identity.pop("rotation_pending_restart", None)
+        identity["rotation_restarted_at"] = time.time()
+        _atomic_json(identity_path, identity, 0o600)
+        return {
+            "rotated": True,
+            "identity_generation": identity.get("identity_generation"),
+            "service_restarted": True,
+            "resumed": True,
+        }
+    # Stop the old-token daemon before invalidating its bearer. If stop cannot be
+    # established, fail before the remote identity changes.
+    control_service(
+        target_platform, "stop", Path(service_path), runner=service_runner)
     private_key_pem, fingerprint = generate_host_identity()
     result = http(
         "POST",
@@ -896,10 +920,14 @@ def rotate_identity(*, identity_path: Path, config_path: Path,
         "public_key_fingerprint": fingerprint,
         "identity_generation": enrollment.get("identity_generation"),
         "rotated_at": time.time(),
+        "rotation_pending_restart": True,
     })
     _atomic_json(identity_path, identity, 0o600)
     control_service(
-        target_platform, "restart", Path(service_path), runner=service_runner)
+        target_platform, "start", Path(service_path), runner=service_runner)
+    identity.pop("rotation_pending_restart", None)
+    identity["rotation_restarted_at"] = time.time()
+    _atomic_json(identity_path, identity, 0o600)
     return {"rotated": True, "identity_generation": identity["identity_generation"],
             "service_restarted": True}
 

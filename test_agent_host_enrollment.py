@@ -733,6 +733,16 @@ try:
         http(*args, **kwargs)
         raise enrollment.EnrollmentError("simulated response loss")
 
+    def fail_rotated_service_start(command, **kwargs):
+        del kwargs
+        service_calls.append(list(command))
+        return subprocess.CompletedProcess(
+            command,
+            1 if command[:2] == ["launchctl", "bootstrap"] else 0,
+            "",
+            "simulated start failure",
+        )
+
     try:
         enrollment.rotate_identity(
             identity_path=mac_identity_path, config_path=mac_config_path,
@@ -753,15 +763,27 @@ try:
        and old_token_denied_elsewhere.status_code == 401
        and recovery_principal and recovery_principal.get("kind") == "host",
        "lost rotation response leaves local identity unchanged and old bearer denied elsewhere")
+    try:
+        enrollment.rotate_identity(
+            identity_path=mac_identity_path, config_path=mac_config_path, http=http,
+            service_runner=fail_rotated_service_start)
+        rotation_start_failed = False
+    except enrollment.EnrollmentError:
+        rotation_start_failed = True
+    pending_rotation = json.loads(mac_identity_path.read_text())
     rotated = enrollment.rotate_identity(
         identity_path=mac_identity_path, config_path=mac_config_path, http=http,
         service_runner=fake_service)
     mac_identity = json.loads(mac_identity_path.read_text())
     rotated_token = mac_identity["host_token"]
-    ok(rotated["identity_generation"] == 3 and rotated_token != initial_mac_token
+    ok(rotation_start_failed and pending_rotation["rotation_pending_restart"] is True
+       and pending_rotation["host_token"] != initial_mac_token
+       and rotated["identity_generation"] == 3 and rotated_token != initial_mac_token
        and rotated["service_restarted"] is True
+       and rotated["resumed"] is True
+       and "rotation_pending_restart" not in mac_identity
        and service_calls[-1][:3] == ["launchctl", "kickstart", "-k"],
-       "bounded rotation recovery persists the bearer and restarts the live daemon")
+       "bounded rotation recovery resumes a failed start without rotating again")
     ok(store.get_principal_by_token(PROJECT, initial_mac_token) is None
        and store.get_principal_by_token(PROJECT, rotated_token) is not None,
        "rotated bearer invalidates the previous token immediately")
@@ -938,6 +960,9 @@ try:
     subprocess.run(["git", "clone", "--bare", str(binding_source), str(binding_remote)],
                    check=True, capture_output=True)
     coordinator_workspace = TMP / "coordination-vm-only" / "bound-session"
+    coordinator_workspace.mkdir(parents=True)
+    coordinator_marker = coordinator_workspace / "coordinator-owned.txt"
+    coordinator_marker.write_text("must remain\n", encoding="utf-8")
     binding_agent = "codex/ADAPTER-18-local-worker"
     binding_claim = "taskclaim-local-worker"
     binding_session = "worksession-local-worker"
@@ -988,6 +1013,14 @@ try:
     ok(denied_claim.get("claimed") is False and denied_context is None
        and "personal workspace is dirty" in denied_claim.get("reason", ""),
        "personal execution refuses reuse of a dirty host-local checkout")
+    with patch.dict(os.environ, binding_environment):
+        local_cleanup = switchboard_core._cleanup_personal_bound_workspace({
+            "bound_existing": True,
+            "workspace_path": str(materialized_workspace),
+        })
+    ok(local_cleanup.get("cleaned") is True
+       and not materialized_workspace.exists() and coordinator_marker.is_file(),
+       "personal cleanup removes only the adopted host-local checkout")
 
     local_workspace = TMP / "local-worker"
     local_workspace.mkdir()
@@ -1021,6 +1054,7 @@ try:
     captured_local_codex: dict[str, object] = {}
     local_control_calls: list[tuple[str, dict]] = []
     local_completion_response_lost = [False]
+    local_final_heartbeat_lost = [False]
 
     def fake_local_git(workspace, *args):
         ok(workspace == str(local_workspace), "native local worker stays in its managed workspace")
@@ -1045,6 +1079,10 @@ try:
     def fake_local_control(method, path, body):
         ok(method == "POST", "native local worker uses authenticated state-changing calls")
         local_control_calls.append((path, dict(body)))
+        if (path == "/ixp/v1/heartbeat_runner_session"
+                and not local_final_heartbeat_lost[0]):
+            local_final_heartbeat_lost[0] = True
+            raise RuntimeError("simulated post-run heartbeat loss")
         if path == "/txp/v1/complete_wake":
             if not local_completion_response_lost[0]:
                 local_completion_response_lost[0] = True
@@ -1116,6 +1154,7 @@ try:
     ok(central_binding_required
        and local_evidence["head_sha"] == completed_sha
        and local_evidence["verification"]["auth_mode"] == "chatgpt_personal"
+       and local_evidence["verification"]["runner_heartbeat_errors_recovered"] == 1
        and local_evidence["verification"]["provider_credential_exported"] is False
        and "exec" in local_command and "ADAPTER-18" in str(local_command[-1])
        and "workspace-write" in local_command

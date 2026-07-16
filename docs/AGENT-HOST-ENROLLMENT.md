@@ -133,6 +133,9 @@ unrestricted write access to the user's home directory. The separate
 by fresh host-local enrollment. After the native worker terminalizes its runner and wake, the
 narrow bearer checkpoints the exact pushed head and executed-test receipt on the bound Work
 Session, then completes or abandons only the bound claim.
+The adapter removes the adopted host-local checkout only after the exact claim completion
+or failed-tuple abandon is accepted. It never asks the coordinator to archive the Work
+Session's original path, and preserves the checkout when a terminal response is unknown.
 
 ## Update, rotate, revoke, and uninstall
 
@@ -160,7 +163,10 @@ python adapters/agent_host_enrollment.py uninstall \
 Rotation invalidates the old bearer for ordinary host APIs immediately. For five minutes,
 that hash is accepted only by the same host's rotation endpoint, so a lost HTTP response can
 be retried without stranding the installation. A successful retry writes the replacement
-identity atomically; revoke/uninstall removes every outstanding recovery hash.
+identity atomically; revoke/uninstall removes every outstanding recovery hash. Rotation first
+stops the old-token daemon, then journals the new bearer as `rotation_pending_restart` before
+starting it. If service start fails or its response is lost, rerunning `rotate` resumes only
+that start boundary without rotating the bearer again.
 
 Enrollment finalization is a separate acknowledgement after the identity, configuration,
 service definition, and installed state are durable. Until that acknowledgement, a lost

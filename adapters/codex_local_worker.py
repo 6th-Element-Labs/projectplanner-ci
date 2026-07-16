@@ -275,14 +275,22 @@ def run(
             check=False,
         )
         stop_heartbeat.set()
-        heartbeat_thread.join(timeout=5)
-        _update_runner(
-            http, values, workspace=workspace, status="running", heartbeat=True)
+        # Do not let an in-flight heartbeat race a later terminal runner update.
+        # The production HTTP call is bounded, so waiting here is finite and keeps
+        # runner state monotonic.
+        heartbeat_thread.join()
         output = ((completed.stdout or "") + (completed.stderr or "")).encode()
         if completed.returncode != 0:
             raise RuntimeError(
                 "native Codex execution failed: "
                 + (completed.stderr or completed.stdout or "no output")[-1000:])
+        # A final running heartbeat is useful for claim renewal, but a transient
+        # outage here must not decide the native execution outcome.
+        try:
+            _update_runner(
+                http, values, workspace=workspace, status="running", heartbeat=True)
+        except Exception as exc:
+            heartbeat_errors.append(exc)
 
         branch = _git(workspace, "branch", "--show-current")
         head_sha = _git(workspace, "rev-parse", "HEAD")
@@ -343,7 +351,7 @@ def run(
     except Exception:
         stop_heartbeat.set()
         if heartbeat_thread is not None:
-            heartbeat_thread.join(timeout=5)
+            heartbeat_thread.join()
         if runner_registered and not wake_completed:
             # Once local execution and exact-head proof succeeded, a lost response
             # must only be retried with that identical success receipt.  Never

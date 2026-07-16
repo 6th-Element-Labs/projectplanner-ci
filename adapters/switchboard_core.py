@@ -479,6 +479,43 @@ def archive_work_session_workspace(project, work_session_id, remove_workspace=Tr
         return None
 
 
+def _cleanup_personal_bound_workspace(managed):
+    """Remove only the adopted host-local checkout, never the coordinator path."""
+    if not (managed or {}).get("bound_existing") or not _personal_execution_enabled():
+        return {"cleaned": False, "reason": "not_personal_bound"}
+    configured_root = str(
+        os.environ.get("PM_PERSONAL_WORKSPACE_ROOT") or "").strip()
+    workspace_value = str((managed or {}).get("workspace_path") or "").strip()
+    if not configured_root or not workspace_value:
+        return {"cleaned": False, "reason": "workspace_binding_missing"}
+    raw_root = os.path.abspath(os.path.expanduser(configured_root))
+    workspace = os.path.abspath(os.path.expanduser(workspace_value))
+    if (os.path.lexists(raw_root) and os.path.islink(raw_root)):
+        return {"cleaned": False, "reason": "workspace_root_symlink"}
+    root = os.path.realpath(raw_root)
+    try:
+        inside_root = os.path.commonpath((root, workspace)) == root
+    except ValueError:
+        inside_root = False
+    if (workspace == root or not inside_root
+            or (os.path.lexists(workspace) and os.path.islink(workspace))
+            or os.path.realpath(workspace) != workspace):
+        return {"cleaned": False, "reason": "workspace_outside_personal_root"}
+    if not os.path.exists(workspace):
+        return {"cleaned": True, "already_absent": True}
+    try:
+        shutil.rmtree(workspace)
+    except OSError as exc:
+        return {"cleaned": False, "reason": f"workspace_remove_failed:{exc}"}
+    parent = os.path.dirname(workspace)
+    if parent != root:
+        try:
+            os.rmdir(parent)
+        except OSError:
+            pass
+    return {"cleaned": True, "workspace_path": workspace}
+
+
 def expire_external_work_session(project, work_session_id, agent_id,
                                  base=None, token=None):
     """Close worker-local session metadata without touching the worker's filesystem."""
@@ -968,9 +1005,16 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
             evidence = work_fn({**res, "task_id": task_id, "task": task,
                                 "managed": managed or {}}) or {}
         except Exception as e:
-            abandon_claim(project, claim_id, f"work_fn error: {e}", base=base, token=token)
+            abandonment = abandon_claim(
+                project, claim_id, f"work_fn error: {e}", base=base, token=token)
             if managed:
-                if managed.get("external") and not managed.get("bound_existing"):
+                if managed.get("bound_existing") and _personal_execution_enabled():
+                    # A rejected abandon can mean the successful receipt is merely
+                    # outcome-unknown. Preserve the checkout for recovery unless the
+                    # exact failed tuple actually released the claim.
+                    if isinstance(abandonment, dict) and abandonment.get("abandoned"):
+                        _cleanup_personal_bound_workspace(managed)
+                elif managed.get("external"):
                     expire_external_work_session(
                         project, managed["work_session_id"], agent_id,
                         base=base, token=token)
@@ -1001,10 +1045,16 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                                               evidence.get("branch", ""),
                                               evidence.get("head_sha", ""))
                     if not pushed.get("ok"):
-                        abandon_claim(project, claim_id,
-                                      f"push failed for {task_id}: {pushed.get('detail')}",
-                                      base=base, token=token)
-                        if managed.get("external") and not managed.get("bound_existing"):
+                        abandonment = abandon_claim(
+                            project, claim_id,
+                            f"push failed for {task_id}: {pushed.get('detail')}",
+                            base=base, token=token)
+                        if (managed.get("bound_existing")
+                                and _personal_execution_enabled()):
+                            if (isinstance(abandonment, dict)
+                                    and abandonment.get("abandoned")):
+                                _cleanup_personal_bound_workspace(managed)
+                        elif managed.get("external"):
                             expire_external_work_session(
                                 project, managed["work_session_id"], agent_id,
                                 base=base, token=token)
@@ -1036,9 +1086,6 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                         "checkpoint": checkpoint, "startup_inbox": startup_inbox}
             managed["head_sha"] = evidence.get("head_sha") or managed.get("head_sha")
         completion = complete_claim(project, claim_id, evidence, base=base, token=token)
-        if managed and not managed.get("external"):
-            archive_work_session_workspace(project, managed["work_session_id"],
-                                           remove_workspace=True, base=base, token=token)
         # Verify progress before claiming it: if the server fail-closed the
         # completion (e.g. push_not_on_remote), stop loudly rather than looping on
         # as if the task were done.
@@ -1046,6 +1093,12 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
             return {"completed": completed,
                     "stopped": f"complete_rejected:{task_id}:{completion.get('reason')}",
                     "rejection": completion, "startup_inbox": startup_inbox}
+        if (managed and managed.get("bound_existing") and _personal_execution_enabled()
+                and isinstance(completion, dict) and completion.get("completed")):
+            _cleanup_personal_bound_workspace(managed)
+        elif managed and not managed.get("external"):
+            archive_work_session_workspace(project, managed["work_session_id"],
+                                           remove_workspace=True, base=base, token=token)
         completed.append({"task_id": task_id, "evidence": evidence,
                           "managed": bool(managed), "completion": completion})
     return {"completed": completed, "stopped": "max_tasks", "startup_inbox": startup_inbox}
