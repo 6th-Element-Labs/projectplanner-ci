@@ -115,7 +115,8 @@ real_get_task = sb.get_task
 real_get_work_session = sb.get_work_session
 bound_env = {key: os.environ.get(key) for key in (
     "PM_REMOTE_WORK_SESSION_REGISTRATION", "PM_AUTO_WORK_SESSION", "PM_TASK_ID",
-    "PM_PERSONAL_AGENT_HOST_EXECUTION", "PM_CO_ACCOUNT_BINDING_JSON", "PM_SOURCE_SHA",
+    "PM_PERSONAL_AGENT_HOST_EXECUTION", "PM_PERSONAL_WORKSPACE_ROOT",
+    "PM_CO_ACCOUNT_BINDING_JSON", "PM_SOURCE_SHA",
 )}
 try:
     os.environ.update({
@@ -123,6 +124,7 @@ try:
         "PM_AUTO_WORK_SESSION": "1",
         "PM_TASK_ID": "COORD-21",
         "PM_PERSONAL_AGENT_HOST_EXECUTION": "1",
+        "PM_PERSONAL_WORKSPACE_ROOT": str(repo.parent),
         "PM_CO_ACCOUNT_BINDING_JSON": json.dumps({
             "task_id": "COORD-21",
             "claim_id": "taskclaim-personal-bound",
