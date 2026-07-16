@@ -38,6 +38,7 @@ from switchboard.domain.provider_credentials import (  # noqa: E402
     list_provider_auth_capabilities,
     provider_auth_decision,
 )
+from switchboard.domain.provider_capacity import account_fingerprint  # noqa: E402
 from switchboard.integrations.provider_runtime_auth import ProviderRuntimeAuth  # noqa: E402
 from switchboard.mcp.tools import provider_credentials as mcp_tools  # noqa: E402
 from switchboard.storage.repositories.provider_capacity import ProviderCapacityRepository  # noqa: E402
@@ -134,7 +135,8 @@ def enrollment(provider: str, auth_type: str, account: str, **extra) -> dict:
     }
     payload.update(extra)
     return commands.enroll_mapping(
-        payload, actor="co15-test", principal_user_id=USER_ID, repository=repository)
+        payload, actor="co15-test", principal_user_id=USER_ID,
+        trusted_provider_native=True, repository=repository)
 
 
 codex = enrollment("codex", "oauth_capsule", "codex-personal")
@@ -206,6 +208,8 @@ binding = {
     "provider_account_id": "legacy-claude",
     "task_id": "CO-15",
     "claim_id": "claim-co15",
+    "wake_id": "wake-co15-legacy",
+    "account_affinity_id": account_fingerprint("claude", "legacy-claude"),
     "host_id": "host-co15-trusted",
     "runner_session_id": "runner-co15",
     "work_session_id": "worksession-co15",
@@ -231,6 +235,8 @@ try:
         task_id="CO-15", host_id="host-co15-trusted",
         runner_session_id="runner-co15", work_session_id="worksession-co15",
         ttl_seconds=900, actor="co15-test", principal=principal,
+        claim_id=binding["claim_id"], wake_id=binding["wake_id"],
+        account_affinity_id=binding["account_affinity_id"],
     )
     ok(False, "legacy Claude acquire_lease must fail closed")
 except CredentialVaultError as exc:
@@ -245,6 +251,8 @@ codex_binding = {
     "provider_account_id": "codex-personal",
     "task_id": "CO-15",
     "claim_id": "claim-co15-codex",
+    "wake_id": "wake-co15-codex",
+    "account_affinity_id": account_fingerprint("codex", "codex-personal"),
     "host_id": "host-co15-trusted",
     "runner_session_id": "runner-co15-codex",
     "work_session_id": "worksession-co15-codex",

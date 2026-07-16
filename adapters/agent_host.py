@@ -133,6 +133,9 @@ def placement_inventory(repo, runtime, policy):
         "bound_wake_id": bound_wake_id or None,
         "drain_state": "accepting" if policy.get("allow_work") else "message_only",
         "tenant_ids": _csv(os.environ.get("PM_HOST_TENANTS", "")),
+        # Provider-native enrollment is accepted only when this trusted host
+        # explicitly attests the owning Switchboard user for the account affinity.
+        "owner_user_ids": _csv(os.environ.get("PM_HOST_OWNER_USERS", "")),
         "projects": _csv(os.environ.get("PM_HOST_PROJECTS", PROJECT)),
         "providers": _csv(os.environ.get("PM_HOST_PROVIDERS", "")),
         "account_affinity_ids": _csv(os.environ.get("PM_HOST_ACCOUNT_AFFINITIES", "")),

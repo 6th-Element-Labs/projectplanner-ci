@@ -54,7 +54,7 @@ def _access(principal: dict[str, Any]) -> dict[str, Any]:
 
 def enroll_provider_connection(connection_json: str, ctx: Context,
                                project: str = "maxwell") -> str:
-    """Enroll an encrypted personal provider identity; the response is metadata-only."""
+    """Enroll owner-bound provider-native proof; raw provider secrets are rejected."""
     services = _services()
     principal = services.require_write(ctx, project, ("write:credentials",))
     access = _access(principal)
@@ -62,7 +62,8 @@ def enroll_provider_connection(connection_json: str, ctx: Context,
     payload = {**_object(connection_json, "connection_json"), "project": project}
     return services.dumps(commands.enroll_mapping(
         payload, actor=services.principal_actor(principal),
-        principal_user_id=principal_id, admin=is_admin))
+        principal_user_id=principal_id, principal_kind=access["principal_kind"],
+        admin=is_admin))
 
 
 def get_provider_connection(credential_reference: str, ctx: Context,
@@ -106,7 +107,7 @@ def list_provider_auth_capabilities(ctx: Context, project: str = "maxwell") -> s
 
 def rotate_provider_connection(credential_reference: str, rotation_json: str,
                                ctx: Context, project: str = "maxwell") -> str:
-    """Rotate an enrolled auth capsule and fence every lease on the prior version."""
+    """Refresh owner-bound provider-native proof and fence the prior version."""
     services = _services()
     principal = services.require_write(ctx, project, ("write:credentials",))
     access = _access(principal)
@@ -115,7 +116,8 @@ def rotate_provider_connection(credential_reference: str, rotation_json: str,
                "credential_reference": credential_reference}
     return services.dumps(commands.rotate_mapping(
         payload, actor=services.principal_actor(principal),
-        principal_user_id=principal_id, admin=is_admin))
+        principal_user_id=principal_id, principal_kind=access["principal_kind"],
+        admin=is_admin))
 
 
 def revoke_provider_connection(credential_reference: str, reason: str,

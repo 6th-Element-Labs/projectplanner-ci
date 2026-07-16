@@ -362,6 +362,9 @@ try:
         ttl_seconds=900,
         actor="co9-test",
         principal=PRINCIPAL,
+        claim_id=bootstrap_claim_id,
+        wake_id=bootstrap_wake["wake_id"],
+        account_affinity_id=bootstrap_binding["account_affinity_id"],
     )
     admitted = store.claim_wake(
         bootstrap_host, bootstrap_wake["wake_id"],
@@ -403,7 +406,8 @@ try:
        "wrong tenant and provider-account affinity fail closed before lease use")
     fake_claim = store.claim_wake(
         bound_host_id, bound["wake_id"], runner_session_id="runner-co9-fake",
-        credential_lease_id="lease-co9-fake", actor="co9-fake", project=PROJECT)
+        credential_lease_id="lease-co9-fake", claim_id=bound_claim_id,
+        work_session_id=bound_work_session, actor="co9-fake", project=PROJECT)
     ok(not fake_claim.get("claimed")
        and "credential_lease_not_available" in set(fake_claim.get("reason_codes") or []),
        "a syntactically valid but nonexistent lease fails authoritative claim admission")
@@ -422,10 +426,14 @@ try:
         ttl_seconds=-1,
         actor="co9-test",
         principal=PRINCIPAL,
+        claim_id=bound_claim_id,
+        wake_id=bound["wake_id"],
+        account_affinity_id=binding["account_affinity_id"],
     )
     expired_claim = store.claim_wake(
         bound_host_id, bound["wake_id"], runner_session_id=expired_runner,
         credential_lease_id=expired_lease["lease_id"],
+        claim_id=bound_claim_id, work_session_id=bound_work_session,
         actor="co9-expired", project=PROJECT)
     ok(not expired_claim.get("claimed")
        and "credential_lease_not_claimable" in set(
@@ -446,10 +454,14 @@ try:
         ttl_seconds=900,
         actor="co9-test",
         principal=PRINCIPAL,
+        claim_id=bound_claim_id,
+        wake_id=bound["wake_id"],
+        account_affinity_id=binding["account_affinity_id"],
     )
     cross_boundary_claim = store.claim_wake(
         bound_host_id, bound["wake_id"], runner_session_id="runner-co9-other",
         credential_lease_id=bound_lease["lease_id"],
+        claim_id=bound_claim_id, work_session_id=bound_work_session,
         actor="co9-cross-boundary", project=PROJECT)
     ok(not cross_boundary_claim.get("claimed")
        and "credential_lease_binding_mismatch" in set(
@@ -470,6 +482,7 @@ try:
     capacity_blocked_claim = store.claim_wake(
         bound_host_id, bound["wake_id"], runner_session_id=bound_runner,
         credential_lease_id=bound_lease["lease_id"],
+        claim_id=bound_claim_id, work_session_id=bound_work_session,
         actor="co9-capacity-blocked", project=PROJECT)
     ok(not capacity_blocked_claim.get("claimed")
        and capacity_blocked_claim.get("reason") == "provider_capacity_denied"
@@ -483,6 +496,7 @@ try:
     bound_claim = store.claim_wake(
         bound_host_id, bound["wake_id"], runner_session_id=bound_runner,
         credential_lease_id=bound_lease["lease_id"],
+        claim_id=bound_claim_id, work_session_id=bound_work_session,
         actor="co9-bound", project=PROJECT)
     ok(bound_claim.get("claimed")
        and bound_claim["wake"]["placement"]["credential_lease_state"] == "issued"
@@ -676,10 +690,14 @@ try:
         ttl_seconds=900,
         actor="co9-test",
         principal=PRINCIPAL,
+        claim_id=bound_claim_id,
+        wake_id=bound["wake_id"],
+        account_affinity_id=binding["account_affinity_id"],
     )
     rebound = store.claim_wake(
         bound_replacement, bound["wake_id"], runner_session_id=replacement_runner,
         credential_lease_id=replacement_lease["lease_id"],
+        claim_id=bound_claim_id, work_session_id=bound_work_session,
         actor="co9-rebound", project=PROJECT)
     ok(rebound.get("claimed")
        and rebound["wake"]["placement"]["credential_rebind_required"] is False

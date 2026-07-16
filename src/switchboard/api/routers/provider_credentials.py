@@ -63,7 +63,8 @@ def create_router(*, resolve_project: ProjectResolver,
         try:
             return commands.enroll_mapping(
                 {**dict(body or {}), "project": project_id}, actor=auth.actor(principal),
-                principal_user_id=principal_id, admin=is_admin, raise_errors=True)
+                principal_user_id=principal_id, principal_kind=access["principal_kind"],
+                admin=is_admin, raise_errors=True)
         except (ValidationError, CredentialVaultError) as exc:
             _raise_http(exc)
 
@@ -114,7 +115,8 @@ def create_router(*, resolve_project: ProjectResolver,
                 {**dict(body or {}), "project": project_id,
                  "credential_reference": credential_reference},
                 actor=auth.actor(principal), principal_user_id=principal_id,
-                admin=is_admin, raise_errors=True)
+                principal_kind=access["principal_kind"], admin=is_admin,
+                raise_errors=True)
         except (ValidationError, CredentialVaultError) as exc:
             _raise_http(exc)
 

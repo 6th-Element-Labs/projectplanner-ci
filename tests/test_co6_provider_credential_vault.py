@@ -44,6 +44,7 @@ from switchboard.storage.repositories.provider_credentials import (  # noqa: E40
     default_provider_credential_repository as repository,
 )
 from switchboard.domain.provider_credentials import CredentialPrincipal  # noqa: E402
+from switchboard.domain.provider_capacity import account_fingerprint  # noqa: E402
 
 
 PROJECT = "switchboard"
@@ -55,6 +56,7 @@ RUNNER_ID = "co6-runner"
 WORK_SESSION_ID = "co6-work-session"
 AGENT_ID = "codex/CO-600"
 PRINCIPAL_ID = "dev-open"
+WAKE_ID = "wake-co6-binding"
 PRINCIPAL = CredentialPrincipal.from_mapping({
     "principal_id": PRINCIPAL_ID,
     "principal_kind": "system",
@@ -62,6 +64,14 @@ PRINCIPAL = CredentialPrincipal.from_mapping({
 })
 passed = failed = 0
 surface_payloads: list[str] = []
+
+
+def exact_lease_binding(provider: str, account: str) -> dict[str, str]:
+    return {
+        "claim_id": CLAIM_ID,
+        "wake_id": WAKE_ID,
+        "account_affinity_id": account_fingerprint(provider, account),
+    }
 
 
 def ok(condition, message):
@@ -157,6 +167,7 @@ try:
         "status": "ready",
         "heartbeat_ttl_s": 3600,
         "metadata": {
+            "wake_id": WAKE_ID,
             "work_session_id": WORK_SESSION_ID,
             "credential_reference": "pending",
             "provider_account_id": "acct-openai-personal",
@@ -167,59 +178,42 @@ try:
 
     missing_key_secret = "co6-missing-key-" + uuid.uuid4().hex
     configured_key = os.environ.pop("PM_PROVIDER_VAULT_KEY")
-    missing_key_response = client.post(
-        f"/api/projects/{PROJECT}/provider-connections",
-        json={
-            "user_id": USER_ID,
-            "provider": "codex",
-            "provider_account_id": "acct-missing-key",
-            "auth_type": "oauth_capsule",
-            "credential": missing_key_secret,
-            "project_allowlist": [PROJECT],
-        },
-    )
+    try:
+        repository.enroll(
+            project=PROJECT, user_id=USER_ID, provider="codex",
+            provider_account_id="acct-missing-key", auth_type="oauth_capsule",
+            credential=missing_key_secret, project_allowlist=[PROJECT], actor="co6-test")
+        missing_key_error = ""
+    except CredentialVaultError as exc:
+        missing_key_error = exc.code
     os.environ["PM_PROVIDER_VAULT_KEY"] = configured_key
-    ok(missing_key_response.status_code == 503
-       and missing_key_secret not in body_text(missing_key_response.json()),
+    ok(missing_key_error == "vault_key_unavailable",
        "missing master key fails closed without persisting or returning the capsule")
 
     github_secret = "co6-github-" + uuid.uuid4().hex
-    github_response = client.post(
-        f"/api/projects/{PROJECT}/provider-connections",
-        json={
-            "user_id": USER_ID,
-            "provider": "codex",
-            "provider_account_id": "acct-github-must-stay-separate",
-            "auth_type": "github_app",
-            "credential": github_secret,
-            "project_allowlist": [PROJECT],
-        },
-    )
-    ok(github_response.status_code == 400
-       and github_response.json().get("detail", {}).get("error")
-       == "github_authorization_separate",
+    try:
+        repository.enroll(
+            project=PROJECT, user_id=USER_ID, provider="codex",
+            provider_account_id="acct-github-must-stay-separate", auth_type="github_app",
+            credential=github_secret, project_allowlist=[PROJECT], actor="co6-test")
+        github_error = ""
+    except CredentialVaultError as exc:
+        github_error = exc.code
+    ok(github_error == "github_authorization_separate",
        "GitHub repository authorization cannot be enrolled as provider authentication")
 
     secret_v1 = "co6-v1-" + uuid.uuid4().hex
-    enroll = client.post(
-        f"/api/projects/{PROJECT}/provider-connections",
-        json={
-            "user_id": USER_ID,
-            "provider": "codex",
-            "provider_account_id": "acct-openai-personal",
-            "auth_type": "oauth_capsule",
-            "credential": secret_v1,
-            "project_allowlist": [PROJECT],
-            "concurrency_policy": {"mode": "exclusive", "max_parallel": 1},
-            "expires_at": time.time() + 3600,
-        },
-    )
-    enrolled = enroll.json()
+    enrolled = repository.enroll(
+        project=PROJECT, user_id=USER_ID, provider="codex",
+        provider_account_id="acct-openai-personal", auth_type="oauth_capsule",
+        credential=secret_v1, project_allowlist=[PROJECT], actor="co6-test",
+        concurrency_policy={"mode": "exclusive", "max_parallel": 1},
+        expires_at=time.time() + 3600)
     reference = enrolled.get("credential_reference")
-    ok(enroll.status_code == 200 and reference
+    ok(bool(reference)
        and enrolled.get("provider") == "openai-codex"
        and enrolled.get("credential_present") is True,
-       "REST enrollment returns only normalized non-secret metadata")
+       "trusted vault enrollment returns only normalized non-secret metadata")
     runner = store.upsert_runner_session({
         "runner_session_id": RUNNER_ID,
         "host_id": HOST_ID,
@@ -230,6 +224,9 @@ try:
         "status": "ready",
         "heartbeat_ttl_s": 3600,
         "metadata": {
+            "wake_id": WAKE_ID,
+            "account_affinity_id": account_fingerprint(
+                "openai-codex", "acct-openai-personal"),
             "work_session_id": WORK_SESSION_ID,
             "credential_reference": reference,
             "provider_account_id": "acct-openai-personal",
@@ -237,7 +234,7 @@ try:
     }, principal_id=PRINCIPAL_ID, actor="co6-test", project=PROJECT)
     ok(secret_v1 not in body_text(enrolled)
        and "encrypted_credential" not in enrolled and "credential_nonce" not in enrolled,
-       "REST enrollment never returns raw or encrypted credential material")
+       "vault enrollment never returns raw or encrypted credential material")
 
     metadata = client.get(
         f"/api/projects/{PROJECT}/provider-connections/{reference}").json()
@@ -261,8 +258,13 @@ try:
     )
     mcp_enrolled = json.loads(mcp_enrolled_raw)
     surface_payloads.append(mcp_enrolled_raw)
-    ok(mcp_enrolled.get("credential_reference") and mcp_secret not in mcp_enrolled_raw,
-       "MCP enrollment response is metadata-only")
+    ok(mcp_enrolled.get("error") == "provider_native_enrollment_required"
+       and mcp_secret not in mcp_enrolled_raw,
+       "MCP refuses raw provider credential enrollment without echoing the secret")
+    cursor_connection = repository.enroll(
+        project=PROJECT, user_id=USER_ID, provider="cursor",
+        provider_account_id="acct-cursor-personal", auth_type="personal_api_key",
+        credential=mcp_secret, project_allowlist=[PROJECT], actor="co6-test")
     listed = client.get(f"/api/projects/{PROJECT}/provider-connections").json()
     ok(len(listed.get("connections") or []) == 2,
        "tenant administrator can list all visible user connections without a user filter")
@@ -277,13 +279,15 @@ try:
         "host_id": HOST_ID,
         "runner_session_id": RUNNER_ID,
         "work_session_id": WORK_SESSION_ID,
+        **exact_lease_binding("openai-codex", "acct-openai-personal"),
         "ttl_seconds": 900,
     }
     store.upsert_runner_session({
         "runner_session_id": RUNNER_ID, "host_id": HOST_ID, "agent_id": AGENT_ID,
         "runtime": "codex", "task_id": TASK_ID, "claim_id": CLAIM_ID,
         "status": "completed", "heartbeat_ttl_s": 3600,
-        "metadata": {"work_session_id": WORK_SESSION_ID,
+        "metadata": {"wake_id": WAKE_ID, "work_session_id": WORK_SESSION_ID,
+                     "account_affinity_id": binding["account_affinity_id"],
                      "credential_reference": reference,
                      "provider_account_id": "acct-openai-personal"},
     }, principal_id=PRINCIPAL_ID, actor="co6-test", project=PROJECT)
@@ -296,7 +300,8 @@ try:
         "runner_session_id": RUNNER_ID, "host_id": HOST_ID, "agent_id": AGENT_ID,
         "runtime": "codex", "task_id": TASK_ID, "claim_id": CLAIM_ID,
         "status": "ready", "heartbeat_ttl_s": 3600,
-        "metadata": {"work_session_id": WORK_SESSION_ID,
+        "metadata": {"wake_id": WAKE_ID, "work_session_id": WORK_SESSION_ID,
+                     "account_affinity_id": binding["account_affinity_id"],
                      "credential_reference": reference,
                      "provider_account_id": "acct-openai-personal"},
     }, principal_id=PRINCIPAL_ID, actor="co6-test", project=PROJECT)
@@ -359,7 +364,8 @@ try:
             provider="openai-codex", provider_account_id="acct-openai-personal",
             task_id=TASK_ID, host_id=HOST_ID, runner_session_id="another-runner",
             work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
-            principal=PRINCIPAL)
+            principal=PRINCIPAL,
+            **exact_lease_binding("openai-codex", "acct-openai-personal"))
 
         concurrency_denied = False
     except CredentialVaultError as exc:
@@ -374,18 +380,22 @@ try:
        and released_rest.json().get("state") == "released",
        "REST preserves the structured system principal through acquire and release")
 
-    mcp_ref = mcp_enrolled["credential_reference"]
+    mcp_ref = cursor_connection["credential_reference"]
     mcp_binding = {
         **binding,
         "credential_reference": mcp_ref,
         "provider": "cursor",
         "provider_account_id": "acct-cursor-personal",
+        "account_affinity_id": account_fingerprint(
+            "cursor", "acct-cursor-personal"),
     }
     store.upsert_runner_session({
         "runner_session_id": RUNNER_ID, "host_id": HOST_ID, "agent_id": AGENT_ID,
         "runtime": "cursor", "task_id": TASK_ID, "claim_id": CLAIM_ID,
         "status": "ready", "heartbeat_ttl_s": 3600,
-        "metadata": {"work_session_id": WORK_SESSION_ID,
+        "metadata": {"wake_id": WAKE_ID, "work_session_id": WORK_SESSION_ID,
+                     "account_affinity_id": account_fingerprint(
+                         "cursor", "acct-cursor-personal"),
                      "credential_reference": mcp_ref,
                      "provider_account_id": "acct-cursor-personal"},
     }, principal_id=PRINCIPAL_ID, actor="co6-test", project=PROJECT)
@@ -403,7 +413,8 @@ try:
         "runner_session_id": RUNNER_ID, "host_id": HOST_ID, "agent_id": AGENT_ID,
         "runtime": "codex", "task_id": TASK_ID, "claim_id": CLAIM_ID,
         "status": "ready", "heartbeat_ttl_s": 3600,
-        "metadata": {"work_session_id": WORK_SESSION_ID,
+        "metadata": {"wake_id": WAKE_ID, "work_session_id": WORK_SESSION_ID,
+                     "account_affinity_id": binding["account_affinity_id"],
                      "credential_reference": reference,
                      "provider_account_id": "acct-openai-personal"},
     }, principal_id=PRINCIPAL_ID, actor="co6-test", project=PROJECT)
@@ -470,6 +481,11 @@ try:
     )
     rotated = json.loads(rotated_raw)
     surface_payloads.append(rotated_raw)
+    ok(rotated.get("error") == "provider_native_enrollment_required",
+       "MCP refuses raw provider credential rotation")
+    rotated = repository.rotate(
+        reference, project=PROJECT, credential=secret_v2, actor="co6-test",
+        expires_at=time.time() + 7200, principal_user_id=USER_ID)
     after_rotation = start_with_provider_credential(
         binding, lease_id=lease_id, actor="co6-test-runner", start_process=starter,
         principal=PRINCIPAL)
@@ -483,13 +499,24 @@ try:
         provider="openai-codex", provider_account_id="acct-openai-personal",
         task_id=TASK_ID, host_id=HOST_ID, runner_session_id=RUNNER_ID,
         work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
-        principal=PRINCIPAL)
+        principal=PRINCIPAL,
+        **exact_lease_binding("openai-codex", "acct-openai-personal"))
     started_v2 = start_with_provider_credential(
         binding, lease_id=lease_v2["lease_id"], actor="co6-test-runner",
         start_process=starter, principal=PRINCIPAL)
     ok(started_v2.get("allowed") is True and starts[-1] == secret_v2,
        "fresh lease materializes only the rotated credential version")
 
+    store.upsert_runner_session({
+        "runner_session_id": RUNNER_ID, "host_id": HOST_ID, "agent_id": AGENT_ID,
+        "runtime": "codex", "task_id": TASK_ID, "claim_id": CLAIM_ID,
+        "status": "ready", "heartbeat_ttl_s": 3600,
+        "control": {"managed_process": True, "runner_kill": True},
+        "metadata": {"wake_id": WAKE_ID, "work_session_id": WORK_SESSION_ID,
+                     "account_affinity_id": binding["account_affinity_id"],
+                     "credential_reference": reference,
+                     "provider_account_id": "acct-openai-personal"},
+    }, principal_id=PRINCIPAL_ID, actor="co6-test", project=PROJECT)
     revoked_response = client.post(
         f"/api/projects/{PROJECT}/provider-connections/{reference}/revoke",
         json={"reason": "operator revocation proof"},
@@ -502,15 +529,27 @@ try:
     ok(revoked_response.status_code == 200
        and revoked.get("lifecycle_state") == "revoked"
        and revoked.get("credential_present") is False
+       and revoked.get("runner_cleanup", {}).get("binding_count") == 1
+       and revoked.get("runner_cleanup", {}).get("requested_count") == 1
        and revoked_launch.get("allowed") is False
        and len(starts) == starts_before_revoked,
-       "revocation erases ciphertext, fences leases, and blocks launch before process start")
+       "revocation erases ciphertext, fences leases, requests runner kill, and blocks launch")
 
     rotate_revoked = client.post(
         f"/api/projects/{PROJECT}/provider-connections/{reference}/rotate",
         json={"credential": "must-not-store-" + uuid.uuid4().hex},
     )
-    ok(rotate_revoked.status_code == 409,
+    try:
+        repository.rotate(
+            reference, project=PROJECT, credential="must-not-store-internal",
+            actor="co6-test", principal_user_id=USER_ID)
+        revoked_rotate_error = ""
+    except CredentialVaultError as exc:
+        revoked_rotate_error = exc.code
+    ok(rotate_revoked.status_code == 400
+       and rotate_revoked.json().get("detail", {}).get("error")
+       == "provider_native_enrollment_required"
+       and revoked_rotate_error == "credential_not_rotatable",
        "revoked credential cannot be silently reactivated by rotation")
 
     deleted_response = client.request(
@@ -543,7 +582,8 @@ try:
             provider_account_id="acct-claude-personal", task_id=TASK_ID,
             host_id=HOST_ID, runner_session_id=RUNNER_ID,
             work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
-            principal=PRINCIPAL)
+            principal=PRINCIPAL,
+            **exact_lease_binding("anthropic-claude", "acct-claude-personal"))
         expired_denied = False
     except CredentialVaultError as exc:
         expired_denied = exc.code == "credential_not_usable"
@@ -569,7 +609,8 @@ try:
         provider_account_id="acct-corrupt-proof", task_id=TASK_ID,
         host_id=HOST_ID, runner_session_id=RUNNER_ID,
         work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
-        principal=PRINCIPAL)
+        principal=PRINCIPAL,
+        **exact_lease_binding("openai-codex", "acct-corrupt-proof"))
     with sqlite3.connect(os.environ["PM_PROJECT_REGISTRY_DB_PATH"]) as c:
         c.execute(
             "UPDATE provider_connections SET encrypted_credential=? "
@@ -604,7 +645,8 @@ try:
         provider_account_id="acct-replay-proof", task_id=TASK_ID,
         host_id=HOST_ID, runner_session_id=RUNNER_ID,
         work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
-        principal=PRINCIPAL)
+        principal=PRINCIPAL,
+        **exact_lease_binding("openai-codex", "acct-replay-proof"))
 
     def materialize_replay():
         try:
@@ -639,7 +681,8 @@ try:
         provider_account_id="acct-start-failure", task_id=TASK_ID,
         host_id=HOST_ID, runner_session_id=RUNNER_ID,
         work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
-        principal=PRINCIPAL)
+        principal=PRINCIPAL,
+        **exact_lease_binding("openai-codex", "acct-start-failure"))
     purges: list[bool] = []
 
     def failed_starter(_credential: str):
@@ -675,7 +718,8 @@ try:
         provider_account_id="acct-activation-binding", task_id=TASK_ID,
         host_id=HOST_ID, runner_session_id=RUNNER_ID,
         work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
-        principal=PRINCIPAL)
+        principal=PRINCIPAL,
+        **exact_lease_binding("openai-codex", "acct-activation-binding"))
     repository.materialize_for_runtime(
         activation_lease["lease_id"], actor="co6-test", principal=PRINCIPAL,
         **{key: activation_binding[key] for key in (
@@ -708,7 +752,8 @@ try:
         provider_account_id="acct-materializing-expiry", task_id=TASK_ID,
         host_id=HOST_ID, runner_session_id=RUNNER_ID,
         work_session_id=WORK_SESSION_ID, ttl_seconds=900, actor="co6-test",
-        principal=PRINCIPAL)
+        principal=PRINCIPAL,
+        **exact_lease_binding("openai-codex", "acct-materializing-expiry"))
     repository.materialize_for_runtime(
         expiry_lease["lease_id"], actor="co6-test", principal=PRINCIPAL,
         **{key: expiry_binding[key] for key in (

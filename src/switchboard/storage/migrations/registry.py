@@ -517,4 +517,52 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         _record(c, provider_capacity_migration)
         newly.append(provider_capacity_migration)
 
+    ownership_migration = "enforce8_execution_connection_ownership"
+    if ownership_migration not in done:
+        c.executescript(
+            """
+            ALTER TABLE provider_connections
+                ADD COLUMN connection_kind TEXT NOT NULL DEFAULT 'personal_subscription';
+            ALTER TABLE provider_connections
+                ADD COLUMN billing_account_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE provider_connections
+                ADD COLUMN budget_policy_json TEXT NOT NULL DEFAULT '{}';
+            ALTER TABLE provider_connections
+                ADD COLUMN host_allowlist_json TEXT NOT NULL DEFAULT '[]';
+            ALTER TABLE provider_connections
+                ADD COLUMN ownership_proof_json TEXT NOT NULL DEFAULT '{}';
+            ALTER TABLE provider_connections
+                ADD COLUMN materialization_mode TEXT NOT NULL DEFAULT 'vault_envelope';
+
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN execution_connection_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN connection_kind TEXT NOT NULL DEFAULT 'personal_subscription';
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN billing_account_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN claim_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN wake_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE provider_credential_leases
+                ADD COLUMN account_affinity_id TEXT NOT NULL DEFAULT '';
+
+            ALTER TABLE provider_credential_events
+                ADD COLUMN execution_connection_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE provider_credential_events
+                ADD COLUMN connection_kind TEXT NOT NULL DEFAULT 'personal_subscription';
+            ALTER TABLE provider_credential_events
+                ADD COLUMN claim_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE provider_credential_events
+                ADD COLUMN wake_id TEXT NOT NULL DEFAULT '';
+            CREATE INDEX IF NOT EXISTS ix_provider_credential_leases_execution_binding
+                ON provider_credential_leases(
+                    execution_connection_id, project_id, task_id, claim_id, work_session_id,
+                    runner_session_id, host_id, wake_id, state
+                );
+            """
+        )
+        _record(c, ownership_migration)
+        newly.append(ownership_migration)
+
     return newly

@@ -3,14 +3,27 @@
   "additionalProperties": false,
   "properties": {
     "credential": {
-      "format": "password",
-      "title": "Credential",
-      "type": "string",
-      "writeOnly": true
+      "anyOf": [
+        {
+          "format": "password",
+          "type": "string",
+          "writeOnly": true
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Credential"
     },
     "credential_reference": {
       "title": "Credential Reference",
       "type": "string"
+    },
+    "enrollment_proof": {
+      "additionalProperties": true,
+      "title": "Enrollment Proof",
+      "type": "object"
     },
     "expires_at": {
       "anyOf": [
@@ -23,6 +36,14 @@
       ],
       "default": null,
       "title": "Expires At"
+    },
+    "host_allowlist": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Host Allowlist",
+      "type": "array"
     },
     "project": {
       "title": "Project",
@@ -41,8 +62,7 @@
   },
   "required": [
     "project",
-    "credential_reference",
-    "credential"
+    "credential_reference"
   ],
   "title": "RotateProviderConnectionCommand",
   "type": "object"

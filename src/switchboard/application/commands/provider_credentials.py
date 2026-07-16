@@ -21,7 +21,9 @@ from switchboard.domain.provider_credentials import (
     CredentialPolicyError,
     CredentialPrincipal,
     auth_host_classes_for_host,
+    normalize_provider,
     provider_auth_decision,
+    require_secret_free_public_payload,
     validate_auth_type,
 )
 from switchboard.storage.repositories.provider_credentials import (
@@ -30,6 +32,7 @@ from switchboard.storage.repositories.provider_credentials import (
     default_provider_credential_repository,
 )
 from switchboard.integrations.worker_credential_envelope import encrypt_for_worker
+from switchboard.domain.provider_capacity import account_fingerprint
 
 
 def _error(exc: BaseException, default_code: str) -> dict[str, Any]:
@@ -149,18 +152,79 @@ def _require_user_authority(requested_user_id: str,
     )
 
 
+def _require_connection_owner(requested_user_id: str,
+                              principal_user_id: str, *, principal_kind: str = "user",
+                              admin: bool = False) -> None:
+    """Enrollment/rotation are owner-only; admin is intentionally not impersonation."""
+    if (str(principal_kind or "").lower() not in {"user", "human"}
+            or not principal_user_id or principal_user_id != requested_user_id):
+        raise CredentialVaultError(
+            "provider_owner_action_required",
+            "only the signed-in owner may enroll or refresh this provider connection",
+            status_code=403,
+        )
+
+
+def _require_provider_native_proof(
+        *, project: str, user_id: str, provider: str, provider_account_id: str,
+        host_allowlist: tuple[str, ...] | list[str], proof: dict[str, Any],
+        host_id: str = "") -> dict[str, Any]:
+    proof_host_id = str(proof.get("host_id") or host_id or "").strip()
+    expected_fingerprint = account_fingerprint(provider, provider_account_id)
+    live_host = next((item for item in store.list_agent_hosts(
+        include_stale=True, project=project)
+        if item.get("host_id") == proof_host_id), None)
+    placement = dict((live_host or {}).get("placement") or
+                     ((live_host or {}).get("capacity") or {}).get("placement") or {})
+    affinities = {
+        str(item or "").strip() for item in
+        (placement.get("account_affinity_ids") or []) if str(item or "").strip()
+    }
+    providers = {
+        str(item or "").strip() for item in
+        (placement.get("providers") or []) if str(item or "").strip()
+    }
+    owners = {
+        str(item or "").strip() for item in
+        (placement.get("owner_user_ids") or []) if str(item or "").strip()
+    }
+    if (not live_host or live_host.get("stale") or live_host.get("status") != "online"
+            or proof.get("verified") is not True
+            or not str(proof.get("proof_id") or "").strip()
+            or str(proof.get("account_fingerprint") or "") != expected_fingerprint
+            or expected_fingerprint not in affinities
+            or user_id not in owners
+            or normalize_provider(provider) not in providers
+            or proof_host_id not in set(host_allowlist)):
+        raise CredentialVaultError(
+            "provider_native_proof_invalid",
+            "provider-native ownership proof does not match a live approved host",
+            status_code=403,
+        )
+    return live_host
+
+
 def enroll_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
                    admin: bool = False,
+                   principal_kind: str = "user",
+                   trusted_provider_native: bool = False,
                    repository: ProviderCredentialRepository = default_provider_credential_repository,
                    raise_errors: bool = False) -> dict[str, Any]:
     try:
         raw = dict(data or {})
+        if not trusted_provider_native:
+            try:
+                require_secret_free_public_payload(raw)
+            except CredentialPolicyError as exc:
+                raise CredentialVaultError(exc.code, exc.message, status_code=400) from exc
         host_id = str(raw.pop("host_id", "") or "").strip()
         # Drop legacy caller taxonomy fields — they are never authority.
         raw.pop("host_class", None)
         raw.pop("auth_host_class", None)
         command = EnrollProviderConnectionCommand.from_mapping(raw)
-        _require_user_authority(command.user_id, principal_user_id, admin=admin)
+        _require_connection_owner(
+            command.user_id, principal_user_id,
+            principal_kind=principal_kind, admin=admin)
         host_classes = _authoritative_host_classes(
             project=command.project, host_id=host_id)
         decision = _require_provider_auth_capability(
@@ -169,18 +233,32 @@ def enroll_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
         concurrency_policy = (
             decision.get("forced_concurrency_policy") or command.concurrency_policy
         )
+        materialization_mode = "vault_envelope"
+        if not trusted_provider_native:
+            proof = dict(command.enrollment_proof or {})
+            _require_provider_native_proof(
+                project=command.project, user_id=command.user_id,
+                provider=command.provider,
+                provider_account_id=command.provider_account_id,
+                host_allowlist=command.host_allowlist, proof=proof, host_id=host_id)
+            materialization_mode = "host_native"
         return repository.enroll(
             project=command.project,
             user_id=command.user_id,
             provider=command.provider,
             provider_account_id=command.provider_account_id,
             auth_type=command.auth_type,
-            credential=command.credential.get_secret_value(),
+            credential=(command.credential.get_secret_value() if command.credential else ""),
             project_allowlist=command.project_allowlist,
             actor=actor,
             expires_at=command.expires_at,
             refresh_state=command.refresh_state,
             concurrency_policy=concurrency_policy,
+            connection_kind=command.connection_kind,
+            billing_account_id=command.billing_account_id,
+            budget_policy=command.budget_policy,
+            host_allowlist=command.host_allowlist,
+            materialization_mode=materialization_mode,
             audit_provenance={"credential_version": 1},
         )
     except (ValidationError, CredentialVaultError) as exc:
@@ -191,10 +269,45 @@ def enroll_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
 
 def rotate_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
                    admin: bool = False,
+                   principal_kind: str = "user",
+                   trusted_provider_native: bool = False,
                    repository: ProviderCredentialRepository = default_provider_credential_repository,
                    raise_errors: bool = False) -> dict[str, Any]:
     try:
+        if not trusted_provider_native:
+            try:
+                require_secret_free_public_payload(dict(data or {}))
+            except CredentialPolicyError as exc:
+                raise CredentialVaultError(exc.code, exc.message, status_code=400) from exc
         command = RotateProviderConnectionCommand.from_mapping(data)
+        metadata = repository.get_metadata(
+            command.credential_reference, project=command.project,
+            principal_user_id=principal_user_id, admin=False)
+        _require_connection_owner(
+            str(metadata.get("user_id") or ""), principal_user_id,
+            principal_kind=principal_kind, admin=admin)
+        if not trusted_provider_native:
+            if metadata.get("materialization_mode") != "host_native":
+                raise CredentialVaultError(
+                    "provider_native_rotation_required",
+                    "public rotation is available only for provider-native connections",
+                    status_code=409,
+                )
+            proof = dict(command.enrollment_proof or {})
+            _require_provider_native_proof(
+                project=command.project, user_id=str(metadata.get("user_id") or ""),
+                provider=str(metadata.get("provider") or ""),
+                provider_account_id=str(metadata.get("provider_account_id") or ""),
+                host_allowlist=command.host_allowlist, proof=proof)
+            return repository.rotate_host_native(
+                command.credential_reference, project=command.project, actor=actor,
+                expires_at=command.expires_at, refresh_state=command.refresh_state,
+                host_allowlist=command.host_allowlist,
+                principal_user_id=principal_user_id,
+            )
+        if command.credential is None:
+            raise CredentialVaultError(
+                "credential_required", "trusted vault rotation requires credential material")
         return repository.rotate(
             command.credential_reference,
             project=command.project,
@@ -203,7 +316,7 @@ def rotate_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
             expires_at=command.expires_at,
             refresh_state=command.refresh_state,
             principal_user_id=principal_user_id,
-            admin=admin,
+            admin=False,
         )
     except (ValidationError, CredentialVaultError) as exc:
         if raise_errors:
@@ -217,7 +330,10 @@ def revoke_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
                    raise_errors: bool = False) -> dict[str, Any]:
     try:
         command = RevokeProviderConnectionCommand.model_validate(data)
-        return repository.revoke(
+        bindings = repository.active_runner_bindings(
+            command.credential_reference, project=command.project,
+            principal_user_id=principal_user_id, admin=admin)
+        result = repository.revoke(
             command.credential_reference,
             project=command.project,
             actor=actor,
@@ -225,6 +341,10 @@ def revoke_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
             principal_user_id=principal_user_id,
             admin=admin,
         )
+        return _request_bound_runner_shutdown(
+            result, bindings=bindings, project=command.project,
+            actor=actor, principal_user_id=principal_user_id,
+            reason="provider_connection_revoked")
     except (ValidationError, CredentialVaultError) as exc:
         if raise_errors:
             raise
@@ -237,7 +357,10 @@ def delete_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
                    raise_errors: bool = False) -> dict[str, Any]:
     try:
         command = DeleteProviderConnectionCommand.model_validate(data)
-        return repository.delete(
+        bindings = repository.active_runner_bindings(
+            command.credential_reference, project=command.project,
+            principal_user_id=principal_user_id, admin=admin)
+        result = repository.delete(
             command.credential_reference,
             project=command.project,
             actor=actor,
@@ -245,10 +368,50 @@ def delete_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
             principal_user_id=principal_user_id,
             admin=admin,
         )
+        return _request_bound_runner_shutdown(
+            result, bindings=bindings, project=command.project,
+            actor=actor, principal_user_id=principal_user_id,
+            reason="provider_connection_deleted")
     except (ValidationError, CredentialVaultError) as exc:
         if raise_errors:
             raise
         return _error(exc, "invalid_provider_deletion")
+
+
+def _request_bound_runner_shutdown(
+        result: dict[str, Any], *, bindings: list[dict[str, str]], project: str,
+        actor: str, principal_user_id: str, reason: str) -> dict[str, Any]:
+    """Request runner termination after the vault has irreversibly fenced every lease."""
+    receipts = []
+    for binding in bindings:
+        runner_session_id = str(binding.get("runner_session_id") or "")
+        if not runner_session_id:
+            continue
+        receipt = store.request_runner_control(
+            runner_session_id, "kill", reason=reason,
+            options={
+                "task_id": binding.get("task_id") or "",
+                "claim_id": binding.get("claim_id") or "",
+                "wake_id": binding.get("wake_id") or "",
+                "credential_lease_id": binding.get("lease_id") or "",
+            },
+            actor=actor, principal_id=principal_user_id, project=project,
+        )
+        receipts.append({
+            "runner_session_id": runner_session_id,
+            "host_id": binding.get("host_id") or "",
+            "requested": bool(receipt.get("requested")),
+            "request_id": receipt.get("request_id"),
+            "reason": receipt.get("reason") or receipt.get("error"),
+        })
+    output = dict(result)
+    output["runner_cleanup"] = {
+        "binding_count": len(bindings),
+        "requested_count": sum(1 for item in receipts if item["requested"]),
+        "pending_count": sum(1 for item in receipts if not item["requested"]),
+        "receipts": receipts,
+    }
+    return output
 
 
 def _validate_runtime_binding(command: AcquireProviderCredentialLeaseCommand,
@@ -344,7 +507,23 @@ def _validate_runtime_binding(command: AcquireProviderCredentialLeaseCommand,
             or (host.get("principal_id") or "") != principal.principal_id):
         raise CredentialVaultError(
             "credential_host_binding_invalid", "credential host binding is invalid", status_code=409)
-    return host
+    wake_id = str(runner_metadata.get("wake_id") or "").strip()
+    if not wake_id:
+        raise CredentialVaultError(
+            "credential_wake_binding_invalid", "credential wake binding is invalid", status_code=409)
+    if command.claim_id and command.claim_id != claim_id:
+        raise CredentialVaultError(
+            "credential_claim_binding_invalid", "credential claim binding is invalid", status_code=409)
+    if command.wake_id and command.wake_id != wake_id:
+        raise CredentialVaultError(
+            "credential_wake_binding_invalid", "credential wake binding is invalid", status_code=409)
+    resolved = dict(host)
+    resolved["_credential_binding"] = {
+        "claim_id": claim_id,
+        "wake_id": wake_id,
+        "account_affinity_id": affinity or command.account_affinity_id,
+    }
+    return resolved
 
 
 def acquire_lease_mapping(data: dict[str, Any], *, actor: str,
@@ -359,6 +538,7 @@ def acquire_lease_mapping(data: dict[str, Any], *, actor: str,
         host = None
         if validate_runtime:
             host = _validate_runtime_binding(command, credential_principal)
+        runtime_binding = (host or {}).get("_credential_binding") or {}
         host_classes = _authoritative_host_classes(
             project=command.project, host_id=command.host_id, host=host)
         _connection_auth_capability(
@@ -377,6 +557,13 @@ def acquire_lease_mapping(data: dict[str, Any], *, actor: str,
             actor=actor,
             principal=credential_principal,
             host_classes=host_classes,
+            claim_id=str(runtime_binding.get("claim_id") or command.claim_id),
+            wake_id=str(runtime_binding.get("wake_id") or command.wake_id),
+            account_affinity_id=str(
+                runtime_binding.get("account_affinity_id") or command.account_affinity_id),
+            execution_connection_id=(
+                command.execution_connection_id or command.credential_reference),
+            expected_tenant_id=command.tenant_id,
         )
     except (ValidationError, CredentialVaultError) as exc:
         if raise_errors:
@@ -485,7 +672,7 @@ def activate_worker_lease_mapping(
 
 def start_with_provider_credential(
         data: dict[str, Any], *, lease_id: str, actor: str,
-        start_process: Callable[[str], Any],
+        start_process: Callable[[str | None], Any],
         principal: dict[str, Any] | CredentialPrincipal,
         purge_runtime: Callable[[], Any] | None = None,
         repository: ProviderCredentialRepository = default_provider_credential_repository,

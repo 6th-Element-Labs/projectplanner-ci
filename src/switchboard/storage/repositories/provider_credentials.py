@@ -8,6 +8,7 @@ named trusted-runtime method, which requires an exact active lease binding.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import time
 import uuid
@@ -23,7 +24,9 @@ from switchboard.domain.provider_credentials import (
     decrypt_credential,
     encrypt_credential,
     normalize_concurrency_policy,
+    normalize_execution_connection_policy,
     normalize_provider,
+    ownership_proof,
     provider_auth_decision,
     validate_auth_type,
 )
@@ -84,6 +87,7 @@ def _safe_event_details(value: Mapping[str, Any] | None) -> dict[str, Any]:
     allowed = {
         "credential_version", "fenced_lease_count", "lifecycle_state",
         "max_parallel", "refresh_state", "revocation_state", "ttl_seconds",
+        "budget_id", "connection_kind", "fallback_enabled", "policy_digest",
     }
     details: dict[str, Any] = {}
     for key, item in dict(value or {}).items():
@@ -157,22 +161,28 @@ class ProviderCredentialRepository:
                   *, actor: str, project: str = "", task_id: str = "",
                   host_id: str = "", runner_session_id: str = "",
                   work_session_id: str = "", lease_id: str = "",
+                  claim_id: str = "", wake_id: str = "",
                   reason_code: str = "", details: Mapping[str, Any] | None = None,
                   now: Optional[float] = None) -> None:
+        source = dict(row)
         c.execute(
             "INSERT INTO provider_credential_events("
             "event_id, credential_reference, tenant_id, user_id, provider, "
             "provider_account_id, event_type, actor, project_id, task_id, host_id, "
-            "runner_session_id, work_session_id, lease_id, reason_code, details_json, created_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "runner_session_id, work_session_id, lease_id, reason_code, details_json, created_at, "
+            "execution_connection_id, connection_kind, claim_id, wake_id"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 f"provider-event-{uuid.uuid4().hex[:16]}",
-                row["credential_reference"], row["tenant_id"], row["user_id"],
-                row["provider"], row["provider_account_id"], event_type,
+                source["credential_reference"], source["tenant_id"], source["user_id"],
+                source["provider"], source["provider_account_id"], event_type,
                 str(actor or "system"), project or None, task_id or None, host_id or None,
                 runner_session_id or None, work_session_id or None, lease_id or None,
                 reason_code or None, json.dumps(_safe_event_details(details), sort_keys=True),
                 time.time() if now is None else now,
+                source["credential_reference"],
+                str(source.get("connection_kind") or "personal_subscription"),
+                claim_id or "", wake_id or "",
             ),
         )
 
@@ -184,13 +194,25 @@ class ProviderCredentialRepository:
         expires_at = item.get("expires_at")
         if state == "active" and expires_at is not None and float(expires_at) <= timestamp:
             state = "expired"
+        billing_id = str(item.get("billing_account_id") or "")
         return {
             "schema": PROVIDER_CONNECTION_SCHEMA,
             "credential_reference": item.get("credential_reference"),
+            "execution_connection_id": item.get("credential_reference"),
             "tenant_id": item.get("tenant_id"),
             "user_id": item.get("user_id"),
             "provider": item.get("provider"),
             "provider_account_id": item.get("provider_account_id"),
+            "connection_kind": item.get("connection_kind") or "personal_subscription",
+            "billing_account_bound": bool(billing_id),
+            "billing_account_fingerprint": (
+                "bill-" + hashlib.sha256(billing_id.encode()).hexdigest()[:16]
+                if billing_id else None
+            ),
+            "budget_policy": _json_object(item.get("budget_policy_json")),
+            "host_allowlist": _json_list(item.get("host_allowlist_json")),
+            "ownership_proof": _json_object(item.get("ownership_proof_json")),
+            "materialization_mode": item.get("materialization_mode") or "vault_envelope",
             "auth_type": item.get("auth_type"),
             "project_allowlist": _json_list(item.get("project_allowlist_json")),
             "lifecycle_state": state,
@@ -226,15 +248,22 @@ class ProviderCredentialRepository:
             "schema": PROVIDER_CREDENTIAL_LEASE_SCHEMA,
             "lease_id": item.get("lease_id"),
             "credential_reference": item.get("credential_reference"),
+            "execution_connection_id": (
+                item.get("execution_connection_id") or item.get("credential_reference")
+            ),
             "tenant_id": item.get("tenant_id"),
             "user_id": item.get("user_id"),
             "provider": item.get("provider"),
             "provider_account_id": item.get("provider_account_id"),
+            "connection_kind": item.get("connection_kind") or "personal_subscription",
             "project": item.get("project_id"),
             "task_id": item.get("task_id"),
             "host_id": item.get("host_id"),
             "runner_session_id": item.get("runner_session_id"),
             "work_session_id": item.get("work_session_id"),
+            "claim_id": item.get("claim_id"),
+            "wake_id": item.get("wake_id"),
+            "account_affinity_id": item.get("account_affinity_id"),
             "credential_version": int(item.get("credential_version") or 0),
             "state": state,
             "acquired_at": item.get("acquired_at"),
@@ -303,6 +332,7 @@ class ProviderCredentialRepository:
                 project=row["project_id"], task_id=row["task_id"], host_id=row["host_id"],
                 runner_session_id=row["runner_session_id"],
                 work_session_id=row["work_session_id"], lease_id=row["lease_id"],
+                claim_id=row["claim_id"], wake_id=row["wake_id"],
                 reason_code="lease_expired", now=now,
             )
         return len(rows)
@@ -327,27 +357,46 @@ class ProviderCredentialRepository:
                 task_id=lease["task_id"], host_id=lease["host_id"],
                 runner_session_id=lease["runner_session_id"],
                 work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                claim_id=lease["claim_id"], wake_id=lease["wake_id"],
                 reason_code=reason, now=now,
             )
         return len(leases)
 
     def enroll(self, *, project: str, user_id: str, provider: str,
-               provider_account_id: str, auth_type: str, credential: str,
+               provider_account_id: str, auth_type: str, credential: str = "",
                project_allowlist: tuple[str, ...] | list[str], actor: str,
                expires_at: float | None = None, refresh_state: str = "not_applicable",
                concurrency_policy: Mapping[str, Any] | None = None,
+               connection_kind: str = "personal_subscription",
+               billing_account_id: str = "",
+               budget_policy: Mapping[str, Any] | None = None,
+               host_allowlist: tuple[str, ...] | list[str] = (),
+               materialization_mode: str = "vault_envelope",
+               enrollment_proof: Mapping[str, Any] | None = None,
                audit_provenance: Mapping[str, Any] | None = None) -> dict[str, Any]:
         self._prepare()
         project = str(project or "").strip().lower()
         user_id = str(user_id or "").strip()
         account_id = str(provider_account_id or "").strip()
         actor = str(actor or "").strip() or "system"
+        materialization = str(materialization_mode or "").strip().lower()
+        if materialization not in {"vault_envelope", "host_native"}:
+            raise CredentialVaultError(
+                "materialization_mode_invalid", "provider materialization mode is invalid")
+        if materialization == "vault_envelope" and not credential:
+            raise CredentialVaultError(
+                "credential_required", "trusted vault enrollment requires credential material")
         if not user_id or not account_id:
             raise CredentialVaultError("provider_identity_required", "user_id and provider_account_id are required")
         try:
             provider_id = normalize_provider(provider)
             auth_type_id = validate_auth_type(auth_type)
             policy = normalize_concurrency_policy(concurrency_policy)
+            execution_policy = normalize_execution_connection_policy(
+                {"budget_policy": dict(budget_policy or {})},
+                connection_kind=connection_kind,
+                billing_account_id=billing_account_id,
+            )
         except CredentialPolicyError as exc:
             raise CredentialVaultError(exc.code, exc.message) from exc
         now = time.time()
@@ -361,27 +410,48 @@ class ProviderCredentialRepository:
                 self._validate_user_tenant_in(c, tenant_id, user_id)
                 allowlist = self._validate_allowlist_in(
                     c, tenant_id, project, list(project_allowlist))
-                sealed = encrypt_credential(
-                    credential,
-                    associated_data=_aad(
-                        reference, tenant_id, user_id, provider_id, account_id, version),
+                sealed = (
+                    encrypt_credential(
+                        credential,
+                        associated_data=_aad(
+                            reference, tenant_id, user_id, provider_id, account_id, version),
+                    ) if materialization == "vault_envelope" else None
                 )
                 c.execute("BEGIN IMMEDIATE")
+                proof = ownership_proof(
+                    tenant_id=tenant_id, user_id=user_id, provider=provider_id,
+                    provider_account_id=account_id, execution_connection_id=reference,
+                    connection_kind=execution_policy["connection_kind"],
+                )
+                hosts = sorted({
+                    str(item or "").strip() for item in host_allowlist
+                    if str(item or "").strip()
+                })
                 c.execute(
                     "INSERT INTO provider_connections("
                     "credential_reference, tenant_id, user_id, provider, provider_account_id, "
                     "auth_type, project_allowlist_json, lifecycle_state, refresh_state, "
                     "revocation_state, concurrency_policy_json, expires_at, credential_version, "
                     "encrypted_credential, credential_nonce, key_id, audit_provenance_json, "
-                    "created_at, created_by, updated_at, updated_by"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "created_at, created_by, updated_at, updated_by, connection_kind, "
+                    "billing_account_id, budget_policy_json, host_allowlist_json, ownership_proof_json, "
+                    "materialization_mode"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         reference, tenant_id, user_id, provider_id, account_id, auth_type_id,
                         json.dumps(allowlist, sort_keys=True), "active", refresh_state or "not_applicable",
                         "not_revoked", json.dumps(policy, sort_keys=True), expires_at, version,
-                        sealed.ciphertext, sealed.nonce, sealed.key_id,
+                        sealed.ciphertext if sealed else None,
+                        sealed.nonce if sealed else None,
+                        sealed.key_id if sealed else None,
                         json.dumps(_safe_event_details(audit_provenance), sort_keys=True),
                         now, actor, now, actor,
+                        execution_policy["connection_kind"],
+                        execution_policy["billing_account_id"],
+                        json.dumps(execution_policy["budget"], sort_keys=True),
+                        json.dumps(hosts, sort_keys=True),
+                        json.dumps(proof, sort_keys=True),
+                        materialization,
                     ),
                 )
                 row = c.execute(
@@ -392,7 +462,9 @@ class ProviderCredentialRepository:
                     c, row, "enrolled", actor=actor, project=project,
                     details={"credential_version": version,
                              "max_parallel": policy["max_parallel"],
-                             "refresh_state": refresh_state or "not_applicable"}, now=now,
+                             "refresh_state": refresh_state or "not_applicable",
+                             "connection_kind": execution_policy["connection_kind"],
+                             "fallback_enabled": False}, now=now,
                 )
                 return self._public_connection(row, now=now)
         except sqlite3.IntegrityError as exc:
@@ -477,6 +549,12 @@ class ProviderCredentialRepository:
             "runner_session_id": item.get("runner_session_id"),
             "work_session_id": item.get("work_session_id"),
             "lease_id": item.get("lease_id"),
+            "execution_connection_id": (
+                item.get("execution_connection_id") or item.get("credential_reference")
+            ),
+            "connection_kind": item.get("connection_kind") or "personal_subscription",
+            "claim_id": item.get("claim_id"),
+            "wake_id": item.get("wake_id"),
             "reason_code": item.get("reason_code"),
             "details": _safe_event_details(_json_object(item.get("details_json"))),
             "created_at": item.get("created_at"),
@@ -541,11 +619,109 @@ class ProviderCredentialRepository:
             raise CredentialVaultError(
                 "vault_key_unavailable", "provider vault key is unavailable", status_code=503) from exc
 
+    def rotate_host_native(
+            self, credential_reference: str, *, project: str, actor: str,
+            host_allowlist: tuple[str, ...] | list[str],
+            expires_at: float | None = None, refresh_state: str = "fresh",
+            principal_user_id: str = "") -> dict[str, Any]:
+        """Refresh redacted host proof and fence the prior provider-native version."""
+        self._prepare()
+        now = time.time()
+        if expires_at is not None and float(expires_at) <= now:
+            raise CredentialVaultError(
+                "credential_expiry_invalid", "credential expiry must be in the future")
+        with _registry_conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (str(credential_reference or "").strip(),),
+            ).fetchone()
+            if not row:
+                raise CredentialVaultError(
+                    "credential_not_available", "provider credential is not available",
+                    status_code=404)
+            self._authorize_connection_in(
+                c, row, project=project, principal_user_id=principal_user_id, admin=False)
+            if (row["lifecycle_state"] in {"revoked", "deleted"}
+                    or row["materialization_mode"] != "host_native"):
+                raise CredentialVaultError(
+                    "credential_not_rotatable",
+                    "provider-native connection is not eligible for refresh", status_code=409)
+            version = int(row["credential_version"] or 0) + 1
+            fenced = self._fence_leases_in(
+                c, row, actor=actor, reason="credential_rotated", now=now)
+            hosts = sorted({
+                str(item or "").strip() for item in host_allowlist
+                if str(item or "").strip()
+            })
+            proof = ownership_proof(
+                tenant_id=row["tenant_id"], user_id=row["user_id"],
+                provider=row["provider"], provider_account_id=row["provider_account_id"],
+                execution_connection_id=row["credential_reference"],
+                connection_kind=row["connection_kind"],
+            )
+            c.execute(
+                "UPDATE provider_connections SET refresh_state=?, expires_at=?, "
+                "credential_version=?, host_allowlist_json=?, ownership_proof_json=?, "
+                "rotated_at=?, rotated_by=?, updated_at=?, updated_by=? "
+                "WHERE credential_reference=?",
+                (
+                    refresh_state or "fresh", expires_at, version,
+                    json.dumps(hosts, sort_keys=True), json.dumps(proof, sort_keys=True),
+                    now, actor, now, actor, row["credential_reference"],
+                ),
+            )
+            current = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (row["credential_reference"],),
+            ).fetchone()
+            self._event_in(
+                c, current, "rotated", actor=actor, project=project,
+                details={"credential_version": version, "fenced_lease_count": fenced,
+                         "refresh_state": refresh_state or "fresh",
+                         "connection_kind": row["connection_kind"]}, now=now,
+            )
+            return self._public_connection(current, now=now)
+
     def revoke(self, credential_reference: str, *, project: str, actor: str,
                reason: str, principal_user_id: str = "", admin: bool = False) -> dict[str, Any]:
         return self._terminal_transition(
             credential_reference, project=project, actor=actor, reason=reason,
             target_state="revoked", principal_user_id=principal_user_id, admin=admin)
+
+    def active_runner_bindings(self, credential_reference: str, *, project: str,
+                               principal_user_id: str = "",
+                               admin: bool = False) -> list[dict[str, str]]:
+        """Return secret-free live runner bindings before a terminal transition."""
+        self._prepare()
+        with _registry_conn() as c:
+            row = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (str(credential_reference or "").strip(),),
+            ).fetchone()
+            if not row:
+                raise CredentialVaultError(
+                    "credential_not_available", "provider credential is not available",
+                    status_code=404)
+            self._authorize_connection_in(
+                c, row, project=project, principal_user_id=principal_user_id, admin=admin)
+            leases = c.execute(
+                "SELECT lease_id, runner_session_id, host_id, task_id, claim_id, wake_id "
+                "FROM provider_credential_leases WHERE credential_reference=? "
+                "AND project_id=? AND state IN ('issued','materializing','materialized','active')",
+                (row["credential_reference"], project),
+            ).fetchall()
+        return [
+            {
+                "lease_id": str(item["lease_id"] or ""),
+                "runner_session_id": str(item["runner_session_id"] or ""),
+                "host_id": str(item["host_id"] or ""),
+                "task_id": str(item["task_id"] or ""),
+                "claim_id": str(item["claim_id"] or ""),
+                "wake_id": str(item["wake_id"] or ""),
+            }
+            for item in leases
+        ]
 
     def delete(self, credential_reference: str, *, project: str, actor: str,
                reason: str, principal_user_id: str = "", admin: bool = False) -> dict[str, Any]:
@@ -622,6 +798,9 @@ class ProviderCredentialRepository:
         host_id: str,
         runner_session_id: str,
         work_session_id: str,
+        claim_id: str,
+        wake_id: str,
+        account_affinity_id: str,
         now: Optional[float] = None,
     ) -> dict[str, Any]:
         """Validate a fresh exact-binding lease at the wake-claim boundary."""
@@ -650,6 +829,9 @@ class ProviderCredentialRepository:
             "host_id": str(host_id or "").strip(),
             "runner_session_id": str(runner_session_id or "").strip(),
             "work_session_id": str(work_session_id or "").strip(),
+            "claim_id": str(claim_id or "").strip(),
+            "wake_id": str(wake_id or "").strip(),
+            "account_affinity_id": str(account_affinity_id or "").strip(),
         }
         if not str(lease_id or "").strip() or not all(expected.values()):
             return decision(False, "binding_incomplete", "credential_lease_binding_incomplete")
@@ -677,7 +859,8 @@ class ProviderCredentialRepository:
                     or connection["revocation_state"] != "not_revoked"
                     or int(connection["credential_version"] or 0)
                     != int(lease["credential_version"] or 0)
-                    or not connection["encrypted_credential"]):
+                    or (not connection["encrypted_credential"]
+                        and connection["materialization_mode"] != "host_native")):
                 return decision(False, "credential_not_usable", "provider_credential_not_active")
             auth_policy = provider_auth_decision(
                 str(connection["provider"] or ""),
@@ -701,6 +884,10 @@ class ProviderCredentialRepository:
                       ttl_seconds: int, actor: str,
                       principal: CredentialPrincipal,
                       host_classes: list[str] | tuple[str, ...] | None = None,
+                      claim_id: str = "", wake_id: str = "",
+                      account_affinity_id: str = "",
+                      execution_connection_id: str = "",
+                      expected_tenant_id: str = "",
                       ) -> dict[str, Any]:
         self._prepare()
         try:
@@ -713,11 +900,14 @@ class ProviderCredentialRepository:
             "host_id": str(host_id or "").strip(),
             "runner_session_id": str(runner_session_id or "").strip(),
             "work_session_id": str(work_session_id or "").strip(),
+            "claim_id": str(claim_id or "").strip(),
+            "wake_id": str(wake_id or "").strip(),
+            "account_affinity_id": str(account_affinity_id or "").strip(),
         }
         if not all(binding.values()):
             raise CredentialVaultError(
                 "credential_binding_incomplete",
-                "project, task, host, runner session, and work session bindings are required",
+                "project, task, claim, work session, runner, host, wake, and account affinity bindings are required",
             )
         now = time.time()
         with _registry_conn() as c:
@@ -733,6 +923,20 @@ class ProviderCredentialRepository:
             self._authorize_connection_in(
                 c, row, project=binding["project_id"], principal_user_id=user_id, admin=False)
             row = self._refresh_expiration_in(c, row, now)
+            connection_id = str(execution_connection_id or credential_reference or "").strip()
+            if connection_id != row["credential_reference"]:
+                raise CredentialVaultError(
+                    "execution_connection_mismatch",
+                    "execution connection binding failed", status_code=403)
+            if expected_tenant_id and expected_tenant_id != row["tenant_id"]:
+                raise CredentialVaultError(
+                    "credential_tenant_binding_mismatch",
+                    "provider credential tenant binding failed", status_code=403)
+            host_allowlist = _json_list(row["host_allowlist_json"])
+            if host_allowlist and binding["host_id"] not in host_allowlist:
+                raise CredentialVaultError(
+                    "credential_host_affinity_denied",
+                    "provider connection is not approved for this host", status_code=403)
             exact_identity = (
                 row["user_id"] == str(user_id or "").strip()
                 and row["provider"] == provider_id
@@ -745,18 +949,21 @@ class ProviderCredentialRepository:
                 )
             if (row["lifecycle_state"] != "active"
                     or row["revocation_state"] != "not_revoked"
-                    or not row["encrypted_credential"]):
+                    or (not row["encrypted_credential"]
+                        and row["materialization_mode"] != "host_native")):
                 raise CredentialVaultError(
                     "credential_not_usable", "provider credential is not active", status_code=409)
             existing = c.execute(
                 "SELECT * FROM provider_credential_leases WHERE credential_reference=? "
                 "AND project_id=? AND task_id=? AND host_id=? AND runner_session_id=? "
-                "AND work_session_id=? AND credential_version=? "
+                "AND work_session_id=? AND claim_id=? AND wake_id=? "
+                "AND account_affinity_id=? AND credential_version=? "
                 "AND state IN ('issued','materializing','active')",
                 (
                     row["credential_reference"], binding["project_id"], binding["task_id"],
                     binding["host_id"], binding["runner_session_id"],
-                    binding["work_session_id"], row["credential_version"],
+                    binding["work_session_id"], binding["claim_id"], binding["wake_id"],
+                    binding["account_affinity_id"], row["credential_version"],
                 ),
             ).fetchone()
             if existing:
@@ -809,8 +1016,10 @@ class ProviderCredentialRepository:
                 "provider_account_id, project_id, task_id, host_id, runner_session_id, "
                 "work_session_id, credential_version, state, acquired_at, acquired_by, expires_at, "
                 "acquiring_principal_id, acquiring_principal_kind, "
-                "acquiring_principal_scopes_json, acquiring_principal_admin"
-                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "acquiring_principal_scopes_json, acquiring_principal_admin, "
+                "execution_connection_id, connection_kind, billing_account_id, claim_id, "
+                "wake_id, account_affinity_id"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     lease_id, row["credential_reference"], row["tenant_id"], row["user_id"],
                     row["provider"], row["provider_account_id"], binding["project_id"],
@@ -818,6 +1027,8 @@ class ProviderCredentialRepository:
                     binding["work_session_id"], row["credential_version"], "issued", now,
                     actor, expires_at, principal.principal_id, principal.principal_kind,
                     json.dumps(list(principal.scopes), sort_keys=True), int(principal.admin),
+                    connection_id, row["connection_kind"], row["billing_account_id"],
+                    binding["claim_id"], binding["wake_id"], binding["account_affinity_id"],
                 ),
             )
             lease = c.execute(
@@ -828,8 +1039,10 @@ class ProviderCredentialRepository:
                 task_id=binding["task_id"], host_id=binding["host_id"],
                 runner_session_id=binding["runner_session_id"],
                 work_session_id=binding["work_session_id"], lease_id=lease_id,
+                claim_id=binding["claim_id"], wake_id=binding["wake_id"],
                 details={"credential_version": row["credential_version"],
-                         "ttl_seconds": int(ttl_seconds)}, now=now,
+                         "ttl_seconds": int(ttl_seconds),
+                         "connection_kind": row["connection_kind"]}, now=now,
             )
             return self._public_lease(lease, now=now)
 
@@ -903,6 +1116,7 @@ class ProviderCredentialRepository:
                     task_id=lease["task_id"], host_id=lease["host_id"],
                     runner_session_id=lease["runner_session_id"],
                     work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                    claim_id=lease["claim_id"], wake_id=lease["wake_id"],
                     reason_code=reason or "released", now=now,
                 )
             current = c.execute(
@@ -915,11 +1129,13 @@ class ProviderCredentialRepository:
                                 provider: str, provider_account_id: str, task_id: str,
                                 host_id: str, runner_session_id: str,
                                 work_session_id: str, actor: str,
-                                principal: CredentialPrincipal) -> str:
-        """Trusted bridge only: validate every binding, then decrypt in process memory.
+                                principal: CredentialPrincipal) -> str | None:
+        """Trusted bridge only: validate every binding, then prepare one runtime lane.
 
         This method is deliberately not registered as a REST or MCP tool. Callers must write
-        the returned value directly into an isolated runtime home and must never serialize it.
+        a returned vault credential directly into an isolated runtime home and must never
+        serialize it. Host-native connections return ``None`` after the same exact binding
+        and single-consumer transition; their provider login remains on the approved host.
         """
         self._prepare()
         try:
@@ -976,10 +1192,14 @@ class ProviderCredentialRepository:
                 c, row, project=expected["project_id"],
                 principal_user_id=expected["user_id"], admin=False)
             row = self._refresh_expiration_in(c, row, now)
+            materialization_mode = str(
+                row["materialization_mode"] or "vault_envelope")
             if (row["lifecycle_state"] != "active"
                     or row["revocation_state"] != "not_revoked"
                     or int(row["credential_version"]) != int(lease["credential_version"])
-                    or not row["encrypted_credential"] or not row["credential_nonce"]):
+                    or (materialization_mode != "host_native"
+                        and (not row["encrypted_credential"]
+                             or not row["credential_nonce"]))):
                 raise CredentialVaultError(
                     "credential_not_usable", "provider credential is not active", status_code=409)
             changed = c.execute(
@@ -993,6 +1213,17 @@ class ProviderCredentialRepository:
                     "provider credential lease cannot be materialized again",
                     status_code=409,
                 )
+            if materialization_mode == "host_native":
+                self._event_in(
+                    c, row, "host_native_ready", actor=actor,
+                    project=lease["project_id"], task_id=lease["task_id"],
+                    host_id=lease["host_id"], runner_session_id=lease["runner_session_id"],
+                    work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                    claim_id=lease["claim_id"], wake_id=lease["wake_id"],
+                    details={"credential_version": row["credential_version"],
+                             "connection_kind": row["connection_kind"]}, now=now,
+                )
+                return None
             try:
                 credential = decrypt_credential(
                     row["encrypted_credential"], row["credential_nonce"], key_id=row["key_id"],
@@ -1012,6 +1243,7 @@ class ProviderCredentialRepository:
                     project=lease["project_id"], task_id=lease["task_id"],
                     host_id=lease["host_id"], runner_session_id=lease["runner_session_id"],
                     work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                    claim_id=lease["claim_id"], wake_id=lease["wake_id"],
                     reason_code="vault_decryption_failed", now=now,
                 )
                 # Persist the fail-closed fence before surfacing the error. Letting the
@@ -1028,6 +1260,7 @@ class ProviderCredentialRepository:
                 task_id=lease["task_id"], host_id=lease["host_id"],
                 runner_session_id=lease["runner_session_id"],
                 work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                claim_id=lease["claim_id"], wake_id=lease["wake_id"],
                 details={"credential_version": row["credential_version"]}, now=now,
             )
             return credential
@@ -1106,6 +1339,7 @@ class ProviderCredentialRepository:
                 task_id=lease["task_id"], host_id=lease["host_id"],
                 runner_session_id=lease["runner_session_id"],
                 work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                claim_id=lease["claim_id"], wake_id=lease["wake_id"],
                 now=now,
             )
             current = c.execute(
@@ -1230,6 +1464,7 @@ class ProviderCredentialRepository:
                 project=lease["project_id"], task_id=lease["task_id"],
                 host_id=lease["host_id"], runner_session_id=lease["runner_session_id"],
                 work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                claim_id=lease["claim_id"], wake_id=lease["wake_id"],
                 details={"credential_version": new_version, "refresh_state": "fresh"},
                 now=now,
             )
@@ -1279,6 +1514,7 @@ class ProviderCredentialRepository:
                     task_id=lease["task_id"], host_id=lease["host_id"],
                     runner_session_id=lease["runner_session_id"],
                     work_session_id=lease["work_session_id"], lease_id=lease["lease_id"],
+                    claim_id=lease["claim_id"], wake_id=lease["wake_id"],
                     reason_code=reason or "process_start_failed", now=now,
                 )
             current = c.execute(

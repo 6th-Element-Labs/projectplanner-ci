@@ -16,6 +16,17 @@ from .policy import (
     normalize_provider,
     validate_auth_type,
 )
+from .ownership import (
+    CONNECTION_KINDS,
+    EXECUTION_CONNECTION_POLICY_SCHEMA,
+    FORBIDDEN_PUBLIC_SECRET_FIELDS,
+    PROVIDER_OWNERSHIP_PROOF_SCHEMA,
+    forbidden_public_secret_paths,
+    normalize_execution_connection_policy,
+    ownership_proof,
+    policy_digest,
+    require_secret_free_public_payload,
+)
 
 __all__ = [
     "CredentialPolicyError",
@@ -33,4 +44,13 @@ __all__ = [
     "list_provider_auth_capabilities",
     "provider_auth_decision",
     "validate_auth_type",
+    "CONNECTION_KINDS",
+    "EXECUTION_CONNECTION_POLICY_SCHEMA",
+    "FORBIDDEN_PUBLIC_SECRET_FIELDS",
+    "PROVIDER_OWNERSHIP_PROOF_SCHEMA",
+    "forbidden_public_secret_paths",
+    "normalize_execution_connection_policy",
+    "ownership_proof",
+    "policy_digest",
+    "require_secret_free_public_payload",
 ]

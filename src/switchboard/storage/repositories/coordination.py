@@ -153,7 +153,8 @@ def _provider_capacity_decision(
 
 def _credential_lease_decision(
     policy: Dict[str, Any], *, task_id: str, project: str, host_id: str,
-    runner_session_id: str, credential_lease_id: str,
+    runner_session_id: str, credential_lease_id: str, claim_id: str,
+    wake_id: str,
 ) -> Dict[str, Any]:
     binding = dict(policy.get("account_binding") or {})
     return default_provider_credential_repository.lease_admission_decision(
@@ -167,6 +168,9 @@ def _credential_lease_decision(
         host_id=host_id,
         runner_session_id=runner_session_id,
         work_session_id=binding.get("work_session_id") or "",
+        claim_id=claim_id,
+        wake_id=wake_id,
+        account_affinity_id=binding.get("account_affinity_id") or "",
     )
 
 
@@ -365,7 +369,7 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
 def _credential_admission_ready(
     policy: Dict[str, Any], *, task_id: str, project: str, host_id: str,
     runner_session_id: str, credential_lease_id: str, claim_id: str,
-    work_session_id: str,
+    work_session_id: str, wake_id: str,
 ) -> tuple[Dict[str, Any], Dict[str, Any], str]:
     """Validate the post-claim BYOA binding and return updated policy/capacity.
 
@@ -373,7 +377,7 @@ def _credential_admission_ready(
     or lease. Those values are accepted only from the selected worker after its
     local worktree has been persisted and the exact task claim is active.
     """
-    if not all((runner_session_id, credential_lease_id, claim_id, work_session_id)):
+    if not all((runner_session_id, credential_lease_id, claim_id, work_session_id, wake_id)):
         return policy, {}, "credential_execution_binding_incomplete"
     updated = dict(policy)
     binding = dict(updated.get("account_binding") or {})
@@ -388,6 +392,8 @@ def _credential_admission_ready(
         updated, task_id=task_id, project=project, host_id=host_id,
         runner_session_id=runner_session_id,
         credential_lease_id=credential_lease_id,
+        claim_id=claim_id,
+        wake_id=wake_id,
     )
     if not lease_decision.get("allowed"):
         return policy, {}, str(lease_decision.get("reason_code") or "credential_lease_denied")
@@ -436,6 +442,7 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                     claim_id=str(claim_id or binding.get("claim_id") or "").strip(),
                     work_session_id=str(
                         work_session_id or binding.get("work_session_id") or "").strip(),
+                    wake_id=wake_id,
                 )
                 if error:
                     reason = ("provider_capacity_denied" if capacity else
@@ -511,6 +518,7 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                         claim_id=str(claim_id or binding.get("claim_id") or "").strip(),
                         work_session_id=str(
                             work_session_id or binding.get("work_session_id") or "").strip(),
+                        wake_id=wake_id,
                     )
                     if error:
                         reason = ("provider_capacity_denied" if capacity else

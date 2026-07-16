@@ -526,7 +526,9 @@ class ProviderCapacityRepository:
             revocation = str(connection.get("revocation_state") or "")
             if lifecycle == "revoked" or revocation == "revoked":
                 return decision(False, "revoked", "provider_credential_revoked")
-            if lifecycle != "active" or not connection.get("encrypted_credential"):
+            if (lifecycle != "active"
+                    or (not connection.get("encrypted_credential")
+                        and connection.get("materialization_mode") != "host_native")):
                 return decision(False, "reauthentication_required", "provider_credential_not_active")
 
             account = c.execute(

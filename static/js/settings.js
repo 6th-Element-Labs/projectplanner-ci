@@ -334,12 +334,12 @@
                 this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-auth-capabilities`),
             ]);
             const conns = data.error ? [] : (data.connections || data.provider_connections || []);
-            const rows = conns.length ? conns.map((c) => `<div class="list-group-item px-0"><div class="row align-items-center">
-                <div class="col-auto"><span class="status-dot ${c.status === 'active' ? 'status-dot-animated bg-green' : 'bg-secondary'}"></span></div>
+            const rows = conns.length ? conns.map((c) => { const state = c.lifecycle_state || c.status || 'unknown'; const proof = c.ownership_proof || {}; return `<div class="list-group-item px-0"><div class="row align-items-center">
+                <div class="col-auto"><span class="status-dot ${state === 'active' ? 'status-dot-animated bg-green' : 'bg-secondary'}"></span></div>
                 <div class="col"><div class="fw-semibold">${this.esc(c.provider || c.provider_id || 'provider')}</div>
-                <div class="text-secondary small"><code>${this.esc(c.connection_id || c.id || '—')}</code></div></div>
-                <div class="col-auto"><span class="badge ${c.status === 'active' ? 'bg-green-lt' : 'bg-secondary-lt'}">${this.esc(c.status || 'unknown')}</span></div>
-                </div></div>`).join('') : '<div class="text-secondary small">No provider connections are enrolled for this project.</div>';
+                <div class="text-secondary small"><code>${this.esc(proof.account_fingerprint || 'unverified')}</code> · ${this.esc((c.connection_kind || 'personal_subscription').replace(/_/g, ' '))}</div></div>
+                <div class="col-auto"><span class="badge ${state === 'active' ? 'bg-green-lt' : 'bg-secondary-lt'}">${this.esc(state)}</span></div>
+                </div></div>`; }).join('') : '<div class="text-secondary small">No provider connections are enrolled for this project.</div>';
             const connectionBody = data.error
                 ? `<div class="alert alert-danger mb-0" role="alert">${this.esc(data.error)}</div>`
                 : `<div class="list-group list-group-flush">${rows}</div>`;
@@ -369,7 +369,7 @@
                     <h4 class="mb-2">Authentication policy</h4>${policyBody}
                     <div class="small text-secondary mt-2 mb-4">LiteLLM personal-subscription broker: <strong>${broker.litellm === false ? 'disabled' : 'unknown'}</strong>. LiteLLM is eligible only for explicit API/paygo paths.</div>
                     <h4 class="mb-2">Enrolled connections</h4>
-                    <div class="alert alert-secondary py-2 px-3 small" role="note"><i class="ti ti-tool me-1" aria-hidden="true"></i>Enroll, verify, bind, and revoke land in <strong>UI-19</strong>. This section currently reads connection state.</div>
+                    <div class="alert alert-secondary py-2 px-3 small" role="note"><i class="ti ti-shield-lock me-1" aria-hidden="true"></i>Enrollment is provider-native and owner-bound. This screen never accepts provider passwords, tokens, cookies, auth capsules, or browser profiles; it displays only redacted host-verified proof.</div>
                     ${connectionBody}`,
             });
         },

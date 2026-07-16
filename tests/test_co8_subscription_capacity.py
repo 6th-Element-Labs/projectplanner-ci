@@ -27,6 +27,7 @@ os.environ["PM_PROVIDER_VAULT_KEY_ID"] = "co8-test:v1"
 import store  # noqa: E402
 from switchboard.domain.provider_capacity import (  # noqa: E402
     CAPACITY_STATES,
+    account_fingerprint,
     normalize_provider_response,
 )
 from switchboard.domain.provider_credentials import CredentialPrincipal  # noqa: E402
@@ -48,6 +49,7 @@ AGENT_ID = "codex/CO-8"
 HOST_ID = "co8-host"
 RUNNER_ID = "co8-runner"
 WORK_SESSION_ID = "co8-work-session"
+WAKE_ID = "wake-co8-binding"
 BASE = time.time()
 PRINCIPAL = CredentialPrincipal.from_mapping({
     "principal_id": "co8-system",
@@ -191,7 +193,7 @@ try:
         "claim_id": CLAIM_ID,
         "status": "ready",
         "heartbeat_ttl_s": 3600,
-        "metadata": {"work_session_id": WORK_SESSION_ID},
+        "metadata": {"work_session_id": WORK_SESSION_ID, "wake_id": WAKE_ID},
     }, principal_id=PRINCIPAL.principal_id, actor="co8-test", project=PROJECT)
     ok(bool(TASK_ID and CLAIM_ID), "created exact task, claim, Work Session, runner, and host bindings")
 
@@ -413,6 +415,9 @@ try:
         ttl_seconds=900,
         actor="co8-test",
         principal=PRINCIPAL,
+        claim_id=CLAIM_ID,
+        wake_id=WAKE_ID,
+        account_affinity_id=account_fingerprint("codex", "co8-personal"),
     )
     concurrency = repository.admission_decision(
         personal_binding,

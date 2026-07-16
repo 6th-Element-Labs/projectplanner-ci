@@ -28,6 +28,7 @@ os.environ["PM_PROVIDER_VAULT_KEY"] = base64.urlsafe_b64encode(b"R" * 32).decode
 os.environ["PM_PROVIDER_VAULT_KEY_ID"] = "co7-test:v1"
 
 import store  # noqa: E402
+from switchboard.domain.provider_capacity import account_fingerprint  # noqa: E402
 from switchboard.domain.provider_credentials import CredentialPrincipal  # noqa: E402
 from switchboard.integrations.provider_runtime_auth import ProviderRuntimeAuth  # noqa: E402
 from switchboard.storage.repositories.provider_credentials import (  # noqa: E402
@@ -42,6 +43,7 @@ AGENT_ID = "codex/CO-700"
 HOST_ID = "co7-host"
 RUNNER_ID = "co7-runner"
 WORK_SESSION_ID = "co7-work-session"
+WAKE_ID = "wake-co7-binding"
 PRINCIPAL_ID = "dev-open"
 PRINCIPAL = CredentialPrincipal.from_mapping({
     "principal_id": PRINCIPAL_ID,
@@ -323,7 +325,9 @@ try:
             "status": "ready",
             "heartbeat_ttl_s": 3600,
             "metadata": {
+                "wake_id": WAKE_ID,
                 "work_session_id": WORK_SESSION_ID,
+                "account_affinity_id": account_fingerprint(normalized, account),
                 "credential_reference": connection["credential_reference"],
                 "provider_account_id": account,
             },
@@ -338,6 +342,9 @@ try:
             "host_id": HOST_ID,
             "runner_session_id": RUNNER_ID,
             "work_session_id": WORK_SESSION_ID,
+            "claim_id": CLAIM_ID,
+            "wake_id": WAKE_ID,
+            "account_affinity_id": account_fingerprint(normalized, account),
             "ttl_seconds": 900,
         }
         lease = repository.acquire_lease(
@@ -353,6 +360,9 @@ try:
             ttl_seconds=900,
             actor="co7-test",
             principal=PRINCIPAL,
+            claim_id=CLAIM_ID,
+            wake_id=WAKE_ID,
+            account_affinity_id=account_fingerprint(normalized, account),
         )
         return connection, binding, lease, credential
 
@@ -397,7 +407,10 @@ try:
         provider_account_id="codex-personal-account", task_id=TASK_ID,
         host_id=HOST_ID, runner_session_id=RUNNER_ID,
         work_session_id=WORK_SESSION_ID, ttl_seconds=900,
-        actor="co7-test", principal=PRINCIPAL)
+        actor="co7-test", principal=PRINCIPAL,
+        claim_id=CLAIM_ID, wake_id=WAKE_ID,
+        account_affinity_id=account_fingerprint(
+            "openai-codex", "codex-personal-account"))
     recovered = repository.materialize_for_runtime(
         fresh_codex_lease["lease_id"], actor="co7-recovery", principal=PRINCIPAL,
         **{key: codex_binding[key] for key in (
@@ -440,6 +453,9 @@ try:
             host_id=HOST_ID, runner_session_id=RUNNER_ID,
             work_session_id=WORK_SESSION_ID, ttl_seconds=900,
             actor="co7-test", principal=PRINCIPAL,
+            claim_id=CLAIM_ID, wake_id=WAKE_ID,
+            account_affinity_id=account_fingerprint(
+                "anthropic-claude", "claude-personal-account"),
         )
         ok(False, "Claude subscription lease acquire must fail closed under CO-15")
     except CredentialVaultError as exc:

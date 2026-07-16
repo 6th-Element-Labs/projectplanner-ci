@@ -507,13 +507,21 @@ class ProviderRuntimeAuth:
                 state["root"] = None
             receipt["residue_purged"] = not bool(root and Path(root).exists())
 
-        def starter(credential: str) -> dict[str, Any]:
+        def starter(credential: str | None) -> dict[str, Any]:
             if credential and any(credential in item for item in lane_command):
                 return {"started": False, "status": "secret_in_argv_denied"}
-            root = self._runtime_root(provider)
-            state["root"] = root
-            env, materialized = self._materialize(
-                provider, credential, root, auth_mode=auth_mode)
+            if credential is None:
+                env = {
+                    str(key): str(value)
+                    for key, value in self.base_environment.items()
+                    if str(key) not in _PROVIDER_SECRET_KEYS
+                }
+                materialized = {}
+            else:
+                root = self._runtime_root(provider)
+                state["root"] = root
+                env, materialized = self._materialize(
+                    provider, credential, root, auth_mode=auth_mode)
             state["materialized"] = materialized
             preflight = self._preflight(
                 provider, env, cwd, expected_auth_mode=auth_mode)
@@ -576,17 +584,25 @@ class ProviderRuntimeAuth:
                     if (provider == "openai-codex"
                             and auth_mode == "chatgpt_subscription" and exit_code == 0):
                         materialized = state.get("materialized") or {}
-                        capsule = self._read_secure_codex_capsule(materialized["auth_path"])
-                        digest = hashlib.sha256(capsule.encode()).hexdigest()
-                        if digest != materialized.get("initial_digest"):
-                            receipt["codex_writeback"] = self.repository.writeback_active_codex_capsule(
-                                lease_id,
-                                credential=capsule,
-                                actor=actor,
-                                principal=credential_principal,
-                            )
+                        auth_path = materialized.get("auth_path")
+                        if not auth_path:
+                            receipt["codex_writeback"] = {
+                                "written_back": False, "reason": "host_native"}
                         else:
-                            receipt["codex_writeback"] = {"written_back": False, "reason": "unchanged"}
+                            capsule = self._read_secure_codex_capsule(auth_path)
+                            digest = hashlib.sha256(capsule.encode()).hexdigest()
+                            if digest != materialized.get("initial_digest"):
+                                receipt["codex_writeback"] = (
+                                    self.repository.writeback_active_codex_capsule(
+                                        lease_id,
+                                        credential=capsule,
+                                        actor=actor,
+                                        principal=credential_principal,
+                                    )
+                                )
+                            else:
+                                receipt["codex_writeback"] = {
+                                    "written_back": False, "reason": "unchanged"}
         except (CredentialVaultError, OSError, subprocess.SubprocessError):
             receipt["status"] = "failed"
             receipt["error_code"] = "provider_runtime_failed"

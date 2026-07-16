@@ -59,17 +59,22 @@ class EnrollProviderConnectionCommand(VersionedModel):
     provider: str
     provider_account_id: str
     auth_type: str
-    credential: SecretStr
+    credential: SecretStr | None = None
     project_allowlist: tuple[str, ...]
     expires_at: float | None = None
     refresh_state: str = "not_applicable"
     concurrency_policy: dict[str, Any] = Field(
         default_factory=lambda: {"mode": "exclusive", "max_parallel": 1}
     )
+    connection_kind: str = "personal_subscription"
+    billing_account_id: str = ""
+    budget_policy: dict[str, Any] = Field(default_factory=dict)
+    host_allowlist: tuple[str, ...] = ()
+    enrollment_proof: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator(
         "project", "user_id", "provider", "provider_account_id", "auth_type",
-        "refresh_state", mode="before",
+        "refresh_state", "connection_kind", "billing_account_id", mode="before",
     )
     @classmethod
     def _strip_text(cls, value: Any) -> str:
@@ -90,6 +95,19 @@ class EnrollProviderConnectionCommand(VersionedModel):
     def _policy(cls, value: Any) -> dict[str, Any]:
         return _parse_object(value, "concurrency_policy")
 
+    @field_validator("budget_policy", "enrollment_proof", mode="before")
+    @classmethod
+    def _objects(cls, value: Any, info) -> dict[str, Any]:
+        return _parse_object(value, info.field_name)
+
+    @field_validator("host_allowlist", mode="before")
+    @classmethod
+    def _hosts(cls, value: Any) -> tuple[str, ...]:
+        values = value if isinstance(value, (list, tuple, set)) else str(value or "").split(",")
+        return tuple(dict.fromkeys(
+            str(item or "").strip() for item in values if str(item or "").strip()
+        ))
+
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "EnrollProviderConnectionCommand":
         data = dict(value or {})
@@ -105,7 +123,9 @@ class RotateProviderConnectionCommand(VersionedModel):
     schema_id: str = Field(default=ROTATE_PROVIDER_CONNECTION_SCHEMA, alias="schema")
     project: str
     credential_reference: str
-    credential: SecretStr
+    credential: SecretStr | None = None
+    host_allowlist: tuple[str, ...] = ()
+    enrollment_proof: dict[str, Any] = Field(default_factory=dict)
     expires_at: float | None = None
     refresh_state: str = "fresh"
 
@@ -113,6 +133,19 @@ class RotateProviderConnectionCommand(VersionedModel):
     @classmethod
     def _strip_text(cls, value: Any) -> str:
         return str(value or "").strip()
+
+    @field_validator("enrollment_proof", mode="before")
+    @classmethod
+    def _proof(cls, value: Any) -> dict[str, Any]:
+        return _parse_object(value, "enrollment_proof")
+
+    @field_validator("host_allowlist", mode="before")
+    @classmethod
+    def _hosts(cls, value: Any) -> tuple[str, ...]:
+        values = value if isinstance(value, (list, tuple, set)) else str(value or "").split(",")
+        return tuple(dict.fromkeys(
+            str(item or "").strip() for item in values if str(item or "").strip()
+        ))
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "RotateProviderConnectionCommand":
@@ -157,12 +190,17 @@ class AcquireProviderCredentialLeaseCommand(VersionedModel):
     runner_session_id: str
     work_session_id: str
     account_affinity_id: str = ""
+    tenant_id: str = ""
+    execution_connection_id: str = ""
+    claim_id: str = ""
+    wake_id: str = ""
     ttl_seconds: int = Field(default=900, ge=30, le=3600)
 
     @field_validator(
         "project", "credential_reference", "user_id", "provider",
         "provider_account_id", "task_id", "host_id", "runner_session_id",
-        "work_session_id", "account_affinity_id", mode="before",
+        "work_session_id", "account_affinity_id", "tenant_id",
+        "execution_connection_id", "claim_id", "wake_id", mode="before",
     )
     @classmethod
     def _strip_text(cls, value: Any) -> str:

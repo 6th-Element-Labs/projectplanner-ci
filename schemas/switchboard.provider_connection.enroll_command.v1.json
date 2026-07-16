@@ -7,16 +7,44 @@
       "title": "Auth Type",
       "type": "string"
     },
+    "billing_account_id": {
+      "default": "",
+      "title": "Billing Account Id",
+      "type": "string"
+    },
+    "budget_policy": {
+      "additionalProperties": true,
+      "title": "Budget Policy",
+      "type": "object"
+    },
     "concurrency_policy": {
       "additionalProperties": true,
       "title": "Concurrency Policy",
       "type": "object"
     },
+    "connection_kind": {
+      "default": "personal_subscription",
+      "title": "Connection Kind",
+      "type": "string"
+    },
     "credential": {
-      "format": "password",
-      "title": "Credential",
-      "type": "string",
-      "writeOnly": true
+      "anyOf": [
+        {
+          "format": "password",
+          "type": "string",
+          "writeOnly": true
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Credential"
+    },
+    "enrollment_proof": {
+      "additionalProperties": true,
+      "title": "Enrollment Proof",
+      "type": "object"
     },
     "expires_at": {
       "anyOf": [
@@ -29,6 +57,14 @@
       ],
       "default": null,
       "title": "Expires At"
+    },
+    "host_allowlist": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Host Allowlist",
+      "type": "array"
     },
     "project": {
       "title": "Project",
@@ -70,7 +106,6 @@
     "provider",
     "provider_account_id",
     "auth_type",
-    "credential",
     "project_allowlist"
   ],
   "title": "EnrollProviderConnectionCommand",

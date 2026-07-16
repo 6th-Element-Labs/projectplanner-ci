@@ -42,6 +42,8 @@ command = AcquireProviderCredentialLeaseCommand.model_validate({
     "host_id": HOST_ID,
     "runner_session_id": RUNNER_ID,
     "work_session_id": WORK_SESSION_ID,
+    "claim_id": CLAIM_ID,
+    "wake_id": "wake-coord25",
     "account_affinity_id": AFFINITY_ID,
 })
 principal = CredentialPrincipal.from_mapping({
@@ -76,6 +78,7 @@ runner = {
         "expires_at": time.time() + 600,
     },
     "metadata": {
+        "wake_id": "wake-coord25",
         "work_session_id": WORK_SESSION_ID,
         "account_affinity_id": AFFINITY_ID,
     },
