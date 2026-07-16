@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from switchboard.application.contracts.agents import (
     BeginHostEnrollmentCommand,
     CompleteHostEnrollmentCommand,
+    FinalizeHostEnrollmentCommand,
     RevokeHostIdentityCommand,
     RotateHostIdentityCommand,
 )
@@ -15,6 +16,7 @@ from switchboard.contracts import validation_error_message
 from switchboard.storage.repositories.agent_host_enrollments import (
     begin_agent_host_enrollment,
     complete_agent_host_enrollment,
+    finalize_agent_host_enrollment,
     revoke_agent_host_identity,
     rotate_agent_host_identity,
 )
@@ -62,6 +64,21 @@ def complete_mapping_result(data: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
+def finalize_mapping_result(data: Mapping[str, Any], *, actor: str,
+                            principal_id: str) -> dict[str, Any]:
+    try:
+        command = FinalizeHostEnrollmentCommand.model_validate(dict(data or {}))
+    except ValidationError as exc:
+        return _validation_error(exc)
+    return finalize_agent_host_enrollment(
+        enrollment_id=command.enrollment_id,
+        host_id=command.host_id,
+        principal_id=principal_id,
+        actor=actor,
+        project=command.project,
+    )
+
+
 def rotate_mapping_result(data: Mapping[str, Any], *, actor: str,
                           principal_id: str) -> dict[str, Any]:
     try:
@@ -94,6 +111,7 @@ def revoke_mapping_result(data: Mapping[str, Any], *, actor: str) -> dict[str, A
 __all__ = [
     "begin_mapping_result",
     "complete_mapping_result",
+    "finalize_mapping_result",
     "rotate_mapping_result",
     "revoke_mapping_result",
 ]

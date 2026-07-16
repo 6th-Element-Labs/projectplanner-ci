@@ -12,19 +12,22 @@ native Codex CLI; it does not wake or remote-drive the Codex desktop application
 - An operator creates a short-lived bootstrap code (60–900 seconds). The code is
   single-use and only its hash is stored.
 - Bootstrap completion creates a stable `host/...` identity, an Ed25519 device key, and
-  a narrow project bearer with `read` + `write:ixp`. Raw bearers are returned once and
-  stored only in the user's `0600` identity file.
+  a narrow project bearer with `read` + `write:ixp`. Initial completion and every
+  pre-finalization recovery return the same bearer, stored only in the user's `0600`
+  identity file.
 - Before consuming the bootstrap, the installer also persists a one-install recovery
-  secret in the pending `0600` identity. For ten minutes, the same bootstrap plus that
-  secret can recover an ambiguous completion response by issuing a replacement bearer;
-  the first possibly-lost bearer is invalidated. The secret is removed after completion.
+  secret in the pending `0600` identity. The same bootstrap plus that secret can recover
+  an ambiguous completion response indefinitely until the host durably writes its local
+  identity/config/service state and acknowledges finalization. Finalization then retires
+  the server-side recovery hash and the local secret.
 - The Codex personal login and all provider credentials remain on the user-owned host.
   Registration and heartbeat expose only redacted readiness/account fingerprints.
 - Rotating the host identity invalidates the old bearer immediately. Revocation fences
   both REST authentication and reuse of the enrolled `host_id`.
-- If Switchboard is offline during revoke, the service is stopped and local state becomes
-  `revocation_pending`; the only bearer is retained for an explicit retry. No cloud/API
-  lane is selected as a silent fallback.
+- Revoke/uninstall intent is journaled before the request. A committed response that is
+  lost can be read back only through the same revoked bearer and exact host endpoint;
+  ordinary host APIs remain denied. Confirmed remote revocation and every local cleanup
+  boundary are independently resumable. No cloud/API lane is selected as a silent fallback.
 
 ## Build and sign a release
 
@@ -130,6 +133,12 @@ that hash is accepted only by the same host's rotation endpoint, so a lost HTTP 
 be retried without stranding the installation. A successful retry writes the replacement
 identity atomically; revoke/uninstall removes every outstanding recovery hash.
 
+Enrollment finalization is a separate acknowledgement after the identity, configuration,
+service definition, and installed state are durable. Until that acknowledgement, a lost
+completion response remains recoverable without a time window. Revoke/uninstall also uses
+an endpoint-only hashed receipt so a lost successful response can be retried after the
+general host bearer has been revoked; local cleanup then resumes without re-authentication.
+
 After revoke/uninstall, confirm the identity and provider-runtime roots are clean:
 
 ```bash
@@ -147,6 +156,11 @@ A wake with `execution_mode=personal_agent_host` or
 - claim, Work Session, and runner-session IDs;
 - target agent and `runtime=codex`;
 - exact host, source SHA, and typed execution-connection ID.
+
+The authenticated host principal, active enrollment, server-issued owner/tenant/project/
+provider policy, registered inventory, runner, and execution connection must also agree.
+Unenrolled legacy hosts cannot enter the personal execution lane, and local installer flags
+cannot widen the server-issued enrollment policy.
 
 The account binding, execution binding, wake, selector, and local inventory must repeat the
 same values; presence alone is insufficient. Source SHA must be a lowercase 40-character Git
@@ -167,15 +181,16 @@ Install fails before consuming the one-time bootstrap unless both `codex --versi
 metered-key variables and persists only a redacted account fingerprint. Operators can repeat
 that safe check independently with `python adapters/agent_host_enrollment.py preflight`.
 If completion returns ambiguously, rerun the same install command with the same bootstrap
-file within ten minutes. The installer reuses the pending key and recovery secret rather than
-generating a second identity or requiring a new bootstrap.
+file. Until durable finalization is acknowledged, the installer reuses the pending key and
+recovery secret rather than generating a second identity or requiring a new bootstrap.
 
 ## Executable proof
 
 `test_agent_host_enrollment.py` builds and signs real bundles, tampers one to prove denial,
 performs fresh sandboxed macOS and Linux installs through the REST ceremony, registers the
-new host bearer, rotates and updates it, exercises offline and successful revoke, proves
-post-revoke denial, recovers a deliberately lost enrollment response, launches the
-host-local worker without a credential-vault binding, uninstalls Linux, and scans for residue.
+new host bearer, rotates and updates it, exercises offline and response-loss revoke,
+proves post-revoke denial, recovers a deliberately lost enrollment response beyond the old
+window, resumes every uninstall cleanup boundary, launches the host-local worker without a
+credential-vault binding, uninstalls Linux, and scans for residue.
 `test_agent_host.py` covers the redacted heartbeat/inventory and relational exact-wake
 admission contract.

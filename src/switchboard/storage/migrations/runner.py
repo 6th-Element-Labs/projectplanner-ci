@@ -122,6 +122,13 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     ("0052_agent_host_enrollments_completion_recovery_expires_at",
      "agent_host_enrollments", "completion_recovery_expires_at",
      "ALTER TABLE agent_host_enrollments ADD COLUMN completion_recovery_expires_at REAL"),
+    ("0055_agent_host_enrollments_completion_finalized_at",
+     "agent_host_enrollments", "completion_finalized_at",
+     "ALTER TABLE agent_host_enrollments ADD COLUMN completion_finalized_at REAL"),
+    ("0058_personal_execution_connections_host_principal_id",
+     "personal_execution_connections", "host_principal_id",
+     "ALTER TABLE personal_execution_connections "
+     "ADD COLUMN host_principal_id TEXT NOT NULL DEFAULT ''"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,
@@ -231,13 +238,23 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "CREATE TABLE IF NOT EXISTS personal_execution_connections ("
      "execution_connection_id TEXT PRIMARY KEY, wake_id TEXT NOT NULL UNIQUE, "
      "task_id TEXT NOT NULL, claim_id TEXT NOT NULL, work_session_id TEXT NOT NULL, "
-     "runner_session_id TEXT NOT NULL, host_id TEXT NOT NULL, agent_id TEXT NOT NULL, "
+     "runner_session_id TEXT NOT NULL, host_id TEXT NOT NULL, "
+     "host_principal_id TEXT NOT NULL, agent_id TEXT NOT NULL, "
      "source_sha TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'reserved', "
      "created_at REAL NOT NULL, expires_at REAL NOT NULL, claimed_at REAL, "
      "completed_at REAL, updated_at REAL NOT NULL)"),
     ("0054_ix_personal_execution_connections_status",
      "CREATE INDEX IF NOT EXISTS ix_personal_execution_connections_status "
      "ON personal_execution_connections(status, expires_at)"),
+    # A revoked bearer remains useful only as an opaque, endpoint-specific receipt
+    # for idempotent revoke/uninstall readback after an ambiguous response.
+    ("0056_agent_host_revocation_recovery",
+     "CREATE TABLE IF NOT EXISTS agent_host_revocation_recovery ("
+     "token_hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL, host_id TEXT NOT NULL, "
+     "final_status TEXT NOT NULL, revoked_at REAL NOT NULL, created_at REAL NOT NULL)"),
+    ("0057_ix_agent_host_revocation_recovery_principal",
+     "CREATE INDEX IF NOT EXISTS ix_agent_host_revocation_recovery_principal "
+     "ON agent_host_revocation_recovery(principal_id, host_id)"),
 ]
 
 
@@ -250,6 +267,12 @@ def is_duplicate_column(exc: BaseException) -> bool:
 def _column_exists(c: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row["name"] == column
                for row in c.execute(f"PRAGMA table_info({table})").fetchall())
+
+
+def _table_exists(c: sqlite3.Connection, table: str) -> bool:
+    return c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,),
+    ).fetchone() is not None
 
 
 def _applied_migrations(c: sqlite3.Connection) -> set[str]:
@@ -272,8 +295,14 @@ def run_additive_migrations(c: sqlite3.Connection) -> List[str]:
     applied = _applied_migrations(c)
     newly: List[str] = []
 
+    deferred: List[Tuple[str, str, str, str]] = []
     for name, table, column, ddl in ADDITIVE_COLUMN_MIGRATIONS:
         if name in applied:
+            continue
+        if not _table_exists(c, table):
+            # Some feature tables are themselves introduced later in DDL_MIGRATIONS.
+            # Defer their additive upgrades until after that create-if-missing pass.
+            deferred.append((name, table, column, ddl))
             continue
         if _column_exists(c, table, column):
             # Legacy DB already carries this column (added before the ledger existed, or by
@@ -294,6 +323,18 @@ def run_additive_migrations(c: sqlite3.Connection) -> List[str]:
         if name in applied:
             continue
         c.execute(sql)
+        _record(c, name)
+        newly.append(name)
+
+    for name, table, column, ddl in deferred:
+        if _column_exists(c, table, column):
+            _record(c, name)
+            continue
+        try:
+            c.execute(ddl)
+        except sqlite3.OperationalError as exc:
+            if not is_duplicate_column(exc):
+                raise
         _record(c, name)
         newly.append(name)
 

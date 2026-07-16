@@ -11,6 +11,7 @@ import stat
 import subprocess
 import tempfile
 from urllib.parse import urlsplit
+from unittest.mock import patch
 
 
 TMP = Path(tempfile.mkdtemp(prefix="adapter18-agent-host-enrollment-"))
@@ -26,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey 
 from fastapi.testclient import TestClient  # noqa: E402
 
 import store  # noqa: E402
+from switchboard.storage.repositories import agent_host_enrollments as enrollment_store  # noqa: E402
 from adapters import agent_host_enrollment as enrollment  # noqa: E402
 from adapters import codex_local_worker, codex_personal_worker  # noqa: E402
 from app import app  # noqa: E402
@@ -185,9 +187,30 @@ try:
         hostname="adapter18-durability.test", platform="linux",
         public_key_fingerprint="sha256:" + "2" * 64,
         completion_recovery_secret="ahr-" + "d" * 43, project=PROJECT)
+    recovery_future = enrollment_store.time.time() + 3600
+    with patch.object(enrollment_store.time, "time", return_value=recovery_future):
+        durability_recoveries = [store.complete_agent_host_enrollment(
+            bootstrap_code=durability_bootstrap["bootstrap_code"],
+            hostname="adapter18-durability.test", platform="linux",
+            public_key_fingerprint="sha256:" + "2" * 64,
+            completion_recovery_secret="ahr-" + "d" * 43, project=PROJECT)
+            for _ in range(2)]
+    durability_revoke = client.post(
+        "/ixp/v1/agent-host-enrollments/revoke",
+        headers={"Authorization": f"Bearer {durability_completion['host_token']}"},
+        json={"project": PROJECT, "host_id": "host/adapter18-durability",
+              "reason": "time_advanced_recovery_proof", "final_status": "revoked"},
+    )
+    durability_principal = store.get_principal_by_token(
+        PROJECT, durability_completion["host_token"])
     ok(durability_denied and not durability_http_calls
-       and durability_completion.get("host_token"),
-       "release and 0600 identity storage must be durable before bootstrap consumption")
+       and durability_completion.get("host_token")
+       and all(item.get("host_token") == durability_completion["host_token"]
+               for item in durability_recoveries)
+       and durability_principal.get("revoked_at") is not None
+       and durability_revoke.status_code == 200
+       and durability_revoke.json().get("revoked") is True,
+       "time-advanced duplicate completion keeps one bearer usable through revoke")
 
     response_loss_bootstrap = begin("host/adapter18-response-loss")
     response_loss_paths = paths("response-loss")
@@ -250,11 +273,10 @@ try:
         duplicate_recoveries = list(pool.map(
             lambda _: store.complete_agent_host_enrollment(**recovery_args), range(2)))
     duplicate_tokens = [item.get("host_token") for item in duplicate_recoveries]
-    ok(all(item.get("completed") for item in duplicate_recoveries)
-       and len(set(duplicate_tokens)) == 1
-       and duplicate_tokens[0] == response_identity["host_token"]
-       and store.get_principal_by_token(PROJECT, duplicate_tokens[0]) is not None,
-       "concurrent completion retries converge on one still-usable recovered bearer")
+    ok(all(item.get("error_code") == "bootstrap_code_consumed"
+           for item in duplicate_recoveries)
+       and not any(duplicate_tokens),
+       "durable finalization acknowledgement retires bootstrap recovery")
 
     def prove_finalization_resume(boundary: str) -> bool:
         bootstrap = begin(f"host/adapter18-resume-{boundary}")
@@ -396,11 +418,12 @@ try:
         bootstrap_code=mac_bootstrap["bootstrap_code"],
         base_url="https://switchboard.test",
         project=PROJECT,
-        owner_user_id="user-adapter18",
+        owner_user_id="user-local-widened",
         target_platform="darwin",
         paths=mac_paths,
         lanes=["ADAPTER"],
-        tenant_allowlist=["tenant-adapter18"],
+        tenant_allowlist=["tenant-local-widened"],
+        provider_allowlist=["unauthorized-provider"],
         http=http,
         service_runner=fake_service,
         local_auth_runner=fake_codex,
@@ -411,9 +434,14 @@ try:
     mac_config_path = mac_paths["config_root"] / "config.json"
     mac_state_path = mac_paths["state_root"] / "state.json"
     mac_identity = json.loads(mac_identity_path.read_text())
+    mac_config = json.loads(mac_config_path.read_text())
     initial_mac_token = mac_identity["host_token"]
     ok(mac_install["installed"] and stat.S_IMODE(mac_identity_path.stat().st_mode) == 0o600,
        "fresh macOS enrollment installs a 0600 rotatable identity")
+    ok(mac_config["owner_user_id"] == "user-adapter18"
+       and mac_config["tenant_allowlist"] == ["tenant-adapter18"]
+       and mac_config["provider_allowlist"] == ["openai-codex"],
+       "installed policy comes only from the server-issued enrollment record")
     ok(codex_calls[:2] == [["codex", "--version"], ["codex", "login", "status"]],
        "install proves the native Codex CLI and host-local ChatGPT login before bootstrap")
     ok(mac_paths["service_path"].is_file()
@@ -436,8 +464,13 @@ try:
             "agent_host_version": "0.2.0",
             "runtimes": [{"runtime": "codex", "lanes": ["ADAPTER"]}],
             "limits": {"max_sessions": 1},
-            "capacity": {"local_auth": {"available": True,
-                "credential_values_redacted": True}},
+            "capacity": {
+                "owner": {"user_id": "user-adapter18",
+                    "tenant_allowlist": ["tenant-adapter18"],
+                    "project_allowlist": [PROJECT],
+                    "provider_allowlist": ["openai-codex"]},
+                "local_auth": {"available": True,
+                    "credential_values_redacted": True}},
         })
     ok(register.status_code == 200 and register.json().get("host_id") == "host/adapter18-macos",
        "enrolled principal registers only its exact host identity")
@@ -496,17 +529,39 @@ try:
     except enrollment.EnrollmentError:
         offline_visible = True
     pending_state = json.loads(mac_state_path.read_text())
-    ok(offline_visible and pending_state["status"] == "revocation_pending"
+    ok(offline_visible and pending_state["status"] == "revocation_response_unknown"
        and mac_identity_path.is_file(),
        "offline revoke stops work but preserves retry identity as visible pending state")
+
+    def lose_revoke_response(*args, **kwargs):
+        response = http(*args, **kwargs)
+        raise enrollment.EnrollmentError("simulated committed revoke response loss")
+
+    try:
+        enrollment.revoke_host(
+            identity_path=mac_identity_path, config_path=mac_config_path,
+            state_path=mac_state_path, http=lose_revoke_response,
+            service_runner=fake_service)
+        revoke_response_lost = False
+    except enrollment.EnrollmentError:
+        revoke_response_lost = True
+    committed_unknown = json.loads(mac_state_path.read_text())
+    old_revoked_token_denied = client.post(
+        "/ixp/v1/register_host",
+        headers={"Authorization": f"Bearer {rotated_token}"},
+        json={"project": PROJECT, "host_id": "host/adapter18-macos", "runtimes": []},
+    )
 
     revoked = enrollment.revoke_host(
         identity_path=mac_identity_path, config_path=mac_config_path,
         state_path=mac_state_path, http=http, service_runner=fake_service)
     mac_record = store.get_agent_host_enrollment("host/adapter18-macos", project=PROJECT)
-    ok(revoked["revoked"] and mac_record["status"] == "revoked"
+    ok(revoke_response_lost
+       and committed_unknown["status"] == "revocation_response_unknown"
+       and old_revoked_token_denied.status_code == 401
+       and revoked["revoked"] and mac_record["status"] == "revoked"
        and not mac_identity_path.exists(),
-       "successful revoke fences the server identity and purges the local bearer")
+       "committed revoke response loss resumes with endpoint-only recovery and purges locally")
     denied = store.register_host(
         {"host_id": "host/adapter18-macos", "runtimes": []},
         principal_id=mac_record["principal_id"], actor="test", project=PROJECT)
@@ -656,14 +711,71 @@ try:
        and "exec" in local_command and "ADAPTER-18" in str(local_command[-1])
        and "OPENAI_API_KEY" not in local_environment,
        "fresh enrollment selects a native local-auth worker with no central credential binding")
+    linux_runtime_root = Path(json.loads(linux_config.read_text())["runtime_root"])
+    linux_runtime_root.mkdir(parents=True, exist_ok=True)
+    (linux_runtime_root / "residue.txt").write_text("non-secret runtime residue")
+    original_atomic = enrollment._atomic_json
+    original_rmtree = enrollment.shutil.rmtree
+    cleanup_failures = []
+
+    def fail_uninstall_boundary(boundary):
+        failed_once = [False]
+
+        def injected_atomic(path, value, mode):
+            step = str((value or {}).get("cleanup_step") or "")
+            target = {
+                "identity_state": "identity_deleted",
+                "runtime_state": "runtime_residue_deleted",
+                "service_state": "service_deleted",
+                "releases_state": "releases_deleted",
+                "config_state": "config_deleted",
+            }.get(boundary)
+            if target == step and not failed_once[0]:
+                failed_once[0] = True
+                raise OSError(f"injected uninstall {boundary}")
+            return original_atomic(path, value, mode)
+
+        def injected_rmtree(path, *args, **kwargs):
+            target = {
+                "runtime_delete": linux_runtime_root,
+                "prefix_delete": linux_paths["prefix"],
+                "config_delete": linux_paths["config_root"],
+                "state_delete": linux_paths["state_root"],
+            }.get(boundary)
+            if target is not None and Path(path) == target and not failed_once[0]:
+                failed_once[0] = True
+                raise OSError(f"injected uninstall {boundary}")
+            return original_rmtree(path, *args, **kwargs)
+
+        enrollment._atomic_json = injected_atomic
+        enrollment.shutil.rmtree = injected_rmtree
+        try:
+            enrollment.uninstall_host(
+                identity_path=linux_identity, config_path=linux_config,
+                state_path=linux_state, http=http, service_runner=fake_service)
+        except OSError:
+            cleanup_failures.append(boundary)
+        finally:
+            enrollment._atomic_json = original_atomic
+            enrollment.shutil.rmtree = original_rmtree
+
+    cleanup_boundaries = (
+        "identity_state", "runtime_delete", "runtime_state", "service_state",
+        "prefix_delete", "releases_state", "config_delete", "config_state",
+        "state_delete",
+    )
+    for cleanup_boundary in cleanup_boundaries:
+        fail_uninstall_boundary(cleanup_boundary)
+
     uninstalled = enrollment.uninstall_host(
         identity_path=linux_identity, config_path=linux_config, state_path=linux_state,
         http=http, service_runner=fake_service)
     linux_record = store.get_agent_host_enrollment("host/adapter18-linux", project=PROJECT)
-    ok(uninstalled["uninstalled"] and linux_record["status"] == "uninstalled"
+    ok(cleanup_failures == list(cleanup_boundaries)
+       and uninstalled["uninstalled"] and linux_record["status"] == "uninstalled"
        and not linux_paths["prefix"].exists()
        and not linux_paths["service_path"].exists(),
-       "Linux uninstall revokes remotely and removes service, releases, config, and state")
+       "Linux uninstall resumes after every local deletion and journal boundary")
 
     public_records = json.dumps(store.list_agent_host_enrollments(project=PROJECT), sort_keys=True)
     ok("bootstrap_hash" not in public_records and "host_token" not in public_records

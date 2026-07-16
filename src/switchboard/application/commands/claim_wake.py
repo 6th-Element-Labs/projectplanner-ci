@@ -39,6 +39,7 @@ def execute(
         command: ClaimWakeCommand,
         *,
         actor: str,
+        principal_id: str = "",
         claim: Optional[ClaimWakeFn] = None) -> dict[str, Any]:
     """Validate and atomically claim one pending wake intent."""
     if not command.host_id:
@@ -56,14 +57,16 @@ def execute(
         credential_lease_id=command.credential_lease_id,
         claim_id=command.claim_id,
         work_session_id=command.work_session_id,
+        principal_id=principal_id,
     )
 
 
-def execute_mapping_result(data: dict[str, Any], *, actor: str,
+def execute_mapping_result(data: dict[str, Any], *, actor: str, principal_id: str = "",
                            claim: Optional[ClaimWakeFn] = None) -> dict[str, Any]:
     """Execute adapter input and return the store result or a structured error."""
     try:
-        return execute(ClaimWakeCommand.from_mapping(data), actor=actor, claim=claim)
+        return execute(ClaimWakeCommand.from_mapping(data), actor=actor,
+                       principal_id=principal_id, claim=claim)
     except ClaimWakeError as exc:
         return exc.as_dict()
     except ValidationError as exc:

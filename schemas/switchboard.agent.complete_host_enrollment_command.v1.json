@@ -1,7 +1,7 @@
 {
   "$id": "switchboard.agent.complete_host_enrollment_command.v1",
   "additionalProperties": false,
-  "description": "Single-use bootstrap completion with bounded response-loss recovery.",
+  "description": "Single-use bootstrap completion with durable response-loss recovery.",
   "properties": {
     "agent_host_version": {
       "default": "",

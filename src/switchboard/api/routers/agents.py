@@ -18,6 +18,7 @@ from switchboard.application.commands import register_host as register_host_comm
 from switchboard.application.contracts.agents import (
     BeginHostEnrollmentCommand,
     CompleteHostEnrollmentCommand,
+    FinalizeHostEnrollmentCommand,
     RevokeHostIdentityCommand,
     RotateHostIdentityCommand,
 )
@@ -132,14 +133,38 @@ def create_router(*, resolve_project: ProjectResolver,
         return control_plane_http(enrollment_command.rotate_mapping_result(
             payload, actor=auth.actor(principal), principal_id=principal["id"]))
 
+    @router.post("/ixp/v1/agent-host-enrollments/finalize")
+    async def ixp_finalize_agent_host_enrollment(
+            request: Request, body: FinalizeHostEnrollmentCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_principal(
+            request, project, ("write:ixp",), dev_actor=body.host_id)
+        payload["project"] = project
+        return control_plane_http(enrollment_command.finalize_mapping_result(
+            payload, actor=auth.actor(principal), principal_id=principal["id"]))
+
     @router.post("/ixp/v1/agent-host-enrollments/revoke")
     async def ixp_revoke_agent_host_identity(
             request: Request, body: RevokeHostIdentityCommand = Body(...)):
         payload = body.model_dump(by_alias=True)
         project = resolve_body_project(payload)
         host_id = body.host_id
-        principal = resolve_principal(
-            request, project, ("write:ixp",), dev_actor=host_id)
+        try:
+            principal = resolve_principal(
+                request, project, ("write:ixp",), dev_actor=host_id)
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise
+            recovery = store.get_agent_host_revocation_recovery_principal(
+                token=auth.bearer_from_request(request), host_id=host_id, project=project)
+            if not recovery:
+                raise
+            try:
+                principal = auth.authorize_principal(
+                    recovery, project, ("write:ixp",))
+            except PermissionError:
+                raise exc
         enrollment = store.get_agent_host_enrollment(host_id, project=project)
         scopes = set(principal.get("effective_scopes") or principal.get("scopes") or [])
         owns_identity = enrollment.get("principal_id") == principal.get("id")

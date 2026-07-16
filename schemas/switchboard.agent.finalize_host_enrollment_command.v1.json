@@ -1,0 +1,31 @@
+{
+  "$id": "switchboard.agent.finalize_host_enrollment_command.v1",
+  "additionalProperties": false,
+  "description": "Host acknowledgement that returned credential material is locally durable.",
+  "properties": {
+    "enrollment_id": {
+      "title": "Enrollment Id",
+      "type": "string"
+    },
+    "host_id": {
+      "title": "Host Id",
+      "type": "string"
+    },
+    "project": {
+      "default": "switchboard",
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.finalize_host_enrollment_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "enrollment_id",
+    "host_id"
+  ],
+  "title": "FinalizeHostEnrollmentCommand",
+  "type": "object"
+}

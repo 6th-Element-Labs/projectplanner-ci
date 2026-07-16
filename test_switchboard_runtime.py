@@ -245,7 +245,36 @@ try:
         "status": "active",
         "dirty_status": "clean",
     }, principal_id=p["id"], actor=auth.actor(p), project=P)["work_session"]
-    store.register_host({
+    unenrolled_personal = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "TEST", "capabilities": ["python"]},
+        reason="reject unenrolled personal host", source="test",
+        policy={"execution_mode": "personal_agent_host", "account_binding": {
+            "claim_id": personal_claim["claim_id"],
+            "work_session_id": personal_session["work_session_id"],
+            "host_id": "host/test",
+        }},
+        task_id=personal_task["task_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    ok("host_not_actively_enrolled_for_personal_connection"
+       in unenrolled_personal.get("reason_codes", []),
+       "legacy registered hosts cannot enter the personal execution lane")
+    with _conn(P) as connection:
+        connection.execute(
+            "INSERT INTO agent_host_enrollments("
+            "enrollment_id, project_id, requested_host_id, host_id, owner_user_id, "
+            "tenant_allowlist_json, project_allowlist_json, provider_allowlist_json, "
+            "bootstrap_hash, bootstrap_expires_at, bootstrap_consumed_at, principal_id, "
+            "public_key_fingerprint, identity_generation, package_version, platform, "
+            "hostname, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("hostenroll-runtime-personal", P, "host/test", "host/test", "user-test",
+             '["tenant-test"]', f'["{P}"]', '["openai-codex"]',
+             "runtime-personal-bootstrap-hash", 9999999999.0, 1.0, p["id"],
+             "sha256:" + "d" * 64, 1, "0.2.0", "linux", "testbox", "active",
+             1.0, 1.0),
+        )
+    widened_inventory = {
         "host_id": "host/test",
         "hostname": "testbox",
         "agent_host_version": "0.2.0",
@@ -257,8 +286,29 @@ try:
              "capabilities": ["python"]},
         ],
         "limits": {"max_sessions": 2},
+        "capacity": {"owner": {
+            "user_id": "user-widened",
+            "tenant_allowlist": ["tenant-test"],
+            "project_allowlist": [P],
+            "provider_allowlist": ["openai-codex"],
+        }},
         "heartbeat_ttl_s": 60,
-    }, principal_id=p["id"], actor=auth.actor(p), project=P)
+    }
+    widened_registration = store.register_host(
+        widened_inventory, principal_id=p["id"], actor=auth.actor(p), project=P)
+    widened_inventory["capacity"]["owner"]["user_id"] = "user-test"
+    enrolled_registration = store.register_host(
+        widened_inventory, principal_id=p["id"], actor=auth.actor(p), project=P)
+    ok(widened_registration.get("error_code") == "host_enrollment_policy_mismatch"
+       and enrolled_registration.get("host_id") == "host/test",
+       "server-issued owner and allowlists are authoritative at registration")
+    widened_heartbeat = store.heartbeat_host(
+        "host/test", capacity={"owner": {
+            "user_id": "user-test", "tenant_allowlist": ["tenant-widened"],
+            "project_allowlist": [P], "provider_allowlist": ["openai-codex"],
+        }}, principal_id=p["id"], actor=auth.actor(p), project=P)
+    ok(widened_heartbeat.get("error_code") == "host_enrollment_policy_mismatch",
+       "heartbeat cannot widen server-issued enrollment policy")
 
     def personal_policy(work_session_id):
         return {
@@ -319,7 +369,7 @@ try:
         )
     nonexistent_connection_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
-        actor=auth.actor(p), project=P)
+        principal_id=p["id"], actor=auth.actor(p), project=P)
     with _conn(P) as connection:
         columns = ",".join(connection_row)
         placeholders = ",".join("?" for _ in connection_row)
@@ -334,7 +384,7 @@ try:
         )
     stale_connection_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
-        actor=auth.actor(p), project=P)
+        principal_id=p["id"], actor=auth.actor(p), project=P)
     with _conn(P) as connection:
         connection.execute(
             "UPDATE personal_execution_connections SET expires_at=?, host_id=? "
@@ -344,7 +394,7 @@ try:
         )
     cross_host_connection_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
-        actor=auth.actor(p), project=P)
+        principal_id=p["id"], actor=auth.actor(p), project=P)
     with _conn(P) as connection:
         connection.execute(
             "UPDATE personal_execution_connections SET host_id=? "
@@ -358,29 +408,67 @@ try:
        "personal wake claim rejects nonexistent, stale, and cross-host execution connections")
     wrong_runner_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id="run_wrong",
-        actor=auth.actor(p), project=P)
+        principal_id=p["id"], actor=auth.actor(p), project=P)
     ok(not wrong_runner_claim.get("claimed")
        and "runner_session_id.argument" in wrong_runner_claim.get("reason_codes", []),
        "personal wake claim rejects a substituted runner session")
+    attacker = store.create_principal(
+        kind="host", display_name="host/attacker", token="host-attacker-token",
+        scopes=["read", "write:ixp"], principal_id="host-attacker",
+        project=P)
+    attacker_claim = store.claim_wake(
+        "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
+        principal_id=attacker["id"], actor="host/attacker", project=P)
     good_personal_claim = store.claim_wake(
         "host/test", good_wake["wake_id"],
         runner_session_id=exact_runner_id,
-        actor=auth.actor(p), project=P)
+        principal_id=p["id"], actor=auth.actor(p), project=P)
     resumed_personal_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
-        actor=auth.actor(p), project=P)
+        principal_id=p["id"], actor=auth.actor(p), project=P)
     with _conn(P) as connection:
         active_connection_status = connection.execute(
             "SELECT status FROM personal_execution_connections "
             "WHERE execution_connection_id=?",
             (good_execution["execution_connection_id"],),
         ).fetchone()["status"]
-    ok(good_personal_claim.get("claimed") is True
+    ok(attacker_claim.get("claimed") is False
+       and "active_enrollment_principal_mismatch"
+       in attacker_claim.get("reason_codes", [])
+       and good_personal_claim.get("claimed") is True
        and good_personal_claim.get("reserved") is False
        and resumed_personal_claim.get("resumed") is True
        and active_connection_status == "active"
        and good_execution.get("source_sha") == personal_source_sha,
        "personal wake atomically activates and idempotently resumes its exact live connection")
+
+    attacker_completion = store.complete_wake(
+        good_wake["wake_id"], runner_session_id=exact_runner_id,
+        agent_id=personal_agent, result={"started": True},
+        principal_id=attacker["id"], actor="host/attacker", project=P)
+    with _conn(P) as connection:
+        state_after_attack = connection.execute(
+            "SELECT status FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (good_execution["execution_connection_id"],),
+        ).fetchone()["status"]
+    personal_completed = store.complete_wake(
+        good_wake["wake_id"], runner_session_id=exact_runner_id,
+        agent_id=personal_agent, result={"started": True},
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        final_connection_state = connection.execute(
+            "SELECT status FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (good_execution["execution_connection_id"],),
+        ).fetchone()["status"]
+    ok(attacker_completion.get("completed") is False
+       and "active_enrollment_principal_mismatch"
+       in attacker_completion.get("reason_codes", [])
+       and state_after_attack == "active"
+       and personal_completed.get("status") == "completed"
+       and final_connection_state == "completed",
+       "personal completion is principal-bound and cannot be terminalized cross-host")
 
     failed_wake = store.request_wake(
         selector={"runtime": "claude-code", "agent_id": "claude/TEST#fail",

@@ -155,19 +155,22 @@ it tells the operator no always-on worker is currently listening.
 
 User-owned macOS and Linux hosts enroll through the signed, versioned lifecycle in
 [`AGENT-HOST-ENROLLMENT.md`](AGENT-HOST-ENROLLMENT.md). An operator issues a short-lived,
-single-use bootstrap; completion returns a narrow rotatable host bearer once and binds the
+single-use bootstrap; completion returns one stable narrow host bearer through durable
+finalization and binds the
 `host_id` to its exact principal and public-key fingerprint. The host's provider login remains
 local. Revoked or uninstalled identities cannot register or heartbeat even if their old host id
 is replayed.
 
-The installer durably creates a one-install recovery secret before bootstrap consumption. A
-bounded retry with the same bootstrap, recovery secret, platform, and key fingerprint rotates
-the bearer when the completion response was ambiguous; the server stores only the recovery
-hash and never extends the ten-minute recovery window.
+The installer durably creates a one-install recovery secret before bootstrap consumption.
+Retries with the same bootstrap, recovery secret, platform, and key fingerprint return the
+same bearer when the completion response was ambiguous. The server stores only the recovery
+hash and retains it until the client acknowledges that local finalization is durable.
 
 The installer provisions a per-user launchd or systemd service, atomically updates signed
-releases, preserves a visible `revocation_pending` state while offline, and purges identity and
-provider-runtime residue only after Switchboard confirms revocation. It never starts a cloud/API
+releases, preserves visible journaled revoke/uninstall intent while offline or response state
+is ambiguous, and purges identity and provider-runtime residue only after durable Switchboard
+revocation proof. A revoked bearer is accepted only for exact-host revocation readback, while
+every local cleanup boundary can resume without authentication. It never starts a cloud/API
 lane as a fallback for a sleeping, offline, or revoked personal host.
 
 ### Hybrid placement inventory

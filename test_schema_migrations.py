@@ -140,5 +140,25 @@ check("legacy decisions indexes are created after columns",
           row["name"] for row in c5.execute("PRAGMA index_list(decisions)").fetchall()
       }))
 
+# 8. An installation that exercised ADAPTER-18 before the principal-binding fix has the
+#    0053 table and ledger entry but lacks host_principal_id. The follow-up migration must
+#    upgrade that real intermediate shape rather than trusting CREATE IF NOT EXISTS.
+c6 = mem()
+c6.execute("CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at REAL NOT NULL)")
+c6.execute("""
+    CREATE TABLE personal_execution_connections (
+        execution_connection_id TEXT PRIMARY KEY,
+        wake_id TEXT NOT NULL UNIQUE,
+        host_id TEXT NOT NULL
+    )
+""")
+for migration_name in ALL_NAMES - {"0058_personal_execution_connections_host_principal_id"}:
+    c6.execute("INSERT INTO schema_migrations(name, applied_at) VALUES (?, 1)",
+               (migration_name,))
+run_additive_migrations(c6)
+check("intermediate personal execution table gains authenticated host principal binding",
+      "host_principal_id" in cols(c6, "personal_execution_connections")
+      and "0058_personal_execution_connections_host_principal_id" in ledger(c6))
+
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

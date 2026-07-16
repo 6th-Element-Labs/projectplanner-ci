@@ -37,6 +37,7 @@ def execute(
         command: CompleteWakeCommand,
         *,
         actor: str,
+        principal_id: str = "",
         complete: Optional[CompleteWakeFn] = None) -> dict[str, Any]:
     """Validate and record wake success/failure evidence."""
     if not command.wake_id:
@@ -49,15 +50,17 @@ def execute(
         agent_id=command.agent_id,
         result=command.result,
         actor=actor,
+        principal_id=principal_id,
         project=command.project,
     )
 
 
-def execute_mapping_result(data: dict[str, Any], *, actor: str,
+def execute_mapping_result(data: dict[str, Any], *, actor: str, principal_id: str = "",
                            complete: Optional[CompleteWakeFn] = None) -> dict[str, Any]:
     """Execute adapter input and return the store result or a structured error."""
     try:
         return execute(CompleteWakeCommand.from_mapping(data), actor=actor,
+                       principal_id=principal_id,
                        complete=complete)
     except CompleteWakeError as exc:
         return exc.as_dict()

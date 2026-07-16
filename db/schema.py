@@ -220,6 +220,16 @@ def apply_schema(c):
         );
         CREATE INDEX IF NOT EXISTS ix_agent_host_rotation_recovery_principal
             ON agent_host_rotation_recovery(principal_id, expires_at);
+        CREATE TABLE IF NOT EXISTS agent_host_revocation_recovery (
+            token_hash   TEXT PRIMARY KEY,
+            principal_id TEXT NOT NULL,
+            host_id      TEXT NOT NULL,
+            final_status TEXT NOT NULL,
+            revoked_at   REAL NOT NULL,
+            created_at   REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_agent_host_revocation_recovery_principal
+            ON agent_host_revocation_recovery(principal_id, host_id);
         CREATE TABLE IF NOT EXISTS principal_passwords (
             login               TEXT PRIMARY KEY,
             principal_id        TEXT NOT NULL,
@@ -800,6 +810,7 @@ def apply_schema(c):
             bootstrap_consumed_at  REAL,
             completion_recovery_hash TEXT,
             completion_recovery_expires_at REAL,
+            completion_finalized_at REAL,
             principal_id           TEXT,
             public_key_fingerprint TEXT,
             identity_generation    INTEGER NOT NULL DEFAULT 0,
@@ -852,6 +863,7 @@ def apply_schema(c):
             work_session_id         TEXT NOT NULL,
             runner_session_id       TEXT NOT NULL,
             host_id                 TEXT NOT NULL,
+            host_principal_id       TEXT NOT NULL,
             agent_id                TEXT NOT NULL,
             source_sha              TEXT NOT NULL,
             status                  TEXT NOT NULL DEFAULT 'reserved',

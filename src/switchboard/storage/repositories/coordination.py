@@ -213,6 +213,7 @@ def _bind_personal_wake_policy(
     selector: Dict[str, Any],
     policy: Dict[str, Any],
     task_id: Optional[str],
+    project: str,
     now: float,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """Create the server-authoritative relational binding for a personal wake."""
@@ -273,6 +274,50 @@ def _bind_personal_wake_policy(
     ).fetchone()
     if not host_row or _host_row(host_row, now=now).get("stale"):
         return updated, ["host_not_live_for_personal_connection"]
+    host = _host_row(host_row, now=now)
+    enrollment_row = c.execute(
+        "SELECT * FROM agent_host_enrollments WHERE project_id=? AND host_id=? "
+        "AND status='active'",
+        (project, host_id),
+    ).fetchone()
+    if not enrollment_row:
+        return updated, ["host_not_actively_enrolled_for_personal_connection"]
+    enrollment = dict(enrollment_row)
+    host_principal_id = str(enrollment.get("principal_id") or "").strip()
+    if not host_principal_id or str(host.get("principal_id") or "") != host_principal_id:
+        return updated, ["host_enrollment_principal_mismatch"]
+    project_allowlist = json.loads(enrollment.get("project_allowlist_json") or "[]")
+    if project not in project_allowlist:
+        return updated, ["host_enrollment_project_denied"]
+    owner = dict((host.get("capacity") or {}).get("owner") or {})
+    expected_owner = {
+        "user_id": str(enrollment.get("owner_user_id") or ""),
+        "tenant_allowlist": sorted(json.loads(
+            enrollment.get("tenant_allowlist_json") or "[]")),
+        "project_allowlist": sorted(project_allowlist),
+        "provider_allowlist": sorted(json.loads(
+            enrollment.get("provider_allowlist_json") or "[]")),
+    }
+    advertised_owner = {
+        "user_id": str(owner.get("user_id") or ""),
+        "tenant_allowlist": sorted(owner.get("tenant_allowlist") or []),
+        "project_allowlist": sorted(owner.get("project_allowlist") or []),
+        "provider_allowlist": sorted(owner.get("provider_allowlist") or []),
+    }
+    if advertised_owner != expected_owner:
+        return updated, ["host_enrollment_policy_inventory_mismatch"]
+    requested_owner = str(binding.get("owner_user_id") or "").strip()
+    if requested_owner and requested_owner != expected_owner["user_id"]:
+        return updated, ["host_enrollment_owner_mismatch"]
+    requested_tenant = str(
+        binding.get("tenant_id") or updated.get("tenant_id") or "").strip()
+    if requested_tenant and requested_tenant not in expected_owner["tenant_allowlist"]:
+        return updated, ["host_enrollment_tenant_denied"]
+    requested_provider = str(
+        binding.get("provider_id") or selector.get("provider_id")
+        or selector.get("provider") or "openai-codex").strip()
+    if requested_provider not in expected_owner["provider_allowlist"]:
+        return updated, ["host_enrollment_provider_denied"]
     execution_connection_id = f"execconn-{uuid.uuid4().hex[:20]}"
     exact = {
         "task_id": canonical_task_id,
@@ -280,9 +325,17 @@ def _bind_personal_wake_policy(
         "work_session_id": work_session_id,
         "runner_session_id": runner_session_id,
         "host_id": host_id,
+        "host_principal_id": host_principal_id,
         "agent_id": agent_id,
     }
     binding.update(exact)
+    binding.update({
+        "owner_user_id": expected_owner["user_id"],
+        "tenant_allowlist": expected_owner["tenant_allowlist"],
+        "project_allowlist": expected_owner["project_allowlist"],
+        "provider_allowlist": expected_owner["provider_allowlist"],
+        "provider_id": requested_provider,
+    })
     updated.update({
         "require_exact_host_binding": True,
         "source_sha": source_sha,
@@ -290,6 +343,11 @@ def _bind_personal_wake_policy(
         "account_binding": binding,
         "execution_binding": {
             **exact,
+            "owner_user_id": expected_owner["user_id"],
+            "tenant_allowlist": expected_owner["tenant_allowlist"],
+            "project_allowlist": expected_owner["project_allowlist"],
+            "provider_allowlist": expected_owner["provider_allowlist"],
+            "provider_id": requested_provider,
             "wake_id": wake_id,
             "source_sha": source_sha,
             "execution_connection_id": execution_connection_id,
@@ -302,10 +360,12 @@ def _bind_personal_wake_policy(
     c.execute(
         "INSERT INTO personal_execution_connections("
         "execution_connection_id, wake_id, task_id, claim_id, work_session_id, "
-        "runner_session_id, host_id, agent_id, source_sha, status, created_at, "
-        "expires_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,'reserved',?,?,?)",
+        "runner_session_id, host_id, host_principal_id, agent_id, source_sha, "
+        "status, created_at, expires_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,'reserved',?,?,?)",
         (execution_connection_id, wake_id, canonical_task_id, claim_id,
-         work_session_id, runner_session_id, host_id, agent_id, source_sha,
+         work_session_id, runner_session_id, host_id, host_principal_id,
+         agent_id, source_sha,
          now, expires_at, now),
     )
     return updated, []
@@ -408,7 +468,7 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             wake_id = "wake-" + uuid.uuid4().hex[:16]
             policy, binding_errors = _bind_personal_wake_policy(
                 c, wake_id=wake_id, selector=selector, policy=policy,
-                task_id=task_id, now=now)
+                task_id=task_id, project=project, now=now)
             if binding_errors:
                 out = {
                     "requested": False,
@@ -546,7 +606,9 @@ def _personal_exact_binding_error(
     wake: Dict[str, Any],
     *,
     host_id: str,
+    principal_id: str,
     runner_session_id: str,
+    project: str,
     now: float,
 ) -> Optional[Dict[str, Any]]:
     """Prove a personal-host wake against live claim and Work Session rows."""
@@ -572,6 +634,7 @@ def _personal_exact_binding_error(
         "work_session_id": str(binding.get("work_session_id") or "").strip(),
         "runner_session_id": expected_runner,
         "host_id": str(host_id or "").strip(),
+        "host_principal_id": str(principal_id or "").strip(),
         "agent_id": agent_id,
         "source_sha": source_sha,
         "execution_connection_id": str(
@@ -588,6 +651,8 @@ def _personal_exact_binding_error(
         "runner_session_id.argument": runner_id,
         "host_id.account": binding.get("host_id"),
         "host_id.execution": execution.get("host_id"),
+        "host_principal_id.account": binding.get("host_principal_id"),
+        "host_principal_id.execution": execution.get("host_principal_id"),
         "agent_id.account": binding.get("agent_id"),
         "agent_id.execution": execution.get("agent_id"),
         "source_sha.policy": policy.get("source_sha"),
@@ -604,6 +669,8 @@ def _personal_exact_binding_error(
         "runner_session_id.argument": expected["runner_session_id"],
         "host_id.account": expected["host_id"],
         "host_id.execution": expected["host_id"],
+        "host_principal_id.account": expected["host_principal_id"],
+        "host_principal_id.execution": expected["host_principal_id"],
         "agent_id.account": expected["agent_id"],
         "agent_id.execution": expected["agent_id"],
         "source_sha.policy": expected["source_sha"],
@@ -647,6 +714,7 @@ def _personal_exact_binding_error(
         for field in (
             "wake_id", "task_id", "claim_id", "work_session_id", "runner_session_id",
             "host_id", "agent_id", "source_sha",
+            "host_principal_id",
         ):
             if str(connection.get(field) or "") != expected[field]:
                 reasons.append(f"execution_connection_{field}_mismatch")
@@ -668,6 +736,7 @@ def _personal_exact_binding_error(
         runner_expected = {
             "task_id": expected["task_id"], "claim_id": expected["claim_id"],
             "host_id": expected["host_id"], "agent_id": expected["agent_id"],
+            "principal_id": expected["host_principal_id"],
         }
         for field, value in runner_expected.items():
             if str(runner.get(field) or "") != value:
@@ -686,6 +755,31 @@ def _personal_exact_binding_error(
         if float(runner.get("heartbeat_at") or 0) + float(
                 runner.get("heartbeat_ttl_s") or 60) <= now:
             reasons.append("execution_connection_runner_stale")
+    host = c.execute(
+        "SELECT principal_id FROM agent_hosts WHERE host_id=?", (expected["host_id"],),
+    ).fetchone()
+    enrollment = c.execute(
+        "SELECT principal_id, status, owner_user_id, tenant_allowlist_json, "
+        "project_allowlist_json, provider_allowlist_json FROM agent_host_enrollments "
+        "WHERE project_id=? AND host_id=?",
+        (project, expected["host_id"]),
+    ).fetchone()
+    if (not host or str(host["principal_id"] or "") != expected["host_principal_id"]):
+        reasons.append("registered_host_principal_mismatch")
+    if (not enrollment or enrollment["status"] != "active"
+            or str(enrollment["principal_id"] or "") != expected["host_principal_id"]):
+        reasons.append("active_enrollment_principal_mismatch")
+    elif (
+        str(execution.get("owner_user_id") or binding.get("owner_user_id") or "")
+        != str(enrollment["owner_user_id"] or "")
+        or sorted(binding.get("tenant_allowlist") or [])
+        != sorted(json.loads(enrollment["tenant_allowlist_json"] or "[]"))
+        or sorted(binding.get("project_allowlist") or [])
+        != sorted(json.loads(enrollment["project_allowlist_json"] or "[]"))
+        or sorted(binding.get("provider_allowlist") or [])
+        != sorted(json.loads(enrollment["provider_allowlist_json"] or "[]"))
+    ):
+        reasons.append("active_enrollment_policy_mismatch")
     if reasons:
         return {
             "claimed": False,
@@ -699,7 +793,7 @@ def _personal_exact_binding_error(
 def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                project: str = DEFAULT_PROJECT, runner_session_id: str = "",
                credential_lease_id: str = "", claim_id: str = "",
-               work_session_id: str = "") -> Dict[str, Any]:
+               work_session_id: str = "", principal_id: str = "") -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
     try:
@@ -713,8 +807,8 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             personal = (policy.get("execution_mode") == "personal_agent_host"
                         or policy.get("require_exact_host_binding") is True)
             binding_error = _personal_exact_binding_error(
-                c, wake, host_id=host_id,
-                runner_session_id=runner_session_id, now=now)
+                c, wake, host_id=host_id, principal_id=principal_id,
+                runner_session_id=runner_session_id, project=project, now=now)
             if binding_error:
                 return binding_error
             if wake["status"] == "claimed":
@@ -855,9 +949,9 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                     "UPDATE personal_execution_connections SET status='active', "
                     "claimed_at=?, updated_at=? WHERE execution_connection_id=? "
                     "AND wake_id=? AND runner_session_id=? AND host_id=? "
-                    "AND status='reserved' AND expires_at>?",
+                    "AND host_principal_id=? AND status='reserved' AND expires_at>?",
                     (now, now, execution.get("execution_connection_id"), wake_id,
-                     runner_session_id, host_id, now),
+                     runner_session_id, host_id, principal_id, now),
                 )
                 if activated.rowcount != 1:
                     c.execute(
@@ -893,7 +987,7 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
 
 def complete_wake(wake_id: str, runner_session_id: str = "",
                   agent_id: str = "", result: Optional[Dict[str, Any]] = None,
-                  actor: str = "system",
+                  actor: str = "system", principal_id: str = "",
                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
@@ -909,14 +1003,42 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
             if not row:
                 return {"error": "wake not found", "wake_id": wake_id}
             wake = _wake_row(row)
+            policy = dict(wake.get("policy") or {})
+            personal = (policy.get("execution_mode") == "personal_agent_host"
+                        or policy.get("require_exact_host_binding") is True)
+            execution = dict(policy.get("execution_binding") or {})
+            if personal:
+                binding_error = _personal_exact_binding_error(
+                    c, wake, host_id=str(wake.get("claimed_by_host") or ""),
+                    principal_id=principal_id, runner_session_id=runner_session_id,
+                    project=project, now=now)
+                if binding_error:
+                    return {"completed": False, **binding_error}
+                expected_agent = str((wake.get("selector") or {}).get("agent_id") or "")
+                if str(agent_id or "") != expected_agent:
+                    return {"completed": False, "reason": "exact_binding_denied",
+                            "reason_codes": ["completion_agent_id_mismatch"],
+                            "wake_id": wake_id}
+                transitioned = c.execute(
+                    "UPDATE personal_execution_connections SET status=?, completed_at=?, "
+                    "updated_at=? WHERE execution_connection_id=? AND wake_id=? "
+                    "AND runner_session_id=? AND host_id=? AND host_principal_id=? "
+                    "AND agent_id=? AND status='active'",
+                    (status, now, now, execution["execution_connection_id"], wake_id,
+                     runner_session_id, wake.get("claimed_by_host"), principal_id,
+                     expected_agent),
+                )
+                if transitioned.rowcount != 1:
+                    return {"completed": False, "reason": "exact_binding_denied",
+                            "reason_codes": ["execution_connection_completion_lost"],
+                            "wake_id": wake_id}
             c.execute(
                 "UPDATE wake_intents SET status=?, completed_at=?, runner_session_id=?, "
                 "agent_id=?, result_json=? WHERE wake_id=?",
                 (status, now, runner_session_id or None, agent_id or None,
                  json.dumps(result, sort_keys=True), wake_id),
             )
-            execution = dict((wake.get("policy") or {}).get("execution_binding") or {})
-            if execution.get("execution_connection_id"):
+            if execution.get("execution_connection_id") and not personal:
                 c.execute(
                     "UPDATE personal_execution_connections SET status=?, completed_at=?, "
                     "updated_at=? WHERE execution_connection_id=? AND wake_id=? "
@@ -1899,6 +2021,36 @@ def _eligible_hosts_in(c: sqlite3.Connection, selector: Dict[str, Any],
     return [h for h in hosts if _host_can_handle(h, selector)]
 
 
+def _enrollment_inventory_error(identity: Dict[str, Any],
+                                capacity: Dict[str, Any],
+                                project: str) -> Optional[Dict[str, Any]]:
+    """Require an enrolled host to advertise exactly its server-issued policy."""
+    if not identity.get("required"):
+        return None
+    owner = dict((capacity or {}).get("owner") or {})
+    expected = {
+        "user_id": str(identity.get("owner_user_id") or ""),
+        "tenant_allowlist": sorted(identity.get("tenant_allowlist") or []),
+        "project_allowlist": sorted(identity.get("project_allowlist") or []),
+        "provider_allowlist": sorted(identity.get("provider_allowlist") or []),
+    }
+    advertised = {
+        "user_id": str(owner.get("user_id") or ""),
+        "tenant_allowlist": sorted(owner.get("tenant_allowlist") or []),
+        "project_allowlist": sorted(owner.get("project_allowlist") or []),
+        "provider_allowlist": sorted(owner.get("provider_allowlist") or []),
+    }
+    if advertised != expected or project not in expected["project_allowlist"]:
+        return {
+            "error": "host_enrollment_policy_mismatch",
+            "error_code": "host_enrollment_policy_mismatch",
+            "message": "host inventory does not match server-issued enrollment policy",
+            "required": True,
+            "allowed": False,
+        }
+    return None
+
+
 def register_host(inventory: Dict[str, Any], principal_id: str = "",
                   actor: str = "system",
                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
@@ -1915,6 +2067,9 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
     runtimes = inventory.get("runtimes") or []
     limits = inventory.get("limits") or {}
     capacity = inventory.get("capacity") or {}
+    inventory_error = _enrollment_inventory_error(identity, capacity, project)
+    if inventory_error:
+        return inventory_error
     if "active_sessions" in inventory and "active_sessions" not in capacity:
         capacity["active_sessions"] = inventory.get("active_sessions")
     ttl_s = max(10, int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60))
@@ -1971,6 +2126,9 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                 current.update(capacity)
             if active_sessions is not None:
                 current["active_sessions"] = int(active_sessions)
+            inventory_error = _enrollment_inventory_error(identity, current, project)
+            if inventory_error:
+                return inventory_error
             c.execute(
                 "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=? "
                 "WHERE host_id=?",

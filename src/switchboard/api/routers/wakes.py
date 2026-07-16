@@ -60,7 +60,7 @@ def create_router(*, resolve_project: ProjectResolver,
         body["project"] = project
         return control_plane_http(raise_if_idem_conflict(
             claim_wake_command.execute_mapping_result(
-                body, actor=auth.actor(principal))))
+                body, actor=auth.actor(principal), principal_id=principal["id"])))
 
     @router.post("/txp/v1/complete_wake")
     async def txp_complete_wake(request: Request, body: dict = Body(...)):
@@ -72,7 +72,7 @@ def create_router(*, resolve_project: ProjectResolver,
         body["project"] = project
         return control_plane_http(raise_if_idem_conflict(
             complete_wake_command.execute_mapping_result(
-                body, actor=auth.actor(principal))))
+                body, actor=auth.actor(principal), principal_id=principal["id"])))
 
     @router.get("/txp/v1/list_wake_intents")
     async def txp_list_wake_intents(project: str = Query(...),

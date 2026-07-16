@@ -1,5 +1,5 @@
 {
-  "count": 43,
+  "count": 44,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -9,6 +9,10 @@
     {
       "$id": "switchboard.agent.complete_host_enrollment_command.v1",
       "path": "switchboard.agent.complete_host_enrollment_command.v1.json"
+    },
+    {
+      "$id": "switchboard.agent.finalize_host_enrollment_command.v1",
+      "path": "switchboard.agent.finalize_host_enrollment_command.v1.json"
     },
     {
       "$id": "switchboard.agent.register_agent_command.v1",

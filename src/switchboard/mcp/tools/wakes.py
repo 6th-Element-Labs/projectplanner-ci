@@ -78,6 +78,7 @@ def claim_wake(host_id: str, wake_id: str, ctx: Context,
             "project": project,
         },
         actor=auth.actor(principal),
+        principal_id=principal["id"],
     ))
 
 
@@ -96,6 +97,7 @@ def complete_wake(wake_id: str, ctx: Context, runner_session_id: str = "",
             "project": project,
         },
         actor=auth.actor(principal),
+        principal_id=principal["id"],
     ))
 
 

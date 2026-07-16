@@ -13,6 +13,7 @@ REGISTER_AGENT_COMMAND_SCHEMA = "switchboard.agent.register_agent_command.v1"
 REGISTER_HOST_COMMAND_SCHEMA = "switchboard.agent.register_host_command.v1"
 BEGIN_HOST_ENROLLMENT_COMMAND_SCHEMA = "switchboard.agent.begin_host_enrollment_command.v1"
 COMPLETE_HOST_ENROLLMENT_COMMAND_SCHEMA = "switchboard.agent.complete_host_enrollment_command.v1"
+FINALIZE_HOST_ENROLLMENT_COMMAND_SCHEMA = "switchboard.agent.finalize_host_enrollment_command.v1"
 ROTATE_HOST_IDENTITY_COMMAND_SCHEMA = "switchboard.agent.rotate_host_identity_command.v1"
 REVOKE_HOST_IDENTITY_COMMAND_SCHEMA = "switchboard.agent.revoke_host_identity_command.v1"
 
@@ -249,7 +250,7 @@ class BeginHostEnrollmentCommand(VersionedModel):
 
 
 class CompleteHostEnrollmentCommand(VersionedModel):
-    """Single-use bootstrap completion with bounded response-loss recovery."""
+    """Single-use bootstrap completion with durable response-loss recovery."""
 
     SCHEMA: ClassVar[str] = COMPLETE_HOST_ENROLLMENT_COMMAND_SCHEMA
     model_config = ConfigDict(frozen=True)
@@ -268,6 +269,23 @@ class CompleteHostEnrollmentCommand(VersionedModel):
                      "agent_host_version", mode="before")
     @classmethod
     def _strip_completion_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+
+class FinalizeHostEnrollmentCommand(VersionedModel):
+    """Host acknowledgement that returned credential material is locally durable."""
+
+    SCHEMA: ClassVar[str] = FINALIZE_HOST_ENROLLMENT_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(default=FINALIZE_HOST_ENROLLMENT_COMMAND_SCHEMA, alias="schema")
+    project: str = "switchboard"
+    enrollment_id: str
+    host_id: str
+
+    @field_validator("project", "enrollment_id", "host_id", mode="before")
+    @classmethod
+    def _strip_finalize_text(cls, value: Any) -> str:
         return str(value or "").strip()
 
 
@@ -317,5 +335,6 @@ register(RegisterAgentCommand)
 register(RegisterHostCommand)
 register(BeginHostEnrollmentCommand)
 register(CompleteHostEnrollmentCommand)
+register(FinalizeHostEnrollmentCommand)
 register(RotateHostIdentityCommand)
 register(RevokeHostIdentityCommand)

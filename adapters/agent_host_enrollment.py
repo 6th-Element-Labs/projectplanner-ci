@@ -438,6 +438,7 @@ def control_service(target_platform: str, action: str, service_path: Path,
 _FINALIZATION_STATUSES = {
     "enrollment_completed_pending_finalize",
     "install_finalization_retry_required",
+    "installed_finalization_ack_pending",
 }
 
 
@@ -445,6 +446,7 @@ def _finalize_install(
     *, state: dict[str, Any], state_path: Path, identity_path: Path,
     config_path: Path, target_platform: str, prefix: Path, service_path: Path,
     log_root: Path, state_root: Path, entrypoint: str, start_service: bool,
+    http: Callable[..., dict[str, Any]],
     service_runner: Callable[..., subprocess.CompletedProcess],
 ) -> dict[str, Any]:
     """Idempotently finish a journaled enrollment after server completion."""
@@ -491,14 +493,37 @@ def _finalize_install(
         raise
     host_id = identity["host_id"]
     completion_recovered = bool(state.get("completion_recovered"))
+    state.update({
+        "status": "installed_finalization_ack_pending",
+        "installed_at": time.time(),
+        "finalization_step": "local_state_durable",
+    })
+    _atomic_json(state_path, state, 0o600)
+    try:
+        acknowledged = http(
+            "POST",
+            config["base_url"] + "/ixp/v1/agent-host-enrollments/finalize",
+            {
+                "schema": "switchboard.agent.finalize_host_enrollment_command.v1",
+                "project": config["project"],
+                "enrollment_id": identity["enrollment_id"],
+                "host_id": identity["host_id"],
+            },
+            identity["host_token"],
+        )
+    except Exception:
+        state["finalization_ack_failed_at"] = time.time()
+        _atomic_json(state_path, state, 0o600)
+        raise
+    if not acknowledged.get("finalized"):
+        state["finalization_ack_failed_at"] = time.time()
+        _atomic_json(state_path, state, 0o600)
+        raise EnrollmentError("Switchboard did not acknowledge enrollment finalization")
     state.pop("pending_identity", None)
     state.pop("pending_config", None)
     state.pop("finalization_attempted_service_start", None)
-    state.update({
-        "status": "installed",
-        "installed_at": time.time(),
-        "finalization_step": "complete",
-    })
+    state.update({"status": "installed", "finalization_step": "complete",
+                  "finalization_acknowledged_at": time.time()})
     _atomic_json(state_path, state, 0o600)
     return {
         "installed": True,
@@ -564,6 +589,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
                 config_path=config_path, target_platform=target_platform, prefix=prefix,
                 service_path=service_path, log_root=log_root, state_root=state_root,
                 entrypoint=manifest["entrypoint"], start_service=start_service,
+                http=http,
                 service_runner=service_runner,
             )
         if not identity_path.is_file():
@@ -673,10 +699,10 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         "allow_work": bool(allow_work),
         "allow_global_claim": False,
         "lanes": sorted(set(lanes)),
-        "owner_user_id": owner_user_id,
-        "tenant_allowlist": sorted(set(tenant_allowlist)),
+        "owner_user_id": str(enrollment.get("owner_user_id") or ""),
+        "tenant_allowlist": sorted(set(enrollment.get("tenant_allowlist") or [])),
         "project_allowlist": enrollment.get("project_allowlist") or [project],
-        "provider_allowlist": sorted(set(provider_allowlist)),
+        "provider_allowlist": sorted(set(enrollment.get("provider_allowlist") or [])),
         "local_auth_account_proof": local_auth["account_fingerprint"],
         "repo_root": str(prefix / "current"),
         "runner_dir": str(state_root / "runner"),
@@ -699,6 +725,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         config_path=config_path, target_platform=target_platform, prefix=prefix,
         service_path=service_path, log_root=log_root, state_root=state_root,
         entrypoint=manifest["entrypoint"], start_service=start_service,
+        http=http,
         service_runner=service_runner,
     )
 
@@ -761,42 +788,100 @@ def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path,
                 final_status: str = "revoked", stop_service: bool = True,
                 http: Callable[..., dict[str, Any]] = request_json,
                 service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict[str, Any]:
+    """Journal remote revocation and resume local cleanup across every boundary."""
     state = _read_json(state_path)
-    identity = _read_json(identity_path) if identity_path.is_file() else {}
-    config = _read_json(config_path) if config_path.is_file() else {}
+    operation = "uninstall" if final_status == "uninstalled" else "revoke"
+    recorded_operation = str(state.get("revocation_operation") or "")
+    if recorded_operation and recorded_operation != operation:
+        raise EnrollmentError("a different host lifecycle operation is already pending")
+    identity = dict(state.get("revocation_identity") or {})
+    config = dict(state.get("revocation_config") or {})
+    if not identity:
+        identity = (_read_json(identity_path) if identity_path.is_file()
+                    else dict(state.get("pending_identity") or {}))
     if not identity.get("host_token"):
-        identity = dict(state.get("pending_identity") or {})
+        identity = dict(state.get("pending_identity") or identity)
+    if not config:
+        config = (_read_json(config_path) if config_path.is_file()
+                  else dict(state.get("pending_config") or {}))
     if not config.get("base_url"):
-        config = dict(state.get("pending_config") or {})
-    if not identity.get("host_id") or not identity.get("host_token"):
-        raise EnrollmentError("no completed host identity is available to revoke")
-    if not config.get("base_url") or not config.get("project"):
-        raise EnrollmentError("no enrollment endpoint is available to revoke the host")
-    if stop_service:
-        control_service(
-            state["platform"], "stop", Path(state["service_path"]), runner=service_runner)
-    try:
-        result = http(
-            "POST",
-            config["base_url"] + "/ixp/v1/agent-host-enrollments/revoke",
-            {"project": config["project"], "host_id": identity["host_id"],
-             "reason": "local_host_revoke", "final_status": final_status},
-            identity["host_token"],
-        )
-    except Exception:
-        state.update({"status": "revocation_pending", "revocation_pending_at": time.time()})
+        config = dict(state.get("pending_config") or config)
+    remote_confirmed = state.get("remote_revocation_confirmed") is True
+    if not remote_confirmed:
+        if not identity.get("host_id") or not identity.get("host_token"):
+            raise EnrollmentError("no completed host identity is available to revoke")
+        if not config.get("base_url") or not config.get("project"):
+            raise EnrollmentError("no enrollment endpoint is available to revoke the host")
+        state.update({
+            "status": "revocation_requested",
+            "revocation_operation": operation,
+            "revocation_identity": identity,
+            "revocation_config": config,
+            "revocation_requested_at": state.get("revocation_requested_at") or time.time(),
+        })
         _atomic_json(state_path, state, 0o600)
-        raise
-    if not result.get("revoked"):
-        raise EnrollmentError("Switchboard did not confirm host revocation")
+        if stop_service:
+            control_service(
+                state["platform"], "stop", Path(state["service_path"]),
+                runner=service_runner)
+        try:
+            result = http(
+                "POST",
+                config["base_url"] + "/ixp/v1/agent-host-enrollments/revoke",
+                {"project": config["project"], "host_id": identity["host_id"],
+                 "reason": "local_host_revoke", "final_status": final_status},
+                identity["host_token"],
+            )
+        except Exception:
+            state.update({"status": "revocation_response_unknown",
+                          "revocation_response_unknown_at": time.time()})
+            _atomic_json(state_path, state, 0o600)
+            raise
+        if not result.get("revoked"):
+            raise EnrollmentError("Switchboard did not confirm host revocation")
+        state.update({
+            "status": "remote_revocation_confirmed",
+            "remote_revocation_confirmed": True,
+            "remote_revocation_confirmed_at": time.time(),
+            "post_revoke_denial": True,
+        })
+        _atomic_json(state_path, state, 0o600)
+
+    state["status"] = "local_cleanup_pending"
     identity_path.unlink(missing_ok=True)
-    runtime_root = Path(config.get("runtime_root") or "")
-    if runtime_root.is_dir():
-        shutil.rmtree(runtime_root)
-    state.update({"status": final_status, "revoked_at": time.time(),
-                  "post_revoke_denial": True})
-    state.pop("pending_identity", None)
-    state.pop("pending_config", None)
+    state["cleanup_step"] = "identity_deleted"
+    _atomic_json(state_path, state, 0o600)
+    runtime_root_value = str(config.get("runtime_root") or "").strip()
+    if runtime_root_value:
+        runtime_root = Path(runtime_root_value)
+        if runtime_root.is_dir():
+            shutil.rmtree(runtime_root)
+    state["cleanup_step"] = "runtime_residue_deleted"
+    _atomic_json(state_path, state, 0o600)
+    if operation == "uninstall":
+        Path(state["service_path"]).unlink(missing_ok=True)
+        state["cleanup_step"] = "service_deleted"
+        _atomic_json(state_path, state, 0o600)
+        prefix = Path(state["prefix"])
+        if prefix.exists():
+            shutil.rmtree(prefix)
+        state["cleanup_step"] = "releases_deleted"
+        _atomic_json(state_path, state, 0o600)
+        config_root = config_path.parent
+        if config_root.exists():
+            shutil.rmtree(config_root)
+        state["cleanup_step"] = "config_deleted"
+        _atomic_json(state_path, state, 0o600)
+        state_root = state_path.parent
+        if state_root.exists():
+            shutil.rmtree(state_root)
+        return {"revoked": True, "status": final_status, "uninstalled": True}
+
+    state.update({"status": "revoked", "revoked_at": time.time(),
+                  "cleanup_step": "complete"})
+    for key in ("pending_identity", "pending_config", "revocation_identity",
+                "revocation_config"):
+        state.pop(key, None)
     _atomic_json(state_path, state, 0o600)
     return {"revoked": True, "status": final_status}
 
@@ -804,8 +889,7 @@ def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path,
 def uninstall_host(*, identity_path: Path, config_path: Path, state_path: Path,
                    http: Callable[..., dict[str, Any]] = request_json,
                    service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict[str, Any]:
-    state = _read_json(state_path)
-    revoked = revoke_host(
+    return revoke_host(
         identity_path=identity_path,
         config_path=config_path,
         state_path=state_path,
@@ -813,14 +897,6 @@ def uninstall_host(*, identity_path: Path, config_path: Path, state_path: Path,
         http=http,
         service_runner=service_runner,
     )
-    Path(state["service_path"]).unlink(missing_ok=True)
-    prefix = Path(state["prefix"])
-    config_root = config_path.parent
-    state_root = state_path.parent
-    shutil.rmtree(prefix, ignore_errors=True)
-    shutil.rmtree(config_root, ignore_errors=True)
-    shutil.rmtree(state_root, ignore_errors=True)
-    return {"uninstalled": True, **revoked}
 
 
 def residue_scan(roots: Iterable[Path]) -> dict[str, Any]:

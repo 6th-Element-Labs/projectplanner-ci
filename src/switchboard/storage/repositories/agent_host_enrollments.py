@@ -24,7 +24,6 @@ from db.core import hash_token
 ENROLLMENT_SCHEMA = "switchboard.agent_host_enrollment.v1"
 _ACTIVE = "active"
 ROTATION_RECOVERY_GRACE_SECONDS = 300
-ENROLLMENT_COMPLETION_RECOVERY_SECONDS = 600
 _FINGERPRINT_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 _COMPLETION_RECOVERY_RE = re.compile(r"^ahr-[A-Za-z0-9_-]{32,}$")
 
@@ -196,7 +195,6 @@ def complete_agent_host_enrollment(
         return _error("unsupported_platform", "platform must be darwin or linux")
 
     now = time.time()
-    token = "aht-" + secrets.token_urlsafe(32)
     bootstrap_digest = hash_token(bootstrap_code)
     recovery_digest = hash_token(completion_recovery_secret)
     with _conn(project) as connection:
@@ -207,26 +205,24 @@ def complete_agent_host_enrollment(
         if not row:
             return _error("invalid_bootstrap_code", "bootstrap code is invalid")
         current = dict(row)
+        token = _completion_recovery_token(
+            project=project,
+            enrollment_id=str(current["enrollment_id"]),
+            recovery_secret=completion_recovery_secret,
+        )
         consumed = bool(current.get("bootstrap_consumed_at"))
         if current.get("status") == _ACTIVE and consumed:
             recovery_matches = secrets.compare_digest(
                 str(current.get("completion_recovery_hash") or ""), recovery_digest)
-            recovery_unexpired = float(
-                current.get("completion_recovery_expires_at") or 0) > now
             same_attempt = (
                 recovery_matches
-                and recovery_unexpired
                 and current.get("public_key_fingerprint") == fingerprint
                 and str(current.get("platform") or "") == platform
+                and not current.get("completion_finalized_at")
             )
             if not same_attempt:
                 return _error(
                     "bootstrap_code_consumed", "bootstrap code has already been consumed")
-            token = _completion_recovery_token(
-                project=project,
-                enrollment_id=str(current["enrollment_id"]),
-                recovery_secret=completion_recovery_secret,
-            )
             principal_id = str(current.get("principal_id") or "")
             changed = connection.execute(
                 "UPDATE principals SET token_hash=? WHERE id=? AND revoked_at IS NULL",
@@ -263,7 +259,7 @@ def complete_agent_host_enrollment(
                 "completed": True,
                 "completion_recovered": True,
                 "host_token": token,
-                "host_token_returned_once": True,
+                "host_token_stable_until_finalized": True,
                 "enrollment": _public(completed),
             }
         if current.get("status") != "pending" or consumed:
@@ -312,7 +308,7 @@ def complete_agent_host_enrollment(
                     str(agent_host_version or "").strip(),
                     now,
                     recovery_digest,
-                    now + ENROLLMENT_COMPLETION_RECOVERY_SECONDS,
+                    None,
                     now,
                     current["enrollment_id"],
                 ),
@@ -359,9 +355,52 @@ def complete_agent_host_enrollment(
         "completed": True,
         "completion_recovered": False,
         "host_token": token,
-        "host_token_returned_once": True,
+        "host_token_stable_until_finalized": True,
         "enrollment": _public(completed),
     }
+
+
+def finalize_agent_host_enrollment(
+    *, enrollment_id: str, host_id: str, principal_id: str,
+    actor: str = "agent-host", project: str = DEFAULT_PROJECT,
+) -> dict[str, Any]:
+    """Acknowledge that the host credential is durable and retire bootstrap recovery."""
+    now = time.time()
+    with _conn(project) as connection:
+        row = connection.execute(
+            "SELECT * FROM agent_host_enrollments WHERE project_id=? "
+            "AND enrollment_id=? AND host_id=?",
+            (project, str(enrollment_id or "").strip(), str(host_id or "").strip()),
+        ).fetchone()
+        if not row:
+            return _error("enrollment_not_found", "host enrollment not found")
+        enrollment = dict(row)
+        if enrollment.get("status") != _ACTIVE:
+            return _error("host_identity_revoked", "host identity is not active")
+        if enrollment.get("principal_id") != str(principal_id or "").strip():
+            return _error("host_identity_mismatch", "host principal does not own this enrollment")
+        if not enrollment.get("completion_finalized_at"):
+            connection.execute(
+                "UPDATE agent_host_enrollments SET completion_recovery_hash=NULL, "
+                "completion_recovery_expires_at=NULL, completion_finalized_at=?, updated_at=? "
+                "WHERE enrollment_id=? AND principal_id=? AND status='active'",
+                (now, now, enrollment["enrollment_id"], principal_id),
+            )
+            connection.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (None, actor, "agent_host.enrollment_finalized", json.dumps({
+                    "enrollment_id": enrollment["enrollment_id"],
+                    "host_id": enrollment["host_id"],
+                    "principal_id": principal_id,
+                    "credential_values_redacted": True,
+                }, sort_keys=True), now),
+            )
+        updated = connection.execute(
+            "SELECT * FROM agent_host_enrollments WHERE enrollment_id=?",
+            (enrollment["enrollment_id"],),
+        ).fetchone()
+    return {"finalized": True, "enrollment": _public(updated)}
 
 
 def get_agent_host_enrollment(host_id: str, project: str = DEFAULT_PROJECT) -> dict[str, Any]:
@@ -411,6 +450,38 @@ def get_agent_host_rotation_recovery_principal(
         principal["scopes"] = json.loads(principal.get("scopes") or "[]")
     except (TypeError, json.JSONDecodeError):
         principal["scopes"] = []
+    return principal
+
+
+def get_agent_host_revocation_recovery_principal(
+    *, token: str, host_id: str, project: str = DEFAULT_PROJECT,
+) -> dict[str, Any] | None:
+    """Resolve a revoked bearer only for idempotent revoke/uninstall readback."""
+    raw_token = str(token or "").strip()
+    host_id = str(host_id or "").strip()
+    if not raw_token or not host_id:
+        return None
+    with _conn(project) as connection:
+        row = connection.execute(
+            "SELECT p.*, r.final_status, r.revoked_at AS recovery_revoked_at "
+            "FROM agent_host_revocation_recovery r "
+            "JOIN principals p ON p.id=r.principal_id "
+            "JOIN agent_host_enrollments e ON e.principal_id=p.id "
+            "WHERE r.token_hash=? AND r.host_id=? AND e.project_id=? "
+            "AND e.host_id=? AND e.status IN ('revoked','uninstalled')",
+            (hash_token(raw_token), host_id, project, host_id),
+        ).fetchone()
+    if not row:
+        return None
+    principal = dict(row)
+    try:
+        principal["scopes"] = json.loads(principal.get("scopes") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        principal["scopes"] = []
+    # This endpoint-specific receipt proves possession of the exact bearer that
+    # performed the original revoke. It must never revive general principal auth.
+    principal["revoked_at"] = None
+    principal["revocation_recovery"] = True
     return principal
 
 
@@ -523,6 +594,24 @@ def revoke_agent_host_identity(
             return _error("enrollment_not_found", "host enrollment not found")
         enrollment = dict(row)
         principal_id = str(enrollment.get("principal_id") or "")
+        principal = connection.execute(
+            "SELECT token_hash, revoked_at FROM principals WHERE id=?",
+            (principal_id,),
+        ).fetchone()
+        already_terminal = enrollment.get("status") in {"revoked", "uninstalled"}
+        if principal and not principal["revoked_at"]:
+            connection.execute(
+                "INSERT OR REPLACE INTO agent_host_revocation_recovery("
+                "token_hash, principal_id, host_id, final_status, revoked_at, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (principal["token_hash"], principal_id, host_id, final_status, now, now),
+            )
+        elif already_terminal:
+            connection.execute(
+                "UPDATE agent_host_revocation_recovery SET final_status=? "
+                "WHERE principal_id=? AND host_id=?",
+                (final_status, principal_id, host_id),
+            )
         connection.execute(
             "UPDATE principals SET revoked_at=COALESCE(revoked_at, ?) WHERE id=?",
             (now, principal_id),
@@ -541,21 +630,22 @@ def revoke_agent_host_identity(
             "UPDATE agent_hosts SET status='revoked', last_error=? WHERE host_id=?",
             (reason, host_id),
         )
-        connection.execute(
-            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-            (
-                None,
-                actor,
-                "agent_host.identity_revoked" if final_status == "revoked" else "agent_host.uninstalled",
-                json.dumps({
-                    "host_id": host_id,
-                    "principal_id": principal_id,
-                    "reason": str(reason or "").strip(),
-                    "post_revoke_denial": True,
-                }, sort_keys=True),
-                now,
-            ),
-        )
+        if not already_terminal or enrollment.get("status") != final_status:
+            connection.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                (
+                    None,
+                    actor,
+                    "agent_host.identity_revoked" if final_status == "revoked" else "agent_host.uninstalled",
+                    json.dumps({
+                        "host_id": host_id,
+                        "principal_id": principal_id,
+                        "reason": str(reason or "").strip(),
+                        "post_revoke_denial": True,
+                    }, sort_keys=True),
+                    now,
+                ),
+            )
         updated = connection.execute(
             "SELECT * FROM agent_host_enrollments WHERE enrollment_id=?",
             (enrollment["enrollment_id"],),
@@ -569,7 +659,9 @@ def check_agent_host_identity(
     """Fence enrolled host ids to their active, exact principal identity."""
     with _conn(project) as connection:
         row = connection.execute(
-            "SELECT status, principal_id, identity_generation, public_key_fingerprint "
+            "SELECT status, principal_id, identity_generation, public_key_fingerprint, "
+            "owner_user_id, tenant_allowlist_json, project_allowlist_json, "
+            "provider_allowlist_json "
             "FROM agent_host_enrollments WHERE project_id=? AND host_id=?",
             (project, str(host_id or "").strip()),
         ).fetchone()
@@ -596,12 +688,17 @@ def check_agent_host_identity(
         "allowed": True,
         "identity_generation": identity.get("identity_generation"),
         "public_key_fingerprint": identity.get("public_key_fingerprint"),
+        "owner_user_id": identity.get("owner_user_id"),
+        "tenant_allowlist": _json_list(identity.get("tenant_allowlist_json") or "[]"),
+        "project_allowlist": _json_list(identity.get("project_allowlist_json") or "[]"),
+        "provider_allowlist": _json_list(identity.get("provider_allowlist_json") or "[]"),
     }
 
 
 class AgentHostEnrollmentRepository:
     begin = staticmethod(begin_agent_host_enrollment)
     complete = staticmethod(complete_agent_host_enrollment)
+    finalize = staticmethod(finalize_agent_host_enrollment)
     get = staticmethod(get_agent_host_enrollment)
     list = staticmethod(list_agent_host_enrollments)
     rotate = staticmethod(rotate_agent_host_identity)
@@ -621,9 +718,11 @@ __all__ = [
     "ROTATION_RECOVERY_GRACE_SECONDS",
     "begin_agent_host_enrollment",
     "complete_agent_host_enrollment",
+    "finalize_agent_host_enrollment",
     "get_agent_host_enrollment",
     "list_agent_host_enrollments",
     "get_agent_host_rotation_recovery_principal",
+    "get_agent_host_revocation_recovery_principal",
     "rotate_agent_host_identity",
     "revoke_agent_host_identity",
     "check_agent_host_identity",
