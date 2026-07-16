@@ -270,6 +270,24 @@ try:
     # The New Project → repo handoff replaced the modal's ga-goto with a settings deep link.
     ok("'#tab-settings/github'" in js,
        "the New Project repo handoff deep-links into Settings -> GitHub, not the old modal")
+    # UI-20 (6/6): Account & password is folded into the Profile section — the standalone
+    # /account form is retired to a compatibility redirect, and the change-password flow
+    # now runs inline (rule #5: profile is scope:null, so the signedIn branch is the gate;
+    # no in-tab login bounce is needed).
+    ok("_settingsChangePassword" in settings_js
+       and "case 'profile-change-password':" in settings_js,
+       "the change-password flow runs inline in the Profile section")
+    ok("api/auth/change-password" in settings_js
+       and "Password updated. Other devices have been signed out." in settings_js,
+       "the inline form posts to /api/auth/change-password and keeps the revocation message")
+    # The user-menu 'Account & password' item points at the canonical section, not /account.
+    ok('id="menu-account"' in html and 'href="#tab-settings/profile"' in html,
+       "the user-menu Account item deep-links into Settings -> Profile")
+    # /account still serves (compat redirect for old links) but no longer hosts a password form.
+    acct = client.get("/account")
+    ok(acct.status_code == 200, "/account still serves (compatibility redirect)")
+    ok('id="pw-form"' not in acct.text and "#tab-settings/profile" in acct.text,
+       "the /account page is a redirect stub with no duplicate password form")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

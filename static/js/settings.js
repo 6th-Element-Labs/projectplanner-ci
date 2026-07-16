@@ -262,15 +262,69 @@
             }
             rows.push(['Auth mode', `<code>${this.esc(this.authMode || '—')}</code>`]);
             rows.push([`Scopes on ${window.PM_PROJECT || 'this project'}`, scopes]);
+            // UI-20 (6/6): the /account Change-password form folded in-place. profile is
+            // scope:null, so this section renders with no global session (dev-open/bearer);
+            // the signedIn branch is the gate (rule #5 — the /account login bounce has no
+            // in-tab equivalent and does not need one). /account itself is now a thin
+            // compatibility redirect into this section.
+            const pwCard = signedIn
+                ? `<div class="card mt-3" id="settings-profile-password"><div class="card-header"><h4 class="card-title mb-0"><i class="ti ti-key me-2" aria-hidden="true"></i>Change password</h4></div>
+                    <div class="card-body">
+                        <div class="mb-2"><label class="form-label small mb-1" for="profile-cur-pw">Current password</label>
+                            <input type="password" id="profile-cur-pw" class="form-control form-control-sm" autocomplete="current-password"></div>
+                        <div class="mb-2"><label class="form-label small mb-1" for="profile-new-pw">New password</label>
+                            <input type="password" id="profile-new-pw" class="form-control form-control-sm" autocomplete="new-password" minlength="8">
+                            <div class="form-hint">At least 8 characters.</div></div>
+                        <div class="mb-2"><label class="form-label small mb-1" for="profile-confirm-pw">Confirm new password</label>
+                            <input type="password" id="profile-confirm-pw" class="form-control form-control-sm" autocomplete="new-password" minlength="8"></div>
+                        <div class="d-flex align-items-center">
+                            <span id="profile-pw-flash" class="small text-secondary me-auto"></span>
+                            <button type="button" id="profile-pw-submit" class="btn btn-primary btn-sm" data-set-action="profile-change-password"><i class="ti ti-key me-1" aria-hidden="true"></i>Update password</button>
+                        </div>
+                    </div></div>`
+                : '';
             return this._settingsCard({
                 id: 'settings-profile', title: 'Profile & security', icon: 'ti-user-shield',
                 subtitle: 'Your identity, session, and effective permissions',
-                body: this._settingsRows(rows),
+                body: this._settingsRows(rows) + pwCard,
                 footer: signedIn
-                    ? `<span class="text-secondary small">Password changes open the account page.</span>
-                       <a class="btn btn-primary btn-sm ms-auto" href="/account"><i class="ti ti-key me-1" aria-hidden="true"></i>Change password</a>`
+                    ? '<span class="text-secondary small"><i class="ti ti-shield-lock me-1" aria-hidden="true"></i>Changing your password signs out your other devices.</span>'
                     : '<span class="text-secondary small">Sign in with a global account to manage a password.</span>',
             });
+        },
+
+        // Mirrors the retired account.html flow: client-side guards, then POST
+        // /api/auth/change-password. Kept as a raw fetch (not _sSend) so the server's 403
+        // (wrong current) / 422 (too short / unchanged) detail surfaces verbatim, and so the
+        // success line stays exactly "Password updated. Other devices have been signed out."
+        async _settingsChangePassword() {
+            const cur = document.getElementById('profile-cur-pw')?.value || '';
+            const next = document.getElementById('profile-new-pw')?.value || '';
+            const confirm = document.getElementById('profile-confirm-pw')?.value || '';
+            const flash = document.getElementById('profile-pw-flash');
+            const setFlash = (msg, cls) => { if (flash) { flash.textContent = msg; flash.className = `small me-auto ${cls}`; } };
+            if (next.length < 8) { setFlash('New password must be at least 8 characters.', 'text-danger'); return; }
+            if (next !== confirm) { setFlash('New password and confirmation do not match.', 'text-danger'); return; }
+            if (next === cur) { setFlash('New password must be different from the current one.', 'text-danger'); return; }
+            const btn = document.getElementById('profile-pw-submit'); if (btn) btn.disabled = true;
+            setFlash('Updating…', 'text-secondary');
+            try {
+                const res = await fetch('api/auth/change-password', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ current_password: cur, new_password: next }),
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    setFlash(data.detail || 'Could not update password.', 'text-danger');
+                    return;
+                }
+                ['profile-cur-pw', 'profile-new-pw', 'profile-confirm-pw'].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ''; });
+                setFlash('Password updated. Other devices have been signed out.', 'text-success');
+            } catch (e) {
+                setFlash('Network error — please try again.', 'text-danger');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         },
 
         async _settingsAiAccountsSection() {
@@ -1211,6 +1265,7 @@
             case 'members-refresh': return this._settingsMembersReload();
             case 'github-save': return this._settingsSaveGithubRepo();
             case 'github-verify': return this._settingsVerifyGithub();
+            case 'profile-change-password': return this._settingsChangePassword();
             case 'tokens-create-toggle': { const f = document.getElementById('apikeys-create-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'tokens-create': return this._settingsCreateToken();
             case 'tokens-copy': return this._settingsTokensCopy();

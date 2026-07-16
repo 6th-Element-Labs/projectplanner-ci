@@ -175,7 +175,7 @@
                             </a>
                             <div class="dropdown-menu dropdown-menu-end dropdown-menu-arrow">
                                 <a href="#tab-settings" class="dropdown-item" id="menu-settings"><i class="ti ti-settings me-2"></i>Settings</a>
-                                <a href="/account" class="dropdown-item"><i class="ti ti-key me-2"></i>Account &amp; password</a>
+                                <a href="#tab-settings/profile" class="dropdown-item" id="menu-account"><i class="ti ti-key me-2"></i>Account &amp; password</a>
                                 <a href="/coordination" class="dropdown-item" id="menu-coordination"><i class="ti ti-messages me-2"></i>Agent coordination</a>
                                 <div class="dropdown-divider"></div>
                                 <a href="#" class="dropdown-item" id="user-menu-signout"><i class="ti ti-logout me-2"></i>Sign out</a>
@@ -1017,6 +1017,13 @@
         var settings = document.getElementById('menu-settings');
         if (settings) settings.addEventListener('click', function (e) {
           e.preventDefault();
+          if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-settings');
+        });
+        // UI-20 (6/6): Account & password is now the Settings → Profile section, not /account.
+        var account = document.getElementById('menu-account');
+        if (account) account.addEventListener('click', function (e) {
+          e.preventDefault();
+          window.location.hash = '#tab-settings/profile';
           if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-settings');
         });
         var out = document.getElementById('user-menu-signout');

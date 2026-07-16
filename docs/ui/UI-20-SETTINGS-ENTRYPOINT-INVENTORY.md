@@ -16,7 +16,7 @@ addressed as `#tab-settings/<section>`.
 | 2 | Communications (UI-14) | `#comms-modal` + rail `#btn-project-comms` | `comms` | **done (3/6)** — inlined into `_settingsCommsSection` (inbound domains + outbound recipients/cadence, chip add/remove, save, send-test); modal + rail button retired; admin gate re-scoped from the `#comms-modal .comms-editable` selector to inline `disabled` driven by the server `can_edit` probe |
 | 3 | Members & access (UI-5) | `#members-modal` + rail `#btn-project-members` | `members` | **done (4/6)** — inlined into `_settingsMembersSection` (member table with per-row role select + revoke, add-a-member form, visibility explainer); modal + rail button retired; role change kept as grant-then-revoke; `btn-project-members` command-palette entry repointed to the `#tab-settings/members` deep link |
 | 4 | Connect GitHub repo (UI-15) | `#github-assoc-modal` + rail `#btn-project-github` | `github` | **done (5/6)** — inlined into `_settingsGithubSection` below the repo-topology card (repo save + guided webhook wiring: payload URL, secret, `gh` one-liner, Verify); modal + rail button retired; open path never probes (only Verify passes `?check=1`); New Project handoff + palette entry repointed to the `#tab-settings/github` deep link |
-| 5 | Account & password | `/account` + `static/account.html` | `profile` | pending |
+| 5 | Account & password | `/account` + `static/account.html` | `profile` | **done (6/6)** — change-password form inlined into `_settingsProfileSection` (guarded by the `signedIn` branch; posts to `/api/auth/change-password` as a raw fetch so the 403/422 detail surfaces and the revocation line stays verbatim); `account.html` reduced to a compatibility redirect into `#tab-settings/profile`; user-menu "Account & password" item repointed to the same deep link |
 | 6 | Project/provenance admin cards | Settings tab (UI-9) | `provenance` / `advanced` | **done (UI-18)** |
 | 7 | Appearance | legacy theme cog (retired) | `appearance` | **done (UI-18)** — read-only; the app is deliberately single-theme (`static/taikun-ui.js`) |
 | 8 | Status docks | `#fleet-dock`, `#saturation-dock`, `#narration-ops-dock` | `fleet` / `capacity` / `narration`, docks exception-only + deep-link | **carved out → UI-22** |
@@ -72,7 +72,15 @@ server still enforces per action.
 existing `signedIn` branch in `_settingsProfileSection` is the gate. Keep
 `'Password updated. Other devices have been signed out.'` — it is the only place the user
 learns their other sessions were revoked (`test_auth_password_change.py` asserts the
-revocation).
+revocation). — **resolved (6/6):** the change-password form is folded into the `signedIn`
+branch of `_settingsProfileSection`; with no session the section renders read-only (no
+in-tab bounce, none needed). `_settingsChangePassword` keeps the client-side guards and the
+exact revocation line, and uses a raw `fetch` (not `_sSend`) so the wrong-current 403 and
+too-short/unchanged 422 detail surface verbatim rather than as a generic write error.
+`account.html` is now a redirect stub (still `GET /account` → 200 for old links, but no
+password form), and the user-menu item deep-links to `#tab-settings/profile`.
+`test_ui18_settings_shell.py` asserts the inline form, the retained message, the redirect
+stub, and the repointed menu item.
 
 ## Scope authority (resolved)
 
