@@ -111,6 +111,7 @@ rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
 | Task | Title | Tracker | Repo evidence |
 |---|---|---|---|
 | **ARCH-MS-96** | Coord service: ADR charter + thin surface | ✅ | PR #531 — ADR-0013; `docs/coord/thin_day_one_surface.md` |
+| **ARCH-MS-104** | Coord independence: routes, writers, auth, SQLite, capacity | 🟡 | No-Go artifact + executable gate; `docs/coord/coord_independence_verdict.json` |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.

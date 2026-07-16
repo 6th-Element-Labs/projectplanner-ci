@@ -68,10 +68,16 @@ def create_router(*, resolve_project: ProjectResolver,
                                     actor=auth.actor(principal), project=project)
 
     @router.get("/ixp/v1/delta")
-    async def ixp_delta(project: str = Query(...), lane: str = "",
+    async def ixp_delta(request: Request, project: str = Query(...), lane: str = "",
                         since_cursor: int = 0):
+        # Protocol routes bypass the global browser/API auth middleware because many
+        # carry their project in a JSON body and authenticate inside the handler.
+        # Delta is a query route, so it must enforce that boundary explicitly; without
+        # this check an unauthenticated caller could read project activity (BUG-73).
+        proj = resolve_project(project)
+        resolve_principal(request, proj, ("read",), dev_actor="agent")
         return store.get_activity_delta(since_cursor=since_cursor, lane=lane,
-                                        project=resolve_project(project))
+                                        project=proj)
 
     @router.get("/ixp/v1/working_agreement")
     async def ixp_working_agreement(project: str = Query(...)):

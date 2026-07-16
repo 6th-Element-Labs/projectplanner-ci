@@ -1,0 +1,222 @@
+{
+  "schema": "switchboard.coord_independence_verdict.v1",
+  "task_id": "ARCH-MS-104",
+  "deliverable_id": "arch-ms-coord-service",
+  "observed_at": "2026-07-16T00:29:48Z",
+  "verdict": "nogo",
+  "process_cut_authorized": false,
+  "blocking_gates": [
+    "G1_ports_independence"
+  ],
+  "go_only_tasks": [
+    "ARCH-MS-105"
+  ],
+  "route_inventory": [
+    {
+      "method": "GET",
+      "path": "/api/board",
+      "router": "src/switchboard/api/routers/board.py",
+      "calls": [
+        "store.board_payload",
+        "etag_json"
+      ],
+      "repositories": [
+        "switchboard.storage.repositories.tasks",
+        "switchboard.storage.repositories.activity"
+      ],
+      "transaction_boundary": "multiple bounded read connections for tasks, meta, project context and rollups; process-local TTL cache",
+      "project_scope": "required query parameter resolved before data access",
+      "auth": "global project-scoped read principal",
+      "writes": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/signals",
+      "router": "src/switchboard/api/routers/board.py",
+      "calls": [
+        "signals.compute_plan_signals",
+        "store.list_tasks",
+        "store.get_meta"
+      ],
+      "repositories": [
+        "switchboard.storage.repositories.tasks",
+        "switchboard.storage.repositories.activity"
+      ],
+      "transaction_boundary": "multiple bounded read connections plus process-local TTL cache",
+      "project_scope": "required query parameter resolved before data access",
+      "auth": "global project-scoped read principal",
+      "writes": false
+    },
+    {
+      "method": "GET",
+      "path": "/ixp/v1/delta",
+      "router": "src/switchboard/api/routers/monitors.py",
+      "calls": [
+        "store.get_activity_delta"
+      ],
+      "repositories": [
+        "switchboard.storage.repositories.activity"
+      ],
+      "transaction_boundary": "one project SQLite read transaction for activity, tasks and git-state projection",
+      "project_scope": "required query parameter resolved before data access",
+      "auth": "handler-enforced project-scoped read principal (BUG-73 fix)",
+      "writes": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/coordination",
+      "router": "src/switchboard/api/routers/coordination.py",
+      "calls": [
+        "store.list_active_agents",
+        "store.list_agent_messages",
+        "store.list_decisions",
+        "store.list_coordinator_decisions"
+      ],
+      "repositories": [
+        "switchboard.storage.repositories.coordination",
+        "decisions_store"
+      ],
+      "transaction_boundary": "four sequential bounded read connections; no cross-call transaction",
+      "project_scope": "required query parameter resolved before data access",
+      "auth": "global project-scoped read principal",
+      "writes": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/coordinator_decisions",
+      "router": "src/switchboard/api/routers/coordination.py",
+      "calls": [
+        "store.list_coordinator_decisions"
+      ],
+      "repositories": [
+        "decisions_store"
+      ],
+      "transaction_boundary": "one project SQLite read transaction",
+      "project_scope": "required query parameter resolved before data access",
+      "auth": "global project-scoped read principal",
+      "writes": false
+    }
+  ],
+  "writer_inventory": [],
+  "coupling": {
+    "unresolved_root_imports": [
+      {
+        "path": "src/switchboard/api/routers/board.py",
+        "imports": [
+          "dispatch",
+          "signals",
+          "store"
+        ]
+      },
+      {
+        "path": "src/switchboard/api/routers/coordination.py",
+        "imports": [
+          "auth",
+          "store"
+        ]
+      },
+      {
+        "path": "src/switchboard/api/routers/monitors.py",
+        "imports": [
+          "auth",
+          "store"
+        ]
+      },
+      {
+        "path": "signals.py",
+        "imports": [
+          "store"
+        ]
+      }
+    ],
+    "required_remediation": [
+      "Define Coord read/query and auth Protocols without root store/auth imports.",
+      "Bind thin service adapters directly to package repositories and shared auth ports.",
+      "Prove a standalone service import ceiling of zero forbidden monolith modules before changing this verdict to go."
+    ]
+  },
+  "auth_project_scope": {
+    "explicit_project_required": true,
+    "api_read_boundary": "global middleware requires project-scoped read",
+    "protocol_read_boundary": "delta handler requires project-scoped read",
+    "bug_task_id": "BUG-73",
+    "production_before_fix": {
+      "delta_unauthenticated_status": 200,
+      "board_unauthenticated_status": 401,
+      "deployed_sha": "5ab59c211b30424ad46238328f5cb1449134b528"
+    },
+    "branch_fix": "src/switchboard/api/routers/monitors.py explicitly calls resolve_principal for /ixp/v1/delta"
+  },
+  "sqlite_contention": {
+    "day_one_coord_writer_count": 0,
+    "journal_mode": "wal",
+    "model": "one existing writer plus three projected Coord readers",
+    "writer_transactions": 80,
+    "reader_queries": 240,
+    "lock_errors": 0,
+    "quick_check": "ok",
+    "production_lock_signals_in_arch_ms_103_soak": 0
+  },
+  "resource_budget": {
+    "host": "ip-172-31-45-202",
+    "memory_total_bytes": 1931718656,
+    "memory_used_bytes": 1053376512,
+    "memory_available_bytes": 692711424,
+    "swap_total_bytes": 965734400,
+    "swap_used_bytes": 47710208,
+    "current_unit_memory_bytes": {
+      "projectplanner": 205279232,
+      "switchboard-auth": 50577408,
+      "switchboard-tasks": 70086656
+    },
+    "projected_coord_rss_bytes": 100663296,
+    "projection_basis": "96 MiB conservative ceiling above live Tasks RSS and nearly twice live Auth RSS",
+    "projected_remaining_bytes": 592048128,
+    "minimum_reserve_bytes": 536870912,
+    "headroom_after_projection_bytes": 55177216,
+    "passed": true
+  },
+  "tasks_production_acceptance": {
+    "task_id": "ARCH-MS-103",
+    "green": true,
+    "tasks_unit_active": true,
+    "tasks_health_service": "switchboard-tasks",
+    "auth_unit_active": true,
+    "auth_health_service": "switchboard-auth",
+    "public_health": "ok",
+    "deployed_sha": "5ab59c211b30424ad46238328f5cb1449134b528"
+  },
+  "gates": {
+    "G1_ports_independence": {
+      "passed": false,
+      "reason": "Day-one routers and signals still import root store/auth/dispatch modules; a second process would network-wrap unresolved coupling."
+    },
+    "G2_route_writer_inventory": {
+      "passed": true,
+      "reason": "All five chartered routes are reads and Coord owns zero day-one writers."
+    },
+    "G3_auth_project_scope": {
+      "passed": true,
+      "reason": "Every route requires explicit project scope and BUG-73 adds missing handler-level read auth to protocol delta."
+    },
+    "G4_sqlite_contention": {
+      "passed": true,
+      "reason": "WAL reader/writer probe completes with zero lock errors; Coord adds readers only."
+    },
+    "G5_resource_budget": {
+      "passed": true,
+      "reason": "A conservative 96 MiB Coord projection leaves 592048128 bytes, above the 512 MiB reserve."
+    },
+    "G6_tasks_acceptance": {
+      "passed": true,
+      "reason": "Tasks/Auth units and health remain green after ARCH-MS-103 production acceptance."
+    }
+  },
+  "nogo_exit": {
+    "keep_coord_in_process": true,
+    "forbid_live_unit": true,
+    "forbid_caddy_8123": true,
+    "forbid_dual_strip": true,
+    "next_action": "Remove root coupling behind explicit ports, rerun this gate, and amend the verdict before ARCH-MS-105 can proceed."
+  }
+}
