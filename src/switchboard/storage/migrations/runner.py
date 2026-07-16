@@ -129,6 +129,10 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
      "personal_execution_connections", "host_principal_id",
      "ALTER TABLE personal_execution_connections "
      "ADD COLUMN host_principal_id TEXT NOT NULL DEFAULT ''"),
+    ("0059_agent_host_enrollments_execution_policy_json",
+     "agent_host_enrollments", "execution_policy_json",
+     "ALTER TABLE agent_host_enrollments "
+     "ADD COLUMN execution_policy_json TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 # Idempotent DDL migrations (``CREATE ... IF NOT EXISTS``) applied after the column set,

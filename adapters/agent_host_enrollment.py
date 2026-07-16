@@ -21,6 +21,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any, Callable, Iterable
 import urllib.error
@@ -88,16 +89,49 @@ def _parse_version(value: str) -> tuple[int, int, int]:
     return tuple(int(match.group(index)) for index in (1, 2, 3))
 
 
+def _cleanup_stale_atomic_temps(path: Path, *, now: float | None = None) -> None:
+    """Remove only old, same-user regular files created by our atomic writer."""
+    cutoff = (time.time() if now is None else now) - 3600
+    prefix = f".{path.name}."
+    for candidate in path.parent.glob(f"{prefix}*.tmp"):
+        try:
+            metadata = candidate.lstat()
+            if (not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.getuid()
+                    or metadata.st_mtime > cutoff):
+                continue
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+
+
 def _atomic_json(path: Path, value: dict[str, Any], mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    with temporary.open("w", encoding="utf-8") as target:
-        json.dump(value, target, sort_keys=True, indent=2)
-        target.write("\n")
-        target.flush()
-        os.fsync(target.fileno())
-    os.chmod(temporary, mode)
-    os.replace(temporary, path)
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    _cleanup_stale_atomic_temps(path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as target:
+            descriptor = -1
+            json.dump(value, target, sort_keys=True, indent=2)
+            target.write("\n")
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, mode)
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(path.parent, directory_flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -344,6 +378,7 @@ def _default_paths(target_platform: str) -> dict[str, Path]:
         "prefix": home / ".local" / "share" / "switchboard-agent-host",
         "config_root": home / ".config" / "switchboard-agent-host",
         "state_root": state_root,
+        "workspace_root": state_root / "workspaces",
         "log_root": log_root,
         "service_path": service,
     }
@@ -456,6 +491,13 @@ def _finalize_install(
         raise EnrollmentError("pending enrollment finalization lacks host identity material")
     if not config.get("base_url") or not config.get("project"):
         raise EnrollmentError("pending enrollment finalization lacks endpoint configuration")
+    workspace_root = Path(config.get("workspace_root") or state_root / "workspaces")
+    try:
+        workspace_root.resolve().relative_to(state_root.resolve())
+    except ValueError as exc:
+        raise EnrollmentError("personal workspace root must be inside the protected state root") from exc
+    workspace_root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(workspace_root, 0o700)
     try:
         _atomic_json(identity_path, identity, 0o600)
         state["finalization_step"] = "identity_written"
@@ -471,7 +513,7 @@ def _finalize_install(
             config_path=config_path,
             service_path=service_path,
             log_root=log_root,
-            writable_roots=(state_root,),
+            writable_roots=(state_root, workspace_root),
         )
         state["finalization_step"] = "service_rendered"
         _atomic_json(state_path, state, 0o600)
@@ -559,6 +601,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
     prefix = Path(selected["prefix"])
     config_root = Path(selected["config_root"])
     state_root = Path(selected["state_root"])
+    workspace_root = Path(selected.get("workspace_root") or state_root / "workspaces")
     service_path = Path(selected["service_path"])
     log_root = Path(selected["log_root"])
     release = _install_release(bundle_dir, manifest, prefix)
@@ -696,9 +739,16 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         "project": project,
         "runtime": "codex",
         "work_module": "adapters.codex_local_worker:run",
-        "allow_work": bool(allow_work),
+        "allow_work": bool((enrollment.get("execution_policy") or {}).get(
+            "allow_work", allow_work)),
         "allow_global_claim": False,
-        "lanes": sorted(set(lanes)),
+        "lanes": sorted(set((enrollment.get("execution_policy") or {}).get(
+            "lanes") or [])),
+        "capabilities": sorted(set((enrollment.get("execution_policy") or {}).get(
+            "capabilities") or [])),
+        "max_sessions": int((enrollment.get("execution_policy") or {}).get(
+            "max_sessions") or 1),
+        "personal_wakes_only": True,
         "owner_user_id": str(enrollment.get("owner_user_id") or ""),
         "tenant_allowlist": sorted(set(enrollment.get("tenant_allowlist") or [])),
         "project_allowlist": enrollment.get("project_allowlist") or [project],
@@ -707,6 +757,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         "repo_root": str(prefix / "current"),
         "runner_dir": str(state_root / "runner"),
         "runtime_root": str(state_root / "provider-runtimes"),
+        "workspace_root": str(workspace_root),
         "agent_host_version": manifest["version"],
     }
     # Journal the only returned bearer and all validated endpoint data before the
@@ -947,6 +998,10 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_AGENT_HOST_ALLOW_WORK": "1" if config.get("allow_work") else "0",
         "PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM": "0",
         "PM_HOST_LANES": ",".join(config.get("lanes") or []),
+        "PM_HOST_CAPABILITIES": ",".join(config.get("capabilities") or []),
+        "PM_HOST_MAX_SESSIONS": str(config.get("max_sessions") or 1),
+        "PM_PERSONAL_AGENT_HOST_EXECUTION": "1" if config.get("personal_wakes_only") else "0",
+        "PM_PERSONAL_WORKSPACE_ROOT": config.get("workspace_root") or "",
         "PM_HOST_OWNER_USER_ID": config.get("owner_user_id") or "",
         "PM_HOST_TENANTS": ",".join(config.get("tenant_allowlist") or []),
         "PM_HOST_PROJECTS": ",".join(config.get("project_allowlist") or [config["project"]]),

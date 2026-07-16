@@ -218,6 +218,8 @@ try:
        "complete_wake records runtime start evidence")
 
     personal_agent = "codex/PERSONAL-1"
+    store.set_project_access(
+        P, "tenant-test", owner_user_id=p["id"], created_by="test")
     personal_task = store.create_task({
         "workstream_id": "TEST", "workstream_name": "Test",
         "title": "Personal exact wake proof", "phase": "Build",
@@ -268,7 +270,7 @@ try:
             "public_key_fingerprint, identity_generation, package_version, platform, "
             "hostname, status, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            ("hostenroll-runtime-personal", P, "host/test", "host/test", "user-test",
+            ("hostenroll-runtime-personal", P, "host/test", "host/test", p["id"],
              '["tenant-test"]', f'["{P}"]', '["openai-codex"]',
              "runtime-personal-bootstrap-hash", 9999999999.0, 1.0, p["id"],
              "sha256:" + "d" * 64, 1, "0.2.0", "linux", "testbox", "active",
@@ -296,15 +298,41 @@ try:
     }
     widened_registration = store.register_host(
         widened_inventory, principal_id=p["id"], actor=auth.actor(p), project=P)
-    widened_inventory["capacity"]["owner"]["user_id"] = "user-test"
+    local_auth_inventory = {
+        "available": True,
+        "runtime": "codex",
+        "auth_mode": "chatgpt_personal",
+        "account_fingerprint": "acct-test",
+        "credential_values_redacted": True,
+        "provider_credential_exported": False,
+    }
+    widened_inventory.update({
+        "runtimes": [{
+            "runtime": "codex",
+            "lanes": ["ADAPTER"],
+            "capabilities": ["docs", "github", "python", "tests"],
+            "policy": {"allow_work": True, "allow_global_claim": False},
+            "local_auth": local_auth_inventory,
+        }],
+        "limits": {"max_sessions": 1},
+    })
+    widened_inventory["capacity"].update({
+        "owner": {
+            "user_id": p["id"],
+            "tenant_allowlist": ["tenant-test"],
+            "project_allowlist": [P],
+            "provider_allowlist": ["openai-codex"],
+        },
+        "local_auth": local_auth_inventory,
+    })
     enrolled_registration = store.register_host(
         widened_inventory, principal_id=p["id"], actor=auth.actor(p), project=P)
     ok(widened_registration.get("error_code") == "host_enrollment_policy_mismatch"
        and enrolled_registration.get("host_id") == "host/test",
-       "server-issued owner and allowlists are authoritative at registration")
+       "server-issued owner, allowlists, runtime, capabilities, and limits are authoritative")
     widened_heartbeat = store.heartbeat_host(
         "host/test", capacity={"owner": {
-            "user_id": "user-test", "tenant_allowlist": ["tenant-widened"],
+            "user_id": p["id"], "tenant_allowlist": ["tenant-widened"],
             "project_allowlist": [P], "provider_allowlist": ["openai-codex"],
         }}, principal_id=p["id"], actor=auth.actor(p), project=P)
     ok(widened_heartbeat.get("error_code") == "host_enrollment_policy_mismatch",
@@ -320,10 +348,48 @@ try:
             },
         }
 
+    attacker = store.create_principal(
+        kind="host", display_name="host/attacker", token="host-attacker-token",
+        scopes=["read", "write:ixp"], principal_id="host-attacker",
+        project=P)
+
+    store.set_project_access(
+        P, "tenant-other", owner_user_id=p["id"], created_by="test")
+    tenant_attack = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "ADAPTER", "capabilities": ["python"]},
+        reason="reject a durable project tenant outside enrollment", source="test",
+        policy=personal_policy(personal_session["work_session_id"]),
+        task_id=personal_task["task_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    store.set_project_access(
+        P, "tenant-test", owner_user_id=p["id"], created_by="test")
+    owner_attack = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "ADAPTER", "capabilities": ["python"]},
+        reason="reject a different principal consuming personal auth", source="test",
+        policy=personal_policy(personal_session["work_session_id"]),
+        task_id=personal_task["task_id"], principal_id=attacker["id"],
+        actor="host/attacker", project=P)
+    generic_wake = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "ADAPTER", "capabilities": ["python"]},
+        reason="generic work cannot use a personal host", source="test",
+        task_id=personal_task["task_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    generic_claim = store.claim_wake(
+        "host/test", generic_wake["wake_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    ok("host_enrollment_tenant_denied" in tenant_attack.get("reason_codes", [])
+       and "personal_wake_owner_principal_denied" in owner_attack.get("reason_codes", [])
+       and generic_claim.get("reason") == "personal_host_execution_policy_denied"
+       and "personal_wakes_only" in generic_claim.get("reason_codes", []),
+       "personal auth is owner-bound and enrolled hosts reject generic execution")
+
     bad_policy = personal_policy("worksession-unrelated")
     bad_wake = store.request_wake(
         selector={"runtime": "codex", "agent_id": personal_agent,
-                  "lane": "TEST", "capabilities": ["python"]},
+                  "lane": "ADAPTER", "capabilities": ["python"]},
         reason="reject unrelated exact binding", source="test",
         policy=bad_policy, task_id=personal_task["task_id"],
         principal_id=p["id"], actor=auth.actor(p), project=P)
@@ -335,7 +401,7 @@ try:
     good_policy = personal_policy(personal_session["work_session_id"])
     good_wake = store.request_wake(
         selector={"runtime": "codex", "agent_id": personal_agent,
-                  "lane": "TEST", "capabilities": ["python"]},
+                  "lane": "ADAPTER", "capabilities": ["python"]},
         reason="accept exact personal binding", source="test",
         policy=good_policy, task_id=personal_task["task_id"],
         principal_id=p["id"], actor=auth.actor(p), project=P)
@@ -412,10 +478,6 @@ try:
     ok(not wrong_runner_claim.get("claimed")
        and "runner_session_id.argument" in wrong_runner_claim.get("reason_codes", []),
        "personal wake claim rejects a substituted runner session")
-    attacker = store.create_principal(
-        kind="host", display_name="host/attacker", token="host-attacker-token",
-        scopes=["read", "write:ixp"], principal_id="host-attacker",
-        project=P)
     attacker_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
         principal_id=attacker["id"], actor="host/attacker", project=P)
@@ -433,8 +495,7 @@ try:
             (good_execution["execution_connection_id"],),
         ).fetchone()["status"]
     ok(attacker_claim.get("claimed") is False
-       and "active_enrollment_principal_mismatch"
-       in attacker_claim.get("reason_codes", [])
+       and attacker_claim.get("error_code") == "host_identity_mismatch"
        and good_personal_claim.get("claimed") is True
        and good_personal_claim.get("reserved") is False
        and resumed_personal_claim.get("resumed") is True
@@ -462,13 +523,85 @@ try:
             "WHERE execution_connection_id=?",
             (good_execution["execution_connection_id"],),
         ).fetchone()["status"]
+    personal_completed_retry = store.complete_wake(
+        good_wake["wake_id"], runner_session_id=exact_runner_id,
+        agent_id=personal_agent, result={"started": True},
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    conflicting_completion_retry = store.complete_wake(
+        good_wake["wake_id"], runner_session_id=exact_runner_id,
+        agent_id=personal_agent, result={"started": True, "detail": "conflict"},
+        principal_id=p["id"], actor=auth.actor(p), project=P)
     ok(attacker_completion.get("completed") is False
        and "active_enrollment_principal_mismatch"
        in attacker_completion.get("reason_codes", [])
        and state_after_attack == "active"
        and personal_completed.get("status") == "completed"
-       and final_connection_state == "completed",
-       "personal completion is principal-bound and cannot be terminalized cross-host")
+       and final_connection_state == "completed"
+       and personal_completed_retry.get("note") == "idempotent terminal readback"
+       and "completion_result_mismatch"
+       in conflicting_completion_retry.get("reason_codes", []),
+       "personal completion is principal-bound, idempotent, and rejects conflicts")
+
+    def connection_status(wake):
+        connection_id = ((wake.get("policy") or {}).get("execution_binding") or {}).get(
+            "execution_connection_id")
+        with _conn(P) as connection:
+            return connection.execute(
+                "SELECT status FROM personal_execution_connections "
+                "WHERE execution_connection_id=?", (connection_id,),
+            ).fetchone()["status"]
+
+    immediate_failed = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "ADAPTER", "capabilities": ["unsupported"]},
+        reason="fail immediately when no personal host is eligible", source="test",
+        policy=personal_policy(personal_session["work_session_id"])
+        | {"no_eligible_host": "fail"},
+        task_id=personal_task["task_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    cancelled_wake = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "ADAPTER", "capabilities": ["python"]},
+        reason="cancel terminal proof", source="test",
+        policy=personal_policy(personal_session["work_session_id"]),
+        task_id=personal_task["task_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    cancelled = store.cancel_wake(
+        cancelled_wake["wake_id"], reason="operator_cancelled",
+        actor=auth.actor(p), project=P)
+    claim_deadline_wake = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "ADAPTER", "capabilities": ["python"]},
+        reason="claim deadline terminal proof", source="test",
+        policy=personal_policy(personal_session["work_session_id"])
+        | {"deadline_seconds": 60},
+        task_id=personal_task["task_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        connection.execute("UPDATE wake_intents SET deadline=-1 WHERE wake_id=?",
+                           (claim_deadline_wake["wake_id"],))
+    claim_deadline = store.claim_wake(
+        "host/test", claim_deadline_wake["wake_id"],
+        runner_session_id=((claim_deadline_wake.get("policy") or {}).get(
+            "execution_binding") or {}).get("runner_session_id", ""),
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    sweep_deadline_wake = store.request_wake(
+        selector={"runtime": "codex", "agent_id": personal_agent,
+                  "lane": "ADAPTER", "capabilities": ["python"]},
+        reason="sweep deadline terminal proof", source="test",
+        policy=personal_policy(personal_session["work_session_id"])
+        | {"deadline_seconds": 60},
+        task_id=personal_task["task_id"], principal_id=p["id"],
+        actor=auth.actor(p), project=P)
+    store.sweep_wake_intents(project=P, now=10**12)
+    ok(immediate_failed.get("status") == "failed"
+       and connection_status(immediate_failed) == "failed"
+       and cancelled.get("status") == "cancelled"
+       and connection_status(cancelled_wake) == "cancelled"
+       and claim_deadline.get("reason") == "deadline_expired"
+       and connection_status(claim_deadline_wake) == "failed"
+       and connection_status(sweep_deadline_wake) == "failed",
+       "every personal wake terminal path closes its exact execution connection first")
 
     failed_wake = store.request_wake(
         selector={"runtime": "claude-code", "agent_id": "claude/TEST#fail",

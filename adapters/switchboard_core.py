@@ -636,6 +636,8 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
             source_sha = str(os.environ.get("PM_SOURCE_SHA") or "").strip()
             workspace_path = str(
                 session.get("worktree_path") or session.get("clone_path") or "").strip()
+            workspace_root = str(
+                os.environ.get("PM_PERSONAL_WORKSPACE_ROOT") or "").strip()
             active_claims = task.get("active_claims") or []
             claim = next(
                 (row for row in active_claims
@@ -652,6 +654,12 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
                 raise RuntimeError("personal claim and Work Session binding is not active")
             if not workspace_path or not os.path.isdir(workspace_path):
                 raise RuntimeError("personal bound workspace is not present on this host")
+            if (not workspace_root or not os.path.isdir(workspace_root)
+                    or os.path.commonpath((os.path.realpath(workspace_path),
+                                           os.path.realpath(workspace_root)))
+                    != os.path.realpath(workspace_root)):
+                raise RuntimeError(
+                    "personal bound workspace is outside the protected writable root")
             head = subprocess.run(
                 ["git", "-C", workspace_path, "rev-parse", "HEAD"],
                 capture_output=True, text=True, timeout=30, check=False)

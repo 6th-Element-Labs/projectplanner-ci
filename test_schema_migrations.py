@@ -160,5 +160,18 @@ check("intermediate personal execution table gains authenticated host principal 
       "host_principal_id" in cols(c6, "personal_execution_connections")
       and "0058_personal_execution_connections_host_principal_id" in ledger(c6))
 
+# 9. An enrollment created before the server-issued execution policy must gain the policy
+#    column even when its table already exists and CREATE TABLE IF NOT EXISTS is a no-op.
+c7 = mem()
+c7.execute("CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at REAL NOT NULL)")
+c7.execute("CREATE TABLE agent_host_enrollments(enrollment_id TEXT PRIMARY KEY)")
+for migration_name in ALL_NAMES - {"0059_agent_host_enrollments_execution_policy_json"}:
+    c7.execute("INSERT INTO schema_migrations(name, applied_at) VALUES (?, 1)",
+               (migration_name,))
+run_additive_migrations(c7)
+check("intermediate Agent Host enrollment gains a durable server execution policy",
+      "execution_policy_json" in cols(c7, "agent_host_enrollments")
+      and "0059_agent_host_enrollments_execution_policy_json" in ledger(c7))
+
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

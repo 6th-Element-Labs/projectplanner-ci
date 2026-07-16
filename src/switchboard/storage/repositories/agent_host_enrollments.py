@@ -26,6 +26,17 @@ _ACTIVE = "active"
 ROTATION_RECOVERY_GRACE_SECONDS = 300
 _FINGERPRINT_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 _COMPLETION_RECOVERY_RE = re.compile(r"^ahr-[A-Za-z0-9_-]{32,}$")
+PERSONAL_EXECUTION_POLICY = {
+    "schema": "switchboard.personal_agent_host_execution_policy.v1",
+    "runtime": "codex",
+    "lanes": ["ADAPTER"],
+    "capabilities": ["docs", "github", "python", "tests"],
+    "allow_work": True,
+    "allow_global_claim": False,
+    "max_sessions": 1,
+    "local_auth_required": True,
+    "personal_wakes_only": True,
+}
 
 
 def _completion_recovery_token(
@@ -63,6 +74,14 @@ def _public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     value.pop("completion_recovery_hash", None)
     for key in ("tenant_allowlist", "project_allowlist", "provider_allowlist"):
         value[key] = _json_list(value.pop(f"{key}_json", "[]"))
+    try:
+        execution_policy = json.loads(value.pop("execution_policy_json", "{}") or "{}")
+    except json.JSONDecodeError:
+        execution_policy = {}
+    value["execution_policy"] = (
+        execution_policy if isinstance(execution_policy, dict) and execution_policy
+        else dict(PERSONAL_EXECUTION_POLICY)
+    )
     value["schema"] = ENROLLMENT_SCHEMA
     return value
 
@@ -117,9 +136,10 @@ def begin_agent_host_enrollment(
             "INSERT INTO agent_host_enrollments("
             "enrollment_id, project_id, requested_host_id, owner_user_id, "
             "tenant_allowlist_json, project_allowlist_json, provider_allowlist_json, "
+            "execution_policy_json, "
             "bootstrap_hash, bootstrap_expires_at, package_version, status, "
             "created_by_principal_id, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 enrollment_id,
                 project,
@@ -128,6 +148,7 @@ def begin_agent_host_enrollment(
                 json.dumps(_normalized_list(tenant_allowlist), sort_keys=True),
                 json.dumps(projects, sort_keys=True),
                 json.dumps(_normalized_list(provider_allowlist), sort_keys=True),
+                json.dumps(PERSONAL_EXECUTION_POLICY, sort_keys=True),
                 hash_token(bootstrap_code),
                 now + ttl_seconds,
                 str(package_version or "").strip() or None,
@@ -661,7 +682,7 @@ def check_agent_host_identity(
         row = connection.execute(
             "SELECT status, principal_id, identity_generation, public_key_fingerprint, "
             "owner_user_id, tenant_allowlist_json, project_allowlist_json, "
-            "provider_allowlist_json "
+            "provider_allowlist_json, execution_policy_json "
             "FROM agent_host_enrollments WHERE project_id=? AND host_id=?",
             (project, str(host_id or "").strip()),
         ).fetchone()
@@ -692,6 +713,10 @@ def check_agent_host_identity(
         "tenant_allowlist": _json_list(identity.get("tenant_allowlist_json") or "[]"),
         "project_allowlist": _json_list(identity.get("project_allowlist_json") or "[]"),
         "provider_allowlist": _json_list(identity.get("provider_allowlist_json") or "[]"),
+        "execution_policy": (
+            json.loads(identity.get("execution_policy_json") or "{}")
+            or dict(PERSONAL_EXECUTION_POLICY)
+        ),
     }
 
 

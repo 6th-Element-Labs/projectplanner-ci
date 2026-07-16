@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import store  # noqa: E402
 from switchboard.storage.repositories import agent_host_enrollments as enrollment_store  # noqa: E402
 from adapters import agent_host_enrollment as enrollment  # noqa: E402
-from adapters import codex_local_worker, codex_personal_worker  # noqa: E402
+from adapters import codex_local_worker, codex_personal_worker, switchboard_core  # noqa: E402
 from app import app  # noqa: E402
 
 
@@ -115,6 +115,34 @@ def begin(host_id: str):
 
 try:
     store.init_db(PROJECT)
+    secure_target = TMP / "atomic-proof" / "identity.json"
+    secure_target.parent.mkdir()
+    stale_temp = secure_target.parent / ".identity.json.stale.tmp"
+    stale_temp.write_text("stale secret")
+    os.utime(stale_temp, (0, 0))
+    protected_target = TMP / "must-not-delete"
+    protected_target.write_text("protected")
+    stale_symlink = secure_target.parent / ".identity.json.symlink.tmp"
+    stale_symlink.symlink_to(protected_target)
+    observed_atomic_modes = []
+    original_json_dump = enrollment.json.dump
+
+    def inspect_atomic_mode(value, target, **kwargs):
+        observed_atomic_modes.append(stat.S_IMODE(os.fstat(target.fileno()).st_mode))
+        return original_json_dump(value, target, **kwargs)
+
+    original_umask = os.umask(0o022)
+    try:
+        with patch.object(enrollment.json, "dump", side_effect=inspect_atomic_mode):
+            enrollment._atomic_json(secure_target, {"host_token": "secret"})
+    finally:
+        os.umask(original_umask)
+    ok(observed_atomic_modes == [0o600]
+       and stat.S_IMODE(secure_target.stat().st_mode) == 0o600
+       and stat.S_IMODE(secure_target.parent.stat().st_mode) == 0o700
+       and not stale_temp.exists() and stale_symlink.is_symlink()
+       and protected_target.read_text() == "protected",
+       "atomic credential writes are 0600 before content, clean stale regular files, and ignore symlinks")
     try:
         enrollment.preflight_codex_local_auth(
             codex_executable="codex", runner=fake_api_key_codex)
@@ -440,7 +468,11 @@ try:
        "fresh macOS enrollment installs a 0600 rotatable identity")
     ok(mac_config["owner_user_id"] == "user-adapter18"
        and mac_config["tenant_allowlist"] == ["tenant-adapter18"]
-       and mac_config["provider_allowlist"] == ["openai-codex"],
+       and mac_config["provider_allowlist"] == ["openai-codex"]
+       and mac_config["lanes"] == ["ADAPTER"]
+       and mac_config["capabilities"] == ["docs", "github", "python", "tests"]
+       and mac_config["max_sessions"] == 1
+       and mac_config["personal_wakes_only"] is True,
        "installed policy comes only from the server-issued enrollment record")
     ok(codex_calls[:2] == [["codex", "--version"], ["codex", "login", "status"]],
        "install proves the native Codex CLI and host-local ChatGPT login before bootstrap")
@@ -462,15 +494,32 @@ try:
             "project": PROJECT,
             "host_id": "host/adapter18-macos",
             "agent_host_version": "0.2.0",
-            "runtimes": [{"runtime": "codex", "lanes": ["ADAPTER"]}],
+            "runtimes": [{
+                "runtime": "codex",
+                "lanes": ["ADAPTER"],
+                "capabilities": ["docs", "github", "python", "tests"],
+                "policy": {"allow_work": True, "allow_global_claim": False},
+                "local_auth": {
+                    "available": True, "runtime": "codex",
+                    "auth_mode": "chatgpt_personal",
+                    "account_fingerprint": "acct-test",
+                    "credential_values_redacted": True,
+                    "provider_credential_exported": False,
+                },
+            }],
             "limits": {"max_sessions": 1},
             "capacity": {
                 "owner": {"user_id": "user-adapter18",
                     "tenant_allowlist": ["tenant-adapter18"],
                     "project_allowlist": [PROJECT],
                     "provider_allowlist": ["openai-codex"]},
-                "local_auth": {"available": True,
-                    "credential_values_redacted": True}},
+                "local_auth": {
+                    "available": True, "runtime": "codex",
+                    "auth_mode": "chatgpt_personal",
+                    "account_fingerprint": "acct-test",
+                    "credential_values_redacted": True,
+                    "provider_credential_exported": False,
+                }},
         })
     ok(register.status_code == 200 and register.json().get("host_id") == "host/adapter18-macos",
        "enrolled principal registers only its exact host identity")
@@ -592,11 +641,15 @@ try:
     linux_identity = linux_paths["config_root"] / "identity.json"
     linux_config = linux_paths["config_root"] / "config.json"
     linux_state = linux_paths["state_root"] / "state.json"
+    linux_workspace_root = linux_paths["state_root"] / "workspaces"
     service_text = linux_paths["service_path"].read_text()
     ok(linux_install["installed"] and "NoNewPrivileges=yes" in service_text
        and str(linux_paths["state_root"]) in service_text
+       and str(linux_workspace_root) in service_text
+       and linux_workspace_root.is_dir()
+       and stat.S_IMODE(linux_workspace_root.stat().st_mode) == 0o700
        and service_calls[-1][:3] == ["systemctl", "--user", "enable"],
-       "Linux systemd service is hardened but can write its owned state roots")
+       "Linux systemd service grants writes only to its protected state and workspace roots")
 
     captured_exec: dict[str, object] = {}
     original_execve = enrollment.os.execve
@@ -625,8 +678,58 @@ try:
     launched_env = captured_exec.get("environment") or {}
     ok("OPENAI_API_KEY" not in launched_env
        and launched_env.get("PM_MCP_TOKEN")
-       and launched_env.get("PM_AGENT_WORK_MODULE") == "adapters.codex_local_worker:run",
-       "service-run strips metered keys and binds only the narrow host identity")
+       and launched_env.get("PM_AGENT_WORK_MODULE") == "adapters.codex_local_worker:run"
+       and launched_env.get("PM_PERSONAL_AGENT_HOST_EXECUTION") == "1"
+       and launched_env.get("PM_PERSONAL_WORKSPACE_ROOT") == str(linux_workspace_root)
+       and all(isinstance(value, str) for value in launched_env.values()),
+       "service-run strips metered keys and binds the personal host to its writable root")
+
+    bound_workspace = linux_workspace_root / "bound-session"
+    bound_workspace.mkdir()
+    outside_workspace = TMP / "outside-personal-root"
+    outside_workspace.mkdir()
+    binding_sha = "f" * 40
+    binding_agent = "codex/ADAPTER-18-local-worker"
+    binding_claim = "taskclaim-local-worker"
+    binding_session = "worksession-local-worker"
+    binding_task = {
+        "task_id": "ADAPTER-18",
+        "active_claims": [{"claim_id": binding_claim, "agent_id": binding_agent}],
+    }
+    binding_work_session = {
+        "task_id": "ADAPTER-18", "agent_id": binding_agent,
+        "claim_id": binding_claim, "work_session_id": binding_session,
+        "status": "active", "head_sha": binding_sha,
+        "branch": "codex/ADAPTER-18-local-worker", "policy_profile": "code_strict",
+        "worktree_path": str(bound_workspace),
+    }
+    binding_environment = {
+        "PM_TASK_ID": "ADAPTER-18",
+        "PM_PERSONAL_AGENT_HOST_EXECUTION": "1",
+        "PM_PERSONAL_WORKSPACE_ROOT": str(linux_workspace_root),
+        "PM_SOURCE_SHA": binding_sha,
+        "PM_CO_ACCOUNT_BINDING_JSON": json.dumps({
+            "task_id": "ADAPTER-18", "claim_id": binding_claim,
+            "work_session_id": binding_session,
+        }),
+    }
+    with (patch.dict(os.environ, binding_environment),
+          patch.object(switchboard_core, "get_task", return_value=binding_task),
+          patch.object(switchboard_core, "get_work_session",
+                       return_value=binding_work_session),
+          patch.object(switchboard_core.subprocess, "run", return_value=
+                       subprocess.CompletedProcess([], 0, binding_sha + "\n", ""))):
+        admitted_claim, admitted_context = switchboard_core._acquire_claim(
+            PROJECT, binding_agent, ["ADAPTER"], "https://switchboard.test", "token",
+            600, False, str(bound_workspace))
+        binding_work_session["worktree_path"] = str(outside_workspace)
+        denied_claim, denied_context = switchboard_core._acquire_claim(
+            PROJECT, binding_agent, ["ADAPTER"], "https://switchboard.test", "token",
+            600, False, str(outside_workspace))
+    ok(admitted_claim.get("claimed") is True and admitted_context.get("bound_existing") is True
+       and denied_claim.get("claimed") is False and denied_context is None
+       and "outside the protected writable root" in denied_claim.get("reason", ""),
+       "personal Work Sessions are admitted only beneath the systemd-writable workspace root")
 
     local_workspace = TMP / "local-worker"
     local_workspace.mkdir()

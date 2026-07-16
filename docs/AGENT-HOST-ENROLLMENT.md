@@ -15,6 +15,10 @@ native Codex CLI; it does not wake or remote-drive the Codex desktop application
   a narrow project bearer with `read` + `write:ixp`. Initial completion and every
   pre-finalization recovery return the same bearer, stored only in the user's `0600`
   identity file.
+- Credential JSON is written through a same-user `0700` directory and a `0600` temporary
+  file whose mode is set before any secret bytes are written. Replacement and its containing
+  directory are fsynced; old same-user regular temporaries are cleaned without following
+  symlinks.
 - Before consuming the bootstrap, the installer also persists a one-install recovery
   secret in the pending `0600` identity. The same bootstrap plus that secret can recover
   an ambiguous completion response indefinitely until the host durably writes its local
@@ -86,7 +90,7 @@ python adapters/agent_host_enrollment.py install \
   --base-url https://plan.taikunai.com \
   --project switchboard \
   --owner-user-id user-123 \
-  --lanes ADAPTER,COORD
+  --lanes ADAPTER
 ```
 
 Default paths:
@@ -95,6 +99,17 @@ Default paths:
 |---|---|---|---|
 | macOS | `~/Library/LaunchAgents/com.6thelement.switchboard-agent-host.plist` | `~/.config/switchboard-agent-host` | `~/.local/share/switchboard-agent-host/releases` |
 | Linux | `~/.config/systemd/user/switchboard-agent-host.service` | `~/.config/switchboard-agent-host` | `~/.local/share/switchboard-agent-host/releases` |
+
+Enrollment persists a server-issued execution profile; local `--lanes`, capability, work-mode,
+or concurrency flags cannot widen it. The initial profile is one native Codex runtime, the
+`ADAPTER` lane, `docs/github/python/tests`, `allow_work=true`, global claiming disabled, local
+personal authentication required, and one concurrent session. Any registration or heartbeat
+that advertises a wider or different inventory is rejected.
+
+On Linux, personal Work Sessions must live below
+`~/.local/state/switchboard-agent-host/workspaces`. That `0700` directory is the dedicated
+workspace entry in systemd `ReadWritePaths`; the remainder of the home directory stays
+read-only. The worker rejects a server-returned Work Session outside this realpath boundary.
 
 The service loads the bearer locally, advertises Codex `chatgpt_personal` readiness, and
 executes `adapters/agent_host.py`. Personal work uses
@@ -157,10 +172,15 @@ A wake with `execution_mode=personal_agent_host` or
 - target agent and `runtime=codex`;
 - exact host, source SHA, and typed execution-connection ID.
 
+The authenticated caller and claim principal must both be the durable enrollment owner.
+Switchboard derives the tenant from project access records and rejects a tenant not in the
+enrollment allowlist; caller-supplied owner or tenant fields are never authorization evidence.
 The authenticated host principal, active enrollment, server-issued owner/tenant/project/
-provider policy, registered inventory, runner, and execution connection must also agree.
+provider and execution policy, registered inventory, runner, and execution connection must
+also agree.
 Unenrolled legacy hosts cannot enter the personal execution lane, and local installer flags
-cannot widen the server-issued enrollment policy.
+cannot widen the server-issued enrollment policy. An enrolled personal host also refuses
+generic wakes: only a server-created exact personal execution binding can use it.
 
 The account binding, execution binding, wake, selector, and local inventory must repeat the
 same values; presence alone is insufficient. Source SHA must be a lowercase 40-character Git
@@ -169,6 +189,11 @@ value is refused before the wake is claimed. Switchboard constructs this binding
 live active claim and Work Session, derives the runner identity from the wake and host, and
 revalidates those database relations atomically at claim time. The launched worker adopts
 that existing claim and Work Session; it never creates a replacement session behind the wake.
+Completion retries compare the stored terminal receipt and exact host/runner/agent/result and
+return that receipt idempotently; conflicting retries are denied. Completion, cancellation,
+claim-time deadline expiry, sweeper expiry, and immediate no-host failure all transition the
+exact execution connection first with a one-row compare-and-set, then terminalize the wake in
+the same transaction.
 
 The daemon heartbeat publishes `allow_work`, runtime capabilities/version, drain state,
 session headroom, owner user/tenant/project/provider allowlists, local-auth availability,
@@ -191,6 +216,7 @@ performs fresh sandboxed macOS and Linux installs through the REST ceremony, reg
 new host bearer, rotates and updates it, exercises offline and response-loss revoke,
 proves post-revoke denial, recovers a deliberately lost enrollment response beyond the old
 window, resumes every uninstall cleanup boundary, launches the host-local worker without a
-credential-vault binding, uninstalls Linux, and scans for residue.
+credential-vault binding, proves the protected systemd workspace boundary, uninstalls Linux,
+and scans for residue.
 `test_agent_host.py` covers the redacted heartbeat/inventory and relational exact-wake
 admission contract.

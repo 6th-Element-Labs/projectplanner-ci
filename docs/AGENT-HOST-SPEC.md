@@ -173,6 +173,19 @@ revocation proof. A revoked bearer is accepted only for exact-host revocation re
 every local cleanup boundary can resume without authentication. It never starts a cloud/API
 lane as a fallback for a sleeping, offline, or revoked personal host.
 
+Switchboard persists the enrolled host's server-issued execution profile. Registration and
+heartbeat must match its single Codex runtime, allowed lanes and capabilities, local-auth
+proof, work/global-claim modes, and concurrency cap exactly. The host bearer cannot widen this
+profile, and an enrolled personal host cannot claim a generic wake. Personal wake creation
+binds the authenticated caller and claim principal to the enrollment owner and derives tenant
+identity from durable project access, never from optional request fields.
+
+Credential JSON temporaries are created `0600` before write under a `0700` directory; file and
+directory durability are fsynced and stale regular temporaries are removed without following
+symlinks. Linux allocates personal Work Sessions beneath the dedicated `0700` Agent Host
+workspace root included in systemd `ReadWritePaths`; the runtime rejects any returned path
+outside that realpath boundary.
+
 ### Hybrid placement inventory
 
 Work-capable hosts also publish a `switchboard.agent_host_placement.v1` object in `capacity`.
@@ -238,6 +251,13 @@ Required operations:
 
 Wake intents must be idempotent by `dedupe_key`. Re-sending the same missed ack or ready-lane
 trigger must not launch duplicate sessions.
+
+For a personal wake, every terminal route first compare-and-sets the exact execution connection
+tuple to `completed`, `failed`, or `cancelled`, requiring exactly one matching row, and only then
+terminalizes the wake in the same transaction. This applies to completion, cancellation,
+claim-time and sweeper deadlines, and immediate no-eligible-host failure. A lost successful
+completion response can be retried with the same principal, runner, agent, status, and result
+to read back the existing receipt; any conflicting retry is denied.
 
 ## 7. Host Daemon Loop
 

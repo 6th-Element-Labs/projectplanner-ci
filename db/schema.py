@@ -805,6 +805,7 @@ def apply_schema(c):
             tenant_allowlist_json  TEXT NOT NULL DEFAULT '[]',
             project_allowlist_json TEXT NOT NULL DEFAULT '[]',
             provider_allowlist_json TEXT NOT NULL DEFAULT '[]',
+            execution_policy_json  TEXT NOT NULL DEFAULT '{}',
             bootstrap_hash         TEXT NOT NULL UNIQUE,
             bootstrap_expires_at   REAL NOT NULL,
             bootstrap_consumed_at  REAL,
