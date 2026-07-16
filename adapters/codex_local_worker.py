@@ -13,7 +13,14 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import threading
+import time
 from typing import Any, Callable
+
+try:
+    import switchboard_core as sb
+except ModuleNotFoundError:  # package import in tests and library callers
+    from adapters import switchboard_core as sb
 
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -59,11 +66,78 @@ def _prompt(task: dict[str, Any], *, source_sha: str, wake_id: str,
     )
 
 
+def _runner_record(values: dict[str, str], *, workspace: str, status: str) -> dict[str, Any]:
+    return {
+        "project": os.environ.get("PM_PROJECT", "switchboard"),
+        "runner_session_id": values["runner_session_id"],
+        "host_id": values["host_id"],
+        "agent_id": values["agent_id"],
+        "runtime": "codex",
+        "task_id": values["task_id"],
+        "claim_id": values["claim_id"],
+        "status": status,
+        "cwd": workspace,
+        "control": {
+            "tier": "T3", "runner_kill": True, "managed_process": True,
+            "runner_open": True, "runner_inject": True, "runner_logs": True,
+        },
+        "metadata": {
+            "wake_id": values["wake_id"],
+            "work_session_id": values["work_session_id"],
+            "source_sha": values["source_sha"],
+            "execution_connection_id": values["execution_connection_id"],
+            "credential_admission_phase": "claim_bound",
+            "auth_lane": "chatgpt_personal_host_local",
+        },
+        "heartbeat_ttl_s": 180,
+    }
+
+
+def _update_runner(
+    http: Callable[..., dict[str, Any]], values: dict[str, str], *,
+    workspace: str, status: str, heartbeat: bool = False,
+) -> dict[str, Any]:
+    path = ("/ixp/v1/heartbeat_runner_session" if heartbeat
+            else "/ixp/v1/register_runner_session")
+    result = http("POST", path, _runner_record(values, workspace=workspace, status=status))
+    if not result or result.get("error") or result.get("error_code"):
+        raise RuntimeError("native Codex runner registry update failed")
+    return result
+
+
+def _complete_wake(
+    http: Callable[..., dict[str, Any]], values: dict[str, str],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    body = {
+        "project": os.environ.get("PM_PROJECT", "switchboard"),
+        "wake_id": values["wake_id"],
+        "runner_session_id": values["runner_session_id"],
+        "agent_id": values["agent_id"],
+        "result": result,
+    }
+    expected = "completed" if result.get("started") is True else "failed"
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            completed = http("POST", "/txp/v1/complete_wake", body)
+            if (not completed or completed.get("error") or completed.get("error_code")
+                    or completed.get("status") != expected):
+                raise RuntimeError("native Codex wake completion was not exact")
+            return completed
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.25 * (attempt + 1))
+    raise RuntimeError("native Codex wake completion failed") from last_error
+
+
 def run(
     task: dict[str, Any],
     *,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     codex_executable: str = "",
+    http: Callable[..., dict[str, Any]] = sb._http,
 ) -> dict[str, Any]:
     """Run native Codex with local auth and return pushed exact-head evidence."""
     managed = task.get("managed") or {}
@@ -148,56 +222,121 @@ def run(
             execution_connection_id=values["execution_connection_id"],
         ),
     ]
-    completed = runner(
-        command,
-        cwd=workspace,
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=7200,
-        check=False,
-    )
-    output = ((completed.stdout or "") + (completed.stderr or "")).encode()
-    if completed.returncode != 0:
-        raise RuntimeError(
-            "native Codex execution failed: "
-            + (completed.stderr or completed.stdout or "no output")[-1000:])
+    stop_heartbeat = threading.Event()
+    heartbeat_errors: list[Exception] = []
 
-    branch = _git(workspace, "branch", "--show-current")
-    head_sha = _git(workspace, "rev-parse", "HEAD")
-    dirty = _git(workspace, "status", "--porcelain")
-    if dirty:
-        raise RuntimeError("native Codex left the managed workspace dirty")
-    upstream_head = _git(workspace, "rev-parse", "@{upstream}")
-    if upstream_head != head_sha:
-        raise RuntimeError("native Codex did not push the exact completed head")
-    return {
-        "branch": branch,
-        "head_sha": head_sha,
-        "git_diff_check": "clean",
-        "verification": {
-            "schema": "switchboard.codex_host_local_execution.v1",
+    def heartbeat_loop() -> None:
+        while not stop_heartbeat.wait(30):
+            try:
+                _update_runner(
+                    http, values, workspace=workspace, status="running", heartbeat=True)
+            except Exception as exc:  # surfaced by the mandatory final heartbeat
+                heartbeat_errors.append(exc)
+
+    runner_registered = False
+    wake_completed = False
+    successful_completion_intent = False
+    heartbeat_thread: threading.Thread | None = None
+    try:
+        _update_runner(http, values, workspace=workspace, status="running")
+        runner_registered = True
+        heartbeat_thread = threading.Thread(
+            target=heartbeat_loop,
+            name=f"switchboard-heartbeat-{values['runner_session_id']}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
+        completed = runner(
+            command,
+            cwd=workspace,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=7200,
+            check=False,
+        )
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=5)
+        _update_runner(
+            http, values, workspace=workspace, status="running", heartbeat=True)
+        output = ((completed.stdout or "") + (completed.stderr or "")).encode()
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "native Codex execution failed: "
+                + (completed.stderr or completed.stdout or "no output")[-1000:])
+
+        branch = _git(workspace, "branch", "--show-current")
+        head_sha = _git(workspace, "rev-parse", "HEAD")
+        dirty = _git(workspace, "status", "--porcelain")
+        if dirty:
+            raise RuntimeError("native Codex left the managed workspace dirty")
+        upstream_head = _git(workspace, "rev-parse", "@{upstream}")
+        if upstream_head != head_sha:
+            raise RuntimeError("native Codex did not push the exact completed head")
+        evidence = {
+            "branch": branch,
+            "head_sha": head_sha,
+            "git_diff_check": "clean",
+            "verification": {
+                "schema": "switchboard.codex_host_local_execution.v1",
+                "task_id": values["task_id"],
+                "claim_id": values["claim_id"],
+                "work_session_id": values["work_session_id"],
+                "host_id": values["host_id"],
+                "runner_session_id": values["runner_session_id"],
+                "wake_id": values["wake_id"],
+                "execution_connection_id": values["execution_connection_id"],
+                "agent_id": values["agent_id"],
+                "source_sha": values["source_sha"],
+                "completed_head_sha": head_sha,
+                "native_cli": True,
+                "auth_mode": "chatgpt_personal",
+                "provider_credential_exported": False,
+                "metered_api_key_paths_absent": True,
+                "output_sha256": hashlib.sha256(output).hexdigest(),
+                "output_bytes": len(output),
+                "provider_output_redacted": True,
+                "runner_heartbeat_errors_recovered": len(heartbeat_errors),
+            },
+        }
+        successful_completion_intent = True
+        _complete_wake(http, values, {
+            "started": True,
+            "reason": "native_codex_execution_completed",
             "task_id": values["task_id"],
-            "claim_id": values["claim_id"],
-            "work_session_id": values["work_session_id"],
-            "host_id": values["host_id"],
-            "runner_session_id": values["runner_session_id"],
-            "wake_id": values["wake_id"],
-            "execution_connection_id": values["execution_connection_id"],
-            "agent_id": values["agent_id"],
-            "source_sha": values["source_sha"],
-            "completed_head_sha": head_sha,
-            "native_cli": True,
-            "auth_mode": "chatgpt_personal",
-            "provider_credential_exported": False,
-            "metered_api_key_paths_absent": True,
-            "output_sha256": hashlib.sha256(output).hexdigest(),
-            "output_bytes": len(output),
-            "provider_output_redacted": True,
-        },
-    }
+            "branch": branch,
+            "head_sha": head_sha,
+        })
+        wake_completed = True
+        _update_runner(http, values, workspace=workspace, status="completed")
+        return evidence
+    except Exception:
+        stop_heartbeat.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=5)
+        if runner_registered and not wake_completed:
+            # Once local execution and exact-head proof succeeded, a lost response
+            # must only be retried with that identical success receipt.  Never
+            # replace an outcome-unknown success with a conflicting failure receipt.
+            if successful_completion_intent:
+                raise
+            try:
+                _update_runner(
+                    http, values, workspace=workspace, status="running", heartbeat=True)
+                _complete_wake(http, values, {
+                    "started": False,
+                    "reason": "native_codex_execution_failed",
+                    "task_id": values["task_id"],
+                })
+                wake_completed = True
+            except Exception:
+                # Preserve the active registry tuple while the terminal receipt is
+                # outcome-unknown; terminalizing first would make an exact retry fail.
+                raise
+            _update_runner(http, values, workspace=workspace, status="failed")
+        raise
 
 
 __all__ = ["run"]

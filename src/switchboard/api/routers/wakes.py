@@ -75,11 +75,15 @@ def create_router(*, resolve_project: ProjectResolver,
                 body, actor=auth.actor(principal), principal_id=principal["id"])))
 
     @router.get("/txp/v1/list_wake_intents")
-    async def txp_list_wake_intents(project: str = Query(...),
+    async def txp_list_wake_intents(request: Request, project: str = Query(...),
                                     status: str = "", host_id: str = "",
                                     runtime: str = ""):
+        resolved = resolve_project(project)
+        resolve_principal(
+            request, resolved, ("read",),
+            dev_actor=host_id or "agent-host")
         wakes = store.list_wake_intents(status=status, host_id=host_id,
-                                        runtime=runtime, project=resolve_project(project))
+                                        runtime=runtime, project=resolved)
         control_plane_http(wakes)
         return {"wake_intents": wakes}
 
@@ -95,10 +99,14 @@ def create_router(*, resolve_project: ProjectResolver,
     # UI-8 Fleet control: wake-intent read/write over REST (hosts + runners already have
     # their routes above). Mirrors the request_wake / list_wake_intents / cancel_wake tools.
     @router.get("/ixp/v1/wake_intents")
-    async def ixp_wake_intents(project: str = Query(...),
+    async def ixp_wake_intents(request: Request, project: str = Query(...),
                                status: str = "", host_id: str = "", runtime: str = ""):
+        resolved = resolve_project(project)
+        resolve_principal(
+            request, resolved, ("read",),
+            dev_actor=host_id or "switchboard/operator")
         return {"wake_intents": store.list_wake_intents(
-            status=status, host_id=host_id, runtime=runtime, project=resolve_project(project))}
+            status=status, host_id=host_id, runtime=runtime, project=resolved)}
 
     @router.post("/ixp/v1/request_wake")
     async def ixp_request_wake(request: Request, body: dict = Body(...)):

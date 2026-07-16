@@ -433,6 +433,10 @@ try:
             "DELETE FROM personal_execution_connections WHERE execution_connection_id=?",
             (good_execution["execution_connection_id"],),
         )
+    ok(good_wake.get("deadline") == connection_row.get("expires_at")
+       and float(good_wake.get("deadline") or 0)
+       - float(good_wake.get("requested_at") or 0) >= 7200,
+       "default personal wake and exact connection share the full native execution deadline")
     nonexistent_connection_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
         principal_id=p["id"], actor=auth.actor(p), project=P)

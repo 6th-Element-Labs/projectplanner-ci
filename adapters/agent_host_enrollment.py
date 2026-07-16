@@ -352,6 +352,23 @@ def _install_release(bundle_dir: Path, manifest: dict[str, Any], prefix: Path) -
         relative = _safe_relative(item["path"])
         os.chmod(temporary / Path(*relative.parts), int(item["mode"]))
     if final.exists():
+        declared = {str(item["path"]): item for item in manifest["files"]}
+        actual = {
+            path.relative_to(final).as_posix()
+            for path in final.rglob("*") if path.is_file() or path.is_symlink()
+        }
+        exact = actual == set(declared)
+        for name, item in declared.items():
+            path = final / Path(*_safe_relative(name).parts)
+            exact = bool(
+                exact and path.is_file() and not path.is_symlink()
+                and _sha256(path) == item["sha256"]
+                and stat.S_IMODE(path.stat().st_mode) == int(item["mode"])
+            )
+        if not exact:
+            shutil.rmtree(temporary)
+            raise EnrollmentError(
+                "existing release does not match the newly verified signed bundle")
         shutil.rmtree(temporary)
     else:
         os.replace(temporary, final)
@@ -789,10 +806,15 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
     if _parse_version(manifest["version"]) <= _parse_version(state.get("version") or ""):
         raise EnrollmentError("update bundle must be newer than the installed version")
     prefix = Path(state["prefix"])
+    config_path = Path(state["config_path"])
+    config = _read_json(config_path)
+    previous_config = dict(config)
     current = prefix / "current"
     previous = current.resolve() if current.exists() else None
     release = _install_release(bundle_dir, manifest, prefix)
     try:
+        config["agent_host_version"] = manifest["version"]
+        _atomic_json(config_path, config, 0o600)
         if restart_service:
             control_service(
                 state["platform"], "restart", Path(state["service_path"]), runner=service_runner)
@@ -801,6 +823,7 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
             rollback = prefix / f".current.rollback.{os.getpid()}"
             rollback.symlink_to(previous)
             os.replace(rollback, current)
+        _atomic_json(config_path, previous_config, 0o600)
         raise
     state.update({"version": manifest["version"], "release": str(release),
                   "status": "installed", "updated_at": time.time()})
@@ -899,6 +922,12 @@ def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path,
         _atomic_json(state_path, state, 0o600)
 
     state["status"] = "local_cleanup_pending"
+    if state.get("platform") == "darwin":
+        # `launchctl bootout` unloads only the current login session.  Removing the
+        # per-user plist makes revoke durable across the next login as well.
+        Path(state["service_path"]).unlink(missing_ok=True)
+        state["cleanup_step"] = "service_disabled"
+        _atomic_json(state_path, state, 0o600)
     identity_path.unlink(missing_ok=True)
     state["cleanup_step"] = "identity_deleted"
     _atomic_json(state_path, state, 0o600)

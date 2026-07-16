@@ -523,6 +523,21 @@ try:
         })
     ok(register.status_code == 200 and register.json().get("host_id") == "host/adapter18-macos",
        "enrolled principal registers only its exact host identity")
+    original_auth_mode = os.environ.get("PM_AUTH_MODE")
+    os.environ["PM_AUTH_MODE"] = "required"
+    try:
+        anonymous_wakes = client.get(
+            "/txp/v1/list_wake_intents", params={"project": PROJECT})
+        authenticated_wakes = client.get(
+            "/txp/v1/list_wake_intents", params={"project": PROJECT},
+            headers={"Authorization": f"Bearer {initial_mac_token}"})
+    finally:
+        if original_auth_mode is None:
+            os.environ.pop("PM_AUTH_MODE", None)
+        else:
+            os.environ["PM_AUTH_MODE"] = original_auth_mode
+    ok(anonymous_wakes.status_code == 401 and authenticated_wakes.status_code == 200,
+       "personal wake bindings cannot be enumerated without project read authority")
 
     def lose_rotation_response(*args, **kwargs):
         http(*args, **kwargs)
@@ -558,13 +573,24 @@ try:
        and store.get_principal_by_token(PROJECT, rotated_token) is not None,
        "rotated bearer invalidates the previous token immediately")
 
-    enrollment.create_signed_bundle(ROOT, bundle_021, "0.2.1", private_path)
+    manifest_021 = enrollment.create_signed_bundle(ROOT, bundle_021, "0.2.1", private_path)
     updated = enrollment.update_host(
         bundle_dir=bundle_021, public_key_path=public_path, state_path=mac_state_path,
         service_runner=fake_service)
+    retry_prefix = TMP / "signed-release-retry"
+    retry_release = enrollment._install_release(bundle_021, manifest_021, retry_prefix)
+    retry_entrypoint = retry_release / manifest_021["entrypoint"]
+    retry_entrypoint.write_text("locally corrupted release", encoding="utf-8")
+    try:
+        enrollment._install_release(bundle_021, manifest_021, retry_prefix)
+        corrupted_retry_denied = False
+    except enrollment.EnrollmentError:
+        corrupted_retry_denied = True
     ok(updated == {"updated": True, "version": "0.2.1"}
-       and (mac_paths["prefix"] / "current").resolve().name == "0.2.1",
-       "signed update advances the atomic current release and restarts launchd")
+       and (mac_paths["prefix"] / "current").resolve().name == "0.2.1"
+       and json.loads(mac_config_path.read_text())["agent_host_version"] == "0.2.1"
+       and corrupted_retry_denied,
+       "signed update advances current/config and refuses mismatched pre-existing release bytes")
 
     def offline(*args, **kwargs):
         del args, kwargs
@@ -609,8 +635,8 @@ try:
        and committed_unknown["status"] == "revocation_response_unknown"
        and old_revoked_token_denied.status_code == 401
        and revoked["revoked"] and mac_record["status"] == "revoked"
-       and not mac_identity_path.exists(),
-       "committed revoke response loss resumes with endpoint-only recovery and purges locally")
+       and not mac_identity_path.exists() and not mac_paths["service_path"].exists(),
+       "committed revoke resumes, purges locally, and persistently disables the LaunchAgent")
     denied = store.register_host(
         {"host_id": "host/adapter18-macos", "runtimes": []},
         principal_id=mac_record["principal_id"], actor="test", project=PROJECT)
@@ -758,6 +784,8 @@ try:
     )}
     local_git_heads = [source_sha, completed_sha]
     captured_local_codex: dict[str, object] = {}
+    local_control_calls: list[tuple[str, dict]] = []
+    local_completion_response_lost = [False]
 
     def fake_local_git(workspace, *args):
         ok(workspace == str(local_workspace), "native local worker stays in its managed workspace")
@@ -774,6 +802,16 @@ try:
     def fake_local_codex(command, **kwargs):
         captured_local_codex.update({"command": command, "kwargs": kwargs})
         return subprocess.CompletedProcess(command, 0, "native codex completed", "")
+
+    def fake_local_control(method, path, body):
+        ok(method == "POST", "native local worker uses authenticated state-changing calls")
+        local_control_calls.append((path, dict(body)))
+        if path == "/txp/v1/complete_wake":
+            if not local_completion_response_lost[0]:
+                local_completion_response_lost[0] = True
+                raise RuntimeError("simulated committed completion response loss")
+            return {"status": "completed" if body["result"]["started"] else "failed"}
+        return {"runner_session_id": body["runner_session_id"], "status": body["status"]}
 
     try:
         codex_local_worker._git = fake_local_git
@@ -797,7 +835,8 @@ try:
             "OPENAI_API_KEY": "must-not-cross-local-worker-boundary",
         })
         local_evidence = codex_local_worker.run(
-            local_task, runner=fake_local_codex, codex_executable="codex")
+            local_task, runner=fake_local_codex, codex_executable="codex",
+            http=fake_local_control)
     finally:
         codex_local_worker._git = original_local_git
         for key, value in original_binding_env.items():
@@ -812,8 +851,18 @@ try:
        and local_evidence["verification"]["auth_mode"] == "chatgpt_personal"
        and local_evidence["verification"]["provider_credential_exported"] is False
        and "exec" in local_command and "ADAPTER-18" in str(local_command[-1])
-       and "OPENAI_API_KEY" not in local_environment,
-       "fresh enrollment selects a native local-auth worker with no central credential binding")
+       and "OPENAI_API_KEY" not in local_environment
+       and any(path == "/ixp/v1/heartbeat_runner_session"
+               for path, _body in local_control_calls)
+       and any(path == "/txp/v1/complete_wake"
+               and body["result"]["started"] is True
+               for path, body in local_control_calls)
+       and len([body for path, body in local_control_calls
+                if path == "/txp/v1/complete_wake"]) == 2
+       and len({json.dumps(body, sort_keys=True) for path, body in local_control_calls
+                if path == "/txp/v1/complete_wake"}) == 1
+       and local_control_calls[-1][1]["status"] == "completed",
+       "native local worker heartbeats and exactly retries/terminalizes its wake and runner")
     linux_runtime_root = Path(json.loads(linux_config.read_text())["runtime_root"])
     linux_runtime_root.mkdir(parents=True, exist_ok=True)
     (linux_runtime_root / "residue.txt").write_text("non-secret runtime residue")

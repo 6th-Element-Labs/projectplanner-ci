@@ -48,6 +48,12 @@ from switchboard.storage.repositories.provider_credentials import (
 )
 
 
+# Native Codex is allowed to execute for up to two hours.  Keep the durable wake
+# and its exact connection alive for that interval plus a small launch/finalize
+# margin when the caller did not request a tighter deadline.
+_PERSONAL_EXECUTION_DEADLINE_S = 2 * 60 * 60 + 5 * 60
+
+
 def _store_facade():
     """Resolve transitional store helpers after store.py is initialized."""
     import store
@@ -348,6 +354,9 @@ def _bind_personal_wake_policy(
     })
     updated.update({
         "require_exact_host_binding": True,
+        "deadline_seconds": float(
+            updated.get("deadline_seconds") or updated.get("claim_timeout_s")
+            or updated.get("ttl_s") or _PERSONAL_EXECUTION_DEADLINE_S),
         "source_sha": source_sha,
         "execution_connection_id": execution_connection_id,
         "account_binding": binding,
@@ -364,10 +373,8 @@ def _bind_personal_wake_policy(
             "execution_connection_id": execution_connection_id,
         },
     })
-    requested_ttl = float(
-        updated.get("deadline_seconds") or updated.get("claim_timeout_s")
-        or updated.get("ttl_s") or 300)
-    expires_at = min(float(claim["expires_at"]), now + max(10.0, requested_ttl))
+    requested_ttl = float(updated["deadline_seconds"])
+    expires_at = now + max(10.0, requested_ttl)
     c.execute(
         "INSERT INTO personal_execution_connections("
         "execution_connection_id, wake_id, task_id, claim_id, work_session_id, "
