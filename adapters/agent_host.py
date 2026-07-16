@@ -639,27 +639,115 @@ def supervisor_action(action, runner_session_id, options=None):
             host_id=host_id,
             ttl_seconds=int(options.get("ttl_seconds") or 900),
         )
-        stream_url = build_stream_url(
+        local_stream_url = build_stream_url(
             bind_host=stream_bind,
             port=stream_port,
             runner_session_id=runner_session_id,
             ticket=ticket,
-            public_base=str(os.environ.get("PM_RUNNER_STREAM_PUBLIC_BASE") or ""),
+            public_base="",
         )
+        public_base = str(
+            os.environ.get("PM_RUNNER_PTY_RELAY_PUBLIC_BASE")
+            or os.environ.get("PM_SWITCHBOARD_PUBLIC_BASE")
+            or ""
+        ).rstrip("/")
+        # Prefer Switchboard relay when a non-loopback public base is configured
+        # so browsers never receive a host-local 127.0.0.1 URL (ADAPTER-22).
+        use_relay = False
+        relay_url = ""
+        transport = "http_chunked"
+        browser_safe = False
+        relay_required = True
+        stream_url = local_stream_url
+        if public_base:
+            try:
+                from switchboard.application import runner_pty_relay as pty_relay
+                from switchboard.domain import runner_pty as pty_domain
+            except ModuleNotFoundError:
+                _root = os.path.abspath(os.path.join(_HERE, ".."))
+                if _root not in sys.path:
+                    sys.path.insert(0, os.path.join(_root, "src"))
+                from switchboard.application import runner_pty_relay as pty_relay
+                from switchboard.domain import runner_pty as pty_domain
+            if not pty_relay.is_loopback_url(public_base):
+                binding = {
+                    "tenant_id": str(options.get("tenant_id") or meta.get("tenant_id") or "tenant/default"),
+                    "user_id": str(options.get("user_id") or meta.get("user_id") or "operator"),
+                    "project_id": str(options.get("project_id") or options.get("project")
+                                      or os.environ.get("PM_PROJECT") or "switchboard"),
+                    "task_id": str(options.get("task_id") or meta.get("task_id") or "unbound"),
+                    "claim_id": str(options.get("claim_id") or meta.get("claim_id") or "unbound"),
+                    "work_session_id": str(
+                        options.get("work_session_id")
+                        or (meta.get("metadata") or {}).get("work_session_id")
+                        or meta.get("work_session_id")
+                        or "unbound"),
+                    "runner_session_id": runner_session_id,
+                    "host_id": host_id or "host/unknown",
+                    "wake_id": str(
+                        options.get("wake_id")
+                        or (meta.get("metadata") or {}).get("wake_id")
+                        or meta.get("wake_id")
+                        or "unbound"),
+                    "execution_connection_id": str(
+                        options.get("execution_connection_id")
+                        or meta.get("execution_connection_id")
+                        or "execconn/unspecified"),
+                    "source_sha": str(options.get("source_sha") or meta.get("source_sha") or "unknown"),
+                    "permission_profile": str(
+                        options.get("permission_profile") or "operator_watch"),
+                }
+                scopes = options.get("scopes") or [
+                    "watch", "input", "resize", "signal"]
+                try:
+                    relay_ticket, relay_payload = pty_relay.mint_capability_ticket(
+                        binding, scopes,
+                        ttl_seconds=int(options.get("ttl_seconds") or 900))
+                    relay_url = pty_relay.public_relay_url(
+                        public_base, runner_session_id, relay_ticket)
+                    use_relay = True
+                    transport = pty_domain.TRANSPORT_SWITCHBOARD_PTY_RELAY
+                    browser_safe = True
+                    relay_required = False
+                    stream_url = relay_url
+                    expires_at = float(relay_payload.get("exp") or expires_at)
+                    ticket = relay_ticket
+                except Exception:
+                    use_relay = False
+        metadata = {
+            "pty": True,
+            "stream_url": stream_url,
+            "stream_ticket_exp": expires_at,
+            "transport": transport,
+            "browser_safe": browser_safe,
+            "relay_required": relay_required,
+            "local_stream_url": local_stream_url,
+        }
+        if use_relay and relay_url:
+            metadata["relay_url"] = relay_url
+            try:
+                from switchboard.application.runner_pty_relay import (
+                    sanitize_browser_stream_metadata,
+                )
+            except ModuleNotFoundError:
+                sanitize_browser_stream_metadata = None
+            if sanitize_browser_stream_metadata is not None:
+                metadata = sanitize_browser_stream_metadata(
+                    metadata, relay_url=relay_url)
+                # Keep host-private loopback coordinate after sanitize.
+                metadata["local_stream_url"] = local_stream_url
         return {
             "opened": True,
             "runner_session_id": runner_session_id,
-            "transport": "http_chunked",
+            "transport": transport,
             "stream_url": stream_url,
+            "relay_url": relay_url or None,
             "ticket": ticket,
             "expires_at": expires_at,
+            "browser_safe": browser_safe,
+            "relay_required": relay_required,
             "capabilities": {"stream": "supported", "open": "supported"},
-            "metadata": {
-                "pty": True,
-                "stream_url": stream_url,
-                "stream_ticket_exp": expires_at,
-                "transport": "http_chunked",
-            },
+            "metadata": metadata,
         }
     elif action == "inject":
         try:
@@ -806,12 +894,36 @@ def handle_runner_controls(inventory):
                         "log_tail": (result.get("logs") or {}).get("log_tail") or "",
                         "log_path": (result.get("logs") or {}).get("log_path")}
         if action == "open" and result.get("opened"):
+            open_meta = dict(result.get("metadata") or {})
+            # Browser-facing registration must never publish loopback stream URLs.
+            try:
+                from switchboard.application.runner_pty_relay import (
+                    sanitize_browser_stream_metadata,
+                )
+            except ModuleNotFoundError:
+                sanitize_browser_stream_metadata = lambda meta, relay_url="": dict(meta or {})  # noqa: E731
+            browser_meta = sanitize_browser_stream_metadata(
+                {
+                    "stream_url": result.get("stream_url"),
+                    "relay_url": result.get("relay_url") or open_meta.get("relay_url"),
+                    "stream_ticket_exp": result.get("expires_at"),
+                    "transport": result.get("transport"),
+                    "browser_safe": result.get("browser_safe"),
+                    "relay_required": result.get("relay_required"),
+                    "pty": True,
+                },
+                relay_url=str(result.get("relay_url") or open_meta.get("relay_url") or ""),
+            )
+            # Never register host-private loopback URLs on the control plane.
+            browser_meta.pop("local_stream_url", None)
             snapshot = {
                 "captured_at": time.time(),
                 "source": "runner_open",
-                "stream_url": result.get("stream_url"),
+                "stream_url": browser_meta.get("stream_url") or result.get("stream_url"),
                 "transport": result.get("transport"),
                 "expires_at": result.get("expires_at"),
+                "browser_safe": result.get("browser_safe"),
+                "relay_required": result.get("relay_required"),
                 "pty": True,
             }
             # Advertise stream coordinates on the central runner_session metadata.
@@ -822,12 +934,7 @@ def handle_runner_controls(inventory):
                 "status": "running",
                 "control": {"tier": "T3", "runner_kill": True, "managed_process": True,
                             "runner_open": True, "runner_inject": True, "runner_logs": True},
-                "metadata": {
-                    "stream_url": result.get("stream_url"),
-                    "stream_ticket_exp": result.get("expires_at"),
-                    "transport": result.get("transport"),
-                    "pty": True,
-                },
+                "metadata": browser_meta,
                 "heartbeat_ttl_s": 60,
             })
         if action == "inject" and result.get("injected"):

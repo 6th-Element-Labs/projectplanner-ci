@@ -3,14 +3,21 @@
 A short-lived companion process inherits the PTY master fd, dual-writes output to
 stdout.log, serves authenticated HTTP chunked streams, and accepts authenticated
 POST inject payloads that write into the bound PTY (Mission panel chat).
+
+ADAPTER-22 adds an authenticated `/control` endpoint for raw input, resize, and
+signal frames used by the Switchboard browser PTY relay bridge.
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import fcntl
 import json
 import os
 import select
+import struct
 import sys
+import termios
 import threading
 import time
 import urllib.parse
@@ -28,6 +35,21 @@ except ModuleNotFoundError:  # adapters/ on sys.path without src/
     from switchboard.api.routers.auth.jwt_util import encode as jwt_encode
 
 INJECT_KINDS = frozenset({"freeform", "redirect", "hold", "approve"})
+CONTROL_ACTIONS = frozenset({"input", "resize", "signal"})
+STREAM_CLIENT_QUEUE_LIMIT = 64
+_SIGNAL_BYTES = {
+    "SIGINT": b"\x03",
+    "CTRL-C": b"\x03",
+    "CTRL_C": b"\x03",
+    "SIGTSTP": b"\x1a",
+    "CTRL-Z": b"\x1a",
+    "CTRL_Z": b"\x1a",
+    "SIGQUIT": b"\x1c",
+    "CTRL-\\": b"\x1c",
+    "EOF": b"\x04",
+    "CTRL-D": b"\x04",
+    "CTRL_D": b"\x04",
+}
 _SHORTCUT_PREFIX = {
     "redirect": "[Switchboard Redirect] ",
     "hold": "[Switchboard Hold] ",
@@ -135,6 +157,80 @@ def verify_inject_ticket(
     return True, ""
 
 
+def mint_control_ticket(
+    *,
+    runner_session_id: str,
+    host_id: str = "",
+    actions: list[str] | None = None,
+    ttl_seconds: int = 900,
+    now: float | None = None,
+) -> tuple[str, float]:
+    issued = float(now if now is not None else time.time())
+    expires = issued + max(30, int(ttl_seconds))
+    allowed = []
+    for action in actions or ["input", "resize", "signal"]:
+        key = str(action or "").strip().lower()
+        if key in CONTROL_ACTIONS and key not in allowed:
+            allowed.append(key)
+    if not allowed:
+        allowed = ["input", "resize", "signal"]
+    token = jwt_encode(
+        {
+            "scope": "runner_pty_control",
+            "runner_session_id": runner_session_id,
+            "host_id": host_id or "",
+            "actions": allowed,
+            "iat": int(issued),
+            "exp": int(expires),
+        },
+        stream_secret(),
+    )
+    return token, expires
+
+
+def verify_control_ticket(
+    ticket: str,
+    *,
+    runner_session_id: str,
+    action: str,
+    host_id: str = "",
+    now: float | None = None,
+) -> tuple[bool, str]:
+    payload, reason = jwt_decode(ticket, stream_secret(), now=now)
+    if payload is None:
+        return False, reason or "invalid_ticket"
+    if payload.get("scope") != "runner_pty_control":
+        return False, "wrong_scope"
+    if str(payload.get("runner_session_id") or "") != str(runner_session_id):
+        return False, "session_mismatch"
+    expected_host = str(host_id or "")
+    ticket_host = str(payload.get("host_id") or "")
+    if expected_host and ticket_host and ticket_host != expected_host:
+        return False, "host_mismatch"
+    action_key = str(action or "").strip().lower()
+    allowed = {
+        str(item or "").strip().lower()
+        for item in (payload.get("actions") or [])
+    }
+    if action_key not in CONTROL_ACTIONS:
+        return False, "unsupported_action"
+    if action_key not in allowed:
+        return False, "action_denied"
+    return True, ""
+
+
+def set_pty_winsize(master_fd: int, rows: int, cols: int) -> None:
+    packed = struct.pack("HHHH", int(rows), int(cols), 0, 0)
+    fcntl.ioctl(int(master_fd), termios.TIOCSWINSZ, packed)
+
+
+def signal_to_bytes(name: str) -> bytes | None:
+    key = str(name or "").strip().upper().replace(" ", "_")
+    if not key:
+        return None
+    return _SIGNAL_BYTES.get(key)
+
+
 def format_inject_payload(
     text: str,
     *,
@@ -180,6 +276,20 @@ def build_inject_url(
         host = bind_host if bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
         base = f"http://{host}:{int(port)}"
     return f"{base}/runner/v1/sessions/{urllib.parse.quote(runner_session_id)}/inject"
+
+
+def build_control_url(
+    *,
+    bind_host: str,
+    port: int,
+    runner_session_id: str,
+    public_base: str = "",
+) -> str:
+    base = (public_base or "").rstrip("/")
+    if not base:
+        host = bind_host if bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
+        base = f"http://{host}:{int(port)}"
+    return f"{base}/runner/v1/sessions/{urllib.parse.quote(runner_session_id)}/control"
 
 
 class _Fanout:
@@ -249,6 +359,7 @@ def _make_handler(
     master_fd: int,
     write_lock: threading.Lock,
     bound_task_id: str = "",
+    stream_queue_limit: int = STREAM_CLIENT_QUEUE_LIMIT,
 ):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -281,8 +392,16 @@ def _make_handler(
                 return
             queue: list[bytes] = []
             event = threading.Event()
+            overflow = {"flag": False}
+            limit = max(1, int(stream_queue_limit))
 
             def write_chunk(data: bytes) -> None:
+                if overflow["flag"]:
+                    raise RuntimeError("backpressure")
+                if len(queue) >= limit:
+                    overflow["flag"] = True
+                    event.set()
+                    raise RuntimeError("backpressure")
                 queue.append(data)
                 event.set()
 
@@ -308,6 +427,8 @@ def _make_handler(
                 while not fanout.closed:
                     event.wait(timeout=1.0)
                     event.clear()
+                    if overflow["flag"]:
+                        break
                     while queue:
                         chunk = queue.pop(0)
                         size = f"{len(chunk):x}\r\n".encode()
@@ -323,12 +444,125 @@ def _make_handler(
                     pass
                 fanout.remove_client(write_chunk)
 
+        def _handle_control(self, body: dict[str, Any], parsed) -> None:
+            ticket = str(
+                body.get("ticket")
+                or self.headers.get("X-Switchboard-Control-Ticket")
+                or urllib.parse.parse_qs(parsed.query).get("ticket", [""])[0]
+                or ""
+            )
+            action = str(body.get("action") or "").strip().lower()
+            ok, reason = verify_control_ticket(
+                ticket,
+                runner_session_id=runner_session_id,
+                action=action,
+                host_id=host_id,
+            )
+            if not ok:
+                self._json(401, {"error": "unauthorized", "reason": reason})
+                return
+            if fanout.closed:
+                self._json(503, {"error": "not_supported", "reason": "pty_closed"})
+                return
+            if action == "input":
+                data = b""
+                if body.get("data_b64") is not None:
+                    try:
+                        data = base64.b64decode(str(body.get("data_b64") or ""), validate=False)
+                    except Exception:
+                        self._json(400, {"error": "invalid_input", "reason": "bad_data_b64"})
+                        return
+                elif isinstance(body.get("text"), str):
+                    # Raw text — no forced newline (unlike inject).
+                    data = body["text"].encode("utf-8", errors="replace")
+                elif isinstance(body.get("data"), str):
+                    data = body["data"].encode("utf-8", errors="replace")
+                else:
+                    self._json(400, {"error": "invalid_input", "reason": "data_required"})
+                    return
+                if not data:
+                    self._json(400, {"error": "invalid_input", "reason": "empty_input"})
+                    return
+                try:
+                    with write_lock:
+                        written = os.write(master_fd, data)
+                except OSError as exc:
+                    self._json(503, {
+                        "error": "not_supported",
+                        "reason": "pty_write_failed",
+                        "message": str(exc),
+                    })
+                    return
+                self._json(200, {
+                    "ok": True,
+                    "action": "input",
+                    "runner_session_id": runner_session_id,
+                    "bytes_written": written,
+                })
+                return
+            if action == "resize":
+                try:
+                    rows = int(body.get("rows") or body.get("row") or 0)
+                    cols = int(body.get("cols") or body.get("col") or body.get("columns") or 0)
+                except (TypeError, ValueError):
+                    self._json(400, {"error": "invalid_input", "reason": "rows_cols_required"})
+                    return
+                if rows <= 0 or cols <= 0:
+                    self._json(400, {"error": "invalid_input", "reason": "rows_cols_required"})
+                    return
+                try:
+                    with write_lock:
+                        set_pty_winsize(master_fd, rows, cols)
+                except OSError as exc:
+                    self._json(503, {
+                        "error": "not_supported",
+                        "reason": "pty_resize_failed",
+                        "message": str(exc),
+                    })
+                    return
+                self._json(200, {
+                    "ok": True,
+                    "action": "resize",
+                    "runner_session_id": runner_session_id,
+                    "rows": rows,
+                    "cols": cols,
+                })
+                return
+            if action == "signal":
+                name = str(body.get("name") or body.get("signal") or "SIGINT")
+                payload = signal_to_bytes(name)
+                if payload is None:
+                    self._json(400, {
+                        "error": "not_supported",
+                        "reason": "unsupported_signal",
+                        "name": name,
+                    })
+                    return
+                try:
+                    with write_lock:
+                        written = os.write(master_fd, payload)
+                except OSError as exc:
+                    self._json(503, {
+                        "error": "not_supported",
+                        "reason": "pty_signal_failed",
+                        "message": str(exc),
+                    })
+                    return
+                self._json(200, {
+                    "ok": True,
+                    "action": "signal",
+                    "runner_session_id": runner_session_id,
+                    "name": name,
+                    "bytes_written": written,
+                })
+                return
+            self._json(400, {"error": "invalid_input", "reason": "unsupported_action"})
+
         def do_POST(self):  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            expected = f"/runner/v1/sessions/{runner_session_id}/inject"
-            if parsed.path.rstrip("/") != expected.rstrip("/"):
-                self.send_error(404, "not_found")
-                return
+            control_path = f"/runner/v1/sessions/{runner_session_id}/control"
+            inject_path = f"/runner/v1/sessions/{runner_session_id}/inject"
+            path = parsed.path.rstrip("/")
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(max(0, length)) if length else b"{}"
             try:
@@ -338,6 +572,12 @@ def _make_handler(
                 return
             if not isinstance(body, dict):
                 self._json(400, {"error": "malformed_payload", "reason": "body_must_be_object"})
+                return
+            if path == control_path.rstrip("/"):
+                self._handle_control(body, parsed)
+                return
+            if path != inject_path.rstrip("/"):
+                self.send_error(404, "not_found")
                 return
             ticket = str(
                 body.get("ticket")
@@ -424,6 +664,7 @@ def serve(
             "task_id": task_id or "",
             "stream_path": f"/runner/v1/sessions/{runner_session_id}/stream",
             "inject_path": f"/runner/v1/sessions/{runner_session_id}/inject",
+            "control_path": f"/runner/v1/sessions/{runner_session_id}/control",
         }), encoding="utf-8")
 
     def pump() -> None:

@@ -13,6 +13,7 @@ from mcp.server.fastmcp import Context
 
 import auth
 from switchboard.application.commands import runner_control as runner_control_command
+from switchboard.application.commands import runner_pty as runner_pty_command
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,38 @@ def request_runner_inject(runner_session_id: str, ctx: Context,
         actor=auth.actor(principal), principal_id=principal["id"]))
 
 
+def mint_runner_pty_ticket(runner_session_id: str, ctx: Context,
+                           scopes_json: str = '["watch"]',
+                           ttl_seconds: int = 900,
+                           binding_json: str = "{}",
+                           project: str = "maxwell") -> str:
+    """Mint a short-lived browser PTY relay capability ticket (ADAPTER-22).
+
+    Requires a fully COORD-34-bound runner session. Tickets never embed host-local
+    loopback URLs; browsers connect through the Switchboard relay path.
+    """
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:ixp",))
+    try:
+        scopes = json.loads(scopes_json or "[]")
+    except Exception:
+        return services.dumps({"error": "scopes_json must be a JSON array string"})
+    try:
+        overlay = json.loads(binding_json or "{}")
+    except Exception:
+        return services.dumps({"error": "binding_json must be a JSON object string"})
+    if not isinstance(overlay, dict):
+        return services.dumps({"error": "binding_json must be a JSON object string"})
+    return services.dumps(runner_pty_command.mint_ticket_for_session(
+        runner_session_id=runner_session_id,
+        project=project,
+        scopes=scopes,
+        ttl_seconds=ttl_seconds,
+        binding_overlay=overlay,
+        actor=auth.actor(principal),
+    ))
+
+
 def list_runner_control_requests(project: str = "maxwell", status: str = "",
                                  host_id: str = "",
                                  runner_session_id: str = "") -> str:
@@ -209,6 +242,7 @@ RUNNER_TOOL_NAMES = (
     "request_runner_logs",
     "request_runner_open",
     "request_runner_inject",
+    "mint_runner_pty_ticket",
     "list_runner_control_requests",
     "claim_runner_control",
     "complete_runner_control",

@@ -238,6 +238,15 @@ asserts that the evaluator denies the operation.
 - Retention is explicit: provider session lifetime, local session-store cleanup, checkpoint TTL,
   and Switchboard handle expiry must be independently visible.
 
+## 9b. Browser PTY relay (ADAPTER-22)
+
+Bound Agent Host runners expose Watch/Chat through an authenticated Switchboard-controlled
+full-duplex PTY relay (`transport=switchboard_pty_relay`). The browser connects to
+`/ixp/v1/runner_sessions/{id}/pty` with a short-lived capability ticket; it never receives a
+host-local `127.0.0.1` stream URL and never requires a publicly exposed Agent Host port.
+Host-local CO-12/CO-13 HTTP chunked stream + inject remain for host-internal use
+(`metadata.local_stream_url`, `browser_safe=false` when no public relay base is configured).
+
 ## 10. Delivery plan
 
 1. **ADAPTER-12 (this contract):** publish the researched matrix, machine-readable fixture,

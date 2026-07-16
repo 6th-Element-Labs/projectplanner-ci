@@ -442,3 +442,12 @@ Exit criteria:
 - What is the right default warm-pool size for knowledge-work dogfood: zero, one per lane, or one
   per runtime?
 - How should Tally cap wake storms when many monitors fire at once?
+
+## 16. Browser PTY relay (ADAPTER-22)
+
+Browser Watch/Chat for bound runners uses the Switchboard PTY relay
+(`transport=switchboard_pty_relay`), not a direct Agent Host port. When
+`PM_SWITCHBOARD_PUBLIC_BASE` / `PM_RUNNER_PTY_RELAY_PUBLIC_BASE` is set, `runner_open`
+returns a public relay URL and keeps the loopback stream under
+`metadata.local_stream_url` only. Without a public base, host-local `http_chunked` remains
+for CO-12 compatibility but is marked `browser_safe=false` / `relay_required=true`.

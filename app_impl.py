@@ -62,6 +62,7 @@ from switchboard.api.routers.health import create_router as _create_health_route
 from switchboard.api.routers.tally import create_router as _create_tally_router  # noqa: E402
 from switchboard.api.routers.ixp_work_sessions import create_router as _create_ixp_work_sessions_router  # noqa: E402
 from switchboard.api.routers.runner import create_router as _create_runner_router  # noqa: E402
+from switchboard.api.routers.runner_pty import create_router as _create_runner_pty_router  # noqa: E402
 from switchboard.api.routers.external_effects import create_router as _create_external_effects_router  # noqa: E402
 from switchboard.api.routers.intake_inbox import create_router as _create_intake_inbox_router  # noqa: E402
 from switchboard.api.routers.digest_notify import create_router as _create_digest_notify_router  # noqa: E402
@@ -289,6 +290,11 @@ app.include_router(_create_ixp_work_sessions_router(
     resolve_body_project=_body_project,
 ))
 app.include_router(_create_runner_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    resolve_body_project=_body_project,
+))
+app.include_router(_create_runner_pty_router(
     resolve_project=_proj,
     resolve_principal=_principal,
     resolve_body_project=_body_project,

@@ -216,6 +216,7 @@ WRITE_TOOLS = frozenset({
     "remove_dependency", "repo_preflight", "report_usage",
     "request_deliverable_closure_verification", "request_external_ci_mirror_run",
     "request_runner_health", "request_runner_inject", "request_runner_kill",
+    "mint_runner_pty_ticket",
     "request_runner_logs", "request_runner_open", "request_runner_snapshot",
     "request_unblock", "request_wake", "resolve_monitor", "resolve_review_finding",
     "restore_project", "revoke_claim", "revoke_provider_connection",
