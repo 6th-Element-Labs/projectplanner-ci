@@ -640,11 +640,158 @@
             } catch (e) { this._settingsCommsFlash(e.message || 'Failed to send test.', 'text-danger'); }
         },
 
+        // UI-20 (5/6): the UI-15 Connect-repo modal folded in-place, below the repo-topology
+        // card. Rule #3 — never probe GitHub on open: the section fetch omits ?check=1, so it
+        // only reads the recorded association; the Verify button is the sole path that probes
+        // reachability (_settingsGithubLoad(true)). The New Project → repo handoff now reloads
+        // straight into ?project=<id>#tab-settings/github instead of the modal's ga-goto.
         async _settingsGithubSection() {
             const proj = window.PM_PROJECT || 'maxwell';
+            this._gaProject = proj;
             const topology = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/repo_topology`);
-            const connect = '<button class="btn btn-sm btn-outline-secondary" type="button" data-set-action="open-github"><i class="ti ti-brand-github me-1" aria-hidden="true"></i>Connect repo</button>';
-            return this._settingsRepoCard(topology, connect);
+            const assoc = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/github_association`);
+            const connectCard = assoc.error
+                ? this._settingsErrCard('Connect a GitHub repo', assoc.error)
+                : this._settingsGithubConnectCardHtml(assoc);
+            return this._settingsRepoCard(topology) + connectCard;
+        },
+
+        _settingsGithubBadgeParts(v) {
+            v = v || {};
+            let cls = 'badge ms-2 ', txt = '';
+            if (v.status === 'connected') {
+                cls += 'bg-green-lt'; txt = 'Connected';
+                if (v.delivery_count) txt += ` · ${v.delivery_count} deliver${v.delivery_count === 1 ? 'y' : 'ies'}`;
+            } else if (v.repo_reachable === false) {
+                cls += 'bg-red-lt'; txt = 'Repo unreachable';
+            } else if (v.repo_reachable === true) {
+                cls += 'bg-yellow-lt'; txt = 'Repo found · awaiting first delivery';
+            } else {
+                cls += 'bg-yellow-lt'; txt = 'Awaiting first delivery';
+            }
+            return [cls, txt];
+        },
+
+        _settingsGithubConnectCardHtml(data) {
+            data = data || {};
+            const wh = data.webhook || {};
+            const configured = !!data.repo_configured;
+            const parts = this._settingsGithubBadgeParts(data.verification);
+            return `<div class="card mb-3" id="settings-github-connect">
+                <div class="card-header"><div><h3 class="card-title"><i class="ti ti-brand-github me-2" aria-hidden="true"></i>Connect a GitHub repo</h3>
+                    <div class="text-secondary small">Point a repo at <strong>${this.esc(this._gaProject)}</strong> so merged PRs stamp its tasks Done automatically.</div></div></div>
+                <div class="card-body">
+                    <label class="form-label" for="ga-repo">GitHub repo <span class="text-secondary fw-normal">(<code>owner/name</code>)</span></label>
+                    <div class="input-group">
+                        <input type="text" id="ga-repo" class="form-control" placeholder="owner/name" autocomplete="off" autocapitalize="off" spellcheck="false" value="${this.esc(data.repo || '')}">
+                        <button type="button" id="ga-save" class="btn btn-outline-primary" data-set-action="github-save"><i class="ti ti-device-floppy me-1" aria-hidden="true"></i>Save</button>
+                    </div>
+                    <div id="ga-repo-flash" class="small mt-1 text-secondary"></div>
+                    <div id="ga-panel" style="${configured ? '' : 'display:none'}">
+                        <hr class="my-3">
+                        <div class="d-flex align-items-center mb-2">
+                            <h4 class="mb-0"><i class="ti ti-webhook me-1" aria-hidden="true"></i>Wire the webhook</h4>
+                            <span id="ga-status" class="${parts[0]}">${this.esc(parts[1])}</span>
+                        </div>
+                        <p class="text-secondary small mb-3">Add a webhook on <code id="ga-repo-name">${this.esc(data.repo || '')}</code> so this board hears push &amp; PR events. The <code>?project=</code> pin is <strong>pre-filled and required</strong> — a bare URL fails closed on repos shared by more than one board.</p>
+                        <div class="mb-2">
+                            <label class="form-label small mb-1">Payload URL <span class="text-secondary fw-normal">(<code>?project=</code> pinned)</span></label>
+                            <div class="input-group input-group-sm">
+                                <input type="text" id="ga-url" class="form-control font-monospace" readonly value="${this.esc(wh.payload_url || '')}">
+                                <button class="btn btn-outline-secondary" data-set-action="github-copy:ga-url" type="button" title="Copy payload URL"><i class="ti ti-copy" aria-hidden="true"></i></button>
+                            </div>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-sm-6"><label class="form-label small mb-1">Content type</label><input type="text" class="form-control form-control-sm font-monospace" value="application/json" readonly></div>
+                            <div class="col-sm-6"><label class="form-label small mb-1">Secret <span class="text-secondary fw-normal">(server env)</span></label><input type="text" id="ga-secret" class="form-control form-control-sm font-monospace" readonly value="${this.esc(wh.secret_env || '')}"></div>
+                        </div>
+                        <div class="mb-2"><label class="form-label small mb-1">Events</label><div><span class="badge bg-blue-lt">push</span> <span class="badge bg-blue-lt">pull_request</span></div></div>
+                        <div class="alert alert-warning py-2 px-3 small mb-3" id="ga-secret-warn" style="${wh.secret_configured ? 'display:none' : ''}"><i class="ti ti-alert-triangle me-1" aria-hidden="true"></i>The server has no <code>PM_GITHUB_WEBHOOK_SECRET</code> set, so deliveries won't be signature-verified until an operator configures one.</div>
+                        <div class="mb-1">
+                            <label class="form-label small mb-1">Or install it with one command (<a href="https://cli.github.com/" target="_blank" rel="noopener"><code>gh</code></a> CLI)</label>
+                            <div class="input-group input-group-sm">
+                                <input type="text" id="ga-gh" class="form-control font-monospace" readonly value="${this.esc(wh.gh_command || '')}">
+                                <button class="btn btn-outline-secondary" data-set-action="github-copy:ga-gh" type="button" title="Copy gh command"><i class="ti ti-copy" aria-hidden="true"></i></button>
+                            </div>
+                            <div class="form-hint">Export <code>$PM_GITHUB_WEBHOOK_SECRET</code> to match the server secret before running.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer d-flex align-items-center">
+                    <span id="ga-verify-flash" class="small text-secondary me-auto"></span>
+                    <button type="button" id="ga-verify" class="btn btn-primary btn-sm" data-set-action="github-verify" style="${configured ? '' : 'display:none'}"><i class="ti ti-plug-connected me-1" aria-hidden="true"></i>Verify connection</button>
+                </div></div>`;
+        },
+
+        _settingsGithubRender(data) {
+            const repoInput = document.getElementById('ga-repo');
+            if (repoInput && data.repo && !repoInput.value) repoInput.value = data.repo;
+            const panel = document.getElementById('ga-panel');
+            const verify = document.getElementById('ga-verify');
+            if (!data.repo_configured) {
+                if (panel) panel.style.display = 'none';
+                if (verify) verify.style.display = 'none';
+                return;
+            }
+            if (panel) panel.style.display = '';
+            if (verify) verify.style.display = '';
+            const wh = data.webhook || {};
+            const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+            set('ga-url', wh.payload_url); set('ga-secret', wh.secret_env); set('ga-gh', wh.gh_command);
+            const name = document.getElementById('ga-repo-name'); if (name) name.textContent = data.repo || '';
+            const warn = document.getElementById('ga-secret-warn'); if (warn) warn.style.display = wh.secret_configured ? 'none' : '';
+            const badge = document.getElementById('ga-status');
+            if (badge) { const parts = this._settingsGithubBadgeParts(data.verification); badge.className = parts[0]; badge.textContent = parts[1]; }
+        },
+
+        // check=true is the only path that probes repo reachability (?check=1) — the section
+        // open path never does (rule #3).
+        async _settingsGithubLoad(check) {
+            const proj = this._gaProject || window.PM_PROJECT || 'maxwell';
+            const data = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/github_association${check ? '?check=1' : ''}`);
+            if (data.error) { const f = document.getElementById('ga-repo-flash'); if (f) { f.textContent = data.error; f.className = 'small mt-1 text-danger'; } return; }
+            this._settingsGithubRender(data);
+        },
+
+        async _settingsSaveGithubRepo() {
+            const proj = this._gaProject || window.PM_PROJECT || 'maxwell';
+            const flash = document.getElementById('ga-repo-flash');
+            const setFlash = (msg, cls) => { if (flash) { flash.textContent = msg; flash.className = `small mt-1 ${cls}`; } };
+            const github_repo = (document.getElementById('ga-repo')?.value || '').trim();
+            if (!github_repo) { setFlash('Enter a repo as owner/name.', 'text-danger'); return; }
+            const btn = document.getElementById('ga-save'); if (btn) btn.disabled = true;
+            setFlash('Saving…', 'text-secondary');
+            try {
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/github_repo`, 'POST', { github_repo });
+                setFlash('Saved — now install the webhook below.', 'text-success');
+                await this._settingsGithubLoad();
+            } catch (e) { setFlash(e.message || 'Failed to save repo.', 'text-danger'); }
+            finally { if (btn) btn.disabled = false; }
+        },
+
+        async _settingsVerifyGithub() {
+            const btn = document.getElementById('ga-verify');
+            const flash = document.getElementById('ga-verify-flash');
+            if (flash) { flash.textContent = 'Checking…'; flash.className = 'small text-secondary me-auto'; }
+            if (btn) btn.disabled = true;
+            await this._settingsGithubLoad(true);
+            const badge = document.getElementById('ga-status');
+            const connected = badge && /Connected/.test(badge.textContent || '');
+            if (flash) {
+                flash.textContent = connected
+                    ? 'Delivery received — you’re connected.'
+                    : 'No delivery yet. Push a commit or merge a PR, then verify again.';
+                flash.className = `small me-auto ${connected ? 'text-success' : 'text-secondary'}`;
+            }
+            if (btn) btn.disabled = false;
+        },
+
+        _settingsCopyField(id) {
+            const src = document.getElementById(id);
+            if (!src) return;
+            src.select();
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(src.value).catch(() => { try { document.execCommand('copy'); } catch (e) { /* noop */ } });
+            else { try { document.execCommand('copy'); } catch (e) { /* noop */ } }
         },
 
         // UI-20 (2/6): the UI-4 scoped-token modal folded in-place. This is the canonical
@@ -1046,6 +1193,7 @@
             try { return this._settingsMembersRevoke(JSON.parse(decodeURIComponent(action.slice('members-revoke:'.length)))); }
             catch (e) { return; }
         }
+        if (String(action || '').startsWith('github-copy:')) return this._settingsCopyField(action.slice('github-copy:'.length));
         switch (action) {
             case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'repo-save': return this.saveRepoTopology();
@@ -1054,15 +1202,15 @@
             case 'verify-offline': return this.verifyOffline();
             case 'move-task': return this.moveTask();
             case 'refresh': return this.renderSettings();
-            // Access tokens (2/6), Communications (3/6), and Members (4/6) are folded inline;
-            // the remaining launcher still opens the not-yet-migrated GitHub modal until
-            // slice 5 lands.
-            case 'open-github': return this.openGithubAssoc(window.PM_PROJECT);
+            // Access tokens (2/6), Communications (3/6), Members (4/6), and GitHub (5/6) are
+            // all folded inline now; no launcher into a legacy modal remains.
             case 'comms-add-domain': return this._settingsCommsAddDomain();
             case 'comms-copy': return this._settingsCommsCopyPlus();
             case 'comms-save': return this._settingsCommsSave();
             case 'members-add': return this._settingsMembersAdd();
             case 'members-refresh': return this._settingsMembersReload();
+            case 'github-save': return this._settingsSaveGithubRepo();
+            case 'github-verify': return this._settingsVerifyGithub();
             case 'tokens-create-toggle': { const f = document.getElementById('apikeys-create-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'tokens-create': return this._settingsCreateToken();
             case 'tokens-copy': return this._settingsTokensCopy();

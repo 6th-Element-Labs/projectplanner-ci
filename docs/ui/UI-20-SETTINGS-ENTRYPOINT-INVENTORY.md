@@ -15,7 +15,7 @@ addressed as `#tab-settings/<section>`.
 | 1 | Access tokens (UI-4) | `#apikeys-modal` + rail `#btn-project-apikeys` | `tokens` — relabel **Switchboard access tokens** (not model-provider API keys) | **done (2/6)** — inlined into `_settingsTokensSection`; modal + rail button retired; shown-once wipe re-anchored onto the panel swap |
 | 2 | Communications (UI-14) | `#comms-modal` + rail `#btn-project-comms` | `comms` | **done (3/6)** — inlined into `_settingsCommsSection` (inbound domains + outbound recipients/cadence, chip add/remove, save, send-test); modal + rail button retired; admin gate re-scoped from the `#comms-modal .comms-editable` selector to inline `disabled` driven by the server `can_edit` probe |
 | 3 | Members & access (UI-5) | `#members-modal` + rail `#btn-project-members` | `members` | **done (4/6)** — inlined into `_settingsMembersSection` (member table with per-row role select + revoke, add-a-member form, visibility explainer); modal + rail button retired; role change kept as grant-then-revoke; `btn-project-members` command-palette entry repointed to the `#tab-settings/members` deep link |
-| 4 | Connect GitHub repo (UI-15) | `#github-assoc-modal` + rail `#btn-project-github` | `github` | pending |
+| 4 | Connect GitHub repo (UI-15) | `#github-assoc-modal` + rail `#btn-project-github` | `github` | **done (5/6)** — inlined into `_settingsGithubSection` below the repo-topology card (repo save + guided webhook wiring: payload URL, secret, `gh` one-liner, Verify); modal + rail button retired; open path never probes (only Verify passes `?check=1`); New Project handoff + palette entry repointed to the `#tab-settings/github` deep link |
 | 5 | Account & password | `/account` + `static/account.html` | `profile` | pending |
 | 6 | Project/provenance admin cards | Settings tab (UI-9) | `provenance` / `advanced` | **done (UI-18)** |
 | 7 | Appearance | legacy theme cog (retired) | `appearance` | **done (UI-18)** — read-only; the app is deliberately single-theme (`static/taikun-ui.js`) |
@@ -51,7 +51,13 @@ reachability; the panel open path omits it so it never makes a network call unti
 asks."* Sections render on selection, so the open path must keep the `loadGithubAssoc()` /
 `loadGithubAssoc(true)` split or every visit hits GitHub's API. Also `app.js` calls
 `openGithubAssoc(id, {switchTo: id})` right after New Project — that flow's exit (`#ga-goto`)
-must survive.
+must survive. — **resolved (5/6):** `_settingsGithubSection` fetches `github_association`
+without `?check=1`, so selecting the section never probes; `_settingsGithubLoad(true)` (the
+Verify button) is the only path that passes `?check=1`. The New Project handoff no longer opens
+a modal — when a repo was named it reloads into `?project=<id>#tab-settings/github`, which both
+switches boards and opens the inline wiring panel (so the `#ga-goto` "Go to project" button is
+subsumed and removed). `test_ui18_settings_shell.py` asserts the no-probe-on-open split and the
+deep-link handoff.
 
 **4. Members — role change is grant-then-revoke.** *"Change role = grant the new role, then
 revoke the old one (grants are per-role rows)."* Not an update. — **resolved (4/6):**

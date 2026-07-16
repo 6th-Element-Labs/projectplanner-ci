@@ -274,18 +274,18 @@ const TeepPlan = {
             }
             const id = (data.project && data.project.id) || '';
             try { localStorage.setItem('pm_project', id); } catch (e) {}
-            // If they named a repo, hand off to the guided webhook-wiring panel before
-            // switching boards — the ?project= pin is only useful once they install it.
-            if (github_repo) {
-                setFlash('Created — wire the webhook…', 'text-success');
-                window.bootstrap.Modal.getOrCreateInstance(document.getElementById('new-project-modal')).hide();
-                this.openGithubAssoc(id, { switchTo: id });
-                if (btn) btn.disabled = false;
-                return;
-            }
-            setFlash('Created — switching…', 'text-success');
             const u = new URL(window.location.href);
             u.searchParams.set('project', id);
+            // If they named a repo (already recorded above), land straight in the new
+            // project's Settings → GitHub section so its inline webhook-wiring panel is
+            // ready — UI-20 (5/6) replaced the old openGithubAssoc(id,{switchTo}) modal
+            // handoff + ga-goto button with this deep link.
+            if (github_repo) {
+                setFlash('Created — opening repo setup…', 'text-success');
+                u.hash = '#tab-settings/github';
+            } else {
+                setFlash('Created — switching…', 'text-success');
+            }
             window.location.href = u.toString();   // reload into the new project
         } catch (e) {
             setFlash(e.message || 'Failed to create project.', 'text-danger');
@@ -294,125 +294,12 @@ const TeepPlan = {
     },
 
     // ---- UI-15: connect a GitHub repo + guided webhook wiring -------------
-    // Opens the shared association modal for `projectId`. opts.switchTo, when set, shows a
-    // "Go to project" button that reloads into that board (used right after New Project).
-    openGithubAssoc(projectId, opts) {
-        const proj = projectId || window.PM_PROJECT || 'maxwell';
-        this._gaProject = proj;
-        this._gaSwitchTo = (opts && opts.switchTo) || '';
-        const label = document.getElementById('ga-project-label');
-        if (label) label.textContent = proj;
-        const repo = document.getElementById('ga-repo'); if (repo) repo.value = '';
-        const flash = document.getElementById('ga-repo-flash'); if (flash) { flash.textContent = ''; flash.className = 'small mt-1 text-secondary'; }
-        const vflash = document.getElementById('ga-verify-flash'); if (vflash) vflash.textContent = '';
-        const panel = document.getElementById('ga-panel'); if (panel) panel.style.display = 'none';
-        const goto = document.getElementById('ga-goto');
-        if (goto) goto.style.display = this._gaSwitchTo ? '' : 'none';
-        window.bootstrap.Modal.getOrCreateInstance(document.getElementById('github-assoc-modal')).show();
-        this.loadGithubAssoc();
-    },
-
-    async loadGithubAssoc(check) {
-        const proj = this._gaProject;
-        if (!proj) return;
-        try {
-            const url = `api/projects/${encodeURIComponent(proj)}/github_association${check ? '?check=1' : ''}`;
-            const res = await fetch(url);
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.detail || data.error || `Failed (${res.status})`);
-            this.renderGithubAssoc(data);
-        } catch (e) {
-            const flash = document.getElementById('ga-repo-flash');
-            if (flash) { flash.textContent = e.message || 'Failed to load.'; flash.className = 'small mt-1 text-danger'; }
-        }
-    },
-
-    renderGithubAssoc(data) {
-        const repoInput = document.getElementById('ga-repo');
-        if (repoInput && data.repo && !repoInput.value) repoInput.value = data.repo;
-        const panel = document.getElementById('ga-panel');
-        const verify = document.getElementById('ga-verify');
-        if (!data.repo_configured) {
-            if (panel) panel.style.display = 'none';
-            if (verify) verify.style.display = 'none';
-            return;
-        }
-        if (panel) panel.style.display = '';
-        if (verify) verify.style.display = '';
-        const wh = data.webhook || {};
-        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
-        set('ga-url', wh.payload_url);
-        set('ga-secret', wh.secret_env);
-        set('ga-gh', wh.gh_command);
-        const name = document.getElementById('ga-repo-name'); if (name) name.textContent = data.repo;
-        const warn = document.getElementById('ga-secret-warn');
-        if (warn) warn.style.display = wh.secret_configured ? 'none' : '';
-        // Verification badge — flips green on the first real delivery.
-        const v = data.verification || {};
-        const badge = document.getElementById('ga-status');
-        if (badge) {
-            let cls = 'badge ms-2 ', txt = '';
-            if (v.status === 'connected') {
-                cls += 'bg-green-lt'; txt = 'Connected';
-                if (v.delivery_count) txt += ` · ${v.delivery_count} deliver${v.delivery_count === 1 ? 'y' : 'ies'}`;
-            } else if (v.repo_reachable === false) {
-                cls += 'bg-red-lt'; txt = 'Repo unreachable';
-            } else if (v.repo_reachable === true) {
-                cls += 'bg-yellow-lt'; txt = 'Repo found · awaiting first delivery';
-            } else {
-                cls += 'bg-yellow-lt'; txt = 'Awaiting first delivery';
-            }
-            badge.className = cls;
-            badge.textContent = txt;
-        }
-    },
-
-    async saveGithubRepo() {
-        const proj = this._gaProject;
-        const flash = document.getElementById('ga-repo-flash');
-        const setFlash = (msg, cls) => { if (flash) { flash.textContent = msg; flash.className = `small mt-1 ${cls}`; } };
-        const github_repo = (document.getElementById('ga-repo')?.value || '').trim();
-        if (!github_repo) { setFlash('Enter a repo as owner/name.', 'text-danger'); return; }
-        const btn = document.getElementById('ga-save');
-        if (btn) btn.disabled = true;
-        setFlash('Saving…', 'text-secondary');
-        try {
-            const res = await fetch(`api/projects/${encodeURIComponent(proj)}/github_repo`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ github_repo }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error(res.status === 403
-                    ? 'You need admin on this project to set its repo.'
-                    : (data.detail || data.error || `Failed (${res.status})`));
-            }
-            setFlash('Saved — now install the webhook below.', 'text-success');
-            await this.loadGithubAssoc();
-        } catch (e) {
-            setFlash(e.message || 'Failed to save repo.', 'text-danger');
-        } finally {
-            if (btn) btn.disabled = false;
-        }
-    },
-
-    async verifyGithubConnection() {
-        const btn = document.getElementById('ga-verify');
-        const flash = document.getElementById('ga-verify-flash');
-        if (flash) { flash.textContent = 'Checking…'; flash.className = 'small text-secondary me-auto'; }
-        if (btn) btn.disabled = true;
-        await this.loadGithubAssoc(true);
-        const badge = document.getElementById('ga-status');
-        const connected = badge && /Connected/.test(badge.textContent || '');
-        if (flash) {
-            flash.textContent = connected
-                ? 'Delivery received — you’re connected.'
-                : 'No delivery yet. Push a commit or merge a PR, then verify again.';
-            flash.className = `small me-auto ${connected ? 'text-success' : 'text-secondary'}`;
-        }
-        if (btn) btn.disabled = false;
-    },
+    // Folded into the Settings shell in UI-20 (5/6): see _settingsGithubSection and the
+    // _settingsGithub*/_settingsSaveGithubRepo/_settingsVerifyGithub handlers in
+    // static/js/settings.js. Rule #3 (never probe on open) is preserved — the section fetch
+    // omits ?check=1; only Verify probes. The standalone #github-assoc-modal and its rail
+    // button #btn-project-github were retired; the New Project handoff now deep-links to
+    // #tab-settings/github.
 
     // ---- UI-7: directed agent messaging + ack inbox -----------------------
     // Compose popover: steer a live agent from its chip. toAgent/taskId come from the chip.
@@ -3905,30 +3792,9 @@ const TeepPlan = {
         if (npBtn) npBtn.addEventListener('click', () => this.openNewProject());
         const npCreate = document.getElementById('np-create');
         if (npCreate) npCreate.addEventListener('click', () => this.submitNewProject());
-        // UI-15: GitHub repo association + guided webhook wiring.
-        const ghBtn = document.getElementById('btn-project-github');
-        if (ghBtn) ghBtn.addEventListener('click', () => this.openGithubAssoc(window.PM_PROJECT));
-        const gaSave = document.getElementById('ga-save');
-        if (gaSave) gaSave.addEventListener('click', () => this.saveGithubRepo());
-        const gaVerify = document.getElementById('ga-verify');
-        if (gaVerify) gaVerify.addEventListener('click', () => this.verifyGithubConnection());
-        const gaGoto = document.getElementById('ga-goto');
-        if (gaGoto) gaGoto.addEventListener('click', () => {
-            const id = this._gaSwitchTo || this._gaProject;
-            const u = new URL(window.location.href);
-            u.searchParams.set('project', id);
-            window.location.href = u.toString();
-        });
-        document.querySelectorAll('#github-assoc-modal .ga-copy').forEach((b) => {
-            b.addEventListener('click', () => {
-                const src = document.getElementById(b.getAttribute('data-copy'));
-                if (!src) return;
-                const done = () => { const i = b.querySelector('i'); if (i) { const p = i.className; i.className = 'ti ti-check'; setTimeout(() => { i.className = p; }, 1200); } };
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(src.value).then(done).catch(() => { src.select(); document.execCommand('copy'); done(); });
-                } else { src.select(); document.execCommand('copy'); done(); }
-            });
-        });
+        // UI-15 GitHub repo association + guided webhook wiring is wired inside the Settings
+        // shell (settings.js) via the delegated data-set-action handler; no dedicated modal
+        // listeners remain.
         // UI-7: directed agent messaging + ack inbox.
         const amSend = document.getElementById('am-send');
         if (amSend) amSend.addEventListener('click', () => this.submitAgentMessage());

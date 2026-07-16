@@ -227,11 +227,9 @@ try:
     ok("tokens" in toks and isinstance(toks["tokens"], list), "access tokens exposes a tokens list")
 
     # ---- the legacy surfaces still work; UI-20 retires their entry points -------
-    print("\n[10] Launchers into the not-yet-folded-in surfaces")
-    for action in ("open-github", "goto-fleet"):
-        ok(f"case '{action}':" in settings_js, f"the shell dispatches {action}")
-    ok("openGithubAssoc(" in settings_js,
-       "the remaining launcher reuses the existing modal implementation")
+    print("\n[10] Launchers + folded-in surfaces")
+    # goto-fleet is a cross-tab jump, not a modal launcher, so it stays.
+    ok("case 'goto-fleet':" in settings_js, "the shell still dispatches goto-fleet")
     # UI-20 (2/6): Access tokens is folded into the shell — its launcher is retired and the
     # create/revoke flow runs inline, so no open-tokens launcher / openApiKeys call remains.
     ok("case 'open-tokens':" not in settings_js and "openApiKeys" not in settings_js,
@@ -255,6 +253,23 @@ try:
        "the members table + add/role/revoke flow runs inline in the Settings shell")
     ok('id="members-modal"' not in html and 'id="btn-project-members"' not in html,
        "the legacy members modal + rail button are retired from index.html")
+    # UI-20 (5/6): Connect-a-repo is folded into the shell — its launcher is retired and the
+    # repo association + webhook wiring runs inline, so no open-github launcher (or the
+    # modal-era openGithubAssoc) remains.
+    ok("case 'open-github':" not in settings_js and "openGithubAssoc" not in settings_js,
+       "the Connect-repo launcher is retired; the surface is inline in Settings")
+    ok("_settingsGithubSection" in settings_js and "_settingsSaveGithubRepo" in settings_js
+       and "_settingsVerifyGithub" in settings_js,
+       "the repo association + webhook wiring runs inline in the Settings shell")
+    # Rule #3: the section open path must never probe GitHub — only Verify passes ?check=1.
+    ok("github_association?check=1" not in settings_js
+       and "check ? '?check=1' : ''" in settings_js,
+       "the GitHub section reads on open but only Verify probes reachability (?check=1)")
+    ok('id="github-assoc-modal"' not in html and 'id="btn-project-github"' not in html,
+       "the legacy Connect-repo modal + rail button are retired from index.html")
+    # The New Project → repo handoff replaced the modal's ga-goto with a settings deep link.
+    ok("'#tab-settings/github'" in js,
+       "the New Project repo handoff deep-links into Settings -> GitHub, not the old modal")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
