@@ -123,6 +123,15 @@ def begin(host_id: str):
 
 try:
     store.init_db(PROJECT)
+    default_provider = client.post("/ixp/v1/agent-host-enrollments", json={
+        "project": PROJECT,
+        "owner_user_id": "user-adapter18",
+        "requested_host_id": "host/adapter18-default-provider",
+    })
+    ok(default_provider.status_code == 200
+       and default_provider.json()["enrollment"]["provider_allowlist"]
+       == ["openai-codex"],
+       "default enrollment admits the personal Codex provider without caller overrides")
     secure_target = TMP / "atomic-proof" / "identity.json"
     secure_target.parent.mkdir()
     stale_temp = secure_target.parent / ".identity.json.stale.tmp"
@@ -1023,8 +1032,10 @@ try:
             return "codex/ADAPTER-18-local-worker"
         if args == ("status", "--porcelain"):
             return ""
-        if args == ("rev-parse", "@{upstream}"):
-            return completed_sha
+        if args == ("ls-remote", "--exit-code", "--refs", "origin",
+                    "refs/heads/codex/ADAPTER-18-local-worker"):
+            return (completed_sha
+                    + "\trefs/heads/codex/ADAPTER-18-local-worker")
         raise AssertionError(args)
 
     def fake_local_codex(command, **kwargs):
@@ -1096,6 +1107,12 @@ try:
                 os.environ[key] = value
     local_command = captured_local_codex.get("command") or []
     local_environment = (captured_local_codex.get("kwargs") or {}).get("env") or {}
+    completed_runner_index = next(
+        index for index, (path, body) in enumerate(local_control_calls)
+        if path == "/ixp/v1/register_runner_session" and body.get("status") == "completed")
+    successful_wake_index = next(
+        index for index, (path, body) in enumerate(local_control_calls)
+        if path == "/txp/v1/complete_wake" and body["result"].get("started") is True)
     ok(central_binding_required
        and local_evidence["head_sha"] == completed_sha
        and local_evidence["verification"]["auth_mode"] == "chatgpt_personal"
@@ -1115,7 +1132,7 @@ try:
                 if path == "/txp/v1/complete_wake"]) == 2
        and len({json.dumps(body, sort_keys=True) for path, body in local_control_calls
                 if path == "/txp/v1/complete_wake"}) == 1
-       and local_control_calls[-1][1]["status"] == "completed",
+       and completed_runner_index < successful_wake_index,
        "native local worker heartbeats and exactly retries/terminalizes its wake and runner")
     failed_runner_index = next(
         index for index, (path, body) in enumerate(failed_local_control_calls)

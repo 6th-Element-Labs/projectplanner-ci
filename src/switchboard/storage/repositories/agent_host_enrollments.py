@@ -148,7 +148,10 @@ def begin_agent_host_enrollment(
                 owner_user_id,
                 json.dumps(_normalized_list(tenant_allowlist), sort_keys=True),
                 json.dumps(projects, sort_keys=True),
-                json.dumps(_normalized_list(provider_allowlist), sort_keys=True),
+                json.dumps(
+                    _normalized_list(provider_allowlist) or ["openai-codex"],
+                    sort_keys=True,
+                ),
                 json.dumps(PERSONAL_EXECUTION_POLICY, sort_keys=True),
                 hash_token(bootstrap_code),
                 now + ttl_seconds,

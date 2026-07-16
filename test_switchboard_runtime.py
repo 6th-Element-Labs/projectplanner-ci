@@ -553,6 +553,26 @@ try:
             "WHERE execution_connection_id=?",
             (good_execution["execution_connection_id"],),
         ).fetchone()["status"]
+    premature_personal_completion = store.complete_wake(
+        good_wake["wake_id"], runner_session_id=exact_runner_id,
+        agent_id=personal_agent, result={"started": True},
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    store.upsert_runner_session({
+        "runner_session_id": exact_runner_id,
+        "host_id": "host/test",
+        "agent_id": personal_agent,
+        "runtime": "codex",
+        "task_id": personal_task["task_id"],
+        "claim_id": personal_claim["claim_id"],
+        "status": "completed",
+        "cwd": os.getcwd(),
+        "metadata": {
+            "wake_id": good_wake["wake_id"],
+            "work_session_id": personal_session["work_session_id"],
+            "source_sha": personal_source_sha,
+            "execution_connection_id": good_execution["execution_connection_id"],
+        },
+    }, principal_id=p["id"], actor=auth.actor(p), project=P)
     personal_completed = store.complete_wake(
         good_wake["wake_id"], runner_session_id=exact_runner_id,
         agent_id=personal_agent, result={"started": True},
@@ -575,6 +595,8 @@ try:
        and "active_enrollment_principal_mismatch"
        in attacker_completion.get("reason_codes", [])
        and state_after_attack == "active"
+       and "execution_connection_runner_not_completed"
+       in premature_personal_completion.get("reason_codes", [])
        and personal_completed.get("status") == "completed"
        and final_connection_state == "completed"
        and personal_completed_retry.get("note") == "idempotent terminal readback"

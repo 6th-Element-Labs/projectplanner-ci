@@ -636,7 +636,7 @@ def _personal_exact_binding_error(
     runner_session_id: str,
     project: str,
     now: float,
-    failed_receipt: bool = False,
+    completion_status: str = "",
 ) -> Optional[Dict[str, Any]]:
     """Prove a personal-host wake against live claim and Work Session rows."""
     policy = dict(wake.get("policy") or {})
@@ -778,12 +778,17 @@ def _personal_exact_binding_error(
             if str(metadata.get(field) or "") != value:
                 reasons.append(f"execution_connection_runner_{field}_mismatch")
         runner_status = str(runner.get("status") or "")
-        expected_statuses = ({"failed"} if failed_receipt
-                             else {"starting", "ready", "running"})
+        if completion_status == "completed":
+            expected_statuses = {"completed"}
+            status_reason = "execution_connection_runner_not_completed"
+        elif completion_status == "failed":
+            expected_statuses = {"failed"}
+            status_reason = "execution_connection_runner_not_failed"
+        else:
+            expected_statuses = {"starting", "ready", "running"}
+            status_reason = "execution_connection_runner_not_active"
         if runner_status not in expected_statuses:
-            reasons.append(
-                "execution_connection_runner_not_failed" if failed_receipt
-                else "execution_connection_runner_not_active")
+            reasons.append(status_reason)
         if float(runner.get("heartbeat_at") or 0) + float(
                 runner.get("heartbeat_ttl_s") or 60) <= now:
             reasons.append("execution_connection_runner_stale")
@@ -1333,7 +1338,7 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                 binding_error = _personal_exact_binding_error(
                     c, wake, host_id=str(wake.get("claimed_by_host") or ""),
                     principal_id=principal_id, runner_session_id=runner_session_id,
-                    project=project, now=now, failed_receipt=not success)
+                    project=project, now=now, completion_status=status)
                 if binding_error:
                     return {"completed": False, **binding_error}
                 expected_agent = str((wake.get("selector") or {}).get("agent_id") or "")

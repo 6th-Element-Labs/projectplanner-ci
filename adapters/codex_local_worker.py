@@ -289,8 +289,16 @@ def run(
         dirty = _git(workspace, "status", "--porcelain")
         if dirty:
             raise RuntimeError("native Codex left the managed workspace dirty")
-        upstream_head = _git(workspace, "rev-parse", "@{upstream}")
-        if upstream_head != head_sha:
+        remote_ref = f"refs/heads/{branch}"
+        remote_lines = _git(
+            workspace, "ls-remote", "--exit-code", "--refs", "origin", remote_ref,
+        ).splitlines()
+        remote_heads = {
+            line.split()[0]
+            for line in remote_lines
+            if len(line.split()) == 2 and line.split()[1] == remote_ref
+        }
+        if remote_heads != {head_sha}:
             raise RuntimeError("native Codex did not push the exact completed head")
         evidence = {
             "branch": branch,
@@ -319,6 +327,10 @@ def run(
             },
         }
         successful_completion_intent = True
+        # Post-execution claim finalization requires both terminal records. Publish
+        # the runner first so a lost response can never leave a terminal wake bound
+        # to a runner that still appears active.
+        _update_runner(http, values, workspace=workspace, status="completed")
         _complete_wake(http, values, {
             "started": True,
             "reason": "native_codex_execution_completed",
@@ -327,7 +339,6 @@ def run(
             "head_sha": head_sha,
         })
         wake_completed = True
-        _update_runner(http, values, workspace=workspace, status="completed")
         return evidence
     except Exception:
         stop_heartbeat.set()
