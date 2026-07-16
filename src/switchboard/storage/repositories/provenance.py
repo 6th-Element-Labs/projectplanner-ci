@@ -31,6 +31,7 @@ from switchboard.domain.provenance.git import (
     provenance_summary as _provenance_summary,
     valid_evidence_hash as _valid_evidence_hash,
 )
+from switchboard.domain.provenance.semantic import semantic_completion_gate
 from switchboard.storage.repositories.tasks import _task_row
 
 
@@ -317,6 +318,37 @@ def _mark_task_merged_impl(task_id: str, merged_sha: str, pr_number: Optional[in
         if not row:
             return {"error": "task not found", "task_id": task_id}
         current = _load_git_state(c, task_id)
+        task = _task_row(row)
+        semantic_gate = semantic_completion_gate(task, current.get("evidence") or {})
+        if not semantic_gate.get("ok"):
+            c.execute("UPDATE tasks SET status='Blocked', updated_at=? WHERE task_id=?",
+                      (now, task_id))
+            git_state = _upsert_git_state(c, task_id, {
+                "branch": branch or None,
+                "head_sha": head_sha or None,
+                "pushed_at": now if head_sha else None,
+                "pr_number": pr_number,
+                "pr_url": pr_url or None,
+                "merged_sha": merged_sha,
+                "merged_at": now,
+                "in_main_content": True,
+                "evidence": {
+                    "merged_sha": merged_sha,
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "branch": branch,
+                    "head_sha": head_sha,
+                    **({"source": provenance_source} if provenance_source else {}),
+                    **({"task_ids_found": task_ids_found} if task_ids_found else {}),
+                },
+            })
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (task_id, actor, "git.pr_merged_semantic_blocked",
+                       json.dumps({"merged_sha": merged_sha, "pr_number": pr_number,
+                                   "pr_url": pr_url, "semantic_gate": semantic_gate},
+                                  sort_keys=True), now))
+            return {"task_id": task_id, "status": "Blocked", "git_state": git_state,
+                    "semantic_gate": semantic_gate, "merged": True}
         same_merge = (
             row["status"] == "Done" and
             current.get("merged_sha") == merged_sha and
@@ -379,6 +411,27 @@ def mark_task_default_branch_commit(task_id: str, commit_sha: str,
         if row["status"] != "In Review":
             return {"skipped": True, "reason": "status_not_in_review",
                     "task_id": task_id, "status": row["status"]}
+        current = _load_git_state(c, task_id)
+        semantic_gate = semantic_completion_gate(_task_row(row), current.get("evidence") or {})
+        if not semantic_gate.get("ok"):
+            c.execute("UPDATE tasks SET status='Blocked', updated_at=? WHERE task_id=?",
+                      (now, task_id))
+            git_state = _upsert_git_state(c, task_id, {
+                "branch": branch or None,
+                "head_sha": commit_sha,
+                "pushed_at": now,
+                "merged_sha": commit_sha,
+                "merged_at": now,
+                "in_main_content": True,
+                "evidence": {"source": "default_branch_backfill", "commit_sha": commit_sha,
+                             "branch": branch, "subject": subject},
+            })
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (task_id, actor, "git.default_branch_semantic_blocked",
+                       json.dumps({"commit_sha": commit_sha, "semantic_gate": semantic_gate},
+                                  sort_keys=True), now))
+            return {"task_id": task_id, "status": "Blocked", "git_state": git_state,
+                    "semantic_gate": semantic_gate, "merged": True}
         c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?",
                   (now, task_id))
         evidence = {"source": "default_branch_backfill", "commit_sha": commit_sha,
@@ -473,6 +526,11 @@ def mark_task_offline_done(task_id: str, evidence: Any = None,
             return {"error": "offline_done_requires_in_review", "task_id": task_id,
                     "status": row["status"],
                     "message": "Offline Done verification requires the task to be In Review first."}
+        semantic_gate = semantic_completion_gate(_task_row(row), evidence_obj)
+        if not semantic_gate.get("ok"):
+            return {"error": "semantic_completion_failed", "task_id": task_id,
+                    "status": row["status"], "semantic_gate": semantic_gate,
+                    "message": semantic_gate.get("message")}
         c.execute("UPDATE tasks SET status='Done', updated_at=? WHERE task_id=?", (now, task_id))
         git_state = _upsert_git_state(c, task_id, {
             "evidence": {"offline_evidence": offline_payload},

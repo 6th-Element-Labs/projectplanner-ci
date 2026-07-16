@@ -15,6 +15,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from constants import DEFAULT_PROJECT, GITHUB_PR_URL_RE, MERGE_GATE_SCHEMA
+from switchboard.domain.provenance.semantic import semantic_completion_gate
 
 
 __all__ = [
@@ -387,6 +388,18 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         merged_payload.get("checks"),
     )
     external_ci = _external_ci_review_gate(task, evidence=merged_payload, project=project)
+    semantic_evidence = {
+        **(((task.get("git_state") or {}).get("evidence") or {})),
+        **merged_payload,
+    }
+    semantic_gate = semantic_completion_gate(task, semantic_evidence)
+    if not semantic_gate.get("ok"):
+        findings.append(_merge_gate_finding(
+            semantic_gate.get("code") or "semantic_completion_failed",
+            semantic_gate.get("message") or "Task semantic completion gate failed.",
+            semantic_gate.get("failure_class") or "failed_gate",
+            details={"semantic_gate": semantic_gate},
+        ))
     missing_contexts = [
         context for context in required_contexts
         if not _merge_gate_context_passed(pr_contexts.get(context, ""))
@@ -540,6 +553,7 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "required_status_contexts": required_contexts,
         "status_contexts": pr_contexts,
         "external_ci": external_ci,
+        "semantic_gate": semantic_gate,
         "review_gate": review_gate,
         "github_pr_source": pr_source,
         "done_authority": "github_webhook_or_reconcile",

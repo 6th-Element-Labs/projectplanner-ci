@@ -23,6 +23,7 @@ import push_verification
 from constants import *  # noqa: F401,F403
 from db.connection import _conn
 from switchboard.domain.board.tasks import READY_TASK_STATUSES
+from switchboard.domain.provenance.semantic import semantic_completion_gate
 from switchboard.storage.repositories.tasks import (
     _deps_done,
     _task_human_gate_state,
@@ -948,6 +949,36 @@ def _complete_claim_impl(claim_id: str, evidence: str = "", final_status: str = 
                         "override_required": True}
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (row["task_id"], actor, "task.complete_blocked_work_session",
+                       json.dumps({"evidence": evidence_obj, **response}, sort_keys=True), now))
+            return response
+        semantic_gate = semantic_completion_gate(task_for_gate, evidence_obj)
+        if not semantic_gate.get("ok"):
+            current_git = _store_facade()._load_git_state(c, row["task_id"])
+            git_updates = _store_facade()._preserve_provider_pr_evidence(
+                current_git,
+                {
+                    "branch": evidence_obj.get("branch"),
+                    "head_sha": evidence_obj.get("head_sha"),
+                    "pushed_at": now if evidence_obj.get("head_sha") else None,
+                    "pr_number": evidence_obj.get("pr_number"),
+                    "pr_url": evidence_obj.get("pr_url"),
+                    "evidence": evidence_obj,
+                },
+                evidence_obj,
+            )
+            git_state = _store_facade()._upsert_git_state(c, row["task_id"], git_updates)
+            response = {
+                "completed": False,
+                "reason": semantic_gate.get("code") or "semantic_completion_failed",
+                "failure_class": semantic_gate.get("failure_class") or "failed_gate",
+                "message": semantic_gate.get("message"),
+                "claim_id": claim_id,
+                "task_id": row["task_id"],
+                "semantic_gate": semantic_gate,
+                "git_state": git_state,
+            }
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (row["task_id"], actor, "task.complete_blocked_semantic",
                        json.dumps({"evidence": evidence_obj, **response}, sort_keys=True), now))
             return response
         c.execute("UPDATE task_claims SET status='completed', completed_at=? WHERE id=?",

@@ -404,6 +404,28 @@ attempt and still keeps the task `In Review`. Code tasks should include branch/h
 `Done` is reserved for GitHub/default-branch provenance after the work is merged, squash-merged, or
 rebased into the intended branch.
 
+Repository provenance is necessary but not sufficient when completion evidence carries an explicit
+semantic outcome. Evidence such as `verdict=nogo`, `process_cut_authorized=false`, a non-empty
+`blocking_gate`, or non-empty `failed_gates` fails closed: `complete_claim` keeps the claim active,
+`merge_gate` blocks, and a later external merge records its SHA while leaving the task `Blocked`.
+This prevents “the report was merged” from being confused with “the required outcome succeeded.”
+
+A task whose purpose is specifically to make a decision may authorize a negative result as terminal
+in its task-owned contract (not in agent-supplied completion evidence):
+
+```text
+semantic_completion_policy: decision
+```
+
+or, for an explicit allow-list:
+
+```text
+semantic_terminal_outcomes: nogo
+```
+
+Without one of those audited task markers, negative semantic evidence cannot be waived by the agent
+that submits it.
+
 ### 7.4 `abandon_claim`
 
 Releases work back to the queue with a reason.
