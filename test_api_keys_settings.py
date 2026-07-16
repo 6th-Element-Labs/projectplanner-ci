@@ -87,28 +87,37 @@ try:
     ok(not any(t.get("id") == pid for t in (active.get("tokens") or [])),
        "revoked key drops out of the active list")
 
-    # ---- index.html shell ----------------------------------------------------
+    # ---- index.html shell (UI-20 2/6: the modal + rail button are retired) ---
     index = client.get("/")
-    for needle in ('id="apikeys-modal"', 'id="btn-project-apikeys"', 'id="apikeys-scopes"',
-                   'id="apikeys-new-banner"'):
-        ok(index.status_code == 200 and needle in index.text,
-           f"index.html exposes {needle}")
+    ok(index.status_code == 200 and 'id="settings-panel"' in index.text,
+       "index.html hosts the unified Settings shell panel")
+    for gone in ('id="apikeys-modal"', 'id="btn-project-apikeys"'):
+        ok(gone not in index.text, f"legacy {gone} retired from index.html")
 
-    # ---- app.js wiring -------------------------------------------------------
+    # ---- frontend wiring (the surface is now inline in the Settings shell) ---
     app_js = read_frontend_source(os.path.dirname(__file__))
     for needle in (
-        "openApiKeys",
-        "_loadApiKeys",
-        "_renderApiKeyForm",
-        "_renderApiKeysTable",
-        "_createApiKey",
-        "_revokeApiKey",
+        "_settingsTokensSection",
+        "_settingsTokensTableHtml",
+        "_settingsCreateToken",
+        "_settingsRevokeToken",
+        "_settingsTokensReload",
     ):
-        ok(needle in app_js, f"app.js defines {needle}")
-    ok("apikeys-admin-warn" in app_js and "403" in app_js,
-       "non-admin load is handled with a read-only notice")
-    ok("_clearApiKeySecret" in app_js and "hidden.bs.modal" in app_js,
-       "shown-once raw key is wiped from the DOM on modal close/reopen")
+        ok(needle in app_js, f"settings.js defines {needle}")
+    # Relabelled so control-plane tokens are not confused with model-provider API keys.
+    ok("Switchboard access tokens" in app_js,
+       "tokens section is relabelled 'Switchboard access tokens'")
+    # The least-privilege scope picker and shown-once banner render inline, off the
+    # write:system-gated section (settings.js gates 'tokens' at write:system).
+    ok('id="apikeys-scopes"' in app_js and 'id="apikeys-new-banner"' in app_js,
+       "the create form scope picker + shown-once banner render inline in Settings")
+    ok("_sSend(`api/access/tokens" in app_js and "settings-token-scope" in app_js,
+       "create/revoke run through the admin-gated _sSend path (403 -> write:system error)")
+    # The shown-once wipe is re-anchored off the modal's hidden.bs.modal onto the panel swap.
+    ok("_clearApiKeySecret" in app_js and 'id="apikeys-modal"' not in app_js,
+       "shown-once token wipe survives; the modal wiring is gone")
+    ok("wipe shown-once token on panel swap" in app_js,
+       "the wipe fires on the _settingsSelect panel swap, not modal close")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

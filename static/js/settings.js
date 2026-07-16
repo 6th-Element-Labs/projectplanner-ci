@@ -148,6 +148,8 @@
         // the operator asked for is what they land on.
         async _settingsSelect(id) {
             if (!this._settingsFind(id)) return;
+            // UI-20: wipe shown-once token on panel swap (re-anchored off hidden.bs.modal).
+            this._clearApiKeySecret();
             this._settingsSectionId = id;
             this._settingsWriteHash(id);
             await this.renderSettings();
@@ -395,22 +397,133 @@
             return this._settingsRepoCard(topology, connect);
         },
 
+        // UI-20 (2/6): the UI-4 scoped-token modal folded in-place. This is the canonical
+        // home for Switchboard access tokens — the legacy #apikeys-modal and its rail button
+        // are retired. Labelled "Switchboard access tokens" so they cannot be confused with
+        // model-provider API keys (those live under Personal AI accounts, UI-19).
         async _settingsTokensSection() {
-            const data = await this._sfetch('api/access/tokens');
-            if (data.error) return this._settingsErrCard('Access tokens', data.error);
-            const tokens = data.tokens || [];
-            const rows = tokens.length ? tokens.map((t) => `<tr>
-                <td><span class="fw-semibold">${this.esc(t.display_name || t.id || '')}</span></td>
-                <td><span class="badge bg-secondary-lt">${this.esc(t.kind || '—')}</span></td>
-                <td>${(t.scopes || []).map((s) => `<span class="badge bg-azure-lt me-1">${this.esc(s)}</span>`).join('') || '<span class="text-secondary">—</span>'}</td>
-                </tr>`).join('') : '<tr><td colspan="3" class="text-secondary text-center py-3">No active tokens.</td></tr>';
+            // Re-entering the section must never carry a prior visit's raw secret. The wipe
+            // is also re-anchored onto the _settingsSelect panel swap (was hidden.bs.modal).
+            this._clearApiKeySecret();
+            const proj = window.PM_PROJECT || 'maxwell';
+            const data = await this._sfetch(`api/access/tokens?project=${encodeURIComponent(proj)}`);
+            // A non-admin (or expired session) gets 403/401 -> _sfetch returns {error}; the
+            // section-level write:system gate normally shows the locked card first, so this is
+            // the defensive fallback rather than the primary path.
+            if (data.error) return this._settingsErrCard('Switchboard access tokens', data.error);
+            this._tokensData = data;
+            const defs = data.scope_definitions || {};
+            const kinds = data.valid_kinds || ['agent'];
+            const allScopes = [...new Set(Object.values(defs).flat())].sort();
+            const kindOpts = kinds.map((k) => `<option ${k === 'agent' ? 'selected' : ''}>${this.esc(k)}</option>`).join('');
+            const roleOpts = '<option value="">— custom —</option>' + Object.keys(defs).map((r) => `<option value="${this.esc(r)}">${this.esc(r)}</option>`).join('');
+            const scopeBoxes = allScopes.map((s) => `<label class="form-check form-check-inline m-0"><input class="form-check-input settings-token-scope" type="checkbox" value="${this.esc(s)}"><span class="form-check-label font-monospace small">${this.esc(s)}</span></label>`).join('');
+            const body = `<div class="alert alert-info py-2 px-3 small mb-3" role="note"><i class="ti ti-info-circle me-1" aria-hidden="true"></i>These are <strong>Switchboard access tokens</strong> for the control plane (MCP, REST, CI, hosts) — <strong>not</strong> model-provider API keys, which live under <a href="#tab-settings/ai-accounts">Personal AI accounts</a>.</div>
+                <div id="apikeys-new-banner" class="alert alert-success" role="alert" style="display:none">
+                    <div class="d-flex align-items-center"><i class="ti ti-alert-circle me-2" aria-hidden="true"></i><strong>Copy it now — this token is shown once and never again.</strong></div>
+                    <div class="input-group input-group-sm mt-2">
+                        <input id="apikeys-new-token" class="form-control font-monospace" readonly aria-label="New access token (shown once)">
+                        <button class="btn btn-outline-secondary" type="button" data-set-action="tokens-copy" title="Copy token"><i class="ti ti-copy" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+                <div class="d-flex mb-2"><button class="btn btn-sm btn-primary" type="button" data-set-action="tokens-create-toggle"><i class="ti ti-plus me-1" aria-hidden="true"></i>Create token</button></div>
+                <div id="apikeys-create-form" class="card mb-3" style="display:none"><div class="card-body">
+                    <div class="row g-2">
+                        <div class="col-md-6"><label class="form-label small mb-1">Name</label><input id="apikeys-name" class="form-control form-control-sm" placeholder="ci-mirror" autocomplete="off"></div>
+                        <div class="col-md-3"><label class="form-label small mb-1">Kind</label><select id="apikeys-kind" class="form-select form-select-sm">${kindOpts}</select></div>
+                        <div class="col-md-3"><label class="form-label small mb-1">Role preset</label><select id="settings-tokens-role" class="form-select form-select-sm">${roleOpts}</select></div>
+                    </div>
+                    <label class="form-label small mt-2 mb-1">Scopes <span class="text-secondary fw-normal">(least-privilege — pick only what this token needs)</span></label>
+                    <div id="apikeys-scopes" class="d-flex flex-wrap gap-2">${scopeBoxes}</div>
+                    <div class="mt-3 d-flex align-items-center gap-2"><button class="btn btn-sm btn-primary" type="button" data-set-action="tokens-create">Create token</button><span id="apikeys-create-flash" class="small text-secondary"></span></div>
+                </div></div>
+                <div id="apikeys-table">${this._settingsTokensTableHtml(data.tokens || [])}</div>`;
             return this._settingsCard({
-                id: 'settings-tokens', title: 'Access tokens', icon: 'ti-key',
-                subtitle: 'Scoped API tokens for agents, hosts, and CI',
-                body: `<div class="table-responsive"><table class="table table-vcenter table-sm mb-0"><thead><tr><th>Name</th><th>Kind</th><th>Scopes</th></tr></thead><tbody>${rows}</tbody></table></div>`,
-                footer: `<span class="text-secondary small">A new token's secret is shown once, at creation.</span>
-                    <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="open-tokens"><i class="ti ti-key me-1" aria-hidden="true"></i>Manage tokens</button>`,
+                id: 'settings-tokens', title: 'Switchboard access tokens', icon: 'ti-key',
+                subtitle: 'Scoped control-plane tokens for agents, hosts, and CI',
+                body,
             });
+        },
+
+        _settingsTokensTableHtml(tokens) {
+            if (!tokens.length) return '<div class="text-secondary small">No tokens yet. Create one above.</div>';
+            const rows = tokens.map((t) => {
+                const scopes = (t.scopes || []).map((s) => `<span class="badge bg-secondary-lt me-1 font-monospace">${this.esc(s)}</span>`).join('') || '<span class="text-secondary">—</span>';
+                const created = t.created_at ? new Date(t.created_at * 1000).toLocaleDateString() : '—';
+                return `<tr>
+                    <td><div class="fw-medium">${this.esc(t.display_name || t.id)}</div><div class="text-secondary font-monospace" style="font-size:11px">${this.esc(t.id)}</div></td>
+                    <td><span class="badge bg-secondary-lt">${this.esc(t.kind || '')}</span></td>
+                    <td>${scopes}</td>
+                    <td class="text-secondary small">${this.esc(created)}</td>
+                    <td class="text-end"><button class="btn btn-sm btn-ghost-danger" type="button" data-set-action="tokens-revoke:${encodeURIComponent(t.id)}">Revoke</button></td>
+                </tr>`;
+            }).join('');
+            return `<div class="table-responsive"><table class="table table-sm align-middle mb-0"><thead><tr><th>Name</th><th>Kind</th><th>Scopes</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        },
+
+        // Re-fetch and re-render only the table, leaving the shown-once banner intact so the
+        // freshly minted secret survives the post-create list refresh.
+        async _settingsTokensReload() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const data = await this._sfetch(`api/access/tokens?project=${encodeURIComponent(proj)}`);
+            if (data.error) return;
+            this._tokensData = data;
+            const el = document.getElementById('apikeys-table');
+            if (el) el.innerHTML = this._settingsTokensTableHtml(data.tokens || []);
+        },
+
+        _settingsTokensApplyRole(role) {
+            const defs = (this._tokensData && this._tokensData.scope_definitions) || {};
+            const scopes = defs[role] || [];
+            document.querySelectorAll('.settings-token-scope').forEach((cb) => { if (role) cb.checked = scopes.includes(cb.value); });
+        },
+
+        async _settingsCreateToken() {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const flash = document.getElementById('apikeys-create-flash');
+            const setFlash = (cls, msg) => { if (flash) { flash.className = 'small text-' + cls; flash.textContent = msg; } };
+            const name = (document.getElementById('apikeys-name')?.value || '').trim();
+            const kind = document.getElementById('apikeys-kind')?.value || 'agent';
+            const scopes = [...document.querySelectorAll('.settings-token-scope:checked')].map((c) => c.value);
+            if (!scopes.length) { setFlash('danger', 'Pick at least one scope.'); return; }
+            setFlash('secondary', 'Creating…');
+            try {
+                const data = await this._sSend(`api/access/tokens?project=${encodeURIComponent(proj)}`, 'POST', { display_name: name || kind, kind, scopes });
+                setFlash('secondary', '');
+                const tok = document.getElementById('apikeys-new-token'); if (tok) tok.value = data.token || '';
+                const banner = document.getElementById('apikeys-new-banner'); if (banner) banner.style.display = '';
+                const nameEl = document.getElementById('apikeys-name'); if (nameEl) nameEl.value = '';
+                const form = document.getElementById('apikeys-create-form'); if (form) form.style.display = 'none';
+                await this._settingsTokensReload();
+            } catch (e) { setFlash('danger', `Create failed: ${e.message}`); }
+        },
+
+        async _settingsRevokeToken(id) {
+            if (!id) return;
+            const proj = window.PM_PROJECT || 'maxwell';
+            const tok = ((this._tokensData && this._tokensData.tokens) || []).find((t) => t.id === id);
+            const name = (tok && (tok.display_name || tok.id)) || id;
+            if (!window.confirm(`Revoke access token "${name}"?\nThis immediately and permanently disables it.`)) return;
+            try {
+                await this._sSend(`api/access/tokens/${encodeURIComponent(id)}/revoke?project=${encodeURIComponent(proj)}`, 'POST', {});
+            } catch (e) { /* result reflected on reload */ }
+            await this._settingsTokensReload();
+        },
+
+        _settingsTokensCopy() {
+            const i = document.getElementById('apikeys-new-token');
+            if (!i) return;
+            i.select();
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(i.value).catch(() => {});
+            else { try { document.execCommand('copy'); } catch (e) { /* noop */ } }
+        },
+
+        // Wipe the shown-once raw token from the DOM so "shown once" holds even against
+        // devtools. UI-20 re-anchored this off the modal's hidden.bs.modal onto the Settings
+        // panel swap (_settingsSelect) and section re-entry.
+        _clearApiKeySecret() {
+            const tok = document.getElementById('apikeys-new-token'); if (tok) tok.value = '';
+            const banner = document.getElementById('apikeys-new-banner'); if (banner) banner.style.display = 'none';
         },
 
         /* ---- Operations ---------------------------------------------------- */
@@ -671,6 +784,7 @@
 
     _settingsAction(action) {
         if (String(action || '').startsWith('project-')) return this._projectAdminAction(action);
+        if (String(action || '').startsWith('tokens-revoke:')) return this._settingsRevokeToken(decodeURIComponent(action.slice('tokens-revoke:'.length)));
         switch (action) {
             case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'repo-save': return this.saveRepoTopology();
@@ -679,12 +793,14 @@
             case 'verify-offline': return this.verifyOffline();
             case 'move-task': return this.moveTask();
             case 'refresh': return this.renderSettings();
-            // Launchers into the surfaces that still live in modals. Settings is already
-            // the canonical way to reach them; UI-20 folds them in and retires the rail.
+            // Access tokens (UI-20 2/6) are folded inline below; the remaining launchers
+            // still open the not-yet-migrated modals until their slices land.
             case 'open-members': return this.openMembers();
             case 'open-comms': return this.openComms(window.PM_PROJECT);
             case 'open-github': return this.openGithubAssoc(window.PM_PROJECT);
-            case 'open-tokens': return this.openApiKeys(window.PM_PROJECT);
+            case 'tokens-create-toggle': { const f = document.getElementById('apikeys-create-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
+            case 'tokens-create': return this._settingsCreateToken();
+            case 'tokens-copy': return this._settingsTokensCopy();
             case 'goto-fleet': { if (window.TAIKUN_showTab) window.TAIKUN_showTab('#tab-fleet'); return; }
         }
     },

@@ -12,7 +12,7 @@ addressed as `#tab-settings/<section>`.
 
 | # | Legacy entry point | Where it lives now | Canonical destination | Status |
 |---|---|---|---|---|
-| 1 | Access tokens (UI-4) | `#apikeys-modal` + rail `#btn-project-apikeys` | `tokens` — relabel **Switchboard access tokens** (not model-provider API keys) | pending |
+| 1 | Access tokens (UI-4) | `#apikeys-modal` + rail `#btn-project-apikeys` | `tokens` — relabel **Switchboard access tokens** (not model-provider API keys) | **done (2/6)** — inlined into `_settingsTokensSection`; modal + rail button retired; shown-once wipe re-anchored onto the panel swap |
 | 2 | Communications (UI-14) | `#comms-modal` + rail `#btn-project-comms` | `comms` | pending |
 | 3 | Members & access (UI-5) | `#members-modal` + rail `#btn-project-members` | `members` | pending |
 | 4 | Connect GitHub repo (UI-15) | `#github-assoc-modal` + rail `#btn-project-github` | `github` | pending |

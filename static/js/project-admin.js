@@ -114,6 +114,8 @@
                 this._settingsProjectId = element.value || '';
                 return this.renderSettings();
             }
+            // UI-20 (2/6): the Access-tokens role preset checks the matching scope boxes.
+            if (element.id === 'settings-tokens-role') return this._settingsTokensApplyRole(element.value);
             if (element.id === 'pa-confirm') {
                 this._sFlash('pa-life-flash', element.checked ? 'Receipt review confirmed.' : 'Confirm the receipt review before continuing.', element.checked ? 'text-success' : 'text-secondary');
             }

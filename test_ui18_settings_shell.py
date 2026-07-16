@@ -228,10 +228,16 @@ try:
 
     # ---- the legacy surfaces still work; UI-20 retires their entry points -------
     print("\n[10] Launchers into the not-yet-folded-in surfaces")
-    for action in ("open-members", "open-comms", "open-github", "open-tokens", "goto-fleet"):
+    for action in ("open-members", "open-comms", "open-github", "goto-fleet"):
         ok(f"case '{action}':" in settings_js, f"the shell dispatches {action}")
-    ok("openMembers()" in settings_js and "openApiKeys(window.PM_PROJECT)" in settings_js,
-       "launchers reuse the existing modal implementations rather than duplicating them")
+    ok("openMembers()" in settings_js,
+       "not-yet-folded launchers reuse the existing modal implementations")
+    # UI-20 (2/6): Access tokens is folded into the shell — its launcher is retired and the
+    # create/revoke flow runs inline, so no open-tokens launcher / openApiKeys call remains.
+    ok("case 'open-tokens':" not in settings_js and "openApiKeys" not in settings_js,
+       "the Access-tokens launcher is retired; the surface is inline in Settings")
+    ok("_settingsCreateToken" in settings_js and "_settingsRevokeToken" in settings_js,
+       "tokens create/revoke run inline in the Settings shell")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)
