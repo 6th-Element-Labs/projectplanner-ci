@@ -41,7 +41,9 @@ __all__ = [
     "is_preclaim_runner",
     "requires_full_runner_bind",
     "assert_runner_watchable",
+    "resolve_task_active_runner",
     "resolve_runner_watch",
+    "_clear_active_runner_pointer_in",
     "request_runner_control",
     "list_runner_control_requests",
     "claim_runner_control_request",
@@ -346,6 +348,73 @@ def resolve_runner_watch(task_id: str, *, include_stale: bool = False,
     }
 
 
+def resolve_task_active_runner(task_id: str, *, agent_state: Optional[Dict[str, Any]] = None,
+                               sessions: Optional[List[Dict[str, Any]]] = None,
+                               project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Resolve Mission's active runner pointer, falling back to authoritative rows.
+
+    ``runner_sessions`` remains the source of truth. The task ``agent_state`` pointer is
+    only a fast path and is ignored when it is stale, terminal, incomplete, or bound to
+    another task.
+    """
+    task_id = str(task_id or "").strip()
+    state = dict(agent_state or {})
+    pointer = state.get("switchboard/runner")
+    pointer = pointer if isinstance(pointer, dict) else {}
+    pointer_id = str(
+        pointer.get("active_runner_session_id")
+        or state.get("active_runner_session_id")
+        or ""
+    ).strip()
+
+    def usable(session: Optional[Dict[str, Any]]) -> bool:
+        if not session or session.get("stale"):
+            return False
+        if str(session.get("task_id") or "") != task_id:
+            return False
+        return bool(assert_runner_watchable(session).get("watchable"))
+
+    candidates = sessions
+    if candidates is None:
+        candidates = list_runner_sessions(
+            task_id=task_id, include_stale=True, project=project)
+
+    if pointer_id:
+        pointed = next(
+            (session for session in candidates
+             if str(session.get("runner_session_id") or "") == pointer_id),
+            None,
+        )
+        if usable(pointed):
+            return {
+                "schema": "switchboard.active_runner_resolution.v1",
+                "task_id": task_id,
+                "active": True,
+                "source": "agent_state_pointer",
+                "pointer_id": pointer_id,
+                "session": pointed,
+            }
+
+    for session in candidates:
+        if usable(session):
+            return {
+                "schema": "switchboard.active_runner_resolution.v1",
+                "task_id": task_id,
+                "active": True,
+                "source": "runner_sessions_fallback",
+                "pointer_id": pointer_id or None,
+                "session": session,
+            }
+    return {
+        "schema": "switchboard.active_runner_resolution.v1",
+        "task_id": task_id,
+        "active": False,
+        "source": "none",
+        "pointer_id": pointer_id or None,
+        "session": None,
+    }
+
+
 def _merge_existing_runner_record(c: sqlite3.Connection,
                                   record: Dict[str, Any]) -> Dict[str, Any]:
     """Preserve stronger claim/work bind fields across heartbeat / partial upserts."""
@@ -400,17 +469,53 @@ def _maybe_set_active_runner_pointer(c: sqlite3.Connection, record: Dict[str, An
     if not isinstance(current, dict):
         current = {}
     pointer = dict(current.get("switchboard/runner") or {})
-    pointer.update({
+    next_pointer = {
         "active_runner_session_id": runner_session_id,
         "host_id": record.get("host_id"),
         "claim_id": record.get("claim_id"),
         "updated_at": now,
-    })
-    current["switchboard/runner"] = pointer
+    }
+    if (pointer.get("active_runner_session_id") == runner_session_id
+            and pointer.get("host_id") == record.get("host_id")
+            and pointer.get("claim_id") == record.get("claim_id")
+            and current.get("active_runner_session_id") == runner_session_id
+            and current.get("active_runner_host_id") == record.get("host_id")):
+        return
+    current["switchboard/runner"] = next_pointer
     # Legacy flat key for Mission UI readers that expect the optional field name.
     current["active_runner_session_id"] = runner_session_id
+    current["active_runner_host_id"] = record.get("host_id")
     c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
               (json.dumps(current, sort_keys=True), now, task_id))
+
+
+def _clear_active_runner_pointer_in(c: sqlite3.Connection, task_id: str,
+                                    runner_session_id: str,
+                                    now: Optional[float] = None) -> bool:
+    """Clear only the matching convenience pointer; never erase a newer runner."""
+    task_id = str(task_id or "").strip()
+    runner_session_id = str(runner_session_id or "").strip()
+    if not task_id or not runner_session_id:
+        return False
+    row = c.execute("SELECT agent_state FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    if not row:
+        return False
+    current = _json_obj(row["agent_state"] if "agent_state" in row.keys() else "{}", {})
+    if not isinstance(current, dict):
+        return False
+    nested = current.get("switchboard/runner")
+    nested_id = (nested or {}).get("active_runner_session_id") if isinstance(nested, dict) else ""
+    flat_id = current.get("active_runner_session_id")
+    if runner_session_id not in {str(nested_id or ""), str(flat_id or "")}:
+        return False
+    if str(nested_id or "") == runner_session_id:
+        current.pop("switchboard/runner", None)
+    if str(flat_id or "") == runner_session_id:
+        current.pop("active_runner_session_id", None)
+        current.pop("active_runner_host_id", None)
+    c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
+              (json.dumps(current, sort_keys=True), now or time.time(), task_id))
+    return True
 
 
 def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
@@ -487,9 +592,16 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                            })}, sort_keys=True), now))
     row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                     (runner_session_id,)).fetchone()
-    if not missing_runner_bind_fields(record):
+    session = _runner_session_row(row, now=now, include_claim=True, c=c)
+    if (not missing_runner_bind_fields(record)
+            and not session.get("stale")
+            and str(session.get("status") or "").lower() in RUNNER_WATCHABLE_STATUSES):
         _maybe_set_active_runner_pointer(c, record, now)
-    return _runner_session_row(row, now=now, include_claim=True, c=c)
+    else:
+        _clear_active_runner_pointer_in(
+            c, str(session.get("task_id") or record.get("task_id") or ""),
+            runner_session_id, now)
+    return session
 
 
 def upsert_runner_session(record: Dict[str, Any], principal_id: str = "",
@@ -741,6 +853,10 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
         session_row = c.execute("SELECT * FROM runner_sessions WHERE runner_session_id=?",
                                 (req["runner_session_id"],)).fetchone()
         session = _runner_session_row(session_row, now=now, include_claim=True, c=c) if session_row else {}
+        if session_status and str(session_status).lower() not in RUNNER_WATCHABLE_STATUSES:
+            _clear_active_runner_pointer_in(
+                c, str(session.get("task_id") or ""),
+                str(session.get("runner_session_id") or ""), now)
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                   (session.get("task_id") or None, actor, f"runner.{req['action']}_{final_status}",
                    json.dumps({"request_id": request_id,

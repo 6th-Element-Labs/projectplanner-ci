@@ -53,10 +53,15 @@ try:
         "task_id": stale_task["task_id"],
         "claim_id": claim["claim_id"],
         "status": "running",
-        "heartbeat_at": old,
+        "heartbeat_at": now,
         "heartbeat_ttl_s": 60,
         "control": {"managed_process": True},
+        "metadata": {"wake_id": "wake-stale-runner",
+                     "work_session_id": "worksession-stale-runner"},
     }, actor="test", project=P)
+    ok(store.get_agent_state(stale_task["task_id"], project=P).get(
+        "active_runner_session_id") == runner["runner_session_id"],
+       "stale lifecycle fixture starts with an active runner pointer")
     wake = store.request_wake(
         selector={"runtime": "codex", "agent_id": "codex/missing"},
         reason="test stale wake",
@@ -84,6 +89,8 @@ try:
                   (old, file_lease["lease_id"]))
         c.execute("UPDATE agent_presence SET heartbeat_at=? WHERE agent_id=?",
                   (old, "codex/stale"))
+        c.execute("UPDATE runner_sessions SET heartbeat_at=? WHERE runner_session_id=?",
+                  (old, runner["runner_session_id"]))
         c.execute("UPDATE wake_intents SET deadline=? WHERE wake_id=?",
                   (old, wake["wake_id"]))
         c.execute("UPDATE coordination_monitors SET status='fired', fired_at=?, updated_at=? "
@@ -140,6 +147,9 @@ try:
     ok(claim_row["status"] == "abandoned" and "cleanup" in claim_row["abandon_reason"],
        "expired task claim is abandoned with cleanup reason")
     ok(runner_row["status"] == "expired", "expired runner session is retained as expired")
+    ok("active_runner_session_id" not in store.get_agent_state(
+        stale_task["task_id"], project=P),
+       "expiring a runner clears its matching task convenience pointer")
     ok(wake_row["status"] == "cancelled", "old wake intent is cancelled")
     ok(monitor_row["status"] == "resolved", "fired monitor is resolved")
     ok(presence_row is None, "stale agent presence is removed from live registry")

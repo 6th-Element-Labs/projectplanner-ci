@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from scripts.frontend_test_source import read_frontend_source
 
 _TMP = tempfile.mkdtemp(prefix="mission-page-")
@@ -137,6 +138,50 @@ try:
        "linked task_detail carries narration fields for map-node hover tooltips")
     ok(all("agent_id" in a for a in (body.get("active_agents") or [])),
        "active_agents entries are shaped for hover tooltips (agent_id + runtime enrichment)")
+
+    runner_agent = "codex/SESSION-13-mission-proof"
+    runner_claim = store.claim_task(
+        target_task["task_id"], runner_agent, actor="test", project=TARGET)
+    store.upsert_runner_session({
+        "runner_session_id": "runner-session-13-mission",
+        "host_id": "host/mission-proof",
+        "agent_id": runner_agent,
+        "runtime": "codex",
+        "task_id": target_task["task_id"],
+        "claim_id": runner_claim["claim_id"],
+        "status": "running",
+        "cwd": "/tmp/session-13-mission",
+        "control": {"managed_process": True, "runner_kill": True, "tier": "T3"},
+        "metadata": {"wake_id": "wake-session-13-mission",
+                     "work_session_id": "worksession-session-13-mission"},
+        "heartbeat_ttl_s": 1800,
+    }, actor="test", project=TARGET)
+    pointer_status = client.get(
+        f"/api/deliverables/{deliverable['id']}/mission_status",
+        params={"project": HOME},
+    ).json()
+    pointer_work = next(
+        item for item in pointer_status.get("active_work") or []
+        if item.get("task_id") == target_task["task_id"])
+    pointer_runner = pointer_work.get("active_runner") or {}
+    ok(pointer_runner.get("active") is True
+       and pointer_runner.get("source") == "agent_state_pointer"
+       and (pointer_runner.get("session") or {}).get("host_id") == "host/mission-proof",
+       "Mission active_work resolves the registered runner through agent_state")
+
+    with store._conn(TARGET) as c:
+        c.execute("UPDATE tasks SET agent_state='{}', updated_at=? WHERE task_id=?",
+                  (time.time(), target_task["task_id"]))
+    fallback_status = client.get(
+        f"/api/deliverables/{deliverable['id']}/mission_status",
+        params={"project": HOME},
+    ).json()
+    fallback_work = next(
+        item for item in fallback_status.get("active_work") or []
+        if item.get("task_id") == target_task["task_id"])
+    ok((fallback_work.get("active_runner") or {}).get("source")
+       == "runner_sessions_fallback",
+       "Mission active_work falls back to authoritative runner_sessions")
 
     brief_res = client.post(
         f"/api/deliverables/{deliverable['id']}/mission_brief",

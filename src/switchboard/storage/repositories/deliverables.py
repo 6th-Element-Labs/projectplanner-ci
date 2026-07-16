@@ -1791,6 +1791,7 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
 
     tasks_by_key: Dict[tuple, Dict[str, Any]] = {}
     claims_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
+    runners_by_key: Dict[tuple, List[Dict[str, Any]]] = {}
     for proj, tids in by_project.items():
         if not _store_facade().has_project(proj):
             continue
@@ -1816,6 +1817,16 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
                     task["session_health"] = _store_facade()._task_session_health_in(
                         c, task, project=proj, active_claims=claims,
                         git_state=task.get("git_state"))
+            runner_rows = c.execute(
+                f"SELECT * FROM runner_sessions WHERE task_id IN ({placeholders}) "
+                "ORDER BY heartbeat_at DESC, runner_session_id",
+                uniq,
+            ).fetchall()
+            runner_now = time.time()
+            for runner_row in runner_rows:
+                runner = _store_facade()._runner_session_row(
+                    runner_row, now=runner_now, include_claim=False, c=c)
+                runners_by_key.setdefault((proj, runner.get("task_id")), []).append(runner)
 
     out: List[Dict[str, Any]] = []
     for link in links:
@@ -1854,6 +1865,13 @@ def _batch_enrich_mission_links(links: List[Dict[str, Any]]) -> List[Dict[str, A
             "publication": None,
             "human_gate": task.get("human_gate"),
             "session_health": task.get("session_health"),
+            "agent_state": task.get("agent_state") or {},
+            "active_runner": _store_facade().resolve_task_active_runner(
+                task["task_id"],
+                agent_state=task.get("agent_state") or {},
+                sessions=runners_by_key.get((proj, tid)) or [],
+                project=proj,
+            ),
             "active_claims": claims_by_key.get((proj, tid)) or [],
             "narration": narration,
             "narration_raw": narration_raw,
@@ -2139,6 +2157,7 @@ def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = 
                 "assignee": detail.get("assignee"),
                 "active_claims": claims,
                 "session_health": detail.get("session_health"),
+                "active_runner": detail.get("active_runner"),
                 "milestone_id": link.get("milestone_id"),
                 "role": link.get("role"),
             })

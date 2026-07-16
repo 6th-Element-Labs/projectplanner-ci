@@ -24,7 +24,10 @@ from switchboard.storage.repositories.coordination import (
     _presence_row,
     _wake_row,
 )
-from switchboard.storage.repositories.runner import _runner_session_row
+from switchboard.storage.repositories.runner import (
+    _clear_active_runner_pointer_in,
+    _runner_session_row,
+)
 from switchboard.storage.repositories.tasks import (
     _active_task_state_in,
     _delete_task_related_in,
@@ -306,6 +309,8 @@ def apply_cleanup(project: str = DEFAULT_PROJECT,
                 elif kind == "runner_session":
                     c.execute("UPDATE runner_sessions SET status='expired', updated_at=? "
                               "WHERE runner_session_id=?", (now, target_id))
+                    _clear_active_runner_pointer_in(
+                        c, str(candidate.get("task_id") or ""), target_id, now)
                     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) "
                               "VALUES (?,?,?,?,?)",
                               (candidate.get("task_id"), actor,
