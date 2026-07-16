@@ -576,6 +576,44 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
     if not runner_session_id:
         return {"error": "runner_session_id required"}
+    principal = c.execute(
+        "SELECT kind, scopes FROM principals WHERE id=?", (principal_id,),
+    ).fetchone() if principal_id else None
+    scopes: set[str] = set()
+    if principal:
+        try:
+            scopes = set(json.loads(principal["scopes"] or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            scopes = set()
+    narrow_host = bool(
+        principal and "write:agent_host" in scopes
+        and "write:ixp" not in scopes and "admin" not in scopes)
+    if narrow_host:
+        submitted_host = str(record.get("host_id") or "").strip()
+        enrollment = c.execute(
+            "SELECT host_id FROM agent_host_enrollments "
+            "WHERE principal_id=? AND host_id=? AND status='active'",
+            (principal_id, submitted_host),
+        ).fetchone()
+        registered_host = c.execute(
+            "SELECT principal_id FROM agent_hosts WHERE host_id=?",
+            (submitted_host,),
+        ).fetchone()
+        existing = c.execute(
+            "SELECT host_id, principal_id FROM runner_sessions WHERE runner_session_id=?",
+            (runner_session_id,),
+        ).fetchone()
+        if (not enrollment or not registered_host
+                or str(registered_host["principal_id"] or "") != principal_id
+                or (existing and (
+                    str(existing["host_id"] or "") != submitted_host
+                    or str(existing["principal_id"] or "") != principal_id))):
+            return {
+                "error": "runner identity is owned by another host",
+                "error_code": "runner_identity_mismatch",
+                "failure_class": "unbound_identity",
+                "runner_session_id": runner_session_id,
+            }
     record = _merge_existing_runner_record(c, record)
     host_id = (record.get("host_id") or "").strip()
     control = _normalize_runner_control(record.get("control") or {}, host_id)

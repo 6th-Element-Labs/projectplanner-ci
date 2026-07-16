@@ -694,6 +694,63 @@ try:
        and connection_status(sweep_deadline_wake) == "failed",
        "every personal wake terminal path closes its exact execution connection first")
 
+    store.upsert_runner_session({
+        "runner_session_id": exact_runner_id,
+        "host_id": "host/test",
+        "agent_id": personal_agent,
+        "runtime": "codex",
+        "task_id": personal_task["task_id"],
+        "claim_id": personal_claim["claim_id"],
+        "status": "completed",
+        "cwd": os.getcwd(),
+        "metadata": {
+            "wake_id": good_wake["wake_id"],
+            "work_session_id": personal_session["work_session_id"],
+            "source_sha": personal_source_sha,
+            "execution_connection_id": good_execution["execution_connection_id"],
+        },
+    }, principal_id=p["id"], actor=auth.actor(p), project=P)
+    successful_binding = {
+        key: good_execution.get(key) for key in (
+            "task_id", "claim_id", "work_session_id", "runner_session_id",
+            "host_id", "agent_id", "wake_id", "source_sha",
+            "execution_connection_id",
+        )
+    }
+    failed_binding = {
+        key: failed_execution.get(key) for key in (
+            "task_id", "claim_id", "work_session_id", "runner_session_id",
+            "host_id", "agent_id", "wake_id", "source_sha",
+            "execution_connection_id",
+        )
+    }
+    successful_checkpoint = store.check_personal_execution_authority(
+        successful_binding, principal_id=p["id"], action="checkpoint_work_session",
+        project=P)
+    successful_completion = store.check_personal_execution_authority(
+        successful_binding, principal_id=p["id"], action="complete_claim", project=P)
+    completed_head = "d" * 40
+    store.update_work_session(
+        personal_session["work_session_id"], {"head_sha": completed_head},
+        actor=auth.actor(p), project=P)
+    retry_checkpoint = store.check_personal_execution_authority(
+        successful_binding | {"completed_head_sha": completed_head},
+        principal_id=p["id"], action="checkpoint_work_session", project=P)
+    cross_claim_authority = store.check_personal_execution_authority(
+        successful_binding | {"claim_id": "taskclaim-unrelated"},
+        principal_id=p["id"], action="complete_claim", project=P)
+    failed_abandon = store.check_personal_execution_authority(
+        failed_binding, principal_id=p["id"], action="abandon_claim", project=P)
+    failed_completion = store.check_personal_execution_authority(
+        failed_binding, principal_id=p["id"], action="complete_claim", project=P)
+    ok(successful_checkpoint.get("allowed") is True
+       and successful_completion.get("allowed") is True
+       and retry_checkpoint.get("allowed") is True
+       and cross_claim_authority.get("allowed") is False
+       and failed_abandon.get("allowed") is True
+       and failed_completion.get("allowed") is False,
+       "post-execution claim and Work Session writes require the exact terminal tuple")
+
     failed_wake = store.request_wake(
         selector={"runtime": "claude-code", "agent_id": "claude/TEST#fail",
                   "lane": "TEST", "capabilities": ["docs"]},

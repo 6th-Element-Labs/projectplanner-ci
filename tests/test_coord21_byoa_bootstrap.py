@@ -113,10 +113,11 @@ bound_head = subprocess.run(
     check=True, capture_output=True, text=True).stdout.strip()
 real_get_task = sb.get_task
 real_get_work_session = sb.get_work_session
+personal_workspace_root = tmp / "personal-workspaces"
 bound_env = {key: os.environ.get(key) for key in (
     "PM_REMOTE_WORK_SESSION_REGISTRATION", "PM_AUTO_WORK_SESSION", "PM_TASK_ID",
     "PM_PERSONAL_AGENT_HOST_EXECUTION", "PM_PERSONAL_WORKSPACE_ROOT",
-    "PM_CO_ACCOUNT_BINDING_JSON", "PM_SOURCE_SHA",
+    "PM_CO_ACCOUNT_BINDING_JSON", "PM_SOURCE_SHA", "PM_AGENT_HOST_ALLOW_FILE_REPO",
 )}
 try:
     os.environ.update({
@@ -124,7 +125,8 @@ try:
         "PM_AUTO_WORK_SESSION": "1",
         "PM_TASK_ID": "COORD-21",
         "PM_PERSONAL_AGENT_HOST_EXECUTION": "1",
-        "PM_PERSONAL_WORKSPACE_ROOT": str(repo.parent),
+        "PM_PERSONAL_WORKSPACE_ROOT": str(personal_workspace_root),
+        "PM_AGENT_HOST_ALLOW_FILE_REPO": "1",
         "PM_CO_ACCOUNT_BINDING_JSON": json.dumps({
             "task_id": "COORD-21",
             "claim_id": "taskclaim-personal-bound",
@@ -140,6 +142,7 @@ try:
         "status": "active",
         "head_sha": bound_head,
         "branch": "codex/COORD-21-byoa",
+        "repo": repo.as_uri(),
         "worktree_path": str(repo),
         "policy_profile": "code_strict",
     }
@@ -162,10 +165,16 @@ finally:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+adopted_workspace = Path((adopted_session or {}).get("workspace_path") or "")
+adopted_head = subprocess.run(
+    ["git", "-C", str(adopted_workspace), "rev-parse", "HEAD"],
+    check=True, capture_output=True, text=True).stdout.strip()
 ok(adopted_claim.get("adopted_existing_claim") is True
    and adopted_session.get("bound_existing") is True
-   and adopted_session.get("workspace_path") == str(repo),
-   "personal Agent Host adopts the exact pre-bound claim and Work Session without creating another")
+   and adopted_workspace.resolve().is_relative_to(personal_workspace_root.resolve())
+   and adopted_workspace.resolve() != repo.resolve()
+   and adopted_head == bound_head,
+   "personal Agent Host adopts the exact pre-bound claim into a host-local exact checkout")
 
 secret = "claude-setup-token-must-never-serialize"
 private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)

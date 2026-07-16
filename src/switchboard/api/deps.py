@@ -110,6 +110,34 @@ def require_agent_host_identity(principal: dict, host_id: str, project: str) -> 
             403, identity.get("error") or "host bearer is not bound to this host")
 
 
+def require_agent_host_runner_identity(
+        principal: dict, runner_session_id: str, host_id: str, project: str) -> None:
+    """Prevent a narrow host bearer from taking over an existing runner id."""
+    if not is_narrow_agent_host_principal(principal):
+        return
+    existing = store.get_runner_session(
+        str(runner_session_id or "").strip(), project=project)
+    if not existing:
+        return
+    if (str(existing.get("host_id") or "") != str(host_id or "").strip()
+            or str(existing.get("principal_id") or "")
+            != str(principal.get("id") or "")):
+        raise HTTPException(403, "host bearer cannot replace another runner identity")
+
+
+def require_personal_execution_authority(
+        principal: dict, binding: dict, action: str, project: str) -> dict:
+    """Fence a narrow host mutation to its durable personal execution tuple."""
+    if not is_narrow_agent_host_principal(principal):
+        return {"allowed": True, "legacy_or_operator": True}
+    result = store.check_personal_execution_authority(
+        binding or {}, principal_id=str(principal.get("id") or ""),
+        action=action, project=project)
+    if not result.get("allowed"):
+        raise HTTPException(403, result)
+    return result
+
+
 def resolve_body_project(body: dict) -> str:
     """Require an explicit body ``project`` — no Maxwell omission fallback (SEG-4)."""
     from switchboard.api.project_scope import resolve_body_project_context

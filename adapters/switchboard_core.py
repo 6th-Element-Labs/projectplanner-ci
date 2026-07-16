@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -353,6 +354,8 @@ def get_work_session(project, work_session_id, base=None, token=None):
 def complete_claim(project, claim_id, evidence, base=None, token=None, final_status=""):
     ev = evidence if isinstance(evidence, str) else __import__("json").dumps(evidence or {})
     body = {"project": project, "claim_id": claim_id, "evidence": ev}
+    if _personal_execution_enabled():
+        body["personal_execution_binding"] = _personal_execution_binding()
     if final_status:
         body["final_status"] = final_status
     return _http("POST", "/txp/v1/complete_claim",
@@ -361,8 +364,11 @@ def complete_claim(project, claim_id, evidence, base=None, token=None, final_sta
 
 def abandon_claim(project, claim_id, reason, base=None, token=None):
     try:
+        body = {"project": project, "claim_id": claim_id, "reason": reason}
+        if _personal_execution_enabled():
+            body["personal_execution_binding"] = _personal_execution_binding()
         return _http("POST", "/txp/v1/abandon_claim",
-                     {"project": project, "claim_id": claim_id, "reason": reason}, base=base, token=token)
+                     body, base=base, token=token)
     except Exception:
         return None
 
@@ -609,6 +615,185 @@ def _push_and_verify(workspace_path, branch, head_sha, remote="origin", timeout_
         return {"ok": False, "detail": f"push/verify error: {e}"}
 
 
+def _personal_execution_enabled():
+    return os.environ.get(
+        "PM_PERSONAL_AGENT_HOST_EXECUTION", "").strip().lower() in (
+            "1", "true", "yes", "on")
+
+
+def _personal_execution_binding():
+    try:
+        account = json.loads(os.environ.get("PM_CO_ACCOUNT_BINDING_JSON") or "{}")
+    except json.JSONDecodeError:
+        account = {}
+    return {
+        "task_id": str(account.get("task_id") or os.environ.get("PM_TASK_ID") or "").strip(),
+        "claim_id": str(account.get("claim_id") or os.environ.get("PM_CLAIM_ID") or "").strip(),
+        "work_session_id": str(
+            account.get("work_session_id") or os.environ.get("PM_WORK_SESSION_ID") or "").strip(),
+        "host_id": str(account.get("host_id") or os.environ.get("PM_CO_HOST_ID") or "").strip(),
+        "runner_session_id": str(
+            account.get("runner_session_id") or os.environ.get("PM_RUNNER_SESSION_ID") or "").strip(),
+        "agent_id": str(account.get("agent_id") or os.environ.get("PM_AGENT_ID") or "").strip(),
+        "wake_id": str(os.environ.get("PM_CO_WAKE_ID") or "").strip(),
+        "source_sha": str(os.environ.get("PM_SOURCE_SHA") or "").strip(),
+        "execution_connection_id": str(
+            os.environ.get("PM_EXECUTION_CONNECTION_ID") or "").strip(),
+    }
+
+
+def _personal_repo_clone_url(value):
+    """Return a credential-free clone URL plus a stable repository identity."""
+    raw = str(value or "").strip()
+    slug = raw[:-4] if raw.endswith(".git") else raw
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", slug):
+        return f"https://github.com/{slug}.git", f"github:{slug.lower()}"
+    parsed = urllib.parse.urlsplit(raw)
+    if (parsed.scheme == "https" and parsed.hostname == "github.com"
+            and not parsed.username and not parsed.password
+            and not parsed.query and not parsed.fragment):
+        path = parsed.path.strip("/")
+        path = path[:-4] if path.endswith(".git") else path
+        if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path):
+            return f"https://github.com/{path}.git", f"github:{path.lower()}"
+    if (parsed.scheme == "file"
+            and os.environ.get("PM_AGENT_HOST_ALLOW_FILE_REPO", "").strip().lower()
+            in ("1", "true", "yes", "on")):
+        local = os.path.realpath(urllib.parse.unquote(parsed.path))
+        return f"file://{local}", f"file:{local}"
+    raise RuntimeError("personal Work Session repository is not an approved clone source")
+
+
+def _personal_git(args, *, cwd="", timeout=300):
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    completed = subprocess.run(
+        ["git", *args], cwd=cwd or None, env=env,
+        capture_output=True, text=True, timeout=timeout, check=False)
+    return completed
+
+
+def _materialize_personal_workspace(session, source_sha, workspace_root):
+    """Create one host-local exact checkout for a coordinator-bound Work Session."""
+    source_sha = str(source_sha or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise RuntimeError("personal Work Session source SHA is invalid")
+    branch = str(session.get("branch") or "").strip()
+    if not branch or _personal_git(["check-ref-format", "--branch", branch]).returncode != 0:
+        raise RuntimeError("personal Work Session branch is invalid")
+    clone_url, expected_identity = _personal_repo_clone_url(session.get("repo"))
+    configured_root = str(workspace_root or "").strip()
+    if not configured_root:
+        raise RuntimeError("personal workspace root is not configured")
+    raw_root = os.path.abspath(os.path.expanduser(configured_root))
+    if os.path.lexists(raw_root) and os.path.islink(raw_root):
+        raise RuntimeError("personal workspace root cannot be a symlink")
+    os.makedirs(raw_root, mode=0o700, exist_ok=True)
+    os.chmod(raw_root, 0o700)
+    root = os.path.realpath(raw_root)
+    task_part = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(session.get("task_id") or "task"))[:64]
+    session_part = re.sub(
+        r"[^A-Za-z0-9_.-]+", "-", str(session.get("work_session_id") or "session"))[:96]
+    parent = os.path.join(root, task_part)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    if os.path.islink(parent) or os.path.realpath(parent) != parent:
+        raise RuntimeError("personal workspace task directory cannot be a symlink")
+    os.chmod(parent, 0o700)
+    workspace = os.path.abspath(os.path.join(parent, session_part))
+    if os.path.commonpath((root, workspace)) != root:
+        raise RuntimeError("personal workspace path escaped its protected root")
+    if os.path.lexists(workspace) and os.path.islink(workspace):
+        raise RuntimeError("personal workspace cannot be a symlink")
+    created = False
+    if not os.path.exists(workspace):
+        staging_root = tempfile.mkdtemp(prefix=".personal-clone-", dir=parent)
+        staging = os.path.join(staging_root, "checkout")
+        try:
+            cloned = _personal_git(
+                ["clone", "--no-checkout", "--origin", "origin", clone_url, staging],
+                timeout=600)
+            if cloned.returncode != 0:
+                raise RuntimeError("personal repository clone failed")
+            os.replace(staging, workspace)
+            created = True
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+    if not os.path.isdir(workspace):
+        raise RuntimeError("personal workspace materialization did not create a directory")
+    os.chmod(workspace, 0o700)
+    remote = _personal_git(["-C", workspace, "remote", "get-url", "origin"])
+    if remote.returncode != 0:
+        raise RuntimeError("personal workspace origin is missing")
+    _remote_url, actual_identity = _personal_repo_clone_url((remote.stdout or "").strip())
+    if actual_identity != expected_identity:
+        raise RuntimeError("personal workspace origin does not match the Work Session repo")
+    if not created:
+        status = _personal_git(["-C", workspace, "status", "--porcelain"])
+        if status.returncode != 0 or (status.stdout or "").strip():
+            raise RuntimeError("personal workspace is dirty")
+    fetched = _personal_git(["-C", workspace, "fetch", "--prune", "origin"], timeout=600)
+    if fetched.returncode != 0:
+        raise RuntimeError("personal workspace fetch failed")
+    commit = _personal_git(["-C", workspace, "cat-file", "-e", f"{source_sha}^{{commit}}"])
+    if commit.returncode != 0:
+        raise RuntimeError("personal workspace source SHA is not available from the canonical repo")
+    if not created:
+        current = _personal_git(["-C", workspace, "rev-parse", "HEAD"])
+        if current.returncode != 0 or (current.stdout or "").strip() != source_sha:
+            raise RuntimeError("existing personal workspace is not at the bound source SHA")
+    checked = _personal_git(["-C", workspace, "checkout", "-B", branch, source_sha])
+    if checked.returncode != 0:
+        raise RuntimeError("personal workspace branch checkout failed")
+    status = _personal_git(["-C", workspace, "status", "--porcelain"])
+    if status.returncode != 0 or (status.stdout or "").strip():
+        raise RuntimeError("personal workspace is dirty after checkout")
+    remote_ref = f"refs/remotes/origin/{branch}"
+    if _personal_git(["-C", workspace, "show-ref", "--verify", "--quiet", remote_ref]).returncode == 0:
+        upstream = _personal_git(
+            ["-C", workspace, "branch", "--set-upstream-to", f"origin/{branch}", branch])
+        if upstream.returncode != 0:
+            raise RuntimeError("personal workspace upstream binding failed")
+    head = _personal_git(["-C", workspace, "rev-parse", "HEAD"])
+    if head.returncode != 0 or (head.stdout or "").strip() != source_sha:
+        raise RuntimeError("personal workspace is not at the exact bound source SHA")
+    return workspace
+
+
+def checkpoint_personal_work_session(project, managed, evidence, agent_id,
+                                     base=None, token=None):
+    """Persist the exact local head/test receipt through the narrow tuple gate."""
+    hygiene = dict(managed.get("session_hygiene") or {})
+    test_run = evidence.get("executed_test_run")
+    if test_run:
+        hygiene["executed_test_run"] = test_run
+    hygiene.update({
+        "git_status": "clean",
+        "conflict_marker_scan": "passed",
+        "personal_host_checkout": {
+            "schema": "switchboard.personal_host_checkout.v1",
+            "storage": "worker_local",
+            "workspace_fingerprint": hashlib.sha256(
+                str(managed.get("workspace_path") or "").encode()).hexdigest()[:16],
+            "source_sha": str(os.environ.get("PM_SOURCE_SHA") or ""),
+            "head_sha": str(evidence.get("head_sha") or ""),
+        },
+    })
+    binding = _personal_execution_binding()
+    binding["completed_head_sha"] = str(evidence.get("head_sha") or "").strip()
+    payload = {
+        "project": project,
+        "agent_id": agent_id,
+        "head_sha": evidence.get("head_sha") or "",
+        "dirty_status": "clean",
+        "conflict_marker_count": 0,
+        "hygiene": hygiene,
+        "personal_execution_binding": binding,
+    }
+    return _http(
+        "PATCH", f"/ixp/v1/work_sessions/{managed['work_session_id']}", payload,
+        base=base, token=token, timeout=30)
+
+
 def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
                    auto_work_session, source_path):
     """Claim the next task. If the scheduler skipped code-strict tasks only because they
@@ -618,9 +803,7 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
         "PM_REMOTE_WORK_SESSION_REGISTRATION", "").strip().lower() in (
             "1", "true", "yes", "on")
     exact_task_id = str(os.environ.get("PM_TASK_ID") or "").strip().upper()
-    personal_bound = os.environ.get(
-        "PM_PERSONAL_AGENT_HOST_EXECUTION", "").strip().lower() in (
-            "1", "true", "yes", "on")
+    personal_bound = _personal_execution_enabled()
     if personal_bound:
         try:
             binding = json.loads(os.environ.get("PM_CO_ACCOUNT_BINDING_JSON") or "{}")
@@ -634,8 +817,6 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
                 project, work_session_id, base=base, token=token)
             task = get_task(project, exact_task_id, base=base, token=token)
             source_sha = str(os.environ.get("PM_SOURCE_SHA") or "").strip()
-            workspace_path = str(
-                session.get("worktree_path") or session.get("clone_path") or "").strip()
             workspace_root = str(
                 os.environ.get("PM_PERSONAL_WORKSPACE_ROOT") or "").strip()
             active_claims = task.get("active_claims") or []
@@ -652,19 +833,8 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
                     or session.get("head_sha") != source_sha
                     or not claim or claim.get("agent_id") != agent_id):
                 raise RuntimeError("personal claim and Work Session binding is not active")
-            if not workspace_path or not os.path.isdir(workspace_path):
-                raise RuntimeError("personal bound workspace is not present on this host")
-            if (not workspace_root or not os.path.isdir(workspace_root)
-                    or os.path.commonpath((os.path.realpath(workspace_path),
-                                           os.path.realpath(workspace_root)))
-                    != os.path.realpath(workspace_root)):
-                raise RuntimeError(
-                    "personal bound workspace is outside the protected writable root")
-            head = subprocess.run(
-                ["git", "-C", workspace_path, "rev-parse", "HEAD"],
-                capture_output=True, text=True, timeout=30, check=False)
-            if head.returncode != 0 or (head.stdout or "").strip() != source_sha:
-                raise RuntimeError("personal bound workspace is not at the exact source SHA")
+            workspace_path = _materialize_personal_workspace(
+                session, source_sha, workspace_root)
             return {
                 "claimed": True,
                 "claim_id": claim_id,
@@ -679,6 +849,7 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
                 "profile": session.get("policy_profile") or "code_strict",
                 "external": True,
                 "bound_existing": True,
+                "session_hygiene": dict(session.get("hygiene") or {}),
             }
         except Exception as exc:
             return {"claimed": False,
@@ -799,7 +970,7 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
         except Exception as e:
             abandon_claim(project, claim_id, f"work_fn error: {e}", base=base, token=token)
             if managed:
-                if managed.get("external"):
+                if managed.get("external") and not managed.get("bound_existing"):
                     expire_external_work_session(
                         project, managed["work_session_id"], agent_id,
                         base=base, token=token)
@@ -833,7 +1004,7 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                         abandon_claim(project, claim_id,
                                       f"push failed for {task_id}: {pushed.get('detail')}",
                                       base=base, token=token)
-                        if managed.get("external"):
+                        if managed.get("external") and not managed.get("bound_existing"):
                             expire_external_work_session(
                                 project, managed["work_session_id"], agent_id,
                                 base=base, token=token)
@@ -851,6 +1022,19 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     # gate's push-evidence presence check passes. Real push and
                     # remote verification are enabled via PM_VERIFY_COMPLETION_PUSH.
                     evidence["remote_ref"] = f"refs/heads/{evidence.get('branch', '')}"
+        if managed and managed.get("bound_existing") and _personal_execution_enabled():
+            try:
+                checkpoint = checkpoint_personal_work_session(
+                    project, managed, evidence, agent_id, base=base, token=token)
+            except Exception as exc:
+                return {"completed": completed,
+                        "stopped": f"checkpoint_error:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox}
+            if not checkpoint.get("updated"):
+                return {"completed": completed,
+                        "stopped": f"checkpoint_rejected:{task_id}",
+                        "checkpoint": checkpoint, "startup_inbox": startup_inbox}
+            managed["head_sha"] = evidence.get("head_sha") or managed.get("head_sha")
         completion = complete_claim(project, claim_id, evidence, base=base, token=token)
         if managed and not managed.get("external"):
             archive_work_session_workspace(project, managed["work_session_id"],

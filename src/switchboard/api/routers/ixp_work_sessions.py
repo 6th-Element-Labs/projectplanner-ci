@@ -13,6 +13,11 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
 import store
+from switchboard.api.deps import (
+    is_narrow_agent_host_principal,
+    require_personal_execution_authority,
+    resolve_agent_host_principal,
+)
 from switchboard.application.commands import pre_tool_check as pre_tool_check_command
 from switchboard.application.commands import work_sessions as work_session_commands
 
@@ -110,11 +115,38 @@ def create_router(*, resolve_project: ProjectResolver,
     async def ixp_update_work_session(work_session_id: str, request: Request,
                                       body: dict = Body(...)):
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("agent_id") or "work-session")
         payload = dict(body or {})
         payload.pop("project", None)
+        binding = payload.pop("personal_execution_binding", {}) or {}
+        if is_narrow_agent_host_principal(principal):
+            if str(binding.get("work_session_id") or "") != work_session_id:
+                raise HTTPException(
+                    403, "personal execution Work Session target mismatch")
+            expected_checkpoint = {
+                "agent_id": str(binding.get("agent_id") or ""),
+                "head_sha": str(binding.get("completed_head_sha") or ""),
+                "dirty_status": "clean",
+                "conflict_marker_count": 0,
+            }
+            if any(payload.get(field) != value
+                   for field, value in expected_checkpoint.items()):
+                raise HTTPException(
+                    403, "personal execution Work Session checkpoint mismatch")
+            allowed_fields = {
+                "agent_id", "head_sha", "dirty_status",
+                "conflict_marker_count", "hygiene",
+            }
+            forbidden = sorted(set(payload) - allowed_fields)
+            if forbidden:
+                raise HTTPException(403, {
+                    "error_code": "personal_work_session_update_scope_denied",
+                    "forbidden_fields": forbidden,
+                })
+            require_personal_execution_authority(
+                principal, binding, "checkpoint_work_session", project)
         result = work_session_commands.update(
             work_session_id, payload, actor=auth.actor(principal),
             project=project)

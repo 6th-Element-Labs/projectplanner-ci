@@ -182,9 +182,10 @@ identity from durable project access, never from optional request fields.
 
 Credential JSON temporaries are created `0600` before write under a `0700` directory; file and
 directory durability are fsynced and stale regular temporaries are removed without following
-symlinks. Linux allocates personal Work Sessions beneath the dedicated `0700` Agent Host
-workspace root included in systemd `ReadWritePaths`; the runtime rejects any returned path
-outside that realpath boundary.
+symlinks. Linux materializes personal Work Sessions beneath the dedicated `0700` Agent Host
+workspace root included in systemd `ReadWritePaths`. It treats the coordinator path as
+server-local metadata, clones the canonical repository into the host root, checks out the
+exact bound SHA, and rejects origin mismatch, symlink escape, dirty reuse, or off-SHA reuse.
 
 ### Hybrid placement inventory
 
@@ -416,7 +417,9 @@ interrupt-tier rules.
 
 ## 12. Security and Safety
 
-- Host credentials need `write:runner` / `write:ixp`, not broad admin by default.
+- Enrolled personal-host credentials use `read` + `write:agent_host`, not broad IXP or admin.
+  Runner mutation is identity-fenced, and post-execution Work Session/claim writes require the
+  complete durable personal-execution tuple and the action-specific terminal state.
 - A host may only launch runtimes declared in its registration.
 - A host must not expose arbitrary shell launch over the network.
 - Runtime command templates live on the host, not in untrusted wake payloads.

@@ -2,6 +2,7 @@
 """SESSION-11: run_session auto-provisions a Work Session + runs executed tests for
 code_strict tasks. Pure unit test — all network/subprocess calls are monkeypatched."""
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -123,6 +124,57 @@ res3 = sb.run_session("switchboard", "claude/PROOF", "claude-code",
 n3 = [c[0] for c in calls3]
 ok("archive_work_session_workspace" in n3 and "complete_claim" not in n3,
    "orphaned workspace archived and no completion when the claim race is lost")
+
+# ---- Test 4: personal host checkpoints the bound session before claim finalization ----------
+personal_managed = {
+    "work_session_id": "worksession-personal", "workspace_path": "/ws/personal",
+    "branch": "codex/TASK-PERSONAL", "head_sha": "a" * 40,
+    "profile": "code_strict", "external": True, "bound_existing": True,
+    "session_hygiene": {},
+}
+personal_claim = {
+    "claimed": True, "claim_id": "taskclaim-personal", "task_id": "TASK-PERSONAL",
+    "task": {"task_id": "TASK-PERSONAL"},
+}
+old_personal = os.environ.get("PM_PERSONAL_AGENT_HOST_EXECUTION")
+try:
+    os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = "1"
+    calls4 = _patch({
+        "_acquire_claim": (personal_claim, personal_managed),
+        "run_executed_tests": {"schema": "switchboard.executed_test_run.v1",
+                               "status": "success", "executed": True, "exit_code": 0},
+        "checkpoint_personal_work_session": {"updated": True},
+        "complete_claim": {"completed": True, "status": "In Review"},
+    })
+    res4 = sb.run_session(
+        "switchboard", "codex/TASK-PERSONAL", "codex",
+        work_fn=lambda task: {"head_sha": "b" * 40,
+                              "branch": "codex/TASK-PERSONAL"},
+        max_tasks=1, auto_work_session=True)
+    names4 = [call[0] for call in calls4]
+    calls5 = _patch({
+        "_acquire_claim": (personal_claim, personal_managed),
+        "run_executed_tests": {"schema": "switchboard.executed_test_run.v1",
+                               "status": "success", "executed": True, "exit_code": 0},
+        "checkpoint_personal_work_session": {"updated": False},
+        "complete_claim": {"completed": True},
+    })
+    res5 = sb.run_session(
+        "switchboard", "codex/TASK-PERSONAL", "codex",
+        work_fn=lambda task: {"head_sha": "b" * 40,
+                              "branch": "codex/TASK-PERSONAL"},
+        max_tasks=1, auto_work_session=True)
+finally:
+    if old_personal is None:
+        os.environ.pop("PM_PERSONAL_AGENT_HOST_EXECUTION", None)
+    else:
+        os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = old_personal
+ok(names4.index("checkpoint_personal_work_session") < names4.index("complete_claim")
+   and res4["completed"] and "archive_work_session_workspace" not in names4,
+   "personal host checkpoints its bound Work Session before completing the exact claim")
+ok(res5.get("stopped") == "checkpoint_rejected:TASK-PERSONAL"
+   and "complete_claim" not in [call[0] for call in calls5],
+   "a rejected personal checkpoint stops loudly without leaking the active claim")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

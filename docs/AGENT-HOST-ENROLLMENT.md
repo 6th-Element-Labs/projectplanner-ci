@@ -13,9 +13,11 @@ native Codex CLI; it does not wake or remote-drive the Codex desktop application
 - An operator creates a short-lived bootstrap code (60–900 seconds). The code is
   single-use and only its hash is stored.
 - Bootstrap completion creates a stable `host/...` identity, an Ed25519 device key, and
-  a narrow project bearer with `read` + `write:ixp`. Initial completion and every
+  a narrow project bearer with `read` + `write:agent_host`. Initial completion and every
   pre-finalization recovery return the same bearer, stored only in the user's `0600`
-  identity file.
+  identity file. The bearer has no generic IXP mutation authority: post-execution Work
+  Session checkpoint and claim completion/abandon are admitted only for its exact durable
+  task/claim/session/runner/host/agent/wake/source/connection tuple.
 - Credential JSON is written through a same-user `0700` directory and a `0600` temporary
   file whose mode is set before any secret bytes are written. Replacement and its containing
   directory are fsynced; old same-user regular temporaries are cleaned without following
@@ -110,7 +112,12 @@ that advertises a wider or different inventory is rejected.
 On Linux, personal Work Sessions must live below
 `~/.local/state/switchboard-agent-host/workspaces`. That `0700` directory is the dedicated
 workspace entry in systemd `ReadWritePaths`; the remainder of the home directory stays
-read-only. The worker rejects a server-returned Work Session outside this realpath boundary.
+read-only. A coordinator Work Session path is descriptive server-local state and is never
+trusted as a path on the personal host. The worker clones the Work Session's canonical GitHub
+repository into a deterministic directory below the protected root, fetches and checks out
+the exact bound source SHA, verifies the origin and clean tree, and refuses dirty, off-SHA,
+symlinked, or escaped reuse. The host's Git credential helper must already be able to read the
+canonical repository without an interactive prompt.
 
 The service loads the bearer locally, advertises Codex `chatgpt_personal` readiness, and
 executes `adapters/agent_host.py`. Personal work uses
@@ -123,7 +130,9 @@ executable proven by preflight, so launchd/systemd does not depend on an interac
 the exact worktree Git metadata directories added for commit/push; it does not receive
 unrestricted write access to the user's home directory. The separate
 `adapters.codex_personal_worker:run` remains the CO credential-vault path and is not selected
-by fresh host-local enrollment.
+by fresh host-local enrollment. After the native worker terminalizes its runner and wake, the
+narrow bearer checkpoints the exact pushed head and executed-test receipt on the bound Work
+Session, then completes or abandons only the bound claim.
 
 ## Update, rotate, revoke, and uninstall
 

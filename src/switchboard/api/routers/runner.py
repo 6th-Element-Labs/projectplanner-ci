@@ -15,6 +15,7 @@ import store
 from switchboard.api.deps import (
     is_narrow_agent_host_principal,
     require_agent_host_identity,
+    require_agent_host_runner_identity,
     resolve_agent_host_principal,
 )
 from switchboard.application.commands import runner_control as runner_control_command
@@ -80,6 +81,9 @@ def create_router(*, resolve_project: ProjectResolver,
             dev_actor=body.get("host_id") or body.get("agent_id") or "runner")
         require_agent_host_identity(
             principal, str(body.get("host_id") or ""), project)
+        require_agent_host_runner_identity(
+            principal, str(body.get("runner_session_id") or body.get("id") or ""),
+            str(body.get("host_id") or ""), project)
         record = dict(body)
         record.pop("project", None)
         return runner_control_command.upsert_session_mapping_result(
@@ -94,6 +98,9 @@ def create_router(*, resolve_project: ProjectResolver,
             dev_actor=body.get("host_id") or body.get("agent_id") or "runner")
         require_agent_host_identity(
             principal, str(body.get("host_id") or ""), project)
+        require_agent_host_runner_identity(
+            principal, str(body.get("runner_session_id") or body.get("id") or ""),
+            str(body.get("host_id") or ""), project)
         record = dict(body)
         record.pop("project", None)
         return runner_control_command.upsert_session_mapping_result(

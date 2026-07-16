@@ -36,7 +36,9 @@ from switchboard.storage.repositories import agent_host_enrollments as enrollmen
 from adapters import agent_host_enrollment as enrollment  # noqa: E402
 from adapters import codex_local_worker, codex_personal_worker, switchboard_core  # noqa: E402
 from app import app  # noqa: E402
+from switchboard.application.commands import complete_claim as complete_claim_command  # noqa: E402
 from switchboard.application.commands import complete_wake as complete_wake_command  # noqa: E402
+from switchboard.application.commands import work_sessions as work_session_commands  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parent
@@ -555,6 +557,26 @@ try:
     ok(register.status_code == 200 and register.json().get("host_id") == "host/adapter18-macos",
        "enrolled principal registers only its exact host identity")
     host_principal = store.get_principal_by_token(PROJECT, initial_mac_token)
+    victim_principal = store.create_principal(
+        kind="host", display_name="host/runner-victim", token="runner-victim-token",
+        scopes=["read", "write:ixp"], principal_id="host-runner-victim",
+        project=PROJECT)
+    store.upsert_runner_session({
+        "runner_session_id": "run-owned-by-victim", "host_id": "host/runner-victim",
+        "agent_id": "codex/runner-victim", "runtime": "codex", "status": "running",
+    }, principal_id=victim_principal["id"], actor="host/runner-victim", project=PROJECT)
+    runner_identity_hijack = client.post(
+        "/ixp/v1/register_runner_session",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={"project": PROJECT, "runner_session_id": "run-owned-by-victim",
+              "host_id": "host/adapter18-macos", "agent_id": "codex/attacker",
+              "runtime": "codex", "status": "running"},
+    )
+    atomic_runner_hijack = store.upsert_runner_session({
+        "runner_session_id": "run-owned-by-victim", "host_id": "host/adapter18-macos",
+        "agent_id": "codex/attacker", "runtime": "codex", "status": "running",
+    }, principal_id=host_principal["id"], actor="host/adapter18-macos", project=PROJECT)
+    runner_after_hijack = store.get_runner_session("run-owned-by-victim", project=PROJECT)
     generic_wake_write = client.post(
         "/ixp/v1/request_wake",
         headers={"Authorization": f"Bearer {initial_mac_token}"},
@@ -605,14 +627,67 @@ try:
                   "runner_session_id": "run-exact-only",
                   "agent_id": "codex/exact-only", "result": {"started": True}},
         )
+    exact_binding = {
+        "task_id": "ADAPTER-18", "claim_id": "taskclaim-exact",
+        "work_session_id": "worksession-exact", "runner_session_id": "run-exact",
+        "host_id": "host/adapter18-macos", "agent_id": "codex/exact",
+        "wake_id": "wake-exact", "source_sha": "a" * 40,
+        "execution_connection_id": "execconn-exact", "completed_head_sha": "b" * 40,
+    }
+    with (patch.object(store, "check_personal_execution_authority",
+                       return_value={"allowed": True}),
+          patch.object(complete_claim_command, "execute_mapping_result",
+                       return_value={"completed": True}),
+          patch.object(store, "abandon_claim", return_value={"abandoned": True}),
+          patch.object(work_session_commands, "update", return_value={"updated": True})):
+        exact_claim_completion = client.post(
+            "/txp/v1/complete_claim",
+            headers={"Authorization": f"Bearer {initial_mac_token}"},
+            json={"project": PROJECT, "claim_id": "taskclaim-exact", "evidence": "{}",
+                  "personal_execution_binding": exact_binding},
+        )
+        wrong_claim_completion = client.post(
+            "/txp/v1/complete_claim",
+            headers={"Authorization": f"Bearer {initial_mac_token}"},
+            json={"project": PROJECT, "claim_id": "taskclaim-other", "evidence": "{}",
+                  "personal_execution_binding": exact_binding},
+        )
+        exact_claim_abandon = client.post(
+            "/txp/v1/abandon_claim",
+            headers={"Authorization": f"Bearer {initial_mac_token}"},
+            json={"project": PROJECT, "claim_id": "taskclaim-exact", "reason": "failed",
+                  "personal_execution_binding": exact_binding},
+        )
+        exact_session_checkpoint = client.patch(
+            "/ixp/v1/work_sessions/worksession-exact",
+            headers={"Authorization": f"Bearer {initial_mac_token}"},
+            json={"project": PROJECT, "agent_id": "codex/exact", "head_sha": "b" * 40,
+                  "dirty_status": "clean", "conflict_marker_count": 0,
+                  "personal_execution_binding": exact_binding},
+        )
+        wrong_session_checkpoint = client.patch(
+            "/ixp/v1/work_sessions/worksession-other",
+            headers={"Authorization": f"Bearer {initial_mac_token}"},
+            json={"project": PROJECT, "agent_id": "codex/exact", "head_sha": "b" * 40,
+                  "dirty_status": "clean", "conflict_marker_count": 0,
+                  "personal_execution_binding": exact_binding},
+        )
     ok(host_principal.get("scopes") == ["read", "write:agent_host"]
        and generic_wake_write.status_code == 403
        and generic_wake_completion.status_code == 403
        and cross_host_runner.status_code == 403
        and spoofed_host_registration.status_code == 403
        and spoofed_host_heartbeat.status_code == 403
-       and exact_only_completion.status_code == 200,
-       "enrolled host bearer is fenced to its host and every exact personal wake route")
+       and exact_only_completion.status_code == 200
+       and runner_identity_hijack.status_code == 403
+       and atomic_runner_hijack.get("error_code") == "runner_identity_mismatch"
+       and runner_after_hijack.get("principal_id") == victim_principal["id"]
+       and exact_claim_completion.status_code == 200
+       and wrong_claim_completion.status_code == 403
+       and exact_claim_abandon.status_code == 200
+       and exact_session_checkpoint.status_code == 200
+       and wrong_session_checkpoint.status_code == 403,
+       "enrolled bearer is fenced to its host, runner identity, and exact terminal tuple")
     original_auth_mode = os.environ.get("PM_AUTH_MODE")
     os.environ["PM_AUTH_MODE"] = "required"
     try:
@@ -835,11 +910,25 @@ try:
        and all(isinstance(value, str) for value in launched_env.values()),
        "service-run strips metered keys and binds the personal host to its writable root")
 
-    bound_workspace = linux_workspace_root / "bound-session"
-    bound_workspace.mkdir()
-    outside_workspace = TMP / "outside-personal-root"
-    outside_workspace.mkdir()
-    binding_sha = "f" * 40
+    binding_source = TMP / "personal-binding-source"
+    binding_remote = TMP / "personal-binding-remote.git"
+    binding_source.mkdir()
+    subprocess.run(["git", "init", "-b", "master", str(binding_source)], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(binding_source), "config", "user.email",
+                    "adapter18@example.test"], check=True)
+    subprocess.run(["git", "-C", str(binding_source), "config", "user.name",
+                    "ADAPTER-18 Test"], check=True)
+    (binding_source / "proof.txt").write_text("canonical source\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(binding_source), "add", "proof.txt"], check=True)
+    subprocess.run(["git", "-C", str(binding_source), "commit", "-m", "source"],
+                   check=True, capture_output=True)
+    binding_sha = subprocess.run(
+        ["git", "-C", str(binding_source), "rev-parse", "HEAD"], check=True,
+        capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "clone", "--bare", str(binding_source), str(binding_remote)],
+                   check=True, capture_output=True)
+    coordinator_workspace = TMP / "coordination-vm-only" / "bound-session"
     binding_agent = "codex/ADAPTER-18-local-worker"
     binding_claim = "taskclaim-local-worker"
     binding_session = "worksession-local-worker"
@@ -852,12 +941,14 @@ try:
         "claim_id": binding_claim, "work_session_id": binding_session,
         "status": "active", "head_sha": binding_sha,
         "branch": "codex/ADAPTER-18-local-worker", "policy_profile": "code_strict",
-        "worktree_path": str(bound_workspace),
+        "repo": binding_remote.as_uri(),
+        "worktree_path": str(coordinator_workspace),
     }
     binding_environment = {
         "PM_TASK_ID": "ADAPTER-18",
         "PM_PERSONAL_AGENT_HOST_EXECUTION": "1",
         "PM_PERSONAL_WORKSPACE_ROOT": str(linux_workspace_root),
+        "PM_AGENT_HOST_ALLOW_FILE_REPO": "1",
         "PM_SOURCE_SHA": binding_sha,
         "PM_CO_ACCOUNT_BINDING_JSON": json.dumps({
             "task_id": "ADAPTER-18", "claim_id": binding_claim,
@@ -867,20 +958,27 @@ try:
     with (patch.dict(os.environ, binding_environment),
           patch.object(switchboard_core, "get_task", return_value=binding_task),
           patch.object(switchboard_core, "get_work_session",
-                       return_value=binding_work_session),
-          patch.object(switchboard_core.subprocess, "run", return_value=
-                       subprocess.CompletedProcess([], 0, binding_sha + "\n", ""))):
+                       return_value=binding_work_session)):
         admitted_claim, admitted_context = switchboard_core._acquire_claim(
             PROJECT, binding_agent, ["ADAPTER"], "https://switchboard.test", "token",
-            600, False, str(bound_workspace))
-        binding_work_session["worktree_path"] = str(outside_workspace)
+            600, False, str(coordinator_workspace))
+        materialized_workspace = Path(admitted_context["workspace_path"])
+        (materialized_workspace / "untracked-attack.txt").write_text(
+            "must be rejected\n", encoding="utf-8")
         denied_claim, denied_context = switchboard_core._acquire_claim(
             PROJECT, binding_agent, ["ADAPTER"], "https://switchboard.test", "token",
-            600, False, str(outside_workspace))
+            600, False, str(coordinator_workspace))
+    materialized_head = subprocess.run(
+        ["git", "-C", str(materialized_workspace), "rev-parse", "HEAD"], check=True,
+        capture_output=True, text=True).stdout.strip()
     ok(admitted_claim.get("claimed") is True and admitted_context.get("bound_existing") is True
-       and denied_claim.get("claimed") is False and denied_context is None
-       and "outside the protected writable root" in denied_claim.get("reason", ""),
-       "personal Work Sessions are admitted only beneath the systemd-writable workspace root")
+       and materialized_workspace.resolve().is_relative_to(linux_workspace_root.resolve())
+       and materialized_workspace != coordinator_workspace
+       and materialized_head == binding_sha,
+       "personal execution materializes the exact canonical SHA below the host-only workspace root")
+    ok(denied_claim.get("claimed") is False and denied_context is None
+       and "personal workspace is dirty" in denied_claim.get("reason", ""),
+       "personal execution refuses reuse of a dirty host-local checkout")
 
     local_workspace = TMP / "local-worker"
     local_workspace.mkdir()
