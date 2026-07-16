@@ -228,10 +228,10 @@ try:
 
     # ---- the legacy surfaces still work; UI-20 retires their entry points -------
     print("\n[10] Launchers into the not-yet-folded-in surfaces")
-    for action in ("open-members", "open-github", "goto-fleet"):
+    for action in ("open-github", "goto-fleet"):
         ok(f"case '{action}':" in settings_js, f"the shell dispatches {action}")
-    ok("openMembers()" in settings_js,
-       "not-yet-folded launchers reuse the existing modal implementations")
+    ok("openGithubAssoc(" in settings_js,
+       "the remaining launcher reuses the existing modal implementation")
     # UI-20 (2/6): Access tokens is folded into the shell — its launcher is retired and the
     # create/revoke flow runs inline, so no open-tokens launcher / openApiKeys call remains.
     ok("case 'open-tokens':" not in settings_js and "openApiKeys" not in settings_js,
@@ -245,6 +245,16 @@ try:
        "the Communications launcher is retired; the surface is inline in Settings")
     ok("_settingsCommsSection" in settings_js and "_settingsCommsSave" in settings_js,
        "the comms inbound/outbound editor runs inline in the Settings shell")
+    # UI-20 (4/6): Members & access is folded into the shell — its launcher is retired and
+    # the member table + add/role/revoke flow runs inline, so no open-members launcher
+    # (or the modal-era openMembers) remains.
+    ok("case 'open-members':" not in settings_js and "openMembers" not in settings_js,
+       "the Members launcher is retired; the surface is inline in Settings")
+    ok("_settingsMembersSection" in settings_js and "_settingsMembersChangeRole" in settings_js
+       and "_settingsMembersAdd" in settings_js,
+       "the members table + add/role/revoke flow runs inline in the Settings shell")
+    ok('id="members-modal"' not in html and 'id="btn-project-members"' not in html,
+       "the legacy members modal + rail button are retired from index.html")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

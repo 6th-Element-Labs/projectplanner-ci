@@ -116,6 +116,18 @@
             }
             // UI-20 (2/6): the Access-tokens role preset checks the matching scope boxes.
             if (element.id === 'settings-tokens-role') return this._settingsTokensApplyRole(element.value);
+            // UI-20 (4/6): the Members role select is grant-then-revoke (per-role rows).
+            if (element.getAttribute && element.getAttribute('data-mm-role')) {
+                try { return this._settingsMembersChangeRole(JSON.parse(decodeURIComponent(element.getAttribute('data-mm-role'))), element.value); }
+                catch (e) { return; }
+            }
+            // UI-20 (4/6): the add-member subject kind relabels its input.
+            if (element.id === 'mm-kind') {
+                const isUser = element.value === 'user';
+                const lbl = document.getElementById('mm-subject-label'); if (lbl) lbl.textContent = isUser ? 'Email' : 'Subject id';
+                const sub = document.getElementById('mm-subject'); if (sub) sub.placeholder = isUser ? 'teammate@company.com' : 'principal or agent id';
+                return;
+            }
             if (element.id === 'pa-confirm') {
                 this._sFlash('pa-life-flash', element.checked ? 'Receipt review confirmed.' : 'Confirm the receipt review before continuing.', element.checked ? 'text-success' : 'text-secondary');
             }

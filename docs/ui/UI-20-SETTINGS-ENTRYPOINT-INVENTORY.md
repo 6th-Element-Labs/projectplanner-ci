@@ -14,7 +14,7 @@ addressed as `#tab-settings/<section>`.
 |---|---|---|---|---|
 | 1 | Access tokens (UI-4) | `#apikeys-modal` + rail `#btn-project-apikeys` | `tokens` — relabel **Switchboard access tokens** (not model-provider API keys) | **done (2/6)** — inlined into `_settingsTokensSection`; modal + rail button retired; shown-once wipe re-anchored onto the panel swap |
 | 2 | Communications (UI-14) | `#comms-modal` + rail `#btn-project-comms` | `comms` | **done (3/6)** — inlined into `_settingsCommsSection` (inbound domains + outbound recipients/cadence, chip add/remove, save, send-test); modal + rail button retired; admin gate re-scoped from the `#comms-modal .comms-editable` selector to inline `disabled` driven by the server `can_edit` probe |
-| 3 | Members & access (UI-5) | `#members-modal` + rail `#btn-project-members` | `members` | pending |
+| 3 | Members & access (UI-5) | `#members-modal` + rail `#btn-project-members` | `members` | **done (4/6)** — inlined into `_settingsMembersSection` (member table with per-row role select + revoke, add-a-member form, visibility explainer); modal + rail button retired; role change kept as grant-then-revoke; `btn-project-members` command-palette entry repointed to the `#tab-settings/members` deep link |
 | 4 | Connect GitHub repo (UI-15) | `#github-assoc-modal` + rail `#btn-project-github` | `github` | pending |
 | 5 | Account & password | `/account` + `static/account.html` | `profile` | pending |
 | 6 | Project/provenance admin cards | Settings tab (UI-9) | `provenance` / `advanced` | **done (UI-18)** |
@@ -54,7 +54,11 @@ asks."* Sections render on selection, so the open path must keep the `loadGithub
 must survive.
 
 **4. Members — role change is grant-then-revoke.** *"Change role = grant the new role, then
-revoke the old one (grants are per-role rows)."* Not an update.
+revoke the old one (grants are per-role rows)."* Not an update. — **resolved (4/6):**
+`_settingsMembersChangeRole` grants the new role, then revokes the old (`project_role` then
+`project_role/revoke`); the per-row `<select>` routes through the Settings `change`
+delegation. The section nav stays `write:system`, so anyone who can open it can edit and the
+server still enforces per action.
 
 **5. Account — the bounce has no in-tab equivalent.** `account.html` redirects to
 `/login?return_to=/account` when unauthenticated. A tab cannot do that. `profile` is

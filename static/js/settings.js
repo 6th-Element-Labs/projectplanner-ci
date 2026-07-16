@@ -339,26 +339,148 @@
 
         /* ---- Project settings --------------------------------------------- */
 
+        // UI-20 (4/6): the UI-5 Members & access modal folded in-place. The section nav is
+        // gated write:system, so anyone who can open it can edit — the server still enforces
+        // per-action. Role change is grant-then-revoke, never an update (grants are per-role
+        // rows): _settingsMembersChangeRole grants the new role, then revokes the old one
+        // (inventory rule #4).
         async _settingsMembersSection() {
             const proj = window.PM_PROJECT || 'maxwell';
-            const detail = await this._sfetch(`api/projects/${encodeURIComponent(proj)}`);
-            if (detail.error) return this._settingsErrCard('Members & access', detail.error);
-            const summary = detail.access_summary || {};
-            const access = summary.access || {};
-            const counts = summary.role_counts || {};
-            const roleText = Object.keys(counts).sort().map((r) => `<span class="badge bg-azure-lt me-1">${this.esc(r)} ${counts[r]}</span>`).join('') || '<span class="text-secondary">no explicit grants</span>';
+            this._mmProject = proj;
+            const data = await this._sfetch(`api/access/members?project=${encodeURIComponent(proj)}`);
+            if (data.error) return this._settingsErrCard('Members & access', data.error);
+            this._mmGlobalAuth = !!data.global_auth;
+            const body = `
+                <div id="mm-visibility" class="alert alert-secondary py-2 px-3 small mb-3">${this._settingsMembersVisibilityHtml(data.visibility)}</div>
+                <div class="d-flex align-items-center mb-2">
+                    <h4 class="mb-0"><i class="ti ti-user-check me-1" aria-hidden="true"></i>Members</h4>
+                    <span id="mm-count" class="badge bg-secondary-lt ms-2">${(data.members || []).length}</span>
+                    <button type="button" class="btn btn-sm btn-ghost-secondary ms-auto p-1" data-set-action="members-refresh" title="Refresh members"><i class="ti ti-refresh" aria-hidden="true"></i></button>
+                </div>
+                <div id="mm-members" class="table-responsive mb-3">${this._settingsMembersTableHtml(data.members || [])}</div>
+                <hr class="my-3">
+                <h4><i class="ti ti-user-plus me-1" aria-hidden="true"></i>Add a member</h4>
+                <div class="row g-2 align-items-end">
+                    <div class="col-sm-3">
+                        <label class="form-label small mb-1" for="mm-kind">Subject</label>
+                        <select id="mm-kind" class="form-select form-select-sm">
+                            <option value="user" selected>Person (email)</option>
+                            <option value="principal">Token / principal</option>
+                            <option value="agent">Agent</option>
+                        </select>
+                    </div>
+                    <div class="col-sm-5">
+                        <label class="form-label small mb-1" for="mm-subject"><span id="mm-subject-label">Email</span></label>
+                        <input id="mm-subject" class="form-control form-control-sm" placeholder="teammate@company.com" autocomplete="off">
+                    </div>
+                    <div class="col-sm-2">
+                        <label class="form-label small mb-1" for="mm-role">Role</label>
+                        <select id="mm-role" class="form-select form-select-sm">
+                            <option value="viewer">viewer</option>
+                            <option value="commenter">commenter</option>
+                            <option value="contributor" selected>contributor</option>
+                            <option value="operator">operator</option>
+                            <option value="admin">admin</option>
+                        </select>
+                    </div>
+                    <div class="col-sm-2">
+                        <button type="button" id="mm-add" class="btn btn-sm btn-primary w-100" data-set-action="members-add"><i class="ti ti-plus me-1" aria-hidden="true"></i>Add</button>
+                    </div>
+                </div>
+                <div id="mm-add-flash" class="small mt-2 text-secondary"></div>`;
             return this._settingsCard({
                 id: 'settings-members', title: 'Members & access', icon: 'ti-users',
                 subtitle: `Who can reach ${proj}, and with which role`,
-                body: this._settingsRows([
-                    ['Visibility', `<span class="badge bg-secondary-lt">${this.esc(access.visibility || 'org')}</span>`],
-                    ['Organization', `<code>${this.esc(access.org_id || '—')}</code>`],
-                    ['Owner', `<code>${this.esc(access.owner_user_id || '—')}</code>`],
-                    ['Grants', roleText],
-                ]),
-                footer: `<span class="text-secondary small">Invite people and change roles.</span>
-                    <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="open-members"><i class="ti ti-users me-1" aria-hidden="true"></i>Manage members</button>`,
+                body,
+                footer: '<span class="text-secondary small">Roles map to scopes; changes are audited.</span>',
             });
+        },
+
+        _settingsMembersVisibilityHtml(visibility) {
+            if (visibility === 'private') return '<i class="ti ti-lock me-1" aria-hidden="true"></i><strong>Private project.</strong> Who can see it: owner <span class="text-success">✓</span> · invited members <span class="text-success">✓</span> · org admins <span class="text-success">✓</span> · other org members <span class="text-danger">✗</span>.';
+            return '<i class="ti ti-users me-1" aria-hidden="true"></i><strong>Shared project.</strong> Everyone in the organization can see it; roles below control what they can change.';
+        },
+
+        _settingsMembersTableHtml(members) {
+            if (!members.length) return '<div class="text-secondary small">No role grants yet — the owner and org admins still have access.</div>';
+            const roles = ['viewer', 'commenter', 'contributor', 'operator', 'admin', 'owner'];
+            const kindBadge = (k) => `<span class="badge bg-secondary-lt ms-1">${this.esc(k)}</span>`;
+            return `<table class="table table-sm align-middle mb-0">
+                <thead><tr><th>Member</th><th>Role</th><th>Granted by</th><th></th></tr></thead>
+                <tbody>${members.map((m) => {
+        const opts = roles.map((r) => `<option value="${r}"${r === m.role ? ' selected' : ''}>${r}</option>`).join('');
+        const who = this.esc(m.display_name || m.subject_id);
+        const sub = m.email && m.email !== m.display_name ? `<div class="text-secondary small">${this.esc(m.email)}</div>` : '';
+        const enc = encodeURIComponent(JSON.stringify({ subject_kind: m.subject_kind, subject_id: m.subject_id, role: m.role }));
+        return `<tr>
+                    <td><span class="fw-medium">${who}</span>${kindBadge(m.subject_kind)}${sub}</td>
+                    <td><select class="form-select form-select-sm" style="width:auto" data-mm-role="${enc}" aria-label="Role for ${who}">${opts}</select></td>
+                    <td class="text-secondary small">${this.esc(m.created_by || '—')}</td>
+                    <td class="text-end"><button type="button" class="btn btn-sm btn-ghost-danger p-1" data-set-action="members-revoke:${enc}" title="Revoke ${who}"><i class="ti ti-trash" aria-hidden="true"></i></button></td>
+                </tr>`;
+    }).join('')}</tbody></table>`;
+        },
+
+        async _settingsMembersReload() {
+            const proj = this._mmProject || window.PM_PROJECT || 'maxwell';
+            const host = document.getElementById('mm-members');
+            const data = await this._sfetch(`api/access/members?project=${encodeURIComponent(proj)}`);
+            if (data.error) { if (host) host.innerHTML = `<div class="text-danger small">${this.esc(data.error)}</div>`; return; }
+            this._mmGlobalAuth = !!data.global_auth;
+            const vis = document.getElementById('mm-visibility'); if (vis) vis.innerHTML = this._settingsMembersVisibilityHtml(data.visibility);
+            const count = document.getElementById('mm-count'); if (count) count.textContent = `${(data.members || []).length}`;
+            if (host) host.innerHTML = this._settingsMembersTableHtml(data.members || []);
+        },
+
+        _settingsMembersFlash(msg, cls) {
+            const f = document.getElementById('mm-add-flash');
+            if (f) { f.textContent = msg; f.className = `small mt-2 ${cls || 'text-secondary'}`; }
+        },
+
+        async _accessPost(path, body) {
+            const proj = this._mmProject || window.PM_PROJECT || 'maxwell';
+            return this._sSend(`api/access/${path}?project=${encodeURIComponent(proj)}`, 'POST', body);
+        },
+
+        // Change role = grant the new role, then revoke the old one (grants are per-role
+        // rows, so this is never an in-place update) — inventory rule #4.
+        async _settingsMembersChangeRole(grant, newRole) {
+            if (!grant || newRole === grant.role) return;
+            try {
+                await this._accessPost('project_role', { subject_kind: grant.subject_kind, subject_id: grant.subject_id, role: newRole });
+                if (grant.role) await this._accessPost('project_role/revoke', grant);
+            } catch (e) { this._settingsMembersFlash(e.message, 'text-danger'); }
+            this._settingsMembersReload();
+        },
+
+        async _settingsMembersRevoke(grant) {
+            try { await this._accessPost('project_role/revoke', grant); }
+            catch (e) { this._settingsMembersFlash(e.message, 'text-danger'); }
+            this._settingsMembersReload();
+        },
+
+        async _settingsMembersAdd() {
+            const kind = document.getElementById('mm-kind')?.value || 'user';
+            const subject = (document.getElementById('mm-subject')?.value || '').trim();
+            const role = document.getElementById('mm-role')?.value || 'contributor';
+            if (!subject) { this._settingsMembersFlash('Enter an email or subject id.', 'text-danger'); return; }
+            const btn = document.getElementById('mm-add'); if (btn) btn.disabled = true;
+            this._settingsMembersFlash('Adding…', 'text-secondary');
+            try {
+                if (kind === 'user' && subject.includes('@')) {
+                    const r = await this._accessPost('invite', { email: subject, role });
+                    this._settingsMembersFlash(`Invited ${r.invited?.display_name || subject} as ${role}.`, 'text-success');
+                } else {
+                    await this._accessPost('project_role', { subject_kind: kind, subject_id: subject, role });
+                    this._settingsMembersFlash(`Granted ${role} to ${subject}.`, 'text-success');
+                }
+                const subEl = document.getElementById('mm-subject'); if (subEl) subEl.value = '';
+                this._settingsMembersReload();
+            } catch (e) {
+                this._settingsMembersFlash(e.message || 'Failed to add member.', 'text-danger');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         },
 
         // UI-20 (3/6): the UI-14 Communications modal folded in-place. Inbound domain
@@ -920,6 +1042,10 @@
         }
         if (String(action || '').startsWith('comms-add:')) return this._settingsCommsAddRecipient(action.slice('comms-add:'.length));
         if (String(action || '').startsWith('comms-test:')) return this._settingsCommsTest(action.slice('comms-test:'.length));
+        if (String(action || '').startsWith('members-revoke:')) {
+            try { return this._settingsMembersRevoke(JSON.parse(decodeURIComponent(action.slice('members-revoke:'.length)))); }
+            catch (e) { return; }
+        }
         switch (action) {
             case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'repo-save': return this.saveRepoTopology();
@@ -928,14 +1054,15 @@
             case 'verify-offline': return this.verifyOffline();
             case 'move-task': return this.moveTask();
             case 'refresh': return this.renderSettings();
-            // Access tokens (UI-20 2/6) and Communications (UI-20 3/6) are folded inline;
-            // the remaining launchers still open the not-yet-migrated modals until their
-            // slices land.
-            case 'open-members': return this.openMembers();
+            // Access tokens (2/6), Communications (3/6), and Members (4/6) are folded inline;
+            // the remaining launcher still opens the not-yet-migrated GitHub modal until
+            // slice 5 lands.
             case 'open-github': return this.openGithubAssoc(window.PM_PROJECT);
             case 'comms-add-domain': return this._settingsCommsAddDomain();
             case 'comms-copy': return this._settingsCommsCopyPlus();
             case 'comms-save': return this._settingsCommsSave();
+            case 'members-add': return this._settingsMembersAdd();
+            case 'members-refresh': return this._settingsMembersReload();
             case 'tokens-create-toggle': { const f = document.getElementById('apikeys-create-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'tokens-create': return this._settingsCreateToken();
             case 'tokens-copy': return this._settingsTokensCopy();
