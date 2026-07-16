@@ -199,9 +199,23 @@ def run(
     if starting_head != values["source_sha"]:
         raise RuntimeError("native Codex workspace is not at the exact bound source SHA")
 
-    executable = str(codex_executable or shutil.which("codex") or "").strip()
-    if not executable:
+    requested_executable = str(
+        codex_executable or os.environ.get("PM_CODEX_EXECUTABLE") or "codex").strip()
+    resolved_executable = shutil.which(requested_executable)
+    if not resolved_executable:
         raise RuntimeError("native Codex CLI is not installed")
+    executable = str(Path(resolved_executable).resolve())
+    if not Path(executable).is_absolute():
+        raise RuntimeError("native Codex CLI path is not absolute")
+    git_common_dir = Path(_git(
+        workspace, "rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
+    try:
+        git_common_dir.relative_to(Path(workspace).resolve())
+        git_dirs: list[str] = []
+    except ValueError:
+        # Linked worktrees keep all mutable Git metadata beneath this one common
+        # directory. Grant exactly that repository resource, never a home-level path.
+        git_dirs = [str(git_common_dir)]
     environment = os.environ.copy()
     for key in _METERED_PROVIDER_ENV:
         environment.pop(key, None)
@@ -210,11 +224,14 @@ def run(
         "exec",
         "--ephemeral",
         "-s",
-        "danger-full-access",
+        "workspace-write",
+        "-c",
+        "sandbox_workspace_write.network_access=true",
         "-c",
         'approval_policy="never"',
         "-C",
         workspace,
+        *[value for directory in git_dirs for value in ("--add-dir", directory)],
         _prompt(
             task,
             source_sha=values["source_sha"],

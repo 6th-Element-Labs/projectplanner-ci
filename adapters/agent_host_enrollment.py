@@ -242,6 +242,14 @@ def verify_bundle(bundle_dir: Path, public_key_path: Path) -> dict[str, Any]:
         key.verify(signature, _canonical_json(manifest))
     except (OSError, ValueError, InvalidSignature) as exc:
         raise EnrollmentError("Agent Host bundle signature verification failed") from exc
+    payload_root = bundle_dir / "payload"
+    if payload_root.is_symlink() or not payload_root.is_dir():
+        raise EnrollmentError("bundle payload must be a regular directory")
+    payload_entries = list(payload_root.rglob("*"))
+    if any(path.is_symlink() for path in payload_entries):
+        raise EnrollmentError("bundle payload may not contain symlinks")
+    if any(not path.is_file() and not path.is_dir() for path in payload_entries):
+        raise EnrollmentError("bundle payload contains a non-regular entry")
     declared: set[str] = set()
     for item in manifest.get("files") or []:
         if not isinstance(item, dict):
@@ -251,7 +259,7 @@ def verify_bundle(bundle_dir: Path, public_key_path: Path) -> dict[str, Any]:
         if name in declared:
             raise EnrollmentError(f"duplicate bundle path: {name}")
         declared.add(name)
-        path = bundle_dir / "payload" / Path(*relative.parts)
+        path = payload_root / Path(*relative.parts)
         if not path.is_file() or path.is_symlink():
             raise EnrollmentError(f"bundle payload is missing regular file: {name}")
         if _sha256(path) != item.get("sha256"):
@@ -260,8 +268,8 @@ def verify_bundle(bundle_dir: Path, public_key_path: Path) -> dict[str, Any]:
         if mode not in {0o644, 0o755}:
             raise EnrollmentError(f"unsafe bundle mode: {name}")
     actual = {
-        path.relative_to(bundle_dir / "payload").as_posix()
-        for path in (bundle_dir / "payload").rglob("*") if path.is_file()
+        path.relative_to(payload_root).as_posix()
+        for path in payload_entries if path.is_file()
     }
     if actual != declared:
         raise EnrollmentError("bundle contains undeclared or missing payload files")
@@ -292,9 +300,11 @@ def preflight_codex_local_auth(
         runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict[str, Any]:
     """Prove the native Codex CLI and local ChatGPT login without exporting it."""
-    executable = str(codex_executable or shutil.which("codex") or "").strip()
-    if not executable:
+    requested = str(codex_executable or "codex").strip()
+    resolved = shutil.which(requested)
+    if not resolved:
         raise EnrollmentError("native codex CLI is not installed or not on PATH")
+    executable = str(Path(resolved).resolve())
     env = os.environ.copy()
     for key in _METERED_PROVIDER_ENV:
         env.pop(key, None)
@@ -332,6 +342,7 @@ def preflight_codex_local_auth(
         "cli_version": version,
         "authenticated": True,
         "auth_mode": "chatgpt_personal",
+        "codex_executable": executable,
         "account_fingerprint": "acct-" + hashlib.sha256(
             proof_material.encode("utf-8", errors="replace")).hexdigest()[:16],
         "credential_values_redacted": True,
@@ -347,10 +358,30 @@ def _install_release(bundle_dir: Path, manifest: dict[str, Any], prefix: Path) -
     temporary = releases / f".{version}.{os.getpid()}.tmp"
     if temporary.exists():
         shutil.rmtree(temporary)
-    shutil.copytree(bundle_dir / "payload", temporary, symlinks=False)
+    # Preserve any link introduced after verification so it is rejected below;
+    # never dereference unsigned content into an installed release.
+    shutil.copytree(bundle_dir / "payload", temporary, symlinks=True)
+    temporary_entries = list(temporary.rglob("*"))
+    if (any(path.is_symlink() for path in temporary_entries)
+            or any(not path.is_file() and not path.is_dir()
+                   for path in temporary_entries)):
+        shutil.rmtree(temporary)
+        raise EnrollmentError("copied bundle payload contains an unsafe entry")
+    copied_files = {
+        path.relative_to(temporary).as_posix()
+        for path in temporary_entries if path.is_file()
+    }
+    declared_files = {str(item["path"]) for item in manifest["files"]}
+    if copied_files != declared_files:
+        shutil.rmtree(temporary)
+        raise EnrollmentError("copied bundle payload does not match its signed manifest")
     for item in manifest["files"]:
         relative = _safe_relative(item["path"])
-        os.chmod(temporary / Path(*relative.parts), int(item["mode"]))
+        copied = temporary / Path(*relative.parts)
+        if _sha256(copied) != item["sha256"]:
+            shutil.rmtree(temporary)
+            raise EnrollmentError("copied bundle payload hash mismatch")
+        os.chmod(copied, int(item["mode"]))
     if final.exists():
         declared = {str(item["path"]): item for item in manifest["files"]}
         actual = {
@@ -771,6 +802,7 @@ def install_host(*, bundle_dir: Path, public_key_path: Path, bootstrap_code: str
         "project_allowlist": enrollment.get("project_allowlist") or [project],
         "provider_allowlist": sorted(set(enrollment.get("provider_allowlist") or [])),
         "local_auth_account_proof": local_auth["account_fingerprint"],
+        "codex_executable": local_auth["codex_executable"],
         "repo_root": str(prefix / "current"),
         "runner_dir": str(state_root / "runner"),
         "runtime_root": str(state_root / "provider-runtimes"),
@@ -1038,6 +1070,7 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_LOCAL_AUTH_AVAILABLE": "1",
         "PM_HOST_LOCAL_AUTH_MODE": "chatgpt_personal",
         "PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF": config.get("local_auth_account_proof") or "",
+        "PM_CODEX_EXECUTABLE": config.get("codex_executable") or "",
         "PM_REPO_ROOT": config["repo_root"],
         "PM_RUNNER_DIR": config["runner_dir"],
         "PM_PROVIDER_RUNTIME_ROOT": config["runtime_root"],

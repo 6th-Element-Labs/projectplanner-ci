@@ -7,8 +7,9 @@ native Codex CLI; it does not wake or remote-drive the Codex desktop application
 ## Trust model
 
 - Release bundles are versioned and signed with Ed25519. Install and update refuse an
-  invalid signature, undeclared file, unsafe path/mode, or hash mismatch before changing
-  local state or consuming a bootstrap code.
+  invalid signature, undeclared file, symlink, non-regular entry, unsafe path/mode, or hash
+  mismatch before changing local state or consuming a bootstrap code. Copying preserves
+  links long enough to reject them and never dereferences unsigned payload content.
 - An operator creates a short-lived bootstrap code (60–900 seconds). The code is
   single-use and only its hash is stored.
 - Bootstrap completion creates a stable `host/...` identity, an Ed25519 device key, and
@@ -116,7 +117,11 @@ executes `adapters/agent_host.py`. Personal work uses
 `adapters.codex_local_worker:run`, which uses the already signed-in native Codex CLI directly,
 refuses inherited OpenAI/Codex metered API keys, and requires the exact managed workspace,
 task/claim/Work Session/runner/host/wake/source/connection binding. It does not request or
-materialize a centrally stored provider credential. The separate
+materialize a centrally stored provider credential. Enrollment persists the absolute Codex
+executable proven by preflight, so launchd/systemd does not depend on an interactive shell
+`PATH`. Native execution uses Codex's `workspace-write` sandbox with network access and only
+the exact worktree Git metadata directories added for commit/push; it does not receive
+unrestricted write access to the user's home directory. The separate
 `adapters.codex_personal_worker:run` remains the CO credential-vault path and is not selected
 by fresh host-local enrollment.
 

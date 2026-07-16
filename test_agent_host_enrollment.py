@@ -15,6 +15,11 @@ from unittest.mock import patch
 
 
 TMP = Path(tempfile.mkdtemp(prefix="adapter18-agent-host-enrollment-"))
+TEST_CODEX = TMP / "bin" / "codex"
+TEST_CODEX.parent.mkdir()
+TEST_CODEX.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+TEST_CODEX.chmod(0o755)
+TEST_CODEX = TEST_CODEX.resolve()
 os.environ["PM_DB_PATH"] = str(TMP / "maxwell.db")
 os.environ["PM_HELM_DB_PATH"] = str(TMP / "helm.db")
 os.environ["PM_SWITCHBOARD_DB_PATH"] = str(TMP / "switchboard.db")
@@ -145,7 +150,7 @@ try:
        "atomic credential writes are 0600 before content, clean stale regular files, and ignore symlinks")
     try:
         enrollment.preflight_codex_local_auth(
-            codex_executable="codex", runner=fake_api_key_codex)
+            codex_executable=str(TEST_CODEX), runner=fake_api_key_codex)
         api_key_mode_denied = False
     except enrollment.EnrollmentError:
         api_key_mode_denied = True
@@ -181,6 +186,27 @@ try:
     first_payload.write_bytes(original)
     ok(tamper_denied, "tampered bundle is denied before bootstrap consumption")
 
+    unsigned_source = TMP / "unsigned-bundle-content"
+    unsigned_source.mkdir()
+    (unsigned_source / "cryptography.py").write_text(
+        "raise RuntimeError('unsigned code executed')\n", encoding="utf-8")
+    unsigned_link = bundle_020 / "payload" / "adapters" / "unsigned-runtime"
+    unsigned_link.symlink_to(unsigned_source, target_is_directory=True)
+    try:
+        enrollment.verify_bundle(bundle_020, public_path)
+        symlink_denied = False
+    except enrollment.EnrollmentError:
+        symlink_denied = True
+    try:
+        enrollment._install_release(
+            bundle_020, manifest, TMP / "unsigned-copy-prefix")
+        symlink_copy_denied = False
+    except enrollment.EnrollmentError:
+        symlink_copy_denied = True
+    unsigned_link.unlink()
+    ok(symlink_denied and symlink_copy_denied,
+       "signed-bundle verification and copy reject undeclared directory symlinks")
+
     durability_bootstrap = begin("host/adapter18-durability")
     durability_paths = paths("durability-failure")
     durability_paths["config_root"].parent.mkdir(parents=True, exist_ok=True)
@@ -204,7 +230,7 @@ try:
             http=durability_http,
             service_runner=fake_service,
             local_auth_runner=fake_codex,
-            codex_executable="codex",
+            codex_executable=str(TEST_CODEX),
             start_service=False,
         )
         durability_denied = False
@@ -259,7 +285,7 @@ try:
             owner_user_id="user-adapter18", target_platform="linux",
             paths=response_loss_paths, lanes=["ADAPTER"], http=lose_enrollment_response,
             service_runner=fake_service, local_auth_runner=fake_codex,
-            codex_executable="codex", hostname="adapter18-response-loss.test",
+            codex_executable=str(TEST_CODEX), hostname="adapter18-response-loss.test",
             start_service=False,
         )
         response_lost = False
@@ -276,7 +302,7 @@ try:
         owner_user_id="user-adapter18", target_platform="linux",
         paths=response_loss_paths, lanes=["ADAPTER"], http=http,
         service_runner=fake_service, local_auth_runner=fake_codex,
-        codex_executable="codex", hostname="adapter18-response-loss.test",
+        codex_executable=str(TEST_CODEX), hostname="adapter18-response-loss.test",
         start_service=False,
     )
     response_identity = json.loads(
@@ -365,7 +391,7 @@ try:
                 owner_user_id="user-adapter18", target_platform="linux",
                 paths=resume_paths, lanes=["ADAPTER"], http=counted_http,
                 service_runner=injected_service, local_auth_runner=fake_codex,
-                codex_executable="codex", hostname=f"resume-{boundary}.test",
+                codex_executable=str(TEST_CODEX), hostname=f"resume-{boundary}.test",
                 start_service=boundary in {"start", "start_state"},
             )
             first_failed = False
@@ -382,7 +408,7 @@ try:
             owner_user_id="user-adapter18", target_platform="linux",
             paths=resume_paths, lanes=["ADAPTER"], http=counted_http,
             service_runner=fake_service, local_auth_runner=fake_codex,
-            codex_executable="codex", hostname=f"resume-{boundary}.test",
+            codex_executable=str(TEST_CODEX), hostname=f"resume-{boundary}.test",
             start_service=boundary in {"start", "start_state"},
         )
         return bool(
@@ -421,7 +447,7 @@ try:
             base_url="https://switchboard.test", project=PROJECT,
             owner_user_id="user-adapter18", target_platform="linux",
             paths=revoke_partial_paths, http=http, service_runner=fake_service,
-            local_auth_runner=fake_codex, codex_executable="codex", start_service=False)
+            local_auth_runner=fake_codex, codex_executable=str(TEST_CODEX), start_service=False)
     except OSError:
         pass
     finally:
@@ -455,7 +481,7 @@ try:
         http=http,
         service_runner=fake_service,
         local_auth_runner=fake_codex,
-        codex_executable="codex",
+        codex_executable=str(TEST_CODEX),
         hostname="adapter18-mac.test",
     )
     mac_identity_path = mac_paths["config_root"] / "identity.json"
@@ -474,7 +500,9 @@ try:
        and mac_config["max_sessions"] == 1
        and mac_config["personal_wakes_only"] is True,
        "installed policy comes only from the server-issued enrollment record")
-    ok(codex_calls[:2] == [["codex", "--version"], ["codex", "login", "status"]],
+    ok(codex_calls[:2] == [[str(TEST_CODEX), "--version"],
+                           [str(TEST_CODEX), "login", "status"]]
+       and mac_config["codex_executable"] == str(TEST_CODEX),
        "install proves the native Codex CLI and host-local ChatGPT login before bootstrap")
     ok(mac_paths["service_path"].is_file()
        and b"LaunchAgents" not in mac_paths["service_path"].read_bytes()
@@ -661,7 +689,7 @@ try:
         http=http,
         service_runner=fake_service,
         local_auth_runner=fake_codex,
-        codex_executable="codex",
+        codex_executable=str(TEST_CODEX),
         hostname="adapter18-linux.test",
     )
     linux_identity = linux_paths["config_root"] / "identity.json"
@@ -705,6 +733,7 @@ try:
     ok("OPENAI_API_KEY" not in launched_env
        and launched_env.get("PM_MCP_TOKEN")
        and launched_env.get("PM_AGENT_WORK_MODULE") == "adapters.codex_local_worker:run"
+       and launched_env.get("PM_CODEX_EXECUTABLE") == str(TEST_CODEX)
        and launched_env.get("PM_PERSONAL_AGENT_HOST_EXECUTION") == "1"
        and launched_env.get("PM_PERSONAL_WORKSPACE_ROOT") == str(linux_workspace_root)
        and all(isinstance(value, str) for value in launched_env.values()),
@@ -780,9 +809,12 @@ try:
     original_binding_env = {key: os.environ.get(key) for key in (
         "PM_CO_HOST_ID", "PM_RUNNER_SESSION_ID", "PM_CO_WAKE_ID", "PM_SOURCE_SHA",
         "PM_EXECUTION_CONNECTION_ID", "PM_AGENT_ID", "PM_CLAIM_ID",
-        "PM_WORK_SESSION_ID", "PM_CO_ACCOUNT_BINDING_JSON", "OPENAI_API_KEY",
+        "PM_WORK_SESSION_ID", "PM_CO_ACCOUNT_BINDING_JSON", "PM_CODEX_EXECUTABLE",
+        "OPENAI_API_KEY",
     )}
     local_git_heads = [source_sha, completed_sha]
+    local_git_common = (TMP / "local-worker-git-common").resolve()
+    local_git_dir = (local_git_common / "worktrees" / "local-worker").resolve()
     captured_local_codex: dict[str, object] = {}
     local_control_calls: list[tuple[str, dict]] = []
     local_completion_response_lost = [False]
@@ -791,6 +823,8 @@ try:
         ok(workspace == str(local_workspace), "native local worker stays in its managed workspace")
         if args == ("rev-parse", "HEAD"):
             return local_git_heads.pop(0)
+        if args == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+            return str(local_git_common)
         if args == ("branch", "--show-current"):
             return "codex/ADAPTER-18-local-worker"
         if args == ("status", "--porcelain"):
@@ -824,6 +858,7 @@ try:
             "PM_AGENT_ID": "codex/ADAPTER-18-local-worker",
             "PM_CLAIM_ID": "taskclaim-local-worker",
             "PM_WORK_SESSION_ID": "worksession-local-worker",
+            "PM_CODEX_EXECUTABLE": str(TEST_CODEX),
             "PM_CO_ACCOUNT_BINDING_JSON": json.dumps({
                 "task_id": "ADAPTER-18",
                 "claim_id": "taskclaim-local-worker",
@@ -835,7 +870,7 @@ try:
             "OPENAI_API_KEY": "must-not-cross-local-worker-boundary",
         })
         local_evidence = codex_local_worker.run(
-            local_task, runner=fake_local_codex, codex_executable="codex",
+            local_task, runner=fake_local_codex,
             http=fake_local_control)
     finally:
         codex_local_worker._git = original_local_git
@@ -851,6 +886,10 @@ try:
        and local_evidence["verification"]["auth_mode"] == "chatgpt_personal"
        and local_evidence["verification"]["provider_credential_exported"] is False
        and "exec" in local_command and "ADAPTER-18" in str(local_command[-1])
+       and "workspace-write" in local_command
+       and "danger-full-access" not in local_command
+       and local_command.count("--add-dir") == 1
+       and str(local_git_common) in local_command and str(local_git_dir) not in local_command
        and "OPENAI_API_KEY" not in local_environment
        and any(path == "/ixp/v1/heartbeat_runner_session"
                for path, _body in local_control_calls)
