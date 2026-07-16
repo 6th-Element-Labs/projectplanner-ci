@@ -8,7 +8,8 @@ Proves the acceptance criteria offline (no live mailbox / SMTP / LLM):
   3. env + web merge  — inbox_routing merges PM_INBOX_ROUTES with the web-managed map, web wins;
   4. per-project out  — notify resolves a project's recipients, falling back to the global list;
   5. REST contract    — GET/POST /api/projects/{p}/comms + /comms/test back the operator screen;
-  6. UI wiring        — index.html + app.js carry the Communications modal + handlers.
+  6. UI wiring        — the Communications editor is folded into the unified Settings shell
+                        (settings.js `_settingsCommsSection`); the modal + rail button retired.
 
 Run directly: `python test_ui14_comms_settings.py`.
 """
@@ -184,15 +185,30 @@ def test_rest_contract():
 
 
 def test_ui_wiring():
-    print("\n[10] UI wiring (index.html + app.js)")
+    # UI-20 (3/6): the standalone Communications modal was folded into the unified Settings
+    # shell. The inbound-domain + outbound-recipient editor now renders inline in
+    # settings.js `_settingsCommsSection`; the modal + rail button are retired.
+    print("\n[10] UI wiring (Settings shell — Communications folded in, modal retired)")
     here = os.path.dirname(os.path.abspath(__file__))
     idx = open(os.path.join(here, "static", "index.html"), encoding="utf-8").read()
     js = read_frontend_source(here)
-    for needle in ('id="comms-modal"', 'id="btn-project-comms"', 'id="comms-plus"'):
-        check(needle in idx, f"index.html has {needle}")
-    for needle in ("openComms", "saveComms", "sendCommsTest", "_commsAddDomain",
+    check('id="settings-panel"' in idx, "index.html hosts the unified Settings shell")
+    for gone in ('id="comms-modal"', 'id="btn-project-comms"'):
+        check(gone not in idx, f"legacy {gone} retired from index.html")
+    # The editor markup + handlers now live in the frontend source (settings.js).
+    for needle in ("_settingsCommsSection", "_settingsCommsAddDomain", "_settingsCommsAddRecipient",
+                   "_settingsCommsSave", "_settingsCommsTest",
                    "api/projects/${encodeURIComponent(proj)}/comms"):
-        check(needle in js, f"app.js defines {needle}")
+        check(needle in js, f"settings.js defines {needle}")
+    for needle in ('id="comms-plus"', 'id="comms-domains"', 'id="comms-cadence"'):
+        check(needle in js, f"the inbound/outbound editor renders {needle} inline")
+    # Inventory rule #2: the admin gate must not stay pinned to the retired #comms-modal
+    # selector (it would silently no-op once the markup left the modal). It is now applied
+    # inline at render time, driven by the server can_edit probe.
+    check("#comms-modal .comms-editable" not in js,
+          "the buggy #comms-modal-scoped admin-gate selector is gone")
+    check("_commsAdmin" in js and "comms-admin-warn" in js,
+          "the comms section still gates edits on the server can_edit probe")
 
 
 def main():

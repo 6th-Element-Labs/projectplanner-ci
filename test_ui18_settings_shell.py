@@ -228,7 +228,7 @@ try:
 
     # ---- the legacy surfaces still work; UI-20 retires their entry points -------
     print("\n[10] Launchers into the not-yet-folded-in surfaces")
-    for action in ("open-members", "open-comms", "open-github", "goto-fleet"):
+    for action in ("open-members", "open-github", "goto-fleet"):
         ok(f"case '{action}':" in settings_js, f"the shell dispatches {action}")
     ok("openMembers()" in settings_js,
        "not-yet-folded launchers reuse the existing modal implementations")
@@ -238,6 +238,13 @@ try:
        "the Access-tokens launcher is retired; the surface is inline in Settings")
     ok("_settingsCreateToken" in settings_js and "_settingsRevokeToken" in settings_js,
        "tokens create/revoke run inline in the Settings shell")
+    # UI-20 (3/6): Communications is folded into the shell — its launcher is retired and the
+    # inbound-domain + outbound-recipient editor runs inline, so no open-comms launcher
+    # (or the modal-era openComms) remains.
+    ok("case 'open-comms':" not in settings_js and "openComms" not in settings_js,
+       "the Communications launcher is retired; the surface is inline in Settings")
+    ok("_settingsCommsSection" in settings_js and "_settingsCommsSave" in settings_js,
+       "the comms inbound/outbound editor runs inline in the Settings shell")
 
 finally:
     shutil.rmtree(_TMP, ignore_errors=True)

@@ -361,33 +361,161 @@
             });
         },
 
+        // UI-20 (3/6): the UI-14 Communications modal folded in-place. Inbound domain
+        // associations (the editable UI-13 routing map) + per-project outbound recipients/
+        // cadence. Anyone who can read the project sees it; edits are gated on the server's
+        // can_edit probe. The admin gate is applied INLINE at render time (disabled
+        // attributes driven by can_edit), replacing the modal-era querySelectorAll that was
+        // pinned to the now-retired modal id — that selector would have silently no-op'd
+        // once the markup left the modal, leaving every control enabled (inventory rule #2).
         async _settingsCommsSection() {
             const proj = window.PM_PROJECT || 'maxwell';
+            this._commsProject = proj;
             const cfg = await this._sfetch(`api/projects/${encodeURIComponent(proj)}/comms`);
             if (cfg.error) return this._settingsErrCard('Communications', cfg.error);
-            const inbound = cfg.inbound || {};
-            const outbound = cfg.outbound || {};
-            const domains = inbound.domains || [];
-            const digest = outbound.digest_recipients || [];
-            const notify = outbound.notify_recipients || [];
-            const domainHtml = domains.length
-                ? domains.map((d) => `<code class="me-1">${this.esc(typeof d === 'string' ? d : (d.domain || d.id || ''))}</code>`).join('')
-                : '<span class="text-secondary">none associated</span>';
+            const inb = cfg.inbound || {}, out = cfg.outbound || {}, fb = cfg.global_fallback || {};
+            const admin = typeof cfg.can_edit === 'boolean' ? cfg.can_edit : true;
+            this._commsAdmin = admin;
+            this._comms = {
+                domains: (inb.domains || []).slice(),
+                notify: (out.notify_recipients || []).slice(),
+                digest: (out.digest_recipients || []).slice(),
+            };
+            const dis = admin ? '' : ' disabled';
+            const cadenceOpts = out.cadence_options || ['off', 'daily', 'weekly', 'monthly'];
+            const cadenceSel = out.cadence || 'weekly';
+            const warn = admin ? '' : '<div class="alert alert-warning py-2 px-3 small mb-3" id="comms-admin-warn"><i class="ti ti-lock me-1" aria-hidden="true"></i>You need <strong>write:system</strong> on this project to change these settings. You can view them, but Save and Send test are disabled.</div>';
+            const body = `${warn}
+                <div class="card mb-3"><div class="card-body">
+                    <h4 class="mb-1"><i class="ti ti-inbox me-1" aria-hidden="true"></i>Inbound mail</h4>
+                    <p class="text-secondary small mb-3">Mail addressed to this board's plus-address, or from an associated domain, lands in this project's Inbox.</p>
+                    <label class="form-label small mb-1">Plus-address <span class="text-secondary fw-normal">(zero-config — works today, no setup)</span></label>
+                    <div class="input-group input-group-sm mb-3">
+                        <input type="text" id="comms-plus" class="form-control font-monospace" readonly value="${this.esc(inb.plus_address || '')}" aria-label="Project plus-address">
+                        <button class="btn btn-outline-secondary" type="button" data-set-action="comms-copy" title="Copy plus-address"><i class="ti ti-copy" aria-hidden="true"></i></button>
+                    </div>
+                    <label class="form-label small mb-1">Associated sender domains</label>
+                    <div class="form-hint mb-1">Any email whose sender is at one of these domains routes to <strong>${this.esc(proj)}</strong> — no <code>.env</code> edit. A domain maps to exactly one board.</div>
+                    <div id="comms-domains" class="mb-2 d-flex flex-wrap gap-1">${this._settingsCommsChipsHtml(this._comms.domains, 'domains', 'No domains associated — plus-address still works.', admin)}</div>
+                    <div class="input-group input-group-sm comms-editable">
+                        <input type="text" id="comms-domain-input" class="form-control" placeholder="client.com" autocomplete="off" autocapitalize="off" spellcheck="false" data-comms-add="comms-add-domain"${dis}>
+                        <button type="button" class="btn btn-outline-primary" data-set-action="comms-add-domain"${dis}><i class="ti ti-plus me-1" aria-hidden="true"></i>Add domain</button>
+                    </div>
+                </div></div>
+                <div class="card mb-2"><div class="card-body">
+                    <h4 class="mb-1"><i class="ti ti-send me-1" aria-hidden="true"></i>Outbound recipients</h4>
+                    <p class="text-secondary small mb-3">Where this project's notifications and digest go. Empty falls back to the global list <code id="comms-fallback" class="text-secondary">${fb.configured ? this.esc((fb.notify_to || []).join(', ')) : '(none configured)'}</code>.</p>
+                    <label class="form-label small mb-1">Notify recipients</label>
+                    <div id="comms-notify" class="mb-2 d-flex flex-wrap gap-1">${this._settingsCommsChipsHtml(this._comms.notify, 'notify', 'Falls back to the global list.', admin)}</div>
+                    <div class="input-group input-group-sm mb-3 comms-editable">
+                        <input type="email" id="comms-notify-input" class="form-control" placeholder="ops@client.com" autocomplete="off" data-comms-add="comms-add:notify"${dis}>
+                        <button type="button" class="btn btn-outline-primary" data-set-action="comms-add:notify"${dis}><i class="ti ti-plus me-1" aria-hidden="true"></i>Add</button>
+                        <button type="button" class="btn btn-outline-secondary" data-set-action="comms-test:notify" title="Send a test notification"${dis}><i class="ti ti-mail-forward me-1" aria-hidden="true"></i>Send test</button>
+                    </div>
+                    <label class="form-label small mb-1">Digest recipients</label>
+                    <div id="comms-digest" class="mb-2 d-flex flex-wrap gap-1">${this._settingsCommsChipsHtml(this._comms.digest, 'digest', 'Falls back to the global list.', admin)}</div>
+                    <div class="input-group input-group-sm mb-3 comms-editable">
+                        <input type="email" id="comms-digest-input" class="form-control" placeholder="lead@client.com" autocomplete="off" data-comms-add="comms-add:digest"${dis}>
+                        <button type="button" class="btn btn-outline-primary" data-set-action="comms-add:digest"${dis}><i class="ti ti-plus me-1" aria-hidden="true"></i>Add</button>
+                        <button type="button" class="btn btn-outline-secondary" data-set-action="comms-test:digest" title="Send a test digest"${dis}><i class="ti ti-mail-forward me-1" aria-hidden="true"></i>Send test</button>
+                    </div>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-sm-6">
+                            <label class="form-label small mb-1">Digest cadence <span class="text-secondary fw-normal">(advisory)</span></label>
+                            <select id="comms-cadence" class="form-select form-select-sm comms-editable"${dis}>${cadenceOpts.map((c) => `<option value="${this.esc(c)}"${c === cadenceSel ? ' selected' : ''}>${this.esc(c)}</option>`).join('')}</select>
+                        </div>
+                        <div class="col-sm-6"><div class="form-hint">The scheduled digest timer is global; cadence records intent and lets you turn a project's digest <code>off</code>.</div></div>
+                    </div>
+                </div></div>`;
             return this._settingsCard({
                 id: 'settings-comms', title: 'Communications', icon: 'ti-mail-cog',
                 subtitle: 'Inbound intake domains and outbound digest recipients',
-                body: this._settingsRows([
-                    ['Plus address', inbound.plus_address ? `<code>${this.esc(inbound.plus_address)}</code>` : '<span class="text-secondary">—</span>'],
-                    ['Inbound domains', domainHtml],
-                    ['Digest recipients', digest.length ? `<span class="badge bg-azure-lt">${digest.length}</span>` : '<span class="text-secondary">none</span>'],
-                    ['Notify recipients', notify.length ? `<span class="badge bg-azure-lt">${notify.length}</span>` : '<span class="text-secondary">none</span>'],
-                    ['Cadence', `<code>${this.esc(outbound.cadence || '—')}</code>`],
-                ]),
-                footer: cfg.can_edit
-                    ? `<span class="text-secondary small">Edit domains, recipients, and cadence.</span>
-                       <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="open-comms"><i class="ti ti-mail-cog me-1" aria-hidden="true"></i>Edit communications</button>`
-                    : `<span class="text-secondary small"><i class="ti ti-lock me-1" aria-hidden="true"></i>Editing communications needs <code>write:system</code>.</span>`,
+                body,
+                footer: `<span id="comms-flash" class="small text-secondary me-auto"></span>
+                    <button class="btn btn-primary btn-sm ms-auto" type="button" data-set-action="comms-save"${dis}><i class="ti ti-device-floppy me-1" aria-hidden="true"></i>Save</button>`,
             });
+        },
+
+        _settingsCommsChipsHtml(list, kind, empty, admin) {
+            if (!list.length) return `<span class="text-secondary small">${this.esc(empty)}</span>`;
+            return list.map((val) => {
+                const x = admin ? `<button type="button" class="btn-close btn-close-sm ms-1" data-set-action="comms-rm:${kind}:${encodeURIComponent(val)}" aria-label="Remove ${this.esc(val)}"></button>` : '';
+                return `<span class="badge bg-blue-lt d-inline-flex align-items-center">${this.esc(val)}${x}</span>`;
+            }).join('');
+        },
+
+        _settingsCommsRenderChips() {
+            const admin = this._commsAdmin;
+            const set = (id, list, kind, empty) => { const el = document.getElementById(id); if (el) el.innerHTML = this._settingsCommsChipsHtml(list, kind, empty, admin); };
+            set('comms-domains', this._comms.domains, 'domains', 'No domains associated — plus-address still works.');
+            set('comms-notify', this._comms.notify, 'notify', 'Falls back to the global list.');
+            set('comms-digest', this._comms.digest, 'digest', 'Falls back to the global list.');
+        },
+
+        _settingsCommsFlash(msg, cls) {
+            const f = document.getElementById('comms-flash');
+            if (f) { f.textContent = msg; f.className = `small me-auto ${cls || 'text-secondary'}`; }
+        },
+
+        _settingsCommsAddDomain() {
+            const inp = document.getElementById('comms-domain-input');
+            const v = (inp?.value || '').trim().replace(/^@/, '').toLowerCase();
+            if (!v) return;
+            if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(v)) { this._settingsCommsFlash('Enter a valid domain like client.com.', 'text-danger'); return; }
+            if (this._comms.domains.indexOf(v) < 0) this._comms.domains.push(v);
+            if (inp) inp.value = '';
+            this._settingsCommsFlash('', '');
+            this._settingsCommsRenderChips();
+        },
+
+        _settingsCommsAddRecipient(kind) {
+            if (kind !== 'notify' && kind !== 'digest') return;
+            const inp = document.getElementById(`comms-${kind}-input`);
+            const v = (inp?.value || '').trim();
+            if (!v) return;
+            if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { this._settingsCommsFlash('Enter a valid email address.', 'text-danger'); return; }
+            if (this._comms[kind].map((x) => x.toLowerCase()).indexOf(v.toLowerCase()) < 0) this._comms[kind].push(v);
+            if (inp) inp.value = '';
+            this._settingsCommsFlash('', '');
+            this._settingsCommsRenderChips();
+        },
+
+        _settingsCommsRemove(kind, val) {
+            if (!this._comms || !this._comms[kind]) return;
+            this._comms[kind] = this._comms[kind].filter((v) => v !== val);
+            this._settingsCommsRenderChips();
+        },
+
+        _settingsCommsCopyPlus() {
+            const src = document.getElementById('comms-plus');
+            if (!src) return;
+            src.select();
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(src.value).catch(() => { try { document.execCommand('copy'); } catch (e) { /* noop */ } });
+            else { try { document.execCommand('copy'); } catch (e) { /* noop */ } }
+        },
+
+        async _settingsCommsSave() {
+            const proj = this._commsProject || window.PM_PROJECT || 'maxwell';
+            const cadence = document.getElementById('comms-cadence')?.value || 'weekly';
+            this._settingsCommsFlash('Saving…', 'text-secondary');
+            try {
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/comms`, 'POST', {
+                    inbound: { domains: this._comms.domains },
+                    outbound: { notify_recipients: this._comms.notify, digest_recipients: this._comms.digest, cadence },
+                });
+                this._settingsCommsFlash('Saved.', 'text-success');
+            } catch (e) { this._settingsCommsFlash(e.message || 'Failed to save.', 'text-danger'); }
+        },
+
+        async _settingsCommsTest(kind) {
+            const proj = this._commsProject || window.PM_PROJECT || 'maxwell';
+            this._settingsCommsFlash('Sending test…', 'text-secondary');
+            try {
+                const data = await this._sSend(`api/projects/${encodeURIComponent(proj)}/comms/test`, 'POST', { kind });
+                const sent = (data.results || []).some((r) => r.sent);
+                const to = (data.recipients || []).join(', ') || '(no recipients — set some or a global fallback)';
+                this._settingsCommsFlash(sent ? `Test sent to ${to}.` : `Dry-run (SMTP not configured) — would send to ${to}.`, sent ? 'text-success' : 'text-secondary');
+            } catch (e) { this._settingsCommsFlash(e.message || 'Failed to send test.', 'text-danger'); }
         },
 
         async _settingsGithubSection() {
@@ -785,6 +913,13 @@
     _settingsAction(action) {
         if (String(action || '').startsWith('project-')) return this._projectAdminAction(action);
         if (String(action || '').startsWith('tokens-revoke:')) return this._settingsRevokeToken(decodeURIComponent(action.slice('tokens-revoke:'.length)));
+        if (String(action || '').startsWith('comms-rm:')) {
+            const rest = action.slice('comms-rm:'.length);
+            const i = rest.indexOf(':');
+            return this._settingsCommsRemove(rest.slice(0, i), decodeURIComponent(rest.slice(i + 1)));
+        }
+        if (String(action || '').startsWith('comms-add:')) return this._settingsCommsAddRecipient(action.slice('comms-add:'.length));
+        if (String(action || '').startsWith('comms-test:')) return this._settingsCommsTest(action.slice('comms-test:'.length));
         switch (action) {
             case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'repo-save': return this.saveRepoTopology();
@@ -793,11 +928,14 @@
             case 'verify-offline': return this.verifyOffline();
             case 'move-task': return this.moveTask();
             case 'refresh': return this.renderSettings();
-            // Access tokens (UI-20 2/6) are folded inline below; the remaining launchers
-            // still open the not-yet-migrated modals until their slices land.
+            // Access tokens (UI-20 2/6) and Communications (UI-20 3/6) are folded inline;
+            // the remaining launchers still open the not-yet-migrated modals until their
+            // slices land.
             case 'open-members': return this.openMembers();
-            case 'open-comms': return this.openComms(window.PM_PROJECT);
             case 'open-github': return this.openGithubAssoc(window.PM_PROJECT);
+            case 'comms-add-domain': return this._settingsCommsAddDomain();
+            case 'comms-copy': return this._settingsCommsCopyPlus();
+            case 'comms-save': return this._settingsCommsSave();
             case 'tokens-create-toggle': { const f = document.getElementById('apikeys-create-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'tokens-create': return this._settingsCreateToken();
             case 'tokens-copy': return this._settingsTokensCopy();

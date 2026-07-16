@@ -13,7 +13,7 @@ addressed as `#tab-settings/<section>`.
 | # | Legacy entry point | Where it lives now | Canonical destination | Status |
 |---|---|---|---|---|
 | 1 | Access tokens (UI-4) | `#apikeys-modal` + rail `#btn-project-apikeys` | `tokens` — relabel **Switchboard access tokens** (not model-provider API keys) | **done (2/6)** — inlined into `_settingsTokensSection`; modal + rail button retired; shown-once wipe re-anchored onto the panel swap |
-| 2 | Communications (UI-14) | `#comms-modal` + rail `#btn-project-comms` | `comms` | pending |
+| 2 | Communications (UI-14) | `#comms-modal` + rail `#btn-project-comms` | `comms` | **done (3/6)** — inlined into `_settingsCommsSection` (inbound domains + outbound recipients/cadence, chip add/remove, save, send-test); modal + rail button retired; admin gate re-scoped from the `#comms-modal .comms-editable` selector to inline `disabled` driven by the server `can_edit` probe |
 | 3 | Members & access (UI-5) | `#members-modal` + rail `#btn-project-members` | `members` | pending |
 | 4 | Connect GitHub repo (UI-15) | `#github-assoc-modal` + rail `#btn-project-github` | `github` | pending |
 | 5 | Account & password | `/account` + `static/account.html` | `profile` | pending |
@@ -41,7 +41,10 @@ rewritten to name the new mechanism, not deleted.
 via `#comms-modal .comms-editable`. Re-hosting the markup without rewriting that prefix leaves
 every control enabled for non-admins (the server still refuses, but the UI lies). The gate
 itself comes from the server: *"Reflect whether THIS caller may edit, so the UI can disable
-Save/Test up front instead of only failing on POST."*
+Save/Test up front instead of only failing on POST."* — **resolved (3/6):** the modal-scoped
+`querySelectorAll` is gone; `_settingsCommsSection` stamps `disabled` inline at render from the
+`can_edit` probe (and shows the `write:system` warning), so there is no selector prefix left to
+drift. `test_ui14_comms_settings.py` asserts the modal-scoped selector is absent.
 
 **3. GitHub — never probe on open.** *"Pass `?check=1` (the Verify button) to also probe repo
 reachability; the panel open path omits it so it never makes a network call until the operator
