@@ -111,6 +111,40 @@ def local_health(
     return out
 
 
+def semantic_body_sha256(body: bytes) -> str:
+    """Hash response meaning while retaining volatile observation-field shape.
+
+    Task detail includes ``session_health.checked_at``, which is generated for
+    every request.  Edge and direct owner probes are necessarily separate HTTP
+    requests, so byte hashes can differ even when they reached the same backend.
+    Canonicalize JSON and replace only values named ``checked_at`` with a stable
+    marker.  The key must still exist, and every other value remains part of the
+    ownership fingerprint.  Non-JSON responses keep exact byte semantics.
+    """
+    def reject_nonstandard_constant(value: str) -> None:
+        raise ValueError(f"non-standard JSON constant: {value}")
+
+    try:
+        payload = json.loads(body, parse_constant=reject_nonstandard_constant)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return hashlib.sha256(body).hexdigest()
+
+    def stable(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: ("<volatile:checked_at>" if key == "checked_at" else stable(item))
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [stable(item) for item in value]
+        return value
+
+    canonical = json.dumps(
+        stable(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def http_fingerprint(
     url: str,
     *,
@@ -139,6 +173,7 @@ def http_fingerprint(
         "method": method,
         "http_status": status,
         "body_sha256": hashlib.sha256(body).hexdigest(),
+        "body_semantic_sha256": semantic_body_sha256(body),
     }
 
 
@@ -166,11 +201,13 @@ def check_live_route_owner(
     )
     edge_status = edge.get("http_status")
     owner_status = owner.get("http_status")
-    same_owner_body = edge.get("body_sha256") == owner.get("body_sha256")
+    same_owner_body = (
+        edge.get("body_semantic_sha256") == owner.get("body_semantic_sha256")
+    )
     owner_distinguished = edge_status == owner_status and same_owner_body
     differs_from_other = (
         edge_status != other.get("http_status")
-        or edge.get("body_sha256") != other.get("body_sha256")
+        or edge.get("body_semantic_sha256") != other.get("body_semantic_sha256")
     )
     ok = bool(edge_status is not None and owner_distinguished and differs_from_other)
     return CheckResult(

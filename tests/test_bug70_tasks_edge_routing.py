@@ -186,7 +186,27 @@ spec.loader.exec_module(verify)
 
 def fingerprint_for(port: int, status: int, digest: str) -> dict[str, object]:
     return {"url": f"http://127.0.0.1:{port}", "method": "GET",
-            "http_status": status, "body_sha256": digest}
+            "http_status": status, "body_sha256": digest,
+            "body_semantic_sha256": digest}
+
+
+volatile_edge = json.dumps({
+    "task_id": "T-1", "session_health": {"status": "healthy", "checked_at": 1.0},
+}).encode()
+volatile_owner = json.dumps({
+    "session_health": {"checked_at": 2.0, "status": "healthy"}, "task_id": "T-1",
+}).encode()
+changed_owner = json.dumps({
+    "session_health": {"checked_at": 2.0, "status": "unsafe"}, "task_id": "T-1",
+}).encode()
+ok(verify.semantic_body_sha256(volatile_edge) == verify.semantic_body_sha256(volatile_owner),
+   "semantic fingerprint ignores only volatile checked_at values and JSON ordering")
+ok(verify.semantic_body_sha256(volatile_edge) != verify.semantic_body_sha256(changed_owner),
+   "semantic fingerprint still rejects non-volatile body changes")
+ok(verify.semantic_body_sha256(b"not-json-a") != verify.semantic_body_sha256(b"not-json-b"),
+   "semantic fingerprint retains exact byte comparison for non-JSON bodies")
+ok(verify.semantic_body_sha256(b"NaN") != verify.semantic_body_sha256(b" NaN "),
+   "semantic fingerprint treats non-standard JSON constants as byte-exact bodies")
 
 
 def passing_probe(url: str, **_: object) -> dict[str, object]:
