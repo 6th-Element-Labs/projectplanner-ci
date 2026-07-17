@@ -36,41 +36,54 @@ def get_activity_delta(since_cursor: int = 0, lane: str = "",
     {cursor, updates: [{task_id, status, title, workstream_id, kinds}]}.
     Use this for polling instead of list_tasks/board_summary — empty updates = zero tokens wasted."""
     lane_upper = lane.strip().upper() if lane else ""
+    lane_sql = " AND t.workstream_id = ?" if lane_upper else ""
+    params = (since_cursor, lane_upper) if lane_upper else (since_cursor,)
     with _conn(project) as c:
-        if lane_upper:
-            rows = c.execute(
-                """SELECT a.id, a.task_id, a.kind, a.actor,
-                          t.status, t.title, t.workstream_id
-                   FROM activity a
-                   JOIN tasks t ON t.task_id = a.task_id
-                   WHERE a.id > ? AND t.workstream_id = ?
-                   ORDER BY a.id""",
-                (since_cursor, lane_upper),
-            ).fetchall()
-        else:
-            rows = c.execute(
-                """SELECT a.id, a.task_id, a.kind, a.actor,
-                          t.status, t.title, t.workstream_id
-                   FROM activity a
-                   JOIN tasks t ON t.task_id = a.task_id
-                   WHERE a.id > ?
-                   ORDER BY a.id""",
-                (since_cursor,),
-            ).fetchall()
-        git_states = {r["task_id"]: _load_git_state(c, r["task_id"]) for r in rows}
-    if not rows:
-        return {"cursor": since_cursor, "updates": []}
-    new_cursor = rows[-1]["id"]
-    by_task: Dict[str, Any] = {}
-    for row in rows:
+        # BUG-79: never materialize the complete activity history for a cursor-zero
+        # read. Production has many activity rows per task, while the wire contract
+        # contains only one update per task and one entry per distinct kind. Fetching
+        # every row multiplied memory by concurrent readers and repeated
+        # _load_git_state once per event. Let SQLite collapse both dimensions first.
+        rows = c.execute(
+            """SELECT a.task_id, t.status, t.title, t.workstream_id,
+                      MIN(a.id) AS first_id, MAX(a.id) AS latest_id
+               FROM activity a
+               JOIN tasks t ON t.task_id = a.task_id
+               WHERE a.id > ?""" + lane_sql + """
+               GROUP BY a.task_id, t.status, t.title, t.workstream_id
+               ORDER BY first_id""",
+            params,
+        ).fetchall()
+        if not rows:
+            return {"cursor": since_cursor, "updates": []}
+        kind_rows = c.execute(
+            """SELECT a.task_id, a.kind, MIN(a.id) AS first_id
+               FROM activity a
+               JOIN tasks t ON t.task_id = a.task_id
+               WHERE a.id > ?""" + lane_sql + """
+               GROUP BY a.task_id, a.kind
+               ORDER BY first_id""",
+            params,
+        ).fetchall()
+        git_states = {
+            row["task_id"]: _load_git_state(c, row["task_id"])
+            for row in rows
+        }
+    new_cursor = max(row["latest_id"] for row in rows)
+    by_task: Dict[str, Any] = {
+        row["task_id"]: {
+            "task_id": row["task_id"],
+            "status": row["status"],
+            "title": row["title"],
+            "workstream_id": row["workstream_id"],
+            "kinds": [],
+            "git_state": git_states.get(row["task_id"], {}),
+        }
+        for row in rows
+    }
+    for row in kind_rows:
         tid = row["task_id"]
-        if tid not in by_task:
-            by_task[tid] = {"task_id": tid, "status": row["status"],
-                            "title": row["title"], "workstream_id": row["workstream_id"],
-                            "kinds": [], "git_state": git_states.get(tid, {})}
-        by_task[tid]["status"] = row["status"]
-        if row["kind"] not in by_task[tid]["kinds"]:
-            by_task[tid]["kinds"].append(row["kind"])
+        by_task[tid]["kinds"].append(row["kind"])
     return {"cursor": new_cursor, "updates": list(by_task.values())}
 
 

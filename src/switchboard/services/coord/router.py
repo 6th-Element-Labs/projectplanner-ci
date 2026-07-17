@@ -1,9 +1,11 @@
 """FastAPI router for only the ADR-0013 Coord day-one read surface."""
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import Response
 
 from . import deps
 from .ports import CoordQueryPort, CoordReadAuthPort
@@ -11,6 +13,17 @@ from .ports import CoordQueryPort, CoordReadAuthPort
 
 ProjectResolver = Callable[[str], str]
 EtagJson = Callable[..., Any]
+
+
+def _json_response(payload: Any) -> Response:
+    """Serialize Coord payloads without FastAPI's recursive jsonable copy.
+
+    These read models are already JSON-compatible repository values. Returning a
+    Response here avoids cloning every nested dict/list before serialization, which
+    was the other half of BUG-79's concurrency-dependent retained-heap spike.
+    """
+    body = json.dumps(payload, default=str, separators=(",", ":")).encode()
+    return Response(content=body, media_type="application/json")
 
 
 def create_router(
@@ -38,18 +51,20 @@ def create_router(
 
     @router.get("/api/signals")
     def plan_signals(request: Request, project: str = Query(...)):
-        return query_port.signals(project_for(request, project))
+        return _json_response(query_port.signals(project_for(request, project)))
 
     @router.get("/ixp/v1/delta")
     def delta(request: Request, project: str = Query(...), lane: str = "",
               since_cursor: int = 0):
-        return query_port.delta(
+        return _json_response(query_port.delta(
             project_for(request, project), since_cursor=since_cursor, lane=lane
-        )
+        ))
 
     @router.get("/api/coordination")
     def coordination(request: Request, project: str = Query(...), limit: int = 500):
-        return query_port.coordination(project_for(request, project), limit=limit)
+        return _json_response(
+            query_port.coordination(project_for(request, project), limit=limit)
+        )
 
     @router.get("/api/coordinator_decisions")
     def coordinator_decisions(
@@ -61,7 +76,7 @@ def create_router(
         limit: int = 100,
     ):
         resolved = project_for(request, project)
-        return {
+        return _json_response({
             "project": resolved,
             "schema": "switchboard.coordinator_decision.v1",
             "decisions": query_port.coordinator_decisions(
@@ -71,6 +86,6 @@ def create_router(
                 decision_kind=decision_kind,
                 limit=limit,
             ),
-        }
+        })
 
     return router
