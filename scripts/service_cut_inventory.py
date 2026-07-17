@@ -37,7 +37,7 @@ def render_shell(data: dict) -> str:
     proof_services = [f"{row['name']}:{row['port']}" for row in cut]
     proof_edges = [f"{owner}:{row['port']}" for row in cut
                    for owner in row.get("edge_owns", [])]
-    proof_ready = [f"{row['name']}:{row['port']}:{row['ready']}"
+    proof_ready = [f"{row.get('runtime_identity') or row['name']}:{row['port']}:{row['ready']}"
                    for row in rows if row.get("ready")]
     return "\n".join((
         shell_array("CUT_SERVICES", [row["name"] for row in cut]),
