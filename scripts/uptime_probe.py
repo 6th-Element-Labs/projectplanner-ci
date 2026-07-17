@@ -278,6 +278,45 @@ def probe_login(base_url: str, email: str, password: str, *, timeout: float,
     }
 
 
+def probe_project_read_journey(base_url: str, email: str, password: str,
+                               project: str, deliverable_id: str, *, timeout: float,
+                               budget_s: float) -> Dict[str, Any]:
+    """Exercise least-privilege browser reads across cut-out service ownership."""
+    conn = _Conn(base_url, timeout)
+    reasons: List[str] = []
+    conn.request("GET", "/health")
+    payload = json.dumps({"email": email, "password": password}).encode("utf-8")
+    login = conn.request("POST", "/api/auth/login",
+                         headers={"Content-Type": "application/json"}, body=payload)
+    token = _cookie_value(login.set_cookie, SESSION_COOKIE)
+    if not (login.ok and token):
+        reasons.append("least-privilege journey login failed")
+    rows: List[Dict[str, Any]] = []
+    if token:
+        headers = {"Cookie": f"{SESSION_COOKIE}={token}"}
+        paths = [
+            "/api/projects",
+            f"/api/board?project={urllib.parse.quote(project)}",
+            f"/api/deliverables?project={urllib.parse.quote(project)}",
+        ]
+        if deliverable_id:
+            paths.append(
+                f"/api/deliverables/{urllib.parse.quote(deliverable_id)}/mission_status"
+                f"?project={urllib.parse.quote(project)}"
+            )
+        for path in paths:
+            result = conn.request("GET", path, headers=headers)
+            rows.append({"path": path, "status": result.status,
+                         "seconds": round(result.seconds, 3)})
+            if not result.ok:
+                reasons.append(f"{path} returned HTTP {result.status}")
+            elif result.seconds > budget_s:
+                reasons.append(f"{path} {result.seconds:.3f}s over {budget_s:.1f}s budget")
+    conn.close()
+    return {"check": "least_privilege_project_read", "ok": not reasons,
+            "project": project, "journey": rows, "reasons": reasons}
+
+
 def evaluate(checks: List[Dict[str, Any]], *, simulate_outage: bool = False) -> Dict[str, Any]:
     """Fold per-check results into an overall verdict."""
     reasons: List[str] = []
@@ -295,6 +334,8 @@ def run(env: Dict[str, str]) -> Dict[str, Any]:
     timeout = float(env.get("PROBE_TIMEOUT_S") or 10.0)
     email = (env.get("PROBE_EMAIL") or "").strip()
     password = env.get("PROBE_PASSWORD") or ""
+    project = (env.get("PROBE_PROJECT_ID") or "").strip()
+    deliverable_id = (env.get("PROBE_DELIVERABLE_ID") or "").strip()
     simulate = _truthy(env.get("PROBE_SIMULATE_OUTAGE"))
 
     checks: List[Dict[str, Any]] = [
@@ -303,6 +344,14 @@ def run(env: Dict[str, str]) -> Dict[str, Any]:
     if email and password:
         checks.append(probe_login(base_url, email, password, timeout=timeout,
                                   budget_s=budget_s))
+        if project:
+            checks.append(probe_project_read_journey(
+                base_url, email, password, project, deliverable_id,
+                timeout=timeout, budget_s=budget_s))
+        else:
+            checks.append({"check": "least_privilege_project_read", "ok": True,
+                           "skipped": True, "reasons": [],
+                           "note": "PROBE_PROJECT_ID unset; activation is ARCH-MS-113"})
     else:
         checks.append({"check": "login", "ok": True, "skipped": True,
                        "reasons": [], "note": "PROBE_EMAIL/PROBE_PASSWORD unset"})
@@ -326,6 +375,9 @@ def _human(verdict: Dict[str, Any]) -> str:
         elif c["check"] == "login":
             lines.append(f"  [{tag}] login: roundtrip={c['roundtrip_s']}s "
                          f"authenticated={c.get('authenticated')}")
+        elif c["check"] == "least_privilege_project_read":
+            lines.append(f"  [{tag}] least-privilege project read: "
+                         f"{len(c.get('journey') or [])} endpoint(s)")
     if not verdict["ok"]:
         lines.append("REASONS:")
         lines.extend(f"  - {r}" for r in verdict["reasons"])
