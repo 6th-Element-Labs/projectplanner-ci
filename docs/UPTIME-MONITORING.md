@@ -68,16 +68,22 @@ Set on the sandbox repo `6th-Element-Labs/projectplanner-ci`:
 | **secret** | `PROBE_PASSWORD` | — | `atlas@taikunai.com` password |
 | variable | `PROBE_EMAIL` | — | probe account (`atlas@taikunai.com`) |
 | variable | `PROBE_BASE_URL` | `https://plan.taikunai.com` | target origin |
+| variable | `PROBE_PROJECT_ID` | `switchboard` | least-privilege project-read journey target |
+| variable | `PROBE_DELIVERABLE_ID` | `arch-ms-deliverables-service` | mission-status scope for the synthetic journey |
 | variable | `PROBE_LATENCY_BUDGET_S` | `2.0` | p95 / per-leg latency budget |
 | variable | `UPTIME_ALERT_ASSIGNEE` | `StevenRidder` | issue assignee (the page target) |
 
 ```bash
 gh secret   set PROBE_PASSWORD           --repo 6th-Element-Labs/projectplanner-ci --body '<atlas password>'
 gh variable set PROBE_EMAIL              --repo 6th-Element-Labs/projectplanner-ci --body 'atlas@taikunai.com'
+gh variable set PROBE_PROJECT_ID         --repo 6th-Element-Labs/projectplanner-ci --body 'switchboard'
+gh variable set PROBE_DELIVERABLE_ID     --repo 6th-Element-Labs/projectplanner-ci --body 'arch-ms-deliverables-service'
 ```
 
-If `PROBE_EMAIL`/`PROBE_PASSWORD` are unset the login check is **skipped** (health-only), so
-the probe degrades gracefully rather than false-alarming.
+If `PROBE_EMAIL`/`PROBE_PASSWORD` are unset the login check and project journey are **skipped**
+(health-only), so the probe degrades gracefully rather than false-alarming. When credentials
+and `PROBE_PROJECT_ID` are set, the synthetic identity must have an explicit read grant for that
+project; the probe checks projects, board, deliverables, and mission status through the public edge.
 
 ## Testing the alert (acceptance drill)
 
