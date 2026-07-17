@@ -267,6 +267,20 @@ try:
         json={"project": PROJECT, "host_id": "host/adapter18-durability",
               "reason": "time_advanced_recovery_proof", "final_status": "revoked"},
     )
+    durability_conflict = client.post(
+        "/ixp/v1/agent-host-enrollments/revoke",
+        headers={"Authorization": f"Bearer {durability_completion['host_token']}"},
+        json={"project": PROJECT, "host_id": "host/adapter18-durability",
+              "reason": "must_not_change_terminal_state", "final_status": "uninstalled"},
+    )
+    durability_replay = client.post(
+        "/ixp/v1/agent-host-enrollments/revoke",
+        headers={"Authorization": f"Bearer {durability_completion['host_token']}"},
+        json={"project": PROJECT, "host_id": "host/adapter18-durability",
+              "reason": "exact_terminal_readback", "final_status": "revoked"},
+    )
+    durability_record = store.get_agent_host_enrollment(
+        "host/adapter18-durability", project=PROJECT)
     durability_principal = store.get_principal_by_token(
         PROJECT, durability_completion["host_token"])
     ok(durability_denied and not durability_http_calls
@@ -277,6 +291,11 @@ try:
        and durability_revoke.status_code == 200
        and durability_revoke.json().get("revoked") is True,
        "time-advanced duplicate completion keeps one bearer usable through revoke")
+    ok(durability_conflict.json().get("error_code") == "terminal_status_conflict"
+       and durability_conflict.json().get("status") == "revoked"
+       and durability_replay.json().get("idempotent_replay") is True
+       and durability_record.get("status") == "revoked",
+       "revoked bearer can replay only the exact immutable terminal result")
 
     response_loss_bootstrap = begin("host/adapter18-response-loss")
     response_loss_paths = paths("response-loss")
@@ -581,6 +600,53 @@ try:
               "host_id": "host/adapter18-macos", "agent_id": "codex/attacker",
               "runtime": "codex", "status": "running"},
     )
+    exact_runner_connection = {
+        "execution_connection_id": "execconn-runner-exact",
+        "wake_id": "wake-runner-exact", "task_id": "ADAPTER-18",
+        "claim_id": "taskclaim-runner-exact",
+        "work_session_id": "worksession-runner-exact",
+        "runner_session_id": "run-personal-exact",
+        "host_id": "host/adapter18-macos",
+        "host_principal_id": host_principal["id"],
+        "agent_id": "codex/personal-exact", "source_sha": "c" * 40,
+    }
+    runner_now = enrollment_store.time.time()
+    with enrollment_store._conn(PROJECT) as connection:
+        connection.execute(
+            "INSERT INTO personal_execution_connections("
+            "execution_connection_id, wake_id, task_id, claim_id, work_session_id, "
+            "runner_session_id, host_id, host_principal_id, agent_id, source_sha, "
+            "status, created_at, expires_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,'reserved',?,?,?)",
+            (*exact_runner_connection.values(), runner_now, runner_now + 3600, runner_now),
+        )
+    exact_runner_registration = client.post(
+        "/ixp/v1/register_runner_session",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={
+            "project": PROJECT,
+            **{key: exact_runner_connection[key] for key in (
+                "runner_session_id", "host_id", "agent_id", "task_id", "claim_id")},
+            "runtime": "codex", "status": "starting",
+            "metadata": {key: exact_runner_connection[key] for key in (
+                "wake_id", "work_session_id", "source_sha", "execution_connection_id")},
+        },
+    )
+    unbound_runner_creation = client.post(
+        "/ixp/v1/register_runner_session",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={
+            "project": PROJECT, "runner_session_id": "run-personal-fabricated",
+            "host_id": "host/adapter18-macos", "agent_id": "codex/fabricated",
+            "runtime": "codex", "task_id": "ADAPTER-18",
+            "claim_id": "taskclaim-fabricated", "status": "running",
+            "metadata": {
+                "wake_id": "wake-fabricated", "work_session_id": "worksession-fabricated",
+                "source_sha": "d" * 40,
+                "execution_connection_id": "execconn-fabricated",
+            },
+        },
+    )
     atomic_runner_hijack = store.upsert_runner_session({
         "runner_session_id": "run-owned-by-victim", "host_id": "host/adapter18-macos",
         "agent_id": "codex/attacker", "runtime": "codex", "status": "running",
@@ -689,6 +755,10 @@ try:
        and spoofed_host_heartbeat.status_code == 403
        and exact_only_completion.status_code == 200
        and runner_identity_hijack.status_code == 403
+       and exact_runner_registration.status_code == 200
+       and unbound_runner_creation.status_code == 403
+       and unbound_runner_creation.json()["detail"].get("error_code")
+       == "runner_execution_binding_mismatch"
        and atomic_runner_hijack.get("error_code") == "runner_identity_mismatch"
        and runner_after_hijack.get("principal_id") == victim_principal["id"]
        and exact_claim_completion.status_code == 200
@@ -834,8 +904,19 @@ try:
     except enrollment.EnrollmentError:
         offline_visible = True
     pending_state = json.loads(mac_state_path.read_text())
+    service_calls_before_pending_update = len(service_calls)
+    try:
+        enrollment.update_host(
+            bundle_dir=bundle_021, public_key_path=public_path,
+            state_path=mac_state_path, service_runner=fake_service)
+        pending_update_denied = False
+    except enrollment.EnrollmentError as exc:
+        pending_update_denied = "clean installed state" in str(exc)
     ok(offline_visible and pending_state["status"] == "revocation_response_unknown"
-       and mac_identity_path.is_file(),
+       and mac_identity_path.is_file()
+       and pending_update_denied
+       and len(service_calls) == service_calls_before_pending_update
+       and (mac_paths["prefix"] / "current").resolve().name == "0.2.1",
        "offline revoke stops work but preserves retry identity as visible pending state")
 
     def lose_revoke_response(*args, **kwargs):

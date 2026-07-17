@@ -116,20 +116,20 @@ ADDITIVE_COLUMN_MIGRATIONS: List[Tuple[str, str, str, str]] = [
     # COORD-20 — force adversarial re-review after concurrency/lease findings.
     ("0040_review_verdicts_review_mode", "review_verdicts", "review_mode",
      "ALTER TABLE review_verdicts ADD COLUMN review_mode TEXT NOT NULL DEFAULT 'standard'"),
-    ("0051_agent_host_enrollments_completion_recovery_hash",
+    ("0053_agent_host_enrollments_completion_recovery_hash",
      "agent_host_enrollments", "completion_recovery_hash",
      "ALTER TABLE agent_host_enrollments ADD COLUMN completion_recovery_hash TEXT"),
-    ("0052_agent_host_enrollments_completion_recovery_expires_at",
+    ("0054_agent_host_enrollments_completion_recovery_expires_at",
      "agent_host_enrollments", "completion_recovery_expires_at",
      "ALTER TABLE agent_host_enrollments ADD COLUMN completion_recovery_expires_at REAL"),
-    ("0055_agent_host_enrollments_completion_finalized_at",
+    ("0057_agent_host_enrollments_completion_finalized_at",
      "agent_host_enrollments", "completion_finalized_at",
      "ALTER TABLE agent_host_enrollments ADD COLUMN completion_finalized_at REAL"),
-    ("0058_personal_execution_connections_host_principal_id",
+    ("0060_personal_execution_connections_host_principal_id",
      "personal_execution_connections", "host_principal_id",
      "ALTER TABLE personal_execution_connections "
      "ADD COLUMN host_principal_id TEXT NOT NULL DEFAULT ''"),
-    ("0059_agent_host_enrollments_execution_policy_json",
+    ("0061_agent_host_enrollments_execution_policy_json",
      "agent_host_enrollments", "execution_policy_json",
      "ALTER TABLE agent_host_enrollments "
      "ADD COLUMN execution_policy_json TEXT NOT NULL DEFAULT '{}'"),
@@ -238,7 +238,7 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "ON agent_host_rotation_recovery(principal_id, expires_at)"),
     # ADAPTER-18 review remediation — personal wakes reserve one durable execution
     # connection at request time and activate it only with the exact live runner.
-    ("0053_personal_execution_connections",
+    ("0055_personal_execution_connections",
      "CREATE TABLE IF NOT EXISTS personal_execution_connections ("
      "execution_connection_id TEXT PRIMARY KEY, wake_id TEXT NOT NULL UNIQUE, "
      "task_id TEXT NOT NULL, claim_id TEXT NOT NULL, work_session_id TEXT NOT NULL, "
@@ -247,16 +247,16 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
      "source_sha TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'reserved', "
      "created_at REAL NOT NULL, expires_at REAL NOT NULL, claimed_at REAL, "
      "completed_at REAL, updated_at REAL NOT NULL)"),
-    ("0054_ix_personal_execution_connections_status",
+    ("0056_ix_personal_execution_connections_status",
      "CREATE INDEX IF NOT EXISTS ix_personal_execution_connections_status "
      "ON personal_execution_connections(status, expires_at)"),
     # A revoked bearer remains useful only as an opaque, endpoint-specific receipt
     # for idempotent revoke/uninstall readback after an ambiguous response.
-    ("0056_agent_host_revocation_recovery",
+    ("0058_agent_host_revocation_recovery",
      "CREATE TABLE IF NOT EXISTS agent_host_revocation_recovery ("
      "token_hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL, host_id TEXT NOT NULL, "
      "final_status TEXT NOT NULL, revoked_at REAL NOT NULL, created_at REAL NOT NULL)"),
-    ("0057_ix_agent_host_revocation_recovery_principal",
+    ("0059_ix_agent_host_revocation_recovery_principal",
      "CREATE INDEX IF NOT EXISTS ix_agent_host_revocation_recovery_principal "
      "ON agent_host_revocation_recovery(principal_id, host_id)"),
 ]

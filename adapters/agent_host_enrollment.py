@@ -839,6 +839,13 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
                 service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict[str, Any]:
     manifest = verify_bundle(bundle_dir, public_key_path)
     state = _read_json(state_path)
+    if (state.get("status") != "installed"
+            or state.get("remote_revocation_confirmed") is True
+            or state.get("revocation_requested_at")
+            or state.get("revocation_identity")
+            or state.get("revocation_config")):
+        raise EnrollmentError(
+            "Agent Host update requires a clean installed state with no pending revocation")
     if _parse_version(manifest["version"]) <= _parse_version(state.get("version") or ""):
         raise EnrollmentError("update bundle must be newer than the installed version")
     prefix = Path(state["prefix"])

@@ -141,7 +141,7 @@ check("legacy decisions indexes are created after columns",
       }))
 
 # 8. An installation that exercised ADAPTER-18 before the principal-binding fix has the
-#    0053 table and ledger entry but lacks host_principal_id. The follow-up migration must
+#    personal-execution table and ledger entry but lacks host_principal_id. The follow-up must
 #    upgrade that real intermediate shape rather than trusting CREATE IF NOT EXISTS.
 c6 = mem()
 c6.execute("CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at REAL NOT NULL)")
@@ -152,26 +152,26 @@ c6.execute("""
         host_id TEXT NOT NULL
     )
 """)
-for migration_name in ALL_NAMES - {"0058_personal_execution_connections_host_principal_id"}:
+for migration_name in ALL_NAMES - {"0060_personal_execution_connections_host_principal_id"}:
     c6.execute("INSERT INTO schema_migrations(name, applied_at) VALUES (?, 1)",
                (migration_name,))
 run_additive_migrations(c6)
 check("intermediate personal execution table gains authenticated host principal binding",
       "host_principal_id" in cols(c6, "personal_execution_connections")
-      and "0058_personal_execution_connections_host_principal_id" in ledger(c6))
+      and "0060_personal_execution_connections_host_principal_id" in ledger(c6))
 
 # 9. An enrollment created before the server-issued execution policy must gain the policy
 #    column even when its table already exists and CREATE TABLE IF NOT EXISTS is a no-op.
 c7 = mem()
 c7.execute("CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at REAL NOT NULL)")
 c7.execute("CREATE TABLE agent_host_enrollments(enrollment_id TEXT PRIMARY KEY)")
-for migration_name in ALL_NAMES - {"0059_agent_host_enrollments_execution_policy_json"}:
+for migration_name in ALL_NAMES - {"0061_agent_host_enrollments_execution_policy_json"}:
     c7.execute("INSERT INTO schema_migrations(name, applied_at) VALUES (?, 1)",
                (migration_name,))
 run_additive_migrations(c7)
 check("intermediate Agent Host enrollment gains a durable server execution policy",
       "execution_policy_json" in cols(c7, "agent_host_enrollments")
-      and "0059_agent_host_enrollments_execution_policy_json" in ledger(c7))
+      and "0061_agent_host_enrollments_execution_policy_json" in ledger(c7))
 
 print(f"\n{passed} passed, {failed} failed")
 raise SystemExit(1 if failed else 0)

@@ -86,9 +86,12 @@ def create_router(*, resolve_project: ProjectResolver,
             str(body.get("host_id") or ""), project)
         record = dict(body)
         record.pop("project", None)
-        return runner_control_command.upsert_session_mapping_result(
+        result = runner_control_command.upsert_session_mapping_result(
             {**record, "project": project},
             principal_id=principal["id"], actor=auth.actor(principal))
+        if is_narrow_agent_host_principal(principal) and result.get("error"):
+            raise HTTPException(403, result)
+        return result
 
     @router.post("/ixp/v1/heartbeat_runner_session")
     async def ixp_heartbeat_runner_session(request: Request, body: dict = Body(...)):
@@ -103,9 +106,12 @@ def create_router(*, resolve_project: ProjectResolver,
             str(body.get("host_id") or ""), project)
         record = dict(body)
         record.pop("project", None)
-        return runner_control_command.upsert_session_mapping_result(
+        result = runner_control_command.upsert_session_mapping_result(
             {**record, "project": project},
             principal_id=principal["id"], actor=auth.actor(principal))
+        if is_narrow_agent_host_principal(principal) and result.get("error"):
+            raise HTTPException(403, result)
+        return result
 
     def _request_control(request: Request, body: dict, action: str,
                          options: dict | None = None):

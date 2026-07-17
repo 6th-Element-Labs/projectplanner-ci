@@ -624,18 +624,27 @@ def revoke_agent_host_identity(
             (principal_id,),
         ).fetchone()
         already_terminal = enrollment.get("status") in {"revoked", "uninstalled"}
+        if already_terminal:
+            stored_status = str(enrollment.get("status") or "")
+            if final_status != stored_status:
+                return _error(
+                    "terminal_status_conflict",
+                    "terminal host revocation status is immutable",
+                    status=stored_status,
+                    requested_final_status=final_status,
+                    host_id=host_id,
+                )
+            return {
+                "revoked": True,
+                "idempotent_replay": True,
+                "enrollment": _public(row),
+            }
         if principal and not principal["revoked_at"]:
             connection.execute(
                 "INSERT OR REPLACE INTO agent_host_revocation_recovery("
                 "token_hash, principal_id, host_id, final_status, revoked_at, created_at) "
                 "VALUES (?,?,?,?,?,?)",
                 (principal["token_hash"], principal_id, host_id, final_status, now, now),
-            )
-        elif already_terminal:
-            connection.execute(
-                "UPDATE agent_host_revocation_recovery SET final_status=? "
-                "WHERE principal_id=? AND host_id=?",
-                (final_status, principal_id, host_id),
             )
         connection.execute(
             "UPDATE principals SET revoked_at=COALESCE(revoked_at, ?) WHERE id=?",
@@ -655,22 +664,21 @@ def revoke_agent_host_identity(
             "UPDATE agent_hosts SET status='revoked', last_error=? WHERE host_id=?",
             (reason, host_id),
         )
-        if not already_terminal or enrollment.get("status") != final_status:
-            connection.execute(
-                "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                (
-                    None,
-                    actor,
-                    "agent_host.identity_revoked" if final_status == "revoked" else "agent_host.uninstalled",
-                    json.dumps({
-                        "host_id": host_id,
-                        "principal_id": principal_id,
-                        "reason": str(reason or "").strip(),
-                        "post_revoke_denial": True,
-                    }, sort_keys=True),
-                    now,
-                ),
-            )
+        connection.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (
+                None,
+                actor,
+                "agent_host.identity_revoked" if final_status == "revoked" else "agent_host.uninstalled",
+                json.dumps({
+                    "host_id": host_id,
+                    "principal_id": principal_id,
+                    "reason": str(reason or "").strip(),
+                    "post_revoke_denial": True,
+                }, sort_keys=True),
+                now,
+            ),
+        )
         updated = connection.execute(
             "SELECT * FROM agent_host_enrollments WHERE enrollment_id=?",
             (enrollment["enrollment_id"],),
