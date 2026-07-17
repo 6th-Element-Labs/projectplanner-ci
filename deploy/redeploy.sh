@@ -24,18 +24,20 @@ set -euo pipefail
 ROOT="${PLAN_ROOT:-/opt/projectplanner}"
 CADDY_UNIT="${PLAN_CADDY_UNIT:-caddy}"
 CADDY_LIVE="/etc/caddy/Caddyfile"
+INVENTORY="$ROOT/deploy/service-cut-inventory.json"
+INVENTORY_PYTHON="${PYTHON:-$ROOT/.venv/bin/python}"
+if [ ! -x "$INVENTORY_PYTHON" ]; then INVENTORY_PYTHON=python3; fi
+# One source of truth for cut units, health/readiness, restart order, and proof.
+eval "$("$INVENTORY_PYTHON" "$ROOT/scripts/service_cut_inventory.py" shell \
+    --inventory "$INVENTORY")"
 # Core web tier — always on; a redeploy must restart these and they must come back healthy.
 # ARCH-MS-76: switchboard-auth is required once Caddy routes /api/auth* → :8121.
 # ARCH-MS-101: switchboard-tasks is required once Caddy routes Mode A Tasks → :8122.
-APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp switchboard-auth switchboard-tasks switchboard-coord)
-# Local health URLs that must be 200 BEFORE any live Caddyfile overwrite.
-# Order: monolith, then every process-cut routed by the edge.
-REQUIRED_HEALTH_URLS=(
-    http://127.0.0.1:8110/health
-    http://127.0.0.1:8121/health
-    http://127.0.0.1:8122/health
-    http://127.0.0.1:8123/health
-)
+APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp "${CUT_SERVICES[@]}")
+# On the first Deliverables cut only, keep the old monolith process serving reads
+# until the healthy :8124 edge is live. Restarting projectplanner with dual-strip
+# before Caddy would create a temporary 404 half-cut.
+PRE_DELIVERABLES_CUT_SERVICES=(projectplanner-gateway projectplanner-mcp "${CUT_SERVICES[@]}")
 # Auxiliary units (timers + agent host). Restarted only if currently active, so unit-file
 # changes take effect without force-starting a unit an operator deliberately stopped (e.g.
 # timers halted during a HARDEN-32 wedge). A brand-new unit still needs a one-time
@@ -81,14 +83,24 @@ TASKS_WAS_ACTIVE="$(systemctl is-active switchboard-tasks 2>/dev/null || true)"
 TASKS_WAS_ENABLED="$(systemctl is-enabled switchboard-tasks 2>/dev/null || true)"
 COORD_WAS_ACTIVE="$(systemctl is-active switchboard-coord 2>/dev/null || true)"
 COORD_WAS_ENABLED="$(systemctl is-enabled switchboard-coord 2>/dev/null || true)"
+DELIVERABLES_WAS_ACTIVE="$(systemctl is-active switchboard-deliverables 2>/dev/null || true)"
+DELIVERABLES_WAS_ENABLED="$(systemctl is-enabled switchboard-deliverables 2>/dev/null || true)"
+DELIVERABLES_CUT_WAS_LIVE=0
+if sudo test -f "$CADDY_LIVE" \
+    && sudo grep -q 'handle @deliverables_day_one_reads' "$CADDY_LIVE"
+then
+    DELIVERABLES_CUT_WAS_LIVE=1
+fi
 PROJECTPLANNER_UNIT_LIVE="${PROJECTPLANNER_UNIT_LIVE:-/etc/systemd/system/projectplanner.service}"
 TASKS_UNIT_LIVE="${TASKS_UNIT_LIVE:-/etc/systemd/system/switchboard-tasks.service}"
 COORD_UNIT_LIVE="${COORD_UNIT_LIVE:-/etc/systemd/system/switchboard-coord.service}"
+DELIVERABLES_UNIT_LIVE="${DELIVERABLES_UNIT_LIVE:-/etc/systemd/system/switchboard-deliverables.service}"
 for snapshot in \
     "$CADDY_LIVE:Caddyfile" \
     "$PROJECTPLANNER_UNIT_LIVE:projectplanner.service" \
     "$TASKS_UNIT_LIVE:switchboard-tasks.service" \
-    "$COORD_UNIT_LIVE:switchboard-coord.service"
+    "$COORD_UNIT_LIVE:switchboard-coord.service" \
+    "$DELIVERABLES_UNIT_LIVE:switchboard-deliverables.service"
 do
     source_path="${snapshot%%:*}"
     snapshot_name="${snapshot#*:}"
@@ -108,8 +120,12 @@ restore_tasks_cut_topology() {
     local monolith_ready=1
     local edge_ready=0
     local coord_tracked=0
+    local deliverables_tracked=0
     if [ "${COORD_WAS_ACTIVE+x}" = x ]; then
         coord_tracked=1
+    fi
+    if [ "${DELIVERABLES_WAS_ACTIVE+x}" = x ]; then
+        deliverables_tracked=1
     fi
     set +e
 
@@ -128,6 +144,10 @@ restore_tasks_cut_topology() {
     if [ -f "$ROLLBACK_DIR/switchboard-coord.service.present" ]; then
         sudo cp "$ROLLBACK_DIR/switchboard-coord.service" \
             "$COORD_UNIT_LIVE" || rollback_rc=1
+    fi
+    if [ -f "$ROLLBACK_DIR/switchboard-deliverables.service.present" ]; then
+        sudo cp "$ROLLBACK_DIR/switchboard-deliverables.service" \
+            "$DELIVERABLES_UNIT_LIVE" || rollback_rc=1
     fi
     sudo systemctl daemon-reload || { rollback_rc=1; monolith_ready=0; }
     sudo systemctl restart projectplanner || { rollback_rc=1; monolith_ready=0; }
@@ -193,6 +213,24 @@ restore_tasks_cut_topology() {
                 sudo systemctl daemon-reload || rollback_rc=1
             fi
         fi
+        if [ "$deliverables_tracked" -eq 1 ]; then
+            case "$DELIVERABLES_WAS_ACTIVE" in
+                active)
+                    sudo systemctl restart switchboard-deliverables || rollback_rc=1
+                    HEALTH_URL=http://127.0.0.1:8124/health \
+                        bash "$ROOT/deploy/wait-for-health.sh" || rollback_rc=1
+                    ;;
+                *) sudo systemctl stop switchboard-deliverables || rollback_rc=1 ;;
+            esac
+            case "$DELIVERABLES_WAS_ENABLED" in
+                enabled) sudo systemctl enable switchboard-deliverables >/dev/null 2>&1 || rollback_rc=1 ;;
+                *) sudo systemctl disable switchboard-deliverables >/dev/null 2>&1 || rollback_rc=1 ;;
+            esac
+            if [ ! -f "$ROLLBACK_DIR/switchboard-deliverables.service.present" ]; then
+                sudo rm -f "$DELIVERABLES_UNIT_LIVE" || rollback_rc=1
+                sudo systemctl daemon-reload || rollback_rc=1
+            fi
+        fi
     fi
 
     set -e
@@ -225,10 +263,16 @@ sudo bash deploy/apply-least-privilege.sh
 sudo systemctl daemon-reload
 
 # 5. Restart the web tier (strict) + any active auxiliary units so new code/units take effect.
-#    Auth (:8121), Tasks (:8122), and Coord (:8123) must be healthy before Caddy.
+#    Auth (:8121), Tasks (:8122), Coord (:8123), and Deliverables (:8124)
+#    must be healthy before Caddy.
 section "restart services"
-sudo systemctl enable switchboard-auth switchboard-tasks switchboard-coord >/dev/null 2>&1
-sudo systemctl restart "${APP_SERVICES[@]}"
+sudo systemctl enable "${CUT_SERVICES[@]}" >/dev/null 2>&1
+if [ "$DELIVERABLES_CUT_WAS_LIVE" -eq 1 ]; then
+    sudo systemctl restart "${APP_SERVICES[@]}"
+else
+    # First activation: leave the currently routed monolith process untouched.
+    sudo systemctl restart "${PRE_DELIVERABLES_CUT_SERVICES[@]}"
+fi
 for u in "${AUX_UNITS[@]}"; do
     if systemctl is-active --quiet "$u"; then
         sudo systemctl restart "$u"
@@ -241,7 +285,19 @@ section "Caddy (fail-closed)"
 export PLAN_ROOT="$ROOT"
 export PLAN_CADDY_UNIT="$CADDY_UNIT"
 export CADDY_LIVE
-bash "$ROOT/deploy/sync_caddy_fail_closed.sh" "${REQUIRED_HEALTH_URLS[@]}"
+bash "$ROOT/deploy/sync_caddy_fail_closed.sh" \
+    "${REQUIRED_HEALTH_URLS[@]}" "${REQUIRED_READY_URLS[@]}"
+
+# First activation only: after Caddy owns the eight reads on healthy :8124,
+# restart the monolith so PM_DELIVERABLES_HTTP_PRIMARY=service takes effect.
+# The rollback guard is still armed; a failed restart/health check restores the
+# prior unit and edge before changing any cut-service lifecycle.
+if [ "$DELIVERABLES_CUT_WAS_LIVE" -eq 0 ]; then
+    section "Deliverables dual-strip monolith"
+    sudo systemctl restart projectplanner
+    HEALTH_URL=http://127.0.0.1:8110/health \
+        bash "$ROOT/deploy/wait-for-health.sh"
+fi
 
 # 8. Exact-SHA / runtime evidence for subsequent service cuts (reusable harness).
 if [ "${SKIP_RUNTIME_PROOF:-0}" != "1" ]; then
@@ -261,21 +317,22 @@ if [ "${SKIP_RUNTIME_PROOF:-0}" != "1" ]; then
     if [ -z "$PM_RUNTIME_PROOF_TOKEN" ]; then
         fail_runtime_proof "PM_MCP_TOKEN unavailable for authenticated edge proof"
     fi
+    PROOF_ARGS=()
+    for service in "${PROOF_SERVICES[@]}"; do
+        PROOF_ARGS+=(--service "$service")
+    done
+    for owner in "${PROOF_EDGE_OWNS[@]}"; do
+        PROOF_ARGS+=(--edge-owns "$owner")
+    done
+    for ready in "${PROOF_READY[@]}"; do
+        PROOF_ARGS+=(--ready "$ready")
+    done
     if ! PM_RUNTIME_PROOF_TOKEN="$PM_RUNTIME_PROOF_TOKEN" \
         "$PYTHON" "$ROOT/scripts/verify_runtime_deploy.py" \
             --root "$ROOT" \
             --canonical-sha "$CANONICAL_SHA" \
             --caddy-live "$CADDY_LIVE" \
-            --service switchboard-auth:8121 \
-            --service switchboard-tasks:8122 \
-            --service switchboard-coord:8123 \
-            --edge-owns '/api/auth*:8121' \
-            --edge-owns '/api/tasks*:8122' \
-            --edge-owns '/api/board:8123' \
-            --edge-owns '/api/signals:8123' \
-            --edge-owns '/ixp/v1/delta:8123' \
-            --edge-owns '/api/coordination:8123' \
-            --edge-owns '/api/coordinator_decisions:8123' \
+            "${PROOF_ARGS[@]}" \
             --edge-base-url "${PM_BASE:-https://plan.taikunai.com}" \
             --probe-task-id "${RUNTIME_PROOF_TASK_ID:-}"
     then

@@ -2641,8 +2641,10 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
-dev = [
+ci = [
     { name = "playwright" },
+]
+dev = [
     { name = "ruff" },
 ]
 gateway = [
@@ -2666,10 +2668,8 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "playwright", specifier = ">=1.40" },
-    { name = "ruff", specifier = ">=0.13" },
-]
+ci = [{ name = "playwright", specifier = ">=1.40" }]
+dev = [{ name = "ruff", specifier = ">=0.13" }]
 gateway = [{ name = "litellm", extras = ["proxy"], specifier = ">=1.40" }]
 
 [[package]]

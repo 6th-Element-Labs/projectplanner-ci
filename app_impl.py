@@ -206,6 +206,9 @@ app.include_router(_create_me_router(
 # sibling BC subpaths (dispatch/chat/review_*). Hermetic TestClient leaves unset.
 _TASKS_HTTP_PRIMARY = (os.environ.get("PM_TASKS_HTTP_PRIMARY") or "").strip().lower()
 _COORD_HTTP_PRIMARY = (os.environ.get("PM_COORD_HTTP_PRIMARY") or "").strip().lower()
+_DELIVERABLES_HTTP_PRIMARY = (
+    os.environ.get("PM_DELIVERABLES_HTTP_PRIMARY") or ""
+).strip().lower()
 if _TASKS_HTTP_PRIMARY == "service":
     app.include_router(_create_task_router(
         resolve_project=_proj,
@@ -324,6 +327,7 @@ app.include_router(_create_deliverables_router(
     resolve_project=_proj,
     resolve_principal=_principal,
     etag_json=_etag_json,
+    sibling_bc_only=_DELIVERABLES_HTTP_PRIMARY == "service",
 ))
 
 register_middleware(

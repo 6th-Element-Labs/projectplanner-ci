@@ -52,8 +52,9 @@ ok("ARCH-MS-76" in provision, "PROVISION has Auth cutover checklist")
 ok("rollback" in provision.lower(), "PROVISION documents Auth rollback")
 
 redeploy = (ROOT / "deploy" / "redeploy.sh").read_text(encoding="utf-8")
+inventory = (ROOT / "deploy" / "service-cut-inventory.json").read_text(encoding="utf-8")
 ok("switchboard-auth" in redeploy, "redeploy.sh manages switchboard-auth")
-ok(re.search(r"8121/health", redeploy) is not None,
+ok('"port": 8121' in inventory and '"health": "/health"' in inventory,
    "redeploy proves Auth /health before Caddy reload")
 # Auth restart must precede fail-closed Caddy sync (ARCH-MS-101 helper).
 restart_pos = redeploy.find('section "restart services"')

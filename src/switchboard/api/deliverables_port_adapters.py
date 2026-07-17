@@ -6,6 +6,7 @@ project-scoped read port.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 from fastapi import Request
@@ -17,6 +18,7 @@ from switchboard.services.deliverables.ports import (
     DeliverablesReadAuthPort,
 )
 from switchboard.storage.repositories import deliverables as deliverables_repo
+from switchboard.storage.repositories import projects as projects_repo
 
 
 class RepositoryDeliverablesQueries:
@@ -125,3 +127,28 @@ def configure_deliverables_ports(
         queries=queries or RepositoryDeliverablesQueries(),
         auth=auth or ProjectScopedDeliverablesReadAuth(),
     )
+
+
+def probe_deliverables_readiness(project: str = "") -> dict[str, Any]:
+    """Fail-closed readiness across DB/schema, Auth/session, and one real read."""
+    from switchboard.api.routers.auth import session as auth_session
+
+    project = project or os.environ.get(
+        "SWITCHBOARD_DELIVERABLES_READY_PROJECT", "switchboard"
+    ).strip()
+    checks: dict[str, Any] = {}
+    db_error = projects_repo.probe_project_db(project)
+    checks["database_schema"] = "ok" if db_error is None else db_error
+    try:
+        auth_session.require_production_secret()
+        checks["browser_session_auth"] = (
+            "ok" if auth_session.COOKIE_NAME else "cookie_name_missing"
+        )
+    except Exception as exc:
+        checks["browser_session_auth"] = type(exc).__name__
+    try:
+        RepositoryDeliverablesQueries().list_deliverables(project)
+        checks["deliverables_repository_read"] = "ok"
+    except Exception as exc:
+        checks["deliverables_repository_read"] = type(exc).__name__
+    return {"ok": all(value == "ok" for value in checks.values()), "checks": checks}

@@ -52,14 +52,16 @@ ok("coordinator_tick" in surf, "thin surface keeps coordinator tick off day-one"
 ok("PM_DELIVERABLES_HTTP_PRIMARY" in surf or "dual-strip" in surf.lower(),
    "thin surface names dual-strip analogue")
 
-ok(not (ROOT / "deploy/switchboard-deliverables.service").is_file(),
-   "no production Deliverables systemd unit yet (charter only)")
+unit = ROOT / "deploy/switchboard-deliverables.service"
+ok(not unit.is_file() or "ARCH-MS-111" in unit.read_text(encoding="utf-8"),
+   "production unit is absent or activated only by the cutover successor")
 caddy = (ROOT / "deploy/Caddyfile").read_text(encoding="utf-8")
 live = "\n".join(
     line for line in caddy.splitlines()
     if line.strip() and not line.lstrip().startswith("#")
 )
-ok("8124" not in live, "live Caddy does not yet route Deliverables :8124")
+ok("8124" not in live or ("@deliverables_day_one_reads" in live and "method GET" in live),
+   "live Caddy is absent or activated by the GET-only cutover successor")
 
 tracker_text = tracker.read_text(encoding="utf-8") if tracker.is_file() else ""
 ok("ARCH-MS-97" in tracker_text, "execution tracker lists ARCH-MS-97")

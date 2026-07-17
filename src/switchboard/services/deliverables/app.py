@@ -8,7 +8,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from switchboard.api import deps as api_deps
-from switchboard.api.deliverables_port_adapters import configure_deliverables_ports
+from switchboard.api.deliverables_port_adapters import (
+    configure_deliverables_ports,
+    probe_deliverables_readiness,
+)
 from switchboard.api.middleware import register_auth_gate
 from switchboard.services.deliverables import health as health_router
 from switchboard.services.deliverables.router import create_router
@@ -42,7 +45,10 @@ def create_app(
         admin_scopes=api_deps.ADMIN_SCOPES,
     )
     application.include_router(
-        health_router.create_router(service_name=cfg.service_name)
+        health_router.create_router(
+            service_name=cfg.service_name,
+            readiness_probe=probe_deliverables_readiness,
+        )
     )
     application.include_router(
         create_router(

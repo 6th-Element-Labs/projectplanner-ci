@@ -138,12 +138,22 @@ PY
 import importlib.util
 import sys
 
-required = ["fastapi", "httpx", "mcp", "openpyxl", "uvicorn"]
+required = ["fastapi", "httpx", "mcp", "openpyxl", "playwright", "uvicorn"]
 missing = [name for name in required if importlib.util.find_spec(name) is None]
 if missing:
     print("Missing required CI dependency module(s): " + ", ".join(missing))
     sys.exit(1)
 print("Required dependency modules importable: " + ", ".join(required))
+PY
+
+  section "Required Chromium service-cut browser"
+  "$PYTHON" - <<'PY'
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as runtime:
+    browser = runtime.chromium.launch(headless=True)
+    browser.close()
+print("Playwright Chromium launch: PASS")
 PY
 fi
 

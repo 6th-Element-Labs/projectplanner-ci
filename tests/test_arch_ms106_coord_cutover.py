@@ -90,14 +90,18 @@ for sibling in (
     ok(sibling in paths, f"dual-strip preserves sibling {sibling}")
 
 redeploy = (ROOT / "deploy" / "redeploy.sh").read_text(encoding="utf-8")
+inventory = (ROOT / "deploy" / "service-cut-inventory.json").read_text(encoding="utf-8")
 restart = redeploy.find('section "restart services"')
 sync = redeploy.find("sync_caddy_fail_closed.sh")
 proof = redeploy.find("verify_runtime_deploy.py")
-ok(re.search(r"APP_SERVICES=\([^)]*switchboard-coord", redeploy, re.DOTALL) is not None,
+ok('"switchboard-coord"' in inventory,
    "Coord is a required deployed service")
-ok("systemctl enable switchboard-auth switchboard-tasks switchboard-coord" in redeploy,
+ok(all(f'"{name}"' in inventory for name in
+       ("switchboard-auth", "switchboard-tasks", "switchboard-coord"))
+   and 'systemctl enable "${CUT_SERVICES[@]}"' in redeploy,
    "Coord is boot-enabled with prior cuts")
-ok("127.0.0.1:8123/health" in redeploy, "Coord health is required before Caddy")
+ok('"port": 8123' in inventory and '"health": "/health"' in inventory,
+   "Coord health is required before Caddy")
 ok(0 <= restart < sync < proof, "restart and health-gated Caddy precede runtime proof")
 ok("COORD_WAS_ACTIVE" in redeploy and "COORD_WAS_ENABLED" in redeploy,
    "rollback snapshots prior Coord lifecycle")
@@ -106,7 +110,9 @@ ok("switchboard-coord.service.present" in redeploy,
 ok("restore_tasks_cut_topology" in redeploy,
    "runtime failure arms the complete process-cut rollback")
 for prior in ("switchboard-auth:8121", "switchboard-tasks:8122"):
-    ok(prior in redeploy, f"runtime proof retains prior cut {prior}")
+    name, port = prior.split(":")
+    ok(f'"{name}"' in inventory and f'"port": {port}' in inventory,
+       f"runtime proof retains prior cut {prior}")
 
 # A dead :8123 must leave the old edge byte-for-byte untouched.
 with tempfile.TemporaryDirectory(prefix="arch-ms106-dead-coord-") as tmp:

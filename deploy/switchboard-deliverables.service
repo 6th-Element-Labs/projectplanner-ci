@@ -1,0 +1,41 @@
+# /etc/systemd/system/switchboard-deliverables.service
+# ARCH-MS-111 — live Deliverables day-one read cut. Caddy routes only the eight
+# ADR-0014 GET routes to :8124; every write and sibling route stays on :8110.
+[Unit]
+Description=Switchboard Deliverables service (:8124, localhost) — live cutover (ARCH-MS-111)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Slice=projectplanner-interactive.slice
+Type=simple
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SWITCHBOARD_DELIVERABLES_SERVICE_NAME=switchboard-deliverables
+Environment=SWITCHBOARD_DELIVERABLES_HOST=127.0.0.1
+Environment=SWITCHBOARD_DELIVERABLES_PORT=8124
+Environment=PYTHONPATH=/opt/projectplanner:/opt/projectplanner/src
+ExecStart=/opt/projectplanner/.venv/bin/uvicorn --factory switchboard.services.deliverables.app:create_app --host 127.0.0.1 --port 8124
+Restart=always
+RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=15
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner
+MemoryMax=250M
+
+[Install]
+WantedBy=multi-user.target

@@ -40,17 +40,16 @@ dependencies = [
 gateway = [
     "litellm[proxy]>=1.40",
 ]
+# ARCH-MS-111: browser installation is mandatory in merge CI but remains out of
+# the production runtime venv. CI installs this group and its Chromium binary.
+ci = [
+    "playwright>=1.40",
+]
 # Developer tooling. NOT installed in prod and NOT wired into the CI gate
 # (scripts/switchboard_ci.sh discovers and runs test_*.py with plain python). Available
 # opt-in via `uv run ruff ...`. Kept out of runtime so it never affects the deployed venv.
 dev = [
     "ruff>=0.13",
-    # UI-24: tests/browser/test_ui24_pty_terminal.py — first real-browser test in
-    # this repo. Needs `playwright install chromium` after install. The CI gate
-    # (scripts/switchboard_ci.sh) does not install this group, so today this test
-    # SKIPs (exit 0, not a failure) rather than runs there — see the module
-    # docstring. Wiring it into CI is a follow-up, not part of this change.
-    "playwright>=1.40",
 ]
 
 [tool.uv]
@@ -60,6 +59,7 @@ package = false
 # Regenerating the checked-in exports after any dependency change (run from repo root):
 #   uv lock
 #   uv export --no-hashes --no-emit-project --no-default-groups -o requirements.txt
+#   uv export --no-hashes --no-emit-project --only-group ci -o requirements-ci.txt
 #   uv export --no-hashes --no-emit-project --only-group gateway -o deploy/gateway/requirements.txt
 # Hashes are intentionally omitted so a single pinned file installs across both the
 # x86_64 CI runner and the aarch64 prod box; the `==` pins are what make builds reproducible.

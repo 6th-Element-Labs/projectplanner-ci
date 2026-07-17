@@ -3,6 +3,7 @@
 # /mcp* -> MCP (:8111); /api/auth* -> Auth process-cut (:8121, ARCH-MS-76);
 # /api/tasks* + claim-only TXP -> Tasks process-cut (:8122, ARCH-MS-92);
 # five exact ADR-0013 read paths -> Coord process-cut (:8123, ARCH-MS-106);
+# eight exact GET-only ADR-0014 reads -> Deliverables (:8124, ARCH-MS-111);
 # everything else -> the web app (:8110). Rollback Tasks/Auth: see runbooks.
 
 # CONSOL-8 (ADR-0007): the edge did TLS/compression/caching/proxying but shipped no
@@ -242,6 +243,26 @@ plan.taikunai.com {
     handle /api/coordinator_decisions {
         reverse_proxy 127.0.0.1:8123 {
             health_uri /health
+            health_interval 5s
+            health_timeout 3s
+            fail_duration 10s
+            lb_try_duration 5s
+            lb_try_interval 250ms
+        }
+    }
+    # ARCH-MS-111: GET-only ADR-0014 Deliverables surface. The anchored regexp
+    # excludes writes and non-chartered siblings, which continue to the monolith.
+    @deliverables_day_one_reads {
+        method GET
+        path_regexp deliverables_day_one ^/api/(?:mission_status|deliverables(?:/breakdown_proposals(?:/[^/]+)?|/[^/]+(?:/(?:mission_status|dependency_graph|closure_report))?)?)$
+    }
+    handle @deliverables_day_one_reads {
+        reverse_proxy 127.0.0.1:8124 {
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 90s
+            }
+            health_uri /ready
             health_interval 5s
             health_timeout 3s
             fail_duration 10s

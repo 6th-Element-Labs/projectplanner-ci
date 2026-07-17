@@ -22,6 +22,9 @@ Environment=PM_TASKS_HTTP_PRIMARY=service
 # ARCH-MS-106: Coord day-one reads are owned by switchboard-coord (:8123).
 # This process keeps only non-chartered board/monitor/coordination siblings.
 Environment=PM_COORD_HTTP_PRIMARY=service
+# ARCH-MS-111: the eight ADR-0014 Deliverables reads are owned by the thin
+# switchboard-deliverables process (:8124); writes and sibling routes remain here.
+Environment=PM_DELIVERABLES_HTTP_PRIMARY=service
 # DELIVERABLES-22: every REST-created deliverable must carry its closure contract.
 Environment=PM_ENFORCE_DELIVERABLE_INTAKE=1
 # Code tree is read-only; don't try to write .pyc back into it.

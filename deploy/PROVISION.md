@@ -95,12 +95,12 @@ sudo cp deploy/projectplanner-gateway.service deploy/projectplanner.service \
   deploy/projectplanner-coordinator-audit.timer deploy/projectplanner-claim-gate.service \
   deploy/projectplanner-claim-gate.timer deploy/projectplanner-agent-host.service \
   deploy/switchboard-auth.service deploy/switchboard-tasks.service \
-  deploy/switchboard-coord.service \
+  deploy/switchboard-coord.service deploy/switchboard-deliverables.service \
   deploy/projectplanner-interactive.slice deploy/projectplanner-batch.slice \
   /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now projectplanner-gateway projectplanner projectplanner-mcp \
-  switchboard-auth switchboard-tasks switchboard-coord
+  switchboard-auth switchboard-tasks switchboard-coord switchboard-deliverables
 sudo systemctl enable --now projectplanner-monitors.timer
 sudo systemctl enable --now projectplanner-reconcile.timer
 sudo systemctl enable --now projectplanner-coordinator-audit.timer
@@ -112,6 +112,8 @@ sudo systemctl enable --now projectplanner-agent-host
 curl -sS http://127.0.0.1:8121/health   # expect {"status":"ok","service":"switchboard-auth"}
 curl -sS http://127.0.0.1:8122/health   # expect {"status":"ok","service":"switchboard-tasks"}
 curl -sS http://127.0.0.1:8123/health   # expect {"status":"ok","service":"switchboard-coord"}
+curl -sS http://127.0.0.1:8124/health   # expect {"status":"ok","service":"switchboard-deliverables"}
+curl -sS http://127.0.0.1:8124/ready    # expect DB/schema + browser Auth + repository read all ok
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 # PERF-3: zram compressed-RAM swap (fast) instead of disk swap (100000x slower page faults).
 sudo bash deploy/setup-zram-swap.sh
@@ -169,6 +171,14 @@ Use `bash deploy/redeploy.sh`: it enables Coord, proves `:8123/health`, installs
 Caddy fail-closed, and runs exact-SHA/edge evidence. Rollback details:
 [`docs/runbooks/coord-caddy-cutover-rollback.md`](../docs/runbooks/coord-caddy-cutover-rollback.md).
 
+### Deliverables process-cut checklist (ARCH-MS-111)
+
+Live edge routes only the eight GET reads chartered by ADR-0014 to
+`switchboard-deliverables` on `127.0.0.1:8124`; all writes and sibling paths remain
+on `:8110`. Use `bash deploy/redeploy.sh`: it starts and proves `:8124/health`
+before changing Caddy, then proves exact route ownership. Rollback details:
+[`docs/runbooks/deliverables-caddy-cutover-rollback.md`](../docs/runbooks/deliverables-caddy-cutover-rollback.md).
+
 ### Off-box backups (HARDEN-43)
 Prod SQLite lives only on this box's disk. Set up daily off-box snapshots + a
 tested restore path — full details in [`docs/BACKUP-RESTORE-RUNBOOK.md`](../docs/BACKUP-RESTORE-RUNBOOK.md).
@@ -194,10 +204,13 @@ curl -s http://127.0.0.1:8110/health/deep      # ops readiness: task + project c
 curl -s http://127.0.0.1:8121/health            # ARCH-MS-76 Auth process-cut
 curl -s http://127.0.0.1:8122/health            # ARCH-MS-101 Tasks process-cut
 curl -s http://127.0.0.1:8123/health            # ARCH-MS-106 Coord process-cut
+curl -s http://127.0.0.1:8124/health            # ARCH-MS-111 Deliverables process-cut
+curl -s http://127.0.0.1:8124/ready             # dependency readiness (required for edge)
 curl -s http://127.0.0.1:8095/v1/models -H "Authorization: Bearer $LLM_GATEWAY_MASTER_KEY"
 systemctl is-active switchboard-auth
 systemctl is-active switchboard-tasks
 systemctl is-active switchboard-coord
+systemctl is-active switchboard-deliverables
 systemctl list-timers projectplanner-monitors.timer
 systemctl list-timers projectplanner-reconcile.timer
 systemctl list-timers projectplanner-coordinator-audit.timer

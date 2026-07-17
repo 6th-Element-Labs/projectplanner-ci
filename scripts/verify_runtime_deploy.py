@@ -315,6 +315,46 @@ def resolve_probe_task_id(
     )
 
 
+def resolve_probe_deliverable_id(
+    *, base_url: str, token: str,
+) -> tuple[str, CheckResult]:
+    """Choose an existing deliverable for non-mutating ownership probes."""
+    path = "/api/deliverables?project=switchboard"
+    probe = http_fingerprint(
+        f"{base_url.rstrip('/')}{path}", token=token, method="GET",
+    )
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    payload: Any = None
+    error = ""
+    try:
+        with urllib.request.urlopen(request, timeout=5.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError,
+            ValueError) as exc:
+        error = str(exc)
+    deliverables = payload.get("deliverables") if isinstance(payload, dict) else None
+    candidates = sorted(
+        str(item.get("deliverable_id") or item.get("id") or "").strip()
+        for item in (deliverables if isinstance(deliverables, list) else [])
+        if isinstance(item, dict)
+        and str(item.get("deliverable_id") or item.get("id") or "").strip()
+    )
+    selected = candidates[0] if candidates else ""
+    ok = probe.get("http_status") == 200 and bool(selected)
+    return selected, CheckResult(
+        name="live_edge:probe_deliverable",
+        ok=ok,
+        detail={"path": path, "selected_deliverable_id": selected or None,
+                "candidate_count": len(candidates), "error": error or None},
+        message=(f"selected existing deliverable {selected} for ownership probes"
+                 if ok else "could not select an existing deliverable for ownership probes"),
+    )
+
+
 _HANDLE_RE = re.compile(
     r"handle\s+(?P<path>[^\s{]+)\s*\{(?P<body>.*?)\n\s*\}",
     re.DOTALL,
@@ -412,6 +452,19 @@ def check_health(service: str, host: str, port: int) -> CheckResult:
     )
 
 
+def check_readiness(service: str, host: str, port: int, path: str) -> CheckResult:
+    url = f"http://{host}:{port}{path}"
+    body = local_health(url, expect_service=service)
+    ok = (body.get("http_status") == 200
+          and body.get("service") == service
+          and body.get("status") == "ready")
+    return CheckResult(
+        name=f"ready:{service}", ok=ok, detail=body,
+        message=(f"{service} dependency readiness passed"
+                 if ok else f"{service} dependency readiness failed"),
+    )
+
+
 def check_edge(
     caddy_text: str,
     path_pattern: str,
@@ -440,6 +493,7 @@ def build_evidence(
     caddy_live: Path,
     services: list[tuple[str, int]],
     edge_owns: list[tuple[str, int]],
+    readiness: list[tuple[str, int, str]] | None = None,
     host: str = "127.0.0.1",
     skip_live_probes: bool = False,
     caddy_text_override: str | None = None,
@@ -458,6 +512,7 @@ def build_evidence(
     unit_fn = unit_fn or check_unit
     listener_fn = listener_fn or check_listener
     health_fn = health_fn or check_health
+    readiness = readiness or []
 
     for service, port in services:
         if skip_live_probes:
@@ -465,6 +520,9 @@ def build_evidence(
         checks.append(unit_fn(service))
         checks.append(listener_fn(host, port))
         checks.append(health_fn(service, host, port))
+    if not skip_live_probes:
+        for service, port, path in readiness:
+            checks.append(check_readiness(service, host, port, path))
 
     if caddy_text_override is not None:
         caddy_text = caddy_text_override
@@ -482,10 +540,15 @@ def build_evidence(
     # BUG-69: anonymous-rejection is checked independent of the authenticated route-
     # ownership probes below (no bearer token needed, no task id needed -- the list
     # endpoint is enough). Only runs when a live edge is actually being probed.
+    service_ports = {service: port for service, port in services}
     if edge_base_url and not skip_live_probes:
         checks.append(check_anon_read_rejected(
             base_url=edge_base_url, path="/api/tasks?project=switchboard",
         ))
+        if service_ports.get("switchboard-deliverables") == 8124:
+            checks.append(check_anon_read_rejected(
+                base_url=edge_base_url, path="/api/deliverables?project=switchboard",
+            ))
 
     if edge_base_url or bearer_token or probe_task_id:
         if not edge_base_url or not bearer_token:
@@ -532,6 +595,33 @@ def build_evidence(
                     token=bearer_token, owner_port=8110, other_port=8122,
                 ),
                 ])
+            if service_ports.get("switchboard-deliverables") == 8124:
+                selected_deliverable_id, selection_check = resolve_probe_deliverable_id(
+                    base_url=edge_base_url, token=bearer_token,
+                )
+                checks.append(selection_check)
+                deliverable = urllib.parse.quote(selected_deliverable_id, safe="")
+                checks.append(check_live_route_owner(
+                    base_url=edge_base_url,
+                    path="/api/deliverables?project=switchboard", method="GET",
+                    token=bearer_token, owner_port=8124, other_port=8110,
+                ))
+                if selected_deliverable_id:
+                    checks.append(check_live_route_owner(
+                        base_url=edge_base_url,
+                        path=f"/api/deliverables/{deliverable}?project=switchboard",
+                        method="GET", token=bearer_token,
+                        owner_port=8124, other_port=8110,
+                    ))
+                # Invalid-id write is side-effect free and proves the GET-only matcher
+                # leaves Deliverables mutations on the monolith.
+                checks.append(check_live_route_owner(
+                    base_url=edge_base_url,
+                    path=("/api/deliverables/__runtime_probe_missing__/closure_request"
+                          "?project=switchboard"),
+                    method="POST", token=bearer_token,
+                    owner_port=8110, other_port=8124, json_body=b"{}",
+                ))
 
     ok = all(c.ok for c in checks)
     return {
@@ -543,6 +633,10 @@ def build_evidence(
         "canonical_sha": canonical_sha,
         "vm_sha": git_sha(root, "HEAD"),
         "services": [{"service": s, "port": p} for s, p in services],
+        "readiness": [
+            {"service": service, "port": port, "path": path}
+            for service, port, path in readiness
+        ],
         "checks": [
             {
                 "name": c.name,
@@ -574,6 +668,15 @@ def _parse_edge(value: str) -> tuple[str, int]:
     return path, int(port_s)
 
 
+def _parse_ready(value: str) -> tuple[str, int, str]:
+    parts = value.split(":", 2)
+    if len(parts) != 3 or not parts[2].startswith("/"):
+        raise argparse.ArgumentTypeError(
+            f"ready must be service:port:/path (got {value!r})"
+        )
+    return parts[0], int(parts[1]), parts[2]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=os.environ.get("PLAN_ROOT", "/opt/projectplanner"))
@@ -592,6 +695,10 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         dest="edge_owns",
         help="path:port the edge must own (repeatable), e.g. '/api/tasks*:8122'",
+    )
+    parser.add_argument(
+        "--ready", action="append", default=[], dest="readiness",
+        help="service:port:/path dependency-readiness probe (repeatable)",
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--edge-base-url", default=os.environ.get("PM_BASE", ""))
@@ -622,12 +729,14 @@ def main(argv: list[str] | None = None) -> int:
 
     services = [_parse_service(raw) for raw in args.services]
     edge_owns = [_parse_edge(raw) for raw in args.edge_owns]
+    readiness = [_parse_ready(raw) for raw in args.readiness]
 
     evidence = build_evidence(
         root=root,
         canonical_sha=canonical,
         caddy_live=Path(args.caddy_live),
         services=services,
+        readiness=readiness,
         edge_owns=edge_owns,
         host=args.host,
         skip_live_probes=args.skip_live_probes,

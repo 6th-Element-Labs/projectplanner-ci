@@ -43,7 +43,9 @@ jobs:
           # green run doesn't reinstall every dependency cold (~30-60s off each run). The
           # mirror dispatches with --ref <ci-branch>, so this runs from the pushed SHA.
           cache: "pip"
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.txt
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -53,7 +55,10 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --disable-pip-version-check -r requirements.txt
+          pip install --disable-pip-version-check -r requirements.txt -r requirements-ci.txt
+
+      - name: Install required Chromium service-cut browser
+        run: python -m playwright install --with-deps chromium
 
       - name: Run Switchboard CI suite
         env:

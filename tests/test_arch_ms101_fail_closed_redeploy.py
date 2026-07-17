@@ -36,17 +36,18 @@ WAIT = ROOT / "deploy" / "wait-for-health.sh"
 
 redeploy = REDEPLOY.read_text(encoding="utf-8")
 sync = SYNC.read_text(encoding="utf-8")
+inventory = (ROOT / "deploy" / "service-cut-inventory.json").read_text(encoding="utf-8")
 
 # --- redeploy wires Tasks as a required routed service -----------------------
 ok(REDEPLOY.is_file() and SYNC.is_file() and VERIFY.is_file(),
    "redeploy, fail-closed Caddy sync, and runtime proof scripts exist")
 ok("switchboard-tasks" in redeploy, "redeploy.sh manages switchboard-tasks")
-ok(re.search(r"APP_SERVICES=\([^)]*switchboard-tasks", redeploy, re.DOTALL) is not None,
+ok('"switchboard-tasks"' in inventory,
    "switchboard-tasks is in APP_SERVICES (required deployed service)")
-ok("systemctl enable switchboard-auth switchboard-tasks" in redeploy
-   or ("enable switchboard-tasks" in redeploy and "enable switchboard-auth" in redeploy),
+ok('"switchboard-tasks"' in inventory and '"switchboard-auth"' in inventory
+   and 'systemctl enable "${CUT_SERVICES[@]}"' in redeploy,
    "redeploy enables switchboard-tasks (and Auth)")
-ok("8122/health" in redeploy or "127.0.0.1:8122/health" in redeploy,
+ok('"port": 8122' in inventory and '"health": "/health"' in inventory,
    "redeploy requires :8122 health before Caddy")
 ok("sync_caddy_fail_closed.sh" in redeploy,
    "redeploy delegates Caddy sync to the fail-closed helper")
@@ -63,9 +64,9 @@ ok(proof_pos > caddy_pos > 0, "runtime proof runs after Caddy sync attempt")
 
 # --- Auth regression: Auth remains a first-class required service ------------
 ok("switchboard-auth" in redeploy, "Auth still managed by redeploy (no regression)")
-ok("8121/health" in redeploy or "127.0.0.1:8121/health" in redeploy,
+ok('"port": 8121' in inventory and '"health": "/health"' in inventory,
    "Auth :8121 health still required before Caddy")
-ok(re.search(r"APP_SERVICES=\([^)]*switchboard-auth", redeploy, re.DOTALL) is not None,
+ok('"switchboard-auth"' in inventory,
    "switchboard-auth remains in APP_SERVICES")
 
 # --- fail-closed helper leaves live Caddy untouched on health failure --------

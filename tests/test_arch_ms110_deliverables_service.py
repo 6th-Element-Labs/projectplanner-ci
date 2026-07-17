@@ -215,6 +215,10 @@ try:
         health.json() == {"status": "ok", "service": "arch-ms110-test"},
         "cut /health identifies Deliverables service",
     )
+    ready = cut.get("/ready")
+    ok(ready.status_code == 200, f"cut /ready status {ready.status_code}")
+    ok(set((ready.json().get("checks") or {}).values()) == {"ok"},
+       "cut /ready proves DB schema, browser Auth, and repository read")
 
     requests = [
         ("deliverables", "/api/deliverables", {}, False),
@@ -286,6 +290,7 @@ try:
 
     read_token = "ms110-alpha-read"
     other_token = "ms110-beta-read"
+    denied_token = "ms110-alpha-no-read"
     store.create_principal(
         kind="agent", display_name="MS110 alpha reader", token=read_token,
         scopes=["read"], principal_id="agent-ms110-alpha", project=PROJECT,
@@ -293,6 +298,10 @@ try:
     store.create_principal(
         kind="agent", display_name="MS110 beta reader", token=other_token,
         scopes=["read"], principal_id="agent-ms110-beta", project=OTHER,
+    )
+    store.create_principal(
+        kind="agent", display_name="MS110 alpha denied", token=denied_token,
+        scopes=["write:tasks"], principal_id="agent-ms110-alpha-denied", project=PROJECT,
     )
     os.environ["PM_AUTH_MODE"] = "required"
     ok(cut.get("/api/deliverables", params={"project": PROJECT}).status_code == 401,
@@ -302,6 +311,11 @@ try:
         params={"project": PROJECT},
         headers={"Authorization": f"Bearer {read_token}"},
     ).status_code == 200, "project-scoped read bearer succeeds")
+    ok(cut.get(
+        "/api/deliverables",
+        params={"project": PROJECT},
+        headers={"Authorization": f"Bearer {denied_token}"},
+    ).status_code == 403, "Bearer without read scope is denied")
     ok(cut.get(
         "/api/deliverables",
         params={"project": PROJECT},
@@ -331,6 +345,20 @@ try:
     ok(browser.get(
         "/api/deliverables", params={"project": OTHER}
     ).status_code == 403, "cookie session remains deny-by-default across projects")
+    no_grant_user = auth_store.create_user(
+        "ms110-no-grant@test.com", "MS110 No Grant",
+        root_auth.password_hash("ms110-no-grant-password"),
+    )
+    no_grant_token, _ = auth_session.issue(no_grant_user)
+    no_grant = TestClient(create_app(settings))
+    no_grant.cookies.set(auth_session.COOKIE_NAME, no_grant_token)
+    ok(no_grant.get(
+        "/api/deliverables", params={"project": PROJECT}
+    ).status_code == 403, "cookie without project grant fails closed")
+    auth_session.revoke(browser_token)
+    ok(browser.get(
+        "/api/deliverables", params={"project": PROJECT}
+    ).status_code == 401, "revoked/logout cookie fails closed")
     os.environ["PM_AUTH_MODE"] = "dev-open"
 
     for method, path in (
@@ -358,8 +386,16 @@ try:
        "future Caddy fragment is retained as a commented reference")
     ok("method GET" in fragment_text and "@deliverables_day_one_reads" in fragment_text,
        "future edge fragment cannot route monolith-owned writers to the read service")
-    ok("127.0.0.1:8124" not in live_caddy,
-       "live Caddy is unchanged before the cutover successor")
+    # ARCH-MS-111 is the cutover successor: once present, the live fragment must
+    # retain the same GET-only boundary ARCH-MS-110 prepared.
+    live_cut_is_bounded = (
+        "127.0.0.1:8124" not in live_caddy
+        or ("@deliverables_day_one_reads" in live_caddy
+            and "method GET" in live_caddy
+            and "handle /api/deliverables*" not in live_caddy)
+    )
+    ok(live_cut_is_bounded,
+       "live Caddy is absent or activated by the bounded cutover successor")
     ok(DeliverablesServiceSettings.from_env().port == 8124,
        "default Deliverables port is 8124")
 

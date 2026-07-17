@@ -23,7 +23,8 @@ EtagJson = Callable[..., Response]
 
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver,
-                  etag_json: EtagJson) -> APIRouter:
+                  etag_json: EtagJson,
+                  sibling_bc_only: bool = False) -> APIRouter:
     """Build the deliverables/mission router against shared trust boundaries."""
     router = APIRouter()
 
@@ -373,5 +374,24 @@ def create_router(*, resolve_project: ProjectResolver,
         if result.get("error"):
             raise HTTPException(400, result["error"])
         return result
+
+    if sibling_bc_only:
+        # ARCH-MS-111: the standalone service owns exactly these ADR-0014 GETs.
+        # Register normally above so the source-level route inventory remains the
+        # architecture contract, then selectively strip only the production mount.
+        day_one_reads = {
+            "/api/deliverables",
+            "/api/deliverables/breakdown_proposals",
+            "/api/deliverables/breakdown_proposals/{proposal_id}",
+            "/api/deliverables/{deliverable_id}",
+            "/api/mission_status",
+            "/api/deliverables/{deliverable_id}/mission_status",
+            "/api/deliverables/{deliverable_id}/dependency_graph",
+            "/api/deliverables/{deliverable_id}/closure_report",
+        }
+        router.routes[:] = [
+            route for route in router.routes
+            if not (route.path in day_one_reads and "GET" in (route.methods or set()))
+        ]
 
     return router
