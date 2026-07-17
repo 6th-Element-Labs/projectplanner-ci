@@ -31,6 +31,7 @@ _METERED_PROVIDER_ENV = {
     "ANTHROPIC_API_KEY",
     "AZURE_OPENAI_API_KEY",
 }
+_PERSONAL_EXECUTION_LIFECYCLE_KEY = "_switchboard_personal_execution_lifecycle"
 
 
 def _git(workspace: str, *args: str) -> str:
@@ -252,7 +253,6 @@ def run(
 
     runner_registered = False
     wake_completed = False
-    successful_completion_intent = False
     heartbeat_thread: threading.Thread | None = None
     try:
         _update_runner(http, values, workspace=workspace, status="running")
@@ -274,11 +274,6 @@ def run(
             timeout=7200,
             check=False,
         )
-        stop_heartbeat.set()
-        # Do not let an in-flight heartbeat race a later terminal runner update.
-        # The production HTTP call is bounded, so waiting here is finite and keeps
-        # runner state monotonic.
-        heartbeat_thread.join()
         output = ((completed.stdout or "") + (completed.stderr or "")).encode()
         if completed.returncode != 0:
             raise RuntimeError(
@@ -334,30 +329,65 @@ def run(
                 "runner_heartbeat_errors_recovered": len(heartbeat_errors),
             },
         }
-        successful_completion_intent = True
-        # Post-execution claim finalization requires both terminal records. Publish
-        # the runner first so a lost response can never leave a terminal wake bound
-        # to a runner that still appears active.
-        _update_runner(http, values, workspace=workspace, status="completed")
-        _complete_wake(http, values, {
-            "started": True,
-            "reason": "native_codex_execution_completed",
-            "task_id": values["task_id"],
-            "branch": branch,
-            "head_sha": head_sha,
-        })
-        wake_completed = True
+        lifecycle_lock = threading.Lock()
+        lifecycle_state = {"terminal": ""}
+
+        def finalize(succeeded: bool, reason: str = "") -> dict[str, Any]:
+            nonlocal wake_completed
+            with lifecycle_lock:
+                terminal = lifecycle_state["terminal"]
+                desired = "completed" if succeeded else "failed"
+                if terminal == desired:
+                    return {"status": desired, "idempotent": True}
+                if terminal == "completing" and not succeeded:
+                    raise RuntimeError(
+                        "native Codex success completion is outcome-unknown")
+                stop_heartbeat.set()
+                if heartbeat_thread is not None:
+                    heartbeat_thread.join()
+                if succeeded:
+                    lifecycle_state["terminal"] = "completing"
+                    # Checkpoint and claim finalization require both terminal records.
+                    # Publish them only after the outer executed-test gate succeeds.
+                    _update_runner(
+                        http, values, workspace=workspace, status="completed")
+                    result = _complete_wake(http, values, {
+                        "started": True,
+                        "reason": "native_codex_execution_completed",
+                        "task_id": values["task_id"],
+                        "branch": branch,
+                        "head_sha": head_sha,
+                    })
+                elif terminal == "completed":
+                    # A later checkpoint/completion rejection uses the narrow,
+                    # server-validated completed -> failed recovery edge.
+                    result = _complete_wake(http, values, {
+                        "started": False,
+                        "reason": reason or "post_execution_validation_failed",
+                        "task_id": values["task_id"],
+                        "recoverable_post_execution_failure": True,
+                    })
+                else:
+                    _update_runner(http, values, workspace=workspace, status="failed")
+                    result = _complete_wake(http, values, {
+                        "started": False,
+                        "reason": reason or "post_execution_validation_failed",
+                        "task_id": values["task_id"],
+                    })
+                lifecycle_state["terminal"] = desired
+                wake_completed = True
+                return result
+
+        evidence[_PERSONAL_EXECUTION_LIFECYCLE_KEY] = {
+            "complete": lambda: finalize(True),
+            "fail": lambda reason="": finalize(False, reason),
+        }
         return evidence
     except Exception:
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join()
         if runner_registered and not wake_completed:
-            # Once local execution and exact-head proof succeeded, a lost response
-            # must only be retried with that identical success receipt.  Never
-            # replace an outcome-unknown success with a conflicting failure receipt.
-            if successful_completion_intent:
-                raise
             try:
                 # A failed personal wake receipt is accepted only after the exact
                 # bound runner is terminal. Publish that state before completion so

@@ -876,6 +876,38 @@ try:
        and json.loads(mac_config_path.read_text())["agent_host_version"] == "0.2.1"
        and corrupted_retry_denied,
        "signed update advances current/config and refuses mismatched pre-existing release bytes")
+    bundle_022 = TMP / "bundle-0.2.2"
+    enrollment.create_signed_bundle(ROOT, bundle_022, "0.2.2", private_path)
+    failed_restart_calls = []
+
+    def fail_new_then_restart_rollback(command, **kwargs):
+        del kwargs
+        failed_restart_calls.append(list(command))
+        failed_new_restart = (
+            command[:3] == ["launchctl", "kickstart", "-k"]
+            and len([call for call in failed_restart_calls
+                     if call[:3] == ["launchctl", "kickstart", "-k"]]) == 1
+        )
+        return subprocess.CompletedProcess(
+            command, 1 if failed_new_restart else 0, "",
+            "simulated update restart failure" if failed_new_restart else "")
+
+    try:
+        enrollment.update_host(
+            bundle_dir=bundle_022, public_key_path=public_path,
+            state_path=mac_state_path,
+            service_runner=fail_new_then_restart_rollback)
+        rollback_visible = False
+    except enrollment.EnrollmentError:
+        rollback_visible = True
+    rollback_restarts = [
+        call for call in failed_restart_calls
+        if call[:3] == ["launchctl", "kickstart", "-k"]
+    ]
+    ok(rollback_visible and len(rollback_restarts) == 2
+       and (mac_paths["prefix"] / "current").resolve().name == "0.2.1"
+       and json.loads(mac_config_path.read_text())["agent_host_version"] == "0.2.1",
+       "failed update restores and restarts the previous signed release")
     try:
         enrollment.install_host(
             bundle_dir=bundle_020, public_key_path=public_path,
@@ -956,6 +988,13 @@ try:
     residue = enrollment.residue_scan([
         mac_paths["config_root"], mac_paths["state_root"] / "provider-runtimes"])
     ok(residue["residue_free"], "post-revoke secret-residue scan is clean")
+    mac_uninstalled = enrollment.uninstall_host(
+        identity_path=mac_identity_path, config_path=mac_config_path,
+        state_path=mac_state_path, http=http, service_runner=fake_service)
+    ok(mac_uninstalled.get("uninstalled") is True
+       and not mac_paths["prefix"].exists()
+       and not mac_paths["config_root"].exists(),
+       "a completed revoke remains locally uninstallable without manual cleanup")
 
     linux_bootstrap = begin("host/adapter18-linux")
     linux_paths = paths("linux")
@@ -1209,6 +1248,16 @@ try:
         local_evidence = codex_local_worker.run(
             local_task, runner=fake_local_codex,
             http=fake_local_control)
+        local_lifecycle = local_evidence.pop(
+            "_switchboard_personal_execution_lifecycle")
+        local_success_was_deferred = not any(
+            (path == "/txp/v1/complete_wake"
+             or (path == "/ixp/v1/register_runner_session"
+                 and body.get("status") == "completed"))
+            for path, body in local_control_calls)
+        local_terminal = local_lifecycle["complete"]()
+        local_recovered = local_lifecycle["fail"](
+            "post_execution_validation_failed:test")
         local_git_heads[:] = [source_sha]
         try:
             codex_local_worker.run(
@@ -1248,12 +1297,20 @@ try:
        and any(path == "/txp/v1/complete_wake"
                and body["result"]["started"] is True
                for path, body in local_control_calls)
+       and local_success_was_deferred
+       and local_terminal.get("status") == "completed"
+       and local_recovered.get("status") == "failed"
        and len([body for path, body in local_control_calls
-                if path == "/txp/v1/complete_wake"]) == 2
+                if path == "/txp/v1/complete_wake"
+                and body["result"].get("started") is True]) == 2
        and len({json.dumps(body, sort_keys=True) for path, body in local_control_calls
-                if path == "/txp/v1/complete_wake"}) == 1
+                if path == "/txp/v1/complete_wake"
+                and body["result"].get("started") is True}) == 1
+       and any(path == "/txp/v1/complete_wake"
+               and body["result"].get("recoverable_post_execution_failure") is True
+               for path, body in local_control_calls)
        and completed_runner_index < successful_wake_index,
-       "native local worker heartbeats and exactly retries/terminalizes its wake and runner")
+       "native local worker defers success and can recover a rejected post-execution gate")
     failed_runner_index = next(
         index for index, (path, body) in enumerate(failed_local_control_calls)
         if path == "/ixp/v1/register_runner_session" and body.get("status") == "failed")

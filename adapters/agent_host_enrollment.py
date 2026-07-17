@@ -861,12 +861,21 @@ def update_host(*, bundle_dir: Path, public_key_path: Path, state_path: Path,
         if restart_service:
             control_service(
                 state["platform"], "restart", Path(state["service_path"]), runner=service_runner)
-    except Exception:
+    except Exception as update_error:
         if previous:
             rollback = prefix / f".current.rollback.{os.getpid()}"
             rollback.symlink_to(previous)
             os.replace(rollback, current)
         _atomic_json(config_path, previous_config, 0o600)
+        if restart_service:
+            try:
+                control_service(
+                    state["platform"], "restart", Path(state["service_path"]),
+                    runner=service_runner)
+            except Exception as rollback_error:
+                raise EnrollmentError(
+                    "Agent Host update failed and the rolled-back service could not restart: "
+                    f"{rollback_error}") from update_error
         raise
     state.update({"version": manifest["version"], "release": str(release),
                   "status": "installed", "updated_at": time.time()})
@@ -948,7 +957,15 @@ def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path,
     operation = "uninstall" if final_status == "uninstalled" else "revoke"
     recorded_operation = str(state.get("revocation_operation") or "")
     if recorded_operation and recorded_operation != operation:
-        raise EnrollmentError("a different host lifecycle operation is already pending")
+        completed_revoke_to_uninstall = (
+            recorded_operation == "revoke" and operation == "uninstall"
+            and state.get("remote_revocation_confirmed") is True
+            and state.get("status") == "revoked"
+        )
+        if not completed_revoke_to_uninstall:
+            raise EnrollmentError("a different host lifecycle operation is already pending")
+        state["revocation_operation"] = "uninstall"
+        _atomic_json(state_path, state, 0o600)
     identity = dict(state.get("revocation_identity") or {})
     config = dict(state.get("revocation_config") or {})
     if not identity:

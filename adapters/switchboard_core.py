@@ -658,6 +658,28 @@ def _personal_execution_enabled():
             "1", "true", "yes", "on")
 
 
+_PERSONAL_EXECUTION_LIFECYCLE_KEY = "_switchboard_personal_execution_lifecycle"
+
+
+def _personal_test_run_succeeded(run):
+    if not isinstance(run, dict) or run.get("executed") is False:
+        return False
+    if run.get("ok") is True or run.get("passed") is True:
+        return True
+    exit_code = run.get("exit_code", run.get("returncode"))
+    if exit_code not in (None, ""):
+        try:
+            return int(exit_code) == 0
+        except (TypeError, ValueError):
+            return False
+    status = str(
+        run.get("status") or run.get("conclusion") or run.get("result") or ""
+    ).strip().lower()
+    return status in {
+        "pass", "passed", "success", "succeeded", "ok", "green", "completed",
+    }
+
+
 def _personal_execution_binding():
     try:
         account = json.loads(os.environ.get("PM_CO_ACCOUNT_BINDING_JSON") or "{}")
@@ -1036,6 +1058,55 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                                                    remove_workspace=True, base=base, token=token)
             return {"completed": completed, "stopped": f"work_error:{task_id}:{e}",
                     "startup_inbox": startup_inbox}
+        personal_bound = bool(
+            managed and managed.get("bound_existing")
+            and _personal_execution_enabled()
+        )
+        personal_lifecycle = None
+        if personal_bound and isinstance(evidence, dict):
+            personal_lifecycle = evidence.pop(
+                _PERSONAL_EXECUTION_LIFECYCLE_KEY, None)
+
+        def fail_personal_postprocessing(stage, detail="", **extra):
+            reason = f"post_execution_validation_failed:{stage}"
+            if personal_lifecycle:
+                fail = personal_lifecycle.get("fail")
+                if callable(fail):
+                    try:
+                        terminal = fail(reason)
+                    except Exception as exc:
+                        return {
+                            "completed": completed,
+                            "stopped": (
+                                f"personal_terminalization_error:{task_id}:{stage}:{exc}"
+                            ),
+                            "startup_inbox": startup_inbox,
+                            **extra,
+                        }
+                    if (isinstance(terminal, dict)
+                            and terminal.get("status") not in {None, "failed"}):
+                        return {
+                            "completed": completed,
+                            "stopped": (
+                                f"personal_terminalization_rejected:{task_id}:{stage}"
+                            ),
+                            "terminalization": terminal,
+                            "startup_inbox": startup_inbox,
+                            **extra,
+                        }
+            abandonment = abandon_claim(
+                project, claim_id,
+                f"personal post-execution {stage} failed: {detail}"[:500],
+                base=base, token=token)
+            if (isinstance(abandonment, dict) and abandonment.get("abandoned")):
+                _cleanup_personal_bound_workspace(managed)
+            return {
+                "completed": completed,
+                "stopped": f"{stage}:{task_id}:{detail}",
+                "abandonment": abandonment,
+                "startup_inbox": startup_inbox,
+                **extra,
+            }
         if managed:
             # code_strict: the runtime need not know about executed-test evidence — the loop
             # runs the tests in the bound worktree and attaches the proof itself.
@@ -1045,6 +1116,15 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     claim_id, agent_id, branch=managed.get("branch", ""),
                     head_sha=evidence.get("head_sha") or managed.get("head_sha", ""))
                 evidence = {**evidence, "executed_test_run": run}
+            if (personal_bound
+                    and not _personal_test_run_succeeded(
+                        evidence.get("executed_test_run") or {})):
+                run = evidence.get("executed_test_run") or {}
+                return fail_personal_postprocessing(
+                    "executed_tests_failed",
+                    str(run.get("error") or run.get("status") or "failed"),
+                    executed_test_run=run,
+                )
             evidence.setdefault("branch", managed.get("branch", ""))
             evidence.setdefault("head_sha", managed.get("head_sha", ""))
             evidence.setdefault("git_diff_check", "clean")
@@ -1058,6 +1138,11 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                                               evidence.get("branch", ""),
                                               evidence.get("head_sha", ""))
                     if not pushed.get("ok"):
+                        if personal_bound:
+                            return fail_personal_postprocessing(
+                                "push_error", str(pushed.get("detail") or "failed"),
+                                push=pushed,
+                            )
                         abandonment = abandon_claim(
                             project, claim_id,
                             f"push failed for {task_id}: {pushed.get('detail')}",
@@ -1085,24 +1170,58 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     # gate's push-evidence presence check passes. Real push and
                     # remote verification are enabled via PM_VERIFY_COMPLETION_PUSH.
                     evidence["remote_ref"] = f"refs/heads/{evidence.get('branch', '')}"
-        if managed and managed.get("bound_existing") and _personal_execution_enabled():
+        if personal_bound and personal_lifecycle:
+            complete_execution = personal_lifecycle.get("complete")
+            if callable(complete_execution):
+                try:
+                    terminal = complete_execution()
+                except Exception as exc:
+                    return {
+                        "completed": completed,
+                        "stopped": f"personal_terminalization_error:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox,
+                    }
+                if (isinstance(terminal, dict)
+                        and terminal.get("status") not in {None, "completed"}):
+                    return {
+                        "completed": completed,
+                        "stopped": f"personal_terminalization_rejected:{task_id}",
+                        "terminalization": terminal,
+                        "startup_inbox": startup_inbox,
+                    }
+        if personal_bound:
             try:
                 checkpoint = checkpoint_personal_work_session(
                     project, managed, evidence, agent_id, base=base, token=token)
             except Exception as exc:
-                return {"completed": completed,
-                        "stopped": f"checkpoint_error:{task_id}:{exc}",
-                        "startup_inbox": startup_inbox}
+                return fail_personal_postprocessing(
+                    "checkpoint_error", str(exc))
             if not checkpoint.get("updated"):
-                return {"completed": completed,
-                        "stopped": f"checkpoint_rejected:{task_id}",
-                        "checkpoint": checkpoint, "startup_inbox": startup_inbox}
+                return fail_personal_postprocessing(
+                    "checkpoint_rejected", "server rejected checkpoint",
+                    checkpoint=checkpoint)
             managed["head_sha"] = evidence.get("head_sha") or managed.get("head_sha")
-        completion = complete_claim(project, claim_id, evidence, base=base, token=token)
+        try:
+            completion = complete_claim(
+                project, claim_id, evidence, base=base, token=token)
+        except Exception as exc:
+            # The response may have been lost after commit. Preserve the exact
+            # terminal checkout for readback/retry; never convert outcome-unknown
+            # success into a conflicting failure receipt.
+            if personal_bound:
+                return {"completed": completed,
+                        "stopped": f"complete_unknown:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox}
+            raise
         # Verify progress before claiming it: if the server fail-closed the
         # completion (e.g. push_not_on_remote), stop loudly rather than looping on
         # as if the task were done.
         if isinstance(completion, dict) and completion.get("completed") is False:
+            if personal_bound:
+                return fail_personal_postprocessing(
+                    "complete_rejected",
+                    str(completion.get("reason") or "server rejected completion"),
+                    rejection=completion)
             return {"completed": completed,
                     "stopped": f"complete_rejected:{task_id}:{completion.get('reason')}",
                     "rejection": completion, "startup_inbox": startup_inbox}

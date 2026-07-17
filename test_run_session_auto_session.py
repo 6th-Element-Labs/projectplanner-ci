@@ -139,6 +139,7 @@ personal_claim = {
 old_personal = os.environ.get("PM_PERSONAL_AGENT_HOST_EXECUTION")
 try:
     os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = "1"
+    personal_lifecycle_events = []
     calls4 = _patch({
         "_acquire_claim": (personal_claim, personal_managed),
         "run_executed_tests": {"schema": "switchboard.executed_test_run.v1",
@@ -150,8 +151,17 @@ try:
     res4 = sb.run_session(
         "switchboard", "codex/TASK-PERSONAL", "codex",
         work_fn=lambda task: {"head_sha": "b" * 40,
-                              "branch": "codex/TASK-PERSONAL"},
+                              "branch": "codex/TASK-PERSONAL",
+                              "_switchboard_personal_execution_lifecycle": {
+                                  "complete": lambda: (
+                                      personal_lifecycle_events.append("complete")
+                                      or {"status": "completed"}),
+                                  "fail": lambda reason: (
+                                      personal_lifecycle_events.append(f"fail:{reason}")
+                                      or {"status": "failed"}),
+                              }},
         max_tasks=1, auto_work_session=True)
+    rejected_lifecycle_events = []
     names4 = [call[0] for call in calls4]
     calls5 = _patch({
         "_acquire_claim": (personal_claim, personal_managed),
@@ -159,11 +169,21 @@ try:
                                "status": "success", "executed": True, "exit_code": 0},
         "checkpoint_personal_work_session": {"updated": False},
         "complete_claim": {"completed": True},
+        "abandon_claim": {"abandoned": True},
+        "_cleanup_personal_bound_workspace": {"cleaned": True},
     })
     res5 = sb.run_session(
         "switchboard", "codex/TASK-PERSONAL", "codex",
         work_fn=lambda task: {"head_sha": "b" * 40,
-                              "branch": "codex/TASK-PERSONAL"},
+                              "branch": "codex/TASK-PERSONAL",
+                              "_switchboard_personal_execution_lifecycle": {
+                                  "complete": lambda: (
+                                      rejected_lifecycle_events.append("complete")
+                                      or {"status": "completed"}),
+                                  "fail": lambda reason: (
+                                      rejected_lifecycle_events.append(f"fail:{reason}")
+                                      or {"status": "failed"}),
+                              }},
         max_tasks=1, auto_work_session=True)
 finally:
     if old_personal is None:
@@ -172,11 +192,54 @@ finally:
         os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = old_personal
 ok(names4.index("checkpoint_personal_work_session") < names4.index("complete_claim")
    and res4["completed"] and "archive_work_session_workspace" not in names4
-   and "_cleanup_personal_bound_workspace" in names4,
+   and "_cleanup_personal_bound_workspace" in names4
+   and personal_lifecycle_events == ["complete"],
    "personal host checkpoints its bound Work Session before completing the exact claim")
-ok(res5.get("stopped") == "checkpoint_rejected:TASK-PERSONAL"
-   and "complete_claim" not in [call[0] for call in calls5],
-   "a rejected personal checkpoint stops loudly without leaking the active claim")
+ok(res5.get("stopped", "").startswith("checkpoint_rejected:TASK-PERSONAL")
+   and "complete_claim" not in [call[0] for call in calls5]
+   and rejected_lifecycle_events[0] == "complete"
+   and rejected_lifecycle_events[1].startswith("fail:")
+   and "abandon_claim" in [call[0] for call in calls5]
+   and "_cleanup_personal_bound_workspace" in [call[0] for call in calls5],
+   "a rejected personal checkpoint recovers failure, abandons, and cleans its checkout")
+
+failed_test_lifecycle_events = []
+calls5b = _patch({
+    "_acquire_claim": (personal_claim, personal_managed),
+    "run_executed_tests": {"schema": "switchboard.executed_test_run.v1",
+                           "status": "failed", "executed": True, "exit_code": 1},
+    "abandon_claim": {"abandoned": True},
+    "_cleanup_personal_bound_workspace": {"cleaned": True},
+    "complete_claim": {"completed": True},
+})
+try:
+    os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = "1"
+    res5b = sb.run_session(
+        "switchboard", "codex/TASK-PERSONAL", "codex",
+        work_fn=lambda task: {
+            "head_sha": "b" * 40,
+            "branch": "codex/TASK-PERSONAL",
+            "_switchboard_personal_execution_lifecycle": {
+                "complete": lambda: (
+                    failed_test_lifecycle_events.append("complete")
+                    or {"status": "completed"}),
+                "fail": lambda reason: (
+                    failed_test_lifecycle_events.append(f"fail:{reason}")
+                    or {"status": "failed"}),
+            },
+        },
+        max_tasks=1, auto_work_session=True)
+finally:
+    if old_personal is None:
+        os.environ.pop("PM_PERSONAL_AGENT_HOST_EXECUTION", None)
+    else:
+        os.environ["PM_PERSONAL_AGENT_HOST_EXECUTION"] = old_personal
+ok(res5b.get("stopped", "").startswith("executed_tests_failed:TASK-PERSONAL")
+   and failed_test_lifecycle_events
+   and failed_test_lifecycle_events[0].startswith("fail:")
+   and "complete" not in failed_test_lifecycle_events
+   and "complete_claim" not in [call[0] for call in calls5b],
+   "failed executed tests terminalize failure before abandon and never publish success")
 
 calls6 = _patch({
     "_acquire_claim": (personal_claim, personal_managed),

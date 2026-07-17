@@ -789,6 +789,36 @@ try:
        and failed_completion.get("allowed") is False,
        "post-execution claim and Work Session writes require the exact terminal tuple")
 
+    recovered_completion = store.complete_wake(
+        good_wake["wake_id"], runner_session_id=exact_runner_id,
+        agent_id=personal_agent,
+        result={
+            "started": False,
+            "reason": "post_execution_validation_failed:complete_rejected",
+            "recoverable_post_execution_failure": True,
+        },
+        principal_id=p["id"], actor=auth.actor(p), project=P)
+    with _conn(P) as connection:
+        recovered_connection = connection.execute(
+            "SELECT status FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (good_execution["execution_connection_id"],),
+        ).fetchone()["status"]
+        recovered_runner = connection.execute(
+            "SELECT status FROM runner_sessions WHERE runner_session_id=?",
+            (exact_runner_id,),
+        ).fetchone()["status"]
+    recovered_abandon = store.check_personal_execution_authority(
+        successful_binding, principal_id=p["id"], action="abandon_claim", project=P)
+    recovered_complete = store.check_personal_execution_authority(
+        successful_binding, principal_id=p["id"], action="complete_claim", project=P)
+    ok(recovered_completion.get("status") == "failed"
+       and recovered_completion.get("recovered_post_execution_failure") is True
+       and recovered_connection == "failed" and recovered_runner == "failed"
+       and recovered_abandon.get("allowed") is True
+       and recovered_complete.get("allowed") is False,
+       "a rejected post-execution gate atomically recovers completion for exact abandon")
+
     failed_wake = store.request_wake(
         selector={"runtime": "claude-code", "agent_id": "claude/TEST#fail",
                   "lane": "TEST", "capabilities": ["docs"]},
