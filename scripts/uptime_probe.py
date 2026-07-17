@@ -279,7 +279,7 @@ def probe_login(base_url: str, email: str, password: str, *, timeout: float,
 
 
 def probe_project_read_journey(base_url: str, email: str, password: str,
-                               project: str, *, timeout: float,
+                               project: str, deliverable_id: str, *, timeout: float,
                                budget_s: float) -> Dict[str, Any]:
     """Exercise least-privilege browser reads across cut-out service ownership."""
     conn = _Conn(base_url, timeout)
@@ -298,8 +298,12 @@ def probe_project_read_journey(base_url: str, email: str, password: str,
             "/api/projects",
             f"/api/board?project={urllib.parse.quote(project)}",
             f"/api/deliverables?project={urllib.parse.quote(project)}",
-            f"/api/mission_status?project={urllib.parse.quote(project)}",
         ]
+        if deliverable_id:
+            paths.append(
+                f"/api/deliverables/{urllib.parse.quote(deliverable_id)}/mission_status"
+                f"?project={urllib.parse.quote(project)}"
+            )
         for path in paths:
             result = conn.request("GET", path, headers=headers)
             rows.append({"path": path, "status": result.status,
@@ -331,6 +335,7 @@ def run(env: Dict[str, str]) -> Dict[str, Any]:
     email = (env.get("PROBE_EMAIL") or "").strip()
     password = env.get("PROBE_PASSWORD") or ""
     project = (env.get("PROBE_PROJECT_ID") or "").strip()
+    deliverable_id = (env.get("PROBE_DELIVERABLE_ID") or "").strip()
     simulate = _truthy(env.get("PROBE_SIMULATE_OUTAGE"))
 
     checks: List[Dict[str, Any]] = [
@@ -341,7 +346,7 @@ def run(env: Dict[str, str]) -> Dict[str, Any]:
                                   budget_s=budget_s))
         if project:
             checks.append(probe_project_read_journey(
-                base_url, email, password, project,
+                base_url, email, password, project, deliverable_id,
                 timeout=timeout, budget_s=budget_s))
         else:
             checks.append({"check": "least_privilege_project_read", "ok": True,

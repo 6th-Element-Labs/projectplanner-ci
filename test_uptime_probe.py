@@ -41,6 +41,16 @@ def raises(fn, exc):
         return False
 
 
+workflow = open(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".github", "workflows", "uptime-probe.yml"),
+    encoding="utf-8",
+).read()
+ok("PROBE_PROJECT_ID: ${{ vars.PROBE_PROJECT_ID || 'switchboard' }}" in workflow,
+   "off-box workflow activates the project-scoped synthetic journey")
+ok("PROBE_DELIVERABLE_ID: ${{ vars.PROBE_DELIVERABLE_ID || 'arch-ms-deliverables-service' }}" in workflow,
+   "off-box workflow binds mission status to the intended deliverable")
+
+
 # --- pure logic -------------------------------------------------------------
 
 ok(probe.percentile([0.1], 95) == 0.1, "p95 of a single sample is that sample")
@@ -93,6 +103,13 @@ class Fake(BaseHTTPRequestHandler):
             else:
                 authed = self.authenticated and "taikun_session=" in self.headers.get("Cookie", "")
             self._send(200, json.dumps({"authenticated": authed}).encode())
+        elif self.path == "/api/projects" and "taikun_session=" in self.headers.get("Cookie", ""):
+            self._send(200, b'{"projects":[{"project_id":"switchboard"}]}')
+        elif (self.path.startswith(("/api/board?project=switchboard",
+                                    "/api/deliverables?project=switchboard",
+                                    "/api/deliverables/arch-ms-deliverables-service/mission_status?project=switchboard"))
+              and "taikun_session=" in self.headers.get("Cookie", "")):
+            self._send(200, b'{"ok":true}')
         else:
             self._send(404, b'{}')
 
@@ -130,6 +147,13 @@ try:
     ok(v["ok"] is True, "all-healthy server -> probe passes")
     ok(checks["health"]["ok"] and checks["login"]["ok"], "both checks pass when healthy")
     ok(checks["login"]["authenticated"] is True, "login round-trip resolves authenticated")
+
+    reset()
+    v = run(BASE, PROBE_PROJECT_ID="switchboard",
+            PROBE_DELIVERABLE_ID="arch-ms-deliverables-service")
+    journey = [c for c in v["checks"] if c["check"] == "least_privilege_project_read"][0]
+    ok(v["ok"] is True and journey["ok"] is True and len(journey["journey"]) == 4,
+       "least-privilege project journey reads projects, board, deliverables, and mission status")
 
     reset(); Fake.health_status = 503
     v = run(BASE)

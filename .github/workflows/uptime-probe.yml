@@ -38,6 +38,11 @@ jobs:
       PROBE_BASE_URL: ${{ vars.PROBE_BASE_URL || 'https://plan.taikunai.com' }}
       PROBE_EMAIL: ${{ vars.PROBE_EMAIL }}
       PROBE_PASSWORD: ${{ secrets.PROBE_PASSWORD }}
+      # ARCH-MS-113: activate the least-privilege project-read journey in the
+      # off-box monitor. Keep this a repository variable so the same canonical
+      # workflow can target a different explicitly granted synthetic project.
+      PROBE_PROJECT_ID: ${{ vars.PROBE_PROJECT_ID || 'switchboard' }}
+      PROBE_DELIVERABLE_ID: ${{ vars.PROBE_DELIVERABLE_ID || 'arch-ms-deliverables-service' }}
       PROBE_LATENCY_BUDGET_S: ${{ vars.PROBE_LATENCY_BUDGET_S || '2.0' }}
       PROBE_HEALTH_SAMPLES: "5"
       # workflow_dispatch with simulate_outage=true forces a failure; empty otherwise.
