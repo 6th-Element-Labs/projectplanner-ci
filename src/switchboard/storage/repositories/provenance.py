@@ -31,7 +31,10 @@ from switchboard.domain.provenance.git import (
     provenance_summary as _provenance_summary,
     valid_evidence_hash as _valid_evidence_hash,
 )
-from switchboard.domain.provenance.semantic import semantic_completion_gate
+from switchboard.domain.provenance.semantic import (
+    merge_completion_evidence,
+    semantic_completion_gate,
+)
 from switchboard.storage.repositories.tasks import _task_row
 
 
@@ -159,7 +162,7 @@ def _upsert_git_state(c: sqlite3.Connection, task_id: str,
     current = _load_git_state(c, task_id)
     evidence = dict(current.get("evidence") or {})
     if "evidence" in updates and isinstance(updates["evidence"], dict):
-        evidence.update(updates.pop("evidence"))
+        evidence = merge_completion_evidence(evidence, updates.pop("evidence"))
     clean_updates = {k: v for k, v in updates.items() if v is not None}
     merged = {**current, **clean_updates}
     branch = merged.get("branch")

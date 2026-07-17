@@ -11,7 +11,17 @@ from typing import Any, Mapping
 
 
 SCHEMA = "switchboard.semantic_completion_gate.v1"
+EVIDENCE_HISTORY_SCHEMA = "switchboard.semantic_evidence_history.v1"
 NEGATIVE_OUTCOMES = {"blocked", "fail", "failed", "failure", "no-go", "nogo", "rejected"}
+SEMANTIC_EVIDENCE_KEYS = frozenset({
+    "blocking_gate",
+    "blocking_gates",
+    "failed_gates",
+    "go_only_task_blocked",
+    "process_cut_authorized",
+    "semantic_outcome",
+    "verdict",
+})
 _TERMINAL_OUTCOMES_RE = re.compile(
     r"(?im)^\s*semantic_terminal_outcomes\s*:\s*([^\n#]+)"
 )
@@ -40,6 +50,54 @@ def _nonempty(value: Any) -> bool:
     if isinstance(value, (list, tuple, set, dict)):
         return bool(value)
     return bool(value)
+
+
+def merge_completion_evidence(current: Mapping[str, Any] | None,
+                              incoming: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Merge provenance while replacing a newly reported semantic decision.
+
+    Most task evidence is cumulative: a later webhook may add merge provenance to
+    completion evidence.  Semantic outcome fields are different.  They describe
+    one current decision and must move together, otherwise an omitted field from a
+    repaired Go result can leave an old No-Go marker active indefinitely.
+
+    A payload with no semantic fields remains an ordinary cumulative update.  A
+    payload with any semantic field replaces the complete active semantic field
+    set and archives the superseded set outside the fields consumed by gates.
+    """
+    merged = dict(current or {})
+    incoming_obj = dict(incoming or {})
+    if not SEMANTIC_EVIDENCE_KEYS.intersection(incoming_obj):
+        merged.update(incoming_obj)
+        return merged
+
+    previous = {
+        key: merged[key]
+        for key in SEMANTIC_EVIDENCE_KEYS
+        if key in merged
+    }
+    replacement = {
+        key: incoming_obj[key]
+        for key in SEMANTIC_EVIDENCE_KEYS
+        if key in incoming_obj
+    }
+    for key in SEMANTIC_EVIDENCE_KEYS:
+        merged.pop(key, None)
+
+    if previous and previous != replacement:
+        history_obj = merged.get("semantic_evidence_history")
+        history = dict(history_obj) if isinstance(history_obj, Mapping) else {}
+        superseded_obj = history.get("superseded")
+        superseded = list(superseded_obj) if isinstance(superseded_obj, list) else []
+        if not superseded or superseded[-1] != previous:
+            superseded.append(previous)
+        merged["semantic_evidence_history"] = {
+            "schema": EVIDENCE_HISTORY_SCHEMA,
+            "superseded": superseded,
+        }
+
+    merged.update(incoming_obj)
+    return merged
 
 
 def terminal_outcomes(task: Mapping[str, Any]) -> set[str]:
