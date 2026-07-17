@@ -148,12 +148,15 @@ def semantic_body_sha256(body: bytes) -> str:
 def http_fingerprint(
     url: str,
     *,
-    token: str,
+    token: str = "",
     method: str = "GET",
     json_body: bytes | None = None,
     timeout: float = 5.0,
 ) -> dict[str, Any]:
-    headers = {"Authorization": f"Bearer {token}"}
+    # An empty token means a genuinely anonymous request (no Authorization header) --
+    # BUG-69's anon-read check needs that; every other caller here always passes a
+    # real token, so this default only changes behavior for the new check below.
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     if json_body is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
@@ -224,6 +227,31 @@ def check_live_route_owner(
         message=(
             f"authenticated edge probe reaches :{owner_port}"
             if ok else f"authenticated edge probe does not reach :{owner_port}"
+        ),
+    )
+
+
+def check_anon_read_rejected(*, base_url: str, path: str) -> CheckResult:
+    """BUG-69: an unauthenticated caller must never reach live project task data.
+
+    The route-ownership checks above always send a bearer token -- they prove "the
+    right service answers", not "an anonymous caller is rejected". Those are
+    different guarantees, and BUG-69 shipped exactly that gap twice (2026-07-15,
+    2026-07-17): the edge correctly routed /api/tasks* to :8122 (the ownership
+    checks would have passed), while :8122 itself skipped the auth middleware and
+    answered anonymous reads with 200 + live task data. This is the check that
+    would have caught it before either incident reached prod.
+    """
+    probe = http_fingerprint(f"{base_url.rstrip('/')}{path}", method="GET")
+    status = probe.get("http_status")
+    ok = status == 401
+    return CheckResult(
+        name=f"live_edge:anon_rejected:{path}",
+        ok=ok,
+        detail={"path": path, "probe": probe},
+        message=(
+            "anonymous read is rejected (401)" if ok
+            else f"anonymous read was NOT rejected (got {status}) -- BUG-69 regression"
         ),
     )
 
@@ -450,6 +478,14 @@ def build_evidence(
 
     for path_pattern, port in edge_owns:
         checks.append(check_edge(caddy_text, path_pattern, port, source=source))
+
+    # BUG-69: anonymous-rejection is checked independent of the authenticated route-
+    # ownership probes below (no bearer token needed, no task id needed -- the list
+    # endpoint is enough). Only runs when a live edge is actually being probed.
+    if edge_base_url and not skip_live_probes:
+        checks.append(check_anon_read_rejected(
+            base_url=edge_base_url, path="/api/tasks?project=switchboard",
+        ))
 
     if edge_base_url or bearer_token or probe_task_id:
         if not edge_base_url or not bearer_token:

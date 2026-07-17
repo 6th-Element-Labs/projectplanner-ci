@@ -91,12 +91,18 @@ def _slow_request_log_ms() -> float:
         return 500.0
 
 
-def register_middleware(app, *, req_obs, saturation_snapshot: SaturationSnapshot,
-                        global_user_scopes: GlobalUserScopes,
-                        global_principal: GlobalPrincipal,
-                        admin_scopes: list) -> None:
-    """Register the four global middleware handlers against ``app``, preserving
-    the monolith's exact registration order and behavior."""
+def register_auth_gate(app, *, global_user_scopes: GlobalUserScopes,
+                       global_principal: GlobalPrincipal,
+                       admin_scopes: list) -> None:
+    """Register just the global auth boundary — the one gate any process serving
+    ``/api/*`` project data MUST have (BUG-69). Split out of ``register_middleware``
+    so a thin service cut (Tasks; Coordination/Deliverables/Tally/Ingest to follow)
+    can wire the exact same auth boundary the monolith uses without also pulling in
+    monolith-only state (request observability, the concurrency limiter, load-shed)
+    that a single-purpose service has no instance of. ``register_middleware`` calls
+    this too, so the monolith's behavior is unchanged — this is a pure extraction,
+    not a second implementation to keep in sync.
+    """
 
     def _attach_server_timing(response, started_at: float):
         elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -163,6 +169,37 @@ def register_middleware(app, *, req_obs, saturation_snapshot: SaturationSnapshot
                 JSONResponse({"detail": "forbidden: no access to this project"}, status_code=403), started_at)
         request.state.principal = global_principal(user, scopes)
         return _attach_server_timing(await call_next(request), started_at)
+
+    @app.middleware("http")
+    async def _auth_boundary(request: Request, call_next):
+        """Gate Switchboard data reads and state-changing writes when auth is required.
+
+        Protocol endpoints authenticate inside their handlers because their project lives in the
+        JSON body. GitHub webhooks keep their HMAC check. Static assets stay public so the login
+        page can render; project data and control APIs do not.
+        """
+        started_at = time.perf_counter()
+        path = request.url.path
+        method = request.method.upper()
+        if _auth_exempt_path(path):
+            return _attach_server_timing(await call_next(request), started_at)
+
+        return await _global_auth_gate(request, call_next, started_at, path, method)
+
+
+def register_middleware(app, *, req_obs, saturation_snapshot: SaturationSnapshot,
+                        global_user_scopes: GlobalUserScopes,
+                        global_principal: GlobalPrincipal,
+                        admin_scopes: list) -> None:
+    """Register the four global middleware handlers against ``app``, preserving
+    the monolith's exact registration order and behavior.
+
+    Starlette's ``@app.middleware("http")`` stack executes last-registered-first
+    (outermost), so the auth gate is registered LAST here — same as before this
+    function was split — so it still runs before request observability, the
+    concurrency limiter, or load-shed do any work on a request that will be
+    rejected anyway.
+    """
 
     @app.middleware("http")
     async def _request_observability(request: Request, call_next):
@@ -238,18 +275,5 @@ def register_middleware(app, *, req_obs, saturation_snapshot: SaturationSnapshot
             headers={"Retry-After": str(retry)},
         )
 
-    @app.middleware("http")
-    async def _auth_boundary(request: Request, call_next):
-        """Gate Switchboard data reads and state-changing writes when auth is required.
-
-        Protocol endpoints authenticate inside their handlers because their project lives in the
-        JSON body. GitHub webhooks keep their HMAC check. Static assets stay public so the login
-        page can render; project data and control APIs do not.
-        """
-        started_at = time.perf_counter()
-        path = request.url.path
-        method = request.method.upper()
-        if _auth_exempt_path(path):
-            return _attach_server_timing(await call_next(request), started_at)
-
-        return await _global_auth_gate(request, call_next, started_at, path, method)
+    register_auth_gate(app, global_user_scopes=global_user_scopes,
+                       global_principal=global_principal, admin_scopes=admin_scopes)

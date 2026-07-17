@@ -17,6 +17,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from switchboard.api import deps
+from switchboard.api.middleware import register_auth_gate
 from switchboard.api.routers import claims as claims_router
 from switchboard.api.routers import tasks as tasks_router
 from switchboard.api.tasks_port_adapters import (
@@ -48,6 +49,21 @@ def create_app(settings: TasksServiceSettings | None = None) -> FastAPI:
         ),
     )
     application.state.tasks_service_settings = cfg
+
+    # BUG-69: the monolith blocks anonymous /api/* reads at this exact boundary
+    # (register_middleware -> register_auth_gate in app_impl.py). A service cut that
+    # mounts the same routers without also registering this gate silently drops that
+    # protection the moment Caddy points live traffic at it — verified live on prod
+    # 2026-07-15 and again 2026-07-17 (anon GET /api/tasks?project=... -> 200 with the
+    # full task list). /health stays open regardless: _auth_exempt_path allows it by
+    # path, independent of where the router is mounted relative to this call.
+    register_auth_gate(
+        application,
+        global_user_scopes=deps.global_user_scopes,
+        global_principal=deps.global_principal,
+        admin_scopes=deps.ADMIN_SCOPES,
+    )
+
     application.include_router(health_router.create_router(service_name=cfg.service_name))
     application.include_router(
         tasks_router.create_router(

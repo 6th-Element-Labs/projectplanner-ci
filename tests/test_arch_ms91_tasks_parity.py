@@ -44,8 +44,20 @@ def ok(condition: bool, message: str) -> None:
 
 
 def _make_baseline_client() -> TestClient:
-    """In-process fat Tasks + claims routers (monolith composition shape)."""
+    """In-process fat Tasks + claims routers (monolith composition shape).
+
+    BUG-69: the monolith's actual protection for these routes is the global auth
+    gate app_impl.py registers via register_middleware — list_tasks/get_task below
+    call resolve_principal nowhere; only the write handlers do. A baseline that
+    omits register_auth_gate is not actually representative of app_impl.py, so an
+    anonymous-read "parity" check against it would trivially pass even with the
+    gate missing from BOTH sides. Registering it here is a no-op for every existing
+    assertion in this file (they all run under PM_AUTH_MODE=dev-open with no bearer
+    token, which the gate short-circuits) and makes the fixture answer the question
+    the file's docstring claims to answer.
+    """
     from switchboard.api import deps
+    from switchboard.api.middleware import register_auth_gate
     from switchboard.api.routers import claims as claims_router
     from switchboard.api.routers import tasks as tasks_router
     from switchboard.api.tasks_port_adapters import (
@@ -56,6 +68,12 @@ def _make_baseline_client() -> TestClient:
     configure_tasks_ports()
     ensure_tasks_runtime()
     app = FastAPI(title="arch-ms91-baseline")
+    register_auth_gate(
+        app,
+        global_user_scopes=deps.global_user_scopes,
+        global_principal=deps.global_principal,
+        admin_scopes=deps.ADMIN_SCOPES,
+    )
     app.include_router(
         tasks_router.create_router(
             resolve_project=deps.resolve_project,
@@ -244,6 +262,36 @@ ok(c_unauth.status_code == 401, f"cut unauth create is 401 (got {c_unauth.status
 _parity("unauth_create_401", b_unauth, c_unauth, expect_status=401)
 ok(b_unauth.status_code != 403 and c_unauth.status_code != 403,
    "unauth create never 403 (401 parity family)")
+
+# --- BUG-69: 401 READ parity under required auth (the gap that let it ship) --
+# list_tasks/get_task never call resolve_principal (see tasks.py) -- they rely
+# entirely on the global auth gate registered outside the router. Before this
+# fix, switchboard.services.tasks.app::create_app never registered it, so an
+# anonymous GET here returned 200 with live task data on prod, twice
+# (2026-07-15, 2026-07-17: anon GET /api/tasks?project=switchboard -> 200).
+# Only testing writes (above) could not catch this -- reads are a materially
+# different code path. b_req/c_req already carry PM_AUTH_MODE=required from
+# the write-parity block above.
+b_list_unauth = b_req.get("/api/tasks", params={"project": PROJECT})
+c_list_unauth = c_req.get("/api/tasks", params={"project": PROJECT})
+ok(b_list_unauth.status_code == 401, f"baseline unauth list is 401 (got {b_list_unauth.status_code})")
+ok(c_list_unauth.status_code == 401, f"cut unauth list is 401 (got {c_list_unauth.status_code})")
+_parity("unauth_list_401", b_list_unauth, c_list_unauth, expect_status=401)
+
+if b_id and c_id:
+    b_get_unauth = b_req.get(f"/api/tasks/{b_id}", params={"project": PROJECT})
+    c_get_unauth = c_req.get(f"/api/tasks/{c_id}", params={"project": PROJECT})
+    ok(b_get_unauth.status_code == 401, f"baseline unauth get_task is 401 (got {b_get_unauth.status_code})")
+    ok(c_get_unauth.status_code == 401, f"cut unauth get_task is 401 (got {c_get_unauth.status_code})")
+    _parity("unauth_get_task_401", b_get_unauth, c_get_unauth, expect_status=401)
+
+ok(b_list_unauth.status_code != 403 and c_list_unauth.status_code != 403,
+   "unauth read never 403 (401 parity family, matches the write check above)")
+
+# /health must stay open on the cut even under required auth -- it is the
+# liveness probe the deploy runbook curls before ever touching Caddy.
+health_req = c_req.get("/health")
+ok(health_req.status_code == 200, f"cut /health stays open under required auth (got {health_req.status_code})")
 
 # Restore open mode for any further local reuse
 os.environ["PM_AUTH_MODE"] = "dev-open"
