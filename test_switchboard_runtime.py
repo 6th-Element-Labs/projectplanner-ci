@@ -434,11 +434,11 @@ try:
             "DELETE FROM personal_execution_connections WHERE execution_connection_id=?",
             (good_execution["execution_connection_id"],),
         )
-    ok(float(connection_row.get("expires_at") or 0)
-       - float(good_wake.get("deadline") or 0) >= 30 * 60
+    ok(abs(float(connection_row.get("expires_at") or 0)
+           - float(good_wake.get("deadline") or 0)) < 2
        and float(good_wake.get("deadline") or 0)
-       - float(good_wake.get("requested_at") or 0) >= 7200,
-       "personal connection reserves post-processing time beyond the native execution deadline")
+       - float(good_wake.get("requested_at") or 0) >= 7200 + 30 * 60,
+       "personal wake and connection both reserve post-processing time beyond execution")
     nonexistent_connection_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
         principal_id=p["id"], actor=auth.actor(p), project=P)

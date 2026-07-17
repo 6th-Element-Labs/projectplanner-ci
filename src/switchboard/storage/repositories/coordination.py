@@ -355,11 +355,16 @@ def _bind_personal_wake_policy(
         "provider_id": requested_provider,
         "tenant_id": durable_tenant_id,
     })
+    requested_ttl = float(
+        updated.get("deadline_seconds") or updated.get("claim_timeout_s")
+        or updated.get("ttl_s") or _PERSONAL_EXECUTION_DEADLINE_S
+    )
     updated.update({
         "require_exact_host_binding": True,
-        "deadline_seconds": float(
-            updated.get("deadline_seconds") or updated.get("claim_timeout_s")
-            or updated.get("ttl_s") or _PERSONAL_EXECUTION_DEADLINE_S),
+        # The wake remains the durable owner of the execution through tests,
+        # checkpoint, and claim completion.  Its deadline therefore needs the
+        # same post-processing margin already granted to the exact connection.
+        "deadline_seconds": requested_ttl + _PERSONAL_POST_PROCESSING_S,
         "source_sha": source_sha,
         "execution_connection_id": execution_connection_id,
         "account_binding": binding,
@@ -376,7 +381,6 @@ def _bind_personal_wake_policy(
             "execution_connection_id": execution_connection_id,
         },
     })
-    requested_ttl = float(updated["deadline_seconds"])
     expires_at = now + max(10.0, requested_ttl) + _PERSONAL_POST_PROCESSING_S
     c.execute(
         "INSERT INTO personal_execution_connections("

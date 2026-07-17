@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 from typing import Any, Callable
+import urllib.parse
 
 try:
     import switchboard_core as sb
@@ -32,6 +33,8 @@ _METERED_PROVIDER_ENV = {
     "AZURE_OPENAI_API_KEY",
 }
 _PERSONAL_EXECUTION_LIFECYCLE_KEY = "_switchboard_personal_execution_lifecycle"
+_TERMINAL_WAKE_STATUSES = {"completed", "failed", "cancelled", "expired"}
+_TERMINALIZATION_READBACK_TIMEOUT_S = 35 * 60
 
 
 def _git(workspace: str, *args: str) -> str:
@@ -118,19 +121,71 @@ def _complete_wake(
         "result": result,
     }
     expected = "completed" if result.get("started") is True else "failed"
+    try:
+        timeout_s = float(os.environ.get(
+            "PM_PERSONAL_TERMINALIZATION_TIMEOUT_S",
+            str(_TERMINALIZATION_READBACK_TIMEOUT_S),
+        ))
+    except ValueError:
+        timeout_s = float(_TERMINALIZATION_READBACK_TIMEOUT_S)
+    deadline = time.monotonic() + max(0.0, timeout_s)
     last_error: Exception | None = None
-    for attempt in range(3):
+    last_status = ""
+    while True:
+        for attempt in range(3):
+            try:
+                completed = http("POST", "/txp/v1/complete_wake", body)
+                if (not completed or completed.get("error")
+                        or completed.get("error_code")
+                        or completed.get("status") != expected):
+                    raise RuntimeError("native Codex wake completion was not exact")
+                return completed
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.25 * (attempt + 1))
+
+        # A lost response is not a failed completion.  Read the durable wake
+        # before deciding whether another identical write is needed.  This
+        # keeps the worker alive through a transient outage instead of exiting
+        # with a claimed wake and an otherwise successful checkout stranded.
+        query = urllib.parse.urlencode({
+            "project": body["project"],
+            "host_id": values["host_id"],
+            "runtime": "codex",
+        })
         try:
-            completed = http("POST", "/txp/v1/complete_wake", body)
-            if (not completed or completed.get("error") or completed.get("error_code")
-                    or completed.get("status") != expected):
-                raise RuntimeError("native Codex wake completion was not exact")
-            return completed
+            listed = http("GET", f"/txp/v1/list_wake_intents?{query}", None)
+            wakes = ((listed or {}).get("wake_intents")
+                     or (listed or {}).get("wakes") or [])
+            wake = next(
+                (item for item in wakes
+                 if str(item.get("wake_id") or "") == values["wake_id"]),
+                None,
+            )
+            if wake is None:
+                raise RuntimeError("native Codex wake readback did not find exact wake")
+            last_status = str(wake.get("status") or "")
+            if last_status == expected:
+                return {
+                    **wake,
+                    "status": expected,
+                    "completion_confirmed_by_readback": True,
+                }
         except Exception as exc:
             last_error = exc
-            if attempt < 2:
-                time.sleep(0.25 * (attempt + 1))
-    raise RuntimeError("native Codex wake completion failed") from last_error
+
+        if last_status in _TERMINAL_WAKE_STATUSES:
+            raise RuntimeError(
+                f"native Codex wake terminalized as {last_status}, expected {expected}"
+            ) from last_error
+
+        if time.monotonic() >= deadline:
+            detail = f"; authoritative status={last_status}" if last_status else ""
+            raise RuntimeError(
+                f"native Codex wake completion failed after readback{detail}"
+            ) from last_error
+        time.sleep(1.0)
 
 
 def run(

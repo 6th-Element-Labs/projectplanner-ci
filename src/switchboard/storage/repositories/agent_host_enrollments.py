@@ -131,7 +131,10 @@ def begin_agent_host_enrollment(
     now = time.time()
     bootstrap_code = "ahb-" + secrets.token_urlsafe(24)
     enrollment_id = "hostenroll-" + uuid.uuid4().hex[:16]
-    projects = _normalized_list(project_allowlist) or [project]
+    # An enrollment is created inside one project and must always admit that
+    # project.  Silently storing a non-empty allowlist that omits it creates a
+    # bootstrap which can be consumed but whose host can never register.
+    projects = sorted(set([project, *_normalized_list(project_allowlist)]))
     with _conn(project) as connection:
         connection.execute(
             "INSERT INTO agent_host_enrollments("
@@ -548,6 +551,15 @@ def rotate_agent_host_identity(
         connection.execute(
             "DELETE FROM agent_host_rotation_recovery WHERE expires_at<=?",
             (now,),
+        )
+        # A grace bearer is a one-retry credential, not a second long-lived
+        # rotation credential.  Clearing this host's previous rows before
+        # publishing the current primary bearer consumes whichever grace row
+        # authorized this call and also fences older successful generations.
+        connection.execute(
+            "DELETE FROM agent_host_rotation_recovery "
+            "WHERE principal_id=? AND host_id=?",
+            (principal_id, host_id),
         )
         connection.execute(
             "INSERT OR REPLACE INTO agent_host_rotation_recovery("

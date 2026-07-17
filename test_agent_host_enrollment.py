@@ -132,6 +132,16 @@ try:
        and default_provider.json()["enrollment"]["provider_allowlist"]
        == ["openai-codex"],
        "default enrollment admits the personal Codex provider without caller overrides")
+    mismatched_projects = client.post("/ixp/v1/agent-host-enrollments", json={
+        "project": PROJECT,
+        "owner_user_id": "user-adapter18",
+        "requested_host_id": "host/adapter18-project-union",
+        "project_allowlist": ["another-project"],
+    })
+    ok(mismatched_projects.status_code == 200
+       and mismatched_projects.json()["enrollment"]["project_allowlist"]
+       == ["another-project", PROJECT],
+       "enrollment always admits its own project when callers provide an allowlist")
     secure_target = TMP / "atomic-proof" / "identity.json"
     secure_target.parent.mkdir()
     stale_temp = secure_target.parent / ".identity.json.stale.tmp"
@@ -840,13 +850,16 @@ try:
         rotation_start_failed = False
     except enrollment.EnrollmentError:
         rotation_start_failed = True
+    consumed_rotation_recovery = store.get_agent_host_rotation_recovery_principal(
+        token=initial_mac_token, host_id="host/adapter18-macos", project=PROJECT)
     pending_rotation = json.loads(mac_identity_path.read_text())
     rotated = enrollment.rotate_identity(
         identity_path=mac_identity_path, config_path=mac_config_path, http=http,
         service_runner=fake_service)
     mac_identity = json.loads(mac_identity_path.read_text())
     rotated_token = mac_identity["host_token"]
-    ok(rotation_start_failed and pending_rotation["rotation_pending_restart"] is True
+    ok(rotation_start_failed and consumed_rotation_recovery is None
+       and pending_rotation["rotation_pending_restart"] is True
        and pending_rotation["host_token"] != initial_mac_token
        and rotated["identity_generation"] == 3 and rotated_token != initial_mac_token
        and rotated["service_restarted"] is True
@@ -1222,6 +1235,36 @@ try:
     def fake_failed_local_codex(command, **kwargs):
         del command, kwargs
         return subprocess.CompletedProcess([], 1, "", "native failure")
+
+    unknown_completion_calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_unknown_completion_control(method, path, body):
+        unknown_completion_calls.append((method, path, body))
+        if method == "POST":
+            raise RuntimeError("simulated committed completion response loss")
+        ok(method == "GET" and path.startswith("/txp/v1/list_wake_intents?"),
+           "outcome-unknown wake completion performs authenticated durable readback")
+        return {"wake_intents": [{
+            "wake_id": "wake-readback-recovery",
+            "status": "completed",
+        }]}
+
+    with patch.object(codex_local_worker.time, "sleep", return_value=None):
+        readback_terminal = codex_local_worker._complete_wake(
+            fake_unknown_completion_control,
+            {
+                "wake_id": "wake-readback-recovery",
+                "runner_session_id": "runner-readback-recovery",
+                "agent_id": "codex/ADAPTER-18-readback",
+                "host_id": "host/adapter18-linux",
+            },
+            {"started": True, "reason": "native_codex_execution_completed"},
+        )
+    ok(readback_terminal.get("status") == "completed"
+       and readback_terminal.get("completion_confirmed_by_readback") is True
+       and len([call for call in unknown_completion_calls if call[0] == "POST"]) == 3
+       and len([call for call in unknown_completion_calls if call[0] == "GET"]) == 1,
+       "lost wake-completion responses resume only after exact authoritative readback")
 
     try:
         codex_local_worker._git = fake_local_git
