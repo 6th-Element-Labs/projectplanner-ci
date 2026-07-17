@@ -279,7 +279,9 @@ def list_tasks_slim(workstream: Optional[str] = None, status: Optional[str] = No
     with _conn(project) as c:
         rows = c.execute(q, params).fetchall()
         tasks = [_task_row(r) for r in rows]
-        provenance = _store_facade()._provenance_by_task(c, [t["task_id"] for t in tasks])
+        # Local import avoids the provenance -> tasks projection cycle at module load.
+        from switchboard.storage.repositories.provenance import _provenance_by_task
+        provenance = _provenance_by_task(c, [t["task_id"] for t in tasks])
         for t in tasks:
             t["provenance"] = provenance.get(t["task_id"])
         return tasks

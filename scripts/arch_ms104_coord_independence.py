@@ -8,6 +8,7 @@ required gate is true and the artifact explicitly authorizes the process cut.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import sqlite3
 import tempfile
@@ -34,10 +35,26 @@ REQUIRED_GATES = {
     "G5_resource_budget",
     "G6_tasks_acceptance",
 }
+FORBIDDEN_ROOT_IMPORTS = {"auth", "dispatch", "signals", "store"}
 
 
 def load_verdict(path: Path = VERDICT_PATH) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def forbidden_imports(path: Path) -> list[str]:
+    """Return direct imports of monolith facades from one Python module."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name.split(".", 1)[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names = [node.module.split(".", 1)[0]]
+        else:
+            continue
+        found.update(name for name in names if name in FORBIDDEN_ROOT_IMPORTS)
+    return sorted(found)
 
 
 def run_sqlite_probe(*, writes: int = 80, reads_per_worker: int = 80,
@@ -117,17 +134,42 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
     expected_verdict = "go" if not failed_gates else "nogo"
     expected_authorized = expected_verdict == "go"
 
-    monitors = (root / "src" / "switchboard" / "api" / "routers" / "monitors.py").read_text(
-        encoding="utf-8")
-    delta_auth_bound = (
-        'async def ixp_delta(request: Request' in monitors
-        and 'resolve_principal(request, proj, ("read",)' in monitors
+    coord_package = root / "src" / "switchboard" / "services" / "coord"
+    package_modules = sorted(coord_package.glob("*.py"))
+    forbidden = {
+        str(path.relative_to(root)): forbidden_imports(path)
+        for path in package_modules
+        if forbidden_imports(path)
+    }
+    router_source = (coord_package / "router.py").read_text(encoding="utf-8")
+    adapter_source = (
+        root / "src" / "switchboard" / "api" / "coord_port_adapters.py"
+    ).read_text(encoding="utf-8")
+    ports_source = (coord_package / "ports.py").read_text(encoding="utf-8")
+    auth_port_bound = (
+        "class CoordReadAuthPort(Protocol)" in ports_source
+        and "auth_port.authorize(request, project)" in router_source
+    )
+    query_port_bound = (
+        "class CoordQueryPort(Protocol)" in ports_source
+        and "class RepositoryCoordQueries" in adapter_source
+    )
+    repository_adapter_bound = all(name in adapter_source for name in (
+        "switchboard.storage.repositories import access",
+        "switchboard.storage.repositories import activity",
+        "switchboard.storage.repositories import coordination",
+        "switchboard.storage.repositories import decisions",
+        "switchboard.storage.repositories import tasks",
+    ))
+    g1_runtime_pass = (
+        bool(package_modules) and not forbidden and auth_port_bound
+        and query_port_bound and repository_adapter_bound
     )
     coupling = verdict.get("coupling") or {}
     unresolved = coupling.get("unresolved_root_imports") or []
-    coupling_evidence_present = all(
-        (root / str(item.get("path") or "")).is_file() and item.get("imports")
-        for item in unresolved
+    resolved_paths = coupling.get("resolved_paths") or []
+    coupling_evidence_present = not unresolved and bool(resolved_paths) and all(
+        (root / str(path)).is_file() for path in resolved_paths
     )
     budget = verdict.get("resource_budget") or {}
     remaining = int(budget.get("memory_available_bytes") or 0) - int(
@@ -140,11 +182,19 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
         "schema": verdict.get("schema") == SCHEMA,
         "task_id": verdict.get("task_id") == "ARCH-MS-104",
         "route_inventory_exact": routes == REQUIRED_ROUTES,
+        "route_inventory_uses_thin_router": all(
+            row.get("router") == "src/switchboard/services/coord/router.py"
+            for row in verdict.get("route_inventory") or []
+        ),
         "all_routes_read_only": all(not bool(row.get("writes"))
                                      for row in verdict.get("route_inventory") or []),
         "writer_inventory_empty": verdict.get("writer_inventory") == [],
         "required_gates_present": REQUIRED_GATES.issubset(gates),
-        "delta_auth_bound": delta_auth_bound,
+        "coord_import_ceiling": not forbidden,
+        "coord_auth_port_bound": auth_port_bound,
+        "coord_query_port_bound": query_port_bound,
+        "repository_adapter_bound": repository_adapter_bound,
+        "g1_matches_runtime": bool((gates.get("G1_ports_independence") or {}).get("passed")) == g1_runtime_pass,
         "coupling_evidence_present": coupling_evidence_present,
         "resource_budget_math": budget_math_ok and budget_pass,
         "tasks_acceptance_green": bool((verdict.get("tasks_production_acceptance") or {}).get("green")),
@@ -160,6 +210,7 @@ def evaluate(root: Path = ROOT, *, run_probe: bool = True) -> dict[str, Any]:
         "verdict": verdict.get("verdict"),
         "process_cut_authorized": bool(verdict.get("process_cut_authorized")),
         "failed_gates": failed_gates,
+        "forbidden_imports": forbidden,
         "checks": checks,
         "sqlite_probe": sqlite_probe,
     }

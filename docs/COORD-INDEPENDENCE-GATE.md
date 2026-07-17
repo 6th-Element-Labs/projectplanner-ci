@@ -1,19 +1,21 @@
 # Coordination / board independence gate (ARCH-MS-104)
 
-**Verdict: No-Go.** Keep Coordination/board in the modular monolith. Do not install a
-Coord unit, route Caddy to `:8123`, or set `PM_COORD_HTTP_PRIMARY=service`.
+**Verdict: Go for ARCH-MS-105 side-by-side build.** The read-only Coord package now has
+an independent query/Auth boundary. This authorizes building and parity-testing the service on
+`:8123`; it does not authorize production cutover or Caddy ownership yet.
 
 The machine-readable authority is
 [`coord_independence_verdict.json`](coord/coord_independence_verdict.json), enforced by
 `scripts/arch_ms104_coord_independence.py`. A future Go amendment must make every required
 gate pass; changing prose alone cannot authorize ARCH-MS-105.
 
-## Why No-Go
+## Why Go
 
-The day-one surface is read-only and operationally affordable, but it is not process
-independent. The current board, coordination, monitor/delta, and signals modules still import
-root `store`, `auth`, `dispatch`, or `signals` facades. Starting another uvicorn now would turn
-those in-process dependencies into a networked monolith—the exact failure ADR-0013 forbids.
+The day-one surface is read-only and operationally affordable. It now lives behind
+`CoordQueryPort` and `CoordReadAuthPort` in `src/switchboard/services/coord`, with production
+adapters bound to package repositories outside the service package. The executable gate parses
+every Coord package module and requires zero direct imports of root `store`, `auth`, `dispatch`,
+or `signals` facades.
 
 ## Exact day-one route and transaction inventory
 
@@ -56,13 +58,12 @@ Capacity and reader contention pass. They do not override the failed ports-indep
 
 | Gate | Result |
 |---|---|
-| G1 Ports / import independence | **Fail — blocks cut** |
+| G1 Ports / import independence | Pass |
 | G2 Route and writer inventory | Pass |
 | G3 Auth and explicit project scope | Pass after BUG-73 fix |
 | G4 SQLite contention | Pass |
 | G5 VM resource budget | Pass |
 | G6 Tasks production acceptance | Pass |
 
-To reopen Path A, introduce dependency-injected Coord query/auth ports with a zero-forbidden-import
-ceiling, bind them directly to package repositories, rerun this executable gate, and merge an
-amended `verdict=go` artifact. Until then, ARCH-MS-105 is Go-only and must remain blocked.
+All six gates pass. ARCH-MS-105 may build the standalone process and run side-by-side parity.
+Production deployment and edge ownership remain gated by the later deployment/acceptance milestones.
