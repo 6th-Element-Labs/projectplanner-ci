@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
 
 from . import deps
+from .heap import release_heap_after
 from .ports import CoordQueryPort, CoordReadAuthPort
 
 
@@ -23,7 +24,7 @@ def _json_response(payload: Any) -> Response:
     was the other half of BUG-79's concurrency-dependent retained-heap spike.
     """
     body = json.dumps(payload, default=str, separators=(",", ":")).encode()
-    return Response(content=body, media_type="application/json")
+    return release_heap_after(Response(content=body, media_type="application/json"))
 
 
 def create_router(
@@ -47,7 +48,7 @@ def create_router(
     def board(request: Request, project: str = Query(...), view: str = Query("")):
         resolved = project_for(request, project)
         payload = query_port.board(resolved, cards=(view or "").strip().lower() == "cards")
-        return etag_json(request, payload, max_age=5)
+        return release_heap_after(etag_json(request, payload, max_age=5))
 
     @router.get("/api/signals")
     def plan_signals(request: Request, project: str = Query(...)):
