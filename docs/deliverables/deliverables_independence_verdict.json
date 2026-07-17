@@ -1,0 +1,106 @@
+{
+  "schema": "switchboard.deliverables_independence_verdict.v1",
+  "task_id": "ARCH-MS-109",
+  "deliverable_id": "arch-ms-deliverables-service",
+  "observed_at": "2026-07-17T00:00:00Z",
+  "canonical_sha": "fe9acdecacb27089d752ef86e744fe6aa00cfd7a",
+  "verdict": "go",
+  "process_build_authorized": true,
+  "production_cutover_authorized": false,
+  "blocking_gates": [],
+  "go_only_tasks": ["ARCH-MS-110"],
+  "route_inventory": [
+    {"method":"GET","path":"/api/deliverables","handler":"list_deliverables","calls":["store.list_deliverable_summaries","store.list_deliverables"],"transaction":"one project-scoped read connection per repository call","revision_binding":"deliverable updated_at per item; parity compares canonical JSON","writes":false},
+    {"method":"GET","path":"/api/deliverables/breakdown_proposals","handler":"list_deliverable_breakdown_proposals","calls":["store.list_deliverable_breakdown_proposals"],"transaction":"one project-scoped read connection","revision_binding":"proposal updated_at per item; parity compares canonical JSON","writes":false},
+    {"method":"GET","path":"/api/deliverables/breakdown_proposals/{proposal_id}","handler":"get_deliverable_breakdown_proposal","calls":["store.get_deliverable_breakdown_proposal"],"transaction":"one project-scoped read connection","revision_binding":"proposal updated_at; parity compares canonical JSON","writes":false},
+    {"method":"GET","path":"/api/deliverables/{deliverable_id}","handler":"get_deliverable","calls":["store.get_deliverable"],"transaction":"bounded project-scoped reads for deliverable, milestones and links","revision_binding":"deliverable updated_at plus linked task snapshots; parity compares canonical JSON","writes":false},
+    {"method":"GET","path":"/api/mission_status","handler":"mission_status_query","calls":["store.get_mission_status"],"transaction":"bounded project-scoped reads; process-local TTL cache keyed by mission cache stamp","revision_binding":"deliverable updated_at plus every linked project's task stamp; response ETag","writes":false},
+    {"method":"GET","path":"/api/deliverables/{deliverable_id}/mission_status","handler":"deliverable_mission_status","calls":["store.get_mission_status"],"transaction":"bounded project-scoped reads; process-local TTL cache keyed by mission cache stamp","revision_binding":"deliverable updated_at plus every linked project's task stamp; response ETag","writes":false},
+    {"method":"GET","path":"/api/deliverables/{deliverable_id}/dependency_graph","handler":"deliverable_dependency_graph","calls":["store.get_deliverable_dependency_graph"],"transaction":"bounded project-scoped reads; process-local TTL cache","revision_binding":"deliverable updated_at plus linked task state; response ETag","writes":false},
+    {"method":"GET","path":"/api/deliverables/{deliverable_id}/closure_report","handler":"get_deliverable_closure_report_route","calls":["store.get_deliverable_closure_report"],"transaction":"one committed project-scoped metadata read; never computes or records closure","revision_binding":"immutable report_id and evidence_hash, retained history, canonical JSON parity","writes":false}
+  ],
+  "writer_inventory": [
+    {"method":"POST","path":"/api/deliverables","calls":["create_deliverable_command.execute_mapping_result"],"ownership":"monolith","boundary_ref":"deliverables._create_deliverable_impl","transaction":"one project _write_through transaction atomically upserts the deliverable and activity; narration enqueue is post-commit and idempotent"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/milestones","calls":["store.add_deliverable_milestone"],"ownership":"monolith","boundary_ref":"deliverables.add_deliverable_milestone","transaction":"one project connection transaction upserts the milestone, activity, and parent updated_at; narration enqueue is post-commit"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/task_links","calls":["store.link_task_to_deliverable"],"ownership":"monolith","boundary_ref":"deliverables._link_task_to_deliverable_impl","transaction":"one project _write_through transaction writes the link, activity, and parent updated_at; optional dependency closure is explicit post-commit orchestration"},
+    {"method":"DELETE","path":"/api/deliverables/{deliverable_id}/task_links","calls":["store.unlink_task_from_deliverable"],"ownership":"monolith","boundary_ref":"deliverables.unlink_task_from_deliverable","transaction":"one project connection transaction deletes the link, writes activity, and touches the parent; narration enqueue is post-commit"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/closure_verify","calls":["deliverable_closure.verify_and_record_closure"],"ownership":"monolith","boundary_ref":"deliverables._record_deliverable_closure_impl","transaction":"grading precedes one project _write_through transaction that atomically persists report metadata and deliverable.closure_verified activity"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/closure_request","calls":["deliverable_closure.request_closure_verification"],"ownership":"monolith","boundary_ref":"deliverable_closure.request_closure_verification","transaction":"monolith orchestration owns separately audited message and wake effects; no claim of one cross-effect SQLite transaction"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/coordinator_tick","calls":["store.run_mission_coordinator_tick"],"ownership":"monolith","boundary_ref":"deliverables.run_mission_coordinator_tick","transaction":"monolith orchestration performs bounded repository writes as separate committed actions; the whole tick is not one transaction"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/mission_brief","calls":["store.generate_mission_brief"],"ownership":"monolith","boundary_ref":"deliverables.generate_mission_brief","transaction":"brief generation precedes one project metadata/activity transaction; external generation is outside the SQLite transaction"},
+    {"method":"PATCH","path":"/api/deliverables/{deliverable_id}/narrative","calls":["store.update_mission_narrative"],"ownership":"monolith","boundary_ref":"deliverables.update_mission_narrative","transaction":"one project connection transaction updates narrative metadata and activity"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/breakdown_proposals","calls":["store.propose_deliverable_breakdown"],"ownership":"monolith","boundary_ref":"deliverables.propose_deliverable_breakdown","transaction":"one project connection transaction supersedes prior proposals, inserts the proposal, and writes activity"},
+    {"method":"POST","path":"/api/deliverables/breakdown_proposals/{proposal_id}/approve","calls":["store.approve_deliverable_breakdown"],"ownership":"monolith","boundary_ref":"deliverables.approve_deliverable_breakdown","transaction":"monolith-owned multi-project orchestration composes separate milestone, task, link, and proposal-state transactions; it is intentionally not globally atomic"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/outcome","calls":["store.submit_deliverable_outcome"],"ownership":"monolith","boundary_ref":"deliverables.submit_deliverable_outcome","transaction":"draft generation precedes the single project proposal transaction; optional LLM work is outside SQLite"},
+    {"method":"POST","path":"/api/deliverables/{deliverable_id}/archive","calls":["store.archive_deliverable"],"ownership":"monolith","boundary_ref":"deliverables.archive_deliverable","transaction":"one project connection transaction updates deliverable status and updated_at"},
+    {"method":"PATCH","path":"/api/deliverables/breakdown_proposals/{proposal_id}","calls":["store.update_deliverable_breakdown_proposal"],"ownership":"monolith","boundary_ref":"deliverables.update_deliverable_breakdown_proposal","transaction":"one project connection transaction updates proposal payload/outcome and writes activity"},
+    {"method":"POST","path":"/api/deliverables/breakdown_proposals/{proposal_id}/reject","calls":["store.reject_deliverable_breakdown"],"ownership":"monolith","boundary_ref":"deliverables._finalize_breakdown_review","transaction":"one project connection transaction marks the proposal rejected and writes activity"},
+    {"method":"POST","path":"/api/deliverables/breakdown_proposals/{proposal_id}/defer","calls":["store.defer_deliverable_breakdown"],"ownership":"monolith","boundary_ref":"deliverables._finalize_breakdown_review","transaction":"one project connection transaction marks the proposal deferred and writes activity"}
+  ],
+  "writer_policy": {
+    "day_one_service_writer_count": 0,
+    "all_inventory_entries_stay_on_monolith": true,
+    "closure_rule": "verify, grade, deliverable metadata update and deliverable.closure_verified activity stamp remain one monolith-owned write transaction",
+    "reader_rule": "the service may expose only committed closure reports; it may not compute, request, grade or persist closure"
+  },
+  "auth_project_scope": {
+    "explicit_project_required": true,
+    "required_port": "DeliverablesReadAuthPort",
+    "required_order": ["resolve_project", "authorize_project_read", "query_repository"],
+    "current_monolith_boundary": "global API middleware; current handlers do not bind a read principal directly",
+    "standalone_rule": "ARCH-MS-110 must authorize every route through the injected project-scoped read port and must reject missing or cross-project bearer tokens"
+  },
+  "closure_consistency": {
+    "write_owner": "monolith",
+    "implementation": "src/switchboard/storage/repositories/deliverables.py::_record_deliverable_closure_impl",
+    "atomic_effects": ["deliverables.metadata_json and updated_at", "activity kind deliverable.closure_verified"],
+    "public_entrypoint": "record_deliverable_closure uses _write_through",
+    "cross_process_contract": "read committed report snapshots only",
+    "unsafe_split_forbidden": true
+  },
+  "revision_drift_binding": {
+    "mission_cache_stamp": "deliverables.updated_at plus linked project task stamps",
+    "closure_identity": ["report_id", "evidence_hash"],
+    "side_by_side_rule": "ARCH-MS-110 compares status, body and ETag/canonical payload at the same observed source revision and reports drift instead of masking it",
+    "cache_rule": "standalone caches are process-local and keyed by the same repository revision stamps"
+  },
+  "sqlite_contention": {
+    "journal_mode": "wal",
+    "model": "one monolith closure writer plus three standalone read workers",
+    "writer_transactions": 80,
+    "reader_transactions": 240,
+    "required_lock_errors": 0,
+    "required_snapshot_mismatches": 0,
+    "required_quick_check": "ok"
+  },
+  "resource_budget": {
+    "host": "ip-172-31-45-202",
+    "measurement_sha": "fe9acdecacb27089d752ef86e744fe6aa00cfd7a",
+    "measurement_scope": "live post-Coord host with projectplanner, Auth, Tasks and Coord active",
+    "memory_total_bytes": 1931718656,
+    "memory_available_bytes": 716730368,
+    "swap_total_bytes": 965734400,
+    "swap_free_bytes": 917237760,
+    "current_unit_memory_bytes": {"projectplanner":177868800,"switchboard-auth":58908672,"switchboard-tasks":66670592,"switchboard-coord":58810368},
+    "projected_deliverables_rss_bytes": 134217728,
+    "projection_basis": "128 MiB hard cap for a read-only uvicorn, above the live Tasks and Coord RSS values",
+    "projected_remaining_bytes": 582512640,
+    "minimum_reserve_bytes": 536870912,
+    "headroom_after_projection_bytes": 45641728,
+    "passed": true
+  },
+  "gates": {
+    "G1_route_repository_transaction_inventory":{"passed":true,"reason":"All 24 router routes are classified: eight day-one reads and sixteen monolith-owned writes, each with repository calls and an explicit transaction or orchestration boundary."},
+    "G2_closure_transaction_boundary":{"passed":true,"reason":"Closure report persistence and its audit stamp share one SQLite transaction and remain on the monolith."},
+    "G3_auth_project_scope":{"passed":true,"reason":"The build contract requires explicit project resolution and a handler-level project-scoped read Auth port on every standalone route."},
+    "G4_revision_drift_binding":{"passed":true,"reason":"Mission caches retain repository stamps; closure identity retains report_id/evidence_hash; parity is revision-aware."},
+    "G5_sqlite_contention":{"passed":true,"reason":"The executable WAL probe requires atomic snapshots, zero lock errors and quick_check=ok with one writer and three readers."},
+    "G6_resource_budget":{"passed":true,"reason":"A 128 MiB cap leaves 582512640 bytes available, 45641728 bytes above the 512 MiB reserve on the live post-Coord host."}
+  },
+  "go_exit": {
+    "authorize_task": "ARCH-MS-110",
+    "authorize_side_by_side_build": true,
+    "authorize_production_cutover": false,
+    "next_action": "Build the port-bound read-only service and prove exact side-by-side parity on :8124; production cut remains a later gated task."
+  }
+}

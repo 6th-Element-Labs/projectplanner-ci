@@ -89,6 +89,7 @@ rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
 | Task | Title | Tracker | Repo evidence |
 |---|---|---|---|
 | **ARCH-MS-97** | Deliverables service: ADR charter + thin surface | ✅ | PR #533 — ADR-0014; `docs/deliverables/thin_day_one_surface.md` |
+| **ARCH-MS-109** | Deliverables independence: closure transactions, auth, capacity | 🟢 | Go artifact + executable route/transaction/contention gate; `docs/deliverables/deliverables_independence_verdict.json` |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
