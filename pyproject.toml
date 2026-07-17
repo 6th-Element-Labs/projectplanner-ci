@@ -30,6 +30,7 @@ dependencies = [
     "python-pptx>=0.6",
     "python-multipart>=0.0.9",
     "websockets>=15.0",
+    "pyte>=0.8",
 ]
 
 [dependency-groups]

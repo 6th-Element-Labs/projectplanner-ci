@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from switchboard.api.routers.auth.jwt_util import decode as jwt_decode
 from switchboard.api.routers.auth.jwt_util import encode as jwt_encode
+from switchboard.domain import pty_screen
 from switchboard.domain import runner_pty as domain
 
 SendFn = Callable[[str], None]
@@ -370,6 +371,11 @@ class _RelaySession:
     browsers: dict[str, _BrowserClient] = field(default_factory=dict)
     replay: list[str] = field(default_factory=list)
     replay_bytes: int = 0
+    # UI-25: headless screen model fed by the PTY byte stream, so a newly
+    # attached browser gets a full-frame snapshot of the current screen
+    # instead of a blank when the source app (a TUI) is idle and the
+    # byte-replay ring has rolled past its last full paint.
+    screen: pty_screen.ScreenModel = field(default_factory=pty_screen.ScreenModel)
     created_at: float = field(default_factory=time.time)
     last_active: float = field(default_factory=time.time)
     closed: bool = False
@@ -535,7 +541,19 @@ class RelayHub:
             )
             session.browsers[cid] = client
             session.last_active = time.time()
-            replay_frames = list(session.replay)
+            # UI-25: prefer a full-frame snapshot of the current screen over the
+            # raw byte-replay ring. The snapshot IS the current screen, so it
+            # renders instantly even for an idle TUI whose last paint has rolled
+            # out of the ring; the ring would also double-apply on top of it, so
+            # they are mutually exclusive. Fall back to the ring when no screen
+            # model is available (pyte missing) or nothing has been drawn yet.
+            snapshot = session.screen.snapshot_bytes()
+            replay_frames = [] if snapshot else list(session.replay)
+        sent_snapshot = False
+        if snapshot:
+            snapshot_frame = domain.encode_frame("replay", {}, data=snapshot)
+            sent_snapshot = self._enqueue_browser(
+                session_id, cid, snapshot_frame, is_replay=True)
         for encoded in replay_frames:
             self._enqueue_browser(session_id, cid, encoded, is_replay=True)
         return {
@@ -543,6 +561,7 @@ class RelayHub:
             "client_id": cid,
             "runner_session_id": sid,
             "replay_frames": len(replay_frames),
+            "snapshot": bool(sent_snapshot),
         }
 
     def disconnect_by_jti(self, jti: str, *, reason: str = "ticket_revoked") -> dict[str, Any]:
@@ -663,6 +682,14 @@ class RelayHub:
                 ):
                     if "kill" not in scopes:
                         return {"ok": False, "error": "missing_scope", "reason": "kill"}
+                # UI-25: keep the screen model sized to the PTY. The host applies
+                # this resize to the PTY, so the reconstructed snapshot must use
+                # the same dimensions or it reflows wrong for late joiners.
+                if kind == "resize":
+                    session.screen.resize(
+                        decoded.get("rows") or decoded.get("row"),
+                        decoded.get("cols") or decoded.get("col") or decoded.get("columns"),
+                    )
                 host_send = session.host_send
                 session.last_active = time.time()
                 client.last_active = session.last_active
@@ -733,6 +760,12 @@ class RelayHub:
                 session.last_active = time.time()
                 if kind in {"output", "state", "replay"}:
                     self._append_replay(session, encoded, domain.frame_byte_size(decoded))
+                    # UI-25: keep the screen model current so late joiners can be
+                    # handed a full frame. Only real output bytes carry screen state.
+                    if kind == "output":
+                        data = decoded.get("data")
+                        if isinstance(data, (bytes, bytearray)):
+                            session.screen.feed(bytes(data))
                 client_ids = list(session.browsers.keys())
                 if kind in {"close", "error"}:
                     session.closed = True
