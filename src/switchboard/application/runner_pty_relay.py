@@ -249,15 +249,12 @@ def is_loopback_url(url: str) -> bool:
     return False
 
 
-def public_relay_url(public_base: str, runner_session_id: str, ticket: str) -> str:
+def _public_ws_url(public_base: str, path: str, ticket: str) -> str:
     base = str(public_base or "").rstrip("/")
     if not base:
         raise ValueError("public_base_required")
     if is_loopback_url(base):
         raise ValueError("public_base_must_not_be_loopback")
-    path = domain.RELAY_PATH_TEMPLATE.format(
-        runner_session_id=urllib.parse.quote(str(runner_session_id), safe=""),
-    )
     if base.startswith("https://"):
         scheme_ws = "wss://"
         rest = base[len("https://"):]
@@ -270,6 +267,48 @@ def public_relay_url(public_base: str, runner_session_id: str, ticket: str) -> s
         scheme_ws = "wss://"
         rest = base
     return f"{scheme_ws}{rest}{path}?{urllib.parse.urlencode({'ticket': ticket})}"
+
+
+def public_relay_url(public_base: str, runner_session_id: str, ticket: str) -> str:
+    path = domain.RELAY_PATH_TEMPLATE.format(
+        runner_session_id=urllib.parse.quote(str(runner_session_id), safe=""),
+    )
+    return _public_ws_url(public_base, path, ticket)
+
+
+def public_host_relay_url(public_base: str, runner_session_id: str, ticket: str) -> str:
+    """Browser-facing hosts must use /pty/host with a host_tunnel ticket (BUG-74)."""
+    path = domain.HOST_RELAY_PATH_TEMPLATE.format(
+        runner_session_id=urllib.parse.quote(str(runner_session_id), safe=""),
+    )
+    return _public_ws_url(public_base, path, ticket)
+
+
+def mint_host_tunnel_ticket(
+    binding: Mapping[str, Any],
+    ttl_seconds: int = domain.DEFAULT_TICKET_TTL_SECONDS,
+    *,
+    now: float | None = None,
+    secret: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Mint a host-only tunnel ticket (never includes browser watch scopes)."""
+    return mint_capability_ticket(
+        binding,
+        [domain.HOST_TUNNEL_SCOPE],
+        ttl_seconds=ttl_seconds,
+        now=now,
+        secret=secret,
+    )
+
+
+def ticket_allows_host_tunnel(payload: Mapping[str, Any] | None) -> tuple[bool, str]:
+    """Fail closed: host tunnel requires host_tunnel and forbids browser scopes."""
+    scopes = set(domain.normalize_scopes((payload or {}).get("scopes")))
+    if domain.HOST_TUNNEL_SCOPE not in scopes:
+        return False, "host_tunnel_required"
+    if scopes & domain.BROWSER_CAPABILITY_SCOPES:
+        return False, "browser_ticket_forbidden"
+    return True, ""
 
 
 def sanitize_browser_stream_metadata(
@@ -386,12 +425,58 @@ class RelayHub:
         *,
         close_fn: CloseFn | None = None,
     ) -> dict[str, Any]:
+        bind = dict(binding or {})
+        allowed, deny_reason = ticket_allows_host_tunnel(bind)
+        if not allowed:
+            return {
+                "ok": False,
+                "error": "missing_scope" if deny_reason == "host_tunnel_required"
+                else deny_reason,
+                "reason": deny_reason,
+            }
+        ticket_host = str(bind.get("host_id") or "").strip()
+        if not ticket_host:
+            return {
+                "ok": False,
+                "error": "host_id_required",
+                "reason": "absent_permission",
+            }
         with self._lock:
-            session = self.ensure_session(session_id, binding)
+            sid = str(session_id or "").strip()
+            existing = self._sessions.get(sid)
+            # Compare against the already-bound session before merge overlays.
+            if existing is not None:
+                if existing.closed:
+                    return {
+                        "ok": False,
+                        "error": "session_closed",
+                        "reason": existing.close_reason,
+                    }
+                session_host = str(existing.binding.get("host_id") or "").strip()
+                if session_host and session_host != ticket_host:
+                    return {
+                        "ok": False,
+                        "error": "host_mismatch",
+                        "reason": "host_id_mismatch",
+                    }
+                for key in ("task_id", "claim_id", "wake_id", "work_session_id",
+                            "runner_session_id"):
+                    have = str(existing.binding.get(key) or "").strip()
+                    want = str(bind.get(key) or "").strip()
+                    if have and want and have != want:
+                        return {"ok": False, "error": f"{key}_mismatch"}
+                # BUG-74: one active host tunnel — never silently replace host_send.
+                if existing.host_send is not None:
+                    return {
+                        "ok": False,
+                        "error": "host_already_attached",
+                        "reason": "single_host_tunnel",
+                    }
+            session = self.ensure_session(session_id, bind)
             if session.closed:
                 return {"ok": False, "error": "session_closed", "reason": session.close_reason}
-            jti = str((binding or {}).get("jti") or "").strip()
-            project = str((binding or {}).get("project_id") or session.binding.get("project_id") or "")
+            jti = str(bind.get("jti") or "").strip()
+            project = str(bind.get("project_id") or session.binding.get("project_id") or "")
             if jti and is_jti_revoked(jti, project=project):
                 return {"ok": False, "error": "revoked", "reason": "ticket_revoked"}
             session.host_send = send_fn

@@ -131,25 +131,31 @@ relay.clear_revoked_jtis_for_tests()
 live_hub = relay.reset_default_hub_for_tests()
 live_frames: list[str] = []
 closed_flags = {"browser": False, "host": False}
-live_ticket, live_payload = relay.mint_capability_ticket(
+host_live_ticket, host_live_payload = relay.mint_host_tunnel_ticket(
+    _binding("run_revoke_live"), ttl_seconds=120)
+browser_live_ticket, browser_live_payload = relay.mint_capability_ticket(
     _binding("run_revoke_live"), ["watch", "input"], ttl_seconds=120)
-live_hub.attach_host(
+att_host_live = live_hub.attach_host(
     "run_revoke_live",
     lambda f: live_frames.append(f"host:{f}"),
-    binding=live_payload,
+    binding=host_live_payload,
     close_fn=lambda: closed_flags.__setitem__("host", True),
 )
 att_live = live_hub.attach_browser(
     "run_revoke_live",
-    live_payload,
+    browser_live_payload,
     lambda f: live_frames.append(f"browser:{f}"),
     client_id="browser-revoke",
     close_fn=lambda: closed_flags.__setitem__("browser", True),
 )
-ok(att_live.get("ok") is True, "live revoke fixture attaches browser")
-dropped = live_hub.disconnect_by_jti(live_payload["jti"], reason="ticket_revoked")
+ok(att_host_live.get("ok") is True and att_live.get("ok") is True,
+   "live revoke fixture attaches distinct host_tunnel + browser tickets")
+dropped_browser = live_hub.disconnect_by_jti(
+    browser_live_payload["jti"], reason="ticket_revoked")
+dropped_host = live_hub.disconnect_by_jti(
+    host_live_payload["jti"], reason="ticket_revoked")
 info_after = live_hub.session_info("run_revoke_live")
-ok(dropped.get("browsers") == 1 and dropped.get("hosts") == 1
+ok(dropped_browser.get("browsers") == 1 and dropped_host.get("hosts") == 1
    and closed_flags["browser"] and closed_flags["host"]
    and info_after is not None and info_after.get("browser_count") == 0
    and info_after.get("host_attached") is False
@@ -157,12 +163,12 @@ ok(dropped.get("browsers") == 1 and dropped.get("hosts") == 1
    "revoke disconnects live browser+host clients with matching jti")
 # Re-attach must fail after revoke_ticket_jti (memory deny list)
 relay.revoke_ticket_jti(
-    live_payload["jti"],
-    expires_at=float(live_payload["exp"]),
+    browser_live_payload["jti"],
+    expires_at=float(browser_live_payload["exp"]),
     hub=live_hub,
 )
 denied_reattach = live_hub.attach_browser(
-    "run_revoke_live", live_payload, lambda f: None, client_id="browser-re")
+    "run_revoke_live", browser_live_payload, lambda f: None, client_id="browser-re")
 ok(denied_reattach.get("error") == "revoked",
    "revoked jti cannot re-attach a live browser client")
 relay.clear_revoked_jtis_for_tests()
@@ -274,7 +280,9 @@ def host_send(frame: str) -> None:
             runner_session_id=session_id)
         bridge.apply_relay_control_frame(control_url, control_ticket, frame)
 
-hub.attach_host(session_id, host_send, binding=_binding(session_id))
+_host_ticket, _host_payload = relay.mint_host_tunnel_ticket(_binding(session_id))
+ok(hub.attach_host(session_id, host_send, binding=_host_payload).get("ok") is True,
+   "host attaches with distinct host_tunnel ticket")
 
 full_ticket, full_payload = relay.mint_capability_ticket(
     _binding(session_id), ["watch", "input", "resize", "signal", "kill"], ttl_seconds=120)
@@ -456,7 +464,11 @@ browser_death: list[str] = []
 death_hub = relay.reset_default_hub_for_tests()
 # Use a fresh hub variable but keep module default for death test
 death_hub = relay.RelayHub()
-death_hub.attach_host("run_dead", lambda f: None, binding=_binding("run_dead"))
+_death_host_ticket, _death_host_payload = relay.mint_host_tunnel_ticket(
+    _binding("run_dead"))
+ok(death_hub.attach_host(
+    "run_dead", lambda f: None, binding=_death_host_payload).get("ok") is True,
+   "death fixture host attaches with host_tunnel ticket")
 death_hub.attach_browser(
     "run_dead",
     relay.mint_capability_ticket(_binding("run_dead"), ["watch"], ttl_seconds=60)[1],

@@ -25,7 +25,13 @@ HOST_TO_BROWSER_TYPES = frozenset({
     "output", "state", "error", "close", "replay", "pong", "backpressure",
 })
 
-CAPABILITY_SCOPES = frozenset({"watch", "input", "resize", "signal", "kill"})
+# Browser tickets use watch/input/resize/signal/kill.
+# Host PTY tunnel uses a distinct host_tunnel scope (BUG-74) — never interchangeable.
+CAPABILITY_SCOPES = frozenset({
+    "watch", "input", "resize", "signal", "kill", "host_tunnel",
+})
+BROWSER_CAPABILITY_SCOPES = frozenset({"watch", "input", "resize", "signal", "kill"})
+HOST_TUNNEL_SCOPE = "host_tunnel"
 
 TICKET_BIND_FIELDS = (
     "tenant_id",
@@ -52,6 +58,7 @@ DEFAULT_TICKET_TTL_SECONDS = 900
 
 TRANSPORT_SWITCHBOARD_PTY_RELAY = "switchboard_pty_relay"
 RELAY_PATH_TEMPLATE = "/ixp/v1/runner_sessions/{runner_session_id}/pty"
+HOST_RELAY_PATH_TEMPLATE = "/ixp/v1/runner_sessions/{runner_session_id}/pty/host"
 
 
 def encode_frame(frame_type: str, payload: Optional[Mapping[str, Any]] = None,

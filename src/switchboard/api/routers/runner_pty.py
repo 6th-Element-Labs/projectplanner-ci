@@ -214,26 +214,30 @@ def create_router(
     @router.websocket("/ixp/v1/runner_sessions/{runner_session_id}/pty/host")
     async def host_pty_ws(websocket: WebSocket, runner_session_id: str,
                           host_id: str = Query("")):
-        # Host tunnel: capability ticket with watch (host side). Prefer host ticket
-        # via query; principal-only fallback stays fail-closed in P0.
+        # BUG-74: host tunnel requires a distinct host_tunnel ticket — never a
+        # browser watch ticket. host_id query must match the ticket bind.
         ticket = _ticket_from_ws(websocket)
-        payload = None
-        reason = "unauthorized"
-        if ticket:
-            payload, reason = relay.verify_capability_ticket(
-                ticket,
-                required_scope="watch",
-                expected_binding_subset={
-                    "runner_session_id": runner_session_id,
-                    **({"host_id": host_id} if host_id else {}),
-                },
-            )
+        host_bind = str(host_id or "").strip()
+        if not host_bind:
+            await websocket.close(code=4403, reason="host_id_required")
+            return
+        if not ticket:
+            await websocket.close(code=4401, reason="unauthorized")
+            return
+        payload, reason = relay.verify_capability_ticket(
+            ticket,
+            required_scope=domain.HOST_TUNNEL_SCOPE,
+            expected_binding_subset={
+                "runner_session_id": runner_session_id,
+                "host_id": host_bind,
+            },
+        )
         if payload is None:
             await websocket.close(code=4401, reason=(reason or "unauthorized")[:120])
             return
-        ticket_host = str(payload.get("host_id") or "")
-        if host_id and ticket_host and ticket_host != host_id:
-            await websocket.close(code=4403, reason="host_mismatch")
+        allowed, deny_reason = relay.ticket_allows_host_tunnel(payload)
+        if not allowed:
+            await websocket.close(code=4403, reason=deny_reason[:120])
             return
         await websocket.accept()
         loop = asyncio.get_running_loop()
