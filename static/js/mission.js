@@ -643,9 +643,17 @@
                 const nid = String(n.id || '').toUpperCase();
                 return boldId ? nid === boldId : label.includes(nid);
             });
-            nodeEl.addEventListener('click', (e) => {
+            nodeEl.addEventListener('click', async (e) => {
                 e.preventDefault();
-                if (hit) this.openNodeModal(hit.id, hit.project_id);   // UI-1: node actions
+                if (!hit) return;
+                // UI-24: a task with a live/watchable runner opens straight into its
+                // bound terminal (the sidecar); otherwise fall back to the existing
+                // deliverable-link node-actions modal (UI-1).
+                if (typeof this.openRunnerSessionPanel === 'function') {
+                    const opened = await this.openRunnerSessionPanel(hit.id, { fallbackIfNotWatchable: true });
+                    if (opened) return;
+                }
+                this.openNodeModal(hit.id, hit.project_id);
             });
             // Native SVG hover tooltip: narration + who's working it now.
             if (hit) {

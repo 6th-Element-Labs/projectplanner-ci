@@ -1,7 +1,16 @@
-/* ARCH-MS-21 / CO-13: runner Watch/Chat + bound PTY session inject. */
+/* UI-24 (was ARCH-MS-21/CO-13 scaffold): runner Watch/Chat, now a real bound PTY
+   terminal. One xterm.js instance + one relay WebSocket per runner_session_id,
+   living in #runner-pty-panel (static/index.html) — opened either as a
+   right-docked sidecar (ambient trigger: a task box, the Proof Console) or
+   reparented in place inside the task-detail modal's Dev tab (already viewing
+   full task context). Never both at once for the same session: opening the
+   other container moves the same panel, it does not open a second connection. */
 (function (global) {
     'use strict';
     const methods = {
+    XTERM_JS_SRC: 'https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js',
+    XTERM_FIT_SRC: 'https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js',
+
     runnerControlHtml(t) {
         return `<div class="card mb-3" id="runner-control-panel" data-task-id="${this.esc(t.task_id)}">
             <div class="card-header py-2">
@@ -10,25 +19,11 @@
                     <span class="fw-semibold">Runner sessions</span>
                     <span id="runner-control-count" class="badge bg-secondary-lt">loading</span>
                     <button type="button" class="btn btn-sm btn-outline-azure ms-2" id="runner-watch-open"
-                        data-task-id="${this.esc(t.task_id)}">Watch / Chat</button>
+                        data-task-id="${this.esc(t.task_id)}"><i class="ti ti-terminal-2 me-1"></i>Watch / Chat</button>
                     <span id="runner-control-flash" class="small text-secondary ms-auto"></span>
                 </div>
             </div>
-            <div id="runner-watch-gate" class="px-3 pt-2" hidden></div>
-            <div id="runner-session-chat" class="px-3 pb-2" hidden>
-                <div class="small text-secondary mb-1">Session chat (bound Codex PTY — not inbox)</div>
-                <div class="btn-list mb-2">
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="redirect">Redirect</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="hold">Hold</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="approve">Approve</button>
-                </div>
-                <div class="input-group input-group-sm">
-                    <input id="runner-chat-input" class="form-control" placeholder="Inject freeform into the live session…" autocomplete="off"/>
-                    <button type="button" class="btn btn-azure" id="runner-chat-send">Send</button>
-                </div>
-                <div id="runner-chat-log" class="small text-secondary mt-2"></div>
-            </div>
-            <div id="runner-control-body" class="card-body py-3">
+            <div class="card-body py-3" id="runner-control-body">
                 <div class="text-secondary small">Loading runner sessions…</div>
             </div>
         </div>`;
@@ -67,132 +62,6 @@
                 taskId,
             ));
         });
-    },
-
-    async openRunnerWatch(taskId) {
-        // UI-17 / COORD-34: fail closed unless list_runner_sessions(task_id) yields a
-        // fully bound live runner (task/claim/host/wake/work_session).
-        // CO-13: on success, expose session chat inject bound to runner_session_id+task_id.
-        const gate = document.getElementById('runner-watch-gate');
-        const chat = document.getElementById('runner-session-chat');
-        const flash = document.getElementById('runner-control-flash');
-        const showGate = (html, cls) => {
-            if (gate) {
-                gate.hidden = false;
-                gate.innerHTML = html;
-                gate.className = `px-3 pt-2 small text-${cls || 'danger'}`;
-            }
-            if (flash) {
-                flash.textContent = '';
-                flash.className = 'small text-secondary ms-auto';
-            }
-        };
-        if (chat) {
-            chat.hidden = true;
-            chat.removeAttribute('data-runner-session-id');
-            chat.removeAttribute('data-task-id');
-        }
-        try {
-            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(taskId)}`;
-            const data = await (await fetch(`/ixp/v1/runner_sessions/watch?${q}`)).json();
-            if (data.error || data.error_code === 'runner_bind_incomplete' || data.watchable === false) {
-                const missing = (data.missing || []).join(', ') || 'bind fields';
-                showGate(
-                    `<span class="badge bg-red-lt me-1">${this.esc(data.error_code || data.error || 'runner_bind_incomplete')}</span>`
-                    + `${this.esc(data.message || 'Runner bind incomplete for Watch/Chat')}`
-                    + ` <span class="text-secondary">(missing: ${this.esc(missing)})</span>`,
-                    'danger',
-                );
-                return;
-            }
-            const sid = data.runner_session_id || (data.session || {}).runner_session_id || '';
-            showGate(
-                `<span class="badge bg-green-lt me-1">watchable</span>`
-                + `Bound runner ${this.esc(sid)} — Watch/Chat panel may open.`
-                + ` <span class="text-secondary font-monospace">${this.esc((data.bind || {}).host_id || '')}</span>`,
-                'green',
-            );
-            if (chat && sid) {
-                chat.hidden = false;
-                chat.setAttribute('data-runner-session-id', sid);
-                chat.setAttribute('data-task-id', taskId);
-                const sendBtn = document.getElementById('runner-chat-send');
-                const input = document.getElementById('runner-chat-input');
-                if (sendBtn && !sendBtn._bound) {
-                    sendBtn.addEventListener('click', () => this.sendRunnerSessionChat('freeform'));
-                    sendBtn._bound = true;
-                }
-                if (input && !input._bound) {
-                    input.addEventListener('keydown', (e) => {
-                        if (e.key === 'Enter') this.sendRunnerSessionChat('freeform');
-                    });
-                    input._bound = true;
-                }
-                chat.querySelectorAll('[data-runner-chat-kind]').forEach((btn) => {
-                    if (btn._bound) return;
-                    btn.addEventListener('click', () => {
-                        this.sendRunnerSessionChat(btn.getAttribute('data-runner-chat-kind') || 'freeform');
-                    });
-                    btn._bound = true;
-                });
-            }
-        } catch (e) {
-            showGate(`Watch refused: ${this.esc(e.message)}`, 'danger');
-        }
-    },
-
-    async sendRunnerSessionChat(kind) {
-        const panel = document.getElementById('runner-session-chat');
-        const input = document.getElementById('runner-chat-input');
-        const log = document.getElementById('runner-chat-log');
-        const flash = (msg, cls) => {
-            const el = document.getElementById('runner-control-flash');
-            if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary') + ' ms-auto'; }
-        };
-        if (!panel || panel.hidden) {
-            flash('Open Watch / Chat on a bound runner first', 'warning');
-            return;
-        }
-        const runnerId = panel.getAttribute('data-runner-session-id') || '';
-        const taskId = panel.getAttribute('data-task-id') || '';
-        const text = ((input && input.value) || '').trim();
-        if (!runnerId || !taskId) {
-            flash('Session chat missing runner_session_id+task_id bind', 'danger');
-            return;
-        }
-        if (!text) return;
-        if (input) input.value = '';
-        const injectKind = (kind || 'freeform').toLowerCase();
-        if (log) {
-            log.insertAdjacentHTML('beforeend',
-                `<div><span class="badge bg-azure-lt me-1">${this.esc(injectKind)}</span>${this.esc(text)}</div>`);
-        }
-        flash(`Injecting ${injectKind}…`);
-        try {
-            const res = await fetch('/ixp/v1/request_runner_inject', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    project: window.PM_PROJECT || 'maxwell',
-                    runner_session_id: runnerId,
-                    task_id: taskId,
-                    text,
-                    kind: injectKind,
-                    reason: `operator ${injectKind} chat from task ${taskId}`,
-                }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok || data.error) {
-                throw new Error(data.error || data.detail || data.message || `HTTP ${res.status}`);
-            }
-            if (data.requested === false) {
-                flash(`inject refused: ${this.esc(data.reason || data.error || 'not accepted')}`, 'warning');
-                return;
-            }
-            flash('inject requested', 'green');
-        } catch (e) {
-            flash(`inject failed: ${e.message}`, 'danger');
-        }
     },
 
     _runnerSessionRow(s) {
@@ -235,7 +104,15 @@
             if (el) { el.textContent = msg; el.className = 'small text-' + (cls || 'secondary') + ' ms-auto'; }
         };
         if (!runnerId || !action) return;
-        if (action === 'kill' && !window.confirm(`Request runner kill for ${runnerId}?`)) return;
+        if (action === 'kill') {
+            const ok = await this._confirm({
+                title: `Kill runner ${runnerId}?`,
+                body: 'Stops the bound provider CLI process on its host. This cannot be undone.',
+                icon: 'ti-player-stop', iconVariant: 'danger',
+                confirmLabel: 'Kill runner', confirmVariant: 'danger',
+            });
+            if (!ok) return;
+        }
         flash(action === 'kill' ? 'Requesting kill…' : `Requesting ${action}…`);
         const endpoints = {
             kill: '/ixp/v1/request_runner_kill',
@@ -266,8 +143,422 @@
             if (!res.ok || data.error) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
             flash(data.requested === false ? `${action} refused` : `${action} requested`, data.requested === false ? 'warning' : 'green');
             await this._loadRunnerSessions(taskId);
+            if (action === 'kill' && data.requested !== false
+                && this._runnerPty && this._runnerPty.runnerSessionId === runnerId) {
+                this._runnerPtyClose();
+            }
         } catch (e) {
             flash(`${action} failed: ${e.message}`, 'danger');
+        }
+    },
+
+    // ---- UI-24: the bound PTY terminal -----------------------------------
+    // this._runnerPty holds the single live session: {taskId, runnerSessionId,
+    // ws, term, fitAddon, mode ('sidecar'|'docked'), reconnectAttempts, reconnectTimer}.
+
+    async _ensureXterm() {
+        if (window.Terminal && window.FitAddon) return;
+        await Promise.all([this._ensureScript(this.XTERM_JS_SRC), this._ensureScript(this.XTERM_FIT_SRC)]);
+        if (!window.Terminal || !window.FitAddon) throw new Error('xterm.js failed to load');
+    },
+
+    _runnerPtyEls() {
+        return {
+            scrim: document.getElementById('runner-pty-scrim'),
+            panel: document.getElementById('runner-pty-panel'),
+            title: document.getElementById('runner-pty-title'),
+            sub: document.getElementById('runner-pty-sub'),
+            live: document.getElementById('runner-pty-live'),
+            gate: document.getElementById('runner-pty-gate'),
+            termMount: document.getElementById('runner-pty-term'),
+            toggleDock: document.getElementById('runner-pty-toggle-dock'),
+            close: document.getElementById('runner-pty-close'),
+            chatWrap: document.getElementById('runner-pty-chat'),
+            chatInput: document.getElementById('runner-chat-input'),
+            chatSend: document.getElementById('runner-chat-send'),
+            chatLog: document.getElementById('runner-chat-log'),
+        };
+    },
+
+    _runnerPtyBindShellOnce() {
+        if (this._runnerPtyShellBound) return;
+        const els = this._runnerPtyEls();
+        if (!els.panel) return;
+        this._runnerPtyShellBound = true;
+        if (els.close) els.close.addEventListener('click', () => this._runnerPtyClose());
+        if (els.scrim) els.scrim.addEventListener('click', () => this._runnerPtyClose());
+        if (els.toggleDock) els.toggleDock.addEventListener('click', () => this._runnerPtyToggleDock());
+        if (els.chatSend) els.chatSend.addEventListener('click', () => this._runnerPtySendChat('freeform'));
+        if (els.chatInput) els.chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') this._runnerPtySendChat('freeform');
+        });
+        if (els.chatWrap) els.chatWrap.querySelectorAll('[data-runner-chat-kind]').forEach((b) => {
+            b.addEventListener('click', () => this._runnerPtySendChat(b.getAttribute('data-runner-chat-kind') || 'freeform'));
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && els.panel.classList.contains('tk-pty-sidecar') && !els.panel.hidden) {
+                this._runnerPtyClose();
+            }
+        });
+        this._runnerPtyGuardModalTeardownOnce();
+    },
+
+    // dockInto: an element inside the task-detail modal's Dev tab, or falsy for the sidecar.
+    _runnerPtyShowShell(dockInto) {
+        this._runnerPtyBindShellOnce();
+        const els = this._runnerPtyEls();
+        if (!els.panel) return els;
+        els.panel.hidden = false;
+        if (dockInto) {
+            dockInto.appendChild(els.panel);
+            els.panel.classList.add('tk-pty-docked');
+            els.panel.classList.remove('tk-pty-sidecar', 'show');
+            if (els.scrim) els.scrim.classList.remove('show');
+        } else {
+            document.body.appendChild(els.panel);
+            els.panel.classList.add('tk-pty-sidecar');
+            els.panel.classList.remove('tk-pty-docked');
+            if (els.scrim) els.scrim.classList.add('show');
+            requestAnimationFrame(() => els.panel.classList.add('show'));
+        }
+        return els;
+    },
+
+    _runnerPtyToggleDock() {
+        const rp = this._runnerPty;
+        if (!rp) return;
+        const els = this._runnerPtyEls();
+        const modalDevMount = document.getElementById('m-dev');
+        const modal = document.getElementById('task-modal');
+        // Only dock into a modal that's actually showing *this* session's
+        // task — otherwise an in-flight open for task X can resolve after
+        // the operator has since opened task Y's modal, and "expand" would
+        // silently plant X's live terminal inside Y's Dev tab.
+        const modalMatches = modal && modal.classList.contains('show')
+            && modal.dataset.taskId === String(rp.taskId || '');
+        if (rp.mode === 'docked') {
+            this._runnerPtyShowShell(null);
+            rp.mode = 'sidecar';
+        } else if (modalDevMount && modalMatches) {
+            this._runnerPtyShowShell(modalDevMount.querySelector('#runner-pty-dev-mount') || modalDevMount);
+            rp.mode = 'docked';
+        }
+        if (rp.fitAddon) requestAnimationFrame(() => { try { rp.fitAddon.fit(); this._runnerPtySendResize(); } catch (e) { /* ignore */ } });
+        if (els.toggleDock) els.toggleDock.title = rp.mode === 'docked' ? 'Pop out to sidecar' : 'Open in full task view';
+    },
+
+    // Pops a docked panel back to the sidecar if one is live. Safe to call
+    // any time - a no-op unless a session is currently docked.
+    _runnerPtyEvacuateIfDocked() {
+        if (this._runnerPty && this._runnerPty.mode === 'docked') this._runnerPtyToggleDock();
+    },
+
+    // openTask() regenerates #task-modal-body's innerHTML on every open,
+    // including when a modal that's already showing gets refreshed in place
+    // (e.g. revokeClaim() -> openTask() again, which never fires
+    // hide.bs.modal since Bootstrap's show() on an already-shown modal is a
+    // no-op). Either path would silently delete a docked panel - and leak
+    // its WebSocket/terminal - with no way for the panel to detect the wipe
+    // after the fact (a MutationObserver would fire too late; innerHTML has
+    // already destroyed the nodes by the time it runs). So this covers the
+    // dismissal case, and app.js calls _runnerPtyEvacuateIfDocked() directly
+    // before its innerHTML rewrite to cover the already-open-modal case.
+    _runnerPtyGuardModalTeardownOnce() {
+        if (this._runnerPtyModalGuardBound) return;
+        const modal = document.getElementById('task-modal');
+        if (!modal) return;
+        this._runnerPtyModalGuardBound = true;
+        modal.addEventListener('hide.bs.modal', () => this._runnerPtyEvacuateIfDocked());
+    },
+
+    _runnerPtyClose() {
+        const els = this._runnerPtyEls();
+        if (els.panel) {
+            els.panel.classList.remove('show');
+            setTimeout(() => { els.panel.hidden = true; }, 200);
+        }
+        if (els.scrim) els.scrim.classList.remove('show');
+        this._runnerPtyTeardown();
+    },
+
+    _runnerPtyTeardown() {
+        const rp = this._runnerPty;
+        if (!rp) return;
+        if (rp.reconnectTimer) clearTimeout(rp.reconnectTimer);
+        if (rp.resizeObserver) { try { rp.resizeObserver.disconnect(); } catch (e) { /* ignore */ } }
+        if (rp.ws) { try { rp.ws.close(); } catch (e) { /* ignore */ } }
+        if (rp.term) { try { rp.term.dispose(); } catch (e) { /* ignore */ } }
+        this._runnerPty = null;
+    },
+
+    _runnerPtyGate(html, cls) {
+        const els = this._runnerPtyEls();
+        if (!els.gate) return;
+        els.gate.innerHTML = html;
+        els.gate.className = `small mb-2 text-${cls || 'secondary'}`;
+    },
+
+    // The one entry point. opts.dockInto: mount inside the task modal's Dev tab
+    // instead of opening the sidecar. opts.fallbackIfNotWatchable: return false
+    // instead of opening a red gate state (lets callers like the mission graph
+    // click handler fall back to a different action for tasks with no live run).
+    async openRunnerSessionPanel(taskId, opts) {
+        opts = opts || {};
+        const id = String(taskId || '').trim();
+        if (!id) return false;
+        let watch;
+        try {
+            const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&task_id=${encodeURIComponent(id)}`;
+            watch = await (await fetch(`/ixp/v1/runner_sessions/watch?${q}`)).json();
+        } catch (e) {
+            if (opts.fallbackIfNotWatchable) return false;
+            this._runnerPtyShowShell(opts.dockInto);
+            this._runnerPtyGate(`Watch refused: ${this.esc(e.message)}`, 'danger');
+            return true;
+        }
+        const watchable = watch && watch.watchable !== false && !watch.error && watch.error_code !== 'runner_bind_incomplete';
+        if (!watchable) {
+            if (opts.fallbackIfNotWatchable) return false;
+            const els = this._runnerPtyShowShell(opts.dockInto);
+            if (els.title) els.title.textContent = id;
+            if (els.sub) els.sub.textContent = '';
+            if (els.live) els.live.hidden = true;
+            const missing = (watch && watch.missing || []).join(', ') || 'bind fields';
+            this._runnerPtyGate(
+                `<span class="badge bg-red-lt me-1">${this.esc(watch?.error_code || watch?.error || 'runner_bind_incomplete')}</span>`
+                + `Runner bind incomplete for Watch/Chat <span class="text-secondary">(missing: ${this.esc(missing)})</span>`,
+                'danger',
+            );
+            return true;
+        }
+        const sid = watch.runner_session_id || (watch.session || {}).runner_session_id || '';
+        const els = this._runnerPtyShowShell(opts.dockInto);
+        const mode = opts.dockInto ? 'docked' : 'sidecar';
+        if (this._runnerPty && this._runnerPty.runnerSessionId === sid) {
+            // Same session already live — just move containers, don't reconnect.
+            this._runnerPty.mode = mode;
+            this._runnerPty.taskId = id;
+            if (this._runnerPty.fitAddon) requestAnimationFrame(() => { try { this._runnerPty.fitAddon.fit(); } catch (e) { /* ignore */ } });
+            return true;
+        }
+        this._runnerPtyTeardown();
+        if (els.title) els.title.textContent = `${id} · ${sid}`;
+        if (els.sub) els.sub.textContent = `${(watch.bind && watch.bind.host_id) || ''}`.trim();
+        this._runnerPtyGate('', 'secondary');
+        this._runnerPty = { taskId: id, runnerSessionId: sid, mode, reconnectAttempts: 0 };
+        await this._runnerPtyConnect();
+        return true;
+    },
+
+    async _runnerPtyConnect() {
+        const rp = this._runnerPty;
+        if (!rp) return;
+        this._runnerPtyGate('<span class="spinner-border spinner-border-sm me-1"></span>Connecting…', 'secondary');
+        // Ensure the host tunnel is attached (idempotent — a no-op if it's already
+        // live). Fire in parallel with our own ticket mint rather than awaiting it
+        // here (the browser can attach before the host does and will simply see no
+        // bytes until it does) — but still surface a refusal once it resolves,
+        // fail-closed, instead of leaving the terminal at "waiting for output"
+        // forever with no explanation.
+        fetch('/ixp/v1/request_runner_open', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project: window.PM_PROJECT || 'maxwell',
+                runner_session_id: rp.runnerSessionId,
+                reason: `operator watch on task ${rp.taskId}`,
+            }),
+        }).then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error || data.requested === false) {
+                throw new Error(data.error || data.detail
+                    || (data.requested === false ? (data.reason || 'refused') : `HTTP ${res.status}`));
+            }
+        }).catch((e) => {
+            if (this._runnerPty === rp) {
+                this._runnerPtyGate(
+                    `Host tunnel did not open: ${this.esc(e.message)}. The relay ticket is live but no bytes will arrive.`,
+                    'danger');
+            }
+        });
+        let ticket;
+        try {
+            const res = await fetch(`/ixp/v1/runner_sessions/${encodeURIComponent(rp.runnerSessionId)}/pty/ticket`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project: window.PM_PROJECT || 'maxwell',
+                    scopes: ['watch', 'input', 'resize', 'signal'],
+                }),
+            });
+            ticket = await res.json();
+            if (!res.ok || ticket.error) throw new Error(ticket.error || ticket.detail || `HTTP ${res.status}`);
+            if (!ticket.relay_url) throw new Error('relay ticket has no browser-safe URL');
+        } catch (e) {
+            this._runnerPtyGate(`Could not open a browser-safe relay ticket: ${this.esc(e.message)}`, 'danger');
+            return;
+        }
+        try {
+            await this._ensureXterm();
+        } catch (e) {
+            this._runnerPtyGate(`Terminal renderer unavailable: ${this.esc(e.message)}`, 'danger');
+            return;
+        }
+        if (this._runnerPty !== rp) return; // superseded by a newer open() while we awaited
+        // Reconnects reuse the live Terminal/ResizeObserver instead of
+        // rebuilding them: rebuilding on every drop wiped the operator's
+        // visible scrollback and leaked the prior ResizeObserver (it was
+        // never .disconnect()ed), accumulating across the reconnect backoff.
+        const reconnecting = !!rp.term;
+        if (!reconnecting) this._runnerPtyMountTerminal(rp);
+        this._runnerPtyOpenSocket(rp, ticket.relay_url, reconnecting);
+    },
+
+    _runnerPtyMountTerminal(rp) {
+        const els = this._runnerPtyEls();
+        if (!els.termMount) return;
+        els.termMount.innerHTML = '';
+        const term = new window.Terminal({
+            convertEol: true, cursorBlink: true, fontSize: 13,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            theme: { background: '#0d0f13', foreground: '#c9ced6' },
+        });
+        const fitAddon = new window.FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(els.termMount);
+        try { fitAddon.fit(); } catch (e) { /* container may be 0-sized mid-transition */ }
+        term.onData((data) => this._runnerPtySendInput(data));
+        rp.term = term;
+        rp.fitAddon = fitAddon;
+        rp.resizeObserver = new ResizeObserver(() => {
+            try { fitAddon.fit(); } catch (e) { return; }
+            this._runnerPtySendResize();
+        });
+        rp.resizeObserver.observe(els.termMount);
+    },
+
+    _runnerPtyEncodeFrame(type, payload) {
+        return JSON.stringify(Object.assign({ type }, payload || {}));
+    },
+
+    _runnerPtyB64FromString(str) {
+        const bytes = new TextEncoder().encode(str);
+        let binary = '';
+        bytes.forEach((b) => { binary += String.fromCharCode(b); });
+        return btoa(binary);
+    },
+
+    _runnerPtySendInput(data) {
+        const rp = this._runnerPty;
+        if (!rp || !rp.ws || rp.ws.readyState !== WebSocket.OPEN) return;
+        rp.ws.send(this._runnerPtyEncodeFrame('input', { data_b64: this._runnerPtyB64FromString(data) }));
+    },
+
+    _runnerPtySendResize() {
+        const rp = this._runnerPty;
+        if (!rp || !rp.term || !rp.ws || rp.ws.readyState !== WebSocket.OPEN) return;
+        rp.ws.send(this._runnerPtyEncodeFrame('resize', { rows: rp.term.rows, cols: rp.term.cols }));
+    },
+
+    _runnerPtyOpenSocket(rp, relayUrl, reconnecting) {
+        let ws;
+        try {
+            ws = new WebSocket(relayUrl);
+        } catch (e) {
+            this._runnerPtyGate(`Could not open the relay socket: ${this.esc(e.message)}`, 'danger');
+            return;
+        }
+        rp.ws = ws;
+        ws.addEventListener('open', () => {
+            if (this._runnerPty !== rp) return;
+            rp.reconnectAttempts = 0;
+            this._runnerPtyGate('Connected — waiting for output…', 'secondary');
+            if (reconnecting && rp.term) {
+                // The relay's bounded replay buffer backfills from here, and
+                // since the terminal (unlike before) kept its prior
+                // scrollback, replay's tail can overlap what's already on
+                // screen — mark the seam instead of leaving it unexplained.
+                rp.term.write('\r\n\x1b[2m─── reconnected ───\x1b[0m\r\n');
+            }
+            this._runnerPtySendResize();
+            const live = document.getElementById('runner-pty-live');
+            if (live) live.hidden = false;
+        });
+        ws.addEventListener('message', (ev) => {
+            if (this._runnerPty !== rp) return;
+            this._runnerPtyHandleFrame(rp, ev.data);
+        });
+        const scheduleReconnect = () => {
+            if (this._runnerPty !== rp) return;
+            const live = document.getElementById('runner-pty-live');
+            if (live) live.hidden = true;
+            rp.reconnectAttempts = (rp.reconnectAttempts || 0) + 1;
+            if (rp.reconnectAttempts > 8) {
+                this._runnerPtyGate('Lost the relay connection and gave up reconnecting. Close and reopen Watch/Chat to retry.', 'danger');
+                return;
+            }
+            const delayMs = Math.min(1000 * 2 ** rp.reconnectAttempts, 15000);
+            this._runnerPtyGate(`Reconnecting in ${Math.round(delayMs / 1000)}s… (bounded replay will backfill on reconnect)`, 'warning');
+            rp.reconnectTimer = setTimeout(() => { if (this._runnerPty === rp) this._runnerPtyConnect(); }, delayMs);
+        };
+        ws.addEventListener('close', scheduleReconnect);
+        ws.addEventListener('error', () => { try { ws.close(); } catch (e) { /* close handler reconnects */ } });
+    },
+
+    _runnerPtyHandleFrame(rp, raw) {
+        let frame;
+        try { frame = JSON.parse(raw); } catch (e) { return; }
+        const type = frame.type;
+        if (type === 'output' || type === 'replay') {
+            if (!frame.data_b64 || !rp.term) return;
+            const binary = atob(frame.data_b64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            rp.term.write(bytes);
+            this._runnerPtyGate('', 'secondary');
+        } else if (type === 'error') {
+            this._runnerPtyGate(`Relay error: ${this.esc(frame.reason || frame.detail || 'unknown')}`, 'danger');
+        } else if (type === 'close') {
+            this._runnerPtyGate(`Session closed: ${this.esc(frame.reason || 'ended')}`, 'secondary');
+        }
+    },
+
+    async _runnerPtySendChat(kind) {
+        const rp = this._runnerPty;
+        const els = this._runnerPtyEls();
+        const flash = (msg, cls) => this._runnerPtyGate(this.esc(msg), cls);
+        if (!rp || !rp.runnerSessionId || !rp.taskId) {
+            flash('Open Watch / Chat on a bound runner first', 'warning');
+            return;
+        }
+        const text = ((els.chatInput && els.chatInput.value) || '').trim();
+        if (!text) return;
+        if (els.chatInput) els.chatInput.value = '';
+        const injectKind = (kind || 'freeform').toLowerCase();
+        if (els.chatLog) {
+            els.chatLog.insertAdjacentHTML('beforeend',
+                `<div><span class="badge bg-azure-lt me-1">${this.esc(injectKind)}</span>${this.esc(text)}</div>`);
+            els.chatLog.scrollTop = els.chatLog.scrollHeight;
+        }
+        try {
+            const res = await fetch('/ixp/v1/request_runner_inject', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project: window.PM_PROJECT || 'maxwell',
+                    runner_session_id: rp.runnerSessionId,
+                    task_id: rp.taskId,
+                    text,
+                    kind: injectKind,
+                    reason: `operator ${injectKind} chat from task ${rp.taskId}`,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) throw new Error(data.error || data.detail || data.message || `HTTP ${res.status}`);
+            if (data.requested === false) {
+                flash(`inject refused: ${data.reason || data.error || 'not accepted'}`, 'warning');
+                return;
+            }
+        } catch (e) {
+            flash(`inject failed: ${e.message}`, 'danger');
         }
     },
     };

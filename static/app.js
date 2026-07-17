@@ -1824,6 +1824,15 @@ const TeepPlan = {
             if (fresh && fresh.task_id) t = Object.assign({}, t || {}, fresh);
         } catch (e) { /* fall back to in-memory task */ }
         if (!t) return;
+        // UI-24: evacuate a docked PTY panel before the innerHTML rewrite
+        // below destroys it - covers both a fresh open and a refresh of an
+        // already-open modal (e.g. revokeClaim()), which never fires
+        // hide.bs.modal. Also stamp the task this modal is now showing so
+        // _runnerPtyToggleDock can refuse to dock a different task's panel
+        // into it.
+        if (typeof this._runnerPtyEvacuateIfDocked === 'function') this._runnerPtyEvacuateIfDocked();
+        const taskModalEl = document.getElementById('task-modal');
+        if (taskModalEl) taskModalEl.dataset.taskId = t.task_id;
         const meta = (label, val) => `<div class="col-6 mb-2"><div class="text-secondary" style="font-size:12px">${label}</div><div>${val}</div></div>`;
         const owner = this.esc(t.owner_org || '—') + (t.owner_person_or_role ? ' · ' + this.esc(t.owner_person_or_role) : '');
         const dates = `${this.esc(t.start_date || '?')} – ${this.esc(t.finish_date || '?')}`;
@@ -1914,6 +1923,7 @@ const TeepPlan = {
                     ${this.mergeGatePanelHtml(t)}
                     ${this.monitorControlHtml(t)}
                     ${this.runnerControlHtml(t)}
+                    <div id="runner-pty-dev-mount" class="mb-3"></div>
                     ${this.claimControlHtml(t)}
                     <button id="edit-dispatch" class="btn btn-primary mb-3"><i class="ti ti-robot me-1"></i>Dispatch to Claude Code</button>
                     <div id="dispatch-panel"></div>
@@ -1940,7 +1950,10 @@ const TeepPlan = {
         this._loadRunnerSessions(t.task_id);
         this._loadDispatch(t.task_id);
         const watchBtn = document.getElementById('runner-watch-open');
-        if (watchBtn) watchBtn.addEventListener('click', () => this.openRunnerWatch(t.task_id));
+        if (watchBtn) watchBtn.addEventListener('click', () => {
+            const mount = document.getElementById('runner-pty-dev-mount');
+            this.openRunnerSessionPanel(t.task_id, { dockInto: mount || undefined });
+        });
         document.getElementById('details-status').addEventListener('change', (e) => this.quickStatus(t.task_id, e.target.value));
         document.getElementById('edit-delete').addEventListener('click', () => this.deleteTask(t.task_id));
         document.getElementById('edit-save').addEventListener('click', () => this.saveTask(t.task_id));

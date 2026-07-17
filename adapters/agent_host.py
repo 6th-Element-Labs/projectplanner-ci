@@ -29,6 +29,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -789,6 +790,82 @@ def _tcp_port_open(host, port, timeout_s=0.5):
         return False
 
 
+# UI-24: one HostBridgeSession per live runner_session_id — the host-tunnel
+# WebSocket + LocalPtyRelayBridge that actually feeds RelayHub.attach_host().
+_HOST_BRIDGES = {}
+_HOST_BRIDGES_LOCK = threading.Lock()
+
+
+def _drop_host_bridge(runner_session_id):
+    with _HOST_BRIDGES_LOCK:
+        session = _HOST_BRIDGES.pop(runner_session_id, None)
+    if session is not None:
+        try:
+            session.stop()
+        except Exception:
+            pass
+
+
+def _ensure_host_bridge(*, runner_session_id, host_id, binding, local_stream_url,
+                         stream_bind, stream_port, public_base):
+    """Idempotently ensure a live host tunnel is pumping this session's PTY
+    bytes into the relay. Re-entrant across poll-loop iterations: a healthy
+    existing bridge is a no-op; a dead one is replaced."""
+    with _HOST_BRIDGES_LOCK:
+        existing = _HOST_BRIDGES.get(runner_session_id)
+        if existing is not None and existing.is_alive():
+            return existing
+    # Lock released here: opening a bridge below is network-bound (up to
+    # HostTunnelConnection's 10s connect timeout) and must not hold
+    # _HOST_BRIDGES_LOCK for that long, or it would block every other
+    # runner_session's lookups/drops. Safe only because agent_host's poll
+    # loop calls this synchronously for one runner_session_id at a time; a
+    # concurrent caller could race two bridges into existence here.
+    if existing is not None:
+        _drop_host_bridge(runner_session_id)
+
+    try:
+        from switchboard.application import runner_pty_relay as pty_relay
+        from codex.pty_stream import build_control_url, mint_control_ticket
+        from codex.pty_host_ws_client import open_host_bridge
+    except ModuleNotFoundError:
+        _root = os.path.abspath(os.path.join(_HERE, ".."))
+        if os.path.join(_root, "src") not in sys.path:
+            sys.path.insert(0, os.path.join(_root, "src"))
+        if _HERE not in sys.path:
+            sys.path.insert(0, _HERE)
+        from switchboard.application import runner_pty_relay as pty_relay
+        from codex.pty_stream import build_control_url, mint_control_ticket
+        from codex.pty_host_ws_client import open_host_bridge
+
+    # Distinct host_tunnel-scoped ticket (BUG-74) — never the browser's
+    # watch/input/resize/signal ticket.
+    host_ticket, _host_payload = pty_relay.mint_host_tunnel_ticket(
+        binding, ttl_seconds=3600)
+    relay_ws_url = pty_relay.public_host_relay_url(
+        public_base, runner_session_id, host_ticket)
+    relay_ws_url = relay_ws_url + "&" + urllib.parse.urlencode({"host_id": host_id})
+
+    control_ticket, _control_exp = mint_control_ticket(
+        runner_session_id=runner_session_id, host_id=host_id,
+        actions=["input", "resize", "signal"], ttl_seconds=3600)
+    control_url = build_control_url(
+        bind_host=stream_bind, port=stream_port,
+        runner_session_id=runner_session_id, public_base="")
+
+    session = open_host_bridge(
+        runner_session_id=runner_session_id,
+        relay_ws_url=relay_ws_url,
+        local_stream_url=local_stream_url,
+        local_control_url=control_url,
+        control_ticket=control_ticket,
+        on_close=lambda reason: _drop_host_bridge(runner_session_id),
+    )
+    with _HOST_BRIDGES_LOCK:
+        _HOST_BRIDGES[runner_session_id] = session
+    return session
+
+
 def supervisor_action(action, runner_session_id, options=None):
     options = options or {}
     if action == "snapshot":
@@ -853,6 +930,22 @@ def supervisor_action(action, runner_session_id, options=None):
         browser_safe = False
         relay_required = True
         stream_url = local_stream_url
+
+        def _open_fail_closed(error, reason):
+            # BUG-76: non-loopback public base requires relay. Never fall
+            # back to local http_chunked / 127.0.0.1 stream_url.
+            return {
+                "error": error,
+                "reason": reason,
+                "failure_class": "hidden_fallback",
+                "opened": False,
+                "runner_session_id": runner_session_id,
+                "transport": None,
+                "browser_safe": False,
+                "relay_required": True,
+                "capabilities": {"stream": "denied", "open": "denied"},
+            }
+
         if public_base:
             try:
                 from switchboard.application import runner_pty_relay as pty_relay
@@ -907,19 +1000,25 @@ def supervisor_action(action, runner_session_id, options=None):
                     expires_at = float(relay_payload.get("exp") or expires_at)
                     ticket = relay_ticket
                 except Exception as mint_exc:
-                    # BUG-76: non-loopback public base requires relay. Never fall
-                    # back to local http_chunked / 127.0.0.1 stream_url.
-                    return {
-                        "error": "relay_mint_failed",
-                        "reason": str(mint_exc) or type(mint_exc).__name__,
-                        "failure_class": "hidden_fallback",
-                        "opened": False,
-                        "runner_session_id": runner_session_id,
-                        "transport": None,
-                        "browser_safe": False,
-                        "relay_required": True,
-                        "capabilities": {"stream": "denied", "open": "denied"},
-                    }
+                    return _open_fail_closed(
+                        "relay_mint_failed", str(mint_exc) or type(mint_exc).__name__)
+                try:
+                    # UI-24: attach the host side of the relay so the browser
+                    # ticket above actually has something to watch. Without
+                    # this, attach_host() is never called outside tests and
+                    # the browser sits connected with no bytes arriving.
+                    _ensure_host_bridge(
+                        runner_session_id=runner_session_id,
+                        host_id=host_id,
+                        binding=binding,
+                        local_stream_url=local_stream_url,
+                        stream_bind=stream_bind,
+                        stream_port=stream_port,
+                        public_base=public_base,
+                    )
+                except Exception as bridge_exc:
+                    return _open_fail_closed(
+                        "host_bridge_failed", str(bridge_exc) or type(bridge_exc).__name__)
         metadata = {
             "pty": True,
             "stream_url": stream_url,
@@ -1156,6 +1255,10 @@ def handle_runner_controls(inventory):
                 "bytes_written": result.get("bytes_written"),
             }
         status = "failed" if result.get("error") else "completed"
+        if action == "kill" and status == "completed":
+            # UI-24: deterministic cleanup — no orphan host tunnel outliving
+            # the runner it was pumping bytes for.
+            _drop_host_bridge(req.get("runner_session_id"))
         _try("POST", P_COMPLETE_RUNNER_CONTROL,
              {"project": PROJECT, "host_id": host_id, "request_id": req_id,
               "status": status, "result": result, "snapshot": snapshot})

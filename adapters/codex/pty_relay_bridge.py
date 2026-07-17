@@ -180,9 +180,16 @@ class LocalPtyRelayBridge:
         self._thread = threading.Thread(target=_run, name="pty-relay-bridge", daemon=True)
         self._thread.start()
 
+    def is_alive(self) -> bool:
+        return bool(self._thread is not None and self._thread.is_alive())
+
     def stop(self, timeout: float = 2.0) -> None:
         self._stop.set()
-        if self._thread:
+        # on_close (called from _run, above) can itself trigger stop() via a
+        # caller's cleanup callback - that's this same thread joining itself,
+        # which raises RuntimeError. Setting _stop is enough in that case:
+        # _run() is already unwinding and will exit on its own.
+        if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=timeout)
 
     def handle_control_frame(self, frame: str | bytes | dict[str, Any]) -> dict[str, Any]:

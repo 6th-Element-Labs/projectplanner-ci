@@ -19,6 +19,10 @@
     <!-- HARDEN-38: pin Tabler versions (was @latest — a Tabler release could break the UI without warning). These are the versions @latest resolved to at pin time. -->
     <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
+    <!-- UI-24: xterm.js CSS is small (~5KB) so it loads eagerly like the rest of the
+         chrome; the JS bundle (~250KB) stays lazy via _ensureScript, loaded only when
+         Watch/Chat actually opens (see static/js/runner-session.js). -->
+    <link href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" rel="stylesheet"/>
     <link href="taikun-tabler.css?v=23" rel="stylesheet"/>
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. -->
@@ -115,6 +119,21 @@
       /* Full-width top header (combo layout): spans the whole page; sidebar + content sit below it. */
       :root{--tk-header-h:3rem}
       .tk-toolbar{background:var(--tblr-bg-surface);border-bottom:1px solid var(--tblr-border-color);min-height:var(--tk-header-h);position:sticky;top:0;z-index:1035}
+      /* UI-24: bound PTY terminal — a sidecar by default (ambient trigger: a
+         Mission graph node, the Proof Console), reparented in place inside the
+         task-detail modal's Dev tab when opened from full task context. Same
+         #runner-pty-panel element moves between the two; never duplicated. */
+      #runner-pty-scrim{position:fixed;inset:0;z-index:1060;background:rgba(20,22,28,.32);display:none}
+      #runner-pty-scrim.show{display:block}
+      #runner-pty-panel{display:flex;flex-direction:column;background:var(--tblr-bg-surface,#fff)}
+      #runner-pty-panel.tk-pty-sidecar{position:fixed;top:0;right:0;bottom:0;width:min(640px,96vw);z-index:1070;
+        border-left:1px solid var(--tblr-border-color);box-shadow:-24px 0 70px -24px rgba(16,24,40,.4);
+        transform:translateX(103%);transition:transform .2s}
+      #runner-pty-panel.tk-pty-sidecar.show{transform:none}
+      #runner-pty-panel.tk-pty-docked{position:static;transform:none;border:1px solid var(--tblr-border-color);
+        border-radius:.5rem;min-height:28rem}
+      #runner-pty-term{height:100%}
+      #runner-pty-term .xterm{height:100%;padding:.5rem}
     </style>
 </head>
 <body class="layout-fluid">
@@ -1054,6 +1073,39 @@
     <div id="fleet-dock"></div>
     <div id="saturation-dock"></div>
     <div id="narration-ops-dock"></div>
+    <!-- UI-24: bound PTY terminal panel — see static/js/runner-session.js. Starts
+         parked here (sidecar-shaped, hidden); openRunnerSessionPanel() moves it
+         either in place (still here, shown as a right-docked sidecar) or into the
+         task-detail modal's #runner-pty-dev-mount (docked, in-flow). -->
+    <div id="runner-pty-scrim"></div>
+    <div class="tk-pty-sidecar" id="runner-pty-panel" hidden>
+        <div class="card-header d-flex align-items-center gap-2 py-2">
+            <span class="badge bg-red-lt" id="runner-pty-live" hidden><i class="ti ti-circle-filled me-1"></i>live</span>
+            <div style="min-width:0;flex:1">
+                <div class="fw-semibold small text-truncate" id="runner-pty-title">Runner session</div>
+                <div class="text-secondary small font-monospace text-truncate" id="runner-pty-sub"></div>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="runner-pty-toggle-dock" title="Open in full task view"><i class="ti ti-arrows-diagonal"></i></button>
+            <button type="button" class="btn-close" id="runner-pty-close" aria-label="Close Watch/Chat"></button>
+        </div>
+        <div class="card-body d-flex flex-column" style="flex:1;min-height:0;overflow:auto">
+            <div id="runner-pty-gate" class="small mb-2"></div>
+            <div id="runner-pty-term" style="flex:1;min-height:16rem;border-radius:.5rem;overflow:hidden"></div>
+            <div class="mt-2" id="runner-pty-chat">
+                <div class="small text-secondary mb-1">Session chat (bound Codex PTY — not inbox)</div>
+                <div class="btn-list mb-2">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="redirect">Redirect</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="hold">Hold</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-runner-chat-kind="approve">Approve</button>
+                </div>
+                <div class="input-group input-group-sm">
+                    <input id="runner-chat-input" class="form-control" placeholder="Inject freeform into the live session…" autocomplete="off"/>
+                    <button type="button" class="btn btn-azure" id="runner-chat-send">Send</button>
+                </div>
+                <div id="runner-chat-log" class="small text-secondary mt-2" style="max-height:6rem;overflow:auto"></div>
+            </div>
+        </div>
+    </div>
     <!-- Reusable confirm dialog (Tabler) — replaces native window.confirm (UI-11 archive uses it). -->
     <div class="modal modal-blur fade" id="confirm-modal" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="modal-dialog modal-sm modal-dialog-centered" role="document">

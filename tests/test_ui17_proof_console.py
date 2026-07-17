@@ -89,7 +89,7 @@ needles = (
     "bg-red-lt",
     "proof blocked",
     "runnerControlHtml",
-    "openRunnerWatch",
+    "openRunnerSessionPanel",  # UI-24: renamed from openRunnerWatch
     "COORD-34",
     "CO-14",
 )

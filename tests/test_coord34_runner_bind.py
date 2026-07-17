@@ -191,18 +191,18 @@ try:
        and "watch_requires" in text,
        "mission_coordinator wake path documents awaiting_runner_bind gate")
 
-    # ---- UI needles for UI-17 Watch open ---------------------------------------
+    # ---- UI needles for UI-17/UI-24 Watch open ---------------------------------
     app_js = read_frontend_source(str(ROOT))
     for needle in (
-        "openRunnerWatch",
+        "openRunnerSessionPanel",  # UI-24: renamed from openRunnerWatch
         "runner-watch-open",
         "runner_bind_incomplete",
         "/ixp/v1/runner_sessions/watch",
         "Watch / Chat",
         "request_runner_inject",
-        "sendRunnerSessionChat",
+        "_runnerPtySendChat",  # UI-24: renamed from sendRunnerSessionChat
     ):
-        ok(needle in app_js, f"app.js exposes UI-17/CO-13 needle {needle}")
+        ok(needle in app_js, f"app.js exposes UI-17/CO-13/UI-24 needle {needle}")
 
     mcp_src = (Path(ROOT) / "src/switchboard/mcp/tools/runner.py").read_text(encoding="utf-8")
     ok("resolve_runner_watch" in mcp_src

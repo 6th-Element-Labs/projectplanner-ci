@@ -232,6 +232,24 @@ while time.time() < deadline:
     time.sleep(0.05)
 ok("ANSI-OK" in log_text and "PTY=True" in log_text, "real PTY child prints ANSI bytes")
 
+# UI-24: this test's public base ("https://plan.example") has no real host
+# tunnel listening behind it. Stub the transport so the ticket/URL-shape
+# assertions below stay meaningful without a real connect attempt; the host
+# bridge transport itself is proven against a real loopback WS server in
+# tests/test_ui24_host_bridge_wiring.py.
+import codex.pty_host_ws_client as _ws_client_module_a22
+
+
+class _StubHostBridgeSessionA22:
+    def is_alive(self):
+        return True
+
+    def stop(self):
+        pass
+
+
+_ws_client_module_a22.open_host_bridge = lambda **kw: _StubHostBridgeSessionA22()
+
 opened = agent_host.supervisor_action("open", meta["runner_session_id"], {
     "task_id": "ADAPTER-22",
     "claim_id": "claim-a22",

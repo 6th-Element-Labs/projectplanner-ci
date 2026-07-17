@@ -29,6 +29,7 @@ dependencies = [
     "python-docx>=1.1",
     "python-pptx>=0.6",
     "python-multipart>=0.0.9",
+    "websockets>=15.0",
 ]
 
 [dependency-groups]
@@ -44,6 +45,12 @@ gateway = [
 # opt-in via `uv run ruff ...`. Kept out of runtime so it never affects the deployed venv.
 dev = [
     "ruff>=0.13",
+    # UI-24: tests/browser/test_ui24_pty_terminal.py — first real-browser test in
+    # this repo. Needs `playwright install chromium` after install. The CI gate
+    # (scripts/switchboard_ci.sh) does not install this group, so today this test
+    # SKIPs (exit 0, not a failure) rather than runs there — see the module
+    # docstring. Wiring it into CI is a follow-up, not part of this change.
+    "playwright>=1.40",
 ]
 
 [tool.uv]

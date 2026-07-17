@@ -258,10 +258,15 @@ ok(killed.get("status") == "killed" and not killed.get("alive"),
 # UI needles (Mission panel session chat)
 from scripts.frontend_test_source import read_frontend_source
 app_js = read_frontend_source(str(ROOT))
+# UI-24: the chat composer moved from a runnerControlHtml() JS template into
+# static/index.html as a persistent global panel (one terminal, reparented
+# between the sidecar and the Dev tab, instead of re-rendered per task) — so
+# its label now lives in the HTML shell, not the composed JS.
+index_html = (Path(ROOT) / "static" / "index.html").read_text(encoding="utf-8")
 ok("request_runner_inject" in app_js
-   and "sendRunnerSessionChat" in app_js
+   and "_runnerPtySendChat" in app_js  # UI-24: renamed from sendRunnerSessionChat
    and "data-runner-chat-kind" in app_js
-   and "Session chat (bound Codex PTY" in app_js
+   and "Session chat (bound Codex PTY" in index_html
    and "SwitchboardRunnerSession" in app_js,
    "Mission panel exposes session chat inject (not inbox-as-chat)")
 

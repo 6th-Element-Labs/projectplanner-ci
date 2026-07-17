@@ -449,7 +449,10 @@
         if (watch && !watch._bound) {
             watch.addEventListener('click', () => {
                 const tid = document.getElementById('runner-control-panel')?.getAttribute('data-task-id') || taskId;
-                if (tid && typeof this.openRunnerWatch === 'function') this.openRunnerWatch(tid);
+                // UI-24: opens the sidecar (Proof Console is a browse/dashboard
+                // surface, same as clicking a Mission graph node — not a
+                // full task detail view, so it doesn't dock).
+                if (tid && typeof this.openRunnerSessionPanel === 'function') this.openRunnerSessionPanel(tid);
             });
             watch._bound = true;
         }
@@ -457,7 +460,7 @@
         if (openBtn && !openBtn._proofBound) {
             openBtn.addEventListener('click', () => {
                 const tid = openBtn.getAttribute('data-task-id') || taskId;
-                if (tid && typeof this.openRunnerWatch === 'function') this.openRunnerWatch(tid);
+                if (tid && typeof this.openRunnerSessionPanel === 'function') this.openRunnerSessionPanel(tid);
             });
             openBtn._proofBound = true;
         }
