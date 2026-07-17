@@ -155,6 +155,32 @@ it, and mounts only the exact workspace writable. `CODEX_HOME` and every protect
 also scrubbed. The run fails closed if the platform sandbox is missing or unusable; removing
 bearer variables from the child environment is defense in depth, not the isolation boundary.
 
+## Declare a provider account for Settings binding (UI-19)
+
+Host enrollment above proves *a* native login exists; it does not say *which* account,
+because Codex's CLI exposes no scriptable account identity. Settings → Personal AI
+accounts (CO-6) needs a specific redacted account fingerprint before it can bind a
+connection. Declare it locally, after install:
+
+```bash
+python adapters/agent_host_enrollment.py declare-account \
+  --identity ~/.config/switchboard-agent-host/identity.json \
+  --config ~/.config/switchboard-agent-host/config.json \
+  --project switchboard \
+  --provider openai-codex \
+  --account-id you@example.com
+```
+
+This is a pure local filesystem operation — no network call, no server-side write path.
+It writes a `0600` `account_affinities.json` next to `config.json` containing only the
+redacted fingerprint (`acct-<sha256 prefix>`, the same formula CO-6 uses), then restarts
+the service so the next heartbeat advertises it. Only someone with shell access to this
+same user account can write that file; the server only ever learns its contents through
+the daemon's own already-authenticated heartbeat, so Settings itself can never inject or
+forge an affinity — it can only detect one this host already declared about itself.
+`--account-id` is a plain identifier (e.g. an email), never a secret. Settings' "Bind this
+connection" action then becomes available once the daemon's next heartbeat reports it.
+
 ## Update, rotate, revoke, and uninstall
 
 ```bash

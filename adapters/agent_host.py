@@ -39,7 +39,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same contract)
 import co_drain  # noqa: E402
-from agent_host_enrollment import preflight_codex_local_auth  # noqa: E402
+from agent_host_enrollment import (  # noqa: E402
+    ACCOUNT_AFFINITIES_FILENAME,
+    ACCOUNT_AFFINITY_IDS_KEY,
+    preflight_codex_local_auth,
+)
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
@@ -175,6 +179,27 @@ def _identity_inventory():
     }
 
 
+def _declared_account_affinities():
+    """Read CO-6 account fingerprints this host's own bearer has declared locally
+    (see `agent_host_enrollment.py declare-account`). Only the already-authenticated
+    host process reads/writes this file, so a remote caller can never inject an
+    affinity — it can only ever reflect what this host already asserted about itself."""
+    config_path = str(os.environ.get("PM_AGENT_HOST_CONFIG_PATH") or "").strip()
+    if not config_path:
+        return []
+    declarations_path = os.path.join(
+        os.path.dirname(config_path), ACCOUNT_AFFINITIES_FILENAME)
+    try:
+        with open(declarations_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    fingerprints = data.get(ACCOUNT_AFFINITY_IDS_KEY) if isinstance(data, dict) else None
+    if not isinstance(fingerprints, list):
+        return []
+    return [str(item).strip() for item in fingerprints if str(item or "").strip()]
+
+
 def placement_inventory(repo, runtime, policy):
     """Build the truthful, non-secret host-placement advertisement used by CO-9."""
     try:
@@ -217,10 +242,18 @@ def placement_inventory(repo, runtime, policy):
         "tenant_ids": _csv(os.environ.get("PM_HOST_TENANTS", "")),
         # Provider-native enrollment is accepted only when this trusted host
         # explicitly attests the owning Switchboard user for the account affinity.
-        "owner_user_ids": _csv(os.environ.get("PM_HOST_OWNER_USERS", "")),
+        # PM_HOST_OWNER_USERS (fleet/static) and PM_HOST_OWNER_USER_ID (ADAPTER-18
+        # personal enrollment, one owner) are two producers of the same list.
+        "owner_user_ids": sorted(set(
+            _csv(os.environ.get("PM_HOST_OWNER_USERS", ""))
+            + _csv(os.environ.get("PM_HOST_OWNER_USER_ID", ""))
+        )),
         "projects": _csv(os.environ.get("PM_HOST_PROJECTS", PROJECT)),
         "providers": _csv(os.environ.get("PM_HOST_PROVIDERS", "")),
-        "account_affinity_ids": _csv(os.environ.get("PM_HOST_ACCOUNT_AFFINITIES", "")),
+        "account_affinity_ids": sorted(set(
+            _csv(os.environ.get("PM_HOST_ACCOUNT_AFFINITIES", ""))
+            + _declared_account_affinities()
+        )),
         "supports_credential_leases": supports_leases,
         "repositories": _csv(os.environ.get(
             "PM_HOST_REPOSITORIES", "6th-Element-Labs/projectplanner")),

@@ -1,5 +1,5 @@
 {
-  "count": 44,
+  "count": 46,
   "schema": "switchboard.schema_manifest.v1",
   "schemas": [
     {
@@ -103,6 +103,10 @@
       "path": "switchboard.project_purge.verify_command.v1.json"
     },
     {
+      "$id": "switchboard.provider_connection.bind_host_native_command.v1",
+      "path": "switchboard.provider_connection.bind_host_native_command.v1.json"
+    },
+    {
       "$id": "switchboard.provider_connection.delete_command.v1",
       "path": "switchboard.provider_connection.delete_command.v1.json"
     },
@@ -117,6 +121,10 @@
     {
       "$id": "switchboard.provider_connection.rotate_command.v1",
       "path": "switchboard.provider_connection.rotate_command.v1.json"
+    },
+    {
+      "$id": "switchboard.provider_connection.verify_command.v1",
+      "path": "switchboard.provider_connection.verify_command.v1.json"
     },
     {
       "$id": "switchboard.provider_credential.acquire_lease_command.v1",

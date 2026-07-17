@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import time
+import uuid
 from typing import Any
 
 from pydantic import ValidationError
@@ -11,11 +12,13 @@ import store
 from switchboard.contracts import validation_error_message
 from switchboard.contracts.provider_credentials import (
     AcquireProviderCredentialLeaseCommand,
+    BindHostNativeConnectionCommand,
     DeleteProviderConnectionCommand,
     EnrollProviderConnectionCommand,
     ReleaseProviderCredentialLeaseCommand,
     RevokeProviderConnectionCommand,
     RotateProviderConnectionCommand,
+    VerifyProviderConnectionCommand,
 )
 from switchboard.domain.provider_credentials import (
     CredentialPolicyError,
@@ -204,6 +207,61 @@ def _require_provider_native_proof(
     return live_host
 
 
+# The live, best (highest-ranked) personal_subscription capability record's
+# auth_type_aliases per provider — NOT its display auth_mode string, which is
+# not itself a member of its own aliases and would fail to match at all (see
+# domain/provider_credentials/capabilities.py's _CAPABILITIES: e.g. cursor's
+# supported_host_bound record's auth_mode is "cursor_personal_browser" but its
+# aliases are only "browser_login"/"local_browser_session"). Bind-host's caller
+# never sends auth_type (Settings' Connect button has no reason to know this
+# string), so a single hardcoded default would silently mismatch every
+# provider but the one it happened to be copied from.
+_PERSONAL_SUBSCRIPTION_AUTH_TYPE = {
+    "openai-codex": "chatgpt_personal",
+    "anthropic-claude": "personal_subscription",
+    "cursor": "browser_login",
+}
+
+
+def _derive_host_native_proof(
+        *, project: str, user_id: str, provider: str, provider_account_id: str,
+        host_allowlist: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    """Find a live, already-approved host in host_allowlist that still attests this
+    account, and build a proof from it. Never trusts caller input — this is how
+    verify/reconnect re-attest without requiring the browser to construct a proof
+    (a browser-constructed proof would mean trusting the browser, which is exactly
+    what ENFORCE-8's host-liveness cross-check exists to avoid)."""
+    provider_id = normalize_provider(provider)
+    expected_fingerprint = account_fingerprint(provider_id, provider_account_id)
+    live_hosts = store.list_agent_hosts(include_stale=True, project=project)
+    for host_id in host_allowlist:
+        host_id = str(host_id or "").strip()
+        if not host_id:
+            continue
+        live_host = next(
+            (item for item in live_hosts if item.get("host_id") == host_id), None)
+        if not live_host or live_host.get("stale") or live_host.get("status") != "online":
+            continue
+        placement = dict(live_host.get("placement") or
+                         (live_host.get("capacity") or {}).get("placement") or {})
+        owners = {str(x).strip() for x in placement.get("owner_user_ids") or []}
+        providers = {str(x).strip() for x in placement.get("providers") or []}
+        affinities = {str(x).strip() for x in placement.get("account_affinity_ids") or []}
+        if (user_id in owners and provider_id in providers
+                and expected_fingerprint in affinities):
+            return {
+                "proof_id": f"derived-{uuid.uuid4().hex[:16]}",
+                "host_id": host_id,
+                "account_fingerprint": expected_fingerprint,
+                "verified": True,
+            }
+    raise CredentialVaultError(
+        "provider_native_host_not_attested",
+        "no live approved host in this connection's allowlist currently attests this account",
+        status_code=409,
+    )
+
+
 def enroll_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
                    admin: bool = False,
                    principal_kind: str = "user",
@@ -294,15 +352,31 @@ def rotate_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
                     status_code=409,
                 )
             proof = dict(command.enrollment_proof or {})
-            _require_provider_native_proof(
-                project=command.project, user_id=str(metadata.get("user_id") or ""),
-                provider=str(metadata.get("provider") or ""),
-                provider_account_id=str(metadata.get("provider_account_id") or ""),
-                host_allowlist=command.host_allowlist, proof=proof)
+            if proof:
+                # A caller supplied its own proof (e.g. a host-side script) — validate
+                # it exactly as before; this branch is unchanged for compatibility.
+                _require_provider_native_proof(
+                    project=command.project, user_id=str(metadata.get("user_id") or ""),
+                    provider=str(metadata.get("provider") or ""),
+                    provider_account_id=str(metadata.get("provider_account_id") or ""),
+                    host_allowlist=command.host_allowlist, proof=proof)
+            else:
+                # The browser's "Reconnect" button has no way to construct a proof
+                # (nor should it) — derive one from the connection's own approved hosts.
+                _derive_host_native_proof(
+                    project=command.project, user_id=str(metadata.get("user_id") or ""),
+                    provider=str(metadata.get("provider") or ""),
+                    provider_account_id=str(metadata.get("provider_account_id") or ""),
+                    host_allowlist=metadata.get("host_allowlist") or ())
+            # rotate_host_native replaces host_allowlist wholesale — an empty body
+            # (the browser's Reconnect call) must preserve the existing allowlist,
+            # not silently erase every approved host on this connection.
+            effective_host_allowlist = (
+                command.host_allowlist or tuple(metadata.get("host_allowlist") or ()))
             return repository.rotate_host_native(
                 command.credential_reference, project=command.project, actor=actor,
                 expires_at=command.expires_at, refresh_state=command.refresh_state,
-                host_allowlist=command.host_allowlist,
+                host_allowlist=effective_host_allowlist,
                 principal_user_id=principal_user_id,
             )
         if command.credential is None:
@@ -322,6 +396,98 @@ def rotate_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
         if raise_errors:
             raise
         return _error(exc, "invalid_provider_rotation")
+
+
+def verify_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
+                   admin: bool = False,
+                   principal_kind: str = "user",
+                   repository: ProviderCredentialRepository = default_provider_credential_repository,
+                   raise_errors: bool = False) -> dict[str, Any]:
+    """Re-run the live host/placement cross-check without rotating credential material.
+
+    Unlike rotate/enroll, this never accepts a caller-supplied proof at all — the
+    browser's "Verify" button has no data to build one from, and letting it try
+    would mean trusting the browser. The proof is always derived from the
+    connection's own already-approved host_allowlist.
+    """
+    try:
+        try:
+            require_secret_free_public_payload(dict(data or {}))
+        except CredentialPolicyError as exc:
+            raise CredentialVaultError(exc.code, exc.message, status_code=400) from exc
+        command = VerifyProviderConnectionCommand.from_mapping(data)
+        metadata = repository.get_metadata(
+            command.credential_reference, project=command.project,
+            principal_user_id=principal_user_id, admin=False)
+        _require_connection_owner(
+            str(metadata.get("user_id") or ""), principal_user_id,
+            principal_kind=principal_kind, admin=admin)
+        if metadata.get("materialization_mode") != "host_native":
+            raise CredentialVaultError(
+                "provider_native_verification_required",
+                "verification is available only for provider-native connections",
+                status_code=409,
+            )
+        _derive_host_native_proof(
+            project=command.project, user_id=str(metadata.get("user_id") or ""),
+            provider=str(metadata.get("provider") or ""),
+            provider_account_id=str(metadata.get("provider_account_id") or ""),
+            host_allowlist=metadata.get("host_allowlist") or ())
+        return repository.verify_host_native(
+            command.credential_reference, project=command.project, actor=actor,
+            principal_user_id=principal_user_id,
+        )
+    except (ValidationError, CredentialVaultError) as exc:
+        if raise_errors:
+            raise
+        return _error(exc, "invalid_provider_verification")
+
+
+def bind_host_native_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
+                             raise_errors: bool = False) -> dict[str, Any]:
+    """Owner-locked: derive enrollment_proof from a caller-selected, already-attested
+    live host rather than trusting a client-supplied proof, then enroll normally."""
+    try:
+        raw = dict(data or {})
+        try:
+            require_secret_free_public_payload(raw)
+        except CredentialPolicyError as exc:
+            raise CredentialVaultError(exc.code, exc.message, status_code=400) from exc
+        host_id = str(raw.pop("host_id", "") or "").strip()
+        raw.pop("user_id", None)
+        raw.pop("enrollment_proof", None)
+        command = BindHostNativeConnectionCommand.from_mapping(raw)
+        if not host_id:
+            raise CredentialVaultError(
+                "provider_native_host_required", "a target host_id is required")
+        provider_id = normalize_provider(command.provider)
+        proof = {
+            "proof_id": f"bind-{uuid.uuid4().hex[:16]}",
+            "host_id": host_id,
+            "account_fingerprint": account_fingerprint(provider_id, command.provider_account_id),
+            "verified": True,
+        }
+        return enroll_mapping(
+            {
+                "project": command.project,
+                "user_id": principal_user_id,
+                "provider": provider_id,
+                "provider_account_id": command.provider_account_id,
+                "auth_type": (
+                    command.auth_type
+                    or _PERSONAL_SUBSCRIPTION_AUTH_TYPE.get(provider_id, "")),
+                "project_allowlist": command.project_allowlist,
+                "connection_kind": "personal_subscription",
+                "host_id": host_id,
+                "host_allowlist": (host_id,),
+                "enrollment_proof": proof,
+            },
+            actor=actor, principal_user_id=principal_user_id,
+            principal_kind="user", raise_errors=True)
+    except (ValidationError, CredentialVaultError) as exc:
+        if raise_errors:
+            raise
+        return _error(exc, "invalid_provider_host_bind")
 
 
 def revoke_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,

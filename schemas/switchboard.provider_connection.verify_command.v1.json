@@ -1,0 +1,26 @@
+{
+  "$id": "switchboard.provider_connection.verify_command.v1",
+  "additionalProperties": false,
+  "description": "Re-attest an existing provider-native connection without rotating it.\n\nDeliberately carries no enrollment_proof field: unlike rotate/enroll, the\ncaller never supplies one — the proof is always derived server-side from the\nconnection's own already-approved host_allowlist (see _derive_host_native_proof).",
+  "properties": {
+    "credential_reference": {
+      "title": "Credential Reference",
+      "type": "string"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.provider_connection.verify_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "credential_reference"
+  ],
+  "title": "VerifyProviderConnectionCommand",
+  "type": "object"
+}

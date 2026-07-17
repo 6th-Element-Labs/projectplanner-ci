@@ -61,6 +61,14 @@
         },
     ];
 
+    // UI-19: the three named runtimes. Personal-subscription state/actions are driven
+    // entirely by the CO-15 matrix + CO-6 vault; nothing here is a local allowlist.
+    const AI_ACCOUNT_PROVIDERS = [
+        { id: 'openai-codex', label: 'Codex / ChatGPT', icon: 'ti-brand-openai' },
+        { id: 'anthropic-claude', label: 'Claude Code', icon: 'ti-sparkles' },
+        { id: 'cursor', label: 'Cursor', icon: 'ti-terminal-2' },
+    ];
+
     const DEFAULT_SECTION = 'profile';
     const SCOPE_LABEL = {
         'write:projects': 'Project editor access (write:projects)',
@@ -329,28 +337,29 @@
 
         async _settingsAiAccountsSection() {
             const proj = window.PM_PROJECT || 'maxwell';
-            const [data, policy] = await Promise.all([
+            const [data, policy, hostsData] = await Promise.all([
                 this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-connections`),
                 this._sfetch(`api/projects/${encodeURIComponent(proj)}/provider-auth-capabilities`),
+                this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=1`),
             ]);
             const conns = data.error ? [] : (data.connections || data.provider_connections || []);
-            const rows = conns.length ? conns.map((c) => { const state = c.lifecycle_state || c.status || 'unknown'; const proof = c.ownership_proof || {}; return `<div class="list-group-item px-0"><div class="row align-items-center">
-                <div class="col-auto"><span class="status-dot ${state === 'active' ? 'status-dot-animated bg-green' : 'bg-secondary'}"></span></div>
-                <div class="col"><div class="fw-semibold">${this.esc(c.provider || c.provider_id || 'provider')}</div>
-                <div class="text-secondary small"><code>${this.esc(proof.account_fingerprint || 'unverified')}</code> · ${this.esc((c.connection_kind || 'personal_subscription').replace(/_/g, ' '))}</div></div>
-                <div class="col-auto"><span class="badge ${state === 'active' ? 'bg-green-lt' : 'bg-secondary-lt'}">${this.esc(state)}</span></div>
-                </div></div>`; }).join('') : '<div class="text-secondary small">No provider connections are enrolled for this project.</div>';
-            const connectionBody = data.error
-                ? `<div class="alert alert-danger mb-0" role="alert">${this.esc(data.error)}</div>`
-                : `<div class="list-group list-group-flush">${rows}</div>`;
-            const stateBadge = (row) => {
-                const state = row.effective_state || row.state || 'unavailable';
-                const cls = state === 'supported' ? 'bg-green-lt'
-                    : state === 'supported_host_bound' ? 'bg-azure-lt'
-                        : state === 'vendor_confirmation_required' ? 'bg-yellow-lt' : 'bg-red-lt';
-                return `<span class="badge ${cls}">${this.esc(state.replace(/_/g, ' '))}</span>`;
-            };
-            const policyRows = (policy.capabilities || []).map((row) => `<tr>
+            const caps = policy.error ? [] : (policy.capabilities || []);
+            const hosts = hostsData.error ? [] : (hostsData.hosts || []);
+            // Reused by _settingsAiAccountsConnect so a click doesn't re-fetch the
+            // same "every host in this project" list the render just fetched.
+            this._aiAccountsHostsCache = hostsData.error ? null : hosts;
+            const me = (this.principal && this.principal.id) || '';
+            // A failed fetch is NOT "you have no connections"/"no host is registered" —
+            // conflating the two would misrepresent unknown state as a known-empty one.
+            const fetchErrors = [
+                data.error ? `Connections: ${data.error}` : '',
+                hostsData.error ? `Agent hosts: ${hostsData.error}` : '',
+            ].filter(Boolean);
+            const fetchErrorBanner = fetchErrors.length
+                ? `<div class="alert alert-danger py-2 px-3 small" role="alert"><i class="ti ti-alert-triangle me-1" aria-hidden="true"></i>Could not load current status — showing policy only until this is retried. ${fetchErrors.map((e) => this.esc(e)).join(' · ')}</div>`
+                : '';
+            const stateBadge = (row) => this._settingsCo15StateBadge(row.effective_state || row.state);
+            const policyRows = caps.map((row) => `<tr>
                 <td><div class="fw-semibold">${this.esc(row.provider || '—')}</div><div class="font-monospace small text-secondary">${this.esc(row.auth_mode || '')}</div></td>
                 <td>${stateBadge(row)}<div class="small text-secondary mt-1">${this.esc(row.effective_disable_reason || row.disable_reason || 'Enabled by current policy')}</div></td>
                 <td><div>${this.esc((row.host_class || '').replace(/_/g, ' '))}</div><div class="small text-secondary">${this.esc((row.portability || '').replace(/_/g, ' '))}</div></td>
@@ -361,17 +370,252 @@
                 ? `<div class="alert alert-danger mb-0" role="alert"><strong>Provider execution is disabled.</strong> ${this.esc(policy.error)}</div>`
                 : `<div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th>Provider / mode</th><th>Effective state</th><th>Host / portability</th><th>Bootstrap</th><th>LiteLLM</th></tr></thead><tbody>${policyRows || '<tr><td colspan="5" class="text-danger">No authoritative capability records; execution fails closed.</td></tr>'}</tbody></table></div>`;
             const broker = policy.personal_subscription_broker || {};
+            const ctx = {
+                conns, caps, hosts, me,
+                connectionsError: data.error || '', hostsError: hostsData.error || '',
+            };
+            const providerCards = AI_ACCOUNT_PROVIDERS.map((p) => this._settingsAiAccountProviderCard(p, ctx)).join('');
             return this._settingsCard({
                 id: 'settings-ai-accounts', title: 'Personal AI accounts', icon: 'ti-plug-connected',
-                subtitle: 'Provider policy and connections available to your agent runtimes',
+                subtitle: 'Provider-native status and enrollment for your agent runtimes',
                 actions: `<span class="badge bg-secondary-lt">policy ${this.esc(policy.policy_version || 'unknown')}</span>`,
                 body: `<div class="alert alert-info py-2 px-3 small" role="note"><i class="ti ti-shield-check me-1" aria-hidden="true"></i>This server-authoritative matrix also gates enrollment, scheduling, runtime launch, MCP, and CO-14 proof. Unknown, stale, unapproved, or host-mismatched modes fail closed.</div>
-                    <h4 class="mb-2">Authentication policy</h4>${policyBody}
-                    <div class="small text-secondary mt-2 mb-4">LiteLLM personal-subscription broker: <strong>${broker.litellm === false ? 'disabled' : 'unknown'}</strong>. LiteLLM is eligible only for explicit API/paygo paths.</div>
-                    <h4 class="mb-2">Enrolled connections</h4>
                     <div class="alert alert-secondary py-2 px-3 small" role="note"><i class="ti ti-shield-lock me-1" aria-hidden="true"></i>Enrollment is provider-native and owner-bound. This screen never accepts provider passwords, tokens, cookies, auth capsules, or browser profiles; it displays only redacted host-verified proof.</div>
-                    ${connectionBody}`,
+                    ${fetchErrorBanner}
+                    ${providerCards}
+                    <h4 class="mb-2 mt-4">Authentication policy</h4>${policyBody}
+                    <div class="small text-secondary mt-2">LiteLLM personal-subscription broker: <strong>${broker.litellm === false ? 'disabled' : 'unknown'}</strong>. LiteLLM is eligible only for explicit API/paygo paths — never for personal subscriptions.</div>`,
             });
+        },
+
+        _settingsCo15StateBadge(state) {
+            state = state || 'unavailable';
+            const cls = state === 'supported' ? 'bg-green-lt'
+                : state === 'supported_host_bound' ? 'bg-azure-lt'
+                    : state === 'vendor_confirmation_required' ? 'bg-yellow-lt' : 'bg-red-lt';
+            return `<span class="badge ${cls}">${this.esc(state.replace(/_/g, ' '))}</span>`;
+        },
+
+        // Best personal-subscription capability record for a provider: prefer a live
+        // (non-unavailable) state over a stale/unsupported alternate mode (e.g. Cursor
+        // has both a host-bound browser-login row and an unavailable portable row).
+        _settingsAiAccountPersonalCapability(caps, providerId) {
+            const rank = { supported: 0, supported_host_bound: 1, vendor_confirmation_required: 2, unavailable: 3 };
+            const candidates = caps.filter((c) => c.provider === providerId && c.auth_mode !== 'api_key');
+            candidates.sort((a, b) => (rank[a.effective_state] ?? 9) - (rank[b.effective_state] ?? 9));
+            return candidates[0] || null;
+        },
+
+        _settingsAiAccountApiCapability(caps, providerId) {
+            return caps.find((c) => c.provider === providerId && c.auth_mode === 'api_key') || null;
+        },
+
+        // Hosts this signed-in user owns for this provider (server-attested placement,
+        // never a caller-supplied claim — see ownership.owner_user_ids in the payload).
+        // list_agent_hosts()/_host_row() nests placement under capacity, not top-level.
+        _settingsAiAccountHostPlacement(h) {
+            return (h && h.capacity && h.capacity.placement) || {};
+        },
+
+        _settingsAiAccountCandidateHosts(hosts, me, providerId) {
+            return hosts.filter((h) => {
+                if (h.stale || !me) return false;
+                const placement = this._settingsAiAccountHostPlacement(h);
+                return (placement.owner_user_ids || []).includes(me)
+                    && (placement.providers || []).includes(providerId);
+            });
+        },
+
+        _settingsAiAccountsDeclareCommand(providerId, accountId) {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const id = (accountId || 'you@example.com').replace(/'/g, "'\\''");
+            return `python adapters/agent_host_enrollment.py declare-account \\\n`
+                + `  --identity ~/.config/switchboard-agent-host/identity.json \\\n`
+                + `  --config ~/.config/switchboard-agent-host/config.json \\\n`
+                + `  --project ${proj} --provider ${providerId} --account-id '${id}'`;
+        },
+
+        // A connection is only "the current one" while it's actually usable — a
+        // revoked/deleted row must fall through to the Connect UI, not permanently
+        // occupy its provider's card (revoke/delete are otherwise a dead end).
+        _settingsAiAccountLiveConnection(conns, providerId, connectionKindPredicate) {
+            return conns.find((c) => c.provider === providerId
+                && connectionKindPredicate(c.connection_kind || 'personal_subscription')
+                && !['revoked', 'deleted'].includes(c.lifecycle_state));
+        },
+
+        _settingsAiAccountProviderCard(provider, ctx) {
+            const personal = this._settingsAiAccountPersonalCapability(ctx.caps, provider.id);
+            const apiCap = this._settingsAiAccountApiCapability(ctx.caps, provider.id);
+            const connection = ctx.connectionsError ? null : this._settingsAiAccountLiveConnection(
+                ctx.conns, provider.id, (kind) => kind === 'personal_subscription');
+            const apiConnection = ctx.connectionsError ? null : this._settingsAiAccountLiveConnection(
+                ctx.conns, provider.id, (kind) => kind !== 'personal_subscription');
+            const state = (personal && personal.effective_state) || 'unavailable';
+
+            let personalBody;
+            if (ctx.connectionsError) {
+                personalBody = `<div class="alert alert-secondary py-2 px-3 small mb-0" role="note">
+                    <i class="ti ti-info-circle me-1" aria-hidden="true"></i>Connection status is unavailable right now — see the error above.</div>`;
+            } else if (connection) {
+                personalBody = this._settingsAiAccountConnectionRows(connection);
+            } else if (state === 'vendor_confirmation_required' || state === 'unavailable') {
+                const reason = (personal && (personal.effective_disable_reason || personal.disable_reason))
+                    || 'This mode is not currently approved by server policy.';
+                personalBody = `<div class="alert ${state === 'unavailable' ? 'alert-secondary' : 'alert-warning'} py-2 px-3 small mb-0" role="note">
+                    <i class="ti ti-info-circle me-1" aria-hidden="true"></i>${this.esc(reason)}</div>`;
+            } else {
+                const candidates = ctx.hostsError ? [] : this._settingsAiAccountCandidateHosts(ctx.hosts, ctx.me, provider.id);
+                const ready = candidates.filter((h) =>
+                    (this._settingsAiAccountHostPlacement(h).account_affinity_ids || []).length > 0);
+                const idFieldId = `aiacct-${provider.id}-account-id`;
+                const cmdFieldId = `aiacct-${provider.id}-cmd`;
+                const hostNote = ctx.hostsError
+                    ? `<div class="small text-danger mb-2"><i class="ti ti-alert-triangle me-1" aria-hidden="true"></i>Could not check for a registered host — see the error above.</div>`
+                    : candidates.length
+                    ? `<div class="small text-secondary mb-2"><i class="ti ti-server-bolt me-1" aria-hidden="true"></i>${candidates.length} host(s) registered for you on this provider, ${ready.length} with a declared account.</div>`
+                    : `<div class="small text-secondary mb-2"><i class="ti ti-server-off me-1" aria-hidden="true"></i>No Agent Host is registered for you on this provider yet. Install one first — see <code>docs/AGENT-HOST-ENROLLMENT.md</code>.</div>`;
+                personalBody = `${hostNote}
+                    <label class="form-label small mb-1" for="${idFieldId}">Account label <span class="text-secondary fw-normal">(e.g. your ChatGPT sign-in email — never a password or token)</span></label>
+                    <input type="text" id="${idFieldId}" class="form-control form-control-sm mb-2" placeholder="you@example.com" autocomplete="off" spellcheck="false">
+                    <label class="form-label small mb-1">Then, on your registered host, declare that account</label>
+                    <div class="input-group input-group-sm mb-2">
+                        <input type="text" id="${cmdFieldId}" class="form-control font-monospace" readonly value="${this.esc(this._settingsAiAccountsDeclareCommand(provider.id, ''))}">
+                        <button class="btn btn-outline-secondary" type="button" data-set-action="ai-accounts-copy-cmd:${provider.id}" title="Copy command with your typed account label"><i class="ti ti-copy" aria-hidden="true"></i></button>
+                    </div>
+                    <div class="small text-secondary mb-2">This runs locally on your own machine — no network call, no secret leaves your host. Switchboard only ever learns the redacted result from that host's own next heartbeat. The copy button always uses whatever you've typed above.</div>
+                    <button type="button" class="btn btn-primary btn-sm" data-set-action="ai-accounts-connect:${provider.id}"><i class="ti ti-plug-connected me-1" aria-hidden="true"></i>Connect</button>
+                    <span id="aiacct-${provider.id}-flash" class="small text-secondary ms-2"></span>`;
+            }
+
+            const apiRow = apiCap ? `<div class="d-flex align-items-center mt-3 pt-3 border-top small">
+                <span class="text-secondary me-2">Direct API key</span>${this._settingsCo15StateBadge(apiConnection ? 'supported' : (apiCap.effective_state || 'unavailable'))}
+                <span class="text-secondary ms-2">${apiConnection ? 'configured, separately metered' : 'not yet self-service from Settings'}</span>
+                </div>` : '';
+
+            return `<div class="card mb-3" id="settings-ai-account-${provider.id}">
+                <div class="card-header"><div><h4 class="card-title mb-0"><i class="ti ${provider.icon} me-2" aria-hidden="true"></i>${this.esc(provider.label)}</h4>
+                    <div class="text-secondary small">Personal subscription</div></div>
+                    <div class="card-actions">${this._settingsCo15StateBadge(state)}</div></div>
+                <div class="card-body">${personalBody}${apiRow}</div>
+                </div>`;
+        },
+
+        _settingsAiAccountConnectionRows(c) {
+            const proof = c.ownership_proof || {};
+            const state = c.lifecycle_state || 'unknown';
+            const stateCls = state === 'active' ? 'bg-green-lt' : state === 'expired' ? 'bg-yellow-lt' : 'bg-red-lt';
+            const fmt = (t) => t ? new Date(t * 1000).toLocaleString() : '—';
+            const rows = this._settingsRows([
+                ['Status', `<span class="badge ${stateCls}">${this.esc(state)}</span> <span class="badge bg-secondary-lt ms-1">${this.esc((c.revocation_state || 'not_revoked').replace(/_/g, ' '))}</span>`],
+                ['Account fingerprint', `<code>${this.esc(proof.account_fingerprint || 'unverified')}</code>`],
+                ['Approved host(s)', (c.host_allowlist || []).map((h) => `<code class="me-1">${this.esc(h)}</code>`).join('') || '<span class="text-secondary">—</span>'],
+                ['Expires', this.esc(fmt(c.expires_at))],
+                ['Last native verification', this.esc(fmt(c.last_verified_at))],
+                ['Active leases', String(c.active_lease_count || 0)],
+            ]);
+            const ref = c.credential_reference;
+            const disabled = state !== 'active';
+            return `${rows}
+                <div class="d-flex align-items-center mt-3 pt-2 border-top">
+                    <span id="aiacct-conn-${this.esc(ref)}-flash" class="small text-secondary me-auto"></span>
+                    <button type="button" class="btn btn-outline-secondary btn-sm me-1" ${disabled ? 'disabled' : ''} data-set-action="ai-accounts-verify:${this.esc(ref)}"><i class="ti ti-shield-check me-1" aria-hidden="true"></i>Verify</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm me-1" ${disabled ? 'disabled' : ''} data-set-action="ai-accounts-reconnect:${this.esc(ref)}"><i class="ti ti-refresh me-1" aria-hidden="true"></i>Reconnect</button>
+                    <button type="button" class="btn btn-outline-warning btn-sm me-1" ${disabled ? 'disabled' : ''} data-set-action="ai-accounts-revoke:${this.esc(ref)}"><i class="ti ti-ban me-1" aria-hidden="true"></i>Revoke</button>
+                    <button type="button" class="btn btn-outline-danger btn-sm" data-set-action="ai-accounts-delete:${this.esc(ref)}"><i class="ti ti-trash me-1" aria-hidden="true"></i>Delete</button>
+                </div>`;
+        },
+
+        // Recomputed at click time (not kept live-synced on every keystroke — this codebase's
+        // settings actions are dispatched through the single delegated click handler, not
+        // per-field input listeners), so it always reflects whatever is currently typed.
+        // Reuses _settingsCopyField for the actual copy — same select()+execCommand
+        // fallback the GitHub/token copy buttons already rely on.
+        _settingsAiAccountsCopyCommand(providerId) {
+            const idField = document.getElementById(`aiacct-${providerId}-account-id`);
+            const cmdFieldId = `aiacct-${providerId}-cmd`;
+            const cmdField = document.getElementById(cmdFieldId);
+            if (cmdField) cmdField.value = this._settingsAiAccountsDeclareCommand(
+                providerId, idField ? idField.value : '');
+            this._settingsCopyField(cmdFieldId);
+        },
+
+        // The client never decides which host "matches" — it only offers each host this
+        // user owns for the provider, one at a time, and trusts the server's independent
+        // live cross-check (a client-computed guess about account_affinity_ids would just
+        // be trusting the browser, which is exactly what this feature must not do).
+        async _settingsAiAccountsConnect(providerId) {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const accountId = (document.getElementById(`aiacct-${providerId}-account-id`)?.value || '').trim();
+            const flash = document.getElementById(`aiacct-${providerId}-flash`);
+            const setFlash = (msg, cls) => { if (flash) { flash.textContent = msg; flash.className = `small ms-2 ${cls}`; } };
+            if (!accountId) { setFlash('Enter an account label first.', 'text-danger'); return; }
+            setFlash('Connecting…', 'text-secondary');
+            // Reuse the hosts list the section already fetched moments ago rather than
+            // re-querying "every host in this project" again; only re-fetch if that
+            // cache is unavailable (e.g. the earlier fetch itself failed).
+            let hosts = this._aiAccountsHostsCache;
+            if (!hosts) {
+                const hostsData = await this._sfetch(`ixp/v1/agent_hosts?project=${encodeURIComponent(proj)}&include_stale=1`);
+                hosts = hostsData.hosts || [];
+            }
+            const candidates = this._settingsAiAccountCandidateHosts(
+                hosts, (this.principal && this.principal.id) || '', providerId);
+            if (!candidates.length) {
+                setFlash('No Agent Host is registered for you on this provider yet.', 'text-danger');
+                return;
+            }
+            let lastError = 'No registered host has declared this account yet — run the command above, then try again.';
+            for (const host of candidates) {
+                try {
+                    await this._sSend(`api/projects/${encodeURIComponent(proj)}/provider-connections/bind-host`, 'POST', {
+                        provider: providerId, provider_account_id: accountId,
+                        project_allowlist: [proj], host_id: host.host_id,
+                    });
+                    setFlash('Connected.', 'text-success');
+                    await this.renderSettings();
+                    return;
+                } catch (e) { lastError = e.message || lastError; }
+            }
+            setFlash(lastError, 'text-danger');
+        },
+
+        async _settingsAiAccountsVerify(ref) {
+            const proj = window.PM_PROJECT || 'maxwell';
+            this._sFlash(`aiacct-conn-${ref}-flash`, 'Verifying…', 'text-secondary');
+            try {
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/provider-connections/${encodeURIComponent(ref)}/verify`, 'POST', {});
+                await this.renderSettings();
+            } catch (e) { this._sFlash(`aiacct-conn-${ref}-flash`, e.message, 'text-danger'); }
+        },
+
+        async _settingsAiAccountsReconnect(ref) {
+            const proj = window.PM_PROJECT || 'maxwell';
+            this._sFlash(`aiacct-conn-${ref}-flash`, 'Reconnecting…', 'text-secondary');
+            try {
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/provider-connections/${encodeURIComponent(ref)}/rotate`, 'POST', {});
+                await this.renderSettings();
+            } catch (e) { this._sFlash(`aiacct-conn-${ref}-flash`, e.message, 'text-danger'); }
+        },
+
+        async _settingsAiAccountsRevoke(ref) {
+            if (!confirm('Revoke this connection? Active runners using it are killed immediately.')) return;
+            const proj = window.PM_PROJECT || 'maxwell';
+            this._sFlash(`aiacct-conn-${ref}-flash`, 'Revoking…', 'text-secondary');
+            try {
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/provider-connections/${encodeURIComponent(ref)}/revoke`, 'POST', { reason: 'operator_revoked_in_settings' });
+                await this.renderSettings();
+            } catch (e) { this._sFlash(`aiacct-conn-${ref}-flash`, e.message, 'text-danger'); }
+        },
+
+        async _settingsAiAccountsDelete(ref) {
+            if (!confirm('Delete this connection? This cryptographically erases it and cannot be undone.')) return;
+            const proj = window.PM_PROJECT || 'maxwell';
+            this._sFlash(`aiacct-conn-${ref}-flash`, 'Deleting…', 'text-secondary');
+            try {
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/provider-connections/${encodeURIComponent(ref)}`, 'DELETE', { reason: 'operator_deleted_in_settings' });
+                await this.renderSettings();
+            } catch (e) { this._sFlash(`aiacct-conn-${ref}-flash`, e.message, 'text-danger'); }
         },
 
         _settingsAppearanceSection() {
@@ -1248,6 +1492,12 @@
             catch (e) { return; }
         }
         if (String(action || '').startsWith('github-copy:')) return this._settingsCopyField(action.slice('github-copy:'.length));
+        if (String(action || '').startsWith('ai-accounts-copy-cmd:')) return this._settingsAiAccountsCopyCommand(action.slice('ai-accounts-copy-cmd:'.length));
+        if (String(action || '').startsWith('ai-accounts-connect:')) return this._settingsAiAccountsConnect(action.slice('ai-accounts-connect:'.length));
+        if (String(action || '').startsWith('ai-accounts-verify:')) return this._settingsAiAccountsVerify(action.slice('ai-accounts-verify:'.length));
+        if (String(action || '').startsWith('ai-accounts-reconnect:')) return this._settingsAiAccountsReconnect(action.slice('ai-accounts-reconnect:'.length));
+        if (String(action || '').startsWith('ai-accounts-revoke:')) return this._settingsAiAccountsRevoke(action.slice('ai-accounts-revoke:'.length));
+        if (String(action || '').startsWith('ai-accounts-delete:')) return this._settingsAiAccountsDelete(action.slice('ai-accounts-delete:'.length));
         switch (action) {
             case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'repo-save': return this.saveRepoTopology();

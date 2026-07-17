@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Callable
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 import auth
 from switchboard.application.commands import provider_credentials as commands
@@ -17,6 +17,26 @@ from switchboard.storage.repositories.provider_credentials import (
 
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
+
+
+class VerifyConnectionBody(BaseModel):
+    """Typed wire body for the verify route — ARCH-MS-84 caps untyped dict bodies.
+
+    Deliberately empty: verify takes no caller input, the proof is always derived
+    server-side (see commands.verify_mapping / _derive_host_native_proof)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class BindHostNativeBody(BaseModel):
+    """Typed wire body for bind-host — the browser never supplies a proof; the route
+    derives it server-side from the selected, already-attested live host."""
+
+    provider: str
+    provider_account_id: str
+    project_allowlist: list[str] = Field(default_factory=list)
+    host_id: str = ""
+    auth_type: str = ""
 
 
 def _access(principal: dict) -> dict:
@@ -95,7 +115,8 @@ def create_router(*, resolve_project: ProjectResolver,
         try:
             return default_provider_credential_repository.get_metadata(
                 credential_reference, project=project_id,
-                principal_user_id=principal_id, admin=is_admin, include_events=True)
+                principal_user_id=principal_id, admin=is_admin,
+                include_events=True, include_lease_count=True)
         except CredentialVaultError as exc:
             _raise_http(exc)
 
@@ -116,6 +137,46 @@ def create_router(*, resolve_project: ProjectResolver,
                  "credential_reference": credential_reference},
                 actor=auth.actor(principal), principal_user_id=principal_id,
                 principal_kind=access["principal_kind"], admin=is_admin,
+                raise_errors=True)
+        except (ValidationError, CredentialVaultError) as exc:
+            _raise_http(exc)
+
+    @router.post(
+        "/api/projects/{project}/provider-connections/{credential_reference}/verify"
+    )
+    def verify_provider_connection(request: Request, project: str,
+                                   credential_reference: str,
+                                   body: VerifyConnectionBody = Body(
+                                       default_factory=VerifyConnectionBody)):
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:credentials",), dev_actor="provider-vault")
+        access = _access(principal)
+        principal_id, is_admin = access["principal_id"], access["admin"]
+        try:
+            return commands.verify_mapping(
+                {**body.model_dump(), "project": project_id,
+                 "credential_reference": credential_reference},
+                actor=auth.actor(principal), principal_user_id=principal_id,
+                principal_kind=access["principal_kind"], admin=is_admin,
+                raise_errors=True)
+        except (ValidationError, CredentialVaultError) as exc:
+            _raise_http(exc)
+
+    @router.post("/api/projects/{project}/provider-connections/bind-host")
+    def bind_host_native_provider_connection(request: Request, project: str,
+                                             body: BindHostNativeBody = Body(...)):
+        """Owner-locked enrollment whose proof is derived server-side from a
+        caller-selected live Agent Host — the browser never supplies a proof."""
+        project_id = resolve_project(project)
+        principal = resolve_principal(
+            request, project_id, ("write:credentials",), dev_actor="provider-vault")
+        access = _access(principal)
+        principal_id = access["principal_id"]
+        try:
+            return commands.bind_host_native_mapping(
+                {**body.model_dump(), "project": project_id},
+                actor=auth.actor(principal), principal_user_id=principal_id,
                 raise_errors=True)
         except (ValidationError, CredentialVaultError) as exc:
             _raise_http(exc)

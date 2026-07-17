@@ -42,6 +42,11 @@ BUNDLE_SCHEMA = "switchboard.agent_host_bundle.v1"
 LOCAL_STATE_SCHEMA = "switchboard.agent_host_local_state.v1"
 IDENTITY_SCHEMA = "switchboard.agent_host_identity.v1"
 SERVICE_LABEL = "com.6thelement.switchboard-agent-host"
+# Shared with agent_host.py's _declared_account_affinities() reader — a single
+# source so the filename/key can never silently drift between writer and reader
+# (a drift would fail silently: the reader's isinstance guard just returns []).
+ACCOUNT_AFFINITIES_FILENAME = "account_affinities.json"
+ACCOUNT_AFFINITY_IDS_KEY = "account_affinity_ids"
 _SEMVER_IDENTIFIER = r"[0-9A-Za-z-]+"
 _SEMVER_RE = re.compile(
     rf"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
@@ -1476,6 +1481,80 @@ def rotate_identity(*, identity_path: Path, config_path: Path, project: str,
             "service_restarted": True}
 
 
+_CO6_CANONICAL_PROVIDERS = ("openai-codex", "anthropic-claude", "cursor")
+
+
+def declare_account_affinity(*, identity_path: Path, config_path: Path, project: str,
+                             provider: str, account_id: str,
+                             service_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+                             ) -> dict[str, Any]:
+    """Locally declare the CO-6 account fingerprint this host attests for a provider.
+
+    Pure local filesystem operation — no network call, no server-side write path.
+    Only someone with shell access to this same user account can write this file;
+    the server only ever learns its contents through the daemon's own already-
+    authenticated heartbeat (same trust boundary as the legacy PM_HOST_ACCOUNT_AFFINITIES
+    env var this sits alongside — see placement_inventory() in agent_host.py). A Settings
+    "Bind this connection" click cannot reach this file and cannot forge an affinity.
+    """
+    identity = _read_json(identity_path)
+    config = _read_json(config_path)
+    project = _require_lifecycle_project(project, identity, config)
+    provider = str(provider or "").strip().lower()
+    if provider not in _CO6_CANONICAL_PROVIDERS:
+        raise EnrollmentError(f"provider must be one of {list(_CO6_CANONICAL_PROVIDERS)}")
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        raise EnrollmentError("account_id is required")
+    fingerprint = "acct-" + hashlib.sha256(
+        f"{provider}\x1f{account_id}".encode("utf-8")).hexdigest()[:16]
+    declarations_path = config_path.parent / ACCOUNT_AFFINITIES_FILENAME
+    current: dict[str, Any] = {}
+    if declarations_path.is_file() and not declarations_path.is_symlink():
+        current = _read_json(declarations_path)
+    existing = {
+        str(item).strip() for item in current.get(ACCOUNT_AFFINITY_IDS_KEY) or []
+        if str(item or "").strip()
+    }
+    already_declared = fingerprint in existing
+    existing.add(fingerprint)
+    _atomic_json(declarations_path, {
+        "schema": "switchboard.agent_host_account_affinities.v1",
+        ACCOUNT_AFFINITY_IDS_KEY: sorted(existing),
+        "declared_at": time.time(),
+    }, 0o600)
+    target_platform = str(config.get("platform") or "").strip()
+    service_path = str(config.get("service_path") or "").strip()
+    restarted = False
+    warning = ""
+    if already_declared:
+        # Re-declaring the same fingerprint changes nothing on disk in effect —
+        # restarting a live, possibly mid-wake daemon for a pure no-op is exactly
+        # the kind of restart this mechanism should not reach for reflexively.
+        warning = "this account was already declared; no restart was needed"
+    elif target_platform in {"darwin", "linux"} and service_path:
+        # placement_inventory() is computed once at daemon start, so the fingerprint
+        # only reaches the next heartbeat after a restart — mirrors rotate_identity's
+        # own restart-to-apply pattern.
+        control_service(
+            target_platform, "restart", Path(service_path), runner=service_runner)
+        restarted = True
+    else:
+        warning = (
+            "could not restart the service automatically (platform/service_path "
+            "unavailable) — restart it yourself for this declaration to take effect"
+        )
+    result = {
+        "declared": True,
+        "provider": provider,
+        "account_fingerprint": fingerprint,
+        "service_restarted": restarted,
+    }
+    if warning:
+        result["warning"] = warning
+    return result
+
+
 def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path, project: str,
                 final_status: str = "revoked", stop_service: bool = True,
                 http: Callable[..., dict[str, Any]] = request_json,
@@ -1779,6 +1858,12 @@ def main(argv: list[str] | None = None) -> int:
     rotate.add_argument("--identity", type=Path, required=True)
     rotate.add_argument("--config", type=Path, required=True)
     rotate.add_argument("--project", required=True, type=_non_blank_project)
+    declare = sub.add_parser("declare-account")
+    declare.add_argument("--identity", type=Path, required=True)
+    declare.add_argument("--config", type=Path, required=True)
+    declare.add_argument("--project", required=True, type=_non_blank_project)
+    declare.add_argument("--provider", required=True, choices=list(_CO6_CANONICAL_PROVIDERS))
+    declare.add_argument("--account-id", required=True)
     revoke = sub.add_parser("revoke")
     revoke.add_argument("--identity", type=Path, required=True)
     revoke.add_argument("--config", type=Path, required=True)
@@ -1824,6 +1909,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "rotate":
             result = rotate_identity(
                 identity_path=args.identity, config_path=args.config, project=args.project)
+        elif args.command == "declare-account":
+            result = declare_account_affinity(
+                identity_path=args.identity, config_path=args.config, project=args.project,
+                provider=args.provider, account_id=args.account_id)
         elif args.command == "revoke":
             result = revoke_host(
                 identity_path=args.identity, config_path=args.config, state_path=args.state,

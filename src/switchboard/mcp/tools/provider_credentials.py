@@ -76,7 +76,7 @@ def get_provider_connection(credential_reference: str, ctx: Context,
     try:
         result = default_provider_credential_repository.get_metadata(
             credential_reference, project=project, principal_user_id=principal_id,
-            admin=is_admin, include_events=True)
+            admin=is_admin, include_events=True, include_lease_count=True)
     except CredentialVaultError as exc:
         result = exc.as_dict()
     return services.dumps(result)
@@ -118,6 +118,35 @@ def rotate_provider_connection(credential_reference: str, rotation_json: str,
         payload, actor=services.principal_actor(principal),
         principal_user_id=principal_id, principal_kind=access["principal_kind"],
         admin=is_admin))
+
+
+def verify_provider_connection(credential_reference: str, ctx: Context,
+                               project: str = "maxwell") -> str:
+    """Re-attest an owner-bound provider-native connection without rotating it.
+
+    Takes no proof input — it is always derived server-side from the connection's
+    own already-approved hosts."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:credentials",))
+    access = _access(principal)
+    principal_id, is_admin = access["principal_id"], access["admin"]
+    payload = {"project": project, "credential_reference": credential_reference}
+    return services.dumps(commands.verify_mapping(
+        payload, actor=services.principal_actor(principal),
+        principal_user_id=principal_id, principal_kind=access["principal_kind"],
+        admin=is_admin))
+
+
+def bind_host_native_provider_connection(bind_json: str, ctx: Context,
+                                         project: str = "maxwell") -> str:
+    """Owner-locked enrollment whose proof is derived from a selected live host."""
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:credentials",))
+    access = _access(principal)
+    payload = {**_object(bind_json, "bind_json"), "project": project}
+    return services.dumps(commands.bind_host_native_mapping(
+        payload, actor=services.principal_actor(principal),
+        principal_user_id=access["principal_id"]))
 
 
 def revoke_provider_connection(credential_reference: str, reason: str,
@@ -175,6 +204,8 @@ PROVIDER_CREDENTIAL_TOOL_NAMES = (
     "list_provider_connections",
     "list_provider_auth_capabilities",
     "rotate_provider_connection",
+    "verify_provider_connection",
+    "bind_host_native_provider_connection",
     "revoke_provider_connection",
     "delete_provider_connection",
     "acquire_provider_credential_lease",

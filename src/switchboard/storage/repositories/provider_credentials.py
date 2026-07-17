@@ -234,9 +234,25 @@ class ProviderCredentialRepository:
             "deleted_at": item.get("deleted_at"),
             "deleted_by": item.get("deleted_by"),
             "deletion_reason": item.get("deletion_reason"),
+            "last_verified_at": item.get("last_verified_at"),
+            "last_verified_by": item.get("last_verified_by") or None,
             "updated_at": item.get("updated_at"),
             "updated_by": item.get("updated_by"),
         }
+
+    @staticmethod
+    def _active_lease_count_in(c: sqlite3.Connection, credential_reference: str,
+                               project: str, now: float) -> int:
+        # expires_at>? matches the sibling concurrency-check query (~line 1061) — an
+        # elapsed-but-unswept lease is not "active" even though its row hasn't been
+        # transitioned by _expire_leases_in yet.
+        row = c.execute(
+            "SELECT COUNT(*) AS n FROM provider_credential_leases "
+            "WHERE credential_reference=? AND project_id=? AND state IN (?,?,?) "
+            "AND expires_at>?",
+            (credential_reference, project, *LIVE_LEASE_STATES, now),
+        ).fetchone()
+        return int(row["n"] or 0) if row else 0
 
     @staticmethod
     def _public_lease(row: Mapping[str, Any], *, now: Optional[float] = None) -> dict[str, Any]:
@@ -479,7 +495,8 @@ class ProviderCredentialRepository:
 
     def get_metadata(self, credential_reference: str, *, project: str,
                      principal_user_id: str = "", admin: bool = False,
-                     include_events: bool = False) -> dict[str, Any]:
+                     include_events: bool = False,
+                     include_lease_count: bool = False) -> dict[str, Any]:
         self._prepare()
         now = time.time()
         with _registry_conn() as c:
@@ -494,6 +511,13 @@ class ProviderCredentialRepository:
                 c, row, project=project, principal_user_id=principal_user_id, admin=admin)
             current = self._refresh_expiration_in(c, row, now)
             result = self._public_connection(current, now=now)
+            # Opt-in like include_events: get_metadata is also called on the hot
+            # provider-runtime-launch auth path (ProviderRuntimeAuth.run()), which
+            # only reads auth_type/provider and never this field — skip the extra
+            # query there rather than pay for it on every task/session launch.
+            if include_lease_count:
+                result["active_lease_count"] = self._active_lease_count_in(
+                    c, current["credential_reference"], project, now)
             if include_events:
                 events = c.execute(
                     "SELECT * FROM provider_credential_events WHERE credential_reference=? "
@@ -526,8 +550,11 @@ class ProviderCredentialRepository:
                         admin=admin)
                 except CredentialVaultError:
                     continue
-                result.append(self._public_connection(
-                    self._refresh_expiration_in(c, row, now), now=now))
+                public = self._public_connection(
+                    self._refresh_expiration_in(c, row, now), now=now)
+                public["active_lease_count"] = self._active_lease_count_in(
+                    c, public["credential_reference"], project, now)
+                result.append(public)
             return result
 
     @staticmethod
@@ -682,6 +709,48 @@ class ProviderCredentialRepository:
                          "connection_kind": row["connection_kind"]}, now=now,
             )
             return self._public_connection(current, now=now)
+
+    def verify_host_native(
+            self, credential_reference: str, *, project: str, actor: str,
+            principal_user_id: str = "") -> dict[str, Any]:
+        """Stamp a fresh live-host attestation without rotating credential material."""
+        self._prepare()
+        now = time.time()
+        with _registry_conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (str(credential_reference or "").strip(),),
+            ).fetchone()
+            if not row:
+                raise CredentialVaultError(
+                    "credential_not_available", "provider credential is not available",
+                    status_code=404)
+            self._authorize_connection_in(
+                c, row, project=project, principal_user_id=principal_user_id, admin=False)
+            if (row["lifecycle_state"] in {"revoked", "deleted"}
+                    or row["materialization_mode"] != "host_native"):
+                raise CredentialVaultError(
+                    "credential_not_verifiable",
+                    "verification is available only for active provider-native connections",
+                    status_code=409)
+            c.execute(
+                "UPDATE provider_connections SET last_verified_at=?, last_verified_by=?, "
+                "updated_at=?, updated_by=? WHERE credential_reference=?",
+                (now, actor, now, actor, row["credential_reference"]),
+            )
+            current = c.execute(
+                "SELECT * FROM provider_connections WHERE credential_reference=?",
+                (row["credential_reference"],),
+            ).fetchone()
+            self._event_in(
+                c, current, "verified", actor=actor, project=project,
+                details={"connection_kind": row["connection_kind"]}, now=now,
+            )
+            result = self._public_connection(current, now=now)
+            result["active_lease_count"] = self._active_lease_count_in(
+                c, current["credential_reference"], project, now)
+            return result
 
     def revoke(self, credential_reference: str, *, project: str, actor: str,
                reason: str, principal_user_id: str = "", admin: bool = False) -> dict[str, Any]:

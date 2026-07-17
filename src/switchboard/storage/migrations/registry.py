@@ -565,4 +565,17 @@ def run_registry_migrations(c: sqlite3.Connection) -> List[str]:
         _record(c, ownership_migration)
         newly.append(ownership_migration)
 
+    verification_migration = "ui19_provider_connection_verification"
+    if verification_migration not in done:
+        c.executescript(
+            """
+            ALTER TABLE provider_connections
+                ADD COLUMN last_verified_at REAL;
+            ALTER TABLE provider_connections
+                ADD COLUMN last_verified_by TEXT NOT NULL DEFAULT '';
+            """
+        )
+        _record(c, verification_migration)
+        newly.append(verification_migration)
+
     return newly

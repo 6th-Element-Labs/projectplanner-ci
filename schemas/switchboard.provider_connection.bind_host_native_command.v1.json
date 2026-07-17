@@ -1,0 +1,44 @@
+{
+  "$id": "switchboard.provider_connection.bind_host_native_command.v1",
+  "additionalProperties": false,
+  "description": "Enroll a personal-subscription connection whose proof is derived server-side\nfrom a caller-selected, already-attested live Agent Host — never client-supplied.",
+  "properties": {
+    "auth_type": {
+      "default": "",
+      "title": "Auth Type",
+      "type": "string"
+    },
+    "project": {
+      "title": "Project",
+      "type": "string"
+    },
+    "project_allowlist": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Project Allowlist",
+      "type": "array"
+    },
+    "provider": {
+      "title": "Provider",
+      "type": "string"
+    },
+    "provider_account_id": {
+      "title": "Provider Account Id",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.provider_connection.bind_host_native_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "provider",
+    "provider_account_id",
+    "project_allowlist"
+  ],
+  "title": "BindHostNativeConnectionCommand",
+  "type": "object"
+}

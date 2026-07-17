@@ -192,7 +192,7 @@ WRITE_TOOLS = frozenset({
     "add_comment", "add_deliverable_milestone", "add_dependency", "apply_cleanup",
     "apply_project_consolidation", "approve_deliverable_breakdown", "archive_project",
     "archive_task", "archive_work_session_workspace", "cancel_monitor", "cancel_wake",
-    "begin_agent_host_enrollment",
+    "begin_agent_host_enrollment", "bind_host_native_provider_connection",
     "claim_external_effect", "claim_files", "claim_next", "claim_resource",
     "claim_runner_control", "claim_task", "claim_wake", "complete_claim",
     "complete_runner_control", "complete_wake", "create_board", "create_deliverable",
@@ -231,6 +231,7 @@ WRITE_TOOLS = frozenset({
     "update_mission_narrative", "update_project", "update_task", "update_work_session",
     "verify_deliverable_closure", "verify_external_effect", "verify_offline_completion",
     "verify_outcome", "verify_project_consolidation", "verify_project_purge_intent",
+    "verify_provider_connection",
 })
 
 if READ_TOOLS & WRITE_TOOLS:

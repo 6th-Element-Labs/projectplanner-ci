@@ -20,6 +20,10 @@ ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA = (
 RELEASE_PROVIDER_CREDENTIAL_LEASE_SCHEMA = (
     "switchboard.provider_credential.release_lease_command.v1"
 )
+VERIFY_PROVIDER_CONNECTION_SCHEMA = "switchboard.provider_connection.verify_command.v1"
+BIND_HOST_NATIVE_CONNECTION_SCHEMA = (
+    "switchboard.provider_connection.bind_host_native_command.v1"
+)
 
 
 def _parse_object(value: Any, field_name: str) -> dict[str, Any]:
@@ -175,6 +179,67 @@ class DeleteProviderConnectionCommand(RevokeProviderConnectionCommand):
     schema_id: str = Field(default=DELETE_PROVIDER_CONNECTION_SCHEMA, alias="schema")
 
 
+class VerifyProviderConnectionCommand(VersionedModel):
+    """Re-attest an existing provider-native connection without rotating it.
+
+    Deliberately carries no enrollment_proof field: unlike rotate/enroll, the
+    caller never supplies one — the proof is always derived server-side from the
+    connection's own already-approved host_allowlist (see _derive_host_native_proof).
+    """
+
+    SCHEMA: ClassVar[str] = VERIFY_PROVIDER_CONNECTION_SCHEMA
+    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
+
+    schema_id: str = Field(default=VERIFY_PROVIDER_CONNECTION_SCHEMA, alias="schema")
+    project: str
+    credential_reference: str
+
+    @field_validator("project", "credential_reference", mode="before")
+    @classmethod
+    def _strip_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "VerifyProviderConnectionCommand":
+        return cls.model_validate(dict(value or {}))
+
+
+class BindHostNativeConnectionCommand(VersionedModel):
+    """Enroll a personal-subscription connection whose proof is derived server-side
+    from a caller-selected, already-attested live Agent Host — never client-supplied."""
+
+    SCHEMA: ClassVar[str] = BIND_HOST_NATIVE_CONNECTION_SCHEMA
+    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
+
+    schema_id: str = Field(default=BIND_HOST_NATIVE_CONNECTION_SCHEMA, alias="schema")
+    project: str
+    provider: str
+    provider_account_id: str
+    auth_type: str = ""
+    project_allowlist: tuple[str, ...]
+
+    @field_validator(
+        "project", "provider", "provider_account_id", "auth_type", mode="before",
+    )
+    @classmethod
+    def _strip_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("provider", mode="after")
+    @classmethod
+    def _lower_provider(cls, value: str) -> str:
+        return value.lower()
+
+    @field_validator("project_allowlist", mode="before")
+    @classmethod
+    def _allowlist(cls, value: Any) -> tuple[str, ...]:
+        return _parse_string_list(value)
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "BindHostNativeConnectionCommand":
+        return cls.model_validate(dict(value or {}))
+
+
 class AcquireProviderCredentialLeaseCommand(VersionedModel):
     SCHEMA: ClassVar[str] = ACQUIRE_PROVIDER_CREDENTIAL_LEASE_SCHEMA
     model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
@@ -232,6 +297,8 @@ for _model in (
     RotateProviderConnectionCommand,
     RevokeProviderConnectionCommand,
     DeleteProviderConnectionCommand,
+    VerifyProviderConnectionCommand,
+    BindHostNativeConnectionCommand,
     AcquireProviderCredentialLeaseCommand,
     ReleaseProviderCredentialLeaseCommand,
 ):
