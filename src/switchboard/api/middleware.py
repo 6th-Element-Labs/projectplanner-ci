@@ -23,8 +23,7 @@ from fastapi.responses import JSONResponse
 import auth
 import concurrency_limiter
 import store
-from switchboard.api.routers.auth import service as _auth_service
-from switchboard.api.routers.auth import session as _auth_session
+from switchboard.api.browser_session import current_browser_user
 
 
 SaturationSnapshot = Callable[[str], dict]
@@ -148,7 +147,7 @@ def register_auth_gate(app, *, global_user_scopes: GlobalUserScopes,
             return _attach_server_timing(await call_next(request), started_at)
 
         # Browser users — global taikun_session JWT.
-        user = _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, ""))
+        user = await current_browser_user(request)
         if not user:
             return _attach_server_timing(JSONResponse({"detail": "not authenticated"}, status_code=401), started_at)
         # "list my projects" — any authenticated user; the route filters to their grants.

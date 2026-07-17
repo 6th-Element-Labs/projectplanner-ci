@@ -18,8 +18,7 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import auth
-from switchboard.api.routers.auth import service as _auth_service
-from switchboard.api.routers.auth import session as _auth_session
+from switchboard.api.browser_session import current_browser_user
 
 
 # --- Content-hashed static asset versions ------------------------------------
@@ -83,7 +82,7 @@ def register_spa(app: FastAPI, *, static_dir: Path) -> None:
     @app.get("/", include_in_schema=False)
     async def root(request: Request):
         index = static_dir / "index.html"
-        if _auth_service.current_user(request.cookies.get(_auth_session.COOKIE_NAME, "")):
+        if await current_browser_user(request):
             return _shell_response(index)
         if auth.auth_mode() == auth.DEV_OPEN:
             return _shell_response(index)
