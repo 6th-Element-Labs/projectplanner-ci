@@ -122,9 +122,49 @@ cross_task, cross_task_reason = relay.verify_capability_ticket(
 ok(cross_task is None and cross_task_reason == "task_id_mismatch",
    "cross-task binding denial")
 
-relay.revoke_ticket_jti(payload["jti"])
+relay.revoke_ticket_jti(payload["jti"], expires_at=float(payload["exp"]))
 revoked, revoked_reason = relay.verify_capability_ticket(ticket, required_scope="watch")
 ok(revoked is None and revoked_reason == "revoked", "revoke/purge denies further use")
+relay.clear_revoked_jtis_for_tests()
+
+# BUG-75: revoke drops live browser/host clients with matching ticket_jti
+live_hub = relay.reset_default_hub_for_tests()
+live_frames: list[str] = []
+closed_flags = {"browser": False, "host": False}
+live_ticket, live_payload = relay.mint_capability_ticket(
+    _binding("run_revoke_live"), ["watch", "input"], ttl_seconds=120)
+live_hub.attach_host(
+    "run_revoke_live",
+    lambda f: live_frames.append(f"host:{f}"),
+    binding=live_payload,
+    close_fn=lambda: closed_flags.__setitem__("host", True),
+)
+att_live = live_hub.attach_browser(
+    "run_revoke_live",
+    live_payload,
+    lambda f: live_frames.append(f"browser:{f}"),
+    client_id="browser-revoke",
+    close_fn=lambda: closed_flags.__setitem__("browser", True),
+)
+ok(att_live.get("ok") is True, "live revoke fixture attaches browser")
+dropped = live_hub.disconnect_by_jti(live_payload["jti"], reason="ticket_revoked")
+info_after = live_hub.session_info("run_revoke_live")
+ok(dropped.get("browsers") == 1 and dropped.get("hosts") == 1
+   and closed_flags["browser"] and closed_flags["host"]
+   and info_after is not None and info_after.get("browser_count") == 0
+   and info_after.get("host_attached") is False
+   and any("ticket_revoked" in f for f in live_frames),
+   "revoke disconnects live browser+host clients with matching jti")
+# Re-attach must fail after revoke_ticket_jti (memory deny list)
+relay.revoke_ticket_jti(
+    live_payload["jti"],
+    expires_at=float(live_payload["exp"]),
+    hub=live_hub,
+)
+denied_reattach = live_hub.attach_browser(
+    "run_revoke_live", live_payload, lambda f: None, client_id="browser-re")
+ok(denied_reattach.get("error") == "revoked",
+   "revoked jti cannot re-attach a live browser client")
 relay.clear_revoked_jtis_for_tests()
 
 # --- sanitize / open path never exposes loopback when public base set ---
