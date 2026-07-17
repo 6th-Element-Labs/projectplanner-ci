@@ -1,0 +1,19 @@
+# ARCH-MS-105 reference only — do not paste into the live Caddyfile yet.
+# The standalone Coord service runs side-by-side on :8123; a later cutover task
+# owns edge routing and monolith dual-strip.
+
+# handle /api/board {
+#     reverse_proxy 127.0.0.1:8123
+# }
+# handle /api/signals {
+#     reverse_proxy 127.0.0.1:8123
+# }
+# handle /ixp/v1/delta {
+#     reverse_proxy 127.0.0.1:8123
+# }
+# handle /api/coordination {
+#     reverse_proxy 127.0.0.1:8123
+# }
+# handle /api/coordinator_decisions {
+#     reverse_proxy 127.0.0.1:8123
+# }

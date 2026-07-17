@@ -1,11 +1,12 @@
-"""Coord/board process-boundary package.
+"""Coord/board process-cut service (ARCH-MS-104/105).
 
-The package owns only the read-only ADR-0013 day-one surface.  Production
-storage and Auth implementations are injected through ports from
-``switchboard.api.coord_port_adapters``; importing this package never imports
-the monolith ``store``, ``auth``, ``dispatch``, or ``signals`` facades.
+Standalone FastAPI + uvicorn unit for the read-only ADR-0013 day-one surface
+on ``127.0.0.1:8123``. Production storage and Auth implementations are
+injected through ports from ``switchboard.api.coord_port_adapters``. Live
+Caddy cutover remains a later task.
 """
 
-from .router import create_router
+from .app import create_app
+from .settings import CoordServiceSettings
 
-__all__ = ["create_router"]
+__all__ = ("CoordServiceSettings", "create_app")
