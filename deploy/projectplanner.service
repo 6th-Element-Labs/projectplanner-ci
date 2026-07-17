@@ -19,6 +19,9 @@ Environment=PM_AUTH_HTTP_PRIMARY=service
 # ARCH-MS-92: Tasks Mode A HTTP is owned by switchboard-tasks (:8122); this
 # process keeps only sibling BC subpaths (dispatch/chat/review_*).
 Environment=PM_TASKS_HTTP_PRIMARY=service
+# ARCH-MS-106: Coord day-one reads are owned by switchboard-coord (:8123).
+# This process keeps only non-chartered board/monitor/coordination siblings.
+Environment=PM_COORD_HTTP_PRIMARY=service
 # DELIVERABLES-22: every REST-created deliverable must carry its closure contract.
 Environment=PM_ENFORCE_DELIVERABLE_INTAKE=1
 # Code tree is read-only; don't try to write .pyc back into it.

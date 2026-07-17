@@ -218,8 +218,8 @@ try:
     ok("8123" in unit_text, "systemd example binds port 8123")
     ok(fragment.is_file() and "8123" in fragment.read_text(encoding="utf-8"),
        "future Caddy fragment is retained as a commented reference")
-    ok("127.0.0.1:8123" not in live_caddy,
-       "ARCH-MS-105 does not prematurely cut live Caddy traffic")
+    ok("127.0.0.1:8123" in live_caddy,
+       "successor ARCH-MS-106 promotes the proven service to live Caddy")
     ok(CoordServiceSettings.from_env().port == 8123,
        "default Coord port is 8123")
 

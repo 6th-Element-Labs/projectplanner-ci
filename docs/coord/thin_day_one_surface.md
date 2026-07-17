@@ -1,6 +1,6 @@
 # Coordination / board — thin day-one surface (Mode A)
 
-**Status:** Locked by [ADR-0013](../decisions/0013-coord-board-process-strangler.md) (ARCH-MS-96).  
+**Status:** Live process cut (ARCH-MS-106), locked by [ADR-0013](../decisions/0013-coord-board-process-strangler.md).
 **Port:** **`:8123`** (suggested; avoids web `:8110`, MCP `:8111`, Auth `:8121`, Tasks `:8122`).  
 **Deliverable:** `arch-ms-coord-service`
 
@@ -25,13 +25,13 @@
 - MCP (`:8111`)
 - Auth (`:8121`) and Tasks Mode A (`:8122`) — must not regress
 
-## Dual-strip (future Go cut)
+## Dual-strip
 
-When Go: production monolith sets `PM_COORD_HTTP_PRIMARY=service` and mounts only sibling
+Production sets `PM_COORD_HTTP_PRIMARY=service` and the monolith mounts only sibling
 Coord/board routes that are **not** on the day-one list (Auth/Tasks dual-strip analogue).
 
-## Drill artifacts (later tasks)
+## Deploy and rollback
 
-- Example unit: `deploy/coord/switchboard-coord.service.example` (not live until Go)
-- Example Caddy fragment under `deploy/` (not live until Go)
-- Rollback runbook patterned after Tasks/Auth
+- Production unit: `deploy/switchboard-coord.service`
+- Exact live handles: `deploy/Caddyfile`
+- Rollback: `docs/runbooks/coord-caddy-cutover-rollback.md`

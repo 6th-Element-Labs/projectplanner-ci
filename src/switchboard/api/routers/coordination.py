@@ -14,42 +14,43 @@ PrincipalResolver = Callable[..., dict]
 
 
 def create_router(*, resolve_project: ProjectResolver,
-                  resolve_principal: PrincipalResolver) -> APIRouter:
+                  resolve_principal: PrincipalResolver,
+                  sibling_bc_only: bool = False) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/coordination")
-    async def api_coordination(project: str = Query(...), limit: int = 500):
-        """Read-only rollup for the Agent Coordination page: presence, the full directed
-        message bus, and the decision log — one project's live coordination record."""
-        proj = resolve_project(project)
-        return {
-            "project": proj,
-            "agents": store.list_active_agents(project=proj),
-            "messages": store.list_agent_messages(project=proj, limit=limit),
-            "decisions": store.list_decisions(project=proj, limit=limit),
-            "coordinator_decisions": store.list_coordinator_decisions(
-                project=proj, limit=min(limit, 200)),
-        }
+    if not sibling_bc_only:
+        @router.get("/api/coordination")
+        async def api_coordination(project: str = Query(...), limit: int = 500):
+            """Read-only rollup for one project's live coordination record."""
+            proj = resolve_project(project)
+            return {
+                "project": proj,
+                "agents": store.list_active_agents(project=proj),
+                "messages": store.list_agent_messages(project=proj, limit=limit),
+                "decisions": store.list_decisions(project=proj, limit=limit),
+                "coordinator_decisions": store.list_coordinator_decisions(
+                    project=proj, limit=min(limit, 200)),
+            }
 
-    @router.get("/api/coordinator_decisions")
-    async def api_coordinator_decisions(
-        project: str = Query(...),
-        task_id: str = "",
-        deliverable_id: str = "",
-        decision_kind: str = "",
-        limit: int = 100,
-    ):
-        """COORD-3 explainable planner trail for cockpit/UI — structured decision records
-        without reading chat transcripts."""
-        proj = resolve_project(project)
-        return {
-            "project": proj,
-            "schema": "switchboard.coordinator_decision.v1",
-            "decisions": store.list_coordinator_decisions(
-                task_id=task_id, deliverable_id=deliverable_id,
-                decision_kind=decision_kind, limit=limit, project=proj,
-            ),
-        }
+    if not sibling_bc_only:
+        @router.get("/api/coordinator_decisions")
+        async def api_coordinator_decisions(
+            project: str = Query(...),
+            task_id: str = "",
+            deliverable_id: str = "",
+            decision_kind: str = "",
+            limit: int = 100,
+        ):
+            """COORD-3 structured planner decisions for cockpit/UI."""
+            proj = resolve_project(project)
+            return {
+                "project": proj,
+                "schema": "switchboard.coordinator_decision.v1",
+                "decisions": store.list_coordinator_decisions(
+                    task_id=task_id, deliverable_id=deliverable_id,
+                    decision_kind=decision_kind, limit=limit, project=proj,
+                ),
+            }
 
     @router.get("/api/coordinator_dispatch/plan")
     async def api_coordinator_dispatch_plan(

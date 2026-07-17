@@ -1,0 +1,41 @@
+# /etc/systemd/system/switchboard-coord.service
+# ARCH-MS-106 — live Coord day-one process cut. Caddy routes exactly the five
+# ADR-0013 read paths to :8123; adjacent board/coordination/IXP paths stay :8110.
+[Unit]
+Description=Switchboard Coord service (:8123, localhost) — live cutover (ARCH-MS-106)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Slice=projectplanner-interactive.slice
+Type=simple
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SWITCHBOARD_COORD_SERVICE_NAME=switchboard-coord
+Environment=SWITCHBOARD_COORD_HOST=127.0.0.1
+Environment=SWITCHBOARD_COORD_PORT=8123
+Environment=PYTHONPATH=/opt/projectplanner:/opt/projectplanner/src
+ExecStart=/opt/projectplanner/.venv/bin/uvicorn --factory switchboard.services.coord.app:create_app --host 127.0.0.1 --port 8123
+Restart=always
+RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=15
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/projectplanner
+MemoryMax=250M
+
+[Install]
+WantedBy=multi-user.target

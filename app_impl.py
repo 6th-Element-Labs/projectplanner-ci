@@ -205,6 +205,7 @@ app.include_router(_create_me_router(
 # claim TXP are owned by switchboard-tasks (:8122) via Caddy. Monolith keeps only
 # sibling BC subpaths (dispatch/chat/review_*). Hermetic TestClient leaves unset.
 _TASKS_HTTP_PRIMARY = (os.environ.get("PM_TASKS_HTTP_PRIMARY") or "").strip().lower()
+_COORD_HTTP_PRIMARY = (os.environ.get("PM_COORD_HTTP_PRIMARY") or "").strip().lower()
 if _TASKS_HTTP_PRIMARY == "service":
     app.include_router(_create_task_router(
         resolve_project=_proj,
@@ -262,6 +263,7 @@ app.include_router(_create_board_router(
     resolve_project=_proj,
     etag_json=_etag_json,
     saturation_snapshot=_saturation_snapshot,
+    sibling_bc_only=_COORD_HTTP_PRIMARY == "service",
 ))
 app.include_router(_create_resource_leases_router(
     resolve_project=_proj,
@@ -272,6 +274,7 @@ app.include_router(_create_monitors_router(
     resolve_project=_proj,
     resolve_principal=_principal,
     resolve_body_project=_body_project,
+    omit_coord_delta=_COORD_HTTP_PRIMARY == "service",
 ))
 app.include_router(_create_tally_router(
     resolve_project=_proj,
@@ -315,6 +318,7 @@ app.include_router(_create_github_webhook_router(resolve_project=_proj))
 app.include_router(_create_coordination_router(
     resolve_project=_proj,
     resolve_principal=_principal,
+    sibling_bc_only=_COORD_HTTP_PRIMARY == "service",
 ))
 app.include_router(_create_deliverables_router(
     resolve_project=_proj,

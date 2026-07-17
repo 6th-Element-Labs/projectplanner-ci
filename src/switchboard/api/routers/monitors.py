@@ -25,7 +25,8 @@ BodyProjectResolver = Callable[[dict], str]
 
 def create_router(*, resolve_project: ProjectResolver,
                   resolve_principal: PrincipalResolver,
-                  resolve_body_project: BodyProjectResolver) -> APIRouter:
+                  resolve_body_project: BodyProjectResolver,
+                  omit_coord_delta: bool = False) -> APIRouter:
     """Build the monitor/reconcile/background-job router against shared trust boundaries."""
     router = APIRouter()
 
@@ -67,17 +68,15 @@ def create_router(*, resolve_project: ProjectResolver,
                                     reason=body.get("reason") or "cancelled",
                                     actor=auth.actor(principal), project=project)
 
-    @router.get("/ixp/v1/delta")
-    async def ixp_delta(request: Request, project: str = Query(...), lane: str = "",
-                        since_cursor: int = 0):
-        # Protocol routes bypass the global browser/API auth middleware because many
-        # carry their project in a JSON body and authenticate inside the handler.
-        # Delta is a query route, so it must enforce that boundary explicitly; without
-        # this check an unauthenticated caller could read project activity (BUG-73).
-        proj = resolve_project(project)
-        resolve_principal(request, proj, ("read",), dev_actor="agent")
-        return store.get_activity_delta(since_cursor=since_cursor, lane=lane,
-                                        project=proj)
+    if not omit_coord_delta:
+        @router.get("/ixp/v1/delta")
+        async def ixp_delta(request: Request, project: str = Query(...), lane: str = "",
+                            since_cursor: int = 0):
+            # Delta carries its project in the query and enforces Auth here (BUG-73).
+            proj = resolve_project(project)
+            resolve_principal(request, proj, ("read",), dev_actor="agent")
+            return store.get_activity_delta(since_cursor=since_cursor, lane=lane,
+                                            project=proj)
 
     @router.get("/ixp/v1/working_agreement")
     async def ixp_working_agreement(project: str = Query(...)):

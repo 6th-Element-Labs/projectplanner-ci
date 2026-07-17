@@ -48,15 +48,20 @@ ok("coordinator_dispatch" in surf, "thin surface keeps write dispatch off day-on
 ok("PM_COORD_HTTP_PRIMARY" in surf or "dual-strip" in surf.lower(),
    "thin surface names dual-strip analogue")
 
-# Must not invent a live Coord cut yet
-ok(not (ROOT / "deploy/switchboard-coord.service").is_file(),
-   "no production Coord systemd unit yet (charter only)")
+# ARCH-MS-96 itself did not cut traffic; successor ARCH-MS-106 may promote the
+# locked surface only with the exact production unit and five exact handles.
+unit = ROOT / "deploy/switchboard-coord.service"
+ok(unit.is_file() and "8123" in unit.read_text(encoding="utf-8"),
+   "successor cut uses the chartered production Coord unit on :8123")
 caddy = (ROOT / "deploy/Caddyfile").read_text(encoding="utf-8")
 live = "\n".join(
     line for line in caddy.splitlines()
     if line.strip() and not line.lstrip().startswith("#")
 )
-ok("8123" not in live, "live Caddy does not yet route Coord :8123")
+ok(all(f"handle {route} {{" in live for route in (
+    "/api/board", "/api/signals", "/ixp/v1/delta",
+    "/api/coordination", "/api/coordinator_decisions",
+)), "successor cut routes exactly the chartered Coord surface")
 
 tracker_text = tracker.read_text(encoding="utf-8") if tracker.is_file() else ""
 ok("ARCH-MS-96" in tracker_text, "execution tracker lists ARCH-MS-96")

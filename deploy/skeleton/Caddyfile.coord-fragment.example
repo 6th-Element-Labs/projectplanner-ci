@@ -1,6 +1,5 @@
-# ARCH-MS-105 reference only — do not paste into the live Caddyfile yet.
-# The standalone Coord service runs side-by-side on :8123; a later cutover task
-# owns edge routing and monolith dual-strip.
+# Historical ARCH-MS-105 drill fragment. ARCH-MS-106 now owns the authoritative
+# live handles in deploy/Caddyfile; do not maintain production routing here.
 
 # handle /api/board {
 #     reverse_proxy 127.0.0.1:8123

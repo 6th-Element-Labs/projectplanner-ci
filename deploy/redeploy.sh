@@ -27,13 +27,14 @@ CADDY_LIVE="/etc/caddy/Caddyfile"
 # Core web tier — always on; a redeploy must restart these and they must come back healthy.
 # ARCH-MS-76: switchboard-auth is required once Caddy routes /api/auth* → :8121.
 # ARCH-MS-101: switchboard-tasks is required once Caddy routes Mode A Tasks → :8122.
-APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp switchboard-auth switchboard-tasks)
+APP_SERVICES=(projectplanner-gateway projectplanner projectplanner-mcp switchboard-auth switchboard-tasks switchboard-coord)
 # Local health URLs that must be 200 BEFORE any live Caddyfile overwrite.
 # Order: monolith, then every process-cut routed by the edge.
 REQUIRED_HEALTH_URLS=(
     http://127.0.0.1:8110/health
     http://127.0.0.1:8121/health
     http://127.0.0.1:8122/health
+    http://127.0.0.1:8123/health
 )
 # Auxiliary units (timers + agent host). Restarted only if currently active, so unit-file
 # changes take effect without force-starting a unit an operator deliberately stopped (e.g.
@@ -72,18 +73,22 @@ if [ "${RUN_CI:-0}" = "1" ]; then
         scripts/switchboard_ci.sh
 fi
 
-# BUG-70: snapshot the complete Tasks edge topology before changing unit files.
+# BUG-70 / ARCH-MS-106: snapshot every live process-cut topology before mutation.
 # The authenticated proof runs after Caddy reload, so a failed proof must restore
-# both the prior edge and the monolith's prior PM_TASKS_HTTP_PRIMARY setting.
+# the prior edge and the monolith's prior dual-strip settings.
 ROLLBACK_DIR="$(mktemp -d /tmp/projectplanner-redeploy.XXXXXX)"
 TASKS_WAS_ACTIVE="$(systemctl is-active switchboard-tasks 2>/dev/null || true)"
 TASKS_WAS_ENABLED="$(systemctl is-enabled switchboard-tasks 2>/dev/null || true)"
+COORD_WAS_ACTIVE="$(systemctl is-active switchboard-coord 2>/dev/null || true)"
+COORD_WAS_ENABLED="$(systemctl is-enabled switchboard-coord 2>/dev/null || true)"
 PROJECTPLANNER_UNIT_LIVE="${PROJECTPLANNER_UNIT_LIVE:-/etc/systemd/system/projectplanner.service}"
 TASKS_UNIT_LIVE="${TASKS_UNIT_LIVE:-/etc/systemd/system/switchboard-tasks.service}"
+COORD_UNIT_LIVE="${COORD_UNIT_LIVE:-/etc/systemd/system/switchboard-coord.service}"
 for snapshot in \
     "$CADDY_LIVE:Caddyfile" \
     "$PROJECTPLANNER_UNIT_LIVE:projectplanner.service" \
-    "$TASKS_UNIT_LIVE:switchboard-tasks.service"
+    "$TASKS_UNIT_LIVE:switchboard-tasks.service" \
+    "$COORD_UNIT_LIVE:switchboard-coord.service"
 do
     source_path="${snapshot%%:*}"
     snapshot_name="${snapshot#*:}"
@@ -102,9 +107,13 @@ restore_tasks_cut_topology() {
     local rollback_rc=0
     local monolith_ready=1
     local edge_ready=0
+    local coord_tracked=0
+    if [ "${COORD_WAS_ACTIVE+x}" = x ]; then
+        coord_tracked=1
+    fi
     set +e
 
-    # Restore the monolith unit first while the new edge still has healthy :8122.
+    # Restore the monolith unit first while the new edge still has healthy cuts.
     if [ -f "$ROLLBACK_DIR/projectplanner.service.present" ]; then
         sudo cp "$ROLLBACK_DIR/projectplanner.service" \
             "$PROJECTPLANNER_UNIT_LIVE" || { rollback_rc=1; monolith_ready=0; }
@@ -115,6 +124,10 @@ restore_tasks_cut_topology() {
     if [ -f "$ROLLBACK_DIR/switchboard-tasks.service.present" ]; then
         sudo cp "$ROLLBACK_DIR/switchboard-tasks.service" \
             "$TASKS_UNIT_LIVE" || rollback_rc=1
+    fi
+    if [ -f "$ROLLBACK_DIR/switchboard-coord.service.present" ]; then
+        sudo cp "$ROLLBACK_DIR/switchboard-coord.service" \
+            "$COORD_UNIT_LIVE" || rollback_rc=1
     fi
     sudo systemctl daemon-reload || { rollback_rc=1; monolith_ready=0; }
     sudo systemctl restart projectplanner || { rollback_rc=1; monolith_ready=0; }
@@ -134,13 +147,13 @@ restore_tasks_cut_topology() {
             edge_ready=1
         else
             rollback_rc=1
-            echo "!! prior Caddy edge could not be restored; preserving the current Tasks lifecycle" >&2
+            echo "!! prior Caddy edge could not be restored; preserving current cut services" >&2
         fi
     elif [ -f "$ROLLBACK_DIR/Caddyfile.present" ]; then
         echo "!! restored monolith is unhealthy; preserving the current Caddy edge" >&2
     else
         rollback_rc=1
-        echo "!! prior Caddy snapshot is missing; preserving the current edge and Tasks lifecycle" >&2
+        echo "!! prior Caddy snapshot is missing; preserving current edge and cut services" >&2
     fi
 
     # Restore the old Tasks lifecycle only after the old monolith/edge is safe.
@@ -162,19 +175,37 @@ restore_tasks_cut_topology() {
             sudo rm -f "$TASKS_UNIT_LIVE" || rollback_rc=1
             sudo systemctl daemon-reload || rollback_rc=1
         fi
+        if [ "$coord_tracked" -eq 1 ]; then
+            case "$COORD_WAS_ACTIVE" in
+                active)
+                    sudo systemctl restart switchboard-coord || rollback_rc=1
+                    HEALTH_URL=http://127.0.0.1:8123/health \
+                        bash "$ROOT/deploy/wait-for-health.sh" || rollback_rc=1
+                    ;;
+                *) sudo systemctl stop switchboard-coord || rollback_rc=1 ;;
+            esac
+            case "$COORD_WAS_ENABLED" in
+                enabled) sudo systemctl enable switchboard-coord >/dev/null 2>&1 || rollback_rc=1 ;;
+                *) sudo systemctl disable switchboard-coord >/dev/null 2>&1 || rollback_rc=1 ;;
+            esac
+            if [ ! -f "$ROLLBACK_DIR/switchboard-coord.service.present" ]; then
+                sudo rm -f "$COORD_UNIT_LIVE" || rollback_rc=1
+                sudo systemctl daemon-reload || rollback_rc=1
+            fi
+        fi
     fi
 
     set -e
     if [ "$rollback_rc" -ne 0 ]; then
-        echo "!! automatic Tasks topology rollback was incomplete" >&2
+        echo "!! automatic process-cut topology rollback was incomplete" >&2
         return 1
     fi
-    echo "Tasks topology rollback complete."
+    echo "Process-cut topology rollback complete."
 }
 
 fail_runtime_proof() {
     local reason="$1"
-    echo "!! $reason; restoring the pre-deploy Tasks topology" >&2
+    echo "!! $reason; restoring the pre-deploy process-cut topology" >&2
     exit 1
 }
 
@@ -194,9 +225,9 @@ sudo bash deploy/apply-least-privilege.sh
 sudo systemctl daemon-reload
 
 # 5. Restart the web tier (strict) + any active auxiliary units so new code/units take effect.
-#    Auth (:8121) and Tasks (:8122) must be healthy BEFORE Caddy reloads their edge handles.
+#    Auth (:8121), Tasks (:8122), and Coord (:8123) must be healthy before Caddy.
 section "restart services"
-sudo systemctl enable switchboard-auth switchboard-tasks >/dev/null 2>&1 || true
+sudo systemctl enable switchboard-auth switchboard-tasks switchboard-coord >/dev/null 2>&1
 sudo systemctl restart "${APP_SERVICES[@]}"
 for u in "${AUX_UNITS[@]}"; do
     if systemctl is-active --quiet "$u"; then
@@ -237,8 +268,14 @@ if [ "${SKIP_RUNTIME_PROOF:-0}" != "1" ]; then
             --caddy-live "$CADDY_LIVE" \
             --service switchboard-auth:8121 \
             --service switchboard-tasks:8122 \
+            --service switchboard-coord:8123 \
             --edge-owns '/api/auth*:8121' \
             --edge-owns '/api/tasks*:8122' \
+            --edge-owns '/api/board:8123' \
+            --edge-owns '/api/signals:8123' \
+            --edge-owns '/ixp/v1/delta:8123' \
+            --edge-owns '/api/coordination:8123' \
+            --edge-owns '/api/coordinator_decisions:8123' \
             --edge-base-url "${PM_BASE:-https://plan.taikunai.com}" \
             --probe-task-id "${RUNTIME_PROOF_TASK_ID:-}"
     then

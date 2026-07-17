@@ -24,8 +24,8 @@ def create_app(settings: CoordServiceSettings | None = None) -> FastAPI:
         title=f"Switchboard — {cfg.service_name}",
         version="0.1.0",
         description=(
-            "Coord process-cut service (ARCH-MS-105). Read-only day-one surface "
-            "running side-by-side; live Caddy routing is not enabled here."
+            "Coord process-cut service (ARCH-MS-105/106). Read-only day-one "
+            "surface owned through the production Caddy edge."
         ),
     )
     application.state.coord_service_settings = cfg
