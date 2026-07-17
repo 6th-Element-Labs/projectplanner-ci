@@ -1,0 +1,64 @@
+{
+  "$id": "switchboard.agent.begin_host_enrollment_command.v1",
+  "additionalProperties": false,
+  "description": "Operator-authorized request for a short-lived bootstrap ceremony.",
+  "properties": {
+    "owner_user_id": {
+      "title": "Owner User Id",
+      "type": "string"
+    },
+    "package_version": {
+      "default": "",
+      "title": "Package Version",
+      "type": "string"
+    },
+    "project": {
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Project",
+      "type": "string"
+    },
+    "project_allowlist": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Project Allowlist",
+      "type": "array"
+    },
+    "provider_allowlist": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Provider Allowlist",
+      "type": "array"
+    },
+    "requested_host_id": {
+      "default": "",
+      "title": "Requested Host Id",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.begin_host_enrollment_command.v1",
+      "title": "Schema",
+      "type": "string"
+    },
+    "tenant_allowlist": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tenant Allowlist",
+      "type": "array"
+    },
+    "ttl_seconds": {
+      "default": 600,
+      "title": "Ttl Seconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "project",
+    "owner_user_id"
+  ],
+  "title": "BeginHostEnrollmentCommand",
+  "type": "object"
+}

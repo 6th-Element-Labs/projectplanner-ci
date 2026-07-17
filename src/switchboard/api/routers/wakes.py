@@ -15,6 +15,11 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
 import store
+from switchboard.api.deps import (
+    is_narrow_agent_host_principal,
+    require_agent_host_identity,
+    resolve_agent_host_principal,
+)
 from switchboard.api.idempotency import inject_idem_key, raise_if_idem_conflict
 from switchboard.application.commands import claim_wake as claim_wake_command
 from switchboard.application.commands import complete_wake as complete_wake_command
@@ -54,32 +59,50 @@ def create_router(*, resolve_project: ProjectResolver,
     async def txp_claim_wake(request: Request, body: dict = Body(...)):
         body = inject_idem_key(request, body)
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or "agent-host")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
         body["project"] = project
         return control_plane_http(raise_if_idem_conflict(
             claim_wake_command.execute_mapping_result(
-                body, actor=auth.actor(principal))))
+                body, actor=auth.actor(principal), principal_id=principal["id"])))
 
     @router.post("/txp/v1/complete_wake")
     async def txp_complete_wake(request: Request, body: dict = Body(...)):
         body = inject_idem_key(request, body)
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or body.get("agent_id") or "agent-host")
+        if is_narrow_agent_host_principal(principal):
+            wake_id = str(body.get("wake_id") or body.get("id") or "").strip()
+            wake = next((item for item in store.list_wake_intents(project=project)
+                         if str(item.get("wake_id") or "") == wake_id), {})
+            policy = dict(wake.get("policy") or {})
+            execution = dict(policy.get("execution_binding") or {})
+            if ((policy.get("execution_mode") != "personal_agent_host"
+                    and not policy.get("require_exact_host_binding"))
+                    or str(execution.get("host_principal_id") or "")
+                    != str(principal.get("id") or "")):
+                raise HTTPException(
+                    403, "host bearer may complete only its exact personal wake")
         body["project"] = project
         return control_plane_http(raise_if_idem_conflict(
             complete_wake_command.execute_mapping_result(
-                body, actor=auth.actor(principal))))
+                body, actor=auth.actor(principal), principal_id=principal["id"])))
 
     @router.get("/txp/v1/list_wake_intents")
-    async def txp_list_wake_intents(project: str = Query(...),
+    async def txp_list_wake_intents(request: Request, project: str = Query(...),
                                     status: str = "", host_id: str = "",
                                     runtime: str = ""):
+        resolved = resolve_project(project)
+        resolve_principal(
+            request, resolved, ("read",),
+            dev_actor=host_id or "agent-host")
         wakes = store.list_wake_intents(status=status, host_id=host_id,
-                                        runtime=runtime, project=resolve_project(project))
+                                        runtime=runtime, project=resolved)
         control_plane_http(wakes)
         return {"wake_intents": wakes}
 
@@ -95,10 +118,14 @@ def create_router(*, resolve_project: ProjectResolver,
     # UI-8 Fleet control: wake-intent read/write over REST (hosts + runners already have
     # their routes above). Mirrors the request_wake / list_wake_intents / cancel_wake tools.
     @router.get("/ixp/v1/wake_intents")
-    async def ixp_wake_intents(project: str = Query(...),
+    async def ixp_wake_intents(request: Request, project: str = Query(...),
                                status: str = "", host_id: str = "", runtime: str = ""):
+        resolved = resolve_project(project)
+        resolve_principal(
+            request, resolved, ("read",),
+            dev_actor=host_id or "switchboard/operator")
         return {"wake_intents": store.list_wake_intents(
-            status=status, host_id=host_id, runtime=runtime, project=resolve_project(project))}
+            status=status, host_id=host_id, runtime=runtime, project=resolved)}
 
     @router.post("/ixp/v1/request_wake")
     async def ixp_request_wake(request: Request, body: dict = Body(...)):

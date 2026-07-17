@@ -12,6 +12,11 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 import auth
 import store
+from switchboard.api.deps import (
+    is_narrow_agent_host_principal,
+    require_personal_execution_authority,
+    resolve_agent_host_principal,
+)
 from switchboard.api.idempotency import inject_idem_key, raise_if_idem_conflict
 from switchboard.application.commands import claim_next as claim_next_command
 from switchboard.application.commands import claim_task as claim_task_command
@@ -61,8 +66,15 @@ def create_router(*, resolve_project: ProjectResolver,
     async def txp_complete_claim(request: Request, body: dict = Body(...)):
         body = inject_idem_key(request, body)
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",), dev_actor="agent")
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project, dev_actor="agent")
+        binding = body.pop("personal_execution_binding", {}) or {}
+        if (is_narrow_agent_host_principal(principal)
+                and str(body.get("claim_id") or "")
+                != str(binding.get("claim_id") or "")):
+            raise HTTPException(403, "personal execution claim target mismatch")
+        require_personal_execution_authority(
+            principal, binding, "complete_claim", project)
         body["project"] = project
         return raise_if_idem_conflict(complete_claim_command.execute_mapping_result(
             body, actor=auth.actor(principal)))
@@ -70,7 +82,15 @@ def create_router(*, resolve_project: ProjectResolver,
     @router.post("/txp/v1/abandon_claim")
     async def txp_abandon_claim(request: Request, body: dict = Body(...)):
         project = resolve_body_project(body)
-        principal = resolve_principal(request, project, ("write:ixp",), dev_actor="agent")
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project, dev_actor="agent")
+        binding = body.pop("personal_execution_binding", {}) or {}
+        if (is_narrow_agent_host_principal(principal)
+                and str(body.get("claim_id") or "")
+                != str(binding.get("claim_id") or "")):
+            raise HTTPException(403, "personal execution claim target mismatch")
+        require_personal_execution_authority(
+            principal, binding, "abandon_claim", project)
         return store.abandon_claim(body.get("claim_id") or "", reason=body.get("reason") or "unspecified",
                                    actor=auth.actor(principal), project=project)
 

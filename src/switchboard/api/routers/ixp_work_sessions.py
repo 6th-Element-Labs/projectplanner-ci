@@ -7,12 +7,18 @@ resolution are supplied by the composition root.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 import auth
 import store
+from switchboard.api.deps import (
+    is_narrow_agent_host_principal,
+    require_personal_execution_authority,
+    resolve_agent_host_principal,
+)
 from switchboard.application.commands import pre_tool_check as pre_tool_check_command
 from switchboard.application.commands import work_sessions as work_session_commands
 
@@ -20,6 +26,43 @@ from switchboard.application.commands import work_sessions as work_session_comma
 ProjectResolver = Callable[[str], str]
 PrincipalResolver = Callable[..., dict]
 BodyProjectResolver = Callable[[dict], str]
+
+
+class PersonalExecutionBindingBody(BaseModel):
+    """Exact durable tuple accepted by the narrow recovery readback route."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    claim_id: str
+    work_session_id: str
+    runner_session_id: str
+    host_id: str
+    agent_id: str
+    wake_id: str
+    source_sha: str
+    execution_connection_id: str
+
+
+class PersonalPostprocessingEvidenceBody(BaseModel):
+    """Evidence fields whose exact persisted values classify recovery state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    branch: str = ""
+    executed_test_run: dict[str, Any] | None = None
+
+
+class PersonalPostprocessingStateBody(BaseModel):
+    """Typed request for transactional personal-host post-processing readback."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str
+    binding: PersonalExecutionBindingBody
+    completed_head_sha: str
+    expected_evidence: PersonalPostprocessingEvidenceBody = Field(
+        default_factory=PersonalPostprocessingEvidenceBody)
 
 
 def _raise_work_session_error(result: dict) -> None:
@@ -106,15 +149,60 @@ def create_router(*, resolve_project: ProjectResolver,
             project=resolve_project(project), task_id=task_id,
             agent_id=agent_id, status=status, only_unsafe=only_unsafe)
 
+    @router.post("/ixp/v1/personal_execution/postprocessing_state")
+    async def ixp_personal_execution_postprocessing_state(
+            request: Request,
+            body: PersonalPostprocessingStateBody = Body(...)):
+        """Read one authenticated, transactionally verified recovery phase."""
+        payload = body.model_dump()
+        project = resolve_body_project(payload)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
+            dev_actor=body.binding.host_id or "personal-execution-readback")
+        return store.get_personal_execution_postprocessing_state(
+            body.binding.model_dump(),
+            principal_id=principal["id"],
+            completed_head_sha=body.completed_head_sha,
+            expected_evidence=body.expected_evidence.model_dump(exclude_none=True),
+            project=project,
+        )
+
     @router.patch("/ixp/v1/work_sessions/{work_session_id}")
     async def ixp_update_work_session(work_session_id: str, request: Request,
                                       body: dict = Body(...)):
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("agent_id") or "work-session")
         payload = dict(body or {})
         payload.pop("project", None)
+        binding = payload.pop("personal_execution_binding", {}) or {}
+        if is_narrow_agent_host_principal(principal):
+            if str(binding.get("work_session_id") or "") != work_session_id:
+                raise HTTPException(
+                    403, "personal execution Work Session target mismatch")
+            expected_checkpoint = {
+                "agent_id": str(binding.get("agent_id") or ""),
+                "head_sha": str(binding.get("completed_head_sha") or ""),
+                "dirty_status": "clean",
+                "conflict_marker_count": 0,
+            }
+            if any(payload.get(field) != value
+                   for field, value in expected_checkpoint.items()):
+                raise HTTPException(
+                    403, "personal execution Work Session checkpoint mismatch")
+            allowed_fields = {
+                "agent_id", "head_sha", "dirty_status",
+                "conflict_marker_count", "hygiene",
+            }
+            forbidden = sorted(set(payload) - allowed_fields)
+            if forbidden:
+                raise HTTPException(403, {
+                    "error_code": "personal_work_session_update_scope_denied",
+                    "forbidden_fields": forbidden,
+                })
+            require_personal_execution_authority(
+                principal, binding, "checkpoint_work_session", project)
         result = work_session_commands.update(
             work_session_id, payload, actor=auth.actor(principal),
             project=project)

@@ -518,11 +518,159 @@ def _clear_active_runner_pointer_in(c: sqlite3.Connection, task_id: str,
     return True
 
 
+def _renew_personal_claim_from_runner_in(
+        c: sqlite3.Connection, record: Dict[str, Any], principal_id: str,
+        now: float) -> bool:
+    """Extend only the claim behind an exact, live personal-host connection.
+
+    Native Codex runs may outlive the ordinary claim TTL. The authenticated
+    runner heartbeat is the renewal signal, but it may renew only the complete
+    tuple already fenced by ``personal_execution_connections`` and never revive
+    an expired claim or outlive the execution deadline.
+    """
+    connection, binding_error = _personal_runner_connection_in(
+        c, record, principal_id, now)
+    if binding_error or not connection:
+        return False
+    status = str(record.get("status") or "").strip().lower()
+    if status not in {"starting", "ready", "running"}:
+        return False
+    if str(connection.get("status") or "") != "active":
+        return False
+    expected = _personal_runner_connection_tuple(record, principal_id)
+    renewed = c.execute(
+        "UPDATE task_claims SET expires_at=? "
+        "WHERE id=? AND task_id=? AND agent_id=? AND status='active' "
+        "AND expires_at>? AND expires_at<?",
+        (float(connection["expires_at"]), expected["claim_id"],
+         expected["task_id"], expected["agent_id"], now,
+         float(connection["expires_at"])),
+    )
+    return renewed.rowcount == 1
+
+
+def _personal_runner_connection_tuple(
+        record: Dict[str, Any], principal_id: str) -> Dict[str, str]:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    return {
+        "runner_session_id": str(
+            record.get("runner_session_id") or record.get("id") or "").strip(),
+        "host_id": str(record.get("host_id") or "").strip(),
+        "host_principal_id": str(principal_id or "").strip(),
+        "agent_id": str(record.get("agent_id") or "").strip(),
+        "task_id": str(record.get("task_id") or "").strip(),
+        "claim_id": str(record.get("claim_id") or "").strip(),
+        "wake_id": str(metadata.get("wake_id") or "").strip(),
+        "work_session_id": str(metadata.get("work_session_id") or "").strip(),
+        "source_sha": str(metadata.get("source_sha") or "").strip(),
+    }
+
+
+def _personal_runner_connection_in(
+        c: sqlite3.Connection, record: Dict[str, Any], principal_id: str,
+        now: float) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Resolve only the exact durable personal execution tuple for this runner."""
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    connection_id = str(metadata.get("execution_connection_id") or "").strip()
+    if not connection_id or not principal_id:
+        return None, {
+            "error": "runner session is not bound to a personal execution connection",
+            "error_code": "runner_execution_binding_mismatch",
+            "failure_class": "unbound_identity",
+            "reason_codes": ["execution_connection_id_missing"],
+        }
+    connection_row = c.execute(
+        "SELECT * FROM personal_execution_connections "
+        "WHERE execution_connection_id=? AND expires_at>?",
+        (connection_id, now),
+    ).fetchone()
+    if not connection_row:
+        return None, {
+            "error": "runner session is not bound to a live personal execution connection",
+            "error_code": "runner_execution_binding_mismatch",
+            "failure_class": "unbound_identity",
+            "reason_codes": ["execution_connection_not_found"],
+            "execution_connection_id": connection_id,
+        }
+    connection = dict(connection_row)
+    expected = _personal_runner_connection_tuple(record, principal_id)
+    mismatches = sorted(
+        field for field, value in expected.items()
+        if not value or str(connection.get(field) or "") != value)
+    status = str(record.get("status") or "").strip().lower()
+    allowed_connection_states = {
+        "starting": {"reserved", "active"},
+        "ready": {"active"},
+        "running": {"active"},
+        "completed": {"active", "completed"},
+        "failed": {"reserved", "active", "failed"},
+    }
+    connection_status = str(connection.get("status") or "").strip().lower()
+    reason_codes: list[str] = []
+    if mismatches:
+        reason_codes.append("execution_connection_tuple_mismatch")
+    if status not in allowed_connection_states:
+        reason_codes.append("runner_status_not_permitted")
+    elif connection_status not in allowed_connection_states[status]:
+        reason_codes.append("execution_connection_status_mismatch")
+    if reason_codes:
+        return None, {
+            "error": "runner session is not bound to the exact personal execution connection",
+            "error_code": "runner_execution_binding_mismatch",
+            "failure_class": "unbound_identity",
+            "reason_codes": reason_codes,
+            "mismatches": mismatches,
+            "runner_session_id": expected["runner_session_id"] or None,
+            "execution_connection_id": connection_id,
+            "runner_status": status or None,
+            "execution_connection_status": connection_status or None,
+        }
+    return connection, None
+
+
 def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                               principal_id: str, actor: str, now: float) -> Dict[str, Any]:
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
     if not runner_session_id:
         return {"error": "runner_session_id required"}
+    principal = c.execute(
+        "SELECT kind, scopes FROM principals WHERE id=?", (principal_id,),
+    ).fetchone() if principal_id else None
+    scopes: set[str] = set()
+    if principal:
+        try:
+            scopes = set(json.loads(principal["scopes"] or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            scopes = set()
+    narrow_host = bool(
+        principal and "write:agent_host" in scopes
+        and "write:ixp" not in scopes and "admin" not in scopes)
+    if narrow_host:
+        submitted_host = str(record.get("host_id") or "").strip()
+        enrollment = c.execute(
+            "SELECT host_id FROM agent_host_enrollments "
+            "WHERE principal_id=? AND host_id=? AND status='active'",
+            (principal_id, submitted_host),
+        ).fetchone()
+        registered_host = c.execute(
+            "SELECT principal_id FROM agent_hosts WHERE host_id=?",
+            (submitted_host,),
+        ).fetchone()
+        existing = c.execute(
+            "SELECT host_id, principal_id FROM runner_sessions WHERE runner_session_id=?",
+            (runner_session_id,),
+        ).fetchone()
+        if (not enrollment or not registered_host
+                or str(registered_host["principal_id"] or "") != principal_id
+                or (existing and (
+                    str(existing["host_id"] or "") != submitted_host
+                    or str(existing["principal_id"] or "") != principal_id))):
+            return {
+                "error": "runner identity is owned by another host",
+                "error_code": "runner_identity_mismatch",
+                "failure_class": "unbound_identity",
+                "runner_session_id": runner_session_id,
+            }
     record = _merge_existing_runner_record(c, record)
     host_id = (record.get("host_id") or "").strip()
     control = _normalize_runner_control(record.get("control") or {}, host_id)
@@ -533,6 +681,11 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             metadata[key] = record.get(key)
     record = {**record, "host_id": host_id, "metadata": metadata,
               "runner_session_id": runner_session_id}
+    if narrow_host:
+        _connection, binding_error = _personal_runner_connection_in(
+            c, record, principal_id, now)
+        if binding_error:
+            return binding_error
     if requires_full_runner_bind(record):
         missing = missing_runner_bind_fields(record)
         if missing:
@@ -578,6 +731,7 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             now,
         ),
     )
+    _renew_personal_claim_from_runner_in(c, record, principal_id, now)
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (record.get("task_id") or None, actor, "runner.session_registered",
                json.dumps({"runner_session_id": runner_session_id, "host_id": host_id or None,
@@ -815,6 +969,7 @@ def claim_runner_control_request(host_id: str, request_id: str,
 def complete_runner_control_request(request_id: str, result: Optional[Dict[str, Any]] = None,
                                     snapshot: Optional[Dict[str, Any]] = None,
                                     status: str = "",
+                                    host_id: str = "",
                                     actor: str = "system",
                                     project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     now = time.time()
@@ -826,6 +981,11 @@ def complete_runner_control_request(request_id: str, result: Optional[Dict[str, 
         if not row:
             return {"error": "runner_control_not_found", "request_id": request_id}
         req = _runner_control_row(row)
+        if host_id and (req.get("status") != "claimed"
+                        or str(req.get("claimed_by_host") or "") != host_id):
+            return {"error": "runner_control_host_mismatch",
+                    "error_code": "runner_control_host_mismatch",
+                    "request_id": request_id}
         final_status = status or ("failed" if result.get("error") else "completed")
         if final_status not in {"completed", "failed", "cancelled"}:
             final_status = "completed"

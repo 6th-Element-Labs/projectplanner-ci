@@ -1,0 +1,38 @@
+{
+  "$id": "switchboard.agent.revoke_host_identity_command.v1",
+  "additionalProperties": false,
+  "description": "Authenticated owner/operator revocation of a personal host identity.",
+  "properties": {
+    "final_status": {
+      "default": "revoked",
+      "title": "Final Status",
+      "type": "string"
+    },
+    "host_id": {
+      "title": "Host Id",
+      "type": "string"
+    },
+    "project": {
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Project",
+      "type": "string"
+    },
+    "reason": {
+      "default": "host_revoke",
+      "title": "Reason",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.revoke_host_identity_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "host_id"
+  ],
+  "title": "RevokeHostIdentityCommand",
+  "type": "object"
+}

@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -335,9 +336,28 @@ def claim_task(project, task_id, agent_id, base=None, token=None,
     return _http("POST", "/txp/v1/claim_task", body, base=base, token=token, timeout=30)
 
 
-def complete_claim(project, claim_id, evidence, base=None, token=None, final_status=""):
+def get_task(project, task_id, base=None, token=None):
+    task = urllib.parse.quote(str(task_id or "").strip(), safe="")
+    scope = urllib.parse.quote(str(project or "").strip(), safe="")
+    return _http("GET", f"/api/tasks/{task}?project={scope}", base=base, token=token)
+
+
+def get_work_session(project, work_session_id, base=None, token=None):
+    session = urllib.parse.quote(str(work_session_id or "").strip(), safe="")
+    scope = urllib.parse.quote(str(project or "").strip(), safe="")
+    return _http(
+        "GET", f"/ixp/v1/work_sessions/{session}?project={scope}",
+        base=base, token=token,
+    )
+
+
+def complete_claim(project, claim_id, evidence, base=None, token=None, final_status="",
+                   personal_execution_binding=None):
     ev = evidence if isinstance(evidence, str) else __import__("json").dumps(evidence or {})
     body = {"project": project, "claim_id": claim_id, "evidence": ev}
+    if _personal_execution_enabled():
+        body["personal_execution_binding"] = (
+            dict(personal_execution_binding or {}) or _personal_execution_binding())
     if final_status:
         body["final_status"] = final_status
     return _http("POST", "/txp/v1/complete_claim",
@@ -346,8 +366,11 @@ def complete_claim(project, claim_id, evidence, base=None, token=None, final_sta
 
 def abandon_claim(project, claim_id, reason, base=None, token=None):
     try:
+        body = {"project": project, "claim_id": claim_id, "reason": reason}
+        if _personal_execution_enabled():
+            body["personal_execution_binding"] = _personal_execution_binding()
         return _http("POST", "/txp/v1/abandon_claim",
-                     {"project": project, "claim_id": claim_id, "reason": reason}, base=base, token=token)
+                     body, base=base, token=token)
     except Exception:
         return None
 
@@ -458,6 +481,43 @@ def archive_work_session_workspace(project, work_session_id, remove_workspace=Tr
         return None
 
 
+def _cleanup_personal_bound_workspace(managed):
+    """Remove only the adopted host-local checkout, never the coordinator path."""
+    if not (managed or {}).get("bound_existing") or not _personal_execution_enabled():
+        return {"cleaned": False, "reason": "not_personal_bound"}
+    configured_root = str(
+        os.environ.get("PM_PERSONAL_WORKSPACE_ROOT") or "").strip()
+    workspace_value = str((managed or {}).get("workspace_path") or "").strip()
+    if not configured_root or not workspace_value:
+        return {"cleaned": False, "reason": "workspace_binding_missing"}
+    raw_root = os.path.abspath(os.path.expanduser(configured_root))
+    workspace = os.path.abspath(os.path.expanduser(workspace_value))
+    if (os.path.lexists(raw_root) and os.path.islink(raw_root)):
+        return {"cleaned": False, "reason": "workspace_root_symlink"}
+    root = os.path.realpath(raw_root)
+    try:
+        inside_root = os.path.commonpath((root, workspace)) == root
+    except ValueError:
+        inside_root = False
+    if (workspace == root or not inside_root
+            or (os.path.lexists(workspace) and os.path.islink(workspace))
+            or os.path.realpath(workspace) != workspace):
+        return {"cleaned": False, "reason": "workspace_outside_personal_root"}
+    if not os.path.exists(workspace):
+        return {"cleaned": True, "already_absent": True}
+    try:
+        shutil.rmtree(workspace)
+    except OSError as exc:
+        return {"cleaned": False, "reason": f"workspace_remove_failed:{exc}"}
+    parent = os.path.dirname(workspace)
+    if parent != root:
+        try:
+            os.rmdir(parent)
+        except OSError:
+            pass
+    return {"cleaned": True, "workspace_path": workspace}
+
+
 def expire_external_work_session(project, work_session_id, agent_id,
                                  base=None, token=None):
     """Close worker-local session metadata without touching the worker's filesystem."""
@@ -481,6 +541,214 @@ def _default_test_commands():
     return ["scripts/switchboard_ci.sh"]
 
 
+_PERSONAL_TEST_HOST_PATH_ENV = (
+    "PM_AGENT_HOST_IDENTITY_PATH",
+    "PM_AGENT_HOST_CONFIG_PATH",
+    "PM_AGENT_HOST_STATE_PATH",
+    "PM_AGENT_HOST_RUNNER_DIR",
+    "PM_AGENT_HOST_RUNTIME_ROOT",
+    "PM_AGENT_HOST_CODEX_HOME",
+    "PM_AGENT_HOST_SOURCE_CODEX_HOME",
+    "PM_AGENT_HOST_USER_HOME",
+)
+
+
+def _personal_test_runtime_roots():
+    """Return supervisor-owned Python roots needed by the sandboxed test harness."""
+    roots = {
+        os.path.realpath(os.path.abspath(str(value)))
+        for value in (sys.prefix, sys.base_prefix)
+        if str(value or "").strip()
+    }
+    return sorted(path for path in roots if os.path.isdir(path))
+
+
+def _sandbox_paths_overlap(left, right):
+    try:
+        left = os.path.realpath(left)
+        right = os.path.realpath(right)
+        return os.path.commonpath((left, right)) in {left, right}
+    except ValueError:
+        return False
+
+
+def _validate_personal_test_runtime_roots(runtime_roots, protected):
+    """Never re-expose a protected credential/state path via a runtime allowlist."""
+    sensitive = {
+        protected[key]
+        for key in (
+            "PM_AGENT_HOST_IDENTITY_PATH",
+            "PM_AGENT_HOST_CONFIG_PATH",
+            "PM_AGENT_HOST_STATE_PATH",
+            "PM_AGENT_HOST_RUNNER_DIR",
+            "PM_AGENT_HOST_RUNTIME_ROOT",
+            "PM_AGENT_HOST_CODEX_HOME",
+            "PM_AGENT_HOST_SOURCE_CODEX_HOME",
+        )
+        if key in protected
+    }
+    sensitive.add(os.path.dirname(protected["PM_AGENT_HOST_CONFIG_PATH"]))
+    for runtime_root in runtime_roots:
+        if any(_sandbox_paths_overlap(runtime_root, path) for path in sensitive):
+            raise RuntimeError(
+                "personal executed-test runtime overlaps protected host state")
+
+
+def _personal_test_sandbox_argv(argv, workspace_path):
+    """Confine worker-controlled post-run tests away from host-owned secrets.
+
+    Environment scrubbing alone is insufficient for a same-UID child: it could read the
+    enrolled identity file or inspect the supervisor.  Personal hosts therefore fail closed
+    unless the platform's OS sandbox is present.  The Linux PID namespace hides the
+    supervisor; both profiles hide identity/configuration, lifecycle state, and provider
+    runtime data while keeping only the exact test workspace writable.
+    """
+    workspace = os.path.realpath(os.path.abspath(os.path.expanduser(workspace_path)))
+    if not os.path.isdir(workspace) or os.path.islink(workspace_path):
+        raise RuntimeError("personal executed-test workspace must be a real directory")
+    protected = {
+        key: os.path.realpath(os.path.abspath(os.path.expanduser(
+            str(os.environ.get(key) or "").strip())))
+        for key in _PERSONAL_TEST_HOST_PATH_ENV
+        if str(os.environ.get(key) or "").strip()
+    }
+    required = {
+        "PM_AGENT_HOST_IDENTITY_PATH",
+        "PM_AGENT_HOST_CONFIG_PATH",
+        "PM_AGENT_HOST_STATE_PATH",
+        "PM_AGENT_HOST_CODEX_HOME",
+        "PM_AGENT_HOST_SOURCE_CODEX_HOME",
+        "PM_AGENT_HOST_USER_HOME",
+    }
+    missing = sorted(required - protected.keys())
+    if missing:
+        raise RuntimeError(
+            "personal executed-test sandbox lacks host path bindings: " + ",".join(missing))
+    platform_name = str(
+        os.environ.get("PM_AGENT_HOST_PLATFORM") or sys.platform).strip().lower()
+    runtime_roots = _personal_test_runtime_roots()
+    _validate_personal_test_runtime_roots(runtime_roots, protected)
+
+    if platform_name in {"darwin", "mac", "macos"}:
+        sandbox = shutil.which("sandbox-exec")
+        if not sandbox:
+            raise RuntimeError("personal executed tests require macOS sandbox-exec")
+        file_paths = [protected["PM_AGENT_HOST_STATE_PATH"]]
+        directory_paths = [
+            protected["PM_AGENT_HOST_USER_HOME"],
+            protected["PM_AGENT_HOST_SOURCE_CODEX_HOME"],
+            os.path.dirname(protected["PM_AGENT_HOST_CONFIG_PATH"]),
+        ]
+        directory_paths.extend(
+            protected[key] for key in (
+                "PM_AGENT_HOST_RUNNER_DIR", "PM_AGENT_HOST_RUNTIME_ROOT",
+                "PM_AGENT_HOST_CODEX_HOME")
+            if key in protected
+        )
+        temporary_root = os.path.realpath(tempfile.gettempdir())
+        profile = [
+            "(version 1)",
+            "(deny default)",
+            "(allow process*)",
+            "(deny process-info*)",
+            "(allow sysctl-read)",
+            "(allow mach-lookup)",
+            "(allow file-read*)",
+            f"(allow file-write* (subpath {json.dumps(temporary_root)}))",
+            "(allow file-write* (literal \"/dev/null\"))",
+        ]
+        profile.extend(
+            f"(deny file-read* file-write* (literal {json.dumps(path)}))"
+            for path in file_paths
+        )
+        profile.extend(
+            f"(deny file-read* file-write* (subpath {json.dumps(path)}))"
+            for path in sorted(set(directory_paths))
+        )
+        profile.extend(
+            f"(allow file-read* (subpath {json.dumps(path)}))"
+            for path in runtime_roots
+        )
+        # The worker checkout is the only user-home subtree restored after the
+        # broad credential boundary.  Everything else beneath the real home stays
+        # unreadable to repository-controlled post-run code.
+        profile.append(
+            f"(allow file-read* file-write* (subpath {json.dumps(workspace)}))")
+        return [sandbox, "-p", "\n".join(profile), *argv]
+
+    if platform_name.startswith("linux"):
+        sandbox = shutil.which("bwrap")
+        if not sandbox:
+            raise RuntimeError("personal executed tests require Linux bubblewrap (bwrap)")
+        user_home = protected["PM_AGENT_HOST_USER_HOME"]
+        if user_home == os.path.sep:
+            raise RuntimeError("personal executed-test user home cannot be filesystem root")
+        temporary_root = os.path.realpath("/tmp")
+        user_home_hidden_by_tmp = (
+            os.path.commonpath((temporary_root, user_home)) == temporary_root)
+        command = [
+            sandbox,
+            "--die-with-parent",
+            "--new-session",
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--ro-bind", "/", "/",
+            "--dev", "/dev",
+            "--proc", "/proc",
+            "--tmpfs", "/tmp",
+            "--dir", "/tmp/switchboard-test-home",
+        ]
+        if user_home_hidden_by_tmp:
+            # Hermetic tests and some portable installs place their protected home
+            # below /tmp. The /tmp tmpfs already hides that whole tree; recreate only
+            # the empty mountpoint needed for the exact-workspace bind below.
+            command += ["--dir", user_home]
+        else:
+            command += ["--tmpfs", user_home]
+        recreated_dirs = set()
+
+        def recreate_home_path(path):
+            relative = os.path.relpath(path, user_home)
+            current = user_home
+            if relative == ".":
+                raise RuntimeError(
+                    "personal executed-test mount cannot expose the user home")
+            for part in relative.split(os.path.sep):
+                current = os.path.join(current, part)
+                if current not in recreated_dirs:
+                    command.extend(["--dir", current])
+                    recreated_dirs.add(current)
+
+        for key in (
+                "PM_AGENT_HOST_SOURCE_CODEX_HOME",
+                "PM_AGENT_HOST_RUNNER_DIR", "PM_AGENT_HOST_RUNTIME_ROOT",
+                "PM_AGENT_HOST_CODEX_HOME"):
+            path = protected.get(key)
+            if (path and os.path.isdir(path)
+                    and os.path.commonpath((user_home, path)) != user_home):
+                command += ["--tmpfs", path]
+        for runtime_root in runtime_roots:
+            if os.path.commonpath((user_home, runtime_root)) == user_home:
+                recreate_home_path(runtime_root)
+                command += ["--ro-bind", runtime_root, runtime_root]
+        # A real deployment normally stores workspaces below the user's protected
+        # home. Recreate only the destination parents before restoring the exact
+        # checkout; the bind source is opened by bubblewrap before namespace setup.
+        if os.path.commonpath((user_home, workspace)) == user_home:
+            recreate_home_path(workspace)
+        command += [
+            "--bind", workspace, workspace,
+            "--chdir", workspace,
+            "--setenv", "HOME", "/tmp/switchboard-test-home",
+            "--setenv", "TMPDIR", "/tmp",
+            *argv,
+        ]
+        return command
+
+    raise RuntimeError(f"personal executed tests do not support platform {platform_name!r}")
+
+
 def run_executed_tests(workspace_path, work_session_id, task_id, claim_id, agent_id,
                        branch="", head_sha="", commands=None, timeout_s=1800):
     """Run the executed-test runner (SESSION-10) inside the bound worktree and return a
@@ -499,6 +767,17 @@ def run_executed_tests(workspace_path, work_session_id, task_id, claim_id, agent
         argv += ["--command", cmd]
     try:
         env = os.environ.copy()
+        # The runner and its commands come from the worker-modifiable checkout.
+        # Keep the stable Agent Host coordination bearer in this supervisor only.
+        for key in ("PM_MCP_TOKEN", "SWITCHBOARD_TOKEN"):
+            env.pop(key, None)
+        if _personal_execution_enabled():
+            argv = _personal_test_sandbox_argv(argv, workspace_path)
+            for key in _PERSONAL_TEST_HOST_PATH_ENV:
+                env.pop(key, None)
+            env.pop("CODEX_HOME", None)
+            env.pop("PYTHONPATH", None)
+            env["PYTHONNOUSERSITE"] = "1"
         interpreter_bin = os.path.dirname(os.path.abspath(sys.executable))
         current_path = env.get("PATH", "")
         env["PATH"] = (interpreter_bin if not current_path else
@@ -594,6 +873,359 @@ def _push_and_verify(workspace_path, branch, head_sha, remote="origin", timeout_
         return {"ok": False, "detail": f"push/verify error: {e}"}
 
 
+def _personal_execution_enabled():
+    return os.environ.get(
+        "PM_PERSONAL_AGENT_HOST_EXECUTION", "").strip().lower() in (
+            "1", "true", "yes", "on")
+
+
+_PERSONAL_EXECUTION_LIFECYCLE_KEY = "_switchboard_personal_execution_lifecycle"
+
+
+def _personal_test_run_succeeded(run):
+    if not isinstance(run, dict) or run.get("executed") is False:
+        return False
+    if run.get("ok") is True or run.get("passed") is True:
+        return True
+    exit_code = run.get("exit_code", run.get("returncode"))
+    if exit_code not in (None, ""):
+        try:
+            return int(exit_code) == 0
+        except (TypeError, ValueError):
+            return False
+    status = str(
+        run.get("status") or run.get("conclusion") or run.get("result") or ""
+    ).strip().lower()
+    return status in {
+        "pass", "passed", "success", "succeeded", "ok", "green", "completed",
+    }
+
+
+def _personal_execution_binding():
+    try:
+        account = json.loads(os.environ.get("PM_CO_ACCOUNT_BINDING_JSON") or "{}")
+    except json.JSONDecodeError:
+        account = {}
+    return {
+        "task_id": str(account.get("task_id") or os.environ.get("PM_TASK_ID") or "").strip(),
+        "claim_id": str(account.get("claim_id") or os.environ.get("PM_CLAIM_ID") or "").strip(),
+        "work_session_id": str(
+            account.get("work_session_id") or os.environ.get("PM_WORK_SESSION_ID") or "").strip(),
+        "host_id": str(account.get("host_id") or os.environ.get("PM_CO_HOST_ID") or "").strip(),
+        "runner_session_id": str(
+            account.get("runner_session_id") or os.environ.get("PM_RUNNER_SESSION_ID") or "").strip(),
+        "agent_id": str(account.get("agent_id") or os.environ.get("PM_AGENT_ID") or "").strip(),
+        "wake_id": str(os.environ.get("PM_CO_WAKE_ID") or "").strip(),
+        "source_sha": str(os.environ.get("PM_SOURCE_SHA") or "").strip(),
+        "execution_connection_id": str(
+            os.environ.get("PM_EXECUTION_CONNECTION_ID") or "").strip(),
+    }
+
+
+def _personal_repo_clone_url(value):
+    """Return a credential-free clone URL plus a stable repository identity."""
+    raw = str(value or "").strip()
+    slug = raw[:-4] if raw.endswith(".git") else raw
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", slug):
+        return f"https://github.com/{slug}.git", f"github:{slug.lower()}"
+    parsed = urllib.parse.urlsplit(raw)
+    if (parsed.scheme == "https" and parsed.hostname == "github.com"
+            and not parsed.username and not parsed.password
+            and not parsed.query and not parsed.fragment):
+        path = parsed.path.strip("/")
+        path = path[:-4] if path.endswith(".git") else path
+        if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path):
+            return f"https://github.com/{path}.git", f"github:{path.lower()}"
+    if (parsed.scheme == "file"
+            and os.environ.get("PM_AGENT_HOST_ALLOW_FILE_REPO", "").strip().lower()
+            in ("1", "true", "yes", "on")):
+        local = os.path.realpath(urllib.parse.unquote(parsed.path))
+        return f"file://{local}", f"file:{local}"
+    raise RuntimeError("personal Work Session repository is not an approved clone source")
+
+
+def _personal_git(args, *, cwd="", timeout=300):
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    completed = subprocess.run(
+        ["git", *args], cwd=cwd or None, env=env,
+        capture_output=True, text=True, timeout=timeout, check=False)
+    return completed
+
+
+def _materialize_personal_workspace(session, source_sha, workspace_root):
+    """Create one host-local exact checkout for a coordinator-bound Work Session."""
+    source_sha = str(source_sha or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise RuntimeError("personal Work Session source SHA is invalid")
+    branch = str(session.get("branch") or "").strip()
+    if not branch or _personal_git(["check-ref-format", "--branch", branch]).returncode != 0:
+        raise RuntimeError("personal Work Session branch is invalid")
+    clone_url, expected_identity = _personal_repo_clone_url(session.get("repo"))
+    configured_root = str(workspace_root or "").strip()
+    if not configured_root:
+        raise RuntimeError("personal workspace root is not configured")
+    raw_root = os.path.abspath(os.path.expanduser(configured_root))
+    if os.path.lexists(raw_root) and os.path.islink(raw_root):
+        raise RuntimeError("personal workspace root cannot be a symlink")
+    os.makedirs(raw_root, mode=0o700, exist_ok=True)
+    os.chmod(raw_root, 0o700)
+    root = os.path.realpath(raw_root)
+    task_part = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(session.get("task_id") or "task"))[:64]
+    session_part = re.sub(
+        r"[^A-Za-z0-9_.-]+", "-", str(session.get("work_session_id") or "session"))[:96]
+    parent = os.path.join(root, task_part)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    if os.path.islink(parent) or os.path.realpath(parent) != parent:
+        raise RuntimeError("personal workspace task directory cannot be a symlink")
+    os.chmod(parent, 0o700)
+    workspace = os.path.abspath(os.path.join(parent, session_part))
+    if os.path.commonpath((root, workspace)) != root:
+        raise RuntimeError("personal workspace path escaped its protected root")
+    if os.path.lexists(workspace) and os.path.islink(workspace):
+        raise RuntimeError("personal workspace cannot be a symlink")
+    created = False
+    if not os.path.exists(workspace):
+        staging_root = tempfile.mkdtemp(prefix=".personal-clone-", dir=parent)
+        staging = os.path.join(staging_root, "checkout")
+        try:
+            cloned = _personal_git(
+                ["clone", "--no-checkout", "--origin", "origin", clone_url, staging],
+                timeout=600)
+            if cloned.returncode != 0:
+                raise RuntimeError("personal repository clone failed")
+            os.replace(staging, workspace)
+            created = True
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+    if not os.path.isdir(workspace):
+        raise RuntimeError("personal workspace materialization did not create a directory")
+    os.chmod(workspace, 0o700)
+    remote = _personal_git(["-C", workspace, "remote", "get-url", "origin"])
+    if remote.returncode != 0:
+        raise RuntimeError("personal workspace origin is missing")
+    _remote_url, actual_identity = _personal_repo_clone_url((remote.stdout or "").strip())
+    if actual_identity != expected_identity:
+        raise RuntimeError("personal workspace origin does not match the Work Session repo")
+    if not created:
+        status = _personal_git(["-C", workspace, "status", "--porcelain"])
+        if status.returncode != 0 or (status.stdout or "").strip():
+            raise RuntimeError("personal workspace is dirty")
+    fetched = _personal_git(["-C", workspace, "fetch", "--prune", "origin"], timeout=600)
+    if fetched.returncode != 0:
+        raise RuntimeError("personal workspace fetch failed")
+    commit = _personal_git(["-C", workspace, "cat-file", "-e", f"{source_sha}^{{commit}}"])
+    if commit.returncode != 0:
+        raise RuntimeError("personal workspace source SHA is not available from the canonical repo")
+    if not created:
+        current = _personal_git(["-C", workspace, "rev-parse", "HEAD"])
+        if current.returncode != 0 or (current.stdout or "").strip() != source_sha:
+            raise RuntimeError("existing personal workspace is not at the bound source SHA")
+    checked = _personal_git(["-C", workspace, "checkout", "-B", branch, source_sha])
+    if checked.returncode != 0:
+        raise RuntimeError("personal workspace branch checkout failed")
+    status = _personal_git(["-C", workspace, "status", "--porcelain"])
+    if status.returncode != 0 or (status.stdout or "").strip():
+        raise RuntimeError("personal workspace is dirty after checkout")
+    remote_ref = f"refs/remotes/origin/{branch}"
+    if _personal_git(["-C", workspace, "show-ref", "--verify", "--quiet", remote_ref]).returncode == 0:
+        upstream = _personal_git(
+            ["-C", workspace, "branch", "--set-upstream-to", f"origin/{branch}", branch])
+        if upstream.returncode != 0:
+            raise RuntimeError("personal workspace upstream binding failed")
+    head = _personal_git(["-C", workspace, "rev-parse", "HEAD"])
+    if head.returncode != 0 or (head.stdout or "").strip() != source_sha:
+        raise RuntimeError("personal workspace is not at the exact bound source SHA")
+    return workspace
+
+
+def checkpoint_personal_work_session(project, managed, evidence, agent_id,
+                                     base=None, token=None, binding=None):
+    """Persist the exact local head/test receipt through the narrow tuple gate."""
+    workspace = str(managed.get("workspace_path") or "").strip()
+    expected_head = str(evidence.get("head_sha") or "").strip()
+    if not workspace or not expected_head:
+        raise RuntimeError("personal checkpoint is missing workspace or completed head")
+    head = _personal_git(["-C", workspace, "rev-parse", "HEAD"])
+    actual_head = (head.stdout or "").strip() if head.returncode == 0 else ""
+    if actual_head != expected_head:
+        raise RuntimeError("personal workspace HEAD drifted during executed tests")
+    status = _personal_git(["-C", workspace, "status", "--porcelain"])
+    if status.returncode != 0:
+        raise RuntimeError("personal workspace cleanliness check failed after executed tests")
+    if (status.stdout or "").strip():
+        raise RuntimeError("personal workspace is dirty after executed tests")
+    hygiene = dict(managed.get("session_hygiene") or {})
+    test_run = evidence.get("executed_test_run")
+    if test_run:
+        hygiene["executed_test_run"] = test_run
+    hygiene.update({
+        "git_status": "clean",
+        "conflict_marker_scan": "passed",
+        "personal_host_checkout": {
+            "schema": "switchboard.personal_host_checkout.v1",
+            "storage": "worker_local",
+            "workspace_fingerprint": hashlib.sha256(
+                str(managed.get("workspace_path") or "").encode()).hexdigest()[:16],
+            "source_sha": str(os.environ.get("PM_SOURCE_SHA") or ""),
+            "head_sha": actual_head,
+        },
+    })
+    binding = dict(binding or {}) or _personal_execution_binding()
+    binding["completed_head_sha"] = actual_head
+    payload = {
+        "project": project,
+        "agent_id": agent_id,
+        "head_sha": actual_head,
+        "dirty_status": "clean",
+        "conflict_marker_count": 0,
+        "hygiene": hygiene,
+        "personal_execution_binding": binding,
+    }
+    return _http(
+        "PATCH", f"/ixp/v1/work_sessions/{managed['work_session_id']}", payload,
+        base=base, token=token, timeout=30)
+
+
+_PERSONAL_POSTPROCESSING_RECOVERY_TIMEOUT_S = 35 * 60
+
+
+def _personal_postprocessing_recovery_timeout_s():
+    try:
+        return max(0.0, float(os.environ.get(
+            "PM_PERSONAL_POSTPROCESSING_RECOVERY_TIMEOUT_S",
+            str(_PERSONAL_POSTPROCESSING_RECOVERY_TIMEOUT_S),
+        )))
+    except ValueError:
+        return float(_PERSONAL_POSTPROCESSING_RECOVERY_TIMEOUT_S)
+
+
+def get_personal_postprocessing_state(
+        project, binding, evidence, base=None, token=None):
+    """Ask the server for one authenticated, transactionally verified phase."""
+    return _http(
+        "POST", "/ixp/v1/personal_execution/postprocessing_state",
+        {
+            "project": project,
+            "binding": dict(binding or {}),
+            "completed_head_sha": str(evidence.get("head_sha") or ""),
+            "expected_evidence": {
+                key: evidence[key] for key in ("branch", "executed_test_run")
+                if key in evidence
+            },
+        },
+        base=base, token=token, timeout=30,
+    )
+
+
+def checkpoint_personal_work_session_with_recovery(
+        project, managed, evidence, agent_id, base=None, token=None, binding=None):
+    """Retry an exact checkpoint and recover a lost committed response by readback."""
+    deadline = time.monotonic() + _personal_postprocessing_recovery_timeout_s()
+    attempt = 0
+    last_error = None
+    binding = dict(binding or {}) or _personal_execution_binding()
+    while True:
+        attempt += 1
+        try:
+            result = checkpoint_personal_work_session(
+                project, managed, evidence, agent_id, base=base, token=token,
+                binding=binding)
+            if result.get("updated"):
+                return result
+            # A server-authored rejection is authoritative, not outcome-unknown.
+            return result
+        except Exception as exc:
+            last_error = exc
+        try:
+            readback = get_personal_postprocessing_state(
+                project, binding, evidence, base=base, token=token)
+            if (readback.get("allowed") is True
+                    and readback.get("state") in {"checkpointed", "completed"}):
+                return {
+                    "updated": True,
+                    "readback": readback,
+                    "checkpoint_confirmed_by_readback": True,
+                    "attempts": attempt,
+                }
+            if readback.get("state") == "conflict":
+                return {
+                    "updated": None,
+                    "outcome_unknown": True,
+                    "authoritative_conflict": True,
+                    "attempts": attempt,
+                    "readback": readback,
+                }
+        except Exception as exc:
+            last_error = exc
+        if time.monotonic() >= deadline:
+            return {
+                "updated": None,
+                "outcome_unknown": True,
+                "attempts": attempt,
+                "error": str(last_error or "checkpoint outcome is unknown"),
+            }
+        time.sleep(min(1.0, 0.1 * attempt))
+
+
+def complete_personal_claim_with_recovery(
+        project, task_id, claim_id, managed, evidence, agent_id,
+        base=None, token=None, binding=None):
+    """Retry exact completion until committed readback or the reserved recovery window ends."""
+    deadline = time.monotonic() + _personal_postprocessing_recovery_timeout_s()
+    attempt = 0
+    last_error = None
+    last_readback = None
+    binding = dict(binding or {}) or _personal_execution_binding()
+    while True:
+        attempt += 1
+        try:
+            result = complete_claim(
+                project, claim_id, evidence, base=base, token=token,
+                personal_execution_binding=binding)
+            if result.get("completed"):
+                return result
+            if result.get("completed") is False and not result.get("error"):
+                return result
+            last_error = RuntimeError(str(result.get("error") or result))
+        except Exception as exc:
+            last_error = exc
+        try:
+            last_readback = get_personal_postprocessing_state(
+                project, binding, evidence, base=base, token=token)
+            if last_readback.get("state") == "completed":
+                return {
+                    "completed": True,
+                    "status": "In Review",
+                    "task_id": task_id,
+                    "claim_id": claim_id,
+                    "completion_confirmed_by_readback": True,
+                    "attempts": attempt,
+                }
+        except Exception as exc:
+            last_error = exc
+            last_readback = None
+        if ((last_readback or {}).get("state") == "conflict"
+                or ((last_readback or {}).get("allowed") is False
+                    and last_readback is not None)):
+            return {
+                "completed": None,
+                "outcome_unknown": True,
+                "attempts": attempt,
+                "error": str(last_error or "completion outcome is unknown"),
+                "readback": last_readback,
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "completed": None,
+                "outcome_unknown": True,
+                "attempts": attempt,
+                "error": str(last_error or "completion retry window expired"),
+                "readback": last_readback,
+            }
+        time.sleep(min(1.0, 0.1 * attempt))
+
+
 def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
                    auto_work_session, source_path):
     """Claim the next task. If the scheduler skipped code-strict tasks only because they
@@ -603,6 +1235,57 @@ def _acquire_claim(project, agent_id, lane_list, base, token, ttl_seconds,
         "PM_REMOTE_WORK_SESSION_REGISTRATION", "").strip().lower() in (
             "1", "true", "yes", "on")
     exact_task_id = str(os.environ.get("PM_TASK_ID") or "").strip().upper()
+    personal_bound = _personal_execution_enabled()
+    if personal_bound:
+        try:
+            binding = json.loads(os.environ.get("PM_CO_ACCOUNT_BINDING_JSON") or "{}")
+            claim_id = str(binding.get("claim_id") or "").strip()
+            work_session_id = str(binding.get("work_session_id") or "").strip()
+            if not exact_task_id or not claim_id or not work_session_id:
+                raise RuntimeError("personal execution binding is incomplete")
+            if str(binding.get("task_id") or "").strip().upper() != exact_task_id:
+                raise RuntimeError("personal task binding does not match the wake")
+            session = get_work_session(
+                project, work_session_id, base=base, token=token)
+            task = get_task(project, exact_task_id, base=base, token=token)
+            source_sha = str(os.environ.get("PM_SOURCE_SHA") or "").strip()
+            workspace_root = str(
+                os.environ.get("PM_PERSONAL_WORKSPACE_ROOT") or "").strip()
+            active_claims = task.get("active_claims") or []
+            claim = next(
+                (row for row in active_claims
+                 if str(row.get("claim_id") or row.get("id") or "") == claim_id),
+                None,
+            )
+            if (session.get("task_id") != exact_task_id
+                    or session.get("agent_id") != agent_id
+                    or session.get("claim_id") != claim_id
+                    or session.get("work_session_id") != work_session_id
+                    or session.get("status") != "active"
+                    or session.get("head_sha") != source_sha
+                    or not claim or claim.get("agent_id") != agent_id):
+                raise RuntimeError("personal claim and Work Session binding is not active")
+            workspace_path = _materialize_personal_workspace(
+                session, source_sha, workspace_root)
+            return {
+                "claimed": True,
+                "claim_id": claim_id,
+                "task_id": exact_task_id,
+                "task": task,
+                "adopted_existing_claim": True,
+            }, {
+                "work_session_id": work_session_id,
+                "workspace_path": workspace_path,
+                "branch": session.get("branch") or "",
+                "head_sha": source_sha,
+                "profile": session.get("policy_profile") or "code_strict",
+                "external": True,
+                "bound_existing": True,
+                "session_hygiene": dict(session.get("hygiene") or {}),
+            }
+        except Exception as exc:
+            return {"claimed": False,
+                    "reason": f"personal_execution_binding_error:{exc}"}, None
     if remote_registration and auto_work_session and exact_task_id:
         profile = os.environ.get("PM_WORK_SESSION_POLICY_PROFILE", "code_strict")
         try:
@@ -717,9 +1400,16 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
             evidence = work_fn({**res, "task_id": task_id, "task": task,
                                 "managed": managed or {}}) or {}
         except Exception as e:
-            abandon_claim(project, claim_id, f"work_fn error: {e}", base=base, token=token)
+            abandonment = abandon_claim(
+                project, claim_id, f"work_fn error: {e}", base=base, token=token)
             if managed:
-                if managed.get("external"):
+                if managed.get("bound_existing") and _personal_execution_enabled():
+                    # A rejected abandon can mean the successful receipt is merely
+                    # outcome-unknown. Preserve the checkout for recovery unless the
+                    # exact failed tuple actually released the claim.
+                    if isinstance(abandonment, dict) and abandonment.get("abandoned"):
+                        _cleanup_personal_bound_workspace(managed)
+                elif managed.get("external"):
                     expire_external_work_session(
                         project, managed["work_session_id"], agent_id,
                         base=base, token=token)
@@ -728,6 +1418,55 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                                                    remove_workspace=True, base=base, token=token)
             return {"completed": completed, "stopped": f"work_error:{task_id}:{e}",
                     "startup_inbox": startup_inbox}
+        personal_bound = bool(
+            managed and managed.get("bound_existing")
+            and _personal_execution_enabled()
+        )
+        personal_lifecycle = None
+        if personal_bound and isinstance(evidence, dict):
+            personal_lifecycle = evidence.pop(
+                _PERSONAL_EXECUTION_LIFECYCLE_KEY, None)
+
+        def fail_personal_postprocessing(stage, detail="", **extra):
+            reason = f"post_execution_validation_failed:{stage}"
+            if personal_lifecycle:
+                fail = personal_lifecycle.get("fail")
+                if callable(fail):
+                    try:
+                        terminal = fail(reason)
+                    except Exception as exc:
+                        return {
+                            "completed": completed,
+                            "stopped": (
+                                f"personal_terminalization_error:{task_id}:{stage}:{exc}"
+                            ),
+                            "startup_inbox": startup_inbox,
+                            **extra,
+                        }
+                    if (isinstance(terminal, dict)
+                            and terminal.get("status") not in {None, "failed"}):
+                        return {
+                            "completed": completed,
+                            "stopped": (
+                                f"personal_terminalization_rejected:{task_id}:{stage}"
+                            ),
+                            "terminalization": terminal,
+                            "startup_inbox": startup_inbox,
+                            **extra,
+                        }
+            abandonment = abandon_claim(
+                project, claim_id,
+                f"personal post-execution {stage} failed: {detail}"[:500],
+                base=base, token=token)
+            if (isinstance(abandonment, dict) and abandonment.get("abandoned")):
+                _cleanup_personal_bound_workspace(managed)
+            return {
+                "completed": completed,
+                "stopped": f"{stage}:{task_id}:{detail}",
+                "abandonment": abandonment,
+                "startup_inbox": startup_inbox,
+                **extra,
+            }
         if managed:
             # code_strict: the runtime need not know about executed-test evidence — the loop
             # runs the tests in the bound worktree and attaches the proof itself.
@@ -735,8 +1474,17 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                 run = run_executed_tests(
                     managed["workspace_path"], managed["work_session_id"], task_id,
                     claim_id, agent_id, branch=managed.get("branch", ""),
-                    head_sha=managed.get("head_sha", ""))
+                    head_sha=evidence.get("head_sha") or managed.get("head_sha", ""))
                 evidence = {**evidence, "executed_test_run": run}
+            if (personal_bound
+                    and not _personal_test_run_succeeded(
+                        evidence.get("executed_test_run") or {})):
+                run = evidence.get("executed_test_run") or {}
+                return fail_personal_postprocessing(
+                    "executed_tests_failed",
+                    str(run.get("error") or run.get("status") or "failed"),
+                    executed_test_run=run,
+                )
             evidence.setdefault("branch", managed.get("branch", ""))
             evidence.setdefault("head_sha", managed.get("head_sha", ""))
             evidence.setdefault("git_diff_check", "clean")
@@ -750,10 +1498,21 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                                               evidence.get("branch", ""),
                                               evidence.get("head_sha", ""))
                     if not pushed.get("ok"):
-                        abandon_claim(project, claim_id,
-                                      f"push failed for {task_id}: {pushed.get('detail')}",
-                                      base=base, token=token)
-                        if managed.get("external"):
+                        if personal_bound:
+                            return fail_personal_postprocessing(
+                                "push_error", str(pushed.get("detail") or "failed"),
+                                push=pushed,
+                            )
+                        abandonment = abandon_claim(
+                            project, claim_id,
+                            f"push failed for {task_id}: {pushed.get('detail')}",
+                            base=base, token=token)
+                        if (managed.get("bound_existing")
+                                and _personal_execution_enabled()):
+                            if (isinstance(abandonment, dict)
+                                    and abandonment.get("abandoned")):
+                                _cleanup_personal_bound_workspace(managed)
+                        elif managed.get("external"):
                             expire_external_work_session(
                                 project, managed["work_session_id"], agent_id,
                                 base=base, token=token)
@@ -771,17 +1530,127 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     # gate's push-evidence presence check passes. Real push and
                     # remote verification are enabled via PM_VERIFY_COMPLETION_PUSH.
                     evidence["remote_ref"] = f"refs/heads/{evidence.get('branch', '')}"
-        completion = complete_claim(project, claim_id, evidence, base=base, token=token)
-        if managed and not managed.get("external"):
-            archive_work_session_workspace(project, managed["work_session_id"],
-                                           remove_workspace=True, base=base, token=token)
+        if personal_bound and personal_lifecycle:
+            complete_execution = personal_lifecycle.get("complete")
+            if callable(complete_execution):
+                try:
+                    terminal = complete_execution(evidence)
+                except Exception as exc:
+                    return {
+                        "completed": completed,
+                        "stopped": f"personal_terminalization_error:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox,
+                    }
+                if (isinstance(terminal, dict)
+                        and terminal.get("status") not in {None, "completed"}):
+                    return {
+                        "completed": completed,
+                        "stopped": f"personal_terminalization_rejected:{task_id}",
+                        "terminalization": terminal,
+                        "startup_inbox": startup_inbox,
+                    }
+        if personal_bound:
+            try:
+                checkpoint = checkpoint_personal_work_session_with_recovery(
+                    project, managed, evidence, agent_id, base=base, token=token)
+            except Exception as exc:
+                return {
+                    "completed": completed,
+                    "stopped": f"checkpoint_unknown:{task_id}:{exc}",
+                    "startup_inbox": startup_inbox,
+                }
+            if checkpoint.get("outcome_unknown"):
+                return {
+                    "completed": completed,
+                    "stopped": f"checkpoint_unknown:{task_id}",
+                    "checkpoint": checkpoint,
+                    "startup_inbox": startup_inbox,
+                }
+            if not checkpoint.get("updated"):
+                return fail_personal_postprocessing(
+                    "checkpoint_rejected", "server rejected checkpoint",
+                    checkpoint=checkpoint)
+            managed["head_sha"] = evidence.get("head_sha") or managed.get("head_sha")
+            checkpointed = (personal_lifecycle or {}).get("checkpointed")
+            if callable(checkpointed):
+                try:
+                    checkpointed(evidence, checkpoint)
+                except Exception as exc:
+                    return {
+                        "completed": completed,
+                        "stopped": f"checkpoint_journal_error:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox,
+                    }
+        try:
+            completion = (
+                complete_personal_claim_with_recovery(
+                    project, task_id, claim_id, managed, evidence, agent_id,
+                    base=base, token=token)
+                if personal_bound else
+                complete_claim(project, claim_id, evidence, base=base, token=token)
+            )
+        except Exception as exc:
+            # The response may have been lost after commit. Preserve the exact
+            # terminal checkout for readback/retry; never convert outcome-unknown
+            # success into a conflicting failure receipt.
+            if personal_bound:
+                return {"completed": completed,
+                        "stopped": f"complete_unknown:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox}
+            raise
+        if personal_bound and completion.get("outcome_unknown"):
+            return {
+                "completed": completed,
+                "stopped": f"complete_unknown:{task_id}",
+                "completion": completion,
+                "startup_inbox": startup_inbox,
+            }
         # Verify progress before claiming it: if the server fail-closed the
         # completion (e.g. push_not_on_remote), stop loudly rather than looping on
         # as if the task were done.
         if isinstance(completion, dict) and completion.get("completed") is False:
+            if personal_bound:
+                return fail_personal_postprocessing(
+                    "complete_rejected",
+                    str(completion.get("reason") or "server rejected completion"),
+                    rejection=completion)
             return {"completed": completed,
                     "stopped": f"complete_rejected:{task_id}:{completion.get('reason')}",
                     "rejection": completion, "startup_inbox": startup_inbox}
+        if personal_bound and isinstance(completion, dict) and completion.get("completed"):
+            claim_completed = (personal_lifecycle or {}).get("claim_completed")
+            if callable(claim_completed):
+                try:
+                    claim_completed(evidence, completion)
+                except Exception as exc:
+                    return {
+                        "completed": completed,
+                        "stopped": f"completion_journal_error:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox,
+                    }
+        if (managed and managed.get("bound_existing") and _personal_execution_enabled()
+                and isinstance(completion, dict) and completion.get("completed")):
+            cleanup = _cleanup_personal_bound_workspace(managed)
+            if not cleanup.get("cleaned"):
+                return {
+                    "completed": completed,
+                    "stopped": f"cleanup_pending:{task_id}",
+                    "cleanup": cleanup,
+                    "startup_inbox": startup_inbox,
+                }
+            cleanup_completed = (personal_lifecycle or {}).get("cleanup_completed")
+            if callable(cleanup_completed):
+                try:
+                    cleanup_completed()
+                except Exception as exc:
+                    return {
+                        "completed": completed,
+                        "stopped": f"cleanup_journal_error:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox,
+                    }
+        elif managed and not managed.get("external"):
+            archive_work_session_workspace(project, managed["work_session_id"],
+                                           remove_workspace=True, base=base, token=token)
         completed.append({"task_id": task_id, "evidence": evidence,
                           "managed": bool(managed), "completion": completion})
     return {"completed": completed, "stopped": "max_tasks", "startup_inbox": startup_inbox}

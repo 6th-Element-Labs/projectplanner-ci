@@ -1,0 +1,53 @@
+{
+  "$id": "switchboard.agent.complete_host_enrollment_command.v1",
+  "additionalProperties": false,
+  "description": "Single-use bootstrap completion with durable response-loss recovery.",
+  "properties": {
+    "agent_host_version": {
+      "default": "",
+      "title": "Agent Host Version",
+      "type": "string"
+    },
+    "bootstrap_code": {
+      "title": "Bootstrap Code",
+      "type": "string"
+    },
+    "completion_recovery_secret": {
+      "title": "Completion Recovery Secret",
+      "type": "string"
+    },
+    "hostname": {
+      "title": "Hostname",
+      "type": "string"
+    },
+    "platform": {
+      "title": "Platform",
+      "type": "string"
+    },
+    "project": {
+      "minLength": 1,
+      "pattern": ".*\\S.*",
+      "title": "Project",
+      "type": "string"
+    },
+    "public_key_fingerprint": {
+      "title": "Public Key Fingerprint",
+      "type": "string"
+    },
+    "schema": {
+      "default": "switchboard.agent.complete_host_enrollment_command.v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project",
+    "bootstrap_code",
+    "hostname",
+    "platform",
+    "public_key_fingerprint",
+    "completion_recovery_secret"
+  ],
+  "title": "CompleteHostEnrollmentCommand",
+  "type": "object"
+}

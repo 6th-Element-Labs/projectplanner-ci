@@ -211,6 +211,25 @@ def apply_schema(c):
             revoked_at    REAL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_principals_token ON principals(token_hash);
+        CREATE TABLE IF NOT EXISTS agent_host_rotation_recovery (
+            token_hash   TEXT PRIMARY KEY,
+            principal_id TEXT NOT NULL,
+            host_id      TEXT NOT NULL,
+            expires_at   REAL NOT NULL,
+            created_at   REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_agent_host_rotation_recovery_principal
+            ON agent_host_rotation_recovery(principal_id, expires_at);
+        CREATE TABLE IF NOT EXISTS agent_host_revocation_recovery (
+            token_hash   TEXT PRIMARY KEY,
+            principal_id TEXT NOT NULL,
+            host_id      TEXT NOT NULL,
+            final_status TEXT NOT NULL,
+            revoked_at   REAL NOT NULL,
+            created_at   REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_agent_host_revocation_recovery_principal
+            ON agent_host_revocation_recovery(principal_id, host_id);
         CREATE TABLE IF NOT EXISTS principal_passwords (
             login               TEXT PRIMARY KEY,
             principal_id        TEXT NOT NULL,
@@ -777,6 +796,39 @@ def apply_schema(c):
         );
         CREATE INDEX IF NOT EXISTS ix_agent_hosts_heartbeat
             ON agent_hosts(status, heartbeat_at);
+        CREATE TABLE IF NOT EXISTS agent_host_enrollments (
+            enrollment_id          TEXT PRIMARY KEY,
+            project_id             TEXT NOT NULL,
+            requested_host_id      TEXT,
+            host_id                TEXT,
+            owner_user_id          TEXT NOT NULL,
+            tenant_allowlist_json  TEXT NOT NULL DEFAULT '[]',
+            project_allowlist_json TEXT NOT NULL DEFAULT '[]',
+            provider_allowlist_json TEXT NOT NULL DEFAULT '[]',
+            execution_policy_json  TEXT NOT NULL DEFAULT '{}',
+            bootstrap_hash         TEXT NOT NULL UNIQUE,
+            bootstrap_expires_at   REAL NOT NULL,
+            bootstrap_consumed_at  REAL,
+            completion_recovery_hash TEXT,
+            completion_recovery_expires_at REAL,
+            completion_finalized_at REAL,
+            principal_id           TEXT,
+            public_key_fingerprint TEXT,
+            identity_generation    INTEGER NOT NULL DEFAULT 0,
+            package_version        TEXT,
+            platform               TEXT,
+            hostname               TEXT,
+            status                 TEXT NOT NULL DEFAULT 'pending',
+            created_by_principal_id TEXT,
+            created_at             REAL NOT NULL,
+            updated_at             REAL NOT NULL,
+            revoked_at             REAL,
+            UNIQUE(project_id, host_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_agent_host_enrollments_status
+            ON agent_host_enrollments(status, bootstrap_expires_at);
+        CREATE INDEX IF NOT EXISTS ix_agent_host_enrollments_principal
+            ON agent_host_enrollments(principal_id);
         CREATE TABLE IF NOT EXISTS wake_intents (
             wake_id           TEXT PRIMARY KEY,
             source            TEXT NOT NULL,
@@ -804,6 +856,26 @@ def apply_schema(c):
             ON wake_intents(claimed_by_host, status);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_wake_intents_idem
             ON wake_intents(idem_key) WHERE idem_key IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS personal_execution_connections (
+            execution_connection_id TEXT PRIMARY KEY,
+            wake_id                 TEXT NOT NULL UNIQUE,
+            task_id                 TEXT NOT NULL,
+            claim_id                TEXT NOT NULL,
+            work_session_id         TEXT NOT NULL,
+            runner_session_id       TEXT NOT NULL,
+            host_id                 TEXT NOT NULL,
+            host_principal_id       TEXT NOT NULL,
+            agent_id                TEXT NOT NULL,
+            source_sha              TEXT NOT NULL,
+            status                  TEXT NOT NULL DEFAULT 'reserved',
+            created_at              REAL NOT NULL,
+            expires_at              REAL NOT NULL,
+            claimed_at              REAL,
+            completed_at            REAL,
+            updated_at              REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_personal_execution_connections_status
+            ON personal_execution_connections(status, expires_at);
         CREATE TABLE IF NOT EXISTS runner_sessions (
             runner_session_id TEXT PRIMARY KEY,
             host_id           TEXT,

@@ -131,7 +131,13 @@ ROLE_SCOPES = {
     "owner": ["read", "read:credentials", "write:tasks", "write:ixp", "write:system", "write:bug_intake", "write:projects", "write:credentials", "use:credentials", "admin"],
 }
 VALID_PRINCIPAL_KINDS = {"human", "user", "agent", "host", "system"}
-VALID_PRINCIPAL_SCOPES = sorted({s for scopes in ROLE_SCOPES.values() for s in scopes})
+# Agent Host bearers use a transport-specific write scope so a compromised
+# personal host cannot invoke generic IXP task, wake-request, or fleet-control
+# mutations. Operators retain their broader role scopes and are admitted by the
+# route-level compatibility gate.
+VALID_PRINCIPAL_SCOPES = sorted(
+    {s for scopes in ROLE_SCOPES.values() for s in scopes} | {"write:agent_host"}
+)
 WORK_SESSION_SCHEMA = "switchboard.work_session.v1"
 MANAGED_WORK_SESSION_SCHEMA = "switchboard.managed_work_session.v1"
 WORK_SESSION_HEALTH_SCHEMA = "switchboard.session_health.v1"

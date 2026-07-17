@@ -97,6 +97,17 @@ store.set_meta("reuse_probe", "v1", project="maxwell")
 check("write-then-read is correct over reused connections",
       store.get_meta("reuse_probe", project="maxwell") == "v1")
 
+store.set_meta("snapshot_probe", "before", project="maxwell")
+with _dbc._conn("maxwell", read_snapshot=True) as _snapshot:
+    _snapshot_before = _snapshot.execute(
+        "SELECT value FROM meta WHERE key='snapshot_probe'").fetchone()[0]
+    store.set_meta("snapshot_probe", "after", project="maxwell")
+    _snapshot_after = _snapshot.execute(
+        "SELECT value FROM meta WHERE key='snapshot_probe'").fetchone()[0]
+check("read_snapshot holds one WAL view across concurrent committed writes",
+      _snapshot_before == '"before"' and _snapshot_after == '"before"'
+      and store.get_meta("snapshot_probe", project="maxwell") == "after")
+
 # honoring per-call timeout on a reused connection
 with store._conn("maxwell", timeout_s=2.5) as _tc:
     check("reused connection honors the per-call busy_timeout",

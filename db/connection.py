@@ -371,7 +371,8 @@ def _close_pooled_conns() -> None:
 
 
 @contextmanager
-def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
+def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None,
+          read_snapshot: bool = False):
     timeout = _sqlite_timeout_s("PM_SQLITE_TIMEOUT_S", 5.0) if timeout_s is None else timeout_s
     project_config = _resolve(project)
     db_path = project_config["db"]
@@ -398,6 +399,11 @@ def _conn(project: str = DEFAULT_PROJECT, timeout_s: Optional[float] = None):
         c = _open_sqlite(db_path, timeout)
     try:
         with c:
+            # sqlite3 does not begin a transaction for SELECT statements by default.
+            # Start the transaction on the actual connection (before proxy wrapping)
+            # when a multi-query classifier requires one stable WAL snapshot.
+            if read_snapshot:
+                c.execute("BEGIN DEFERRED")
             if single_writer_enabled() and not in_write_worker():
                 exposed = _SerializedWriteProxy(db_path, timeout, c)
             else:

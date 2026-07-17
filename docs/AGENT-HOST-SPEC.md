@@ -151,6 +151,42 @@ Required operations:
 A stale host must not be selected for a wake intent. Stale host state is evidence, not failure:
 it tells the operator no always-on worker is currently listening.
 
+### Personal host enrollment (ADAPTER-18)
+
+User-owned macOS and Linux hosts enroll through the signed, versioned lifecycle in
+[`AGENT-HOST-ENROLLMENT.md`](AGENT-HOST-ENROLLMENT.md). An operator issues a short-lived,
+single-use bootstrap; completion returns one stable narrow host bearer through durable
+finalization and binds the
+`host_id` to its exact principal and public-key fingerprint. The host's provider login remains
+local. Revoked or uninstalled identities cannot register or heartbeat even if their old host id
+is replayed.
+
+The installer durably creates a one-install recovery secret before bootstrap consumption.
+Retries with the same bootstrap, recovery secret, platform, and key fingerprint return the
+same bearer when the completion response was ambiguous. The server stores only the recovery
+hash and retains it until the client acknowledges that local finalization is durable.
+
+The installer provisions a per-user launchd or systemd service, atomically updates signed
+releases, preserves visible journaled revoke/uninstall intent while offline or response state
+is ambiguous, and purges identity and provider-runtime residue only after durable Switchboard
+revocation proof. A revoked bearer is accepted only for exact-host revocation readback, while
+every local cleanup boundary can resume without authentication. It never starts a cloud/API
+lane as a fallback for a sleeping, offline, or revoked personal host.
+
+Switchboard persists the enrolled host's server-issued execution profile. Registration and
+heartbeat must match its single Codex runtime, allowed lanes and capabilities, local-auth
+proof, work/global-claim modes, and concurrency cap exactly. The host bearer cannot widen this
+profile, and an enrolled personal host cannot claim a generic wake. Personal wake creation
+binds the authenticated caller and claim principal to the enrollment owner and derives tenant
+identity from durable project access, never from optional request fields.
+
+Credential JSON temporaries are created `0600` before write under a `0700` directory; file and
+directory durability are fsynced and stale regular temporaries are removed without following
+symlinks. Linux materializes personal Work Sessions beneath the dedicated `0700` Agent Host
+workspace root included in systemd `ReadWritePaths`. It treats the coordinator path as
+server-local metadata, clones the canonical repository into the host root, checks out the
+exact bound SHA, and rejects origin mismatch, symlink escape, dirty reuse, or off-SHA reuse.
+
 ### Hybrid placement inventory
 
 Work-capable hosts also publish a `switchboard.agent_host_placement.v1` object in `capacity`.
@@ -162,6 +198,11 @@ required project, tenant, provider account, repository, isolation, credential-le
 runtime, capability, or resource headroom must be explicitly compatible. The lease itself is
 acquired only after host selection and is validated against the exact host and runner when the
 wake is claimed.
+
+Enrolled personal hosts additionally publish redacted identity generation, owner
+user/tenant/project/provider allowlists, local-auth availability, drain state, and session
+headroom. Host bearer, raw account proof, and provider credential material are forbidden from
+registration and heartbeat payloads.
 
 Host capacity and provider subscription capacity are different admission gates. A free CPU
 slot cannot override a personal-plan cooldown, and a ready provider subscription does not make
@@ -212,6 +253,13 @@ Required operations:
 Wake intents must be idempotent by `dedupe_key`. Re-sending the same missed ack or ready-lane
 trigger must not launch duplicate sessions.
 
+For a personal wake, every terminal route first compare-and-sets the exact execution connection
+tuple to `completed`, `failed`, or `cancelled`, requiring exactly one matching row, and only then
+terminalizes the wake in the same transaction. This applies to completion, cancellation,
+claim-time and sweeper deadlines, and immediate no-eligible-host failure. A lost successful
+completion response can be retried with the same principal, runner, agent, status, and result
+to read back the existing receipt; any conflicting retry is denied.
+
 ## 7. Host Daemon Loop
 
 An Agent Host daemon runs continuously:
@@ -248,6 +296,15 @@ one-time session token, and worktree lease; the host performs the returned launc
 workspace. If the managed creation returns an error, the host must not fall back silently to the
 shared checkout. It should surface the failure as `failed_gate`, `wrong_repo`, `stale_branch`, or
 the supplied failure class.
+
+A personal-host wake that opts into exact binding is refused before claim unless task, claim,
+Work Session, runner, host, wake, source SHA, and execution-connection fields are present. The
+account binding, execution binding, wake, selector, and local inventory must agree on every
+repeated identifier, and the source SHA must be a 40-character lowercase Git SHA. Fresh
+host-local enrollment selects the native Codex local worker; the credential-vault personal
+worker is a separate centrally bound lane. Switchboard derives the stored execution binding
+from the active claim and Work Session, then validates the same live rows during wake claim;
+the host-local worker adopts the pre-bound session instead of creating a second one.
 
 The host daemon may also proactively keep warm sessions:
 
@@ -360,7 +417,9 @@ interrupt-tier rules.
 
 ## 12. Security and Safety
 
-- Host credentials need `write:runner` / `write:ixp`, not broad admin by default.
+- Enrolled personal-host credentials use `read` + `write:agent_host`, not broad IXP or admin.
+  Runner mutation is identity-fenced, and post-execution Work Session/claim writes require the
+  complete durable personal-execution tuple and the action-specific terminal state.
 - A host may only launch runtimes declared in its registration.
 - A host must not expose arbitrary shell launch over the network.
 - Runtime command templates live on the host, not in untrusted wake payloads.

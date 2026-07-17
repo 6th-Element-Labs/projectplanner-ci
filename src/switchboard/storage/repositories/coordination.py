@@ -9,7 +9,9 @@ stay reachable via ``_store_facade()``. ``store.py`` re-exports these symbols; r
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -44,6 +46,14 @@ from switchboard.storage.repositories.provider_credentials import (
     CredentialVaultError,
     default_provider_credential_repository,
 )
+
+
+# Native Codex is allowed to execute for up to two hours.  Keep the durable wake
+# alive for that interval plus a small launch/finalize margin when the caller did
+# not request a tighter deadline.  Both the wake and its exact connection include
+# the post-run test, Work Session checkpoint, and claim-completion window.
+_PERSONAL_EXECUTION_DEADLINE_S = 2 * 60 * 60 + 5 * 60
+_PERSONAL_POST_PROCESSING_S = 35 * 60
 
 
 def _store_facade():
@@ -203,17 +213,209 @@ def _clear_execution_credential_binding(policy: Dict[str, Any]) -> Dict[str, Any
         updated["account_binding"] = binding
     return updated
 
+
+def _bind_personal_wake_policy(
+    c: sqlite3.Connection,
+    *,
+    wake_id: str,
+    selector: Dict[str, Any],
+    policy: Dict[str, Any],
+    task_id: Optional[str],
+    project: str,
+    now: float,
+    request_principal_id: str,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Create the server-authoritative relational binding for a personal wake."""
+    updated = dict(policy or {})
+    personal = (updated.get("execution_mode") == "personal_agent_host"
+                or updated.get("require_exact_host_binding") is True)
+    if not personal:
+        return updated, []
+    binding = dict(updated.get("account_binding") or {})
+    canonical_task_id = str(task_id or "").strip()
+    claim_id = str(binding.get("claim_id") or "").strip()
+    work_session_id = str(binding.get("work_session_id") or "").strip()
+    host_id = str(binding.get("host_id") or "").strip()
+    agent_id = str(selector.get("agent_id") or "").strip()
+    reasons: List[str] = []
+    claim = c.execute(
+        "SELECT id, task_id, agent_id, principal_id, status, expires_at "
+        "FROM task_claims WHERE id=?",
+        (claim_id,),
+    ).fetchone()
+    if (not claim or claim["task_id"] != canonical_task_id
+            or claim["agent_id"] != agent_id or claim["status"] != "active"
+            or float(claim["expires_at"] or 0) <= now):
+        reasons.append("claim_not_active_for_task_agent")
+    work_session = c.execute(
+        "SELECT task_id, agent_id, claim_id, head_sha, status FROM work_sessions "
+        "WHERE work_session_id=?",
+        (work_session_id,),
+    ).fetchone()
+    if (not work_session or work_session["task_id"] != canonical_task_id
+            or work_session["agent_id"] != agent_id
+            or work_session["claim_id"] != claim_id
+            or work_session["status"] != "active"):
+        reasons.append("work_session_not_active_for_claim")
+    if not host_id:
+        reasons.append("host_id_required")
+    if str(selector.get("runtime") or "") != "codex":
+        reasons.append("codex_runtime_required")
+    if reasons:
+        return updated, sorted(set(reasons))
+
+    source_sha = str(work_session["head_sha"] or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        return updated, ["work_session_source_sha_invalid"]
+    requested_source = str(updated.get("source_sha") or "").strip()
+    if requested_source and requested_source != source_sha:
+        return updated, ["source_sha_not_current_work_session_head"]
+    requested_task = str(binding.get("task_id") or "").strip()
+    requested_agent = str(binding.get("agent_id") or "").strip()
+    if requested_task and requested_task != canonical_task_id:
+        return updated, ["task_id_binding_mismatch"]
+    if requested_agent and requested_agent != agent_id:
+        return updated, ["agent_id_binding_mismatch"]
+
+    runner_session_id = "run_" + hashlib.sha256(
+        f"{wake_id}:{host_id}".encode()).hexdigest()[:16]
+    host_row = c.execute(
+        "SELECT * FROM agent_hosts WHERE host_id=?", (host_id,),
+    ).fetchone()
+    if not host_row or _host_row(host_row, now=now).get("stale"):
+        return updated, ["host_not_live_for_personal_connection"]
+    host = _host_row(host_row, now=now)
+    enrollment_row = c.execute(
+        "SELECT * FROM agent_host_enrollments WHERE project_id=? AND host_id=? "
+        "AND status='active'",
+        (project, host_id),
+    ).fetchone()
+    if not enrollment_row:
+        return updated, ["host_not_actively_enrolled_for_personal_connection"]
+    enrollment = dict(enrollment_row)
+    host_principal_id = str(enrollment.get("principal_id") or "").strip()
+    if not host_principal_id or str(host.get("principal_id") or "") != host_principal_id:
+        return updated, ["host_enrollment_principal_mismatch"]
+    claim_principal_id = str(claim["principal_id"] or "").strip()
+    owner_user_id = str(enrollment.get("owner_user_id") or "").strip()
+    if (not claim_principal_id or claim_principal_id != owner_user_id
+            or str(request_principal_id or "").strip() != owner_user_id):
+        return updated, ["personal_wake_owner_principal_denied"]
+    project_access = _store_facade().project_access(project) or {}
+    durable_tenant_id = str(project_access.get("org_id") or "").strip()
+    if (str(project_access.get("owner_user_id") or "").strip() != owner_user_id):
+        return updated, ["personal_wake_project_owner_denied"]
+    if not durable_tenant_id:
+        return updated, ["personal_wake_project_tenant_missing"]
+    project_allowlist = json.loads(enrollment.get("project_allowlist_json") or "[]")
+    if project not in project_allowlist:
+        return updated, ["host_enrollment_project_denied"]
+    owner = dict((host.get("capacity") or {}).get("owner") or {})
+    expected_owner = {
+        "user_id": owner_user_id,
+        "tenant_allowlist": sorted(json.loads(
+            enrollment.get("tenant_allowlist_json") or "[]")),
+        "project_allowlist": sorted(project_allowlist),
+        "provider_allowlist": sorted(json.loads(
+            enrollment.get("provider_allowlist_json") or "[]")),
+    }
+    advertised_owner = {
+        "user_id": str(owner.get("user_id") or ""),
+        "tenant_allowlist": sorted(owner.get("tenant_allowlist") or []),
+        "project_allowlist": sorted(owner.get("project_allowlist") or []),
+        "provider_allowlist": sorted(owner.get("provider_allowlist") or []),
+    }
+    if advertised_owner != expected_owner:
+        return updated, ["host_enrollment_policy_inventory_mismatch"]
+    if (expected_owner["tenant_allowlist"]
+            and durable_tenant_id not in expected_owner["tenant_allowlist"]):
+        return updated, ["host_enrollment_tenant_denied"]
+    requested_provider = str(
+        binding.get("provider_id") or selector.get("provider_id")
+        or selector.get("provider") or "openai-codex").strip()
+    if requested_provider not in expected_owner["provider_allowlist"]:
+        return updated, ["host_enrollment_provider_denied"]
+    execution_connection_id = f"execconn-{uuid.uuid4().hex[:20]}"
+    exact = {
+        "task_id": canonical_task_id,
+        "claim_id": claim_id,
+        "work_session_id": work_session_id,
+        "runner_session_id": runner_session_id,
+        "host_id": host_id,
+        "host_principal_id": host_principal_id,
+        "agent_id": agent_id,
+    }
+    binding.update(exact)
+    binding.update({
+        "owner_user_id": expected_owner["user_id"],
+        "tenant_allowlist": expected_owner["tenant_allowlist"],
+        "project_allowlist": expected_owner["project_allowlist"],
+        "provider_allowlist": expected_owner["provider_allowlist"],
+        "provider_id": requested_provider,
+        "tenant_id": durable_tenant_id,
+    })
+    requested_ttl = float(
+        updated.get("deadline_seconds") or updated.get("claim_timeout_s")
+        or updated.get("ttl_s") or _PERSONAL_EXECUTION_DEADLINE_S
+    )
+    updated.update({
+        "require_exact_host_binding": True,
+        # The wake remains the durable owner of the execution through tests,
+        # checkpoint, and claim completion.  Its deadline therefore needs the
+        # same post-processing margin already granted to the exact connection.
+        "deadline_seconds": requested_ttl + _PERSONAL_POST_PROCESSING_S,
+        "source_sha": source_sha,
+        "execution_connection_id": execution_connection_id,
+        "account_binding": binding,
+        "execution_binding": {
+            **exact,
+            "owner_user_id": expected_owner["user_id"],
+            "tenant_allowlist": expected_owner["tenant_allowlist"],
+            "project_allowlist": expected_owner["project_allowlist"],
+            "provider_allowlist": expected_owner["provider_allowlist"],
+            "provider_id": requested_provider,
+            "tenant_id": durable_tenant_id,
+            "wake_id": wake_id,
+            "source_sha": source_sha,
+            "execution_connection_id": execution_connection_id,
+        },
+    })
+    expires_at = now + max(10.0, requested_ttl) + _PERSONAL_POST_PROCESSING_S
+    c.execute(
+        "INSERT INTO personal_execution_connections("
+        "execution_connection_id, wake_id, task_id, claim_id, work_session_id, "
+        "runner_session_id, host_id, host_principal_id, agent_id, source_sha, "
+        "status, created_at, expires_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,'reserved',?,?,?)",
+        (execution_connection_id, wake_id, canonical_task_id, claim_id,
+         work_session_id, runner_session_id, host_id, host_principal_id,
+         agent_id, source_sha,
+         now, expires_at, now),
+    )
+    return updated, []
+
 def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
                         reason: str, source: str, policy: Dict[str, Any],
                         task_id: Optional[str], principal_id: str, actor: str,
                         now: float, project: str, idem_key: str = "",
-                        effect_key: str = "") -> Dict[str, Any]:
+                        effect_key: str = "", wake_id: str = "") -> Dict[str, Any]:
     deadline_s = (policy.get("deadline_seconds") or policy.get("claim_timeout_s") or
                   policy.get("ttl_s"))
     deadline = now + float(deadline_s) if deadline_s else None
+    personal = (policy.get("execution_mode") == "personal_agent_host"
+                or policy.get("require_exact_host_binding") is True)
     hybrid = str((policy.get("scheduler") or {}).get("mode") or "") == "hybrid"
     placement: Dict[str, Any] = {}
-    if hybrid:
+    if personal:
+        exact_host_id = str(
+            ((policy.get("execution_binding") or {}).get("host_id")) or "")
+        exact_host_row = c.execute(
+            "SELECT * FROM agent_hosts WHERE host_id=?", (exact_host_id,),
+        ).fetchone() if exact_host_id else None
+        exact_host = _host_row(exact_host_row, now=now) if exact_host_row else None
+        eligible = ([exact_host] if exact_host and _host_can_handle(exact_host, selector)
+                    else [])
+    elif hybrid:
         hosts = _host_rows_in(c, now)
         placement = plan_hybrid_placement(
             hosts, selector, policy, project=project,
@@ -236,7 +438,7 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
         "reason": (placement.get("reason_code") if placement_denied else "no_eligible_host"),
         "eligible_host_count": 0,
     } if status == "failed" else {})
-    wake_id = "wake-" + uuid.uuid4().hex[:16]
+    wake_id = wake_id or "wake-" + uuid.uuid4().hex[:16]
     c.execute(
         "INSERT INTO wake_intents(wake_id, source, reason, selector_json, policy_json, "
         "status, requested_at, deadline, result_json, placement_json, task_id, principal_id, "
@@ -266,6 +468,13 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
         )
     row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
     wake = _wake_row(row)
+    if status == "failed":
+        terminal = _terminalize_personal_connection_in(
+            c, wake, target_status="failed", now=now)
+        if not terminal.get("ok"):
+            raise RuntimeError(
+                "personal wake creation could not terminalize its exact connection: "
+                f"{terminal.get('reason_code')}")
     wake["eligible_host_count"] = len(eligible)
     wake["eligible_hosts"] = [h["host_id"] for h in eligible]
     return wake
@@ -298,12 +507,33 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
             hit = _store_facade()._idem_hit(c, "request_wake", idem_key, actor, payload)
             if hit is not None:
                 return hit
+            wake_id = "wake-" + uuid.uuid4().hex[:16]
+            policy, binding_errors = _bind_personal_wake_policy(
+                c, wake_id=wake_id, selector=selector, policy=policy,
+                task_id=task_id, project=project, now=now,
+                request_principal_id=principal_id)
+            if binding_errors:
+                out = {
+                    "requested": False,
+                    "error": "invalid_personal_execution_binding",
+                    "reason_codes": binding_errors,
+                }
+                _store_facade()._idem_store(
+                    c, "request_wake", idem_key, actor, payload, out)
+                return out
             effect_claim = _store_facade()._claim_external_effect_in(
                 c, "wake", "agent_host", json.dumps(selector, sort_keys=True),
                 payload, task_id=task_id, agent_id=selector.get("agent_id") or "",
                 idem_key=idem_key, actor=actor, principal_id=principal_id,
                 project=project, now=now)
             if not effect_claim.get("claimed"):
+                execution = dict(policy.get("execution_binding") or {})
+                if execution.get("execution_connection_id"):
+                    c.execute(
+                        "DELETE FROM personal_execution_connections "
+                        "WHERE execution_connection_id=? AND status='reserved'",
+                        (execution["execution_connection_id"],),
+                    )
                 out = {"requested": False, "reason": effect_claim.get("reason"),
                        "effect": effect_claim.get("effect"),
                        "effect_key": effect_claim.get("effect_key"),
@@ -317,7 +547,8 @@ def request_wake(selector: Dict[str, Any], reason: str = "",
                 c, selector=selector, reason=reason or "wake requested",
                 source=source or actor, policy=policy, task_id=task_id,
                 principal_id=principal_id, actor=actor, now=now, idem_key=idem_key,
-                effect_key=effect_claim["effect_key"], project=project)
+                effect_key=effect_claim["effect_key"], project=project,
+                wake_id=wake_id)
             _store_facade()._update_external_effect_in(
                 c, effect_claim["effect_key"], "issued",
                 readback={"wake_id": wake["wake_id"], "wake_status": wake["status"]},
@@ -412,10 +643,820 @@ def _credential_admission_ready(
     updated["provider_capacity"] = capacity
     return updated, capacity, ""
 
+
+def _personal_exact_binding_error(
+    c: sqlite3.Connection,
+    wake: Dict[str, Any],
+    *,
+    host_id: str,
+    principal_id: str,
+    runner_session_id: str,
+    project: str,
+    now: float,
+    completion_status: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Prove a personal-host wake against live claim and Work Session rows."""
+    policy = dict(wake.get("policy") or {})
+    personal = (policy.get("execution_mode") == "personal_agent_host"
+                or policy.get("require_exact_host_binding") is True)
+    if not personal:
+        return None
+    binding = dict(policy.get("account_binding") or {})
+    execution = dict(policy.get("execution_binding") or {})
+    selector = dict(wake.get("selector") or {})
+    wake_id = str(wake.get("wake_id") or "").strip()
+    task_id = str(wake.get("task_id") or "").strip()
+    agent_id = str(selector.get("agent_id") or "").strip()
+    runner_id = str(runner_session_id or "").strip()
+    source_sha = str(execution.get("source_sha") or "").strip()
+    expected_runner = "run_" + hashlib.sha256(
+        f"{wake_id}:{host_id}".encode()).hexdigest()[:16]
+    expected = {
+        "wake_id": wake_id,
+        "task_id": task_id,
+        "claim_id": str(binding.get("claim_id") or "").strip(),
+        "work_session_id": str(binding.get("work_session_id") or "").strip(),
+        "runner_session_id": expected_runner,
+        "host_id": str(host_id or "").strip(),
+        "host_principal_id": str(principal_id or "").strip(),
+        "agent_id": agent_id,
+        "source_sha": source_sha,
+        "execution_connection_id": str(
+            execution.get("execution_connection_id") or "").strip(),
+    }
+    comparisons = {
+        "wake_id": execution.get("wake_id"),
+        "task_id.account": binding.get("task_id"),
+        "task_id.execution": execution.get("task_id"),
+        "claim_id.execution": execution.get("claim_id"),
+        "work_session_id.execution": execution.get("work_session_id"),
+        "runner_session_id.account": binding.get("runner_session_id"),
+        "runner_session_id.execution": execution.get("runner_session_id"),
+        "runner_session_id.argument": runner_id,
+        "host_id.account": binding.get("host_id"),
+        "host_id.execution": execution.get("host_id"),
+        "host_principal_id.account": binding.get("host_principal_id"),
+        "host_principal_id.execution": execution.get("host_principal_id"),
+        "agent_id.account": binding.get("agent_id"),
+        "agent_id.execution": execution.get("agent_id"),
+        "source_sha.policy": policy.get("source_sha"),
+        "execution_connection_id.policy": policy.get("execution_connection_id"),
+    }
+    comparison_expected = {
+        "wake_id": expected["wake_id"],
+        "task_id.account": expected["task_id"],
+        "task_id.execution": expected["task_id"],
+        "claim_id.execution": expected["claim_id"],
+        "work_session_id.execution": expected["work_session_id"],
+        "runner_session_id.account": expected["runner_session_id"],
+        "runner_session_id.execution": expected["runner_session_id"],
+        "runner_session_id.argument": expected["runner_session_id"],
+        "host_id.account": expected["host_id"],
+        "host_id.execution": expected["host_id"],
+        "host_principal_id.account": expected["host_principal_id"],
+        "host_principal_id.execution": expected["host_principal_id"],
+        "agent_id.account": expected["agent_id"],
+        "agent_id.execution": expected["agent_id"],
+        "source_sha.policy": expected["source_sha"],
+        "execution_connection_id.policy": expected["execution_connection_id"],
+    }
+    reasons = sorted(
+        key for key, value in comparisons.items()
+        if str(value or "").strip() != comparison_expected[key]
+    )
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        reasons.append("source_sha.invalid")
+    if not all(expected.values()) or selector.get("runtime") != "codex":
+        reasons.append("required_binding_missing")
+
+    claim = c.execute(
+        "SELECT id, task_id, agent_id, status, expires_at FROM task_claims WHERE id=?",
+        (expected["claim_id"],),
+    ).fetchone()
+    if (not claim or claim["task_id"] != task_id or claim["agent_id"] != agent_id
+            or claim["status"] != "active" or float(claim["expires_at"] or 0) <= now):
+        reasons.append("claim_not_active_for_task_agent")
+    work_session = c.execute(
+        "SELECT task_id, agent_id, claim_id, head_sha, status FROM work_sessions "
+        "WHERE work_session_id=?",
+        (expected["work_session_id"],),
+    ).fetchone()
+    if (not work_session or work_session["task_id"] != task_id
+            or work_session["agent_id"] != agent_id
+            or work_session["claim_id"] != expected["claim_id"]
+            or work_session["head_sha"] != source_sha
+            or work_session["status"] != "active"):
+        reasons.append("work_session_not_active_for_claim_source")
+    connection = c.execute(
+        "SELECT * FROM personal_execution_connections WHERE execution_connection_id=?",
+        (expected["execution_connection_id"],),
+    ).fetchone()
+    if not connection:
+        reasons.append("execution_connection_not_found")
+    else:
+        connection = dict(connection)
+        for field in (
+            "wake_id", "task_id", "claim_id", "work_session_id", "runner_session_id",
+            "host_id", "agent_id", "source_sha",
+            "host_principal_id",
+        ):
+            if str(connection.get(field) or "") != expected[field]:
+                reasons.append(f"execution_connection_{field}_mismatch")
+        expected_connection_status = (
+            "active" if wake.get("status") == "claimed" else "reserved")
+        if connection.get("status") != expected_connection_status:
+            reasons.append(
+                f"execution_connection_not_{expected_connection_status}")
+        if float(connection.get("expires_at") or 0) <= now:
+            reasons.append("execution_connection_stale")
+    runner = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=?", (runner_id,),
+    ).fetchone()
+    if not runner:
+        reasons.append("execution_connection_runner_not_found")
+    else:
+        runner = dict(runner)
+        metadata = _json_obj(runner.get("metadata_json", "{}"), {})
+        runner_expected = {
+            "task_id": expected["task_id"], "claim_id": expected["claim_id"],
+            "host_id": expected["host_id"], "agent_id": expected["agent_id"],
+            "principal_id": expected["host_principal_id"],
+        }
+        for field, value in runner_expected.items():
+            if str(runner.get(field) or "") != value:
+                reasons.append(f"execution_connection_runner_{field}_mismatch")
+        metadata_expected = {
+            "wake_id": expected["wake_id"],
+            "work_session_id": expected["work_session_id"],
+            "source_sha": expected["source_sha"],
+            "execution_connection_id": expected["execution_connection_id"],
+        }
+        for field, value in metadata_expected.items():
+            if str(metadata.get(field) or "") != value:
+                reasons.append(f"execution_connection_runner_{field}_mismatch")
+        runner_status = str(runner.get("status") or "")
+        if completion_status == "completed":
+            expected_statuses = {"completed"}
+            status_reason = "execution_connection_runner_not_completed"
+        elif completion_status == "failed":
+            expected_statuses = {"failed"}
+            status_reason = "execution_connection_runner_not_failed"
+        else:
+            expected_statuses = {"starting", "ready", "running"}
+            status_reason = "execution_connection_runner_not_active"
+        if runner_status not in expected_statuses:
+            reasons.append(status_reason)
+        if float(runner.get("heartbeat_at") or 0) + float(
+                runner.get("heartbeat_ttl_s") or 60) <= now:
+            reasons.append("execution_connection_runner_stale")
+    host = c.execute(
+        "SELECT principal_id FROM agent_hosts WHERE host_id=?", (expected["host_id"],),
+    ).fetchone()
+    enrollment = c.execute(
+        "SELECT principal_id, status, owner_user_id, tenant_allowlist_json, "
+        "project_allowlist_json, provider_allowlist_json FROM agent_host_enrollments "
+        "WHERE project_id=? AND host_id=?",
+        (project, expected["host_id"]),
+    ).fetchone()
+    if (not host or str(host["principal_id"] or "") != expected["host_principal_id"]):
+        reasons.append("registered_host_principal_mismatch")
+    if (not enrollment or enrollment["status"] != "active"
+            or str(enrollment["principal_id"] or "") != expected["host_principal_id"]):
+        reasons.append("active_enrollment_principal_mismatch")
+    elif (
+        str(execution.get("owner_user_id") or binding.get("owner_user_id") or "")
+        != str(enrollment["owner_user_id"] or "")
+        or sorted(binding.get("tenant_allowlist") or [])
+        != sorted(json.loads(enrollment["tenant_allowlist_json"] or "[]"))
+        or sorted(binding.get("project_allowlist") or [])
+        != sorted(json.loads(enrollment["project_allowlist_json"] or "[]"))
+        or sorted(binding.get("provider_allowlist") or [])
+        != sorted(json.loads(enrollment["provider_allowlist_json"] or "[]"))
+    ):
+        reasons.append("active_enrollment_policy_mismatch")
+    if reasons:
+        return {
+            "claimed": False,
+            "reason": "exact_binding_denied",
+            "reason_codes": sorted(set(reasons)),
+            "host_id": host_id,
+            "wake_id": wake_id,
+        }
+    return None
+
+
+def _terminalize_personal_connection_in(
+    c: sqlite3.Connection,
+    wake: Dict[str, Any],
+    *,
+    target_status: str,
+    now: float,
+) -> Dict[str, Any]:
+    """Terminalize the exact personal connection before its wake becomes terminal."""
+    policy = dict(wake.get("policy") or {})
+    personal = (policy.get("execution_mode") == "personal_agent_host"
+                or policy.get("require_exact_host_binding") is True)
+    if not personal:
+        return {"ok": True, "personal": False}
+    if target_status not in {"completed", "failed", "cancelled"}:
+        return {"ok": False, "reason_code": "invalid_personal_terminal_status"}
+    binding = dict(policy.get("account_binding") or {})
+    execution = dict(policy.get("execution_binding") or {})
+    connection_id = str(execution.get("execution_connection_id") or "").strip()
+    row = c.execute(
+        "SELECT * FROM personal_execution_connections WHERE execution_connection_id=?",
+        (connection_id,),
+    ).fetchone()
+    if not row:
+        return {"ok": False, "reason_code": "execution_connection_not_found"}
+    connection = dict(row)
+    expected = {
+        "wake_id": str(wake.get("wake_id") or ""),
+        "task_id": str(wake.get("task_id") or ""),
+        "claim_id": str(binding.get("claim_id") or ""),
+        "work_session_id": str(binding.get("work_session_id") or ""),
+        "runner_session_id": str(execution.get("runner_session_id") or ""),
+        "host_id": str(execution.get("host_id") or ""),
+        "host_principal_id": str(execution.get("host_principal_id") or ""),
+        "agent_id": str(execution.get("agent_id") or ""),
+        "source_sha": str(execution.get("source_sha") or ""),
+    }
+    mismatches = [
+        field for field, value in expected.items()
+        if not value or str(connection.get(field) or "") != value
+    ]
+    if mismatches:
+        return {"ok": False, "reason_code": "execution_connection_tuple_mismatch",
+                "mismatches": sorted(mismatches)}
+    current_status = str(connection.get("status") or "")
+    if current_status == target_status:
+        return {"ok": True, "personal": True, "idempotent": True,
+                "execution_connection_id": connection_id}
+    if current_status not in {"reserved", "active"}:
+        return {"ok": False, "reason_code": "execution_connection_terminal_conflict",
+                "current_status": current_status}
+    transitioned = c.execute(
+        "UPDATE personal_execution_connections SET status=?, completed_at=?, updated_at=? "
+        "WHERE execution_connection_id=? AND wake_id=? AND task_id=? AND claim_id=? "
+        "AND work_session_id=? AND runner_session_id=? AND host_id=? "
+        "AND host_principal_id=? AND agent_id=? AND source_sha=? AND status=?",
+        (target_status, now, now, connection_id, expected["wake_id"],
+         expected["task_id"], expected["claim_id"], expected["work_session_id"],
+         expected["runner_session_id"], expected["host_id"],
+         expected["host_principal_id"], expected["agent_id"],
+         expected["source_sha"], current_status),
+    )
+    if transitioned.rowcount != 1:
+        return {"ok": False, "reason_code": "execution_connection_terminal_race"}
+    return {"ok": True, "personal": True, "idempotent": False,
+            "execution_connection_id": connection_id}
+
+
+def check_personal_execution_authority(
+    binding: Dict[str, Any], *, principal_id: str, action: str,
+    project: str = DEFAULT_PROJECT,
+) -> Dict[str, Any]:
+    """Authorize one post-execution mutation against the complete bound tuple.
+
+    The enrolled host bearer deliberately lacks generic ``write:ixp``.  After the
+    native worker terminalizes its wake, it still must checkpoint the Work Session
+    and either complete or abandon the already-owned task claim.  Those mutations
+    are admitted only when every durable execution row agrees with the bearer and
+    the action-specific terminal state.
+    """
+    action = str(action or "").strip()
+    expected_terminal = {
+        "checkpoint_work_session": "completed",
+        "complete_claim": "completed",
+        "abandon_claim": "failed",
+    }.get(action)
+    if not expected_terminal:
+        return {"allowed": False, "error_code": "personal_execution_action_invalid"}
+    supplied = {
+        key: str((binding or {}).get(key) or "").strip()
+        for key in (
+            "task_id", "claim_id", "work_session_id", "runner_session_id",
+            "host_id", "agent_id", "wake_id", "source_sha",
+            "execution_connection_id",
+        )
+    }
+    supplied["task_id"] = supplied["task_id"].upper()
+    completed_head_sha = str(
+        (binding or {}).get("completed_head_sha") or "").strip()
+    principal_id = str(principal_id or "").strip()
+    if not principal_id or not all(supplied.values()):
+        return {"allowed": False, "error_code": "personal_execution_binding_incomplete"}
+    now = time.time()
+    reasons: List[str] = []
+    with _conn(project, read_snapshot=True) as c:
+        connection_row = c.execute(
+            "SELECT * FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (supplied["execution_connection_id"],),
+        ).fetchone()
+        if not connection_row:
+            return {"allowed": False, "error_code": "execution_connection_not_found"}
+        connection = dict(connection_row)
+        for field, value in supplied.items():
+            if str(connection.get(field) or "") != value:
+                reasons.append(f"execution_connection_{field}_mismatch")
+        if str(connection.get("host_principal_id") or "") != principal_id:
+            reasons.append("execution_connection_principal_mismatch")
+        if str(connection.get("status") or "") != expected_terminal:
+            reasons.append("execution_connection_terminal_status_mismatch")
+
+        claim = c.execute(
+            "SELECT id, task_id, agent_id, status, expires_at "
+            "FROM task_claims WHERE id=?",
+            (supplied["claim_id"],),
+        ).fetchone()
+        if (not claim or claim["task_id"] != supplied["task_id"]
+                or claim["agent_id"] != supplied["agent_id"]
+                or claim["status"] != "active"
+                or float(claim["expires_at"] or 0) <= now):
+            reasons.append("claim_not_active_for_execution")
+
+        session = c.execute(
+            "SELECT task_id, agent_id, claim_id, status, head_sha FROM work_sessions "
+            "WHERE work_session_id=?",
+            (supplied["work_session_id"],),
+        ).fetchone()
+        if (not session or session["task_id"] != supplied["task_id"]
+                or session["agent_id"] != supplied["agent_id"]
+                or session["claim_id"] != supplied["claim_id"]
+                or session["status"] != "active"):
+            reasons.append("work_session_not_active_for_execution")
+        elif action == "checkpoint_work_session":
+            admissible_heads = {supplied["source_sha"]}
+            if completed_head_sha:
+                admissible_heads.add(completed_head_sha)
+            if str(session["head_sha"] or "") not in admissible_heads:
+                reasons.append("work_session_source_sha_mismatch")
+
+        wake_row = c.execute(
+            "SELECT * FROM wake_intents WHERE wake_id=?", (supplied["wake_id"],),
+        ).fetchone()
+        if not wake_row:
+            reasons.append("wake_not_found")
+        else:
+            wake = _wake_row(wake_row)
+            if (wake.get("task_id") != supplied["task_id"]
+                    or wake.get("claimed_by_host") != supplied["host_id"]
+                    or wake.get("status") != expected_terminal):
+                reasons.append("wake_terminal_binding_mismatch")
+
+        runner_row = c.execute(
+            "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+            (supplied["runner_session_id"],),
+        ).fetchone()
+        if not runner_row:
+            reasons.append("runner_not_found")
+        else:
+            runner = dict(runner_row)
+            metadata = _json_obj(runner.get("metadata_json", "{}"), {})
+            for field in ("task_id", "claim_id", "host_id", "agent_id"):
+                if str(runner.get(field) or "") != supplied[field]:
+                    reasons.append(f"runner_{field}_mismatch")
+            if str(runner.get("principal_id") or "") != principal_id:
+                reasons.append("runner_principal_mismatch")
+            for field in (
+                "wake_id", "work_session_id", "source_sha", "execution_connection_id",
+            ):
+                if str(metadata.get(field) or "") != supplied[field]:
+                    reasons.append(f"runner_{field}_mismatch")
+            if str(runner.get("status") or "") != expected_terminal:
+                reasons.append("runner_terminal_status_mismatch")
+
+        host = c.execute(
+            "SELECT principal_id FROM agent_hosts WHERE host_id=?",
+            (supplied["host_id"],),
+        ).fetchone()
+        enrollment = c.execute(
+            "SELECT status, principal_id FROM agent_host_enrollments "
+            "WHERE project_id=? AND host_id=?",
+            (project, supplied["host_id"]),
+        ).fetchone()
+        if not host or str(host["principal_id"] or "") != principal_id:
+            reasons.append("registered_host_principal_mismatch")
+        if (not enrollment or enrollment["status"] != "active"
+                or str(enrollment["principal_id"] or "") != principal_id):
+            reasons.append("active_enrollment_principal_mismatch")
+
+    if reasons:
+        return {"allowed": False, "error_code": "personal_execution_authority_denied",
+                "reason_codes": sorted(set(reasons))}
+    return {"allowed": True, "action": action, "checked_at": now,
+            "task_id": supplied["task_id"], "claim_id": supplied["claim_id"],
+            "work_session_id": supplied["work_session_id"]}
+
+
+def get_personal_execution_postprocessing_state(
+    binding: Dict[str, Any], *, principal_id: str, completed_head_sha: str,
+    expected_evidence: Optional[Dict[str, Any]] = None,
+    project: str = DEFAULT_PROJECT,
+) -> Dict[str, Any]:
+    """Transactionally classify a personal run after an ambiguous response.
+
+    This is intentionally narrower than the general task/Work Session read APIs.
+    One SQLite snapshot verifies the enrolled bearer, execution connection, wake,
+    runner, claim, Work Session, and completion provenance before reporting which
+    post-processing write may safely be retried.
+    """
+    supplied = {
+        key: str((binding or {}).get(key) or "").strip()
+        for key in (
+            "task_id", "claim_id", "work_session_id", "runner_session_id",
+            "host_id", "agent_id", "wake_id", "source_sha",
+            "execution_connection_id",
+        )
+    }
+    supplied["task_id"] = supplied["task_id"].upper()
+    principal_id = str(principal_id or "").strip()
+    completed_head_sha = str(completed_head_sha or "").strip()
+    if (not principal_id or not all(supplied.values())
+            or not re.fullmatch(r"[0-9a-f]{40}", supplied["source_sha"])
+            or not re.fullmatch(r"[0-9a-f]{40}", completed_head_sha)):
+        return {
+            "allowed": False, "state": "conflict",
+            "error_code": "personal_execution_readback_incomplete",
+        }
+    expected_evidence = dict(expected_evidence or {})
+    expected_test_run = expected_evidence.get("executed_test_run")
+    expected_branch = str(expected_evidence.get("branch") or "").strip()
+    reasons: List[str] = []
+    with _conn(project, read_snapshot=True) as c:
+        connection_row = c.execute(
+            "SELECT * FROM personal_execution_connections "
+            "WHERE execution_connection_id=?",
+            (supplied["execution_connection_id"],),
+        ).fetchone()
+        if not connection_row:
+            reasons.append("execution_connection_not_found")
+            connection = {}
+        else:
+            connection = dict(connection_row)
+            for field, value in supplied.items():
+                if str(connection.get(field) or "") != value:
+                    reasons.append(f"execution_connection_{field}_mismatch")
+            if str(connection.get("host_principal_id") or "") != principal_id:
+                reasons.append("execution_connection_principal_mismatch")
+            if str(connection.get("status") or "") != "completed":
+                reasons.append("execution_connection_not_completed")
+
+        wake_row = c.execute(
+            "SELECT * FROM wake_intents WHERE wake_id=?", (supplied["wake_id"],)
+        ).fetchone()
+        wake = _wake_row(wake_row) if wake_row else {}
+        wake_result = dict(wake.get("result") or {})
+        if not wake:
+            reasons.append("wake_not_found")
+        else:
+            if (str(wake.get("task_id") or "") != supplied["task_id"]
+                    or str(wake.get("claimed_by_host") or "") != supplied["host_id"]
+                    or str(wake.get("runner_session_id") or "")
+                    != supplied["runner_session_id"]
+                    or str(wake.get("agent_id") or "") != supplied["agent_id"]
+                    or str(wake.get("status") or "") != "completed"):
+                reasons.append("wake_terminal_binding_mismatch")
+            if (wake_result.get("started") is not True
+                    or str(wake_result.get("head_sha") or "") != completed_head_sha):
+                reasons.append("wake_terminal_result_mismatch")
+
+        runner_row = c.execute(
+            "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+            (supplied["runner_session_id"],),
+        ).fetchone()
+        if not runner_row:
+            reasons.append("runner_not_found")
+        else:
+            runner = dict(runner_row)
+            metadata = _json_obj(runner.get("metadata_json", "{}"), {})
+            for field in ("task_id", "claim_id", "host_id", "agent_id"):
+                if str(runner.get(field) or "") != supplied[field]:
+                    reasons.append(f"runner_{field}_mismatch")
+            if str(runner.get("principal_id") or "") != principal_id:
+                reasons.append("runner_principal_mismatch")
+            for field in (
+                "wake_id", "work_session_id", "source_sha",
+                "execution_connection_id",
+            ):
+                if str(metadata.get(field) or "") != supplied[field]:
+                    reasons.append(f"runner_{field}_mismatch")
+            if str(runner.get("status") or "") != "completed":
+                reasons.append("runner_not_completed")
+
+        session_row = c.execute(
+            "SELECT * FROM work_sessions WHERE work_session_id=?",
+            (supplied["work_session_id"],),
+        ).fetchone()
+        session = dict(session_row) if session_row else {}
+        if not session:
+            reasons.append("work_session_not_found")
+        else:
+            for field in ("task_id", "claim_id", "agent_id"):
+                if str(session.get(field) or "") != supplied[field]:
+                    reasons.append(f"work_session_{field}_mismatch")
+            if str(session.get("dirty_status") or "") != "clean":
+                reasons.append("work_session_not_clean")
+
+        claim_row = c.execute(
+            "SELECT id, task_id, agent_id, status FROM task_claims WHERE id=?",
+            (supplied["claim_id"],),
+        ).fetchone()
+        claim = dict(claim_row) if claim_row else {}
+        if (not claim or str(claim.get("task_id") or "") != supplied["task_id"]
+                or str(claim.get("agent_id") or "") != supplied["agent_id"]):
+            reasons.append("claim_binding_mismatch")
+
+        host = c.execute(
+            "SELECT principal_id FROM agent_hosts WHERE host_id=?",
+            (supplied["host_id"],),
+        ).fetchone()
+        enrollment = c.execute(
+            "SELECT status, principal_id FROM agent_host_enrollments "
+            "WHERE project_id=? AND host_id=?",
+            (project, supplied["host_id"]),
+        ).fetchone()
+        if not host or str(host["principal_id"] or "") != principal_id:
+            reasons.append("registered_host_principal_mismatch")
+        if (not enrollment or enrollment["status"] != "active"
+                or str(enrollment["principal_id"] or "") != principal_id):
+            reasons.append("active_enrollment_principal_mismatch")
+
+        phase = "conflict"
+        if not reasons:
+            session_status = str(session.get("status") or "")
+            session_head = str(session.get("head_sha") or "")
+            hygiene = _json_obj(session.get("hygiene_json", "{}"), {})
+            test_receipt_matches = (
+                expected_test_run is None
+                or hygiene.get("executed_test_run") == expected_test_run
+            )
+            checkout = dict(hygiene.get("personal_host_checkout") or {})
+            checkout_matches = (
+                str(checkout.get("source_sha") or "") == supplied["source_sha"]
+                and str(checkout.get("head_sha") or "") == completed_head_sha
+            )
+            if (session_status == "active" and claim.get("status") == "active"
+                    and session_head == supplied["source_sha"]):
+                phase = "terminalized"
+            elif (session_status == "active" and claim.get("status") == "active"
+                  and session_head == completed_head_sha
+                  and test_receipt_matches and checkout_matches):
+                phase = "checkpointed"
+            elif (session_status == "completed" and claim.get("status") == "completed"
+                  and session_head == completed_head_sha
+                  and test_receipt_matches and checkout_matches):
+                task = c.execute(
+                    "SELECT status FROM tasks WHERE task_id=?",
+                    (supplied["task_id"],),
+                ).fetchone()
+                git_row = c.execute(
+                    "SELECT branch, head_sha, evidence_json FROM task_git_state "
+                    "WHERE task_id=?",
+                    (supplied["task_id"],),
+                ).fetchone()
+                git_evidence = _json_obj(
+                    git_row["evidence_json"] if git_row else "{}", {})
+                if (task and str(task["status"] or "") in {
+                        "In Review", "Done", "Cancelled", "Canceled"}
+                        and git_row
+                        and str(git_row["head_sha"] or "") == completed_head_sha
+                        and (not expected_branch
+                             or str(git_row["branch"] or "") == expected_branch)
+                        and (expected_test_run is None
+                             or git_evidence.get("executed_test_run")
+                             == expected_test_run)):
+                    phase = "completed"
+                else:
+                    reasons.append("task_completion_provenance_mismatch")
+            else:
+                reasons.append("postprocessing_state_conflict")
+
+    if reasons:
+        return {
+            "allowed": False, "state": "conflict",
+            "error_code": "personal_execution_readback_denied",
+            "reason_codes": sorted(set(reasons)),
+        }
+    return {
+        "allowed": True,
+        "state": phase,
+        "task_id": supplied["task_id"],
+        "claim_id": supplied["claim_id"],
+        "work_session_id": supplied["work_session_id"],
+        "execution_connection_id": supplied["execution_connection_id"],
+        "completed_head_sha": completed_head_sha,
+        "checked_at": time.time(),
+    }
+
+
+def _personal_completion_retry_error(
+    c: sqlite3.Connection,
+    wake: Dict[str, Any],
+    *,
+    principal_id: str,
+    runner_session_id: str,
+    agent_id: str,
+    requested_status: str,
+    requested_result: Dict[str, Any],
+    now: float,
+) -> Optional[Dict[str, Any]]:
+    """Authenticate an exact retry after a personal completion response was lost."""
+    policy = dict(wake.get("policy") or {})
+    execution = dict(policy.get("execution_binding") or {})
+    reasons = []
+    if str(wake.get("status") or "") != requested_status:
+        reasons.append("completion_terminal_status_conflict")
+    expected = {
+        "principal_id": str(execution.get("host_principal_id") or ""),
+        "runner_session_id": str(execution.get("runner_session_id") or ""),
+        "agent_id": str(execution.get("agent_id") or ""),
+        "host_id": str(execution.get("host_id") or ""),
+    }
+    actual = {
+        "principal_id": str(principal_id or ""),
+        "runner_session_id": str(runner_session_id or ""),
+        "agent_id": str(agent_id or ""),
+        "host_id": str(wake.get("claimed_by_host") or ""),
+    }
+    reasons.extend(
+        f"completion_{field}_mismatch" for field in expected
+        if not expected[field] or actual[field] != expected[field]
+    )
+    stored = {
+        "runner_session_id": str(wake.get("runner_session_id") or ""),
+        "agent_id": str(wake.get("agent_id") or ""),
+        "host_id": str(wake.get("claimed_by_host") or ""),
+    }
+    reasons.extend(
+        f"completion_stored_{field}_mismatch" for field in stored
+        if stored[field] != expected[field]
+    )
+    if dict(wake.get("result") or {}) != requested_result:
+        reasons.append("completion_result_mismatch")
+    if reasons:
+        return {"completed": False, "reason": "exact_binding_denied",
+                "reason_codes": sorted(set(reasons)), "wake_id": wake.get("wake_id")}
+    transition = _terminalize_personal_connection_in(
+        c, wake, target_status=requested_status, now=now)
+    if not transition.get("ok"):
+        return {"completed": False, "reason": "exact_binding_denied",
+                "reason_codes": [str(transition.get("reason_code")
+                                     or "execution_connection_retry_denied")],
+                "wake_id": wake.get("wake_id")}
+    return None
+
+
+def _recover_personal_completed_execution_in(
+    c: sqlite3.Connection,
+    wake: Dict[str, Any],
+    *,
+    principal_id: str,
+    runner_session_id: str,
+    agent_id: str,
+    requested_result: Dict[str, Any],
+    actor: str,
+    now: float,
+) -> Optional[Dict[str, Any]]:
+    """Atomically turn a completed personal run into an abandonable failure.
+
+    The narrow host must terminalize success before checkpoint/claim completion is
+    authorized.  A later fail-closed checkpoint or completion-evidence rejection
+    therefore needs one equally narrow recovery edge; otherwise the completed
+    connection can no longer authorize ``abandon_claim`` and the claim is stranded.
+    """
+    policy = dict(wake.get("policy") or {})
+    binding = dict(policy.get("account_binding") or {})
+    execution = dict(policy.get("execution_binding") or {})
+    expected = {
+        "wake_id": str(wake.get("wake_id") or ""),
+        "task_id": str(wake.get("task_id") or ""),
+        "claim_id": str(binding.get("claim_id") or ""),
+        "work_session_id": str(binding.get("work_session_id") or ""),
+        "runner_session_id": str(execution.get("runner_session_id") or ""),
+        "host_id": str(execution.get("host_id") or ""),
+        "host_principal_id": str(execution.get("host_principal_id") or ""),
+        "agent_id": str(execution.get("agent_id") or ""),
+        "source_sha": str(execution.get("source_sha") or ""),
+        "execution_connection_id": str(
+            execution.get("execution_connection_id") or ""),
+    }
+    reasons: List[str] = []
+    if wake.get("status") != "completed":
+        reasons.append("recovery_wake_not_completed")
+    if requested_result.get("started") is not False:
+        reasons.append("recovery_failure_receipt_required")
+    if requested_result.get("recoverable_post_execution_failure") is not True:
+        reasons.append("recovery_intent_required")
+    if str(principal_id or "") != expected["host_principal_id"]:
+        reasons.append("recovery_principal_mismatch")
+    if str(runner_session_id or "") != expected["runner_session_id"]:
+        reasons.append("recovery_runner_session_mismatch")
+    if str(agent_id or "") != expected["agent_id"]:
+        reasons.append("recovery_agent_id_mismatch")
+    if not all(expected.values()):
+        reasons.append("recovery_binding_incomplete")
+
+    claim = c.execute(
+        "SELECT task_id, agent_id, status, expires_at FROM task_claims WHERE id=?",
+        (expected["claim_id"],),
+    ).fetchone()
+    if (not claim or claim["task_id"] != expected["task_id"]
+            or claim["agent_id"] != expected["agent_id"]
+            or claim["status"] != "active"
+            or float(claim["expires_at"] or 0) <= now):
+        reasons.append("recovery_claim_not_active")
+    session = c.execute(
+        "SELECT task_id, agent_id, claim_id, status FROM work_sessions "
+        "WHERE work_session_id=?", (expected["work_session_id"],),
+    ).fetchone()
+    if (not session or session["task_id"] != expected["task_id"]
+            or session["agent_id"] != expected["agent_id"]
+            or session["claim_id"] != expected["claim_id"]
+            or session["status"] != "active"):
+        reasons.append("recovery_work_session_not_active")
+
+    connection = c.execute(
+        "SELECT * FROM personal_execution_connections "
+        "WHERE execution_connection_id=?",
+        (expected["execution_connection_id"],),
+    ).fetchone()
+    if not connection:
+        reasons.append("recovery_execution_connection_not_found")
+    else:
+        connection = dict(connection)
+        for field in (
+            "wake_id", "task_id", "claim_id", "work_session_id",
+            "runner_session_id", "host_id", "host_principal_id", "agent_id",
+            "source_sha",
+        ):
+            if str(connection.get(field) or "") != expected[field]:
+                reasons.append(f"recovery_execution_connection_{field}_mismatch")
+        if connection.get("status") != "completed":
+            reasons.append("recovery_execution_connection_not_completed")
+
+    runner = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+        (expected["runner_session_id"],),
+    ).fetchone()
+    if not runner:
+        reasons.append("recovery_runner_not_found")
+    else:
+        runner = dict(runner)
+        metadata = _json_obj(runner.get("metadata_json", "{}"), {})
+        for field in ("task_id", "claim_id", "host_id", "agent_id"):
+            if str(runner.get(field) or "") != expected[field]:
+                reasons.append(f"recovery_runner_{field}_mismatch")
+        if str(runner.get("principal_id") or "") != expected["host_principal_id"]:
+            reasons.append("recovery_runner_principal_mismatch")
+        for field in (
+            "wake_id", "work_session_id", "source_sha",
+            "execution_connection_id",
+        ):
+            if str(metadata.get(field) or "") != expected[field]:
+                reasons.append(f"recovery_runner_{field}_mismatch")
+        if runner.get("status") != "completed":
+            reasons.append("recovery_runner_not_completed")
+    if reasons:
+        return {"completed": False, "reason": "exact_binding_denied",
+                "reason_codes": sorted(set(reasons)),
+                "wake_id": expected["wake_id"]}
+
+    connection_update = c.execute(
+        "UPDATE personal_execution_connections SET status='failed', completed_at=?, "
+        "updated_at=? WHERE execution_connection_id=? AND status='completed'",
+        (now, now, expected["execution_connection_id"]),
+    )
+    runner_update = c.execute(
+        "UPDATE runner_sessions SET status='failed', heartbeat_at=?, updated_at=? "
+        "WHERE runner_session_id=? AND principal_id=? AND status='completed'",
+        (now, now, expected["runner_session_id"], expected["host_principal_id"]),
+    )
+    wake_update = c.execute(
+        "UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+        "WHERE wake_id=? AND status='completed'",
+        (now, json.dumps(requested_result, sort_keys=True), expected["wake_id"]),
+    )
+    if (connection_update.rowcount != 1 or runner_update.rowcount != 1
+            or wake_update.rowcount != 1):
+        return {"completed": False, "reason": "exact_binding_denied",
+                "reason_codes": ["recovery_terminal_race"],
+                "wake_id": expected["wake_id"]}
+    c.execute(
+        "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (expected["task_id"], actor, "wake.post_execution_recovered_failed",
+         json.dumps({"wake_id": expected["wake_id"],
+                     "runner_session_id": expected["runner_session_id"],
+                     "reason": requested_result.get("reason")}, sort_keys=True), now),
+    )
+    return None
+
 def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                project: str = DEFAULT_PROJECT, runner_session_id: str = "",
                credential_lease_id: str = "", claim_id: str = "",
-               work_session_id: str = "") -> Dict[str, Any]:
+               work_session_id: str = "", principal_id: str = "") -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
     try:
@@ -424,9 +1465,44 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if not wake_row:
                 return {"claimed": False, "error": "wake not found", "wake_id": wake_id}
             wake = _wake_row(wake_row)
+            policy = dict(wake.get("policy") or {})
+            binding = dict(policy.get("account_binding") or {})
+            personal = (policy.get("execution_mode") == "personal_agent_host"
+                        or policy.get("require_exact_host_binding") is True)
+            host_identity = _store_facade().check_agent_host_identity(
+                host_id, principal_id, project=project)
+            if not host_identity.get("allowed"):
+                return {"claimed": False, **host_identity, "host_id": host_id,
+                        "wake_id": wake_id}
+            if host_identity.get("required") and not personal:
+                return {"claimed": False, "reason": "personal_host_execution_policy_denied",
+                        "reason_codes": ["personal_wakes_only"],
+                        "host_id": host_id, "wake_id": wake_id}
+            if (wake.get("status") == "pending" and wake.get("deadline")
+                    and wake["deadline"] <= now):
+                result = {"reason": "deadline_expired", "deadline": wake["deadline"]}
+                terminal = _terminalize_personal_connection_in(
+                    c, wake, target_status="failed", now=now)
+                if not terminal.get("ok"):
+                    return {"claimed": False, "reason": "exact_binding_denied",
+                            "reason_codes": [str(terminal.get("reason_code")
+                                                 or "execution_connection_terminal_lost")],
+                            "wake_id": wake_id}
+                c.execute(
+                    "UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+                    "WHERE wake_id=? AND status='pending'",
+                    (now, json.dumps(result, sort_keys=True), wake_id),
+                )
+                return {"claimed": False, "reason": "deadline_expired", "wake_id": wake_id}
+            binding_error = _personal_exact_binding_error(
+                c, wake, host_id=host_id, principal_id=principal_id,
+                runner_session_id=runner_session_id, project=project, now=now)
+            if binding_error:
+                return binding_error
             if wake["status"] == "claimed":
-                policy = dict(wake.get("policy") or {})
-                binding = dict(policy.get("account_binding") or {})
+                if personal:
+                    return {"claimed": True, "resumed": True, "reserved": False,
+                            "credential_admission_phase": None, "wake": wake}
                 same_reservation = (
                     wake.get("claimed_by_host") == host_id
                     and binding.get("host_id") == host_id
@@ -476,27 +1552,20 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                         "credential_admission_phase": "ready", "wake": _wake_row(row)}
             if wake["status"] != "pending":
                 return {"claimed": False, "reason": f"wake is {wake['status']}", "wake": wake}
-            if wake.get("deadline") and wake["deadline"] <= now:
-                result = {"reason": "deadline_expired", "deadline": wake["deadline"]}
-                c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
-                          "WHERE wake_id=?",
-                          (now, json.dumps(result, sort_keys=True), wake_id))
-                return {"claimed": False, "reason": "deadline_expired", "wake_id": wake_id}
             host_row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
             if not host_row:
                 return {"claimed": False, "reason": "host_not_registered", "host_id": host_id}
             host = _host_row(host_row, now=now)
-            policy = dict(wake.get("policy") or {})
-            binding = dict(policy.get("account_binding") or {})
+            credential_binding = bool(binding) and not personal
             placement_claim = claim_decision(
-                host, wake, project=project, credential_rebound=bool(binding),
+                host, wake, project=project, credential_rebound=credential_binding,
             )
             if not placement_claim.get("allowed"):
                 return {"claimed": False, "reason": "host_not_eligible",
                         "reason_codes": (placement_claim.get("candidate") or {}).get(
                             "reason_codes") or [],
                         "host_id": host_id, "wake_id": wake_id}
-            if binding:
+            if credential_binding:
                 runner_id = str(runner_session_id or "").strip()
                 lease_id = str(credential_lease_id or "").strip()
                 if not runner_id:
@@ -537,14 +1606,14 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                     "selected_host_class": candidate.get("host_class"),
                     "cost_class": candidate.get("cost_class"),
                     "claimed_at": now,
-                    "credential_rebind_required": bool(binding and not lease_id),
+                    "credential_rebind_required": bool(credential_binding and not lease_id),
                     "credential_lease_state": (
                         ("issued" if lease_id else "pending_claim_binding")
-                        if binding else placement.get("credential_lease_state")
+                        if credential_binding else placement.get("credential_lease_state")
                     ),
                     "credential_admission_phase": (
                         "ready" if lease_id else "pending"
-                    ) if binding else None,
+                    ) if credential_binding else None,
                 })
             cur = c.execute(
                 "UPDATE wake_intents SET status='claimed', claimed_at=?, claimed_by_host=?, "
@@ -556,6 +1625,25 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if cur.rowcount == 0:
                 row = c.execute("SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,)).fetchone()
                 return {"claimed": False, "reason": "lost_race", "wake": _wake_row(row)}
+            if personal:
+                execution = dict(policy.get("execution_binding") or {})
+                activated = c.execute(
+                    "UPDATE personal_execution_connections SET status='active', "
+                    "claimed_at=?, updated_at=? WHERE execution_connection_id=? "
+                    "AND wake_id=? AND runner_session_id=? AND host_id=? "
+                    "AND host_principal_id=? AND status='reserved' AND expires_at>?",
+                    (now, now, execution.get("execution_connection_id"), wake_id,
+                     runner_session_id, host_id, principal_id, now),
+                )
+                if activated.rowcount != 1:
+                    c.execute(
+                        "UPDATE wake_intents SET status='pending', claimed_at=NULL, "
+                        "claimed_by_host=NULL WHERE wake_id=? AND status='claimed'",
+                        (wake_id,),
+                    )
+                    return {"claimed": False, "reason": "exact_binding_denied",
+                            "reason_codes": ["execution_connection_activation_lost"],
+                            "host_id": host_id, "wake_id": wake_id}
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (wake.get("task_id"), actor, "wake.claimed",
                        json.dumps({"wake_id": wake_id, "host_id": host_id}, sort_keys=True), now))
@@ -581,7 +1669,7 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
 
 def complete_wake(wake_id: str, runner_session_id: str = "",
                   agent_id: str = "", result: Optional[Dict[str, Any]] = None,
-                  actor: str = "system",
+                  actor: str = "system", principal_id: str = "",
                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
@@ -597,12 +1685,67 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
             if not row:
                 return {"error": "wake not found", "wake_id": wake_id}
             wake = _wake_row(row)
+            policy = dict(wake.get("policy") or {})
+            personal = (policy.get("execution_mode") == "personal_agent_host"
+                        or policy.get("require_exact_host_binding") is True)
+            execution = dict(policy.get("execution_binding") or {})
+            if personal:
+                if (wake.get("status") == "completed" and status == "failed"
+                        and result.get("recoverable_post_execution_failure") is True):
+                    recovery_error = _recover_personal_completed_execution_in(
+                        c, wake, principal_id=principal_id,
+                        runner_session_id=runner_session_id, agent_id=agent_id,
+                        requested_result=result, actor=actor, now=now)
+                    if recovery_error:
+                        return recovery_error
+                    row = c.execute(
+                        "SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,),
+                    ).fetchone()
+                    return _wake_row(row) | {
+                        "completed": False,
+                        "recovered_post_execution_failure": True,
+                    }
+                if wake.get("status") in {"completed", "failed", "cancelled"}:
+                    retry_error = _personal_completion_retry_error(
+                        c, wake, principal_id=principal_id,
+                        runner_session_id=runner_session_id, agent_id=agent_id,
+                        requested_status=status, requested_result=result, now=now)
+                    if retry_error:
+                        return retry_error
+                    return wake | {"completed": wake.get("status") == "completed",
+                                   "note": "idempotent terminal readback"}
+                binding_error = _personal_exact_binding_error(
+                    c, wake, host_id=str(wake.get("claimed_by_host") or ""),
+                    principal_id=principal_id, runner_session_id=runner_session_id,
+                    project=project, now=now, completion_status=status)
+                if binding_error:
+                    return {"completed": False, **binding_error}
+                expected_agent = str((wake.get("selector") or {}).get("agent_id") or "")
+                if str(agent_id or "") != expected_agent:
+                    return {"completed": False, "reason": "exact_binding_denied",
+                            "reason_codes": ["completion_agent_id_mismatch"],
+                            "wake_id": wake_id}
+                transitioned = _terminalize_personal_connection_in(
+                    c, wake, target_status=status, now=now)
+                if not transitioned.get("ok"):
+                    return {"completed": False, "reason": "exact_binding_denied",
+                            "reason_codes": [str(transitioned.get("reason_code")
+                                                 or "execution_connection_completion_lost")],
+                            "wake_id": wake_id}
             c.execute(
                 "UPDATE wake_intents SET status=?, completed_at=?, runner_session_id=?, "
                 "agent_id=?, result_json=? WHERE wake_id=?",
                 (status, now, runner_session_id or None, agent_id or None,
                  json.dumps(result, sort_keys=True), wake_id),
             )
+            if execution.get("execution_connection_id") and not personal:
+                c.execute(
+                    "UPDATE personal_execution_connections SET status=?, completed_at=?, "
+                    "updated_at=? WHERE execution_connection_id=? AND wake_id=? "
+                    "AND runner_session_id=? AND status='active'",
+                    (status, now, now, execution["execution_connection_id"], wake_id,
+                     runner_session_id),
+                )
             c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
                       (wake.get("task_id"), actor,
                        "wake.completed" if status == "completed" else "wake.failed",
@@ -610,7 +1753,7 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                                    "runner_session_id": runner_session_id or None,
                                    "agent_id": agent_id or None,
                                    "result": result}, sort_keys=True), now))
-            if status == "completed" and runner_session_id:
+            if status == "completed" and runner_session_id and not personal:
                 selector = wake.get("selector") or {}
                 # A delegated worker may have rebound the preclaim runner row to its
                 # exact task claim and Work Session before completing the wake.  Wake
@@ -693,6 +1836,13 @@ def cancel_wake(wake_id: str, reason: str = "cancelled", actor: str = "system",
                 return wake | {"note": "already terminal"}
             result = dict(wake.get("result") or {})
             result.update({"reason": reason, "cancelled_by": actor})
+            terminal = _terminalize_personal_connection_in(
+                c, wake, target_status="cancelled", now=now)
+            if not terminal.get("ok"):
+                return {"cancelled": False, "reason": "exact_binding_denied",
+                        "reason_codes": [str(terminal.get("reason_code")
+                                             or "execution_connection_terminal_lost")],
+                        "wake_id": wake_id}
             c.execute("UPDATE wake_intents SET status='cancelled', completed_at=?, result_json=? "
                       "WHERE wake_id=?",
                       (now, json.dumps(result, sort_keys=True), wake_id))
@@ -729,6 +1879,13 @@ def sweep_wake_intents(project: str = DEFAULT_PROJECT,
                 wake = _wake_row(row)
                 result = dict(wake.get("result") or {})
                 result.update({"reason": "deadline_expired", "deadline": wake.get("deadline")})
+                terminal = _terminalize_personal_connection_in(
+                    c, wake, target_status="failed", now=now)
+                if not terminal.get("ok"):
+                    events.append({"wake_id": wake["wake_id"], "status": wake["status"],
+                                   "reason": "personal_terminal_transition_denied",
+                                   "reason_code": terminal.get("reason_code")})
+                    continue
                 c.execute("UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
                           "WHERE wake_id=?",
                           (now, json.dumps(result, sort_keys=True), wake["wake_id"]))
@@ -1560,6 +2717,9 @@ def _selector_runtime_for_agent(agent_id: str) -> str:
 
 
 def _runtime_matches_selector(runtime: Dict[str, Any], selector: Dict[str, Any]) -> bool:
+    local_auth = runtime.get("local_auth")
+    if isinstance(local_auth, dict) and local_auth.get("available") is not True:
+        return False
     return runtime_matches_selector(runtime, selector)
 
 
@@ -1578,6 +2738,66 @@ def _eligible_hosts_in(c: sqlite3.Connection, selector: Dict[str, Any],
     return [h for h in hosts if _host_can_handle(h, selector)]
 
 
+def _enrollment_inventory_error(identity: Dict[str, Any],
+                                capacity: Dict[str, Any],
+                                project: str,
+                                runtimes: Optional[List[Dict[str, Any]]] = None,
+                                limits: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Require an enrolled host to advertise exactly its server-issued policy."""
+    if not identity.get("required"):
+        return None
+    owner = dict((capacity or {}).get("owner") or {})
+    expected = {
+        "user_id": str(identity.get("owner_user_id") or ""),
+        "tenant_allowlist": sorted(identity.get("tenant_allowlist") or []),
+        "project_allowlist": sorted(identity.get("project_allowlist") or []),
+        "provider_allowlist": sorted(identity.get("provider_allowlist") or []),
+    }
+    advertised = {
+        "user_id": str(owner.get("user_id") or ""),
+        "tenant_allowlist": sorted(owner.get("tenant_allowlist") or []),
+        "project_allowlist": sorted(owner.get("project_allowlist") or []),
+        "provider_allowlist": sorted(owner.get("provider_allowlist") or []),
+    }
+    execution = dict(identity.get("execution_policy") or {})
+    runtime_rows = list(runtimes or [])
+    runtime = dict(runtime_rows[0]) if len(runtime_rows) == 1 else {}
+    runtime_policy = dict(runtime.get("policy") or {})
+    local_auth = dict(runtime.get("local_auth") or {})
+    capacity_local_auth = dict((capacity or {}).get("local_auth") or {})
+    try:
+        advertised_max_sessions = int((limits or {}).get("max_sessions") or 0)
+        allowed_max_sessions = int(execution.get("max_sessions") or 0)
+    except (TypeError, ValueError):
+        advertised_max_sessions = -1
+        allowed_max_sessions = -2
+    execution_matches = bool(
+        len(runtime_rows) == 1
+        and runtime.get("runtime") == execution.get("runtime") == "codex"
+        and sorted(runtime.get("lanes") or []) == sorted(execution.get("lanes") or [])
+        and sorted(runtime.get("capabilities") or [])
+        == sorted(execution.get("capabilities") or [])
+        and runtime_policy.get("allow_work") is execution.get("allow_work")
+        and runtime_policy.get("allow_global_claim") is False
+        and advertised_max_sessions == allowed_max_sessions
+        and (not execution.get("local_auth_required")
+             or (isinstance(local_auth.get("available"), bool)
+                 and local_auth.get("runtime") == "codex"
+                 and local_auth.get("provider_credential_exported") is False
+                 and capacity_local_auth == local_auth))
+    )
+    if (advertised != expected or project not in expected["project_allowlist"]
+            or not execution_matches):
+        return {
+            "error": "host_enrollment_policy_mismatch",
+            "error_code": "host_enrollment_policy_mismatch",
+            "message": "host inventory or execution capability does not match server-issued enrollment policy",
+            "required": True,
+            "allowed": False,
+        }
+    return None
+
+
 def register_host(inventory: Dict[str, Any], principal_id: str = "",
                   actor: str = "system",
                   project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
@@ -1587,9 +2807,17 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
     host_id = (inventory.get("host_id") or "").strip()
     if not host_id:
         return {"error": "host_id required"}
+    identity = _store_facade().check_agent_host_identity(
+        host_id, principal_id, project=project)
+    if not identity.get("allowed"):
+        return identity
     runtimes = inventory.get("runtimes") or []
     limits = inventory.get("limits") or {}
     capacity = inventory.get("capacity") or {}
+    inventory_error = _enrollment_inventory_error(
+        identity, capacity, project, runtimes=runtimes, limits=limits)
+    if inventory_error:
+        return inventory_error
     if "active_sessions" in inventory and "active_sessions" not in capacity:
         capacity["active_sessions"] = inventory.get("active_sessions")
     ttl_s = max(10, int(inventory.get("heartbeat_ttl_s") or inventory.get("ttl_s") or 60))
@@ -1627,10 +2855,15 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
 def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                    capacity: Optional[Dict[str, Any]] = None,
                    status: str = "online", last_error: str = "",
+                   principal_id: str = "",
                    actor: str = "system",
                    project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     started_at = time.time()
     now = time.time()
+    identity = _store_facade().check_agent_host_identity(
+        host_id, principal_id, project=project)
+    if not identity.get("allowed"):
+        return identity
     try:
         with _control_plane_conn(project) as c:
             row = c.execute("SELECT * FROM agent_hosts WHERE host_id=?", (host_id,)).fetchone()
@@ -1641,6 +2874,13 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
                 current.update(capacity)
             if active_sessions is not None:
                 current["active_sessions"] = int(active_sessions)
+            stored_runtimes = _json_obj(row["runtimes_json"], [])
+            stored_limits = _json_obj(row["limits_json"], {})
+            inventory_error = _enrollment_inventory_error(
+                identity, current, project,
+                runtimes=stored_runtimes, limits=stored_limits)
+            if inventory_error:
+                return inventory_error
             c.execute(
                 "UPDATE agent_hosts SET heartbeat_at=?, capacity_json=?, status=?, last_error=? "
                 "WHERE host_id=?",
@@ -1773,6 +3013,8 @@ __all__ = [
     "list_wake_intents",
     "claim_wake",
     "complete_wake",
+    "check_personal_execution_authority",
+    "get_personal_execution_postprocessing_state",
     "cancel_wake",
     "sweep_wake_intents",
     "request_unblock",

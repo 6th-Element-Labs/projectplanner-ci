@@ -1,0 +1,17 @@
+[Unit]
+Description=Switchboard personal Agent Host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@PYTHON@ @ENTRYPOINT@ service-run --identity @IDENTITY@ --config @CONFIG@
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

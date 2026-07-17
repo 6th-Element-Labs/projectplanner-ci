@@ -12,8 +12,21 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 import auth
 import store
+from switchboard.api.deps import (
+    authorize_agent_host_principal,
+    require_agent_host_identity,
+    resolve_agent_host_principal,
+)
 from switchboard.application.commands import register_agent as register_agent_command
+from switchboard.application.commands import agent_host_enrollment as enrollment_command
 from switchboard.application.commands import register_host as register_host_command
+from switchboard.application.contracts.agents import (
+    BeginHostEnrollmentCommand,
+    CompleteHostEnrollmentCommand,
+    FinalizeHostEnrollmentCommand,
+    RevokeHostIdentityCommand,
+    RotateHostIdentityCommand,
+)
 
 
 ProjectResolver = Callable[[str], str]
@@ -45,9 +58,11 @@ def create_router(*, resolve_project: ProjectResolver,
     async def ixp_register_host(request: Request, body: dict = Body(...)):
         body = dict(body or {})
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or "agent-host")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
         body["project"] = project
         return control_plane_http(register_host_command.execute_mapping_result(
             body, actor=auth.actor(principal), principal_id=principal["id"]))
@@ -70,25 +85,127 @@ def create_router(*, resolve_project: ProjectResolver,
     async def ixp_heartbeat_host(request: Request, body: dict = Body(...)):
         body = dict(body or {})
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("host_id") or "agent-host")
+        require_agent_host_identity(
+            principal, str(body.get("host_id") or ""), project)
         return control_plane_http(store.heartbeat_host(
             (body.get("host_id") or "").strip(),
             active_sessions=body.get("active_sessions"),
             capacity=body.get("capacity") or {},
             status=body.get("status") or "online",
             last_error=body.get("last_error") or "",
-            actor=auth.actor(principal), project=project))
+            principal_id=principal["id"], actor=auth.actor(principal), project=project))
+
+    @router.post("/ixp/v1/agent-host-enrollments")
+    async def ixp_begin_agent_host_enrollment(
+            request: Request, body: BeginHostEnrollmentCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_principal(
+            request, project, ("write:system",), dev_actor="agent-host-enrollment")
+        payload["project"] = project
+        return control_plane_http(enrollment_command.begin_mapping_result(
+            payload, actor=auth.actor(principal), principal_id=principal["id"]))
+
+    @router.post("/ixp/v1/agent-host-enrollments/complete")
+    async def ixp_complete_agent_host_enrollment(
+            body: CompleteHostEnrollmentCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        payload["project"] = resolve_body_project(payload)
+        return control_plane_http(enrollment_command.complete_mapping_result(payload))
+
+    @router.post("/ixp/v1/agent-host-enrollments/rotate")
+    async def ixp_rotate_agent_host_identity(
+            request: Request, body: RotateHostIdentityCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        host_id = body.host_id
+        try:
+            principal = resolve_agent_host_principal(
+                resolve_principal, request, project, dev_actor=host_id)
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise
+            recovery = store.get_agent_host_rotation_recovery_principal(
+                token=auth.bearer_from_request(request), host_id=host_id, project=project)
+            if not recovery:
+                raise
+            try:
+                principal = authorize_agent_host_principal(recovery, project)
+            except PermissionError:
+                raise exc
+        payload["host_id"] = host_id
+        payload["project"] = project
+        return control_plane_http(enrollment_command.rotate_mapping_result(
+            payload, actor=auth.actor(principal), principal_id=principal["id"]))
+
+    @router.post("/ixp/v1/agent-host-enrollments/finalize")
+    async def ixp_finalize_agent_host_enrollment(
+            request: Request, body: FinalizeHostEnrollmentCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project, dev_actor=body.host_id)
+        payload["project"] = project
+        return control_plane_http(enrollment_command.finalize_mapping_result(
+            payload, actor=auth.actor(principal), principal_id=principal["id"]))
+
+    @router.post("/ixp/v1/agent-host-enrollments/revoke")
+    async def ixp_revoke_agent_host_identity(
+            request: Request, body: RevokeHostIdentityCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        host_id = body.host_id
+        try:
+            principal = resolve_agent_host_principal(
+                resolve_principal, request, project, dev_actor=host_id)
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise
+            recovery = store.get_agent_host_revocation_recovery_principal(
+                token=auth.bearer_from_request(request), host_id=host_id, project=project)
+            if not recovery:
+                raise
+            try:
+                principal = authorize_agent_host_principal(recovery, project)
+            except PermissionError:
+                raise exc
+        enrollment = store.get_agent_host_enrollment(host_id, project=project)
+        scopes = set(principal.get("effective_scopes") or principal.get("scopes") or [])
+        owns_identity = enrollment.get("principal_id") == principal.get("id")
+        is_operator = "admin" in scopes or "write:system" in scopes
+        if not owns_identity and not is_operator:
+            raise HTTPException(403, "host identity may be revoked only by its owner or an operator")
+        payload["project"] = project
+        return control_plane_http(enrollment_command.revoke_mapping_result(
+            payload, actor=auth.actor(principal)))
+
+    @router.get("/ixp/v1/agent-host-enrollment")
+    async def ixp_agent_host_enrollment_status(
+            request: Request, host_id: str,
+            project: str = Query(...)):
+        resolved = resolve_project(project)
+        principal = resolve_principal(
+            request, resolved, ("read",), dev_actor=host_id)
+        enrollment = store.get_agent_host_enrollment(host_id, project=resolved)
+        scopes = set(principal.get("effective_scopes") or principal.get("scopes") or [])
+        if (enrollment.get("principal_id") != principal.get("id")
+                and "admin" not in scopes and "write:system" not in scopes):
+            raise HTTPException(403, "host enrollment is private to its owner")
+        return control_plane_http(enrollment)
 
     @router.get("/ixp/v1/agent_hosts")
-    async def ixp_agent_hosts(project: str = Query(...), runtime: str = "",
+    async def ixp_agent_hosts(request: Request, project: str = Query(...), runtime: str = "",
                               lane: str = "", capability: str = "",
                               include_stale: bool = False):
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("read",), dev_actor="agent-host-inventory")
         hosts = store.list_agent_hosts(runtime=runtime, lane=lane,
                                        capability=capability,
                                        include_stale=include_stale,
-                                       project=resolve_project(project))
+                                       project=resolved)
         control_plane_http(hosts)
         return {"hosts": hosts}
 
@@ -100,8 +217,10 @@ def create_router(*, resolve_project: ProjectResolver,
             project=resolve_project(project), lane=lane, include_heavy=include_heavy)
 
     @router.get("/ixp/v1/host_status")
-    async def ixp_host_status(host_id: str, project: str = Query(...)):
-        status = control_plane_http(store.host_status(host_id, project=resolve_project(project)))
+    async def ixp_host_status(request: Request, host_id: str, project: str = Query(...)):
+        resolved = resolve_project(project)
+        resolve_principal(request, resolved, ("read",), dev_actor=host_id or "agent-host")
+        status = control_plane_http(store.host_status(host_id, project=resolved))
         if status.get("error"):
             raise HTTPException(404, status["error"])
         return status
