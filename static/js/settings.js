@@ -641,12 +641,13 @@
         // the redacted result. `--api-key-stdin` prompts on the host (no shell history).
         _settingsApiEnrollCommand(providerId, billing, ceiling, currency) {
             const proj = window.PM_PROJECT || 'maxwell';
-            const q = (v, d) => String(v || d).replace(/'/g, "'\\''");
+            const q = (v, d) => `'${String(v || d).replace(/'/g, "'\\''")}'`;
             return `python adapters/agent_host_enrollment.py enroll-api-key \\\n`
                 + `  --identity ~/.config/switchboard-agent-host/identity.json \\\n`
                 + `  --config ~/.config/switchboard-agent-host/config.json \\\n`
-                + `  --project ${proj} --provider ${providerId} \\\n`
-                + `  --billing-account '${q(billing, 'acct-billing-1')}' \\\n`
+                + `  --project ${q(proj, 'maxwell')} --provider ${q(providerId, 'openai-codex')} \\\n`
+                + `  --provider-account ${q(billing, 'acct-billing-1')} \\\n`
+                + `  --billing-account ${q(billing, 'acct-billing-1')} \\\n`
                 + `  --budget-ceiling ${q(ceiling, '50')} --budget-currency ${q(currency, 'usd')} \\\n`
                 + `  --api-key-stdin`;
         },
@@ -683,7 +684,7 @@
                         <input type="text" id="${cmdId}" class="form-control font-monospace" readonly value="${this.esc(this._settingsApiEnrollCommand(provider.id, '', '', 'usd'))}">
                         <button class="btn btn-outline-secondary" type="button" data-set-action="api-connections-copy-cmd:${provider.id}" title="Copy command with the billing/budget you typed"><i class="ti ti-copy" aria-hidden="true"></i></button>
                     </div>
-                    <div class="small text-secondary mb-0"><i class="ti ti-shield-lock me-1" aria-hidden="true"></i>Your API key is entered on your own host and envelope-encrypted there — it never touches this browser, is never logged, and Switchboard only ever stores ciphertext plus a redacted fingerprint. See <code>docs/AGENT-HOST-ENROLLMENT.md</code>.</div>`;
+                    <div class="small text-secondary mb-0"><i class="ti ti-shield-lock me-1" aria-hidden="true"></i>Your API key is entered on your own host, sent only over TLS to its owner-bound one-use endpoint, and immediately envelope-encrypted by Switchboard. It never touches this browser, is never logged or echoed, and only ciphertext plus a redacted fingerprint is retained. See <code>docs/AGENT-HOST-ENROLLMENT.md</code>.</div>`;
             }
             return `<div class="card mb-3" id="settings-api-conn-${provider.id}">
                 <div class="card-header"><div><h4 class="card-title mb-0"><i class="ti ${provider.icon} me-2" aria-hidden="true"></i>${this.esc(provider.label)}</h4>

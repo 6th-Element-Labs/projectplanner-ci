@@ -262,6 +262,61 @@ def _derive_host_native_proof(
     )
 
 
+def enroll_host_api_key_mapping(
+        data: dict[str, Any], *, actor: str, host_principal_id: str,
+        repository: ProviderCredentialRepository = default_provider_credential_repository,
+        raise_errors: bool = False) -> dict[str, Any]:
+    """Vault one API key presented by its exact active, owner-bound Agent Host."""
+    try:
+        raw = dict(data or {})
+        project = str(raw.get("project") or "").strip()
+        host_id = str(raw.get("host_id") or "").strip()
+        provider = normalize_provider(str(raw.get("provider") or ""))
+        enrollment = store.get_agent_host_enrollment(host_id, project=project)
+        owner_user_id = str(enrollment.get("owner_user_id") or "").strip()
+        live_host = next((item for item in store.list_agent_hosts(
+            include_stale=False, project=project)
+            if item.get("host_id") == host_id and item.get("status") == "online"), None)
+        if (enrollment.get("status") != "active" or not owner_user_id
+                or str(host_principal_id or "") != str(enrollment.get("principal_id") or "")
+                or not live_host):
+            raise CredentialVaultError(
+                "active_owner_host_required",
+                "active owner-bound Agent Host required", status_code=403)
+        if project not in set(enrollment.get("project_allowlist") or []):
+            raise CredentialVaultError(
+                "host_project_not_approved", "Agent Host project is not approved",
+                status_code=403)
+        if provider not in set(enrollment.get("provider_allowlist") or []):
+            raise CredentialVaultError(
+                "host_provider_not_approved", "Agent Host provider is not approved",
+                status_code=403)
+        return enroll_mapping({
+            "project": project,
+            "user_id": owner_user_id,
+            "provider": provider,
+            "provider_account_id": raw.get("provider_account_id"),
+            "auth_type": "api_key",
+            "credential": raw.get("api_key"),
+            "project_allowlist": [project],
+            "connection_kind": "direct_api",
+            "billing_account_id": raw.get("billing_account_id"),
+            "budget_policy": {
+                "budget_id": "budget-" + uuid.uuid4().hex[:16],
+                "currency": raw.get("budget_currency"),
+                "ceiling": raw.get("budget_ceiling"),
+            },
+            "host_allowlist": [host_id],
+            "host_id": host_id,
+        }, actor=actor, principal_user_id=owner_user_id,
+            principal_kind="user", trusted_provider_native=True,
+            repository=repository, raise_errors=True)
+    except (ValidationError, CredentialVaultError) as exc:
+        if raise_errors:
+            raise
+        return _error(exc, "invalid_provider_enrollment")
+
+
 def enroll_mapping(data: dict[str, Any], *, actor: str, principal_user_id: str,
                    admin: bool = False,
                    principal_kind: str = "user",

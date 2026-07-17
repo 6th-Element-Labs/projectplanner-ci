@@ -12,6 +12,7 @@ import base64
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import math
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -1555,6 +1556,79 @@ def declare_account_affinity(*, identity_path: Path, config_path: Path, project:
     return result
 
 
+def enroll_api_key(*, identity_path: Path, config_path: Path, project: str,
+                   provider: str, provider_account_id: str,
+                   billing_account_id: str, budget_ceiling: float,
+                   budget_currency: str, api_key: str,
+                   http: Callable[..., dict[str, Any]] = request_json,
+                   ) -> dict[str, Any]:
+    """Submit one API key from the owner host without argv, env, or disk residue."""
+    identity_path = Path(identity_path)
+    config_path = Path(config_path)
+    if (not identity_path.is_file() or identity_path.is_symlink()
+            or stat.S_IMODE(identity_path.stat().st_mode) & 0o077):
+        raise EnrollmentError("identity file must be a regular 0600 file")
+    if not config_path.is_file() or config_path.is_symlink():
+        raise EnrollmentError("config file must be a regular file")
+    identity = _read_json(identity_path)
+    config = _read_json(config_path)
+    project = _require_lifecycle_project(project, identity, config)
+    provider = str(provider or "").strip().lower()
+    if provider != "openai-codex":
+        raise EnrollmentError("only openai-codex API enrollment is enabled")
+    provider_account_id = str(provider_account_id or "").strip()
+    billing_account_id = str(billing_account_id or "").strip()
+    currency = str(budget_currency or "").strip().upper()
+    try:
+        ceiling = float(budget_ceiling)
+    except (TypeError, ValueError) as exc:
+        raise EnrollmentError("budget ceiling must be a positive finite number") from exc
+    if (not provider_account_id or not billing_account_id
+            or not math.isfinite(ceiling) or ceiling <= 0):
+        raise EnrollmentError("provider account, billing account, and positive finite budget are required")
+    if len(currency) != 3 or not currency.isalpha():
+        raise EnrollmentError("budget currency must be a three-letter code")
+    secret = str(api_key or "").rstrip("\r\n")
+    if not secret:
+        raise EnrollmentError("API key is required on stdin")
+    payload = {
+        "project": project,
+        "host_id": identity.get("host_id"),
+        "provider": provider,
+        "provider_account_id": provider_account_id,
+        "billing_account_id": billing_account_id,
+        "budget_ceiling": ceiling,
+        "budget_currency": currency,
+        "api_key": secret,
+    }
+    try:
+        result = http(
+            "POST",
+            config["base_url"].rstrip("/")
+            + "/ixp/v1/agent-host-provider-connections/enroll-api-key",
+            payload,
+            identity.get("host_token") or "",
+        )
+    finally:
+        payload["api_key"] = ""
+        secret = ""
+    reference = str(
+        result.get("execution_connection_id")
+        or result.get("credential_reference") or "").strip()
+    if not reference:
+        raise EnrollmentError("Switchboard did not return an API execution connection")
+    return {
+        "enrolled": True,
+        "provider": provider,
+        "connection_kind": result.get("connection_kind") or "direct_api",
+        "execution_connection_id": reference,
+        "billing_account_bound": bool(result.get("billing_account_bound")),
+        "budget_policy": result.get("budget_policy") or {},
+        "credential_present": bool(result.get("credential_present", True)),
+        "credential_values_redacted": True,
+    }
+
+
 def revoke_host(*, identity_path: Path, config_path: Path, state_path: Path, project: str,
                 final_status: str = "revoked", stop_service: bool = True,
                 http: Callable[..., dict[str, Any]] = request_json,
@@ -1864,6 +1938,16 @@ def main(argv: list[str] | None = None) -> int:
     declare.add_argument("--project", required=True, type=_non_blank_project)
     declare.add_argument("--provider", required=True, choices=list(_CO6_CANONICAL_PROVIDERS))
     declare.add_argument("--account-id", required=True)
+    api_key = sub.add_parser("enroll-api-key")
+    api_key.add_argument("--identity", type=Path, required=True)
+    api_key.add_argument("--config", type=Path, required=True)
+    api_key.add_argument("--project", required=True, type=_non_blank_project)
+    api_key.add_argument("--provider", required=True, choices=["openai-codex"])
+    api_key.add_argument("--provider-account", default="")
+    api_key.add_argument("--billing-account", required=True)
+    api_key.add_argument("--budget-ceiling", required=True, type=float)
+    api_key.add_argument("--budget-currency", default="usd")
+    api_key.add_argument("--api-key-stdin", action="store_true", required=True)
     revoke = sub.add_parser("revoke")
     revoke.add_argument("--identity", type=Path, required=True)
     revoke.add_argument("--config", type=Path, required=True)
@@ -1913,6 +1997,18 @@ def main(argv: list[str] | None = None) -> int:
             result = declare_account_affinity(
                 identity_path=args.identity, config_path=args.config, project=args.project,
                 provider=args.provider, account_id=args.account_id)
+        elif args.command == "enroll-api-key":
+            secret = sys.stdin.readline().rstrip("\r\n")
+            try:
+                result = enroll_api_key(
+                    identity_path=args.identity, config_path=args.config,
+                    project=args.project, provider=args.provider,
+                    provider_account_id=args.provider_account or args.billing_account,
+                    billing_account_id=args.billing_account,
+                    budget_ceiling=args.budget_ceiling,
+                    budget_currency=args.budget_currency, api_key=secret)
+            finally:
+                secret = ""
         elif args.command == "revoke":
             result = revoke_host(
                 identity_path=args.identity, config_path=args.config, state_path=args.state,

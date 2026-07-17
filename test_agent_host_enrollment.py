@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, redirect_stderr
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+import base64
 import inspect
 import io
 import json
@@ -44,6 +45,8 @@ os.environ["PM_SWITCHBOARD_DB_PATH"] = str(TMP / "switchboard.db")
 os.environ["PM_PROJECT_REGISTRY_DB_PATH"] = str(TMP / "project_registry.db")
 os.environ["PM_DYNAMIC_PROJECTS_DIR"] = str(TMP)
 os.environ["PM_AUTH_MODE"] = "dev-open"
+os.environ["PM_PROVIDER_VAULT_KEY"] = base64.urlsafe_b64encode(b"U" * 32).decode()
+os.environ["PM_PROVIDER_VAULT_KEY_ID"] = "ui21-host-test:v1"
 
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
@@ -53,6 +56,9 @@ from jsonschema import Draft202012Validator  # noqa: E402
 import store  # noqa: E402
 from switchboard.storage.repositories import agent_host_enrollments as enrollment_store  # noqa: E402
 from switchboard.storage.repositories import coordination as coordination_store  # noqa: E402
+from switchboard.storage.repositories.provider_credentials import (  # noqa: E402
+    default_provider_credential_repository as credential_repository,
+)
 from adapters import agent_host, agent_host_enrollment as enrollment  # noqa: E402
 from adapters import codex_local_worker, codex_personal_worker, switchboard_core  # noqa: E402
 from app import app  # noqa: E402
@@ -1224,6 +1230,109 @@ try:
         "Authorization": f"Bearer {initial_mac_token}"}, json=registration_payload)
     ok(register.status_code == 200 and register.json().get("host_id") == "host/adapter18-macos",
        "enrolled principal registers only its exact host identity")
+    store.ensure_org(store.DEFAULT_ORG_ID, "6th Element Labs", created_by="ui21-host-test")
+    store.set_project_access(
+        PROJECT, store.DEFAULT_ORG_ID, purpose="UI-21 host fixture",
+        created_by="ui21-host-test")
+    store.ensure_user(
+        "user-adapter18", "user-adapter18@example.test", "UI-21 owner",
+        created_by="ui21-host-test")
+    store.add_org_member(
+        store.DEFAULT_ORG_ID, "user-adapter18", role="member",
+        created_by="ui21-host-test")
+    raw_api_key = "sk-ui21-host-only-super-secret"
+    api_result = enrollment.enroll_api_key(
+        identity_path=mac_identity_path,
+        config_path=mac_config_path,
+        project=PROJECT,
+        provider="openai-codex",
+        provider_account_id="acct-openai-ui21",
+        billing_account_id="billing-openai-ui21",
+        budget_ceiling=25,
+        budget_currency="usd",
+        api_key=raw_api_key,
+        http=http,
+    )
+    api_ref = api_result.get("execution_connection_id")
+    api_metadata = credential_repository.get_metadata(
+        api_ref, principal_user_id="user-adapter18", project=PROJECT)
+    ok(api_result.get("enrolled") is True
+       and api_result.get("credential_values_redacted") is True
+       and api_metadata.get("connection_kind") == "direct_api"
+       and api_metadata.get("billing_account_bound") is True
+       and (api_metadata.get("budget_policy") or {}).get("ceiling") == 25
+       and raw_api_key not in json.dumps(api_result, sort_keys=True)
+       and raw_api_key not in json.dumps(api_metadata, sort_keys=True),
+       "host-authenticated API enrollment immediately vaults the key and returns only redacted billing/budget metadata")
+    denied_api = client.post(
+        "/ixp/v1/agent-host-provider-connections/enroll-api-key",
+        headers={"Authorization": "Bearer invalid-host-token"},
+        json={
+            "project": PROJECT,
+            "host_id": "host/adapter18-macos",
+            "provider": "openai-codex",
+            "provider_account_id": "acct-denied",
+            "billing_account_id": "billing-denied",
+            "budget_ceiling": 10,
+            "budget_currency": "USD",
+            "api_key": raw_api_key,
+        },
+    )
+    ok(denied_api.status_code in (401, 403)
+       and raw_api_key not in denied_api.text,
+       "the one-use secret endpoint rejects a non-host bearer without echoing the key")
+    invalid_api = client.post(
+        "/ixp/v1/agent-host-provider-connections/enroll-api-key",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json={
+            "project": PROJECT,
+            "host_id": "host/adapter18-macos",
+            "provider": "openai-codex",
+            "provider_account_id": "acct-invalid-budget",
+            "billing_account_id": "billing-invalid-budget",
+            "budget_ceiling": "NaN",
+            "budget_currency": "USD",
+            "api_key": raw_api_key,
+        },
+    )
+    ok(invalid_api.status_code == 422 and raw_api_key not in invalid_api.text,
+       "validation failures scrub the one-use key while rejecting non-finite budgets")
+
+    cli_capture = {}
+
+    def capture_cli_api_key(**kwargs):
+        cli_capture.update(kwargs)
+        return {
+            "enrolled": True,
+            "provider": "openai-codex",
+            "connection_kind": "direct_api",
+            "execution_connection_id": "execconn-cli-redacted",
+            "credential_values_redacted": True,
+        }
+
+    cli_stdout = io.StringIO()
+    cli_stderr = io.StringIO()
+    with (patch.object(enrollment, "enroll_api_key", capture_cli_api_key),
+          patch("sys.stdin", io.StringIO(raw_api_key + "\n")),
+          redirect_stdout(cli_stdout), redirect_stderr(cli_stderr)):
+        cli_rc = enrollment.main([
+            "enroll-api-key",
+            "--identity", str(mac_identity_path),
+            "--config", str(mac_config_path),
+            "--project", PROJECT,
+            "--provider", "openai-codex",
+            "--provider-account", "acct-openai-ui21",
+            "--billing-account", "billing-openai-ui21",
+            "--budget-ceiling", "25",
+            "--budget-currency", "usd",
+            "--api-key-stdin",
+        ])
+    cli_output = cli_stdout.getvalue() + cli_stderr.getvalue()
+    ok(cli_rc == 0 and cli_capture.get("api_key") == raw_api_key
+       and raw_api_key not in cli_output
+       and raw_api_key not in mac_identity_path.read_text()
+       and raw_api_key not in mac_config_path.read_text(),
+       "the real enroll-api-key CLI consumes stdin, never argv/env/disk, and emits only a redacted receipt")
     unavailable_auth = {
         "available": False, "runtime": "codex",
         "auth_mode": "chatgpt_personal",

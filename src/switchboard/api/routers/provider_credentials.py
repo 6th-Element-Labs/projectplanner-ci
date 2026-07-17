@@ -1,12 +1,17 @@
 """Tenant provider-connection vault REST routes (CO-6)."""
 from __future__ import annotations
 
+import math
 from typing import Callable
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 import auth
+from switchboard.api.deps import (
+    require_agent_host_identity,
+    resolve_agent_host_principal,
+)
 from switchboard.application.commands import provider_credentials as commands
 from switchboard.domain.provider_credentials import list_provider_auth_capabilities
 from switchboard.storage.repositories.provider_credentials import (
@@ -37,6 +42,61 @@ class BindHostNativeBody(BaseModel):
     project_allowlist: list[str] = Field(default_factory=list)
     host_id: str = ""
     auth_type: str = ""
+
+
+class HostApiKeyEnrollmentBody(BaseModel):
+    """One-use secret body accepted only from an enrolled Agent Host bearer.
+
+    ``SecretStr`` keeps the credential out of validation representations. The route
+    never returns or logs this model and passes the plaintext directly to the vault,
+    where it is envelope-encrypted before any response is built.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(min_length=1, max_length=128, pattern=r".*\S.*")
+    host_id: str = Field(min_length=1, max_length=160, pattern=r"^host/")
+    provider: str = "openai-codex"
+    provider_account_id: str = Field(min_length=1, max_length=255)
+    billing_account_id: str = Field(min_length=1, max_length=255)
+    budget_ceiling: float
+    budget_currency: str = "USD"
+    api_key: SecretStr = Field(min_length=1, max_length=16384)
+
+    @field_validator("provider")
+    @classmethod
+    def _openai_mvp_only(cls, value: str) -> str:
+        provider = str(value or "").strip().lower()
+        if provider != "openai-codex":
+            raise ValueError("only openai-codex API enrollment is enabled")
+        return provider
+
+    @field_validator("provider_account_id", "billing_account_id", mode="before")
+    @classmethod
+    def _strip_required(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @field_validator("budget_ceiling", mode="after")
+    @classmethod
+    def _positive_finite_budget(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("budget_ceiling must be positive and finite")
+        return value
+
+    @field_validator("budget_currency", mode="before")
+    @classmethod
+    def _currency(cls, value: str) -> str:
+        currency = str(value or "").strip().upper()
+        if len(currency) != 3 or not currency.isalpha():
+            raise ValueError("budget_currency must be a three-letter code")
+        return currency
+
+    @field_validator("api_key", mode="after")
+    @classmethod
+    def _nonempty_secret(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("api_key is required")
+        return value
 
 
 def _access(principal: dict) -> dict:
@@ -87,6 +147,39 @@ def create_router(*, resolve_project: ProjectResolver,
                 admin=is_admin, raise_errors=True)
         except (ValidationError, CredentialVaultError) as exc:
             _raise_http(exc)
+
+    @router.post("/ixp/v1/agent-host-provider-connections/enroll-api-key")
+    def enroll_host_api_key_connection(
+            request: Request,
+            body: HostApiKeyEnrollmentBody = Body(...)):
+        """Enroll one metered API key from its owner-controlled Agent Host.
+
+        This is deliberately not a browser/user-principal endpoint. The narrow host
+        bearer, exact host identity, active enrollment, live presence, owner binding,
+        project/provider allowlists, and vault write all have to agree. The plaintext
+        exists only in this request and the immediate vault-encryption call.
+        """
+        project_id = resolve_project(body.project)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project_id, dev_actor=body.host_id)
+        require_agent_host_identity(principal, body.host_id, project_id)
+        secret = body.api_key.get_secret_value()
+        try:
+            return commands.enroll_host_api_key_mapping({
+                "project": project_id,
+                "host_id": body.host_id,
+                "provider": body.provider,
+                "provider_account_id": body.provider_account_id,
+                "billing_account_id": body.billing_account_id,
+                "budget_currency": body.budget_currency,
+                "budget_ceiling": body.budget_ceiling,
+                "api_key": secret,
+            }, actor=auth.actor(principal), host_principal_id=principal.get("id") or "",
+                raise_errors=True)
+        except (ValidationError, CredentialVaultError) as exc:
+            _raise_http(exc)
+        finally:
+            secret = ""
 
     @router.get("/api/projects/{project}/provider-connections")
     def list_provider_connections(request: Request, project: str, user_id: str = ""):

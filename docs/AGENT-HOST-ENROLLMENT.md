@@ -27,7 +27,10 @@ native Codex CLI; it does not wake or remote-drive the Codex desktop application
   an ambiguous completion response indefinitely until the host durably writes its local
   identity/config/service state and acknowledges finalization. Finalization then retires
   the server-side recovery hash and the local secret.
-- The Codex personal login and all provider credentials remain on the user-owned host.
+- The Codex personal login remains on the user-owned host. A separately chosen metered
+  API key is entered only through the host CLI, sent over TLS to the host-authenticated
+  one-use enrollment endpoint, and immediately envelope-encrypted in the provider vault.
+  It never enters browser state, argv, environment variables, logs, or readback responses.
   Registration and heartbeat expose only redacted readiness/account fingerprints.
 - Rotating the host identity invalidates the old bearer immediately. Revocation fences
   both REST authentication and reuse of the enrolled `host_id`.
@@ -180,6 +183,31 @@ the daemon's own already-authenticated heartbeat, so Settings itself can never i
 forge an affinity — it can only detect one this host already declared about itself.
 `--account-id` is a plain identifier (e.g. an email), never a secret. Settings' "Bind this
 connection" action then becomes available once the daemon's next heartbeat reports it.
+
+## Enroll a separately billed OpenAI API connection (UI-21)
+
+API execution is a distinct, explicitly metered connection. It is never selected as a
+fallback for the personal ChatGPT subscription above. Enter the key on the registered
+host through stdin so it does not enter shell history, argv, the environment, or disk:
+
+```bash
+python adapters/agent_host_enrollment.py enroll-api-key \
+  --identity ~/.config/switchboard-agent-host/identity.json \
+  --config ~/.config/switchboard-agent-host/config.json \
+  --project switchboard \
+  --provider openai-codex \
+  --provider-account acct-openai-owner \
+  --billing-account acct-openai-billing \
+  --budget-ceiling 25 \
+  --budget-currency usd \
+  --api-key-stdin
+```
+
+The CLI reads exactly one line from stdin, authenticates with the narrow host bearer, and
+submits to `/ixp/v1/agent-host-provider-connections/enroll-api-key`. The server requires
+the exact active host principal, enrollment owner, live host presence, project allowlist,
+and provider allowlist before immediately vaulting the key. Neither success nor failure
+echoes it; only a redacted execution connection, billing binding, and budget are returned.
 
 ## Update, rotate, revoke, and uninstall
 

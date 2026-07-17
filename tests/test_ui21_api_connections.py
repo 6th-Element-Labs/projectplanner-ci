@@ -3,10 +3,9 @@
 
 Same "command/repository + REST TestClient + frontend-source needle + Node JS"
 style as tests/test_ui19_ai_accounts_settings.py. UI-21 adds the "API connections"
-group beside UI-19's personal subscriptions. This PR is the Settings surface +
-lifecycle over the already-reviewed provider-connections backend; the host-local
-`enroll-api-key` CLI + its secure host→server credential transport are the tracked
-slice-2 follow-up (they carry the independent security review). Covers: the
+group beside UI-19's personal subscriptions. This PR includes the Settings surface,
+lifecycle, and the host-local `enroll-api-key` CLI plus its owner-bound, secret-safe
+host-to-server vault transport. Covers: the
 redacted read surface for a direct_api connection, no raw-secret echo, owner-only
 enforcement, rotate/revoke/delete lifecycle, the two-group IA, the metered
 warning, the disabled Anthropic/Cursor rows, and — critically — that the browser
@@ -150,6 +149,13 @@ ok(b_rotate.status_code in (403, 404),
 
 # ── 5. Frontend source needles ───────────────────────────────────────────────
 settings_source = (ROOT / "static" / "js" / "settings.js").read_text()
+host_cli_source = (ROOT / "adapters" / "agent_host_enrollment.py").read_text()
+provider_router_source = (
+    ROOT / "src" / "switchboard" / "api" / "routers" / "provider_credentials.py"
+).read_text()
+provider_command_source = (
+    ROOT / "src" / "switchboard" / "application" / "commands" / "provider_credentials.py"
+).read_text()
 frontend_source = read_frontend_source(ROOT)
 ok('name="credential"' not in settings_source and 'name="api_key"' not in settings_source
    and 'name="token"' not in settings_source and 'name="password"' not in settings_source,
@@ -162,6 +168,11 @@ ok("API connections" in settings_source and "explicitly metered" in settings_sou
    "the two-group IA + metered warning copy are present")
 ok("enroll-api-key" in settings_source and "api-key-stdin" in settings_source,
    "the connect flow is host-local (enroll-api-key + --api-key-stdin), not a browser secret field")
+ok("def enroll_api_key" in host_cli_source and "sys.stdin.readline" in host_cli_source
+   and "/ixp/v1/agent-host-provider-connections/enroll-api-key" in provider_router_source
+   and "enroll_host_api_key_mapping" in provider_command_source
+   and "trusted_provider_native=True" in provider_command_source,
+   "the rendered command is backed by a real stdin CLI and owner-bound vault endpoint")
 for action in ("api-connections-revoke", "api-connections-delete", "api-connections-copy-cmd"):
     ok(action in settings_source, f"settings.js wires the {action} action")
 ok("_settingsAiAccountsSection" in frontend_source and "ai-accounts" in frontend_source,
@@ -196,6 +207,9 @@ if (!/ADAPTER-20/.test(disabled) || !/gated|disabled|not self-service/.test(disa
 const connect = ctx._settingsApiConnectionCard.call(ctx, openai, {conns:[],caps:[],hosts:[],me:'user-a',connectionsError:'',hostsError:''});
 if (!/enroll-api-key/.test(connect) || !/api-key-stdin/.test(connect)) { console.error('connect_missing_host_cli'); process.exit(5); }
 if (/type="password"/.test(connect) || /name="api_key"/.test(connect)) { console.error('connect_has_secret_input'); process.exit(6); }
+const quoted = ctx._settingsApiEnrollCommand.call(ctx, 'openai-codex', "acct'; touch /tmp/pwned; echo '", '25; touch /tmp/pwned', 'usd');
+if (!/--budget-ceiling '25; touch \/tmp\/pwned'/.test(quoted) || !quoted.includes("acct'\\''; touch /tmp/pwned; echo '\\''")) {
+  console.error('connect_command_not_shell_quoted'); process.exit(7); }
 console.log('ui21_frontend_ok');
 """
 run = subprocess.run(["node", "-e", node_check, str(ROOT / "static" / "js" / "settings.js")],
