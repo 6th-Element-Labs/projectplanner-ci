@@ -5,6 +5,7 @@ so the auth package stays free of those imports (ARCH-MS-82).
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from typing import Any
 
@@ -67,3 +68,26 @@ def configure_auth_ports(*, hasher: PasswordHasher | None = None,
         notifier=notifier or SmtpAuthNotifier(),
         registry=registry or MonolithAuthRegistry(),
     )
+
+
+def probe_auth_readiness(project: str = "") -> dict[str, Any]:
+    """Fail closed across registry DB/schema, session auth, and an Auth read."""
+    from switchboard.api.routers.auth import session as auth_session
+    from switchboard.api.routers.auth import store as auth_store
+    from switchboard.storage.repositories import projects as projects_repo
+
+    project = project or os.environ.get("SWITCHBOARD_AUTH_READY_PROJECT", "switchboard").strip()
+    checks: dict[str, Any] = {}
+    db_error = projects_repo.probe_project_db(project)
+    checks["database_schema"] = "ok" if db_error is None else db_error
+    try:
+        auth_session.require_production_secret()
+        checks["browser_session_auth"] = "ok" if auth_session.COOKIE_NAME else "cookie_name_missing"
+    except Exception as exc:
+        checks["browser_session_auth"] = type(exc).__name__
+    try:
+        auth_store.get_user("__readiness_probe__")
+        checks["auth_repository_read"] = "ok"
+    except Exception as exc:
+        checks["auth_repository_read"] = type(exc).__name__
+    return {"ok": all(value == "ok" for value in checks.values()), "checks": checks}

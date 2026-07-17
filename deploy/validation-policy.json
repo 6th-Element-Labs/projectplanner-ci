@@ -1,0 +1,16 @@
+{
+  "schema": "switchboard.validation_policy.v1",
+  "project": "switchboard",
+  "classification_required": true,
+  "allowed_ui_impact": ["yes", "no"],
+  "required_status_context": "Switchboard UI / Playwright",
+  "runner": {
+    "command": "python3 scripts/run_ui_playwright.py",
+    "browser": "chromium",
+    "headless": true,
+    "tier": "hermetic",
+    "allow_skip": false
+  },
+  "live_edge_required_for": ["authentication", "routing", "service-cut", "deployment"],
+  "waiver_required_fields": ["approved_by", "approved_at", "reason", "alternative_evidence", "task_id", "expires_at"]
+}

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from constants import DEFAULT_PROJECT, PRE_TOOL_CHECK_SCHEMA
 from switchboard.domain.access.identity import write_binding_activity_payload
+from switchboard.domain.validation_policy import classify_task
 
 
 __all__ = [
@@ -423,6 +424,27 @@ def pre_tool_check(payload: Dict[str, Any], actor: str = "system",
     target_path = _pre_tool_target_path(tool_input)
     if classification["action"] == "file_write" and target_path:
         relpath = _pre_tool_relpath(target_path, session)
+        validation = classify_task(
+            task, project=project, existing=task, changed_files=[relpath])
+        if not validation.get("ok"):
+            return _pre_tool_decision(
+                "deny",
+                validation.get("message") or "Task UI validation classification failed.",
+                "missing_data", "high",
+                ["Set ui_impact=yes|no on the task before writing code."],
+                **base, target_path=relpath,
+                validation_policy=validation, ok=False)
+        stored_validation = ((task.get("agent_state") or {}).get("validation_policy") or {})
+        if any(validation.get(key) != stored_validation.get(key) for key in (
+                "ui_impact", "classification_source", "reasons", "ui_validation")):
+            _store_facade().ensure_task_validation(
+                task_id, project=project, actor=actor_name,
+                changed_files=[relpath])
+            _record_pre_tool_activity(
+                task_id, actor_name, "validation.reclassified",
+                {**base, "target_path": relpath,
+                 "prior_ui_impact": stored_validation.get("ui_impact"),
+                 "validation_policy": validation}, project=project)
         held = check_resources("file", [relpath], project=project)
         conflicts = [h for h in held if h.get("name") == relpath and
                      h.get("held_by") and h.get("held_by") != agent_id]

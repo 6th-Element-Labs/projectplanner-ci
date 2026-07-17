@@ -1,15 +1,4 @@
-"""Liveness probe for the Tasks cut-out process (ARCH-MS-90)."""
-from __future__ import annotations
+"""Shared liveness/readiness router for the Tasks cut-out process."""
+from switchboard.services.health import create_router
 
-from fastapi import APIRouter
-
-
-def create_router(*, service_name: str) -> APIRouter:
-    """Build a cheap liveness router (no DB / network I/O)."""
-    router = APIRouter()
-
-    @router.get("/health")
-    async def health():
-        return {"status": "ok", "service": service_name}
-
-    return router
+__all__ = ["create_router"]

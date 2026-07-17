@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from constants import DEFAULT_PROJECT
+from switchboard.domain.validation_policy import project_validation_policy
 
 
 __all__ = ["get_working_agreement", "execute", "execute_mapping_result"]
@@ -35,6 +36,7 @@ def execute(project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
         "work_session_contract": store.work_session_contract(project),
         "code_repo_gate": repo_topology.get("code_repo_gate"),
         "protocol": store.protocol_envelope(),
+        "validation_policy": project_validation_policy(project),
         "canonical_main_sha": store.get_meta("canonical_main_sha", None, project=project),
         "branch_convention": "claude/<TASK-ID>-<slug>",
         "definition_of_done": "Done means merged/rebased into the intended branch with recorded GitHub/default-branch provenance, or verified non-code work with recorded offline evidence provenance; implemented work with branch/head_sha/PR evidence is In Review.",

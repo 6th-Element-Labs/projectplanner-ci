@@ -37,6 +37,7 @@ from switchboard.domain.provenance.git import (
     provenance_summary as _provenance_summary,
 )
 from switchboard.domain.access.identity import is_unbound_system_actor
+from switchboard.domain.validation_policy import classify_task
 from switchboard.storage.repositories.access import (
     _task_identity_state_in,
     has_project,
@@ -75,6 +76,7 @@ __all__ = [
     "update_task",
     "_create_task_impl",
     "create_task",
+    "ensure_task_validation",
     "_deps_done",
     "_task_tally_snapshot",
     "task_tally",
@@ -135,7 +137,45 @@ def _task_row(r: sqlite3.Row) -> Dict[str, Any]:
     d["_wsName"] = d.pop("workstream_name")
     raw_state = d.pop("agent_state", None)
     d["agent_state"] = json.loads(raw_state) if raw_state else {}
+    validation = (d["agent_state"].get("validation_policy") or {})
+    d["ui_impact"] = validation.get("ui_impact")
+    d["ui_validation"] = validation.get("ui_validation") or {"required": False}
     return d
+
+
+def _persist_task_validation(task_id: str, validation: Dict[str, Any],
+                             *, actor: str, project: str) -> None:
+    try:
+        with _conn(project) as c:
+            row = c.execute("SELECT agent_state FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            if not row:
+                return
+            state = json.loads(row["agent_state"] or "{}") if row["agent_state"] else {}
+            state["validation_policy"] = dict(validation)
+            now = time.time()
+            c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
+                      (json.dumps(state, sort_keys=True), now, task_id))
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (task_id, actor, "validation.classified",
+                       json.dumps(validation, sort_keys=True), now))
+    except sqlite3.OperationalError as exc:
+        # Unit seams may monkeypatch the create impl without creating schema. Real
+        # persistence never hides a schema failure; only the explicit no-table seam
+        # remains compatible with the write-through retry tests.
+        if "no such table" not in str(exc).lower():
+            raise
+
+
+def ensure_task_validation(task_id: str, *, project: str = DEFAULT_PROJECT,
+                           actor: str = "system", changed_files: Any = None) -> Dict[str, Any]:
+    task = get_task(task_id, project=project)
+    if not task:
+        return {"ok": False, "error": "task_not_found", "task_id": task_id}
+    validation = classify_task(task, project=project, existing=task,
+                               changed_files=changed_files)
+    if validation.get("ok"):
+        _persist_task_validation(task_id, validation, actor=actor, project=project)
+    return validation
 
 def _dependency_state_in(c: sqlite3.Connection, task: Dict[str, Any]) -> Dict[str, Any]:
     deps = list(dict.fromkeys(task.get("depends_on") or []))
@@ -487,8 +527,19 @@ def _update_task_impl(task_id: str, fields: Dict[str, Any], actor: str = "user",
 def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
                 project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     s = _store_facade()
+    current = s.get_task(task_id, project)
+    if not current:
+        return None
+    material = bool(set(fields) & {
+        "title", "description", "phase", "entry_criteria", "exit_criteria", "deliverable"
+    })
+    validation = classify_task(fields, project=project, existing=current,
+                               material_rescope=material)
+    if not validation.get("ok"):
+        return validation
+    store_fields = {key: value for key, value in fields.items() if key != "ui_impact"}
     result = s._write_through(project,
-        lambda: s._update_task_impl(task_id, fields, actor=actor, project=project))
+        lambda: s._update_task_impl(task_id, store_fields, actor=actor, project=project))
     if result is None or (isinstance(result, dict) and result.get("error")):
         return result
     changed = result.get("changed", {}) if isinstance(result, dict) else {}
@@ -500,6 +551,7 @@ def update_task(task_id: str, fields: Dict[str, Any], actor: str = "user",
     # Runs fully post-commit on the caller thread so it never nests inside the task writer.
     if isinstance(result, dict) and result.get("emitted"):
         narration_outbox.invalidate_linked_deliverables(task_id, project, actor=actor)
+    _persist_task_validation(task_id, validation, actor=actor, project=project)
     # Via facade so tests / callers that monkeypatch store.get_task are honored.
     return s.get_task(task_id, project)
 
@@ -554,12 +606,17 @@ def _create_task_impl(data: Dict[str, Any], actor: str = "user",
 def create_task(data: Dict[str, Any], actor: str = "user",
                 project: str = DEFAULT_PROJECT) -> Optional[Dict[str, Any]]:
     s = _store_facade()
+    validation = classify_task(data, project=project)
+    if not validation.get("ok"):
+        return validation
+    store_data = {key: value for key, value in data.items() if key != "ui_impact"}
     tid = s._write_through(project,
-        lambda: s._create_task_impl(data, actor=actor, project=project))
+        lambda: s._create_task_impl(store_data, actor=actor, project=project))
     if not tid:
         return None
+    _persist_task_validation(tid, validation, actor=actor, project=project)
     # NARRATE-2: a newly created task is a meaningful transition — enqueue its first narration.
-    enqueue_narration(tid, status=(data.get("status") or "Not Started"),
+    enqueue_narration(tid, status=(store_data.get("status") or "Not Started"),
                       reason="create", project=project)
     # NARRATE-11: bounded fan-out to any deliverables this new task is already linked to
     # (usually none at creation) — post-commit, idempotent, no full-project scan.

@@ -383,6 +383,8 @@ def prepare_agent_session(
         "milestone_id": (milestone_id or "").strip() or None,
         "warnings": warnings,
         "working_agreement": agreement,
+        "validation_policy": agreement.get("validation_policy"),
+        "effective_task_validation": contract.get("effective_task_validation"),
         "project_contract": contract,
         "first_calls": build_first_calls(
             selected, chosen_agent_id, runtime, model, tid, ws, agreement,

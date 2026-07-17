@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 import store
+from switchboard.domain.validation_policy import project_validation_policy, task_validation
 
 
 def resolve_project_input(project: str) -> str:
@@ -45,6 +46,8 @@ def _task_brief(task: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "deliverable": task.get("deliverable"),
         "risk_level": task.get("risk_level"),
         "is_blocking": task.get("is_blocking"),
+        "ui_impact": task.get("ui_impact"),
+        "ui_validation": task.get("ui_validation") or {"required": False},
     }
 
 
@@ -158,6 +161,8 @@ def build(
         "session_policy_profiles": store.get_session_policy_profiles(selected),
         "work_session_contract": store.work_session_contract(selected),
         "code_repo_gate": repo_topology.get("code_repo_gate"),
+        "validation_policy": project_validation_policy(selected),
+        "effective_task_validation": task_validation(task, selected) if task else None,
         "local_docs_policy": (
             "Do not assume repo-local docs define this project. Use this project contract, the "
             "selected project's corpus, tasks, task activity, and active leases as the canonical "

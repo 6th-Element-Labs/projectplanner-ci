@@ -1,0 +1,57 @@
+{
+  "schema": "switchboard.service_boundary_contract.v1",
+  "project": "switchboard",
+  "services": [
+    {"name": "auth", "port": 8121, "liveness": "/health", "readiness": "/ready", "owned_read": "auth_repository_read"},
+    {"name": "tasks", "port": 8122, "liveness": "/health", "readiness": "/ready", "owned_read": "tasks_repository_read"},
+    {"name": "coord", "port": 8123, "liveness": "/health", "readiness": "/ready", "owned_read": "coord_repository_read"},
+    {"name": "deliverables", "port": 8124, "liveness": "/health", "readiness": "/ready", "owned_read": "deliverables_repository_read"}
+  ],
+  "readiness_checks": ["database_schema", "browser_session_auth", "service_owned_repository_read"],
+  "identity_matrix": [
+    {"identity": "anonymous", "expected": "401_or_403"},
+    {"identity": "expired_cookie", "expected": "401"},
+    {"identity": "valid_cookie_project_member", "expected": "200"},
+    {"identity": "valid_bearer_project_member", "expected": "200"},
+    {"identity": "valid_principal_wrong_project", "expected": "403"},
+    {"identity": "admin", "expected": "200"}
+  ],
+  "browser_journey": [
+    "login",
+    "GET /api/projects",
+    "GET /api/board",
+    "GET /api/deliverables",
+    "GET /api/mission/status"
+  ],
+  "parity": {
+    "dimensions": ["status", "json_shape", "auth_result", "etag", "cache_control"],
+    "allow_route_mocks": false,
+    "browser": "chromium",
+    "headless": true,
+    "allow_skip": false
+  },
+  "sqlite": {
+    "multiprocess_required": true,
+    "writers": ["tasks"],
+    "readers": ["coord", "deliverables"],
+    "checks": ["wal", "busy_timeout", "transaction_integrity", "idempotency", "migration_compatibility"]
+  },
+  "resource_budget": {
+    "host_memory_mib": 911,
+    "measure": ["rss_bytes", "open_file_descriptors", "database_connections"],
+    "failure_containment_required": true
+  },
+  "uptime": {
+    "least_privilege_project_read_journey": true,
+    "requires_liveness_and_readiness": true,
+    "activation_task": "ARCH-MS-113"
+  },
+  "rollup_reconciliation": {
+    "sources": ["task_links", "task_status", "merge_provenance", "verification_evidence"],
+    "fail_on_disagreement": true
+  },
+  "extension_template": {
+    "services": ["tally", "ingest"],
+    "required_sections": ["identity_matrix", "readiness", "parity", "sqlite", "resource_budget", "uptime"]
+  }
+}

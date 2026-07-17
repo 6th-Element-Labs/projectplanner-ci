@@ -1,0 +1,14 @@
+{
+  "schema": "switchboard.ui_consumed_endpoints.v1",
+  "endpoints": [
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/projects",
+    "/api/board",
+    "/api/signals",
+    "/api/mission_status",
+    "/api/deliverables",
+    "/api/deliverables/{deliverable_id}",
+    "/api/tasks"
+  ]
+}
