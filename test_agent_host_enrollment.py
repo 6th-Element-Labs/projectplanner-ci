@@ -1263,6 +1263,53 @@ try:
     ok(failed_local_visible and failed_runner_index < failed_wake_index
        and failed_local_control_calls[failed_wake_index][1]["result"]["started"] is False,
        "native execution failure terminalizes its exact runner before the failed wake receipt")
+    original_personal_git = switchboard_core._personal_git
+    original_checkpoint_http = switchboard_core._http
+    checkpoint_payloads = []
+    checkpoint_state = {"head": completed_sha, "status": ""}
+
+    def checkpoint_git(args, **_kwargs):
+        if args[-2:] == ["rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(args, 0, checkpoint_state["head"] + "\n", "")
+        if args[-2:] == ["status", "--porcelain"]:
+            return subprocess.CompletedProcess(args, 0, checkpoint_state["status"], "")
+        raise AssertionError(args)
+
+    def checkpoint_http(method, path, payload, **_kwargs):
+        checkpoint_payloads.append((method, path, payload))
+        return {"updated": True}
+
+    try:
+        switchboard_core._personal_git = checkpoint_git
+        switchboard_core._http = checkpoint_http
+        checkpoint = switchboard_core.checkpoint_personal_work_session(
+            PROJECT, local_task["managed"], local_evidence,
+            "codex/ADAPTER-18-local-worker")
+        checkpoint_state["status"] = " M generated.py\n"
+        try:
+            switchboard_core.checkpoint_personal_work_session(
+                PROJECT, local_task["managed"], local_evidence,
+                "codex/ADAPTER-18-local-worker")
+            dirty_checkpoint_denied = False
+        except RuntimeError as exc:
+            dirty_checkpoint_denied = "dirty after executed tests" in str(exc)
+        checkpoint_state.update({"status": "", "head": "f" * 40})
+        try:
+            switchboard_core.checkpoint_personal_work_session(
+                PROJECT, local_task["managed"], local_evidence,
+                "codex/ADAPTER-18-local-worker")
+            drift_checkpoint_denied = False
+        except RuntimeError as exc:
+            drift_checkpoint_denied = "HEAD drifted during executed tests" in str(exc)
+    finally:
+        switchboard_core._personal_git = original_personal_git
+        switchboard_core._http = original_checkpoint_http
+    clean_checkpoint_payload = checkpoint_payloads[0][2] if checkpoint_payloads else {}
+    ok(checkpoint.get("updated") is True
+       and clean_checkpoint_payload.get("head_sha") == completed_sha
+       and clean_checkpoint_payload.get("dirty_status") == "clean"
+       and dirty_checkpoint_denied and drift_checkpoint_denied,
+       "personal checkpoint revalidates exact HEAD and cleanliness after executed tests")
     linux_runtime_root = Path(json.loads(linux_config.read_text())["runtime_root"])
     linux_runtime_root.mkdir(parents=True, exist_ok=True)
     (linux_runtime_root / "residue.txt").write_text("non-secret runtime residue")

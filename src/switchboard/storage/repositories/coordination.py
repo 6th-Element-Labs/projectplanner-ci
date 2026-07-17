@@ -49,9 +49,12 @@ from switchboard.storage.repositories.provider_credentials import (
 
 
 # Native Codex is allowed to execute for up to two hours.  Keep the durable wake
-# and its exact connection alive for that interval plus a small launch/finalize
-# margin when the caller did not request a tighter deadline.
+# alive for that interval plus a small launch/finalize margin when the caller did
+# not request a tighter deadline.  The exact connection remains live longer so
+# post-run tests, the Work Session checkpoint, and claim completion cannot race
+# the execution deadline.
 _PERSONAL_EXECUTION_DEADLINE_S = 2 * 60 * 60 + 5 * 60
+_PERSONAL_POST_PROCESSING_S = 35 * 60
 
 
 def _store_facade():
@@ -374,7 +377,7 @@ def _bind_personal_wake_policy(
         },
     })
     requested_ttl = float(updated["deadline_seconds"])
-    expires_at = now + max(10.0, requested_ttl)
+    expires_at = now + max(10.0, requested_ttl) + _PERSONAL_POST_PROCESSING_S
     c.execute(
         "INSERT INTO personal_execution_connections("
         "execution_connection_id, wake_id, task_id, claim_id, work_session_id, "
@@ -396,9 +399,20 @@ def _insert_wake_intent(c: sqlite3.Connection, selector: Dict[str, Any],
     deadline_s = (policy.get("deadline_seconds") or policy.get("claim_timeout_s") or
                   policy.get("ttl_s"))
     deadline = now + float(deadline_s) if deadline_s else None
+    personal = (policy.get("execution_mode") == "personal_agent_host"
+                or policy.get("require_exact_host_binding") is True)
     hybrid = str((policy.get("scheduler") or {}).get("mode") or "") == "hybrid"
     placement: Dict[str, Any] = {}
-    if hybrid:
+    if personal:
+        exact_host_id = str(
+            ((policy.get("execution_binding") or {}).get("host_id")) or "")
+        exact_host_row = c.execute(
+            "SELECT * FROM agent_hosts WHERE host_id=?", (exact_host_id,),
+        ).fetchone() if exact_host_id else None
+        exact_host = _host_row(exact_host_row, now=now) if exact_host_row else None
+        eligible = ([exact_host] if exact_host and _host_can_handle(exact_host, selector)
+                    else [])
+    elif hybrid:
         hosts = _host_rows_in(c, now)
         placement = plan_hybrid_placement(
             hosts, selector, policy, project=project,
@@ -1374,7 +1388,7 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                                    "runner_session_id": runner_session_id or None,
                                    "agent_id": agent_id or None,
                                    "result": result}, sort_keys=True), now))
-            if status == "completed" and runner_session_id:
+            if status == "completed" and runner_session_id and not personal:
                 selector = wake.get("selector") or {}
                 # A delegated worker may have rebound the preclaim runner row to its
                 # exact task claim and Work Session before completing the wake.  Wake

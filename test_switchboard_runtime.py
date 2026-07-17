@@ -434,10 +434,11 @@ try:
             "DELETE FROM personal_execution_connections WHERE execution_connection_id=?",
             (good_execution["execution_connection_id"],),
         )
-    ok(good_wake.get("deadline") == connection_row.get("expires_at")
+    ok(float(connection_row.get("expires_at") or 0)
+       - float(good_wake.get("deadline") or 0) >= 30 * 60
        and float(good_wake.get("deadline") or 0)
        - float(good_wake.get("requested_at") or 0) >= 7200,
-       "default personal wake and exact connection share the full native execution deadline")
+       "personal connection reserves post-processing time beyond the native execution deadline")
     nonexistent_connection_claim = store.claim_wake(
         "host/test", good_wake["wake_id"], runner_session_id=exact_runner_id,
         principal_id=p["id"], actor=auth.actor(p), project=P)
@@ -583,6 +584,10 @@ try:
             "WHERE execution_connection_id=?",
             (good_execution["execution_connection_id"],),
         ).fetchone()["status"]
+        final_runner = dict(connection.execute(
+            "SELECT status, principal_id FROM runner_sessions WHERE runner_session_id=?",
+            (exact_runner_id,),
+        ).fetchone())
     personal_completed_retry = store.complete_wake(
         good_wake["wake_id"], runner_session_id=exact_runner_id,
         agent_id=personal_agent, result={"started": True},
@@ -599,6 +604,7 @@ try:
        in premature_personal_completion.get("reason_codes", [])
        and personal_completed.get("status") == "completed"
        and final_connection_state == "completed"
+       and final_runner == {"status": "completed", "principal_id": p["id"]}
        and personal_completed_retry.get("note") == "idempotent terminal readback"
        and "completion_result_mismatch"
        in conflicting_completion_retry.get("reason_codes", []),
@@ -664,6 +670,16 @@ try:
                 "WHERE execution_connection_id=?", (connection_id,),
             ).fetchone()["status"]
 
+    fleet_principal = store.create_principal(
+        kind="agent", display_name="fleet/unrelated", token="fleet-unrelated-token",
+        scopes=["read", "write:ixp"], principal_id="fleet-unrelated", project=P)
+    store.register_host({
+        "host_id": "host/unrelated", "hostname": "unrelated",
+        "agent_host_version": "0.1.0", "repo_root": os.getcwd(),
+        "runtimes": [{"runtime": "codex", "lanes": ["ADAPTER"],
+                      "capabilities": ["unsupported"]}],
+        "limits": {"max_sessions": 1}, "heartbeat_ttl_s": 60,
+    }, principal_id=fleet_principal["id"], actor="fleet/unrelated", project=P)
     immediate_failed = store.request_wake(
         selector={"runtime": "codex", "agent_id": personal_agent,
                   "lane": "ADAPTER", "capabilities": ["unsupported"]},
@@ -714,7 +730,7 @@ try:
        and claim_deadline.get("reason") == "deadline_expired"
        and connection_status(claim_deadline_wake) == "failed"
        and connection_status(sweep_deadline_wake) == "failed",
-       "every personal wake terminal path closes its exact execution connection first")
+       "personal no-host admission ignores unrelated fleet hosts and every terminal path closes its exact connection first")
 
     store.upsert_runner_session({
         "runner_session_id": exact_runner_id,

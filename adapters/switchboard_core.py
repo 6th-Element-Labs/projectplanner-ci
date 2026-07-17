@@ -799,6 +799,19 @@ def _materialize_personal_workspace(session, source_sha, workspace_root):
 def checkpoint_personal_work_session(project, managed, evidence, agent_id,
                                      base=None, token=None):
     """Persist the exact local head/test receipt through the narrow tuple gate."""
+    workspace = str(managed.get("workspace_path") or "").strip()
+    expected_head = str(evidence.get("head_sha") or "").strip()
+    if not workspace or not expected_head:
+        raise RuntimeError("personal checkpoint is missing workspace or completed head")
+    head = _personal_git(["-C", workspace, "rev-parse", "HEAD"])
+    actual_head = (head.stdout or "").strip() if head.returncode == 0 else ""
+    if actual_head != expected_head:
+        raise RuntimeError("personal workspace HEAD drifted during executed tests")
+    status = _personal_git(["-C", workspace, "status", "--porcelain"])
+    if status.returncode != 0:
+        raise RuntimeError("personal workspace cleanliness check failed after executed tests")
+    if (status.stdout or "").strip():
+        raise RuntimeError("personal workspace is dirty after executed tests")
     hygiene = dict(managed.get("session_hygiene") or {})
     test_run = evidence.get("executed_test_run")
     if test_run:
@@ -812,15 +825,15 @@ def checkpoint_personal_work_session(project, managed, evidence, agent_id,
             "workspace_fingerprint": hashlib.sha256(
                 str(managed.get("workspace_path") or "").encode()).hexdigest()[:16],
             "source_sha": str(os.environ.get("PM_SOURCE_SHA") or ""),
-            "head_sha": str(evidence.get("head_sha") or ""),
+            "head_sha": actual_head,
         },
     })
     binding = _personal_execution_binding()
-    binding["completed_head_sha"] = str(evidence.get("head_sha") or "").strip()
+    binding["completed_head_sha"] = actual_head
     payload = {
         "project": project,
         "agent_id": agent_id,
-        "head_sha": evidence.get("head_sha") or "",
+        "head_sha": actual_head,
         "dirty_status": "clean",
         "conflict_marker_count": 0,
         "hygiene": hygiene,
