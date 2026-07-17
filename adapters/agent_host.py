@@ -715,8 +715,20 @@ def supervisor_action(action, runner_session_id, options=None):
                     stream_url = relay_url
                     expires_at = float(relay_payload.get("exp") or expires_at)
                     ticket = relay_ticket
-                except Exception:
-                    use_relay = False
+                except Exception as mint_exc:
+                    # BUG-76: non-loopback public base requires relay. Never fall
+                    # back to local http_chunked / 127.0.0.1 stream_url.
+                    return {
+                        "error": "relay_mint_failed",
+                        "reason": str(mint_exc) or type(mint_exc).__name__,
+                        "failure_class": "hidden_fallback",
+                        "opened": False,
+                        "runner_session_id": runner_session_id,
+                        "transport": None,
+                        "browser_safe": False,
+                        "relay_required": True,
+                        "capabilities": {"stream": "denied", "open": "denied"},
+                    }
         metadata = {
             "pty": True,
             "stream_url": stream_url,
@@ -919,10 +931,13 @@ def handle_runner_controls(inventory):
             )
             # Never register host-private loopback URLs on the control plane.
             browser_meta.pop("local_stream_url", None)
+            # BUG-76: do not reintroduce loopback via result.stream_url fallback
+            # after sanitize strips it from browser_meta.
+            safe_stream_url = browser_meta.get("stream_url")
             snapshot = {
                 "captured_at": time.time(),
                 "source": "runner_open",
-                "stream_url": browser_meta.get("stream_url") or result.get("stream_url"),
+                "stream_url": safe_stream_url,
                 "transport": result.get("transport"),
                 "expires_at": result.get("expires_at"),
                 "browser_safe": result.get("browser_safe"),
