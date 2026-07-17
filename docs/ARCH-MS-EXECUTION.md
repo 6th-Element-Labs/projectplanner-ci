@@ -67,6 +67,7 @@ rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
 | Task | Title | Tracker | Repo evidence |
 |---|---|---|---|
 | **ARCH-MS-98** | Tally service: ADR charter + thin surface | ✅ | PR #535 — ADR-0015; `docs/tally/thin_day_one_surface.md` |
+| **ARCH-MS-114** | Tally independence: ledger ownership, joins, and capacity | 🔴 No-Go | Executable route/writer/attribution/contention/capacity gate; `docs/tally/tally_independence_verdict.json`; ARCH-MS-115 fails closed |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.

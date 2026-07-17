@@ -1,0 +1,99 @@
+{
+  "schema": "switchboard.tally_independence_verdict.v1",
+  "task_id": "ARCH-MS-114",
+  "deliverable_id": "arch-ms-tally-service",
+  "observed_at": "2026-07-17T23:10:00Z",
+  "canonical_sha": "c55fa5da48847a9609ed100f1ed34323ab4e8a70",
+  "verdict": "nogo",
+  "process_build_authorized": false,
+  "production_cutover_authorized": false,
+  "blocking_gates": [
+    "G2_attribution_integrity",
+    "G6_resource_budget"
+  ],
+  "go_only_tasks": ["ARCH-MS-115"],
+  "route_inventory": [
+    {"method":"GET","path":"/tally/v1/kpis","handler":"tally_list_kpis","calls":["store.list_kpis"],"repository":"kpis_economics.list_kpis","attribution":"project database; KPI id/project originate from the selected project connection","writes":false},
+    {"method":"GET","path":"/tally/v1/outcomes","handler":"tally_list_outcomes","calls":["store.list_outcomes"],"repository":"kpis_economics.list_outcomes","attribution":"project database; outcome and KPI-link joins stay on the selected project connection","writes":false},
+    {"method":"GET","path":"/tally/v1/task/{task_id}","handler":"tally_task","calls":["store.task_tally"],"repository":"tasks.task_tally","attribution":"task -> outcome -> claim/outcome spend -> KPI links; spend rows deduplicated by id","writes":false},
+    {"method":"GET","path":"/tally/v1/kpi/{kpi_id}","handler":"tally_kpi","calls":["store.kpi_tally"],"repository":"kpis_economics.kpi_tally","attribution":"KPI -> outcome links -> outcome task ids -> task/outcome/claim spend","writes":false},
+    {"method":"GET","path":"/tally/v1/project","handler":"tally_project","calls":["store.project_tally"],"repository":"tasks.project_tally","attribution":"project task inventory -> per-task tally -> KPI totals; verified outcomes are the denominator","writes":false},
+    {"method":"GET","path":"/tally/v1/deliverable/{deliverable_id}","handler":"tally_deliverable","calls":["store.deliverable_tally"],"repository":"deliverables.deliverable_tally","attribution":"deliverable links retain task project+id, milestone, proof bucket, KPI project namespace, and proven/in-review split","writes":false}
+  ],
+  "writer_inventory": [
+    {"method":"POST","path":"/tally/v1/spend/ingest","handler":"tally_spend_ingest","calls":["store.report_usage"],"ownership":"monolith","boundary_ref":"kpis_economics.report_usage","transaction":"one project connection resolves optional outcome, applies request-id idempotency, inserts spend and tally.usage_reported activity"},
+    {"method":"POST","path":"/tally/v1/outcomes","handler":"tally_record_outcome","calls":["auth.actor","store.record_outcome"],"ownership":"monolith","boundary_ref":"kpis_economics.record_outcome","transaction":"one project connection inserts outcome and tally.outcome_recorded activity"},
+    {"method":"POST","path":"/tally/v1/outcomes/{outcome_id}/verify","handler":"tally_verify_outcome","calls":["auth.actor","store.verify_outcome"],"ownership":"monolith","boundary_ref":"kpis_economics.verify_outcome","transaction":"one project connection reads outcome, merges evidence, updates verification, and inserts activity"},
+    {"method":"POST","path":"/tally/v1/outcomes/{outcome_id}/reject","handler":"tally_reject_outcome","calls":["auth.actor","store.reject_outcome"],"ownership":"monolith","boundary_ref":"kpis_economics.reject_outcome","transaction":"one project connection reads outcome, records rejection evidence/status, and inserts activity"},
+    {"method":"POST","path":"/tally/v1/kpis","handler":"tally_create_kpi","calls":["auth.actor","store.create_kpi"],"ownership":"monolith","boundary_ref":"kpis_economics.create_kpi","transaction":"one project connection inserts KPI and tally.kpi_created activity"},
+    {"method":"PATCH","path":"/tally/v1/kpis/{kpi_id}","handler":"tally_update_kpi","calls":["auth.actor","store.update_kpi_value"],"ownership":"monolith","boundary_ref":"kpis_economics.update_kpi_value","transaction":"one project connection updates KPI value and inserts evidence-bearing activity"},
+    {"method":"POST","path":"/tally/v1/outcome_kpi_links","handler":"tally_link_outcome_kpi","calls":["auth.actor","store.link_outcome_to_kpi"],"ownership":"monolith","boundary_ref":"kpis_economics.link_outcome_to_kpi","transaction":"one project connection resolves outcome+KPI, inserts the link, and inserts tally.outcome_kpi_linked activity"}
+  ],
+  "writer_policy": {
+    "day_one_service_writer_count": 0,
+    "all_inventory_entries_stay_on_monolith": true,
+    "reader_rule": "the proposed service may expose committed read models only; all seven writers remain on the monolith",
+    "unsafe_attribution_rule": "a read process is not authorized while writers can persist conflicting task, claim, outcome, or KPI attribution"
+  },
+  "project_scope": {
+    "explicit_project_required": true,
+    "read_binding": "every read requires Query(...) and resolve_project(project)",
+    "write_binding": "every write resolves the body project before principal authorization",
+    "storage_isolation": "one SQLite database per Switchboard project",
+    "standalone_port": "TallyReadAuthPort"
+  },
+  "attribution_contract": {
+    "required_keys": ["project_id", "task_id", "claim_id", "outcome_id", "kpi_id", "deliverable_id"],
+    "safe": false,
+    "blocking_findings": [
+      {"code":"conflicting_usage_attribution_not_rejected","surface":"kpis_economics.report_usage","detail":"When both task_id and outcome_id are supplied, the outcome task is not compared with task_id; claim ownership is not validated."},
+      {"code":"outcome_parent_not_validated","surface":"kpis_economics.record_outcome","detail":"task_id and claim_id are accepted without proving that they exist and belong to the same project/task before the outcome is inserted."}
+    ],
+    "preserved_read_contracts": [
+      "task tallies deduplicate spend reachable by task, outcome, or claim",
+      "KPI tallies include only verified contribution in the denominator",
+      "deliverable tallies retain task project and proof bucket and namespace KPIs by project"
+    ]
+  },
+  "sqlite_contention": {
+    "journal_mode": "wal",
+    "model": "one monolith attribution-bundle writer plus three standalone read workers",
+    "writer_transactions": 80,
+    "reader_transactions": 240,
+    "required_lock_errors": 0,
+    "required_snapshot_mismatches": 0,
+    "required_quick_check": "ok"
+  },
+  "resource_budget": {
+    "host": "ip-172-31-45-202",
+    "measurement_sha": "c55fa5da48847a9609ed100f1ed34323ab4e8a70",
+    "measurement_scope": "live post-Deliverables host with monolith, Auth, Tasks, Coord, and Deliverables active",
+    "memory_total_bytes": 1931714560,
+    "memory_available_bytes": 605138944,
+    "swap_total_bytes": 536866816,
+    "swap_free_bytes": 533196800,
+    "current_unit_memory_bytes": {"projectplanner":188727296,"switchboard-auth":60256256,"switchboard-tasks":67719168,"switchboard-coord":66830336,"switchboard-deliverables":97587200},
+    "current_unit_memory_total_bytes": 481120256,
+    "projected_tally_rss_bytes": 134217728,
+    "projection_basis": "128 MiB hard cap consistent with the prior read-service independence budget; swap is excluded from resident reserve",
+    "projected_remaining_bytes": 470921216,
+    "minimum_reserve_bytes": 536870912,
+    "headroom_after_projection_bytes": -65949696,
+    "passed": false
+  },
+  "gates": {
+    "G1_route_repository_writer_inventory":{"passed":true,"reason":"All thirteen Tally routes are classified as six day-one reads and seven monolith-owned writers with concrete repository and transaction boundaries."},
+    "G2_attribution_integrity":{"passed":false,"reason":"Spend/outcome writers do not fail closed on conflicting task/outcome/claim parents, so existing read joins cannot yet be treated as an invariant-safe standalone ledger."},
+    "G3_project_scope":{"passed":true,"reason":"Every route resolves an explicit project and storage remains isolated by project database."},
+    "G4_writer_transaction_boundaries":{"passed":true,"reason":"All seven writers and their audit effects have named monolith transaction boundaries and remain outside day-one service scope."},
+    "G5_sqlite_contention":{"passed":true,"reason":"Executable WAL probe requires zero lock errors, zero attribution snapshot mismatches, and quick_check=ok."},
+    "G6_resource_budget":{"passed":false,"reason":"A 128 MiB Tally process would leave 470921216 bytes available, 65949696 bytes below the required 512 MiB resident reserve."}
+  },
+  "nogo_exit": {
+    "blocked_task": "ARCH-MS-115",
+    "keep_in_process": true,
+    "ship_uvicorn": false,
+    "ship_caddy_cut": false,
+    "next_action": "Keep Tally in-process. Re-evaluate only after attribution parents fail closed and at least 65949696 additional bytes of resident headroom are demonstrated (plus safety margin)."
+  }
+}
