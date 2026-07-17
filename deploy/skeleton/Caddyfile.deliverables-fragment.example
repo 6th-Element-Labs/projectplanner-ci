@@ -1,0 +1,10 @@
+# ARCH-MS-110 side-by-side drill only. A successor cutover task owns live
+# deploy/Caddyfile edits after parity and rollback gates pass.
+
+# @deliverables_day_one_reads {
+#     method GET
+#     path /api/mission_status /api/deliverables /api/deliverables/*
+# }
+# handle @deliverables_day_one_reads {
+#     reverse_proxy 127.0.0.1:8124
+# }

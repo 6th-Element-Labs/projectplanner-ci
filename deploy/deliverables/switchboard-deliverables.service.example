@@ -1,0 +1,27 @@
+# Example systemd unit for Switchboard Deliverables (ARCH-MS-110 side-by-side)
+#
+# The Go verdict authorizes the localhost process and parity soak only. Live
+# Caddy routing remains disabled until the explicit cutover task.
+
+[Unit]
+Description=Switchboard Deliverables service (:8124, side-by-side)
+After=network.target
+PartOf=projectplanner.service
+
+[Service]
+Type=simple
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+Environment=PYTHONUNBUFFERED=1
+Environment=SWITCHBOARD_DELIVERABLES_SERVICE_NAME=switchboard-deliverables
+Environment=SWITCHBOARD_DELIVERABLES_HOST=127.0.0.1
+Environment=SWITCHBOARD_DELIVERABLES_PORT=8124
+Environment=PYTHONPATH=/opt/projectplanner:/opt/projectplanner/src
+ExecStart=/opt/projectplanner/.venv/bin/uvicorn --factory switchboard.services.deliverables.app:create_app --host 127.0.0.1 --port 8124
+Restart=on-failure
+RestartSec=3
+MemoryMax=250M
+
+[Install]
+WantedBy=multi-user.target

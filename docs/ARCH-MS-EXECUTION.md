@@ -90,6 +90,7 @@ rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
 |---|---|---|---|
 | **ARCH-MS-97** | Deliverables service: ADR charter + thin surface | ✅ | PR #533 — ADR-0014; `docs/deliverables/thin_day_one_surface.md` |
 | **ARCH-MS-109** | Deliverables independence: closure transactions, auth, capacity | 🟢 | Go artifact + executable route/transaction/contention gate; `docs/deliverables/deliverables_independence_verdict.json` |
+| **ARCH-MS-110** | Standalone Deliverables service + side-by-side parity on `:8124` | 🟢 | Read-only service/ports + Auth, revision/closure parity gate; `tests/test_arch_ms110_deliverables_service.py` |
 
 Update the **Repo evidence** column when a PR merges. Board status follows Switchboard provenance
 rules — agents use `complete_claim`; Done requires merge webhook or reconcile.
@@ -370,4 +371,5 @@ Tasks with satisfied dependencies and remaining work:
 | 2026-07-16 | ARCH-MS-97 | Deliverables/mission charter ADR-0014 + Mode A thin surface (`:8124`); `docs/deliverables/thin_day_one_surface.md`; `tests/test_arch_ms97_deliverables_charter.py` |
 | 2026-07-16 | ARCH-MS-98 | Tally/economics charter ADR-0015 + Mode A thin surface (`:8125`); `docs/tally/thin_day_one_surface.md`; `tests/test_arch_ms98_tally_charter.py` |
 | 2026-07-16 | ARCH-MS-99 | Ingest/inbox charter ADR-0016 + Mode A thin surface (`:8126`); `docs/ingest/thin_day_one_surface.md`; `tests/test_arch_ms99_ingest_charter.py` |
+| 2026-07-18 | ARCH-MS-110 | Deliverables/mission read-only process package + project-scoped Auth port + side-by-side parity on `:8124`; writers and live Caddy remain monolith/successor-owned; `tests/test_arch_ms110_deliverables_service.py` |
 | 2026-07-15 | ARCH-MS-71 | **TRUE Phase 1 exit** (supersedes #440 Done on ARCH-MS-45): `arch_ms_phase1_exit_gate.py` → `passed=true`, `rename_as_done=false`; shell deleted (ARCH-MS-64); `app_impl`/`mcp_server_impl` under residual ceilings (ARCH-MS-70); proof `tests/test_arch_ms71_true_phase1_exit.py` |
