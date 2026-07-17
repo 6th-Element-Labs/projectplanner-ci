@@ -7,6 +7,7 @@ repositories so the Tasks service package stays free of root ``store`` /
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Mapping, Optional
 
 import auth as _auth
@@ -236,3 +237,25 @@ def ensure_tasks_runtime() -> None:
 
     auth_store.init()
     init_project_registry()
+
+
+def probe_tasks_readiness(project: str = "") -> dict[str, Any]:
+    """Fail closed across DB/schema, browser auth, and one Tasks-owned read."""
+    from switchboard.api.routers.auth import session as auth_session
+    from switchboard.storage.repositories import projects as projects_repo
+
+    project = project or os.environ.get("SWITCHBOARD_TASKS_READY_PROJECT", "switchboard").strip()
+    checks: dict[str, Any] = {}
+    db_error = projects_repo.probe_project_db(project)
+    checks["database_schema"] = "ok" if db_error is None else db_error
+    try:
+        auth_session.require_production_secret()
+        checks["browser_session_auth"] = "ok" if auth_session.COOKIE_NAME else "cookie_name_missing"
+    except Exception as exc:
+        checks["browser_session_auth"] = type(exc).__name__
+    try:
+        _tasks.list_tasks_slim(project=project)
+        checks["tasks_repository_read"] = "ok"
+    except Exception as exc:
+        checks["tasks_repository_read"] = type(exc).__name__
+    return {"ok": all(value == "ok" for value in checks.values()), "checks": checks}

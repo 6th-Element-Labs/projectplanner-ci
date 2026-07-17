@@ -81,6 +81,7 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
                 assignee: str = "", phase: str = "", start_date: str = "",
                 finish_date: str = "", risk_level: str = "", is_blocking: str = "",
                 depends_on: str = "", project: str = "maxwell", agent_id: str = "",
+                ui_impact: str = "",
                 system_actor: str = "", system_reason: str = "") -> str:
     """Update only the fields you pass on a task. status: Not Started|In Progress|In Review|Blocked|Done;
     Done fails closed unless merge/default-branch provenance is already recorded for the task;
@@ -103,6 +104,8 @@ def update_task(task_id: str, ctx: Context, title: str = "", description: str = 
                        ("is_blocking", is_blocking), ("depends_on", depends_on)):
         if value != "":
             data[key] = value
+    if ui_impact != "":
+        data["ui_impact"] = ui_impact
     if not data:
         return "no fields to update"
     task = update_task_command.execute_mapping_result(
@@ -117,6 +120,7 @@ def create_task(workstream_id: str, title: str, ctx: Context, description: str =
                 owner_org: str = "", owner_person_or_role: str = "", status: str = "",
                 phase: str = "", risk_level: str = "", depends_on: str = "",
                 project: str = "maxwell", agent_id: str = "", system_actor: str = "",
+                ui_impact: str = "",
                 system_reason: str = "") -> str:
     """Create a task in a workstream (SSO/SEN/... for Maxwell; ENGINE/CHART/... for Helm;
     PROTO/ADAPTER/ENFORCE/... for Switchboard). depends_on:

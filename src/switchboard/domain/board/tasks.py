@@ -139,7 +139,11 @@ def apply_terminal_done_view(task: dict[str, Any]) -> None:
     identity = task.get("identity") or {}
     suppressed: dict[str, Any] = {}
     if stale_agent_state:
-        suppressed["agent_state_agents"] = sorted(stale_agent_state.keys())
+        reserved = {"validation_policy", "session_policy", "work_session"}
+        suppressed["agent_state_agents"] = sorted(
+            key for key in stale_agent_state.keys() if key not in reserved)
+        if stale_agent_state.get("validation_policy"):
+            suppressed["validation_policy"] = True
     if stale_claims:
         suppressed["active_claim_count"] = len(stale_claims)
         suppressed["active_claim_ids"] = [

@@ -39,6 +39,7 @@ from switchboard.domain.deliverables.lifecycle import (
     validate_deliverable_status,
 )
 from switchboard.storage.repositories.tasks import _task_row
+from switchboard.domain.validation_policy import classify_task
 
 
 def _store_facade():
@@ -1125,8 +1126,16 @@ def _validate_breakdown_task_spec(milestone_idx: int, task_idx: int,
             f"milestones[{milestone_idx}].tasks[{task_idx}] create requires "
             "workstream_id and title"
         )
-    return dict(task, action="create", project_id=task_project,
-                workstream_id=workstream_id, title=task_title), None
+    normalized = dict(task, action="create", project_id=task_project,
+                      workstream_id=workstream_id, title=task_title)
+    validation = classify_task(normalized, project=task_project, material_rescope=True)
+    if not validation.get("ok"):
+        return None, (
+            f"milestones[{milestone_idx}].tasks[{task_idx}] "
+            f"{validation.get('message') or validation.get('error')}"
+        )
+    normalized["ui_impact"] = validation.get("ui_impact")
+    return normalized, None
 
 
 def _validate_breakdown_payload(payload: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -1625,9 +1634,12 @@ def approve_deliverable_breakdown(proposal_id: str, actor: str = "user",
                     "phase": task_spec.get("phase"),
                     "status": task_spec.get("status") or "Not Started",
                     "depends_on": task_spec.get("depends_on") or [],
+                    "ui_impact": task_spec.get("ui_impact"),
                 }, actor=actor, project=task_project)
-                if not created:
-                    return {"error": "failed to create proposed task",
+                if not created or created.get("error"):
+                    return {"error": created.get("message") or created.get("error")
+                            if isinstance(created, dict)
+                            else "failed to create proposed task",
                             "project_id": task_project,
                             "workstream_id": task_spec["workstream_id"],
                             "title": task_spec["title"]}

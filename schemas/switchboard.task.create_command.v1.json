@@ -193,6 +193,18 @@
       "title": "Title",
       "type": "string"
     },
+    "ui_impact": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ui Impact"
+    },
     "workstream_id": {
       "title": "Workstream Id",
       "type": "string"

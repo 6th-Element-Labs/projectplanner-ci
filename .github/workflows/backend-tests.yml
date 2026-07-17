@@ -65,6 +65,7 @@ jobs:
           SWITCHBOARD_CI_STRICT: "1"
           SWITCHBOARD_CI_REQUIRE_NODE: "1"
           CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
+          UI_PLAYWRIGHT_REPORT: ".artifacts/ui-playwright-receipt.json"
         run: |
           # Strip GitHub's auto-set GITHUB_REPOSITORY: store.py falls back to it for a
           # project's canonical repo, which on this CI repo is the *sandbox* slug and makes
@@ -81,3 +82,11 @@ jobs:
           name: concurrent-load-slo-report
           path: .artifacts/concurrent-load-report.json
           if-no-files-found: warn
+
+      - name: Upload UI Playwright receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-playwright-receipt
+          path: .artifacts/ui-playwright-receipt.json
+          if-no-files-found: error

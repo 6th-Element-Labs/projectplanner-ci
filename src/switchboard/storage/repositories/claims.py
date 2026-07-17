@@ -24,6 +24,10 @@ from constants import *  # noqa: F401,F403
 from db.connection import _conn
 from switchboard.domain.board.tasks import READY_TASK_STATUSES
 from switchboard.domain.provenance.semantic import semantic_completion_gate
+from switchboard.domain.validation_policy import (
+    classify_task,
+    ui_playwright_evidence_gate,
+)
 from switchboard.storage.repositories.tasks import (
     _deps_done,
     _task_human_gate_state,
@@ -519,6 +523,24 @@ def _complete_claim_work_session_gate_in(
     if rules.get("requires_diff_check") and not _store_facade()._completion_evidence_has_diff_check(evidence_obj, session):
         problems.append({"reason": "missing_diff_check", "failure_class": "missing_data",
                          "message": "Completion evidence must record git diff --check as clean."})
+    hygiene = (session or {}).get("hygiene") or {}
+    preflight = hygiene.get("repo_preflight") or {}
+    changed_files = (
+        evidence_obj.get("changed_files")
+        or preflight.get("changed_files")
+        or hygiene.get("changed_files")
+        or []
+    )
+    ui_gate = ui_playwright_evidence_gate(
+        task, evidence_obj, session, project=project,
+        head_sha=evidence_head or session_head, changed_files=changed_files)
+    if not ui_gate.get("ok"):
+        problems.append({
+            "reason": ui_gate.get("reason") or ui_gate.get("error") or "missing_ui_playwright_evidence",
+            "failure_class": "missing_data",
+            "message": ui_gate.get("message") or "UI validation policy failed.",
+            "ui_playwright_gate": ui_gate,
+        })
     problems.extend(_store_facade()._work_session_stale_lease_problems(session, now))
     if problems:
         first = problems[0]
@@ -694,6 +716,15 @@ def claim_task(task_id: str, agent_id: str,
                require_work_session: bool = False,
                project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
     s = _store_facade()
+    task = s.get_task(task_id, project=project)
+    validation = (classify_task(task or {}, project=project, existing=task or {})
+                  if task else {"ok": False, "error": "task_not_found"})
+    if not validation.get("ok"):
+        return {"claimed": False,
+                "reason": validation.get("error") or "ui_validation_policy_failed",
+                "task_id": task_id, "validation_policy": validation}
+    if "agent_state" in (task or {}):
+        s.ensure_task_validation(task_id, project=project, actor=actor)
     return s._write_through(project, lambda: s._claim_task_impl(
         task_id, agent_id, principal_id=principal_id, actor=actor,
         ttl_seconds=ttl_seconds, idem_key=idem_key,
@@ -768,10 +799,11 @@ def claim_next(agent_id: str, lanes: Any = None,
         eligible = []
         skipped = {"active_claim": 0, "status": 0, "lane": 0, "dependencies": 0,
                    "human_approval": 0, "capability_mismatch": 0, "risk": 0, "budget": 0,
-                   "identity_unknown": 0, "work_session": 0}
+                   "identity_unknown": 0, "work_session": 0, "ui_validation": 0}
         identity_risks: Dict[str, Dict[str, Any]] = {}
         human_gates: Dict[str, Dict[str, Any]] = {}
         work_session_findings: Dict[str, Dict[str, Any]] = {}
+        validation_findings: Dict[str, Dict[str, Any]] = {}
         for t in tasks:
             if t["task_id"] in active_claims:
                 skipped["active_claim"] += 1
@@ -779,6 +811,12 @@ def claim_next(agent_id: str, lanes: Any = None,
             if t.get("status") not in READY_TASK_STATUSES:
                 skipped["status"] += 1
                 continue
+            validation = classify_task(t, project=project, existing=t)
+            if not validation.get("ok"):
+                skipped["ui_validation"] += 1
+                validation_findings[t["task_id"]] = validation
+                continue
+            t["_effective_validation"] = validation
             if lane_set and (t.get("_wsId") or "").upper() not in lane_set:
                 skipped["lane"] += 1
                 continue
@@ -829,11 +867,22 @@ def claim_next(agent_id: str, lanes: Any = None,
                                             "candidate_count": 0,
                                             "human_gates": human_gates,
                                             "identity_risks": identity_risks,
-                                            "work_session_findings": work_session_findings}}
+                                            "work_session_findings": work_session_findings,
+                                            "validation_findings": validation_findings}}
             _store_facade()._idem_store(c, "claim_next", idem_key, actor, payload, response)
             return response
         _, _, _, task, selected_score = sorted(
             eligible, key=lambda x: (-x[0], -x[1], x[2]))[0]
+        selected_validation = task.pop("_effective_validation", {})
+        if selected_validation:
+            state = dict(task.get("agent_state") or {})
+            state["validation_policy"] = selected_validation
+            task["agent_state"] = state
+            c.execute("UPDATE tasks SET agent_state=?, updated_at=? WHERE task_id=?",
+                      (json.dumps(state, sort_keys=True), now, task["task_id"]))
+            c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                      (task["task_id"], actor, "validation.classified",
+                       json.dumps(selected_validation, sort_keys=True), now))
         claim_id = "taskclaim-" + uuid.uuid4().hex[:16]
         lease_id = "lease-" + uuid.uuid4().hex[:16]
         expires_at = now + max(60, int(ttl_seconds or 1800))

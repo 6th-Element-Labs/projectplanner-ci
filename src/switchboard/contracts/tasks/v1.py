@@ -19,14 +19,14 @@ CREATE_TASK_FIELDS: tuple[str, ...] = (
     "workstream_id", "title", "description", "workstream_name", "owner_org",
     "owner_person_or_role", "assignee", "phase", "status", "effort_days",
     "duration_days", "start_date", "finish_date", "depends_on", "entry_criteria",
-    "exit_criteria", "deliverable", "risk_level", "is_blocking",
+    "exit_criteria", "deliverable", "risk_level", "is_blocking", "ui_impact",
 )
 
 UPDATE_TASK_FIELDS: tuple[str, ...] = (
     "title", "description", "owner_org", "owner_person_or_role", "assignee",
     "phase", "status", "effort_days", "duration_days", "start_date",
     "finish_date", "risk_level", "is_blocking", "sort_order",
-    "entry_criteria", "exit_criteria", "deliverable",
+    "entry_criteria", "exit_criteria", "deliverable", "ui_impact",
 )
 
 # CreateTaskCommand's optional text columns — the dataclass era mapped every
@@ -81,6 +81,7 @@ class CreateTaskCommand(VersionedModel):
     deliverable: str | None = None
     risk_level: str | None = None
     is_blocking: bool = False
+    ui_impact: str | None = None
 
     @field_validator("workstream_id", "title", mode="before")
     @classmethod
@@ -116,7 +117,7 @@ class CreateTaskCommand(VersionedModel):
         return cls.model_validate(filtered)
 
     def to_store_data(self) -> dict[str, Any]:
-        return {
+        data = {
             "workstream_id": self.workstream_id,
             "title": self.title,
             "description": self.description,
@@ -137,6 +138,9 @@ class CreateTaskCommand(VersionedModel):
             "risk_level": self.risk_level,
             "is_blocking": self.is_blocking,
         }
+        if self.ui_impact is not None:
+            data["ui_impact"] = self.ui_impact
+        return data
 
 
 class GetTaskQuery(VersionedModel):

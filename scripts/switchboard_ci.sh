@@ -171,6 +171,16 @@ section "CI hermeticity gate (tests must not read live host state)"
 
 run_discovered_tests
 
+if [ "$STRICT" = "1" ]; then
+  section "Dedicated Switchboard UI / Playwright gate"
+  "$PYTHON" scripts/run_ui_playwright.py \
+    --task-id "${SWITCHBOARD_TASK_ID:-CI-UI}" \
+    --work-session-id "${SWITCHBOARD_WORK_SESSION_ID:-}" \
+    --branch "${SWITCHBOARD_BRANCH:-}" \
+    --head-sha "${SWITCHBOARD_HEAD_SHA:-${GITHUB_SHA:-}}" \
+    --output "${UI_PLAYWRIGHT_REPORT:-.artifacts/ui-playwright-receipt.json}"
+fi
+
 section "Frontend JavaScript syntax"
 if command -v node >/dev/null 2>&1; then
   node --check static/app.js

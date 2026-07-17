@@ -21,6 +21,7 @@ concurrency:
 env:
   CANONICAL_REPO: 6th-Element-Labs/projectplanner
   STATUS_CONTEXT: Switchboard CI / VM gate
+  UI_STATUS_CONTEXT: Switchboard UI / Playwright
   TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
@@ -47,6 +48,11 @@ jobs:
             -f state=pending \
             -f context="$STATUS_CONTEXT" \
             -f description='scratchpad: running full suite' \
+            -f target_url="$TARGET_URL"
+          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+            -f state=pending \
+            -f context="$UI_STATUS_CONTEXT" \
+            -f description='playwright: running required Chromium journey' \
             -f target_url="$TARGET_URL"
 
       - name: Check out scratchpad branch
@@ -84,6 +90,7 @@ jobs:
           SWITCHBOARD_CI_STRICT: "1"
           SWITCHBOARD_CI_REQUIRE_NODE: "1"
           CONCURRENT_LOAD_REPORT: ".artifacts/concurrent-load-report.json"
+          UI_PLAYWRIGHT_REPORT: ".artifacts/ui-playwright-receipt.json"
         run: |
           unset GITHUB_REPOSITORY
           bash scripts/switchboard_ci.sh
@@ -96,6 +103,14 @@ jobs:
           path: .artifacts/concurrent-load-report.json
           if-no-files-found: warn
 
+      - name: Upload UI Playwright receipt
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-playwright-${{ github.sha }}
+          path: .artifacts/ui-playwright-receipt.json
+          if-no-files-found: error
+
       - name: Post required success status
         if: success()
         env:
@@ -105,6 +120,11 @@ jobs:
             -f state=success \
             -f context="$STATUS_CONTEXT" \
             -f description='tests: full suite passed (scratchpad)' \
+            -f target_url="$TARGET_URL"
+          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+            -f state=success \
+            -f context="$UI_STATUS_CONTEXT" \
+            -f description='playwright: Chromium journey passed with no skips' \
             -f target_url="$TARGET_URL"
 
       - name: Post tests failure status
@@ -117,6 +137,11 @@ jobs:
             -f context="$STATUS_CONTEXT" \
             -f description='tests: switchboard_ci.sh failed — see run log' \
             -f target_url="$TARGET_URL" || true
+          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+            -f state=failure \
+            -f context="$UI_STATUS_CONTEXT" \
+            -f description='playwright: required Chromium journey failed' \
+            -f target_url="$TARGET_URL" || true
 
       - name: Post infra failure status
         if: failure() && steps.checkout.outcome != 'success'
@@ -127,4 +152,9 @@ jobs:
             -f state=failure \
             -f context="$STATUS_CONTEXT" \
             -f description='infra: scratchpad checkout/setup failed — see run log' \
+            -f target_url="$TARGET_URL" || true
+          gh api "repos/$CANONICAL_REPO/statuses/$GITHUB_SHA" \
+            -f state=failure \
+            -f context="$UI_STATUS_CONTEXT" \
+            -f description='infra: Playwright checkout/setup failed' \
             -f target_url="$TARGET_URL" || true

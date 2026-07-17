@@ -23,6 +23,7 @@ from switchboard.api.routers import tasks as tasks_router
 from switchboard.api.tasks_port_adapters import (
     configure_tasks_ports,
     ensure_tasks_runtime,
+    probe_tasks_readiness,
 )
 
 from switchboard.services.tasks import health as health_router
@@ -64,7 +65,8 @@ def create_app(settings: TasksServiceSettings | None = None) -> FastAPI:
         admin_scopes=deps.ADMIN_SCOPES,
     )
 
-    application.include_router(health_router.create_router(service_name=cfg.service_name))
+    application.include_router(health_router.create_router(
+        service_name=cfg.service_name, readiness_probe=probe_tasks_readiness))
     application.include_router(
         tasks_router.create_router(
             resolve_project=deps.resolve_project,

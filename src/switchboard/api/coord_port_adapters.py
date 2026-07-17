@@ -6,6 +6,7 @@ Auth port, matching the Auth and Tasks process-cut pattern.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 from fastapi import Request
@@ -137,3 +138,25 @@ def configure_coord_ports(
         queries=queries or RepositoryCoordQueries(),
         auth=auth or ProjectScopedCoordReadAuth(),
     )
+
+
+def probe_coord_readiness(project: str = "") -> dict[str, Any]:
+    """Fail closed across DB/schema, browser auth, and one Coord-owned query."""
+    from switchboard.api.routers.auth import session as auth_session
+    from switchboard.storage.repositories import projects as projects_repo
+
+    project = project or os.environ.get("SWITCHBOARD_COORD_READY_PROJECT", "switchboard").strip()
+    checks: dict[str, Any] = {}
+    db_error = projects_repo.probe_project_db(project)
+    checks["database_schema"] = "ok" if db_error is None else db_error
+    try:
+        auth_session.require_production_secret()
+        checks["browser_session_auth"] = "ok" if auth_session.COOKIE_NAME else "cookie_name_missing"
+    except Exception as exc:
+        checks["browser_session_auth"] = type(exc).__name__
+    try:
+        RepositoryCoordQueries().board(project, cards=False)
+        checks["coord_repository_read"] = "ok"
+    except Exception as exc:
+        checks["coord_repository_read"] = type(exc).__name__
+    return {"ok": all(value == "ok" for value in checks.values()), "checks": checks}

@@ -16,6 +16,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from constants import DEFAULT_PROJECT, GITHUB_PR_URL_RE, MERGE_GATE_SCHEMA
 from switchboard.domain.provenance.semantic import semantic_completion_gate
+from switchboard.domain.validation_policy import (
+    UI_CONTEXT,
+    classify_task,
+    ui_playwright_evidence_gate,
+)
 
 
 __all__ = [
@@ -378,7 +383,36 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "Merge gate requires safe rebase evidence before merge.",
                 "missing_data"))
 
+    session_hint = None
+    if work_session_id:
+        session_hint = get_work_session(work_session_id, project=project)
+    elif claim_id:
+        with _conn(project) as c:
+            row = c.execute(
+                "SELECT * FROM work_sessions WHERE claim_id=? ORDER BY updated_at DESC LIMIT 1",
+                (claim_id,),
+            ).fetchone()
+            session_hint = _work_session_row(row) if row else None
+    hint_hygiene = (session_hint or {}).get("hygiene") or {}
+    declared_changed_files = (
+        merged_payload.get("changed_files")
+        or (hint_hygiene.get("repo_preflight") or {}).get("changed_files")
+        or hint_hygiene.get("changed_files")
+        or []
+    )
+    task_validation = classify_task(
+        task, project=project, existing=task,
+        changed_files=declared_changed_files)
     required_contexts = _merge_gate_required_contexts(topology, merged_payload)
+    if (task_validation.get("ok")
+            and task_validation.get("ui_impact") == "yes"
+            and UI_CONTEXT not in required_contexts):
+        required_contexts.append(UI_CONTEXT)
+    if not task_validation.get("ok"):
+        findings.append(_merge_gate_finding(
+            task_validation.get("error") or "ui_validation_policy_failed",
+            task_validation.get("message") or "Task UI validation classification failed.",
+            "missing_data", details={"validation_policy": task_validation}))
     pr_contexts = _merge_gate_status_contexts(
         pr.get("status_contexts") if pr else None,
         pr.get("statusCheckRollup") if pr else None,
@@ -440,16 +474,15 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             "invalid_input",
             details={"known_profiles": sorted((get_session_policy_profiles(project).get("profiles") or {}).keys())}))
 
-    session = None
+    session = session_hint
     if work_session_id:
-        session = get_work_session(work_session_id, project=project)
         if not session:
             findings.append(_merge_gate_finding(
                 "work_session_not_found",
                 "Merge gate work_session_id was not found.",
                 "missing_data",
                 details={"work_session_id": work_session_id}))
-    elif claim_id:
+    elif claim_id and not session:
         with _conn(project) as c:
             row = c.execute(
                 "SELECT * FROM work_sessions WHERE claim_id=? ORDER BY updated_at DESC LIMIT 1",
@@ -514,6 +547,22 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
                 "missing_data",
                 details={"executed_test_gate": executed_test_gate,
                          "policy_profile": profile}))
+    hygiene = (session or {}).get("hygiene") or {}
+    preflight = hygiene.get("repo_preflight") or {}
+    changed_files = (
+        declared_changed_files
+        or preflight.get("changed_files")
+        or hygiene.get("changed_files")
+        or []
+    )
+    ui_gate = ui_playwright_evidence_gate(
+        task, merged_payload, session, project=project,
+        head_sha=review_head_sha, changed_files=changed_files)
+    if not ui_gate.get("ok"):
+        findings.append(_merge_gate_finding(
+            ui_gate.get("reason") or ui_gate.get("error") or "missing_ui_playwright_evidence",
+            ui_gate.get("message") or "UI Playwright evidence gate failed.",
+            "missing_data", details={"ui_playwright_gate": ui_gate}))
 
     # Shared "is this task backed by board process" check (ADR-0006) — the same
     # definition the SESSION-12 claim gate enforces at the CI chokepoint. merge_gate
@@ -555,6 +604,8 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
         "external_ci": external_ci,
         "semantic_gate": semantic_gate,
         "review_gate": review_gate,
+        "validation_policy": task_validation,
+        "ui_playwright_gate": ui_gate,
         "github_pr_source": pr_source,
         "done_authority": "github_webhook_or_reconcile",
         "done_controlled_by_merge_provenance": True,

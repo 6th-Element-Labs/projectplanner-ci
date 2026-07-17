@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from switchboard.domain.validation_policy import classify_task
+
 from pydantic import ValidationError
 
 import store
@@ -62,7 +64,16 @@ def execute(
             dependency_ids=unknown,
         )
 
-    created = repo.create_task(command.to_store_data(), actor=actor, project=project)
+    store_data = command.to_store_data()
+    validation = classify_task(store_data, project=project, material_rescope=True)
+    if not validation.get("ok"):
+        raise CreateTaskError(
+            validation.get("error") or "ui_validation_policy_failed",
+            validation.get("message") or "Task UI validation classification failed.",
+            project=project,
+        )
+    store_data["ui_impact"] = validation.get("ui_impact")
+    created = repo.create_task(store_data, actor=actor, project=project)
     if not created:
         raise CreateTaskError(
             "invalid_create_task",

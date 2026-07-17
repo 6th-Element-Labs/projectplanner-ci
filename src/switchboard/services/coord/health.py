@@ -1,14 +1,4 @@
-"""Cheap liveness endpoint for the standalone Coord process."""
-from __future__ import annotations
+"""Shared liveness/readiness router for the Coord cut-out process."""
+from switchboard.services.health import create_router
 
-from fastapi import APIRouter
-
-
-def create_router(*, service_name: str) -> APIRouter:
-    router = APIRouter()
-
-    @router.get("/health")
-    async def health():
-        return {"status": "ok", "service": service_name}
-
-    return router
+__all__ = ["create_router"]

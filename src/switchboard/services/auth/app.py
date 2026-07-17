@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from switchboard.api.auth_port_adapters import configure_auth_ports
+from switchboard.api.auth_port_adapters import configure_auth_ports, probe_auth_readiness
 from switchboard.api.routers.auth import store as auth_store
 from switchboard.api.routers.auth.routes import router as auth_router
 
@@ -40,6 +40,7 @@ def create_app(settings: AuthServiceSettings | None = None) -> FastAPI:
         ),
     )
     application.state.auth_service_settings = cfg
-    application.include_router(health_router.create_router(service_name=cfg.service_name))
+    application.include_router(health_router.create_router(
+        service_name=cfg.service_name, readiness_probe=probe_auth_readiness))
     application.include_router(auth_router)
     return application
