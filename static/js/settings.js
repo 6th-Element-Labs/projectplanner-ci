@@ -69,6 +69,16 @@
         { id: 'cursor', label: 'Cursor', icon: 'ti-terminal-2' },
     ];
 
+    // UI-21: the "API connections" group — user-owned, explicitly metered BYOK
+    // credentials, distinct from the personal subscriptions above. OpenAI is the
+    // MVP row; Anthropic/Cursor stay UI-disabled until their adapters qualify
+    // (ADAPTER-20/21), even though the CO-15 matrix already lists them supported.
+    const API_CONNECTION_PROVIDERS = [
+        { id: 'openai-codex', label: 'OpenAI API', icon: 'ti-brand-openai', enabled: true },
+        { id: 'anthropic-claude', label: 'Anthropic API', icon: 'ti-sparkles', enabled: false, gate: 'ADAPTER-20' },
+        { id: 'cursor', label: 'Cursor Agent API', icon: 'ti-terminal-2', enabled: false, gate: 'ADAPTER-21' },
+    ];
+
     const DEFAULT_SECTION = 'profile';
     const SCOPE_LABEL = {
         'write:projects': 'Project editor access (write:projects)',
@@ -375,14 +385,20 @@
                 connectionsError: data.error || '', hostsError: hostsData.error || '',
             };
             const providerCards = AI_ACCOUNT_PROVIDERS.map((p) => this._settingsAiAccountProviderCard(p, ctx)).join('');
+            const apiConnectionCards = API_CONNECTION_PROVIDERS.map((p) => this._settingsApiConnectionCard(p, ctx)).join('');
             return this._settingsCard({
-                id: 'settings-ai-accounts', title: 'Personal AI accounts', icon: 'ti-plug-connected',
-                subtitle: 'Provider-native status and enrollment for your agent runtimes',
+                id: 'settings-ai-accounts', title: 'AI connections', icon: 'ti-plug-connected',
+                subtitle: 'Personal subscriptions and user-owned API connections for your agent runtimes',
                 actions: `<span class="badge bg-secondary-lt">policy ${this.esc(policy.policy_version || 'unknown')}</span>`,
                 body: `<div class="alert alert-info py-2 px-3 small" role="note"><i class="ti ti-shield-check me-1" aria-hidden="true"></i>This server-authoritative matrix also gates enrollment, scheduling, runtime launch, MCP, and CO-14 proof. Unknown, stale, unapproved, or host-mismatched modes fail closed.</div>
                     <div class="alert alert-secondary py-2 px-3 small" role="note"><i class="ti ti-shield-lock me-1" aria-hidden="true"></i>Enrollment is provider-native and owner-bound. This screen never accepts provider passwords, tokens, cookies, auth capsules, or browser profiles; it displays only redacted host-verified proof.</div>
                     ${fetchErrorBanner}
+                    <h4 class="mb-1 mt-2">Personal subscriptions</h4>
+                    <div class="small text-secondary mb-3">Your ChatGPT/Claude/Cursor sign-in, used natively on your own Agent Host. No metered API billing.</div>
                     ${providerCards}
+                    <h4 class="mb-1 mt-4">API connections</h4>
+                    <div class="alert alert-warning py-2 px-3 small" role="note"><i class="ti ti-currency-dollar me-1" aria-hidden="true"></i>User-owned API keys are <strong>explicitly metered</strong> — every run bills your own provider account against the budget you set. API is never auto-selected as a fallback for a personal subscription; switching billing mode is always an explicit, audited choice.</div>
+                    ${apiConnectionCards}
                     <h4 class="mb-2 mt-4">Authentication policy</h4>${policyBody}
                     <div class="small text-secondary mt-2">LiteLLM personal-subscription broker: <strong>${broker.litellm === false ? 'disabled' : 'unknown'}</strong>. LiteLLM is eligible only for explicit API/paygo paths — never for personal subscriptions.</div>`,
             });
@@ -616,6 +632,125 @@
                 await this._sSend(`api/projects/${encodeURIComponent(proj)}/provider-connections/${encodeURIComponent(ref)}`, 'DELETE', { reason: 'operator_deleted_in_settings' });
                 await this.renderSettings();
             } catch (e) { this._sFlash(`aiacct-conn-${ref}-flash`, e.message, 'text-danger'); }
+        },
+
+        // ── UI-21: API connections (user-owned, explicitly metered BYOK) ──────────
+        // The host-local enroll command the user runs on their Agent Host. Like the
+        // personal declare-account flow, the API key is typed on the host and never
+        // crosses the browser — Settings only ever binds billing/budget and displays
+        // the redacted result. `--api-key-stdin` prompts on the host (no shell history).
+        _settingsApiEnrollCommand(providerId, billing, ceiling, currency) {
+            const proj = window.PM_PROJECT || 'maxwell';
+            const q = (v, d) => String(v || d).replace(/'/g, "'\\''");
+            return `python adapters/agent_host_enrollment.py enroll-api-key \\\n`
+                + `  --identity ~/.config/switchboard-agent-host/identity.json \\\n`
+                + `  --config ~/.config/switchboard-agent-host/config.json \\\n`
+                + `  --project ${proj} --provider ${providerId} \\\n`
+                + `  --billing-account '${q(billing, 'acct-billing-1')}' \\\n`
+                + `  --budget-ceiling ${q(ceiling, '50')} --budget-currency ${q(currency, 'usd')} \\\n`
+                + `  --api-key-stdin`;
+        },
+
+        _settingsApiConnectionCard(provider, ctx) {
+            const conn = ctx.connectionsError ? null : this._settingsAiAccountLiveConnection(
+                ctx.conns, provider.id, (kind) => kind !== 'personal_subscription');
+            const headerBadge = conn
+                ? '<span class="badge bg-green-lt">connected</span>'
+                : (provider.enabled ? '<span class="badge bg-secondary-lt">not connected</span>'
+                    : `<span class="badge bg-secondary-lt">gated · ${this.esc(provider.gate || '')}</span>`);
+            let body;
+            if (ctx.connectionsError) {
+                body = `<div class="alert alert-secondary py-2 px-3 small mb-0" role="note"><i class="ti ti-info-circle me-1" aria-hidden="true"></i>Connection status is unavailable right now — see the error above.</div>`;
+            } else if (conn) {
+                body = this._settingsApiConnectionRows(conn);
+            } else if (!provider.enabled) {
+                body = `<div class="alert alert-secondary py-2 px-3 small mb-0" role="note"><i class="ti ti-lock me-1" aria-hidden="true"></i>Direct API for ${this.esc(provider.label)} is not self-service yet — it stays disabled until its adapter qualifies (${this.esc(provider.gate || 'a follow-on adapter')}). OpenAI is the supported API row today.</div>`;
+            } else {
+                const billId = `apiconn-${provider.id}-billing`;
+                const ceilId = `apiconn-${provider.id}-ceiling`;
+                const curId = `apiconn-${provider.id}-currency`;
+                const cmdId = `apiconn-${provider.id}-cmd`;
+                body = `<div class="row g-2 mb-2">
+                        <div class="col-md-6"><label class="form-label small mb-1" for="${billId}">Billing account</label>
+                            <input type="text" id="${billId}" class="form-control form-control-sm" placeholder="acct-billing-1" autocomplete="off" spellcheck="false"></div>
+                        <div class="col-md-3"><label class="form-label small mb-1" for="${ceilId}">Budget ceiling</label>
+                            <input type="number" id="${ceilId}" class="form-control form-control-sm" placeholder="50" min="1" step="1"></div>
+                        <div class="col-md-3"><label class="form-label small mb-1" for="${curId}">Currency</label>
+                            <input type="text" id="${curId}" class="form-control form-control-sm" value="usd" autocomplete="off" spellcheck="false"></div>
+                    </div>
+                    <label class="form-label small mb-1">On your registered Agent Host, enroll your API key</label>
+                    <div class="input-group input-group-sm mb-2">
+                        <input type="text" id="${cmdId}" class="form-control font-monospace" readonly value="${this.esc(this._settingsApiEnrollCommand(provider.id, '', '', 'usd'))}">
+                        <button class="btn btn-outline-secondary" type="button" data-set-action="api-connections-copy-cmd:${provider.id}" title="Copy command with the billing/budget you typed"><i class="ti ti-copy" aria-hidden="true"></i></button>
+                    </div>
+                    <div class="small text-secondary mb-0"><i class="ti ti-shield-lock me-1" aria-hidden="true"></i>Your API key is entered on your own host and envelope-encrypted there — it never touches this browser, is never logged, and Switchboard only ever stores ciphertext plus a redacted fingerprint. See <code>docs/AGENT-HOST-ENROLLMENT.md</code>.</div>`;
+            }
+            return `<div class="card mb-3" id="settings-api-conn-${provider.id}">
+                <div class="card-header"><div><h4 class="card-title mb-0"><i class="ti ${provider.icon} me-2" aria-hidden="true"></i>${this.esc(provider.label)}</h4>
+                    <div class="text-secondary small">User-owned API key · metered</div></div>
+                    <div class="card-actions">${headerBadge}</div></div>
+                <div class="card-body">${body}</div></div>`;
+        },
+
+        _settingsApiConnectionRows(c) {
+            const state = c.lifecycle_state || 'unknown';
+            const stateCls = state === 'active' ? 'bg-green-lt' : state === 'expired' ? 'bg-yellow-lt' : 'bg-red-lt';
+            const fmt = (t) => t ? new Date(t * 1000).toLocaleString() : '—';
+            const budget = c.budget_policy || {};
+            const budgetTxt = (budget.ceiling != null)
+                ? `${this.esc(String(budget.ceiling))} ${this.esc((budget.currency || '').toUpperCase())}`
+                    + (c.budget_spent != null ? ` · spent ${this.esc(String(c.budget_spent))}` : '')
+                : '<span class="text-secondary">—</span>';
+            const rows = this._settingsRows([
+                ['Status', `<span class="badge ${stateCls}">${this.esc(state)}</span> <span class="badge bg-secondary-lt ms-1">${this.esc((c.revocation_state || 'not_revoked').replace(/_/g, ' '))}</span>`],
+                ['Connection kind', `<code>${this.esc(c.connection_kind || 'direct_api')}</code>`],
+                ['Execution connection', `<code>${this.esc(c.execution_connection_id || c.credential_reference || '—')}</code>`],
+                ['Billing account', c.billing_account_bound ? `<code>${this.esc(c.billing_account_fingerprint || 'bound')}</code>` : '<span class="text-danger">not bound</span>'],
+                ['Budget', budgetTxt],
+                ['Approved host(s)', (c.host_allowlist || []).map((h) => `<code class="me-1">${this.esc(h)}</code>`).join('') || '<span class="text-secondary">—</span>'],
+                ['Active runners', String(c.active_lease_count || 0)],
+                ['Last use', this.esc(fmt(c.last_verified_at))],
+            ]);
+            const ref = c.credential_reference;
+            const disabled = state !== 'active';
+            return `<div class="alert alert-warning py-2 px-3 small" role="note"><i class="ti ti-currency-dollar me-1" aria-hidden="true"></i>Metered: usage on this connection bills your own provider account against the budget above.</div>
+                ${rows}
+                <div class="small text-secondary mt-2"><i class="ti ti-refresh me-1" aria-hidden="true"></i>To rotate the key, re-run <code>enroll-api-key</code> on your host — the new key is envelope-encrypted there and never crosses the browser.</div>
+                <div class="d-flex align-items-center mt-3 pt-2 border-top">
+                    <span id="apiconn-${this.esc(ref)}-flash" class="small text-secondary me-auto"></span>
+                    <button type="button" class="btn btn-outline-warning btn-sm me-1" ${disabled ? 'disabled' : ''} data-set-action="api-connections-revoke:${this.esc(ref)}"><i class="ti ti-ban me-1" aria-hidden="true"></i>Revoke</button>
+                    <button type="button" class="btn btn-outline-danger btn-sm" data-set-action="api-connections-delete:${this.esc(ref)}"><i class="ti ti-trash me-1" aria-hidden="true"></i>Delete</button>
+                </div>`;
+        },
+
+        _settingsApiConnectionsCopyCommand(providerId) {
+            const val = (id) => (document.getElementById(id)?.value || '').trim();
+            const cmdId = `apiconn-${providerId}-cmd`;
+            const cmdField = document.getElementById(cmdId);
+            if (cmdField) cmdField.value = this._settingsApiEnrollCommand(
+                providerId, val(`apiconn-${providerId}-billing`), val(`apiconn-${providerId}-ceiling`),
+                val(`apiconn-${providerId}-currency`) || 'usd');
+            this._settingsCopyField(cmdId);
+        },
+
+        async _settingsApiConnectionsRevoke(ref) {
+            if (!confirm('Revoke this API connection? Active runners billing it are stopped immediately.')) return;
+            const proj = window.PM_PROJECT || 'maxwell';
+            this._sFlash(`apiconn-${ref}-flash`, 'Revoking…', 'text-secondary');
+            try {
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/provider-connections/${encodeURIComponent(ref)}/revoke`, 'POST', { reason: 'operator_revoked_in_settings' });
+                await this.renderSettings();
+            } catch (e) { this._sFlash(`apiconn-${ref}-flash`, e.message, 'text-danger'); }
+        },
+
+        async _settingsApiConnectionsDelete(ref) {
+            if (!confirm('Delete this API connection? This cryptographically erases the stored key and cannot be undone.')) return;
+            const proj = window.PM_PROJECT || 'maxwell';
+            this._sFlash(`apiconn-${ref}-flash`, 'Deleting…', 'text-secondary');
+            try {
+                await this._sSend(`api/projects/${encodeURIComponent(proj)}/provider-connections/${encodeURIComponent(ref)}`, 'DELETE', { reason: 'operator_deleted_in_settings' });
+                await this.renderSettings();
+            } catch (e) { this._sFlash(`apiconn-${ref}-flash`, e.message, 'text-danger'); }
         },
 
         _settingsAppearanceSection() {
@@ -1498,6 +1633,9 @@
         if (String(action || '').startsWith('ai-accounts-reconnect:')) return this._settingsAiAccountsReconnect(action.slice('ai-accounts-reconnect:'.length));
         if (String(action || '').startsWith('ai-accounts-revoke:')) return this._settingsAiAccountsRevoke(action.slice('ai-accounts-revoke:'.length));
         if (String(action || '').startsWith('ai-accounts-delete:')) return this._settingsAiAccountsDelete(action.slice('ai-accounts-delete:'.length));
+        if (String(action || '').startsWith('api-connections-copy-cmd:')) return this._settingsApiConnectionsCopyCommand(action.slice('api-connections-copy-cmd:'.length));
+        if (String(action || '').startsWith('api-connections-revoke:')) return this._settingsApiConnectionsRevoke(action.slice('api-connections-revoke:'.length));
+        if (String(action || '').startsWith('api-connections-delete:')) return this._settingsApiConnectionsDelete(action.slice('api-connections-delete:'.length));
         switch (action) {
             case 'repo-edit': { const f = document.getElementById('repo-edit-form'); if (f) f.style.display = f.style.display === 'none' ? '' : 'none'; return; }
             case 'repo-save': return this.saveRepoTopology();
