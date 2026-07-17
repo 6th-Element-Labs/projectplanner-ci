@@ -2141,6 +2141,13 @@ def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = 
     for milestone in deliverable.get("milestones") or []:
         item = dict(milestone)
         item["linked_task_count"] = milestone_task_counts.get(milestone.get("id"), 0)
+        stored_status = item.get("status") or "not_started"
+        effective_status = _mission_milestone_rollup_status(
+            linked_tasks, milestone.get("id"), stored_status)
+        item["status"] = effective_status
+        item["status_source"] = "linked_task_rollup" if item["linked_task_count"] else "stored"
+        if effective_status != stored_status:
+            item["stored_status"] = stored_status
         milestones.append(item)
     active_work = []
     done_with_proof = []
@@ -2237,6 +2244,47 @@ def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = 
         "economics": economics if not economics.get("error") else economics,
     }
     return _attach_mission_brief_fields(result, project=project)
+
+
+def _mission_milestone_rollup_status(
+    linked_tasks: List[Dict[str, Any]], milestone_id: str, stored_status: str = "not_started",
+) -> str:
+    """Derive mission milestone state from current linked-task truth.
+
+    Stored milestone state remains authoritative only when no tasks are linked (or the
+    milestone was explicitly skipped). This prevents merged/verified tasks from leaving
+    the operator cockpit permanently at ``not_started``.
+    """
+    stored = (stored_status or "not_started").strip().lower()
+    if stored == "skipped":
+        return stored
+    relevant = [
+        link for link in linked_tasks
+        if link.get("milestone_id") == milestone_id
+        and not (link.get("task_detail") or {}).get("error")
+    ]
+    if not relevant:
+        return stored
+    details = [link.get("task_detail") or {} for link in relevant]
+    if all(
+        detail.get("status") == "Done"
+        and (detail.get("provenance") or {}).get("terminal") is True
+        for detail in details
+    ):
+        return "done"
+    if any(detail.get("status") == "Blocked" for detail in details):
+        return "blocked"
+    if any(
+        detail.get("status") == "In Progress" or detail.get("active_claims")
+        for detail in details
+    ):
+        return "in_progress"
+    if any(
+        detail.get("status") in {"In Review", "Done"}
+        for detail in details
+    ):
+        return "in_review"
+    return "not_started"
 
 
 def get_deliverable_dependency_graph(project: str = DEFAULT_PROJECT, deliverable_id: str = "",

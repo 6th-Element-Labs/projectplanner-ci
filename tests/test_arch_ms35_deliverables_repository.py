@@ -70,6 +70,24 @@ ok(store.create_deliverable.__module__
 ok(isinstance(store.deliverables_repository, deliv_repo.StoreDeliverablesRepository),
    "store.deliverables_repository is StoreDeliverablesRepository")
 
+rollup = deliv_repo._mission_milestone_rollup_status
+mid = "acceptance"
+ok(rollup([{"milestone_id": mid, "task_detail": {
+    "status": "Done", "provenance": {"terminal": True}}}], mid) == "done",
+   "milestone rollup is done only when every linked task has terminal proof")
+ok(rollup([{"milestone_id": mid, "task_detail": {
+    "status": "Done", "provenance": {"terminal": False}}}], mid) == "in_review",
+   "Done without terminal proof cannot render a milestone done")
+ok(rollup([{"milestone_id": mid, "task_detail": {
+    "status": "In Progress", "active_claims": [{"claim_id": "c"}]}}], mid) == "in_progress",
+   "active linked work renders the milestone in progress")
+ok(rollup([
+    {"milestone_id": mid, "task_detail": {"status": "Done", "provenance": {"terminal": True}}},
+    {"milestone_id": mid, "task_detail": {"status": "In Progress"}},
+], mid) == "in_progress", "active work takes precedence over partial completed proof")
+ok(rollup([{"milestone_id": mid, "task_detail": {"status": "Blocked"}}], mid) == "blocked",
+   "a blocked linked task renders the milestone blocked")
+
 try:
     store.init_project_registry()
     store.init_db("switchboard")
