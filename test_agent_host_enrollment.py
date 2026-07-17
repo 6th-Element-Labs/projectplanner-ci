@@ -17,7 +17,14 @@ from unittest.mock import patch
 TMP = Path(tempfile.mkdtemp(prefix="adapter18-agent-host-enrollment-"))
 TEST_CODEX = TMP / "bin" / "codex"
 TEST_CODEX.parent.mkdir()
-TEST_CODEX.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+TEST_CODEX.write_text(
+    "#!/bin/sh\n"
+    "if [ \"$1\" = \"--version\" ]; then echo 'codex-cli 1.2.3'; exit 0; fi\n"
+    "if [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then "
+    "echo 'Logged in using ChatGPT'; exit 0; fi\n"
+    "exit 1\n",
+    encoding="utf-8",
+)
 TEST_CODEX.chmod(0o755)
 TEST_CODEX = TEST_CODEX.resolve()
 os.environ["PM_DB_PATH"] = str(TMP / "maxwell.db")
@@ -33,7 +40,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import store  # noqa: E402
 from switchboard.storage.repositories import agent_host_enrollments as enrollment_store  # noqa: E402
-from adapters import agent_host_enrollment as enrollment  # noqa: E402
+from switchboard.storage.repositories import coordination as coordination_store  # noqa: E402
+from adapters import agent_host, agent_host_enrollment as enrollment  # noqa: E402
 from adapters import codex_local_worker, codex_personal_worker, switchboard_core  # noqa: E402
 from app import app  # noqa: E402
 from switchboard.application.commands import complete_claim as complete_claim_command  # noqa: E402
@@ -123,6 +131,33 @@ def begin(host_id: str):
 
 try:
     store.init_db(PROJECT)
+    missing_project_requests = [
+        ("/ixp/v1/agent-host-enrollments", {
+            "owner_user_id": "user-adapter18",
+        }),
+        ("/ixp/v1/agent-host-enrollments/complete", {
+            "bootstrap_code": "ahb-test", "hostname": "missing-project",
+            "platform": "linux", "public_key_fingerprint": "sha256:" + "1" * 64,
+            "completion_recovery_secret": "ahr-" + "x" * 43,
+        }),
+        ("/ixp/v1/agent-host-enrollments/finalize", {
+            "enrollment_id": "enrollment-missing-project",
+            "host_id": "host/missing-project",
+        }),
+        ("/ixp/v1/agent-host-enrollments/rotate", {
+            "host_id": "host/missing-project",
+            "public_key_fingerprint": "sha256:" + "2" * 64,
+        }),
+        ("/ixp/v1/agent-host-enrollments/revoke", {
+            "host_id": "host/missing-project",
+        }),
+    ]
+    missing_project_responses = [
+        client.post(path, json=payload)
+        for path, payload in missing_project_requests
+    ]
+    ok(all(response.status_code == 422 for response in missing_project_responses),
+       "every enrollment lifecycle ingress requires an explicit project")
     default_provider = client.post("/ixp/v1/agent-host-enrollments", json={
         "project": PROJECT,
         "owner_user_id": "user-adapter18",
@@ -178,6 +213,43 @@ try:
         api_key_mode_denied = True
     ok(api_key_mode_denied,
        "local-auth preflight rejects a stored API-key login as non-personal auth")
+    preflight_environments = []
+
+    def capture_secret_free_preflight(command, **kwargs):
+        preflight_environments.append(dict(kwargs.get("env") or {}))
+        output = ("codex-cli 1.2.3\n" if command[-1] == "--version"
+                  else "Logged in using ChatGPT\n")
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    with patch.dict(os.environ, {
+            "PM_MCP_TOKEN": "host-bearer-must-not-cross-preflight",
+            "SWITCHBOARD_TOKEN": "alternate-bearer-must-not-cross-preflight",
+    }):
+        enrollment.preflight_codex_local_auth(
+            codex_executable=str(TEST_CODEX), runner=capture_secret_free_preflight)
+    ok(all("PM_MCP_TOKEN" not in environment
+           and "SWITCHBOARD_TOKEN" not in environment
+           for environment in preflight_environments),
+       "local-auth probes never inherit the stable host coordination bearer")
+    semver_precedence = [
+        "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta",
+        "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11",
+        "1.0.0-rc.1", "1.0.0",
+    ]
+    semver_ordered = all(
+        enrollment._parse_version(left) < enrollment._parse_version(right)
+        for left, right in zip(semver_precedence, semver_precedence[1:])
+    )
+    try:
+        enrollment._parse_version("1.0.0-rc.01")
+        invalid_prerelease_denied = False
+    except enrollment.EnrollmentError:
+        invalid_prerelease_denied = True
+    ok(semver_ordered
+       and enrollment._parse_version("1.0.0+build.1")
+       == enrollment._parse_version("1.0.0+build.2")
+       and invalid_prerelease_denied,
+       "signed updates implement full SemVer prerelease precedence and ignore build metadata")
     private_key = Ed25519PrivateKey.generate()
     private_path = TMP / "bundle-signing-private.pem"
     public_path = TMP / "bundle-signing-public.pem"
@@ -560,8 +632,7 @@ try:
     ok(consumed.get("error_code") == "bootstrap_code_consumed",
        "device bootstrap is single-use")
 
-    register = client.post("/ixp/v1/register_host", headers={
-        "Authorization": f"Bearer {initial_mac_token}"}, json={
+    registration_payload = {
             "project": PROJECT,
             "host_id": "host/adapter18-macos",
             "agent_host_version": "0.2.0",
@@ -591,9 +662,39 @@ try:
                     "credential_values_redacted": True,
                     "provider_credential_exported": False,
                 }},
-        })
+        }
+    register = client.post("/ixp/v1/register_host", headers={
+        "Authorization": f"Bearer {initial_mac_token}"}, json=registration_payload)
     ok(register.status_code == 200 and register.json().get("host_id") == "host/adapter18-macos",
        "enrolled principal registers only its exact host identity")
+    unavailable_auth = {
+        "available": False, "runtime": "codex",
+        "auth_mode": "chatgpt_personal",
+        "account_fingerprint": None,
+        "credential_values_redacted": True,
+        "provider_credential_exported": False,
+        "unavailable_reason": "EnrollmentError",
+    }
+    unavailable_registration = json.loads(json.dumps(registration_payload))
+    unavailable_registration["runtimes"][0]["local_auth"] = unavailable_auth
+    unavailable_registration["capacity"]["local_auth"] = unavailable_auth
+    unavailable_register = client.post(
+        "/ixp/v1/register_host",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json=unavailable_registration,
+    )
+    unavailable_runtime = unavailable_register.json().get("runtimes", [{}])[0]
+    restored_register = client.post(
+        "/ixp/v1/register_host",
+        headers={"Authorization": f"Bearer {initial_mac_token}"},
+        json=registration_payload,
+    )
+    ok(unavailable_register.status_code == 200
+       and unavailable_runtime.get("local_auth", {}).get("available") is False
+       and not coordination_store._runtime_matches_selector(
+           unavailable_runtime, {"runtime": "codex"})
+       and restored_register.status_code == 200,
+       "an auth-loss refresh is accepted, made ineligible, and recoverable")
     host_principal = store.get_principal_by_token(PROJECT, initial_mac_token)
     victim_principal = store.create_principal(
         kind="host", display_name="host/runner-victim", token="runner-victim-token",
@@ -1073,6 +1174,36 @@ try:
        and launched_env.get("PM_PERSONAL_WORKSPACE_ROOT") == str(linux_workspace_root)
        and all(isinstance(value, str) for value in launched_env.values()),
        "service-run strips metered keys and binds the personal host to its writable root")
+    personal_auth = {
+        "available": True,
+        "runtime": "codex",
+        "auth_mode": "chatgpt_personal",
+        "account_fingerprint": "acct-1111111111111111",
+        "credential_values_redacted": True,
+        "provider_credential_exported": False,
+    }
+    auth_inventory = {
+        "runtimes": [{"runtime": "codex", "local_auth": dict(personal_auth)}],
+        "capacity": {"local_auth": dict(personal_auth)},
+    }
+    refreshed_proof = {
+        "authenticated": True,
+        "auth_mode": "chatgpt_personal",
+        "account_fingerprint": "acct-2222222222222222",
+    }
+    with patch.object(agent_host, "preflight_codex_local_auth",
+                      side_effect=[RuntimeError("signed out"), refreshed_proof]):
+        auth_withdrawn = agent_host.refresh_local_auth_inventory(
+            auth_inventory, force=True)
+        withdrawn = dict(auth_inventory["capacity"]["local_auth"])
+        auth_restored = agent_host.refresh_local_auth_inventory(
+            auth_inventory, force=True)
+    ok(auth_withdrawn and withdrawn.get("available") is False
+       and auth_restored
+       and auth_inventory["capacity"]["local_auth"].get("available") is True
+       and auth_inventory["runtimes"][0]["local_auth"]
+       == auth_inventory["capacity"]["local_auth"],
+       "daemon re-probes personal login, withdraws unavailable auth, and restores it")
 
     binding_source = TMP / "personal-binding-source"
     binding_remote = TMP / "personal-binding-remote.git"
@@ -1179,7 +1310,7 @@ try:
         "PM_CO_HOST_ID", "PM_RUNNER_SESSION_ID", "PM_CO_WAKE_ID", "PM_SOURCE_SHA",
         "PM_EXECUTION_CONNECTION_ID", "PM_AGENT_ID", "PM_CLAIM_ID",
         "PM_WORK_SESSION_ID", "PM_CO_ACCOUNT_BINDING_JSON", "PM_CODEX_EXECUTABLE",
-        "OPENAI_API_KEY",
+        "OPENAI_API_KEY", "PM_MCP_TOKEN", "SWITCHBOARD_TOKEN",
     )}
     local_git_heads = [source_sha, completed_sha]
     local_git_common = (TMP / "local-worker-git-common").resolve()
@@ -1287,6 +1418,8 @@ try:
                 "agent_id": "codex/ADAPTER-18-local-worker",
             }),
             "OPENAI_API_KEY": "must-not-cross-local-worker-boundary",
+            "PM_MCP_TOKEN": "stable-host-bearer-must-not-cross",
+            "SWITCHBOARD_TOKEN": "alternate-host-bearer-must-not-cross",
         })
         local_evidence = codex_local_worker.run(
             local_task, runner=fake_local_codex,
@@ -1335,6 +1468,9 @@ try:
        and local_command.count("--add-dir") == 1
        and str(local_git_common) in local_command and str(local_git_dir) not in local_command
        and "OPENAI_API_KEY" not in local_environment
+       and "PM_MCP_TOKEN" not in local_environment
+       and "SWITCHBOARD_TOKEN" not in local_environment
+       and local_evidence["verification"]["host_coordination_credential_exported"] is False
        and any(path == "/ixp/v1/heartbeat_runner_session"
                for path, _body in local_control_calls)
        and any(path == "/txp/v1/complete_wake"

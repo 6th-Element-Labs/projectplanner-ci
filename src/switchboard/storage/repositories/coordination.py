@@ -50,9 +50,8 @@ from switchboard.storage.repositories.provider_credentials import (
 
 # Native Codex is allowed to execute for up to two hours.  Keep the durable wake
 # alive for that interval plus a small launch/finalize margin when the caller did
-# not request a tighter deadline.  The exact connection remains live longer so
-# post-run tests, the Work Session checkpoint, and claim completion cannot race
-# the execution deadline.
+# not request a tighter deadline.  Both the wake and its exact connection include
+# the post-run test, Work Session checkpoint, and claim-completion window.
 _PERSONAL_EXECUTION_DEADLINE_S = 2 * 60 * 60 + 5 * 60
 _PERSONAL_POST_PROCESSING_S = 35 * 60
 
@@ -2517,6 +2516,9 @@ def _selector_runtime_for_agent(agent_id: str) -> str:
 
 
 def _runtime_matches_selector(runtime: Dict[str, Any], selector: Dict[str, Any]) -> bool:
+    local_auth = runtime.get("local_auth")
+    if isinstance(local_auth, dict) and local_auth.get("available") is not True:
+        return False
     return runtime_matches_selector(runtime, selector)
 
 
@@ -2578,7 +2580,7 @@ def _enrollment_inventory_error(identity: Dict[str, Any],
         and runtime_policy.get("allow_global_claim") is False
         and advertised_max_sessions == allowed_max_sessions
         and (not execution.get("local_auth_required")
-             or (local_auth.get("available") is True
+             or (isinstance(local_auth.get("available"), bool)
                  and local_auth.get("runtime") == "codex"
                  and local_auth.get("provider_credential_exported") is False
                  and capacity_local_auth == local_auth))

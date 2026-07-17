@@ -32,6 +32,10 @@ _METERED_PROVIDER_ENV = {
     "ANTHROPIC_API_KEY",
     "AZURE_OPENAI_API_KEY",
 }
+_COORDINATION_CREDENTIAL_ENV = {
+    "PM_MCP_TOKEN",
+    "SWITCHBOARD_TOKEN",
+}
 _PERSONAL_EXECUTION_LIFECYCLE_KEY = "_switchboard_personal_execution_lifecycle"
 _TERMINAL_WAKE_STATUSES = {"completed", "failed", "cancelled", "expired"}
 _TERMINALIZATION_READBACK_TIMEOUT_S = 35 * 60
@@ -58,10 +62,11 @@ def _prompt(task: dict[str, Any], *, source_sha: str, wake_id: str,
     return (
         "You are the native Codex implementation worker for a task already claimed "
         "and bound by Switchboard. Work only in the current managed workspace. "
-        "Do not claim or complete another task. Inspect the live task and working "
-        "agreement through the configured taikun-plan MCP server, implement the task, "
-        "run the required tests, commit the intended changes, and push the current "
-        "task branch. Leave the worktree clean before exiting.\n\n"
+        "Do not claim or complete another task. The task and lifecycle binding below "
+        "are authoritative; do not call Switchboard, its MCP server, or lifecycle "
+        "endpoints from this child. Implement the task, run the required tests, commit "
+        "the intended changes, and push the current task branch. Leave the worktree "
+        "clean before exiting.\n\n"
         f"Task: {task_id} {title}\n"
         f"Exact source SHA: {source_sha}\n"
         f"Wake: {wake_id}\n"
@@ -273,7 +278,7 @@ def run(
         # directory. Grant exactly that repository resource, never a home-level path.
         git_dirs = [str(git_common_dir)]
     environment = os.environ.copy()
-    for key in _METERED_PROVIDER_ENV:
+    for key in _METERED_PROVIDER_ENV | _COORDINATION_CREDENTIAL_ENV:
         environment.pop(key, None)
     command = [
         executable,
@@ -377,6 +382,7 @@ def run(
                 "native_cli": True,
                 "auth_mode": "chatgpt_personal",
                 "provider_credential_exported": False,
+                "host_coordination_credential_exported": False,
                 "metered_api_key_paths_absent": True,
                 "output_sha256": hashlib.sha256(output).hexdigest(),
                 "output_bytes": len(output),

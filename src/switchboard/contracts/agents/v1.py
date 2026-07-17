@@ -218,7 +218,7 @@ class BeginHostEnrollmentCommand(VersionedModel):
     model_config = ConfigDict(frozen=True)
 
     schema_id: str = Field(default=BEGIN_HOST_ENROLLMENT_COMMAND_SCHEMA, alias="schema")
-    project: str = "switchboard"
+    project: str
     owner_user_id: str
     requested_host_id: str = ""
     tenant_allowlist: list[str] = Field(default_factory=list)
@@ -256,7 +256,7 @@ class CompleteHostEnrollmentCommand(VersionedModel):
     model_config = ConfigDict(frozen=True)
 
     schema_id: str = Field(default=COMPLETE_HOST_ENROLLMENT_COMMAND_SCHEMA, alias="schema")
-    project: str = "switchboard"
+    project: str
     bootstrap_code: str
     hostname: str
     platform: str
@@ -279,7 +279,7 @@ class FinalizeHostEnrollmentCommand(VersionedModel):
     model_config = ConfigDict(frozen=True)
 
     schema_id: str = Field(default=FINALIZE_HOST_ENROLLMENT_COMMAND_SCHEMA, alias="schema")
-    project: str = "switchboard"
+    project: str
     enrollment_id: str
     host_id: str
 
@@ -296,7 +296,7 @@ class RotateHostIdentityCommand(VersionedModel):
     model_config = ConfigDict(frozen=True)
 
     schema_id: str = Field(default=ROTATE_HOST_IDENTITY_COMMAND_SCHEMA, alias="schema")
-    project: str = "switchboard"
+    project: str
     host_id: str
     public_key_fingerprint: str
 
@@ -313,7 +313,7 @@ class RevokeHostIdentityCommand(VersionedModel):
     model_config = ConfigDict(frozen=True)
 
     schema_id: str = Field(default=REVOKE_HOST_IDENTITY_COMMAND_SCHEMA, alias="schema")
-    project: str = "switchboard"
+    project: str
     host_id: str
     reason: str = "host_revoke"
     final_status: str = "revoked"

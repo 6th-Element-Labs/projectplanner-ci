@@ -13,7 +13,6 @@
       "type": "string"
     },
     "project": {
-      "default": "switchboard",
       "title": "Project",
       "type": "string"
     },
@@ -29,6 +28,7 @@
     }
   },
   "required": [
+    "project",
     "host_id"
   ],
   "title": "RevokeHostIdentityCommand",

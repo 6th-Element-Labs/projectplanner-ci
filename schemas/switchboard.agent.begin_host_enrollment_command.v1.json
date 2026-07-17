@@ -13,7 +13,6 @@
       "type": "string"
     },
     "project": {
-      "default": "switchboard",
       "title": "Project",
       "type": "string"
     },
@@ -55,6 +54,7 @@
     }
   },
   "required": [
+    "project",
     "owner_user_id"
   ],
   "title": "BeginHostEnrollmentCommand",

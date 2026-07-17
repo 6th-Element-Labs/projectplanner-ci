@@ -38,6 +38,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import switchboard_core as sb  # noqa: E402  (reuses _http + agent_id, same contract)
 import co_drain  # noqa: E402
+from agent_host_enrollment import preflight_codex_local_auth  # noqa: E402
 from codex.cloud_adapter import launch_wake as launch_codex_cloud_wake  # noqa: E402
 
 PROJECT = os.environ.get("PM_PROJECT", "switchboard")
@@ -60,6 +61,7 @@ P_LIST_WORK_SESSIONS = "/ixp/v1/work_sessions"
 P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
 AGENT_HOST_VERSION = os.environ.get("PM_AGENT_HOST_VERSION", "0.2.0")
+_LOCAL_AUTH_LAST_PROBE_AT = 0.0
 
 
 def _csv(value):
@@ -102,8 +104,9 @@ def _redacted_local_auth(runtime):
     raw_proof = str(os.environ.get("PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF") or "").strip()
     fingerprint = ""
     if raw_proof:
-        fingerprint = "acct-" + hashlib.sha256(
-            f"switchboard-local-auth:{runtime}:{raw_proof}".encode()).hexdigest()[:16]
+        fingerprint = raw_proof if re.fullmatch(r"acct-[0-9a-f]{16}", raw_proof) else (
+            "acct-" + hashlib.sha256(
+                f"switchboard-local-auth:{runtime}:{raw_proof}".encode()).hexdigest()[:16])
     return {
         "available": available,
         "runtime": runtime,
@@ -112,6 +115,52 @@ def _redacted_local_auth(runtime):
         "credential_values_redacted": True,
         "provider_credential_exported": False,
     }
+
+
+def refresh_local_auth_inventory(inventory, *, now=None, force=False):
+    """Re-probe personal Codex auth and atomically refresh admission inventory."""
+    global _LOCAL_AUTH_LAST_PROBE_AT
+    runtimes = inventory.get("runtimes") or []
+    if len(runtimes) != 1 or runtimes[0].get("runtime") != "codex":
+        return False
+    current = dict(runtimes[0].get("local_auth") or {})
+    if current.get("auth_mode") not in {"chatgpt_personal", "unavailable"}:
+        return False
+    checked_at = time.time() if now is None else float(now)
+    try:
+        interval = max(5.0, float(os.environ.get(
+            "PM_HOST_LOCAL_AUTH_PROBE_INTERVAL_S", "30")))
+    except ValueError:
+        interval = 30.0
+    if not force and checked_at - _LOCAL_AUTH_LAST_PROBE_AT < interval:
+        return False
+    _LOCAL_AUTH_LAST_PROBE_AT = checked_at
+    try:
+        proof = preflight_codex_local_auth(
+            codex_executable=os.environ.get("PM_CODEX_EXECUTABLE") or "")
+        if proof.get("authenticated") is not True:
+            raise RuntimeError("native Codex local auth is unavailable")
+        refreshed = {
+            "available": True,
+            "runtime": "codex",
+            "auth_mode": "chatgpt_personal",
+            "account_fingerprint": proof.get("account_fingerprint") or None,
+            "credential_values_redacted": True,
+            "provider_credential_exported": False,
+        }
+    except Exception as exc:
+        refreshed = {
+            "available": False,
+            "runtime": "codex",
+            "auth_mode": "chatgpt_personal",
+            "account_fingerprint": None,
+            "credential_values_redacted": True,
+            "provider_credential_exported": False,
+            "unavailable_reason": type(exc).__name__,
+        }
+    runtimes[0]["local_auth"] = refreshed
+    inventory.setdefault("capacity", {})["local_auth"] = refreshed
+    return current != refreshed
 
 
 def _identity_inventory():
@@ -1265,6 +1314,16 @@ def run_once(inventory):
     _try("POST", P_HEARTBEAT_HOST, {"project": PROJECT, "host_id": host_id,
                                     "active_sessions": capacity["active_sessions"],
                                     "capacity": capacity})
+    local_auth = capacity.get("local_auth")
+    if isinstance(local_auth, dict) and local_auth.get("available") is not True:
+        return {
+            "host_id": host_id,
+            "pending": 0,
+            "acted": [],
+            "refused": [],
+            "runner_controls": [],
+            "auth_available": False,
+        }
     controls = handle_runner_controls(inventory)
     listed = _try("GET", f"{P_LIST_WAKES}?project={PROJECT}&status=pending") or {}
     wakes = wakes_bound_to_host(listed.get("wake_intents") or listed.get("wakes") or [])
@@ -1423,12 +1482,14 @@ def run(interval=10, once=False):
     register_every = max(10, int(inv.get("heartbeat_ttl_s") or 60) // 2)
     while True:
         now = time.time()
+        auth_changed = refresh_local_auth_inventory(inv, now=now)
         drain_request = co_drain.discover_request()
         advertised = co_drain.inventory_for_drain(inv) if drain_request else inv
         if drain_request:
             placement = ((advertised.get("capacity") or {}).get("placement") or {})
             placement["drain_state"] = "draining"
-        should_register = (not registered or now - last_register_at >= register_every
+        should_register = (not registered or auth_changed
+                           or now - last_register_at >= register_every
                            or bool(drain_request) != drain_advertised)
         if should_register:
             reg = _try("POST", P_REGISTER_HOST, advertised)

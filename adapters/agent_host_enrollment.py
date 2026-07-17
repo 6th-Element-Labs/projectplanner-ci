@@ -40,7 +40,12 @@ BUNDLE_SCHEMA = "switchboard.agent_host_bundle.v1"
 LOCAL_STATE_SCHEMA = "switchboard.agent_host_local_state.v1"
 IDENTITY_SCHEMA = "switchboard.agent_host_identity.v1"
 SERVICE_LABEL = "com.6thelement.switchboard-agent-host"
-_SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
+_SEMVER_IDENTIFIER = r"[0-9A-Za-z-]+"
+_SEMVER_RE = re.compile(
+    rf"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    rf"(?:-({_SEMVER_IDENTIFIER}(?:\.{_SEMVER_IDENTIFIER})*))?"
+    rf"(?:\+({_SEMVER_IDENTIFIER}(?:\.{_SEMVER_IDENTIFIER})*))?$"
+)
 _SECRET_MARKERS = (
     b"aht-",
     b"ahb-",
@@ -56,6 +61,10 @@ _METERED_PROVIDER_ENV = {
     "CODEX_ACCESS_TOKEN",
     "ANTHROPIC_API_KEY",
     "AZURE_OPENAI_API_KEY",
+}
+_COORDINATION_CREDENTIAL_ENV = {
+    "PM_MCP_TOKEN",
+    "SWITCHBOARD_TOKEN",
 }
 
 
@@ -82,11 +91,30 @@ def _safe_relative(value: str) -> PurePosixPath:
     return path
 
 
-def _parse_version(value: str) -> tuple[int, int, int]:
+def _parse_version(
+        value: str,
+) -> tuple[int, int, int, int, tuple[tuple[int, int | str], ...]]:
+    """Return a comparison key implementing SemVer 2.0 precedence exactly."""
     match = _SEMVER_RE.fullmatch(str(value or "").strip())
     if not match:
-        raise EnrollmentError("bundle version must be semantic version x.y.z")
-    return tuple(int(match.group(index)) for index in (1, 2, 3))
+        raise EnrollmentError("bundle version must be a valid semantic version")
+    prerelease = str(match.group(4) or "")
+    identifiers: list[tuple[int, int | str]] = []
+    for identifier in prerelease.split(".") if prerelease else ():
+        if identifier.isdigit():
+            if len(identifier) > 1 and identifier.startswith("0"):
+                raise EnrollmentError(
+                    "numeric semantic-version prerelease identifiers cannot have leading zeros")
+            identifiers.append((0, int(identifier)))
+        else:
+            identifiers.append((1, identifier))
+    # Stable releases sort after every prerelease. Build metadata is deliberately
+    # absent from the key because SemVer excludes it from precedence.
+    return (
+        int(match.group(1)), int(match.group(2)), int(match.group(3)),
+        0 if prerelease else 1,
+        tuple(identifiers),
+    )
 
 
 def _cleanup_stale_atomic_temps(path: Path, *, now: float | None = None) -> None:
@@ -306,7 +334,7 @@ def preflight_codex_local_auth(
         raise EnrollmentError("native codex CLI is not installed or not on PATH")
     executable = str(Path(resolved).resolve())
     env = os.environ.copy()
-    for key in _METERED_PROVIDER_ENV:
+    for key in _METERED_PROVIDER_ENV | _COORDINATION_CREDENTIAL_ENV:
         env.pop(key, None)
     results: list[subprocess.CompletedProcess] = []
     for command in ([executable, "--version"], [executable, "login", "status"]):
@@ -1112,6 +1140,8 @@ def service_run(identity_path: Path, config_path: Path) -> None:
     # provider credential cross into the supervised runtime by accident.
     for key in _METERED_PROVIDER_ENV:
         env.pop(key, None)
+    local_auth = preflight_codex_local_auth(
+        codex_executable=str(config.get("codex_executable") or ""))
     values = {
         "PM_BASE": config["base_url"],
         "PM_PROJECT": config["project"],
@@ -1133,10 +1163,10 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_TENANTS": ",".join(config.get("tenant_allowlist") or []),
         "PM_HOST_PROJECTS": ",".join(config.get("project_allowlist") or [config["project"]]),
         "PM_HOST_PROVIDERS": ",".join(config.get("provider_allowlist") or []),
-        "PM_HOST_LOCAL_AUTH_AVAILABLE": "1",
-        "PM_HOST_LOCAL_AUTH_MODE": "chatgpt_personal",
-        "PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF": config.get("local_auth_account_proof") or "",
-        "PM_CODEX_EXECUTABLE": config.get("codex_executable") or "",
+        "PM_HOST_LOCAL_AUTH_AVAILABLE": "1" if local_auth.get("authenticated") else "0",
+        "PM_HOST_LOCAL_AUTH_MODE": local_auth.get("auth_mode") or "unavailable",
+        "PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF": local_auth.get("account_fingerprint") or "",
+        "PM_CODEX_EXECUTABLE": local_auth.get("codex_executable") or "",
         "PM_REPO_ROOT": config["repo_root"],
         "PM_RUNNER_DIR": config["runner_dir"],
         "PM_PROVIDER_RUNTIME_ROOT": config["runtime_root"],

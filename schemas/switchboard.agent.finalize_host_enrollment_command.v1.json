@@ -12,7 +12,6 @@
       "type": "string"
     },
     "project": {
-      "default": "switchboard",
       "title": "Project",
       "type": "string"
     },
@@ -23,6 +22,7 @@
     }
   },
   "required": [
+    "project",
     "enrollment_id",
     "host_id"
   ],
