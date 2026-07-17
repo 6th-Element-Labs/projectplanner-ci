@@ -144,11 +144,22 @@ def open_relay_descriptor(
     return result
 
 
-def revoke_ticket(*, jti: str = "", ticket: str = "") -> dict[str, Any]:
-    if jti:
-        ok = relay.revoke_ticket_jti(jti)
-        return {"revoked": bool(ok), "jti": jti}
+def revoke_ticket(
+    *,
+    jti: str = "",
+    ticket: str = "",
+    project: str = "",
+    hub: relay.RelayHub | None = None,
+) -> dict[str, Any]:
+    project_id = str(project or DEFAULT_PROJECT)
     if ticket:
-        ok, reason = relay.revoke_capability_ticket(ticket)
-        return {"revoked": bool(ok), "reason": reason}
+        ok, reason = relay.revoke_capability_ticket(
+            ticket, project=project_id, hub=hub)
+        result: dict[str, Any] = {"revoked": bool(ok)}
+        if reason:
+            result["reason"] = reason
+        return result
+    if jti:
+        ok = relay.revoke_ticket_jti(jti, project=project_id, hub=hub)
+        return {"revoked": bool(ok), "jti": jti}
     return {"revoked": False, "error": "jti_or_ticket_required"}

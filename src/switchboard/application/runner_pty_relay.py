@@ -15,8 +15,11 @@ from switchboard.api.routers.auth.jwt_util import encode as jwt_encode
 from switchboard.domain import runner_pty as domain
 
 SendFn = Callable[[str], None]
+CloseFn = Callable[[], None]
 
-_REVOKED_JTIS: set[str] = set()
+# In-process cache: jti -> expires_at (unix seconds). Shared DB is authoritative
+# across instances; this cache avoids a DB round-trip on every frame.
+_REVOKED_JTIS: dict[str, float] = {}
 _REVOKE_LOCK = threading.Lock()
 
 
@@ -37,23 +40,91 @@ def public_base_from_env() -> str:
     ).rstrip("/")
 
 
-def revoke_ticket_jti(jti: str) -> bool:
+def _remember_revoked_jti(jti: str, expires_at: float) -> None:
+    token = str(jti or "").strip()
+    if not token:
+        return
+    with _REVOKE_LOCK:
+        prior = _REVOKED_JTIS.get(token)
+        _REVOKED_JTIS[token] = max(float(expires_at), float(prior or 0.0))
+
+
+def _purge_expired_memory(now: float) -> None:
+    stale = [jti for jti, exp in _REVOKED_JTIS.items() if float(exp) <= now]
+    for jti in stale:
+        _REVOKED_JTIS.pop(jti, None)
+
+
+def revoke_ticket_jti(
+    jti: str,
+    *,
+    project: str = "",
+    expires_at: float | None = None,
+    hub: "RelayHub | None" = None,
+    now: float | None = None,
+) -> bool:
+    """Revoke a ticket jti, persist until expiry, and drop matching live clients."""
     token = str(jti or "").strip()
     if not token:
         return False
-    with _REVOKE_LOCK:
-        _REVOKED_JTIS.add(token)
+    ts = float(now if now is not None else time.time())
+    exp = float(expires_at) if expires_at is not None else (
+        ts + float(domain.DEFAULT_ABSOLUTE_TTL_SECONDS)
+    )
+    if exp <= ts:
+        exp = ts + 1.0
+    project_id = str(project or "").strip()
+    if project_id:
+        from switchboard.storage.repositories import runner_pty_revocations as rev_store
+        rev_store.persist_revoked_jti(
+            token, expires_at=exp, project=project_id, now=ts)
+    _remember_revoked_jti(token, exp)
+    target = hub if hub is not None else get_default_hub()
+    target.disconnect_by_jti(token, reason="ticket_revoked")
     return True
 
 
-def is_jti_revoked(jti: str) -> bool:
+def is_jti_revoked(
+    jti: str,
+    *,
+    project: str = "",
+    now: float | None = None,
+) -> bool:
+    token = str(jti or "").strip()
+    if not token:
+        return False
+    ts = float(now if now is not None else time.time())
     with _REVOKE_LOCK:
-        return str(jti or "") in _REVOKED_JTIS
+        _purge_expired_memory(ts)
+        exp = _REVOKED_JTIS.get(token)
+        if exp is not None:
+            return float(exp) > ts
+    project_id = str(project or "").strip()
+    if not project_id:
+        return False
+    try:
+        from switchboard.storage.repositories import runner_pty_revocations as rev_store
+        expires_at = rev_store.is_jti_revoked_persisted(
+            token, project=project_id, now=ts)
+        if expires_at is not None:
+            _remember_revoked_jti(token, float(expires_at))
+            return True
+    except Exception:
+        return False
+    return False
 
 
-def clear_revoked_jtis_for_tests() -> None:
+def clear_revoked_jtis_for_tests(project: str = "") -> None:
     with _REVOKE_LOCK:
         _REVOKED_JTIS.clear()
+    project_id = str(project or "").strip()
+    if not project_id:
+        return
+    try:
+        from switchboard.storage.repositories import runner_pty_revocations as rev_store
+        rev_store.clear_revoked_jtis_for_tests(project_id)
+    except Exception:
+        pass
 
 
 def mint_capability_ticket(
@@ -105,7 +176,7 @@ def verify_capability_ticket(
     jti = str(payload.get("jti") or "")
     if not jti:
         return None, "missing_jti"
-    if is_jti_revoked(jti):
+    if is_jti_revoked(jti, project=str(payload.get("project_id") or ""), now=now):
         return None, "revoked"
     scopes = domain.normalize_scopes(payload.get("scopes"))
     if not scopes:
@@ -131,7 +202,14 @@ def verify_capability_ticket(
     return out, ""
 
 
-def revoke_capability_ticket(ticket: str, *, secret: str | None = None) -> tuple[bool, str]:
+def revoke_capability_ticket(
+    ticket: str,
+    *,
+    secret: str | None = None,
+    project: str = "",
+    hub: "RelayHub | None" = None,
+    now: float | None = None,
+) -> tuple[bool, str]:
     # Allow revoking expired tickets: verify signature with a far-future clock.
     payload, reason = jwt_decode(ticket or "", secret or relay_secret(), now=10**12)
     if payload is None:
@@ -139,7 +217,16 @@ def revoke_capability_ticket(ticket: str, *, secret: str | None = None) -> tuple
     jti = str(payload.get("jti") or "")
     if not jti:
         return False, "missing_jti"
-    revoke_ticket_jti(jti)
+    exp_raw = payload.get("exp")
+    expires_at = float(exp_raw) if exp_raw is not None else None
+    project_id = str(project or payload.get("project_id") or "").strip()
+    revoke_ticket_jti(
+        jti,
+        project=project_id,
+        expires_at=expires_at,
+        hub=hub,
+        now=now,
+    )
     return True, ""
 
 
@@ -230,6 +317,7 @@ class _BrowserClient:
     queue: list[str] = field(default_factory=list)
     disconnected: bool = False
     last_active: float = field(default_factory=time.time)
+    close_fn: CloseFn | None = None
 
 
 @dataclass
@@ -237,6 +325,8 @@ class _RelaySession:
     runner_session_id: str
     binding: dict[str, str] = field(default_factory=dict)
     host_send: SendFn | None = None
+    host_ticket_jti: str = ""
+    host_close_fn: CloseFn | None = None
     browsers: dict[str, _BrowserClient] = field(default_factory=dict)
     replay: list[str] = field(default_factory=list)
     replay_bytes: int = 0
@@ -287,13 +377,25 @@ class RelayHub:
                 session.binding = domain.merge_binding(session.binding, binding)
             return session
 
-    def attach_host(self, session_id: str, send_fn: SendFn,
-                    binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def attach_host(
+        self,
+        session_id: str,
+        send_fn: SendFn,
+        binding: Mapping[str, Any] | None = None,
+        *,
+        close_fn: CloseFn | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             session = self.ensure_session(session_id, binding)
             if session.closed:
                 return {"ok": False, "error": "session_closed", "reason": session.close_reason}
+            jti = str((binding or {}).get("jti") or "").strip()
+            project = str((binding or {}).get("project_id") or session.binding.get("project_id") or "")
+            if jti and is_jti_revoked(jti, project=project):
+                return {"ok": False, "error": "revoked", "reason": "ticket_revoked"}
             session.host_send = send_fn
+            session.host_ticket_jti = jti
+            session.host_close_fn = close_fn
             session.last_active = time.time()
             return {"ok": True, "runner_session_id": session.runner_session_id}
 
@@ -304,6 +406,8 @@ class RelayHub:
                 return
             if send_fn is None or session.host_send is send_fn:
                 session.host_send = None
+                session.host_ticket_jti = ""
+                session.host_close_fn = None
 
     def attach_browser(
         self,
@@ -312,6 +416,7 @@ class RelayHub:
         send_fn: SendFn,
         *,
         client_id: str = "",
+        close_fn: CloseFn | None = None,
     ) -> dict[str, Any]:
         scopes = domain.normalize_scopes(ticket_payload.get("scopes"))
         if "watch" not in scopes:
@@ -320,6 +425,10 @@ class RelayHub:
         ticket_sid = str(ticket_payload.get("runner_session_id") or "").strip()
         if ticket_sid and ticket_sid != sid:
             return {"ok": False, "error": "session_mismatch"}
+        jti = str(ticket_payload.get("jti") or "").strip()
+        project = str(ticket_payload.get("project_id") or "")
+        if jti and is_jti_revoked(jti, project=project):
+            return {"ok": False, "error": "revoked", "reason": "ticket_revoked"}
         with self._lock:
             session = self.ensure_session(sid, ticket_payload)
             if session.closed:
@@ -335,7 +444,8 @@ class RelayHub:
                 client_id=cid,
                 send_fn=send_fn,
                 scopes=scopes,
-                ticket_jti=str(ticket_payload.get("jti") or ""),
+                ticket_jti=jti,
+                close_fn=close_fn,
             )
             session.browsers[cid] = client
             session.last_active = time.time()
@@ -348,6 +458,68 @@ class RelayHub:
             "runner_session_id": sid,
             "replay_frames": len(replay_frames),
         }
+
+    def disconnect_by_jti(self, jti: str, *, reason: str = "ticket_revoked") -> dict[str, Any]:
+        """Drop every live browser/host client bound to ``jti`` and notify them."""
+        token = str(jti or "").strip()
+        if not token:
+            return {"ok": True, "browsers": 0, "hosts": 0}
+        close_frame = domain.encode_frame("close", {"reason": reason})
+        browser_targets: list[tuple[str, str, SendFn, CloseFn | None]] = []
+        host_targets: list[tuple[str, SendFn, CloseFn | None]] = []
+        with self._lock:
+            for sid, session in list(self._sessions.items()):
+                for cid, client in list(session.browsers.items()):
+                    if client.ticket_jti != token or client.disconnected:
+                        continue
+                    client.disconnected = True
+                    browser_targets.append(
+                        (sid, cid, client.send_fn, client.close_fn))
+                    session.browsers.pop(cid, None)
+                if session.host_ticket_jti == token and session.host_send is not None:
+                    host_targets.append(
+                        (sid, session.host_send, session.host_close_fn))
+                    session.host_send = None
+                    session.host_ticket_jti = ""
+                    session.host_close_fn = None
+        for _sid, _cid, send_fn, close_fn in browser_targets:
+            try:
+                send_fn(close_frame)
+            except Exception:
+                pass
+            if close_fn is not None:
+                try:
+                    close_fn()
+                except Exception:
+                    pass
+        for _sid, send_fn, close_fn in host_targets:
+            try:
+                send_fn(close_frame)
+            except Exception:
+                pass
+            if close_fn is not None:
+                try:
+                    close_fn()
+                except Exception:
+                    pass
+        return {
+            "ok": True,
+            "browsers": len(browser_targets),
+            "hosts": len(host_targets),
+            "reason": reason,
+        }
+
+    def _client_revoked_locked(
+        self,
+        session: _RelaySession,
+        client: _BrowserClient,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        if not client.ticket_jti:
+            return False
+        project = str(session.binding.get("project_id") or "")
+        return is_jti_revoked(client.ticket_jti, project=project, now=now)
 
     def detach_browser(self, session_id: str, client_id: str) -> None:
         with self._lock:
@@ -374,6 +546,9 @@ class RelayHub:
         if kind == "close":
             self.detach_browser(session_id, client_id)
             return {"ok": True, "type": "close"}
+        revoked_send: SendFn | None = None
+        revoked_close: CloseFn | None = None
+        host_send: SendFn | None = None
         with self._lock:
             session = self._sessions.get(str(session_id))
             if not session or session.closed:
@@ -381,24 +556,43 @@ class RelayHub:
             client = session.browsers.get(str(client_id))
             if not client or client.disconnected:
                 return {"ok": False, "error": "client_disconnected"}
-            scopes = set(client.scopes)
-            if kind == "input" and "input" not in scopes:
-                return {"ok": False, "error": "missing_scope", "reason": "input"}
-            if kind == "resize" and "resize" not in scopes:
-                return {"ok": False, "error": "missing_scope", "reason": "resize"}
-            if kind == "signal" and "signal" not in scopes:
-                return {"ok": False, "error": "missing_scope", "reason": "signal"}
-            # kill is a logical control; may arrive as type=signal name=kill or type via payload
-            if kind not in {"input", "resize", "signal"}:
-                return {"ok": False, "error": "unsupported_frame", "reason": kind}
-            if str(decoded.get("action") or "").lower() == "kill" or (
-                kind == "signal" and str(decoded.get("name") or "").upper() == "KILL"
-            ):
-                if "kill" not in scopes:
-                    return {"ok": False, "error": "missing_scope", "reason": "kill"}
-            host_send = session.host_send
-            session.last_active = time.time()
-            client.last_active = session.last_active
+            if self._client_revoked_locked(session, client):
+                client.disconnected = True
+                revoked_send = client.send_fn
+                revoked_close = client.close_fn
+                session.browsers.pop(str(client_id), None)
+            else:
+                scopes = set(client.scopes)
+                if kind == "input" and "input" not in scopes:
+                    return {"ok": False, "error": "missing_scope", "reason": "input"}
+                if kind == "resize" and "resize" not in scopes:
+                    return {"ok": False, "error": "missing_scope", "reason": "resize"}
+                if kind == "signal" and "signal" not in scopes:
+                    return {"ok": False, "error": "missing_scope", "reason": "signal"}
+                # kill is a logical control; may arrive as type=signal name=kill or type via payload
+                if kind not in {"input", "resize", "signal"}:
+                    return {"ok": False, "error": "unsupported_frame", "reason": kind}
+                if str(decoded.get("action") or "").lower() == "kill" or (
+                    kind == "signal" and str(decoded.get("name") or "").upper() == "KILL"
+                ):
+                    if "kill" not in scopes:
+                        return {"ok": False, "error": "missing_scope", "reason": "kill"}
+                host_send = session.host_send
+                session.last_active = time.time()
+                client.last_active = session.last_active
+        if revoked_send is not None or revoked_close is not None:
+            try:
+                if revoked_send is not None:
+                    revoked_send(domain.encode_frame(
+                        "close", {"reason": "ticket_revoked"}))
+            except Exception:
+                pass
+            if revoked_close is not None:
+                try:
+                    revoked_close()
+                except Exception:
+                    pass
+            return {"ok": False, "error": "revoked", "reason": "ticket_revoked"}
         if host_send is None:
             return {"ok": False, "error": "host_detached"}
         encoded = domain.encode_frame(
@@ -432,19 +626,44 @@ class RelayHub:
             {k: v for k, v in decoded.items() if k not in {"type", "data", "data_b64"}},
             data=decoded.get("data") if isinstance(decoded.get("data"), (bytes, bytearray)) else None,
         )
+        host_send: SendFn | None = None
+        host_close: CloseFn | None = None
+        client_ids: list[str] = []
         with self._lock:
             session = self._sessions.get(str(session_id))
             if not session:
                 return {"ok": False, "error": "unknown_session"}
-            if session.closed and kind not in {"close", "error"}:
+            host_jti = str(session.host_ticket_jti or "")
+            project = str(session.binding.get("project_id") or "")
+            if host_jti and is_jti_revoked(host_jti, project=project):
+                host_send = session.host_send
+                host_close = session.host_close_fn
+                session.host_send = None
+                session.host_ticket_jti = ""
+                session.host_close_fn = None
+            elif session.closed and kind not in {"close", "error"}:
                 return {"ok": False, "error": "session_closed"}
-            session.last_active = time.time()
-            if kind in {"output", "state", "replay"}:
-                self._append_replay(session, encoded, domain.frame_byte_size(decoded))
-            client_ids = list(session.browsers.keys())
-            if kind in {"close", "error"}:
-                session.closed = True
-                session.close_reason = str(decoded.get("reason") or kind)
+            else:
+                session.last_active = time.time()
+                if kind in {"output", "state", "replay"}:
+                    self._append_replay(session, encoded, domain.frame_byte_size(decoded))
+                client_ids = list(session.browsers.keys())
+                if kind in {"close", "error"}:
+                    session.closed = True
+                    session.close_reason = str(decoded.get("reason") or kind)
+        if host_send is not None or host_close is not None:
+            try:
+                if host_send is not None:
+                    host_send(domain.encode_frame(
+                        "close", {"reason": "ticket_revoked"}))
+            except Exception:
+                pass
+            if host_close is not None:
+                try:
+                    host_close()
+                except Exception:
+                    pass
+            return {"ok": False, "error": "revoked", "reason": "ticket_revoked"}
         delivered = 0
         for cid in client_ids:
             if self._enqueue_browser(session_id, cid, encoded):
@@ -455,6 +674,8 @@ class RelayHub:
                 if session:
                     session.browsers.clear()
                     session.host_send = None
+                    session.host_ticket_jti = ""
+                    session.host_close_fn = None
         return {"ok": True, "type": kind, "delivered": delivered}
 
     def publish_output(self, session_id: str, data: bytes,

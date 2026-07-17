@@ -101,6 +101,8 @@ def create_router(
         result = runner_pty_command.revoke_ticket(
             jti=str(body.jti or ""),
             ticket=str(body.ticket or ""),
+            project=project,
+            hub=_hub(),
         )
         if not result.get("revoked"):
             raise HTTPException(400, result)
@@ -148,7 +150,7 @@ def create_router(
             return
         await websocket.accept()
         loop = asyncio.get_running_loop()
-        outbound: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+        outbound: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=256)
         closed = {"flag": False}
 
         def send_fn(frame: str) -> None:
@@ -159,7 +161,15 @@ def create_router(
             except Exception:
                 closed["flag"] = True
 
-        attached = _hub().attach_browser(runner_session_id, payload, send_fn)
+        def close_fn() -> None:
+            closed["flag"] = True
+            try:
+                loop.call_soon_threadsafe(outbound.put_nowait, None)
+            except Exception:
+                pass
+
+        attached = _hub().attach_browser(
+            runner_session_id, payload, send_fn, close_fn=close_fn)
         if not attached.get("ok"):
             await websocket.close(code=4403, reason=str(attached.get("error") or "denied")[:120])
             return
@@ -168,14 +178,22 @@ def create_router(
         async def writer() -> None:
             while not closed["flag"]:
                 frame = await outbound.get()
+                if frame is None:
+                    break
                 await websocket.send_text(frame)
+            try:
+                await websocket.close(code=4401, reason="ticket_revoked")
+            except Exception:
+                pass
 
         writer_task = asyncio.create_task(writer())
         try:
-            while True:
+            while not closed["flag"]:
                 message = await websocket.receive_text()
                 result = _hub().route_browser_to_host(
                     runner_session_id, client_id, message)
+                if result.get("error") == "revoked":
+                    break
                 if not result.get("ok") and result.get("error") in {
                     "missing_scope", "session_mismatch", "host_mismatch",
                     "task_mismatch", "session_closed",
@@ -219,7 +237,7 @@ def create_router(
             return
         await websocket.accept()
         loop = asyncio.get_running_loop()
-        outbound: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+        outbound: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=256)
         closed = {"flag": False}
 
         def send_fn(frame: str) -> None:
@@ -230,8 +248,15 @@ def create_router(
             except Exception:
                 closed["flag"] = True
 
+        def close_fn() -> None:
+            closed["flag"] = True
+            try:
+                loop.call_soon_threadsafe(outbound.put_nowait, None)
+            except Exception:
+                pass
+
         attached = _hub().attach_host(
-            runner_session_id, send_fn, binding=payload)
+            runner_session_id, send_fn, binding=payload, close_fn=close_fn)
         if not attached.get("ok"):
             await websocket.close(code=4403, reason=str(attached.get("error") or "denied")[:120])
             return
@@ -239,13 +264,21 @@ def create_router(
         async def writer() -> None:
             while not closed["flag"]:
                 frame = await outbound.get()
+                if frame is None:
+                    break
                 await websocket.send_text(frame)
+            try:
+                await websocket.close(code=4401, reason="ticket_revoked")
+            except Exception:
+                pass
 
         writer_task = asyncio.create_task(writer())
         try:
-            while True:
+            while not closed["flag"]:
                 message = await websocket.receive_text()
-                _hub().route_host_to_browsers(runner_session_id, message)
+                result = _hub().route_host_to_browsers(runner_session_id, message)
+                if result.get("error") == "revoked":
+                    break
         except WebSocketDisconnect:
             _hub().close_session(runner_session_id, reason="host_disconnect")
         finally:

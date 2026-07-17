@@ -201,6 +201,15 @@ DDL_MIGRATIONS: List[Tuple[str, str]] = [
     ("0048_ix_preflight_findings_code",
      "CREATE INDEX IF NOT EXISTS ix_preflight_findings_code "
      "ON preflight_findings(code, blocking)"),
+    # BUG-75 — durable PTY capability-ticket revocation until JWT expiry.
+    ("0049_runner_pty_revoked_jtis",
+     "CREATE TABLE IF NOT EXISTS runner_pty_revoked_jtis ("
+     "jti TEXT PRIMARY KEY, "
+     "expires_at REAL NOT NULL, "
+     "revoked_at REAL NOT NULL)"),
+    ("0050_ix_runner_pty_revoked_jtis_expires",
+     "CREATE INDEX IF NOT EXISTS ix_runner_pty_revoked_jtis_expires "
+     "ON runner_pty_revoked_jtis(expires_at)"),
 ]
 
 
