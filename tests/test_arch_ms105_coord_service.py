@@ -197,6 +197,31 @@ try:
         "/api/board", params={"project": PROJECT},
         headers={"Authorization": f"Bearer {read_token}"},
     ).status_code == 200, "project-scoped read bearer succeeds")
+
+    # BUG-81: production Caddy routes /api/board directly to this service.  A
+    # browser session must therefore be authenticated here, not only by the
+    # monolith that served the app shell/project picker.
+    from switchboard.api.routers.auth import session as auth_session
+    from switchboard.api.routers.auth import store as auth_store
+    import auth as root_auth
+
+    auth_store.init()
+    browser_user = auth_store.create_user(
+        "coord-browser@example.test", "Coord Browser",
+        root_auth.password_hash("coord-browser-password"),
+    )
+    store.grant_project_role(
+        PROJECT, "user", browser_user["id"], "viewer", created_by="test",
+        scopes=["read"],
+    )
+    browser_token, _expires = auth_session.issue(browser_user)
+    browser_client = TestClient(create_app(settings))
+    browser_client.cookies.set(auth_session.COOKIE_NAME, browser_token)
+    ok(browser_client.get(
+        "/api/board", params={"project": PROJECT, "view": "cards"},
+    ).status_code == 200,
+       "signed-in browser session reads the Coord-owned board")
+
     cut_cross_project = cut.get(
         "/api/board", params={"project": PROJECT},
         headers={"Authorization": f"Bearer {other_token}"},
