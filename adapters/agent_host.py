@@ -68,6 +68,9 @@ P_TALLY_SPEND = "/tally/v1/spend/ingest"
 MESSAGE_ONLY_LANE = "__MESSAGE_ONLY__"
 AGENT_HOST_VERSION = os.environ.get("PM_AGENT_HOST_VERSION", "0.2.0")
 _LOCAL_AUTH_LAST_PROBE_AT = 0.0
+_BOUND_FINALIZERS_LOCK = threading.Lock()
+_BOUND_FINALIZERS = {}
+_BOUND_FINALIZER_RESULTS = []
 
 
 def _csv(value):
@@ -1566,6 +1569,162 @@ def _enrich_bound_runner_record(rec, session):
     }
 
 
+def _finalize_bound_runner(wake, inventory, runner_session_id, rec):
+    """Finish claim-bound admission without blocking host dispatch/heartbeats."""
+    bound_result = wait_for_runner_binding(wake, inventory, runner_session_id)
+    runner_registration = (bound_result or {}).get("session")
+    started = bool((bound_result or {}).get("bound"))
+    reason = (bound_result or {}).get("reason") or "runner_bind_timeout"
+    if not started:
+        supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+        failed_rec = {
+            **(rec or {}),
+            "runner_session_id": runner_session_id,
+            "status": "failed",
+            "metadata": {
+                **((rec or {}).get("metadata") or {}),
+                "credential_admission_phase": "preclaim_failed",
+                "failure_reason": reason,
+            },
+        }
+        runner_registration = register_runner_session(
+            failed_rec, wake, inventory)
+    else:
+        # The child owns claim/Work Session authority and the supervisor owns
+        # Watch/Chat transport. Publish their joined row before acknowledging
+        # the wake so the web can observe the runner as soon as it is Running.
+        runner_registration = register_runner_session(
+            _enrich_bound_runner_record(rec, runner_registration), wake, inventory)
+        if (not runner_registration
+                or runner_registration.get("error")
+                or runner_registration.get("error_code")):
+            started = False
+            reason = ((runner_registration or {}).get("error_code")
+                      or (runner_registration or {}).get("error")
+                      or "runner_bind_registration_failed")
+            supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+            failed_rec = {
+                **(rec or {}),
+                "runner_session_id": runner_session_id,
+                "status": "failed",
+                "metadata": {
+                    **((rec or {}).get("metadata") or {}),
+                    "credential_admission_phase": "preclaim_failed",
+                    "failure_reason": reason,
+                },
+            }
+            runner_registration = register_runner_session(
+                failed_rec, wake, inventory)
+        else:
+            reason = "runner_bound"
+
+    result = {
+        "started": started,
+        "runner_session_id": ((rec or {}).get("runner_session_id")
+                              or runner_session_id),
+        "wake_mode": (rec or {}).get("wake_mode") or wake_mode(wake, inventory),
+        "reason": reason,
+        "pid": (rec or {}).get("pid"),
+        "cwd": (rec or {}).get("cwd"),
+        "task_id": (rec or {}).get("task_id") or wake.get("task_id"),
+        "claim_id": ((runner_registration or {}).get("claim_id")
+                     if started else None),
+        "work_session_id": (((runner_registration or {}).get("metadata") or {})
+                            .get("work_session_id") if started else None),
+        "control": (rec or {}).get("control") or {},
+        "session_url": (rec or {}).get("session_url"),
+        "provider_session_id": (rec or {}).get("provider_session_id"),
+        "failure_class": ((rec or {}).get("failure_class")
+                          or (None if started else "failed_gate")),
+        "provider_error": (rec or {}).get("provider_error"),
+        "runner_registered": bool(
+            runner_registration and not runner_registration.get("error")
+            and not runner_registration.get("error_code")),
+        "usage_registered": False,
+        "binding_pending": False,
+    }
+    completion = _try("POST", P_COMPLETE_WAKE, {
+        "project": PROJECT,
+        "wake_id": wake.get("wake_id"),
+        "runner_session_id": result["runner_session_id"],
+        "agent_id": (wake.get("selector") or {}).get("agent_id"),
+        "result": result,
+    })
+    result["wake_completed"] = bool(completion and not completion.get("error"))
+    return {"host_id": inventory.get("host_id"),
+            "wake_id": wake.get("wake_id"), **result}
+
+
+def _submit_bound_finalizer(wake, inventory, runner_session_id, rec):
+    """Start one daemon finalizer per claimed wake and return immediately."""
+    key = f"{inventory.get('host_id')}:{wake.get('wake_id')}:{runner_session_id}"
+
+    def finish():
+        try:
+            receipt = _finalize_bound_runner(
+                wake, inventory, runner_session_id, rec)
+        except Exception as exc:
+            # A background exception must still fail closed and release the
+            # durable wake instead of silently stranding it as claimed.
+            supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+            result = {
+                "started": False,
+                "runner_session_id": runner_session_id,
+                "wake_mode": (rec or {}).get("wake_mode") or wake_mode(wake, inventory),
+                "reason": "runner_bind_finalizer_error",
+                "task_id": wake.get("task_id"),
+                "failure_class": "failed_gate",
+                "provider_error": str(exc)[:500],
+                "binding_pending": False,
+            }
+            register_runner_session({
+                **(rec or {}),
+                "runner_session_id": runner_session_id,
+                "status": "failed",
+                "metadata": {
+                    **((rec or {}).get("metadata") or {}),
+                    "credential_admission_phase": "preclaim_failed",
+                    "failure_reason": "runner_bind_finalizer_error",
+                },
+            }, wake, inventory)
+            _try("POST", P_COMPLETE_WAKE, {
+                "project": PROJECT,
+                "wake_id": wake.get("wake_id"),
+                "runner_session_id": runner_session_id,
+                "agent_id": (wake.get("selector") or {}).get("agent_id"),
+                "result": result,
+            })
+            receipt = {"host_id": inventory.get("host_id"),
+                       "wake_id": wake.get("wake_id"), **result}
+        with _BOUND_FINALIZERS_LOCK:
+            _BOUND_FINALIZERS.pop(key, None)
+            _BOUND_FINALIZER_RESULTS.append(receipt)
+
+    with _BOUND_FINALIZERS_LOCK:
+        if key in _BOUND_FINALIZERS:
+            return False
+        thread = threading.Thread(
+            target=finish,
+            name=f"agent-host-bind-{str(wake.get('wake_id') or '')[-12:]}",
+            daemon=True,
+        )
+        _BOUND_FINALIZERS[key] = thread
+        thread.start()
+    return True
+
+
+def _reap_bound_finalizers(host_id):
+    """Return completed async receipts for this host without blocking."""
+    with _BOUND_FINALIZERS_LOCK:
+        ours = [row for row in _BOUND_FINALIZER_RESULTS
+                if row.get("host_id") == host_id]
+        _BOUND_FINALIZER_RESULTS[:] = [
+            row for row in _BOUND_FINALIZER_RESULTS
+            if row.get("host_id") != host_id
+        ]
+    return [{k: v for k, v in row.items() if k != "host_id"} for row in ours]
+
+
 def _acquire_provider_lease(wake, inventory, runner_session_id):
     binding = ((wake.get("policy") or {}).get("account_binding") or {})
     reference = str(binding.get("credential_reference") or "")
@@ -1649,6 +1808,7 @@ def run_once(inventory):
     if drain_request:
         return handle_drain(drain_request, inventory)
     host_id = inventory["host_id"]
+    finalized = _reap_bound_finalizers(host_id)
     capacity = heartbeat_capacity(inventory)
     heartbeat = _try("POST", P_HEARTBEAT_HOST, {
         "project": PROJECT, "host_id": host_id,
@@ -1663,7 +1823,7 @@ def run_once(inventory):
         return {
             "host_id": host_id,
             "pending": 0,
-            "acted": [],
+            "acted": finalized,
             "refused": [],
             "runner_controls": [],
             "auth_available": False,
@@ -1693,7 +1853,7 @@ def run_once(inventory):
         return {
             "host_id": host_id,
             "pending": 0,
-            "acted": [],
+            "acted": finalized,
             "refused": [],
             "runner_controls": [],
             "postprocessing_recovery": recovery,
@@ -1701,7 +1861,7 @@ def run_once(inventory):
     controls = handle_runner_controls(inventory)
     listed = _try("GET", f"{P_LIST_WAKES}?project={PROJECT}&status=pending") or {}
     wakes = wakes_bound_to_host(listed.get("wake_intents") or listed.get("wakes") or [])
-    acted = []
+    acted = list(finalized)
     refused = []
     cap = inventory["limits"]["max_sessions"]
     for w in wakes:
@@ -1825,34 +1985,35 @@ def run_once(inventory):
             runner_registration = register_runner_session(
                 failed_rec, claimed_wake, inventory)
         elif bind_required and started:
-            bound_result = wait_for_runner_binding(
-                claimed_wake, inventory, runner_session_id)
-            runner_registration = (bound_result or {}).get("session")
-            if not (bound_result or {}).get("bound"):
-                started = False
-                result_reason = (bound_result or {}).get("reason") or "runner_bind_timeout"
-                supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
-                failed_rec = {
-                    **(rec or {}),
-                    "runner_session_id": runner_session_id,
-                    "status": "failed",
-                    "metadata": {
-                        **((rec or {}).get("metadata") or {}),
-                        "credential_admission_phase": "preclaim_failed",
-                        "failure_reason": result_reason,
-                    },
-                }
-                runner_registration = register_runner_session(
-                    failed_rec, claimed_wake, inventory)
-            else:
-                # The child publishes the durable claim/Work Session tuple; the
-                # supervisor publishes the local PTY transport. Join them only
-                # after claim_bound readiness so complete_wake cannot race the
-                # child's final admission update.
-                runner_registration = register_runner_session(
-                    _enrich_bound_runner_record(rec, runner_registration),
-                    claimed_wake, inventory)
-                result_reason = "runner_bound"
+            _submit_bound_finalizer(
+                claimed_wake, inventory, runner_session_id, rec)
+            # Launch acknowledgement is intentionally distinct from durable
+            # wake completion. The finalizer will publish the exact claim-bound
+            # Watch/Chat row and complete this wake independently.
+            acted.append({
+                "wake_id": wake_id,
+                "started": True,
+                "runner_session_id": ((rec or {}).get("runner_session_id")
+                                      or runner_session_id),
+                "wake_mode": (rec or {}).get("wake_mode") or wake_mode(w, inventory),
+                "reason": "runner_binding_pending",
+                "pid": (rec or {}).get("pid"),
+                "cwd": (rec or {}).get("cwd"),
+                "task_id": (rec or {}).get("task_id") or w.get("task_id"),
+                "claim_id": None,
+                "work_session_id": None,
+                "control": (rec or {}).get("control") or {},
+                "session_url": (rec or {}).get("session_url"),
+                "provider_session_id": (rec or {}).get("provider_session_id"),
+                "failure_class": None,
+                "provider_error": None,
+                "runner_registered": bool(
+                    preclaim_registration
+                    and not preclaim_registration.get("error")),
+                "usage_registered": False,
+                "binding_pending": True,
+            })
+            continue
         elif bind_required:
             result_reason = (rec or {}).get("reason") or "launch_failed"
             failed_rec = {
