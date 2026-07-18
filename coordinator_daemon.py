@@ -326,6 +326,36 @@ class CoordinatorDaemon:
         return hashlib.sha256(
             json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
+    def _wake_generation(self, project: str, deliverable_id: str,
+                         task_id: str) -> int:
+        """Return the completed dispatch generation for an exact task.
+
+        The task/dependency snapshot does not change when a host startup dies before
+        it creates a claim.  Keying daemon ticks only from that snapshot therefore
+        replays the old coordinator result forever.  Terminal exact wakes are the
+        durable retry boundary; active wakes deliberately do not advance it so crash
+        replay still deduplicates an in-flight launch.
+        """
+        list_wakes = getattr(self.store, "list_wake_intents", None)
+        if not callable(list_wakes):
+            return 0
+        try:
+            rows = list_wakes(
+                project=project, task_id=task_id,
+                deliverable_id=deliverable_id)
+        except Exception:
+            return 0
+        if not isinstance(rows, list):
+            return 0
+        terminal = {"completed", "failed", "cancelled", "expired"}
+        return sum(
+            1 for row in rows
+            if str(row.get("task_id") or "") == task_id
+            and str((row.get("selector") or {}).get("deliverable_id") or "")
+            == deliverable_id
+            and str(row.get("status") or "") in terminal
+        )
+
     def _run_scope(self, project: str, scope: Dict[str, Any],
                    denied_lanes: Iterable[str] = ()) -> Dict[str, Any]:
         deliverable_id = str(scope.get("deliverable_id") or "")
@@ -351,7 +381,8 @@ class CoordinatorDaemon:
         for candidate in candidates:
             task_id = str(candidate.get("task_id") or "").upper()
             revision = self._candidate_revision(mission_status, candidate)
-            idem_key = f"ui28:{scope['scope_id']}:{task_id}:{revision}"
+            wake_generation = self._wake_generation(
+                project, deliverable_id, task_id)
             policy = {
                 "auto_refresh_brief": not receipts,
                 "auto_claim": bool(self.config.act and self.config.worker_agent_id),
@@ -367,6 +398,14 @@ class CoordinatorDaemon:
                 "target_project_id": candidate.get("task_project")
                     or candidate.get("project_id") or project,
             }
+            # Idempotency is exact-payload scoped.  A deployed policy change must
+            # not collide with a receipt created by the previous policy version,
+            # while byte-equivalent crash replay must retain the same key.
+            policy_revision = hashlib.sha256(
+                json.dumps(policy, sort_keys=True, default=str).encode()
+            ).hexdigest()[:12]
+            idem_key = (f"ui30:{scope['scope_id']}:{task_id}:{revision}:"
+                        f"wake-generation-{wake_generation}:policy-{policy_revision}")
             result = self.store.run_mission_coordinator_tick(
                 project=project,
                 deliverable_id=deliverable_id,

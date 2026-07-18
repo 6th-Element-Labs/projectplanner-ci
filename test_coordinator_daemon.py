@@ -34,6 +34,7 @@ class FakeStore:
         self.effects = {}
         self.calls = []
         self.cursor = 0
+        self.wakes = []
 
     def get_meta(self, key, default=None, project="switchboard"):
         value = self.meta.get((project, key), default)
@@ -128,6 +129,15 @@ class FakeStore:
             }
         return dict(self.effects[idem_key])
 
+    def list_wake_intents(self, *, task_id="", deliverable_id="", **_kwargs):
+        return [
+            dict(row) for row in self.wakes
+            if (not task_id or row.get("task_id") == task_id)
+            and (not deliverable_id
+                 or (row.get("selector") or {}).get("deliverable_id")
+                 == deliverable_id)
+        ]
+
 
 clock = Clock()
 store = FakeStore(clock)
@@ -172,6 +182,38 @@ replay = third.tick_project("switchboard")
 ok(replay["receipts"][0]["task_receipts"][0]["idem_key"] in store.effects
    and len(store.effects) == effects_before,
    "crash replay reuses the durable idempotency key without duplicating effects")
+
+# A host can fail before it creates a claim, leaving the task snapshot unchanged.
+# The terminal wake advances the daemon generation so the next tick is a real
+# retry, while subsequent polls of that same generation remain idempotent.
+store.wakes.append({
+    "wake_id": "wake-terminal", "task_id": "TASK-B", "status": "failed",
+    "selector": {"deliverable_id": "deliverable-b"},
+})
+retry_effects_before = len(store.effects)
+store.set_meta(daemon_mod._state_key("test"), state1, project="switchboard")
+clock.value += 31
+retry_run = daemon_mod.CoordinatorDaemon(
+    config, store_mod=store, instance_id="instance-retry", clock=clock,
+).tick_project("switchboard")
+retry_key = retry_run["receipts"][0]["task_receipts"][0]["idem_key"]
+ok("wake-generation-1" in retry_key
+   and len(store.effects) == retry_effects_before + 1,
+   "terminal wake advances the durable retry generation without a task-state change")
+
+policy_variant = daemon_mod.DaemonConfig(
+    profile_id="test", projects=("switchboard",), allowed_lanes=("CO", "COORD"),
+    act=True, max_deliverables_per_tick=1, heartbeat_seconds=10,
+    lease_ttl_seconds=30, elastic_runtime_config_ref="ssm:/new-runtime-policy",
+)
+store.set_meta(daemon_mod._state_key("test"), state1, project="switchboard")
+clock.value += 31
+policy_run = daemon_mod.CoordinatorDaemon(
+    policy_variant, store_mod=store, instance_id="instance-policy", clock=clock,
+).tick_project("switchboard")
+policy_key = policy_run["receipts"][0]["task_receipts"][0]["idem_key"]
+ok(policy_key != retry_key and ":policy-" in policy_key,
+   "a deployed dispatch-policy change cannot conflict with the prior receipt")
 
 paused = daemon_mod.set_control(
     store, "switchboard", "test", actor="operator", paused=True, now=clock())
