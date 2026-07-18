@@ -11,8 +11,10 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -228,6 +230,84 @@ def _update_runner(
     return result
 
 
+def _write_watch_output(chunk: bytes, stream: Any = None) -> None:
+    """Copy native Codex bytes into the supervisor-owned PTY immediately."""
+    if not chunk:
+        return
+    target = stream
+    if target is None:
+        target = getattr(sys.stdout, "buffer", sys.stdout)
+    try:
+        target.write(chunk)
+    except TypeError:
+        target.write(chunk.decode("utf-8", errors="replace"))
+    target.flush()
+
+
+def _run_streaming_command(
+    command: list[str], *, cwd: str, env: dict[str, str], timeout: float,
+    stream: Any = None,
+) -> subprocess.CompletedProcess:
+    """Run a child while teeing its combined output to the browser Watch PTY.
+
+    ``subprocess.run(..., stdout=PIPE)`` withheld the native Codex transcript
+    until the process exited. The Agent Host supervisor already owns the outer
+    PTY, so copying each ready pipe chunk to stdout makes that exact transcript
+    observable while retaining the same bytes for completion evidence.
+    """
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=0,
+    )
+    if process.stdout is None:  # pragma: no cover - guaranteed by stdout=PIPE
+        process.kill()
+        raise RuntimeError("native Codex output pipe was not created")
+
+    output = bytearray()
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            for key, _mask in selector.select(min(0.25, remaining)):
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                output.extend(chunk)
+                _write_watch_output(chunk, stream)
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
+        returncode = process.wait(timeout=remaining)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        try:
+            tail, _unused = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            tail = b""
+        if tail:
+            output.extend(tail)
+            _write_watch_output(tail, stream)
+        raise subprocess.TimeoutExpired(
+            command, timeout, output=bytes(output)) from exc
+    finally:
+        selector.close()
+        process.stdout.close()
+
+    rendered = bytes(output).decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(command, returncode, rendered, "")
+
+
 def _complete_wake(
     http: Callable[..., dict[str, Any]], values: dict[str, str],
     result: dict[str, Any],
@@ -310,7 +390,7 @@ def _complete_wake(
 def run(
     task: dict[str, Any],
     *,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
     codex_executable: str = "",
     http: Callable[..., dict[str, Any]] = sb._http,
 ) -> dict[str, Any]:
@@ -446,17 +526,24 @@ def run(
             daemon=True,
         )
         heartbeat_thread.start()
-        completed = runner(
-            command,
-            cwd=workspace,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=7200,
-            check=False,
-        )
+        if runner is None:
+            completed = _run_streaming_command(
+                command, cwd=workspace, env=environment, timeout=7200)
+        else:
+            # Test and embedding hook. Production deliberately takes the
+            # streaming path above; injected runners retain the previous
+            # CompletedProcess contract.
+            completed = runner(
+                command,
+                cwd=workspace,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=7200,
+                check=False,
+            )
         output = ((completed.stdout or "") + (completed.stderr or "")).encode()
         if completed.returncode != 0:
             raise RuntimeError(
