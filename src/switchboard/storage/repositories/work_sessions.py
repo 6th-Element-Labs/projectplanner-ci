@@ -140,10 +140,28 @@ def _task_session_health_in(c: sqlite3.Connection, task: Dict[str, Any],
         (task_id,),
     ).fetchall()
     sessions = [_work_session_row(row) for row in rows]
-    current_sessions = [
+    claims = active_claims if active_claims is not None else _active_task_claims_in(c, task_id)
+    active_claim_ids = {
+        str(claim.get("claim_id") or claim.get("id") or "")
+        for claim in (claims or [])
+        if claim.get("claim_id") or claim.get("id")
+    }
+    nonterminal = [
         s for s in sessions
-        if s.get("status") not in {"completed", "archived"}
+        if s.get("status") not in {"completed", "archived", "expired"}
     ]
+    if active_claim_ids:
+        # One task may have a long history of failed/expired attempts.  Once a
+        # current claim exists, only its bound Work Session is delivery health;
+        # superseded attempts remain queryable history, not 20 duplicate blockers.
+        current_sessions = [
+            s for s in nonterminal
+            if str(s.get("claim_id") or "") in active_claim_ids
+        ]
+    else:
+        # A task cannot legitimately have several simultaneous unclaimed Work
+        # Sessions. Keep at most the newest orphan as a bounded cleanup signal.
+        current_sessions = nonterminal[:1]
     active_sessions = [
         s for s in current_sessions
         if s.get("status") == "active" and (
@@ -169,7 +187,6 @@ def _task_session_health_in(c: sqlite3.Connection, task: Dict[str, Any],
                 "repair": finding.get("repair"),
             })
 
-    claims = active_claims if active_claims is not None else _active_task_claims_in(c, task_id)
     session_claim_ids = {s.get("claim_id") for s in sessions if s.get("claim_id")}
     for claim in claims or []:
         claim_id = claim.get("claim_id")

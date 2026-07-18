@@ -73,10 +73,18 @@ with tempfile.TemporaryDirectory(prefix="switchboard-test-sandbox-") as root_val
     runtime_root = state_root / "provider-runtimes"
     codex_home = state_root / "codex-home"
     source_codex_home = user_home / ".codex"
+    source_repo_root = user_home / "source-repo"
+    browser_root = user_home / "Library" / "Caches" / "ms-playwright"
     for directory in (
             workspace, config_root, runner_root, runtime_root, codex_home,
-            source_codex_home):
+            source_codex_home, source_repo_root, browser_root):
         directory.mkdir(parents=True, exist_ok=True)
+    common_git_root = source_repo_root / ".git"
+    worktree_git_root = common_git_root / "worktrees" / "TASK"
+    worktree_git_root.mkdir(parents=True)
+    (workspace / ".git").write_text(
+        f"gitdir: {worktree_git_root}\n", encoding="utf-8")
+    (worktree_git_root / "commondir").write_text("../..\n", encoding="utf-8")
     identity_path = config_root / "identity.json"
     config_path = config_root / "config.json"
     state_path = state_root / "state.json"
@@ -100,6 +108,7 @@ with tempfile.TemporaryDirectory(prefix="switchboard-test-sandbox-") as root_val
         "PM_AGENT_HOST_RUNTIME_ROOT": str(runtime_root),
         "PM_AGENT_HOST_CODEX_HOME": str(codex_home),
         "PM_AGENT_HOST_SOURCE_CODEX_HOME": str(source_codex_home),
+        "PM_AGENT_HOST_SOURCE_REPO_ROOT": str(source_repo_root),
         "PM_AGENT_HOST_USER_HOME": str(user_home),
         "CODEX_HOME": str(codex_home),
         "PM_MCP_TOKEN": "stable-host-bearer",
@@ -135,17 +144,29 @@ with tempfile.TemporaryDirectory(prefix="switchboard-test-sandbox-") as root_val
            and mac_argv[:2] == ["/usr/bin/sandbox-exec", "-p"]
            and "(deny default)" in mac_profile
            and "(allow default)" not in mac_profile
-           and "(deny process-info*)" in mac_profile
+           and "(allow process-info* (target same-sandbox))" in mac_profile
+           and "(allow mach-register)" in mac_profile
+           and "(allow user-preference-read)" in mac_profile
+           and "(allow dynamic-code-generation)" in mac_profile
+           and "(allow iokit-open*)" in mac_profile
+           and "(allow network-outbound)" in mac_profile
+           and "(allow network-inbound)" in mac_profile
+           and "(subpath \"/private/tmp\")" in mac_profile
+           and "(require-not (subpath" in mac_profile
            and str(config_root.resolve()) in mac_profile
            and str(state_path.resolve()) in mac_profile
            and str(codex_home.resolve()) in mac_profile
            and str(source_codex_home.resolve()) in mac_profile
+           and str(browser_root.resolve()) in mac_profile
+           and str(common_git_root.resolve()) in mac_profile
+           and str(worktree_git_root.resolve()) in mac_profile
            and str(user_home.resolve()) in mac_profile
            and str(workspace.resolve()) in mac_profile
            and all(key not in child_env for key in sb._PERSONAL_TEST_HOST_PATH_ENV)
            and "CODEX_HOME" not in child_env
            and "PYTHONPATH" not in child_env
            and child_env.get("PYTHONNOUSERSITE") == "1"
+           and child_env.get("PLAYWRIGHT_BROWSERS_PATH") == str(browser_root)
            and "PM_MCP_TOKEN" not in child_env
            and "SWITCHBOARD_TOKEN" not in child_env,
            "macOS personal test harness denies host files/process inspection and scrubs paths")
@@ -251,6 +272,16 @@ with tempfile.TemporaryDirectory(prefix="switchboard-test-sandbox-") as root_val
                 str(runtime_root.resolve())] in [
                linux_home_runtime_argv[index:index + 3]
                for index, value in enumerate(linux_home_runtime_argv)
+               if value == "--ro-bind"]
+           and ["--ro-bind", str(common_git_root.resolve()),
+                str(common_git_root.resolve())] in [
+               linux_argv[index:index + 3]
+               for index, value in enumerate(linux_argv)
+               if value == "--ro-bind"]
+           and ["--ro-bind", str(worktree_git_root.resolve()),
+                str(worktree_git_root.resolve())] in [
+               linux_argv[index:index + 3]
+               for index, value in enumerate(linux_argv)
                if value == "--ro-bind"],
            "Linux personal test harness hides the supervisor and mounts only workspace writable")
 

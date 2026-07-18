@@ -770,6 +770,19 @@ const TeepPlan = {
             const data = await (await fetch(`/ixp/v1/work_sessions?${p}&include_expired=false`, { cache: 'no-store' })).json();
             sessions = data.work_sessions || [];
         } catch (e) { this._fleetLoadBusy = false; return; }
+        // The dock is a live-agent surface, not Work Session history. Historical
+        // attempts can retain null expires_at (and older failed hosts could leave
+        // status=active), so include_expired=false alone is not enough. Keep only
+        // live lifecycle states and one newest attempt per task+agent; the task's
+        // Work Sessions panel remains the place to inspect complete history.
+        const latest = new Map();
+        sessions.filter((s) => ['active', 'proposed'].includes(String(s.status || '').toLowerCase()))
+            .forEach((s) => {
+                const key = `${String(s.task_id || '').toUpperCase()}\u0000${String(s.agent_id || '')}`;
+                const prior = latest.get(key);
+                if (!prior || Number(s.updated_at || 0) > Number(prior.updated_at || 0)) latest.set(key, s);
+            });
+        sessions = Array.from(latest.values());
         const ctx = this._dockCtx || { mode: 'project' };
         if (ctx.mode === 'deliverable' && Array.isArray(ctx.taskIds)) {
             const ids = new Set(ctx.taskIds.map((x) => String(x).toUpperCase()));

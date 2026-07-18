@@ -1462,6 +1462,141 @@ def _recover_personal_completed_execution_in(
     )
     return None
 
+
+def _recover_host_local_completed_execution_in(
+    c: sqlite3.Connection,
+    wake: Dict[str, Any],
+    *,
+    principal_id: str,
+    runner_session_id: str,
+    agent_id: str,
+    requested_result: Dict[str, Any],
+    actor: str,
+    now: float,
+) -> Optional[Dict[str, Any]]:
+    """Turn an exact completed launch receipt into a failed child execution.
+
+    Generic Agent Hosts complete the wake once the native CLI is launched.  The
+    child can still fail its executed-test or completion gate afterward.  This
+    recovery is deliberately narrower than an ordinary terminal rewrite: it
+    requires the same host principal, runner, task, claim, Work Session, wake,
+    and agent tuple, plus a terminal host-local runner and explicit recovery
+    intent.
+    """
+    policy = dict(wake.get("policy") or {})
+    selector = dict(wake.get("selector") or {})
+    expected = {
+        "wake_id": str(wake.get("wake_id") or ""),
+        "task_id": str(wake.get("task_id") or selector.get("task_id") or ""),
+        "runner_session_id": str(wake.get("runner_session_id") or ""),
+        "host_id": str(wake.get("claimed_by_host") or ""),
+        "agent_id": str(wake.get("agent_id") or selector.get("agent_id") or ""),
+    }
+    reasons: List[str] = []
+    if wake.get("status") != "completed":
+        reasons.append("recovery_wake_not_completed")
+    if requested_result.get("started") is not False:
+        reasons.append("recovery_failure_receipt_required")
+    if requested_result.get("recoverable_post_execution_failure") is not True:
+        reasons.append("recovery_intent_required")
+    if policy.get("require_runner_bind") is not True:
+        reasons.append("recovery_runner_bind_not_required")
+    if (policy.get("execution_mode") == "personal_agent_host"
+            or policy.get("require_exact_host_binding") is True
+            or policy.get("account_binding")
+            or (policy.get("execution_binding") or {}).get(
+                "execution_connection_id")):
+        reasons.append("recovery_not_generic_host_local")
+    if str(runner_session_id or "") != expected["runner_session_id"]:
+        reasons.append("recovery_runner_session_mismatch")
+    if str(agent_id or "") != expected["agent_id"]:
+        reasons.append("recovery_agent_id_mismatch")
+    if not all(expected.values()):
+        reasons.append("recovery_binding_incomplete")
+    original_result = dict(wake.get("result") or {})
+    if original_result.get("started") is not True:
+        reasons.append("recovery_original_launch_not_started")
+
+    runner = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+        (expected["runner_session_id"],),
+    ).fetchone()
+    claim_id = ""
+    work_session_id = ""
+    if not runner:
+        reasons.append("recovery_runner_not_found")
+    else:
+        runner = dict(runner)
+        metadata = _json_obj(runner.get("metadata_json", "{}"), {})
+        claim_id = str(runner.get("claim_id") or "")
+        work_session_id = str(metadata.get("work_session_id") or "")
+        expected_runner = {
+            "task_id": expected["task_id"],
+            "host_id": expected["host_id"],
+            "agent_id": expected["agent_id"],
+            "principal_id": str(principal_id or ""),
+        }
+        for field, expected_value in expected_runner.items():
+            if str(runner.get(field) or "") != expected_value:
+                reasons.append(f"recovery_runner_{field}_mismatch")
+        if str(metadata.get("wake_id") or "") != expected["wake_id"]:
+            reasons.append("recovery_runner_wake_id_mismatch")
+        if str(metadata.get("credential_admission_phase") or "") != "claim_bound":
+            reasons.append("recovery_runner_not_claim_bound")
+        if str(metadata.get("auth_lane") or "") != "codex_host_local":
+            reasons.append("recovery_runner_not_host_local")
+        if str(runner.get("status") or "").lower() not in {
+                "failed", "cancelled", "expired", "lost", "killed", "exited"}:
+            reasons.append("recovery_runner_not_terminal_failed")
+        if not claim_id or not work_session_id:
+            reasons.append("recovery_runner_binding_incomplete")
+
+    claim = c.execute(
+        "SELECT task_id, agent_id, status, expires_at FROM task_claims WHERE id=?",
+        (claim_id,),
+    ).fetchone() if claim_id else None
+    if (not claim or str(claim["task_id"] or "") != expected["task_id"]
+            or str(claim["agent_id"] or "") != expected["agent_id"]
+            or str(claim["status"] or "") != "active"
+            or float(claim["expires_at"] or 0) <= now):
+        reasons.append("recovery_claim_not_active")
+    session = c.execute(
+        "SELECT task_id, agent_id, claim_id, status FROM work_sessions "
+        "WHERE work_session_id=?", (work_session_id,),
+    ).fetchone() if work_session_id else None
+    if (not session or str(session["task_id"] or "") != expected["task_id"]
+            or str(session["agent_id"] or "") != expected["agent_id"]
+            or str(session["claim_id"] or "") != claim_id
+            or str(session["status"] or "") not in {"active", "expired"}):
+        reasons.append("recovery_work_session_mismatch")
+
+    if reasons:
+        return {"completed": False, "reason": "exact_binding_denied",
+                "reason_codes": sorted(set(reasons)),
+                "wake_id": expected["wake_id"]}
+
+    wake_update = c.execute(
+        "UPDATE wake_intents SET status='failed', completed_at=?, result_json=? "
+        "WHERE wake_id=? AND status='completed' AND runner_session_id=? AND agent_id=?",
+        (now, json.dumps(requested_result, sort_keys=True), expected["wake_id"],
+         expected["runner_session_id"], expected["agent_id"]),
+    )
+    if wake_update.rowcount != 1:
+        return {"completed": False, "reason": "exact_binding_denied",
+                "reason_codes": ["recovery_terminal_race"],
+                "wake_id": expected["wake_id"]}
+    c.execute(
+        "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (expected["task_id"], actor, "wake.post_execution_recovered_failed",
+         json.dumps({"wake_id": expected["wake_id"],
+                     "runner_session_id": expected["runner_session_id"],
+                     "claim_id": claim_id,
+                     "work_session_id": work_session_id,
+                     "reason": requested_result.get("reason")}, sort_keys=True), now),
+    )
+    return None
+
 def claim_wake(host_id: str, wake_id: str, actor: str = "system",
                project: str = DEFAULT_PROJECT, runner_session_id: str = "",
                credential_lease_id: str = "", claim_id: str = "",
@@ -1797,6 +1932,32 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                             "reason_codes": [str(transitioned.get("reason_code")
                                                  or "execution_connection_completion_lost")],
                             "wake_id": wake_id}
+            elif wake.get("status") == "completed":
+                if (status == "failed"
+                        and result.get("recoverable_post_execution_failure") is True):
+                    recovery_error = _recover_host_local_completed_execution_in(
+                        c, wake, principal_id=principal_id,
+                        runner_session_id=runner_session_id, agent_id=agent_id,
+                        requested_result=result, actor=actor, now=now)
+                    if recovery_error:
+                        return recovery_error
+                    row = c.execute(
+                        "SELECT * FROM wake_intents WHERE wake_id=?", (wake_id,),
+                    ).fetchone()
+                    return _wake_row(row) | {
+                        "completed": False,
+                        "recovered_post_execution_failure": True,
+                    }
+                if (status == "completed"
+                        and str(wake.get("runner_session_id") or "")
+                        == str(runner_session_id or "")
+                        and str(wake.get("agent_id") or "") == str(agent_id or "")
+                        and dict(wake.get("result") or {}) == result):
+                    return wake | {"completed": True,
+                                   "note": "idempotent terminal readback"}
+                return {"completed": False, "reason": "exact_binding_denied",
+                        "reason_codes": ["completed_wake_rewrite_denied"],
+                        "wake_id": wake_id}
             c.execute(
                 "UPDATE wake_intents SET status=?, completed_at=?, runner_session_id=?, "
                 "agent_id=?, result_json=? WHERE wake_id=?",

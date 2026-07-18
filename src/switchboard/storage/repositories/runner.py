@@ -109,7 +109,8 @@ def check_agent_host_bootstrap_authority(
     allowed_wake_statuses = (
         {"claimed", "completed", "failed", "cancelled", "expired"}
         if action == "expire_work_session" else
-        ({"claimed", "completed"} if action == "heartbeat_agent" else {"claimed"})
+        ({"claimed", "completed"}
+         if action in {"complete_wake", "heartbeat_agent"} else {"claimed"})
     )
     if (not wake or wake_status not in allowed_wake_statuses
             or str(wake["claimed_by_host"] or "") != supplied["host_id"]):
@@ -1065,6 +1066,34 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
             now,
         ),
     )
+    # A terminal failure is also the end of its exact Work Session attempt.  The
+    # child normally expires the session after abandoning its claim, but hard kills
+    # and host loss cannot execute that cleanup.  Closing it here makes the central
+    # runner heartbeat the durable fallback and prevents failed attempts remaining
+    # "active" forever. Successful runners stay active until checkpoint/claim
+    # completion owns their stronger lifecycle transition.
+    runner_status = str(record.get("status") or "").strip().lower()
+    work_session_id = str(metadata.get("work_session_id") or "").strip()
+    if (work_session_id
+            and str(metadata.get("auth_lane") or "") == "codex_host_local"
+            and runner_status in {
+            "failed", "cancelled", "expired", "lost", "killed", "exited"
+    }):
+        changed = c.execute(
+            "UPDATE work_sessions SET status='expired', updated_at=?, updated_by=? "
+            "WHERE work_session_id=? AND status IN ('active','proposed','blocked')",
+            (now, actor, work_session_id),
+        )
+        if changed.rowcount:
+            c.execute(
+                "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (record.get("task_id") or None, actor,
+                 "work_session.expired_by_terminal_runner",
+                 json.dumps({"runner_session_id": runner_session_id,
+                             "work_session_id": work_session_id,
+                             "runner_status": runner_status}, sort_keys=True), now),
+            )
     _renew_personal_claim_from_runner_in(c, record, principal_id, now)
     c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
               (record.get("task_id") or None, actor, "runner.session_registered",

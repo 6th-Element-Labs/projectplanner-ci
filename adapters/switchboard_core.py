@@ -33,6 +33,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 DEFAULT_BASE = os.environ.get("PM_BASE", "https://plan.taikunai.com").rstrip("/")
 TIMEOUT = 4
@@ -682,18 +683,59 @@ _PERSONAL_TEST_HOST_PATH_ENV = (
     "PM_AGENT_HOST_RUNTIME_ROOT",
     "PM_AGENT_HOST_CODEX_HOME",
     "PM_AGENT_HOST_SOURCE_CODEX_HOME",
+    "PM_AGENT_HOST_SOURCE_REPO_ROOT",
     "PM_AGENT_HOST_USER_HOME",
 )
 
 
-def _personal_test_runtime_roots():
-    """Return supervisor-owned Python roots needed by the sandboxed test harness."""
+def _personal_test_runtime_roots(protected=None):
+    """Return read-only runtime roots needed by the sandboxed test harness."""
     roots = {
         os.path.realpath(os.path.abspath(str(value)))
         for value in (sys.prefix, sys.base_prefix)
         if str(value or "").strip()
     }
+    # Browser tests are part of the canonical Switchboard gate. Playwright keeps
+    # its signed browser payload outside the virtualenv by default, including
+    # beneath the user's otherwise-hidden home on macOS/Linux. Expose that one
+    # dependency read-only; never expose the surrounding cache or home.
+    browser_path = str(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    if browser_path and browser_path != "0":
+        roots.add(os.path.realpath(os.path.abspath(os.path.expanduser(browser_path))))
+    elif protected and protected.get("PM_AGENT_HOST_USER_HOME"):
+        user_home = protected["PM_AGENT_HOST_USER_HOME"]
+        if str(os.environ.get("PM_AGENT_HOST_PLATFORM") or sys.platform).lower() \
+                in {"darwin", "mac", "macos"}:
+            roots.add(os.path.join(user_home, "Library", "Caches", "ms-playwright"))
+        else:
+            roots.add(os.path.join(user_home, ".cache", "ms-playwright"))
     return sorted(path for path in roots if os.path.isdir(path))
+
+
+def _personal_test_git_roots(workspace, protected):
+    """Expose only the canonical common Git metadata for this exact worktree."""
+    dotgit = os.path.join(workspace, ".git")
+    if not os.path.isfile(dotgit):
+        return []
+    try:
+        marker = Path(dotgit).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("personal test worktree Git binding is unreadable") from exc
+    if not marker.startswith("gitdir: "):
+        raise RuntimeError("personal test worktree Git binding is invalid")
+    gitdir = os.path.realpath(os.path.join(workspace, marker[8:].strip()))
+    commondir_path = os.path.join(gitdir, "commondir")
+    try:
+        common_marker = Path(commondir_path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("personal test worktree common Git binding is unreadable") from exc
+    common = os.path.realpath(os.path.join(gitdir, common_marker))
+    source_root = protected["PM_AGENT_HOST_SOURCE_REPO_ROOT"]
+    expected_common = os.path.realpath(os.path.join(source_root, ".git"))
+    if (common != expected_common
+            or os.path.commonpath((expected_common, gitdir)) != expected_common):
+        raise RuntimeError("personal test worktree Git binding crosses source repository")
+    return [gitdir, common]
 
 
 def _sandbox_paths_overlap(left, right):
@@ -751,6 +793,7 @@ def _personal_test_sandbox_argv(argv, workspace_path):
         "PM_AGENT_HOST_STATE_PATH",
         "PM_AGENT_HOST_CODEX_HOME",
         "PM_AGENT_HOST_SOURCE_CODEX_HOME",
+        "PM_AGENT_HOST_SOURCE_REPO_ROOT",
         "PM_AGENT_HOST_USER_HOME",
     }
     missing = sorted(required - protected.keys())
@@ -759,16 +802,18 @@ def _personal_test_sandbox_argv(argv, workspace_path):
             "personal executed-test sandbox lacks host path bindings: " + ",".join(missing))
     platform_name = str(
         os.environ.get("PM_AGENT_HOST_PLATFORM") or sys.platform).strip().lower()
-    runtime_roots = _personal_test_runtime_roots()
-    _validate_personal_test_runtime_roots(runtime_roots, protected)
+    runtime_roots = _personal_test_runtime_roots(protected)
+    git_roots = _personal_test_git_roots(workspace, protected)
+    read_roots = sorted(set((*runtime_roots, *git_roots)))
+    _validate_personal_test_runtime_roots(read_roots, protected)
 
     if platform_name in {"darwin", "mac", "macos"}:
         sandbox = shutil.which("sandbox-exec")
         if not sandbox:
             raise RuntimeError("personal executed tests require macOS sandbox-exec")
         file_paths = [protected["PM_AGENT_HOST_STATE_PATH"]]
+        user_home = protected["PM_AGENT_HOST_USER_HOME"]
         directory_paths = [
-            protected["PM_AGENT_HOST_USER_HOME"],
             protected["PM_AGENT_HOST_SOURCE_CODEX_HOME"],
             os.path.dirname(protected["PM_AGENT_HOST_CONFIG_PATH"]),
         ]
@@ -783,11 +828,32 @@ def _personal_test_sandbox_argv(argv, workspace_path):
             "(version 1)",
             "(deny default)",
             "(allow process*)",
-            "(deny process-info*)",
+            "(allow signal (target same-sandbox))",
+            "(allow process-info* (target same-sandbox))",
             "(allow sysctl-read)",
             "(allow mach-lookup)",
-            "(allow file-read*)",
-            f"(allow file-write* (subpath {json.dumps(temporary_root)}))",
+            "(allow mach-register)",
+            # CoreFoundation and headless Chromium read system preference
+            # domains during startup. Denying this operation makes current
+            # macOS abort Python/Chromium subprocesses instead of returning a
+            # recoverable error; it does not grant file access to the hidden
+            # user home or any Agent Host credential path below.
+            "(allow user-preference-read)",
+            "(allow dynamic-code-generation)",
+            "(allow iokit-open*)",
+            "(allow ipc-posix-sem)",
+            "(allow ipc-posix-shm*)",
+            "(allow pseudo-tty)",
+            "(allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))",
+            "(allow file-read* file-write* file-ioctl (regex #\"^/dev/ttys[0-9]+\"))",
+            "(allow network-outbound)",
+            "(allow network-inbound)",
+            f"(allow file-read* (require-not (subpath {json.dumps(user_home)})))",
+            f"(allow file-read* file-write* (subpath {json.dumps(temporary_root)}))",
+            # Seatbelt evaluates the canonical /private/tmp path even when test
+            # code spells it through the traditional /tmp symlink.
+            "(allow file-read* file-write* (subpath \"/private/tmp\"))",
+            "(allow file-read* file-write* (subpath \"/tmp\"))",
             "(allow file-write* (literal \"/dev/null\"))",
         ]
         profile.extend(
@@ -800,7 +866,26 @@ def _personal_test_sandbox_argv(argv, workspace_path):
         )
         profile.extend(
             f"(allow file-read* (subpath {json.dumps(path)}))"
-            for path in runtime_roots
+            for path in read_roots
+        )
+        # Seatbelt checks each ancestor while resolving a symlinked virtualenv
+        # executable or a checkout below the hidden home. Grant directory
+        # metadata only on those exact ancestors; file contents remain denied.
+        visible_roots = [*read_roots, workspace]
+        visible_ancestors = set()
+        for root in visible_roots:
+            current = os.path.realpath(root)
+            while _sandbox_paths_overlap(user_home, current):
+                visible_ancestors.add(current)
+                if current == user_home:
+                    break
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+        profile.extend(
+            f"(allow file-read-metadata (literal {json.dumps(path)}))"
+            for path in sorted(visible_ancestors)
         )
         # The worker checkout is the only user-home subtree restored after the
         # broad credential boundary.  Everything else beneath the real home stays
@@ -861,10 +946,10 @@ def _personal_test_sandbox_argv(argv, workspace_path):
             if (path and os.path.isdir(path)
                     and os.path.commonpath((user_home, path)) != user_home):
                 command += ["--tmpfs", path]
-        for runtime_root in runtime_roots:
-            if os.path.commonpath((user_home, runtime_root)) == user_home:
-                recreate_home_path(runtime_root)
-                command += ["--ro-bind", runtime_root, runtime_root]
+        for read_root in read_roots:
+            if os.path.commonpath((user_home, read_root)) == user_home:
+                recreate_home_path(read_root)
+                command += ["--ro-bind", read_root, read_root]
         # A real deployment normally stores workspaces below the user's protected
         # home. Recreate only the destination parents before restoring the exact
         # checkout; the bind source is opened by bubblewrap before namespace setup.
@@ -911,6 +996,22 @@ def run_executed_tests(workspace_path, work_session_id, task_id, claim_id, agent
             env.pop("CODEX_HOME", None)
             env.pop("PYTHONPATH", None)
             env["PYTHONNOUSERSITE"] = "1"
+            if str(os.environ.get("PM_AGENT_HOST_PLATFORM") or sys.platform).lower() \
+                    in {"darwin", "mac", "macos"}:
+                test_home = os.path.join(
+                    os.path.realpath(tempfile.gettempdir()),
+                    "switchboard-test-home")
+                os.makedirs(test_home, mode=0o700, exist_ok=True)
+                env["HOME"] = test_home
+                # Playwright normally discovers its browser payload through
+                # HOME. The sandbox deliberately replaces HOME, so retain only
+                # the exact browser cache already admitted read-only above.
+                if "PLAYWRIGHT_BROWSERS_PATH" not in env:
+                    browser_root = os.path.join(
+                        os.environ["PM_AGENT_HOST_USER_HOME"],
+                        "Library", "Caches", "ms-playwright")
+                    if os.path.isdir(browser_root):
+                        env["PLAYWRIGHT_BROWSERS_PATH"] = browser_root
         interpreter_bin = os.path.dirname(os.path.abspath(sys.executable))
         current_path = env.get("PATH", "")
         env["PATH"] = (interpreter_bin if not current_path else

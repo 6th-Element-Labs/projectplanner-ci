@@ -536,6 +536,7 @@ def run(
                             "started": False,
                             "reason": reason or "post_execution_validation_failed",
                             "task_id": values["task_id"],
+                            "recoverable_post_execution_failure": True,
                         })
                     lifecycle_state["terminal"] = desired
                     return {"status": desired}
@@ -649,6 +650,7 @@ def run(
                     "started": False,
                     "reason": "native_codex_execution_failed",
                     "task_id": values["task_id"],
+                    "recoverable_post_execution_failure": True,
                 })
                 wake_completed = True
             except Exception:

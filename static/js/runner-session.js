@@ -377,8 +377,10 @@
         }).then(async (res) => {
             const data = await res.json().catch(() => ({}));
             if (!res.ok || data.error || data.requested === false) {
-                throw new Error(data.error || data.detail
-                    || (data.requested === false ? (data.reason || 'refused') : `HTTP ${res.status}`));
+                throw new Error(this._runnerPtyApiError(
+                    data,
+                    data.requested === false ? (data.reason || 'refused') : `HTTP ${res.status}`,
+                ));
             }
         }).catch((e) => {
             if (this._runnerPty === rp) {
@@ -397,7 +399,9 @@
                 }),
             });
             ticket = await res.json();
-            if (!res.ok || ticket.error) throw new Error(ticket.error || ticket.detail || `HTTP ${res.status}`);
+            if (!res.ok || ticket.error) {
+                throw new Error(this._runnerPtyApiError(ticket, `HTTP ${res.status}`));
+            }
             if (!ticket.relay_url) throw new Error('relay ticket has no browser-safe URL');
         } catch (e) {
             this._runnerPtyGate(`Could not open a browser-safe relay ticket: ${this.esc(e.message)}`, 'danger');
@@ -417,6 +421,17 @@
         const reconnecting = !!rp.term;
         if (!reconnecting) this._runnerPtyMountTerminal(rp);
         this._runnerPtyOpenSocket(rp, ticket.relay_url, reconnecting);
+    },
+
+    _runnerPtyApiError(payload, fallback) {
+        const value = (payload && (payload.error || payload.detail || payload.message)) || fallback;
+        if (typeof value === 'string') return value;
+        if (value && typeof value === 'object') {
+            return value.message || value.error || value.error_code
+                || (Array.isArray(value.missing) && value.missing.length
+                    ? `missing: ${value.missing.join(', ')}` : JSON.stringify(value));
+        }
+        return String(value || fallback || 'request failed');
     },
 
     _runnerPtyMountTerminal(rp) {

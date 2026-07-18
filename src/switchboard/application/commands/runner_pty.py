@@ -67,17 +67,22 @@ def mint_ticket_for_session(
         binding = domain.merge_binding(binding, binding_overlay)
     # Ticket mint requires the full ADAPTER-22 bind tuple. Fill safe defaults for
     # optional identity fields when the session row does not yet carry them.
-    binding.setdefault("tenant_id", binding.get("tenant_id") or "tenant/default")
-    binding.setdefault("user_id", binding.get("user_id") or (actor or "operator"))
-    binding.setdefault(
-        "execution_connection_id",
-        binding.get("execution_connection_id") or "execconn/unspecified",
-    )
-    binding.setdefault("source_sha", binding.get("source_sha") or "unknown")
-    binding.setdefault(
-        "permission_profile",
-        binding.get("permission_profile") or "operator_watch",
-    )
+    # ``_session_binding`` deliberately returns every bind key, including optional
+    # identity fields that are absent on older runner rows.  ``setdefault`` does not
+    # replace an existing empty string, so those rows used to fail with
+    # incomplete_bind even though this path has explicit safe defaults.  Assign on
+    # falsy instead: never invent task/claim/host authority, only the documented
+    # optional identity/transport defaults.
+    if not binding.get("tenant_id"):
+        binding["tenant_id"] = "tenant/default"
+    if not binding.get("user_id"):
+        binding["user_id"] = actor or "operator"
+    if not binding.get("execution_connection_id"):
+        binding["execution_connection_id"] = "execconn/unspecified"
+    if not binding.get("source_sha"):
+        binding["source_sha"] = "unknown"
+    if not binding.get("permission_profile"):
+        binding["permission_profile"] = "operator_watch"
     still_missing = domain.missing_ticket_bind_fields(binding)
     if still_missing:
         return {
