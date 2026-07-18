@@ -14,6 +14,7 @@ import auth
 import store
 from switchboard.api.deps import (
     is_narrow_agent_host_principal,
+    require_agent_host_bootstrap_authority,
     require_personal_execution_authority,
     resolve_agent_host_principal,
 )
@@ -52,9 +53,21 @@ def create_router(*, resolve_project: ProjectResolver,
     async def txp_claim_task(request: Request, body: dict = Body(...)):
         body = inject_idem_key(request, body)
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("agent_id") or "agent")
+        bootstrap = body.pop("agent_host_bootstrap_binding", {}) or {}
+        if is_narrow_agent_host_principal(principal):
+            if (str(body.get("task_id") or "").upper()
+                    != str(bootstrap.get("task_id") or "").upper()
+                    or str(body.get("agent_id") or "")
+                    != str(bootstrap.get("agent_id") or "")):
+                raise HTTPException(403, {
+                    "error_code": "agent_host_bootstrap_claim_scope_denied",
+                })
+        require_agent_host_bootstrap_authority(
+            principal, bootstrap, "claim_task", project,
+            work_session_id=str(body.get("work_session_id") or ""))
         body.setdefault("agent_id", auth.actor(principal))
         body["project"] = project
         if "work_session" not in body and body.get("work_session_json"):

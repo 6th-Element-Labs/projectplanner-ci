@@ -40,6 +40,7 @@ __all__ = [
     "runner_bind_incomplete",
     "is_preclaim_runner",
     "requires_full_runner_bind",
+    "check_agent_host_bootstrap_authority",
     "assert_runner_watchable",
     "resolve_task_active_runner",
     "resolve_runner_watch",
@@ -49,6 +50,134 @@ __all__ = [
     "claim_runner_control_request",
     "complete_runner_control_request",
 ]
+
+
+def check_agent_host_bootstrap_authority(
+        binding: Dict[str, Any], *, principal_id: str,
+        project: str = DEFAULT_PROJECT, work_session_id: str = "",
+        action: str = "create_work_session") -> Dict[str, Any]:
+    """Authorize one narrow host mutation from an exact claimed generic wake.
+
+    Generic Autopilot wakes intentionally start with a preclaim runner and no task
+    claim or Work Session.  A narrow Agent Host bearer may create those two records
+    only for the wake it already claimed and the preclaim runner it already owns.
+    Every submitted field is compared with durable server state; the binding is
+    never accepted as authority on its own.
+    """
+    supplied = {key: str((binding or {}).get(key) or "").strip() for key in (
+        "wake_id", "host_id", "runner_session_id", "task_id", "agent_id",
+    )}
+    supplied["task_id"] = supplied["task_id"].upper()
+    missing = sorted(key for key, value in supplied.items() if not value)
+    if missing:
+        return {
+            "allowed": False,
+            "error_code": "agent_host_bootstrap_binding_incomplete",
+            "missing": missing,
+        }
+    if action not in {"create_work_session", "claim_task", "expire_work_session"}:
+        return {"allowed": False, "error_code": "agent_host_bootstrap_action_denied"}
+
+    now = time.time()
+    with _conn(project) as c:
+        wake = c.execute(
+            "SELECT status, claimed_by_host, task_id, selector_json, policy_json "
+            "FROM wake_intents WHERE wake_id=?",
+            (supplied["wake_id"],),
+        ).fetchone()
+        runner = c.execute(
+            "SELECT host_id, agent_id, runtime, task_id, claim_id, status, "
+            "metadata_json, principal_id, heartbeat_at, heartbeat_ttl_s "
+            "FROM runner_sessions WHERE runner_session_id=?",
+            (supplied["runner_session_id"],),
+        ).fetchone()
+        session = None
+        if work_session_id:
+            session = c.execute(
+                "SELECT work_session_id, task_id, agent_id, principal_id, status, "
+                "claim_id FROM work_sessions WHERE work_session_id=?",
+                (str(work_session_id).strip(),),
+            ).fetchone()
+
+    reasons: List[str] = []
+    selector = _json_obj(wake["selector_json"], {}) if wake else {}
+    policy = _json_obj(wake["policy_json"], {}) if wake else {}
+    metadata = _json_obj(runner["metadata_json"], {}) if runner else {}
+    wake_status = str(wake["status"] or "") if wake else ""
+    allowed_wake_statuses = (
+        {"claimed"} if action != "expire_work_session"
+        else {"claimed", "completed", "failed", "cancelled", "expired"}
+    )
+    if (not wake or wake_status not in allowed_wake_statuses
+            or str(wake["claimed_by_host"] or "") != supplied["host_id"]):
+        reasons.append("wake_not_claimed_by_host")
+    if wake and str(wake["task_id"] or selector.get("task_id") or "").upper() \
+            != supplied["task_id"]:
+        reasons.append("wake_task_mismatch")
+    if wake and str(selector.get("agent_id") or "") != supplied["agent_id"]:
+        reasons.append("wake_agent_mismatch")
+    if wake and policy.get("require_runner_bind") is not True:
+        reasons.append("wake_runner_bind_not_required")
+    if wake and (policy.get("account_binding")
+                 or (policy.get("execution_binding") or {}).get("execution_connection_id")):
+        reasons.append("exact_personal_wake_uses_prebound_path")
+    if not runner:
+        reasons.append("preclaim_runner_not_found")
+    else:
+        expected_runner = {
+            "host_id": supplied["host_id"],
+            "agent_id": supplied["agent_id"],
+            "task_id": supplied["task_id"],
+            "principal_id": str(principal_id or ""),
+        }
+        for field, expected in expected_runner.items():
+            actual = str(runner[field] or "")
+            if field == "task_id":
+                actual = actual.upper()
+            if actual != expected:
+                reasons.append(f"runner_{field}_mismatch")
+        if str(runner["claim_id"] or ""):
+            reasons.append("runner_already_claim_bound")
+        if (action != "expire_work_session"
+                and str(runner["status"] or "").lower() != "starting"):
+            reasons.append("runner_not_preclaim_starting")
+        if (str(metadata.get("credential_admission_phase") or "") != "preclaim"
+                or str(metadata.get("wake_id") or "") != supplied["wake_id"]):
+            reasons.append("runner_preclaim_metadata_mismatch")
+        if action != "expire_work_session" and float(runner["heartbeat_at"] or 0) \
+                + max(10, int(runner["heartbeat_ttl_s"] or 60)) <= now:
+            reasons.append("runner_preclaim_stale")
+    if action in {"claim_task", "expire_work_session"}:
+        if not session:
+            reasons.append("bootstrap_work_session_not_found")
+        else:
+            expected_session = {
+                "task_id": supplied["task_id"],
+                "agent_id": supplied["agent_id"],
+                "principal_id": str(principal_id or ""),
+                "status": "active",
+            }
+            for field, expected in expected_session.items():
+                actual = str(session[field] or "")
+                if field == "task_id":
+                    actual = actual.upper()
+                if actual != expected:
+                    reasons.append(f"work_session_{field}_mismatch")
+            if action == "claim_task" and str(session["claim_id"] or ""):
+                reasons.append("work_session_already_claim_bound")
+    if reasons:
+        return {
+            "allowed": False,
+            "error_code": "agent_host_bootstrap_binding_denied",
+            "reason_codes": sorted(set(reasons)),
+        }
+    return {
+        "allowed": True,
+        "schema": "switchboard.agent_host_bootstrap_authority.v1",
+        "action": action,
+        **supplied,
+        "work_session_id": str(work_session_id or "") or None,
+    }
 
 
 def _store_facade():

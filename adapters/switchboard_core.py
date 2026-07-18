@@ -309,6 +309,25 @@ def ack(project, message_id, response="", base=None, token=None):
                  base=base, token=token)
 
 
+def _agent_host_bootstrap_binding(task_id="", agent_id=""):
+    """Return the exact generic-wake tuple a narrow Agent Host may bootstrap.
+
+    The server treats this only as a claim to verify against its claimed wake and
+    preclaim runner rows.  It is not authority by itself, and it is deliberately
+    absent from ordinary CLI/operator requests.
+    """
+    binding = {
+        "wake_id": str(os.environ.get("PM_CO_WAKE_ID") or "").strip(),
+        "host_id": str(
+            os.environ.get("PM_CO_HOST_ID") or os.environ.get("PM_HOST_ID") or ""
+        ).strip(),
+        "runner_session_id": str(os.environ.get("PM_RUNNER_SESSION_ID") or "").strip(),
+        "task_id": str(task_id or os.environ.get("PM_TASK_ID") or "").strip().upper(),
+        "agent_id": str(agent_id or os.environ.get("PM_AGENT_ID") or "").strip(),
+    }
+    return binding if all(binding.values()) else {}
+
+
 def claim_next(project, agent_id, lanes=None, base=None, token=None, idem_key=""):
     body = {"project": project, "agent_id": agent_id}
     if lanes:
@@ -333,6 +352,9 @@ def claim_task(project, task_id, agent_id, base=None, token=None,
         body["work_session_id"] = work_session_id
     if session_policy_profile:
         body["session_policy_profile"] = session_policy_profile
+    bootstrap = _agent_host_bootstrap_binding(task_id=task_id, agent_id=agent_id)
+    if bootstrap:
+        body["agent_host_bootstrap_binding"] = bootstrap
     return _http("POST", "/txp/v1/claim_task", body, base=base, token=token, timeout=30)
 
 
@@ -486,6 +508,9 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
             "worker_owned_workspace": worker_owned_workspace,
         },
     }
+    bootstrap = _agent_host_bootstrap_binding(task_id=task_marker, agent_id=agent_id)
+    if bootstrap:
+        payload["agent_host_bootstrap_binding"] = bootstrap
     try:
         created = _http("POST", "/ixp/v1/work_sessions", payload,
                         base=base, token=token, timeout=30)
@@ -592,9 +617,13 @@ def expire_external_work_session(project, work_session_id, agent_id,
                                  base=None, token=None):
     """Close worker-local session metadata without touching the worker's filesystem."""
     try:
+        body = {"project": project, "agent_id": agent_id, "status": "expired"}
+        bootstrap = _agent_host_bootstrap_binding(agent_id=agent_id)
+        if bootstrap:
+            body["agent_host_bootstrap_binding"] = bootstrap
         return _http(
             "PATCH", f"/ixp/v1/work_sessions/{work_session_id}",
-            {"project": project, "agent_id": agent_id, "status": "expired"},
+            body,
             base=base, token=token, timeout=15,
         )
     except Exception:

@@ -191,7 +191,11 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
             ready = _await_stream_ready(ready_path)
             stream_bind = ready.get("bind_host") or os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1")
             stream_port = ready.get("port")
-            if streamer.poll() is not None or not stream_port:
+            # The worker can fail and close its PTY immediately after the companion
+            # writes the ready receipt.  That is a real child exit, not a streamer
+            # readiness failure. Preserve the session/log receipt so Agent Host can
+            # publish the actual failure instead of deleting the evidence.
+            if not stream_port:
                 raise RuntimeError("pty_stream companion failed to become ready")
         except Exception:
             if slave_fd >= 0:
@@ -247,6 +251,7 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         )
         log.close()
         control = {"tier": "T3", "runner_kill": True, "managed_process": True}
+    child_alive = proc.poll() is None
     meta = {
         "runner_session_id": runner_session_id,
         "agent_id": agent_id,
@@ -257,7 +262,7 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         "cwd": str(Path(cwd or os.getcwd()).resolve()),
         "command": command,
         "log_path": str(log_path),
-        "status": "running",
+        "status": "running" if child_alive else "exited",
         "started_at": _now(),
         "control": control,
         "pty": bool(use_pty),
@@ -267,7 +272,10 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         "host_id": host_id,
     }
     _write_json(_meta_path(runner_session_id, runner_dir), meta)
-    return {**meta, "alive": True}
+    if not child_alive:
+        meta["exited_at"] = _now()
+        _write_json(_meta_path(runner_session_id, runner_dir), meta)
+    return {**meta, "alive": child_alive}
 
 
 def status_session(runner_session_id, runner_dir=None):

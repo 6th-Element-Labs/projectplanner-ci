@@ -138,6 +138,22 @@ def require_personal_execution_authority(
     return result
 
 
+def require_agent_host_bootstrap_authority(
+        principal: dict, binding: dict, action: str, project: str,
+        *, work_session_id: str = "") -> dict:
+    """Fence a narrow host to its exact claimed wake and preclaim runner."""
+    if not is_narrow_agent_host_principal(principal):
+        return {"allowed": True, "legacy_or_operator": True}
+    host_id = str((binding or {}).get("host_id") or "").strip()
+    require_agent_host_identity(principal, host_id, project)
+    result = store.check_agent_host_bootstrap_authority(
+        binding or {}, principal_id=str(principal.get("id") or ""),
+        project=project, work_session_id=work_session_id, action=action)
+    if not result.get("allowed"):
+        raise HTTPException(403, result)
+    return result
+
+
 def resolve_body_project(body: dict) -> str:
     """Require an explicit body ``project`` — no Maxwell omission fallback (SEG-4)."""
     from switchboard.api.project_scope import resolve_body_project_context

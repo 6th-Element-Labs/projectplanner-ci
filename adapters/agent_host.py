@@ -735,6 +735,22 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         env = os.environ.copy()
         env.update({str(k): str(v) for k, v in (extra_env or {}).items()})
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
+        if out.returncode != 0 or not (out.stdout or "").strip():
+            detail = (out.stderr or out.stdout or "supervisor emitted no receipt")[-4000:]
+            print(
+                f"[agent_host] supervisor start failed rc={out.returncode} "
+                f"stderr={detail!r}", flush=True)
+            return {
+                "runner_session_id": runner_session_id or None,
+                "started": False,
+                "wake_mode": mode,
+                "host_id": inventory.get("host_id"),
+                "runtime": (wake.get("selector") or {}).get("runtime") or "",
+                "task_id": wake.get("task_id") or "",
+                "reason": "supervisor_start_failed",
+                "failure_class": "failed_gate",
+                "provider_error": detail,
+            }
         rec = json.loads(out.stdout)
         if isinstance(rec, dict):
             rec["wake_mode"] = mode
@@ -744,7 +760,17 @@ def launch(wake, inventory, runner_session_id="", extra_env=None):
         return rec
     except Exception as e:
         print(f"[agent_host] launch failed: {e}", flush=True)
-        return None
+        return {
+            "runner_session_id": runner_session_id or None,
+            "started": False,
+            "wake_mode": mode,
+            "host_id": inventory.get("host_id"),
+            "runtime": (wake.get("selector") or {}).get("runtime") or "",
+            "task_id": wake.get("task_id") or "",
+            "reason": "runtime_launch_exception",
+            "failure_class": "failed_gate",
+            "provider_error": str(e)[:4000],
+        }
 
 
 def confirm_started(rec, grace_s=4.0):
