@@ -152,19 +152,14 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
         env.setdefault("TERM", os.environ.get("TERM") or "xterm-256color")
         proc = None
         streamer = None
+        stream_log = None
+        stream_error_path = root / "pty_stream.stderr.log"
         try:
-            proc = subprocess.Popen(
-                command,
-                cwd=cwd or os.getcwd(),
-                env=env,
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                start_new_session=True,
-                close_fds=True,
-            )
-            os.close(slave_fd)
-            slave_fd = -1
+            # Make Watch/Chat ready before the worker can emit output or exit. Starting
+            # the child first created a real race: a fast authorization failure could
+            # close the slave PTY while the companion was still importing, so the
+            # supervisor deleted the only log and mislabeled the launch as no-PTY.
+            stream_log = stream_error_path.open("ab")
             streamer = subprocess.Popen(
                 [
                     sys.executable,
@@ -183,21 +178,41 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
                 close_fds=True,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=stream_log,
             )
-            os.close(master_fd)
-            master_fd = -1
+            stream_log.close()
+            stream_log = None
             streamer_pid = streamer.pid
             ready = _await_stream_ready(ready_path)
             stream_bind = ready.get("bind_host") or os.environ.get("PM_RUNNER_STREAM_BIND", "127.0.0.1")
             stream_port = ready.get("port")
-            # The worker can fail and close its PTY immediately after the companion
-            # writes the ready receipt.  That is a real child exit, not a streamer
-            # readiness failure. Preserve the session/log receipt so Agent Host can
-            # publish the actual failure instead of deleting the evidence.
             if not stream_port:
-                raise RuntimeError("pty_stream companion failed to become ready")
+                companion_error = _tail(stream_error_path).strip()
+                companion_status = streamer.poll()
+                detail = companion_error or (
+                    f"companion exit={companion_status}" if companion_status is not None
+                    else "companion produced no ready receipt"
+                )
+                raise RuntimeError(
+                    f"pty_stream companion failed to become ready: {detail}")
+
+            proc = subprocess.Popen(
+                command,
+                cwd=cwd or os.getcwd(),
+                env=env,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            slave_fd = -1
+            os.close(master_fd)
+            master_fd = -1
         except Exception:
+            if stream_log is not None:
+                stream_log.close()
             if slave_fd >= 0:
                 try:
                     os.close(slave_fd)
@@ -224,12 +239,8 @@ def start_session(command, agent_id, task_id="", claim_id="", cwd=None, runner_d
                         streamer.kill()
                     except Exception:
                         pass
-            # Leave no orphaned session directory for a failed PTY launch.
-            try:
-                import shutil
-                shutil.rmtree(root, ignore_errors=True)
-            except Exception:
-                pass
+            # Preserve the bounded failure directory and companion stderr for the
+            # operator. It has no session.json and therefore is never counted as live.
             raise
         control = {
             "tier": "T3",

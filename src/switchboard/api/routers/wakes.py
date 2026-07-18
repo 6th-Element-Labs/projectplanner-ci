@@ -17,6 +17,7 @@ import auth
 import store
 from switchboard.api.deps import (
     is_narrow_agent_host_principal,
+    require_agent_host_bootstrap_authority,
     require_agent_host_identity,
     resolve_agent_host_principal,
 )
@@ -82,12 +83,32 @@ def create_router(*, resolve_project: ProjectResolver,
                          if str(item.get("wake_id") or "") == wake_id), {})
             policy = dict(wake.get("policy") or {})
             execution = dict(policy.get("execution_binding") or {})
-            if ((policy.get("execution_mode") != "personal_agent_host"
-                    and not policy.get("require_exact_host_binding"))
-                    or str(execution.get("host_principal_id") or "")
-                    != str(principal.get("id") or "")):
-                raise HTTPException(
-                    403, "host bearer may complete only its exact personal wake")
+            personal_exact = (
+                policy.get("execution_mode") == "personal_agent_host"
+                or policy.get("require_exact_host_binding")
+            )
+            if personal_exact:
+                if str(execution.get("host_principal_id") or "") \
+                        != str(principal.get("id") or ""):
+                    raise HTTPException(
+                        403, "host bearer may complete only its exact personal wake")
+            else:
+                selector = dict(wake.get("selector") or {})
+                require_agent_host_bootstrap_authority(
+                    principal,
+                    {
+                        "wake_id": wake_id,
+                        "host_id": str(wake.get("claimed_by_host") or ""),
+                        "runner_session_id": str(
+                            body.get("runner_session_id") or ""),
+                        "task_id": str(
+                            wake.get("task_id") or selector.get("task_id") or ""),
+                        "agent_id": str(
+                            body.get("agent_id") or selector.get("agent_id") or ""),
+                    },
+                    "complete_wake",
+                    project,
+                )
         body["project"] = project
         return control_plane_http(raise_if_idem_conflict(
             complete_wake_command.execute_mapping_result(

@@ -75,7 +75,9 @@ def check_agent_host_bootstrap_authority(
             "error_code": "agent_host_bootstrap_binding_incomplete",
             "missing": missing,
         }
-    if action not in {"create_work_session", "claim_task", "expire_work_session"}:
+    if action not in {
+            "create_work_session", "claim_task", "expire_work_session",
+            "complete_wake"}:
         return {"allowed": False, "error_code": "agent_host_bootstrap_action_denied"}
 
     now = time.time()
@@ -105,8 +107,8 @@ def check_agent_host_bootstrap_authority(
     metadata = _json_obj(runner["metadata_json"], {}) if runner else {}
     wake_status = str(wake["status"] or "") if wake else ""
     allowed_wake_statuses = (
-        {"claimed"} if action != "expire_work_session"
-        else {"claimed", "completed", "failed", "cancelled", "expired"}
+        {"claimed", "completed", "failed", "cancelled", "expired"}
+        if action == "expire_work_session" else {"claimed"}
     )
     if (not wake or wake_status not in allowed_wake_statuses
             or str(wake["claimed_by_host"] or "") != supplied["host_id"]):
@@ -136,15 +138,35 @@ def check_agent_host_bootstrap_authority(
                 actual = actual.upper()
             if actual != expected:
                 reasons.append(f"runner_{field}_mismatch")
-        if str(runner["claim_id"] or ""):
+        if (action not in {"expire_work_session", "complete_wake"}
+                and str(runner["claim_id"] or "")):
             reasons.append("runner_already_claim_bound")
-        if (action != "expire_work_session"
-                and str(runner["status"] or "").lower() != "starting"):
+        runner_status = str(runner["status"] or "").lower()
+        if action == "complete_wake":
+            claim_bound = bool(str(runner["claim_id"] or ""))
+            session_bound = bool(str(metadata.get("work_session_id") or ""))
+            if claim_bound != session_bound:
+                reasons.append("runner_completion_binding_partial")
+            completion_phase = str(
+                metadata.get("credential_admission_phase") or "")
+            expected_phase = "claim_bound" if claim_bound else "preclaim"
+            if completion_phase != expected_phase:
+                reasons.append("runner_completion_phase_invalid")
+            allowed_completion_statuses = (
+                {"exited", "failed", "completed", "cancelled", "killed"}
+                if claim_bound else {"exited", "failed"}
+            )
+            if runner_status not in allowed_completion_statuses:
+                reasons.append("runner_completion_status_invalid")
+        elif (action != "expire_work_session"
+              and runner_status != "starting"):
             reasons.append("runner_not_preclaim_starting")
-        if (str(metadata.get("credential_admission_phase") or "") != "preclaim"
-                or str(metadata.get("wake_id") or "") != supplied["wake_id"]):
+        if (action != "complete_wake"
+                and str(metadata.get("credential_admission_phase") or "") != "preclaim"):
             reasons.append("runner_preclaim_metadata_mismatch")
-        if action != "expire_work_session" and float(runner["heartbeat_at"] or 0) \
+        if str(metadata.get("wake_id") or "") != supplied["wake_id"]:
+            reasons.append("runner_preclaim_metadata_mismatch")
+        if action not in {"expire_work_session", "complete_wake"} and float(runner["heartbeat_at"] or 0) \
                 + max(10, int(runner["heartbeat_ttl_s"] or 60)) <= now:
             reasons.append("runner_preclaim_stale")
     if action in {"claim_task", "expire_work_session"}:

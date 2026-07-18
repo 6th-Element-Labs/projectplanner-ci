@@ -702,6 +702,12 @@ def launch_command(wake, inventory, runner_session_id=""):
             raise ValueError("global claim_next requires PM_AGENT_HOST_ALLOW_GLOBAL_CLAIM=1")
         idle = os.environ.get("PM_AGENT_HOST_CLAIM_IDLE_SECONDS", "6")
         child += ["--idle-seconds", idle]
+        if (wake.get("task_id")
+                and (wake.get("policy") or {}).get("require_runner_bind") is True):
+            # Task-bound Autopilot wakes must take the exact bootstrap route. Do
+            # not rely on an inherited default that can fall through to globally
+            # forbidden claim_next for a narrow Agent Host principal.
+            child.append("--auto-work-session")
         child += (["--work-module", work_mod] if work_mod else ["--dry"])
     cmd = [sys.executable, SUPERVISOR, "start", "--agent-id", agent_id,
            "--cwd", inventory["repo_root"]]
@@ -1723,6 +1729,8 @@ def run_once(inventory):
             "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
             "PM_AUTO_WORK_SESSION": "1",
             "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
+            "PM_RUNTIME": str((claimed_wake.get("selector") or {}).get(
+                "runtime") or ""),
             "PM_WORK_SESSION_SOURCE_PATH": str(inventory.get("repo_root") or ""),
             "PM_AGENT_HOST_ISOLATE_TASK_WORKSPACE": "1",
             "PM_PERSONAL_AGENT_HOST_EXECUTION": "0",
