@@ -108,7 +108,13 @@ def _snapshot(meta):
     }
 
 
-def _await_stream_ready(ready_path: Path, timeout_s: float = 5.0) -> dict:
+def _await_stream_ready(ready_path: Path, timeout_s: float | None = None) -> dict:
+    if timeout_s is None:
+        try:
+            timeout_s = float(os.environ.get(
+                "PM_RUNNER_STREAM_READY_TIMEOUT_SECONDS", "15") or 15)
+        except (TypeError, ValueError):
+            timeout_s = 15.0
     deadline = time.time() + max(0.5, float(timeout_s))
     while time.time() < deadline:
         if ready_path.exists():

@@ -149,8 +149,11 @@ def check_agent_host_bootstrap_authority(
                 reasons.append("runner_completion_binding_partial")
             completion_phase = str(
                 metadata.get("credential_admission_phase") or "")
-            expected_phase = "claim_bound" if claim_bound else "preclaim"
-            if completion_phase != expected_phase:
+            allowed_phases = (
+                {"claim_bound"} if claim_bound
+                else {"preclaim", "preclaim_failed"}
+            )
+            if completion_phase not in allowed_phases:
                 reasons.append("runner_completion_phase_invalid")
             allowed_completion_statuses = (
                 {"exited", "failed", "completed", "cancelled", "killed"}
