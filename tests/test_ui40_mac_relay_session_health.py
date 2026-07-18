@@ -113,10 +113,17 @@ try:
         "task_id": tid,
         "claim_id": current_claim["claim_id"],
         "status": "running",
+        "control": {
+            "managed_process": True,
+            "runner_open": True,
+            "runner_inject": True,
+        },
         "metadata": {
             "wake_id": wake_id,
             "work_session_id": current_ws["work_session_id"],
             "credential_admission_phase": "claim_bound",
+            "execution_connection_id": "execconn-ui40-watch",
+            "source_sha": "a" * 40,
         },
     }, principal_id="principal/ui40-host", actor=host_id, project=P)
     ticket = runner_pty.mint_ticket_for_session(
@@ -131,6 +138,22 @@ try:
     ok(str(ticket.get("relay_url") or "").startswith(
         f"wss://plan.example/ixp/v1/runner_sessions/{runner_id}/pty?ticket="),
        "ticket exposes the public Switchboard WebSocket relay, never host loopback")
+    control = store.request_runner_control(
+        runner_id, "open", actor="ui40-operator",
+        principal_id="user/ui40-operator", project=P)
+    claimed_control = store.claim_runner_control_request(
+        host_id, control["request_id"], actor=host_id, project=P)
+    relay_options = ((claimed_control.get("request") or {}).get("options") or {}).get(
+        "server_relay") or {}
+    persisted_control = store.list_runner_control_requests(
+        runner_session_id=runner_id, project=P)[-1]
+    ok(str(relay_options.get("host_url") or "").startswith(
+       f"wss://plan.example/ixp/v1/runner_sessions/{runner_id}/pty/host?ticket=")
+       and str(relay_options.get("browser_url") or "").startswith(
+       f"wss://plan.example/ixp/v1/runner_sessions/{runner_id}/pty?ticket="),
+       "server mints distinct host and browser relay capabilities at control claim")
+    ok("server_relay" not in (persisted_control.get("options") or {}),
+       "server relay capabilities are delivered ephemerally and never persisted")
 
     # A terminal failed runner is the durable fallback for hosts that die before
     # their child can expire its Work Session explicitly.

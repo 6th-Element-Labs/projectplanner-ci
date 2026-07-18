@@ -1905,6 +1905,12 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         str(config.get("source_repo_root") or ""))
     values = {
         "PM_BASE": config["base_url"],
+        # Watch/Chat is a two-hop stream: the Mac PTY binds on loopback, then the
+        # Agent Host opens a host tunnel to Switchboard and gives the browser a
+        # public wss:// relay URL.  Without this binding supervisor_action("open")
+        # can only return 127.0.0.1, which the browser correctly rejects.
+        "PM_SWITCHBOARD_PUBLIC_BASE": config["base_url"],
+        "PM_RUNNER_PTY_RELAY_PUBLIC_BASE": config["base_url"],
         "PM_PROJECT": config["project"],
         "PM_MCP_TOKEN": identity["host_token"],
         "PM_HOST_ID": identity["host_id"],

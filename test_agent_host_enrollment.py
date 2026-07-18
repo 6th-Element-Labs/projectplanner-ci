@@ -2053,6 +2053,8 @@ try:
         separated_inventory = agent_host.default_inventory()
     ok("OPENAI_API_KEY" not in launched_env
        and launched_env.get("PM_MCP_TOKEN")
+       and launched_env.get("PM_SWITCHBOARD_PUBLIC_BASE") == "https://switchboard.test"
+       and launched_env.get("PM_RUNNER_PTY_RELAY_PUBLIC_BASE") == "https://switchboard.test"
        and launched_env.get("PM_AGENT_WORK_MODULE") == "adapters.codex_local_worker:run"
        and launched_env.get("PM_CODEX_EXECUTABLE") == str(TEST_CODEX)
        and launched_env.get("PM_PERSONAL_AGENT_HOST_EXECUTION") == "0"

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import urllib.parse
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
@@ -1295,6 +1296,57 @@ def list_runner_control_requests(status: str = "", host_id: str = "",
         return [_runner_control_row(r) for r in c.execute(q, params).fetchall()]
 
 
+def _server_relay_options(session: Dict[str, Any], *, user_id: str,
+                          project: str) -> Dict[str, Any]:
+    """Mint the two relay capabilities at the server trust boundary.
+
+    A personal Agent Host has its own narrow bearer, not the server's PTY relay
+    signing secret.  Tickets therefore cannot be minted on the Mac.  They are
+    attached only to the authenticated claim response and are never persisted in
+    runner_control_requests.options_json.
+    """
+    from switchboard.application import runner_pty_relay as relay
+    from switchboard.domain import runner_pty as pty_domain
+
+    metadata = dict(session.get("metadata") or {})
+    public_base = relay.public_base_from_env()
+    if not public_base or relay.is_loopback_url(public_base):
+        return {"error": "relay_public_base_unavailable"}
+    binding = {
+        "tenant_id": str(metadata.get("tenant_id") or "tenant/default"),
+        "user_id": str(user_id or "operator"),
+        "project_id": str(project or DEFAULT_PROJECT),
+        "task_id": str(session.get("task_id") or ""),
+        "claim_id": str(session.get("claim_id") or ""),
+        "work_session_id": str(metadata.get("work_session_id") or ""),
+        "runner_session_id": str(session.get("runner_session_id") or ""),
+        "host_id": str(session.get("host_id") or ""),
+        "wake_id": str(metadata.get("wake_id") or ""),
+        "execution_connection_id": str(metadata.get("execution_connection_id") or ""),
+        "source_sha": str(metadata.get("source_sha") or ""),
+        "permission_profile": "operator_watch",
+    }
+    missing = pty_domain.missing_ticket_bind_fields(binding)
+    if missing:
+        return {"error": RUNNER_BIND_ERROR, "missing": missing}
+    ttl = 900
+    host_ticket, host_payload = relay.mint_host_tunnel_ticket(binding, ttl_seconds=ttl)
+    browser_ticket, browser_payload = relay.mint_capability_ticket(
+        binding, ["watch", "input", "resize", "signal"], ttl_seconds=ttl)
+    host_url = relay.public_host_relay_url(
+        public_base, binding["runner_session_id"], host_ticket)
+    host_url += "&host_id=" + urllib.parse.quote(binding["host_id"], safe="")
+    return {
+        "host_url": host_url,
+        "browser_url": relay.public_relay_url(
+            public_base, binding["runner_session_id"], browser_ticket),
+        "expires_at": min(
+            float(host_payload.get("exp") or 0),
+            float(browser_payload.get("exp") or 0),
+        ),
+    }
+
+
 def claim_runner_control_request(host_id: str, request_id: str,
                                  actor: str = "system",
                                  project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
@@ -1326,7 +1378,24 @@ def claim_runner_control_request(host_id: str, request_id: str,
                    json.dumps({"request_id": request_id, "host_id": host_id}, sort_keys=True), now))
         row = c.execute("SELECT * FROM runner_control_requests WHERE request_id=?",
                         (request_id,)).fetchone()
-    return {"claimed": True, "request": _runner_control_row(row)}
+        claimed_request = _runner_control_row(row)
+        if claimed_request.get("action") == "open":
+            session_row = c.execute(
+                "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+                (claimed_request.get("runner_session_id"),),
+            ).fetchone()
+            session = (_runner_session_row(
+                session_row, now=now, include_claim=True, c=c)
+                if session_row else {})
+            claimed_request["options"] = {
+                **(claimed_request.get("options") or {}),
+                "server_relay": _server_relay_options(
+                    session,
+                    user_id=str(claimed_request.get("principal_id") or ""),
+                    project=project,
+                ),
+            }
+    return {"claimed": True, "request": claimed_request}
 
 
 def complete_runner_control_request(request_id: str, result: Optional[Dict[str, Any]] = None,

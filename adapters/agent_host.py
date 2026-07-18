@@ -979,7 +979,8 @@ def _drop_host_bridge(runner_session_id):
 
 
 def _ensure_host_bridge(*, runner_session_id, host_id, binding, local_stream_url,
-                         stream_bind, stream_port, public_base):
+                         stream_bind, stream_port, public_base,
+                         host_relay_url=""):
     """Idempotently ensure a live host tunnel is pumping this session's PTY
     bytes into the relay. Re-entrant across poll-loop iterations: a healthy
     existing bridge is a no-op; a dead one is replaced."""
@@ -1010,13 +1011,16 @@ def _ensure_host_bridge(*, runner_session_id, host_id, binding, local_stream_url
         from codex.pty_stream import build_control_url, mint_control_ticket
         from codex.pty_host_ws_client import open_host_bridge
 
-    # Distinct host_tunnel-scoped ticket (BUG-74) — never the browser's
-    # watch/input/resize/signal ticket.
-    host_ticket, _host_payload = pty_relay.mint_host_tunnel_ticket(
-        binding, ttl_seconds=3600)
-    relay_ws_url = pty_relay.public_host_relay_url(
-        public_base, runner_session_id, host_ticket)
-    relay_ws_url = relay_ws_url + "&" + urllib.parse.urlencode({"host_id": host_id})
+    relay_ws_url = str(host_relay_url or "").strip()
+    if not relay_ws_url:
+        # Legacy/in-process compatibility. Real enrolled hosts receive a
+        # server-minted one-session URL in the claimed control request because
+        # they must never possess the server relay signing secret.
+        host_ticket, _host_payload = pty_relay.mint_host_tunnel_ticket(
+            binding, ttl_seconds=3600)
+        relay_ws_url = pty_relay.public_host_relay_url(
+            public_base, runner_session_id, host_ticket)
+        relay_ws_url = relay_ws_url + "&" + urllib.parse.urlencode({"host_id": host_id})
 
     control_ticket, _control_exp = mint_control_ticket(
         runner_session_id=runner_session_id, host_id=host_id,
@@ -1156,21 +1160,31 @@ def supervisor_action(action, runner_session_id, options=None):
                     "permission_profile": str(
                         options.get("permission_profile") or "operator_watch"),
                 }
-                scopes = options.get("scopes") or [
-                    "watch", "input", "resize", "signal"]
+                server_relay = options.get("server_relay") or {}
+                host_relay_url = str(server_relay.get("host_url") or "")
+                browser_relay_url = str(server_relay.get("browser_url") or "")
                 try:
-                    relay_ticket, relay_payload = pty_relay.mint_capability_ticket(
-                        binding, scopes,
-                        ttl_seconds=int(options.get("ttl_seconds") or 900))
-                    relay_url = pty_relay.public_relay_url(
-                        public_base, runner_session_id, relay_ticket)
+                    if host_relay_url and browser_relay_url:
+                        relay_url = browser_relay_url
+                        expires_at = float(server_relay.get("expires_at") or expires_at)
+                        ticket = None
+                    else:
+                        if server_relay.get("error"):
+                            raise RuntimeError(str(server_relay.get("error")))
+                        scopes = options.get("scopes") or [
+                            "watch", "input", "resize", "signal"]
+                        relay_ticket, relay_payload = pty_relay.mint_capability_ticket(
+                            binding, scopes,
+                            ttl_seconds=int(options.get("ttl_seconds") or 900))
+                        relay_url = pty_relay.public_relay_url(
+                            public_base, runner_session_id, relay_ticket)
+                        expires_at = float(relay_payload.get("exp") or expires_at)
+                        ticket = relay_ticket
                     use_relay = True
                     transport = pty_domain.TRANSPORT_SWITCHBOARD_PTY_RELAY
                     browser_safe = True
                     relay_required = False
                     stream_url = relay_url
-                    expires_at = float(relay_payload.get("exp") or expires_at)
-                    ticket = relay_ticket
                 except Exception as mint_exc:
                     return _open_fail_closed(
                         "relay_mint_failed", str(mint_exc) or type(mint_exc).__name__)
@@ -1187,6 +1201,7 @@ def supervisor_action(action, runner_session_id, options=None):
                         stream_bind=stream_bind,
                         stream_port=stream_port,
                         public_base=public_base,
+                        host_relay_url=host_relay_url,
                     )
                 except Exception as bridge_exc:
                     return _open_fail_closed(
@@ -1357,6 +1372,7 @@ def handle_runner_controls(inventory):
                        {"project": PROJECT, "host_id": host_id, "request_id": req_id})
         if not claimed or not claimed.get("claimed"):
             continue
+        req = claimed.get("request") or req
         action = req.get("action")
         result = supervisor_action(action, req.get("runner_session_id"), req.get("options") or {})
         snapshot = result.get("last_snapshot") or result.get("snapshot") or {}
