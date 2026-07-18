@@ -39,6 +39,7 @@ from switchboard.domain.deliverables.lifecycle import (
     validate_deliverable_status,
 )
 from switchboard.storage.repositories.tasks import _task_row
+from switchboard.domain.board.tasks import READY_TASK_STATUSES
 from switchboard.domain.validation_policy import classify_task
 
 
@@ -2124,7 +2125,7 @@ def _mission_next_actions(deliverable: Dict[str, Any],
         dep = detail.get("dependency_state") or {}
         blocks = _task_blocks_others(detail)
         lane = detail.get("workstream") or detail.get("_wsId")
-        if (automatic_eligible and status == "Not Started"
+        if (automatic_eligible and status in READY_TASK_STATUSES
                 and dep.get("ready") and not claims):
             actions.append(_action(
                 "claim_task", owner="agent", automatic=True,

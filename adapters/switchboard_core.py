@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -81,8 +82,29 @@ def _http(method, path, body=None, base=None, token=None, timeout=None):
     token = token if token is not None else os.environ.get("PM_MCP_TOKEN", "")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=timeout or TIMEOUT) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or TIMEOUT) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as exc:
+        # Preserve the server's authoritative denial reason without echoing an
+        # arbitrary response body (which may contain credentials or other
+        # sensitive fields) into worker logs.
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            payload = {}
+        reasons = []
+        if isinstance(payload, dict):
+            for key in ("detail", "error_code", "reason_codes", "message", "error"):
+                value = payload.get(key)
+                if value not in (None, "", [], {}):
+                    rendered = (value if isinstance(value, str)
+                                else json.dumps(value, sort_keys=True))
+                    reasons.append(f"{key}={rendered}")
+        reason = "; ".join(reasons)[:500] or str(exc.reason or "request denied")[:500]
+        safe_path = urllib.parse.urlsplit(path).path
+        raise RuntimeError(f"HTTP {exc.code} {safe_path}: {reason}") from exc
 
 
 def ensure_compatible(agreement):

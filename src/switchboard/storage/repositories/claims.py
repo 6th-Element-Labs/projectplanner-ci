@@ -600,8 +600,14 @@ def _claim_task_impl(task_id: str, agent_id: str,
                         "agent_id": active["agent_id"]}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
-        if task.get("status") not in READY_TASK_STATUSES:
+        orphan_adoption = task.get("status") == "In Progress"
+        if task.get("status") not in READY_TASK_STATUSES and not orphan_adoption:
             response = {"claimed": False, "reason": "status_not_ready",
+                        "task_id": task_id, "status": task.get("status")}
+            _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
+            return response
+        if orphan_adoption and not (work_session_id or work_session):
+            response = {"claimed": False, "reason": "orphan_work_session_required",
                         "task_id": task_id, "status": task.get("status")}
             _store_facade()._idem_store(c, "claim_task", idem_key, actor, payload, response)
             return response
@@ -675,6 +681,8 @@ def _claim_task_impl(task_id: str, agent_id: str,
                   (agent_id, now, task_id))
         dispatch_reason = {"policy": "exact.v1", "requested_task_id": task_id,
                            "dependency_checked": True}
+        if orphan_adoption:
+            dispatch_reason["orphan_adopted"] = True
         if risk and override_identity_risk:
             dispatch_reason["identity_override"] = risk
         work_session_binding = _attach_work_session_claim_in(
@@ -690,7 +698,8 @@ def _claim_task_impl(task_id: str, agent_id: str,
                          "task_id": task_id, "agent_id": agent_id,
                          "dispatch_reason": dispatch_reason}
         c.execute("INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
-                  (task_id, actor, "task.claimed",
+                  (task_id, actor, ("task.orphan_claim_adopted" if orphan_adoption
+                                    else "task.claimed"),
                    json.dumps(payload_event, sort_keys=True), now))
         claimed_task = _task_row(c.execute("SELECT * FROM tasks WHERE task_id=?",
                                            (task_id,)).fetchone())

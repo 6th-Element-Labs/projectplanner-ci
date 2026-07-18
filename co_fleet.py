@@ -375,7 +375,7 @@ allowed = {{
     "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST",
 }}
 missing = [key for key in ("PM_MCP_TOKEN",) if not value.get(key)]
-runtime_key = "PM_AGENT_WORK_MODULE_" + {values['runtime']}.upper().replace("-", "_")
+runtime_key = "PM_AGENT_WORK_MODULE_" + {json.dumps(runtime)}.upper().replace("-", "_")
 if not value.get(runtime_key) and not value.get("PM_AGENT_WORK_MODULE"):
     missing.append(runtime_key)
 if missing:

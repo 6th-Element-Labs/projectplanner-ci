@@ -398,6 +398,22 @@ def heartbeat_capacity(inventory):
     return capacity
 
 
+def registration_inventory(inventory, drain_request=None):
+    """Build a host advertisement from live supervisor capacity.
+
+    Registration is periodically renewed, so it must be just as current as a
+    heartbeat.  Reusing the inventory constructed at process startup resets a
+    busy host to 0 active sessions on every renewal.
+    """
+    advertised = dict(inventory)
+    advertised["capacity"] = heartbeat_capacity(inventory)
+    if drain_request:
+        advertised = co_drain.inventory_for_drain(advertised)
+        placement = ((advertised.get("capacity") or {}).get("placement") or {})
+        placement["drain_state"] = "draining"
+    return advertised
+
+
 def apply_authoritative_execution_policy(inventory, response):
     """Hot-apply the authenticated server policy to one enrolled personal host.
 
@@ -1840,7 +1856,7 @@ def run_once(inventory):
         "active_sessions": capacity["active_sessions"], "capacity": capacity,
     })
     if apply_authoritative_execution_policy(inventory, heartbeat):
-        advertised = _try("POST", P_REGISTER_HOST, inventory)
+        advertised = _try("POST", P_REGISTER_HOST, registration_inventory(inventory))
         apply_authoritative_execution_policy(inventory, advertised)
         capacity = heartbeat_capacity(inventory)
     local_auth = capacity.get("local_auth")
@@ -2126,17 +2142,14 @@ def run(interval=10, once=False):
         now = time.time()
         auth_changed = refresh_local_auth_inventory(inv, now=now)
         drain_request = co_drain.discover_request()
-        advertised = co_drain.inventory_for_drain(inv) if drain_request else inv
-        if drain_request:
-            placement = ((advertised.get("capacity") or {}).get("placement") or {})
-            placement["drain_state"] = "draining"
+        advertised = registration_inventory(inv, drain_request=drain_request)
         should_register = (not registered or auth_changed
                            or now - last_register_at >= register_every
                            or bool(drain_request) != drain_advertised)
         if should_register:
             reg = _try("POST", P_REGISTER_HOST, advertised)
             if apply_authoritative_execution_policy(inv, reg):
-                advertised = co_drain.inventory_for_drain(inv) if drain_request else inv
+                advertised = registration_inventory(inv, drain_request=drain_request)
                 reg = _try("POST", P_REGISTER_HOST, advertised)
             registered = bool(reg and not reg.get("error"))
             drain_advertised = bool(drain_request and reg)

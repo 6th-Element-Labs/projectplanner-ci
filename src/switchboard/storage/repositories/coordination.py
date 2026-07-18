@@ -1832,6 +1832,14 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                 existing = dict(existing_row) if existing_row else {}
                 existing_metadata = _json_obj(existing.get("metadata_json", "{}"), {})
                 existing_control = _json_obj(existing.get("control_json", "{}"), {})
+                runner_principal_id = existing.get("principal_id") or ""
+                if not runner_principal_id:
+                    host_row = c.execute(
+                        "SELECT principal_id FROM agent_hosts WHERE host_id=?",
+                        (wake.get("claimed_by_host") or existing.get("host_id") or "",),
+                    ).fetchone()
+                    runner_principal_id = (host_row["principal_id"]
+                                           if host_row and host_row["principal_id"] else "")
                 runner_metadata = {
                     **existing_metadata,
                     "wake_id": wake_id,
@@ -1866,7 +1874,7 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                         "heartbeat_ttl_s": (result.get("heartbeat_ttl_s")
                                             or existing.get("heartbeat_ttl_s") or 60),
                     },
-                    principal_id=actor,
+                    principal_id=runner_principal_id,
                     actor=actor,
                     now=now,
                 )
