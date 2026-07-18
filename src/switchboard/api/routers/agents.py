@@ -14,6 +14,8 @@ import auth
 import store
 from switchboard.api.deps import (
     authorize_agent_host_principal,
+    is_narrow_agent_host_principal,
+    require_agent_host_bootstrap_authority,
     require_agent_host_identity,
     resolve_agent_host_principal,
 )
@@ -47,9 +49,25 @@ def create_router(*, resolve_project: ProjectResolver,
     async def ixp_register_agent(request: Request, body: dict = Body(...)):
         body = dict(body or {})
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("agent_id") or "agent")
+        bootstrap = body.pop("agent_host_bootstrap_binding", {}) or {}
+        if is_narrow_agent_host_principal(principal):
+            authority = require_agent_host_bootstrap_authority(
+                principal, bootstrap, "register_agent", project)
+            mismatches = sorted(
+                field for field, actual, expected in (
+                    ("agent_id", body.get("agent_id"), authority.get("agent_id")),
+                    ("task_id", body.get("task_id"), authority.get("task_id")),
+                    ("runtime", body.get("runtime"), authority.get("runtime")),
+                ) if str(actual or "") != str(expected or "")
+            )
+            if mismatches:
+                raise HTTPException(403, {
+                    "error_code": "agent_host_bootstrap_request_mismatch",
+                    "mismatches": mismatches,
+                })
         body.setdefault("agent_id", auth.actor(principal))
         body["project"] = project
         return register_agent_command.execute_mapping_result(
@@ -72,9 +90,22 @@ def create_router(*, resolve_project: ProjectResolver,
     async def ixp_heartbeat(request: Request, body: dict = Body(...)):
         body = dict(body or {})
         project = resolve_body_project(body)
-        principal = resolve_principal(
-            request, project, ("write:ixp",),
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
             dev_actor=body.get("agent_id") or "agent")
+        bootstrap = body.pop("agent_host_bootstrap_binding", {}) or {}
+        if is_narrow_agent_host_principal(principal):
+            authority = require_agent_host_bootstrap_authority(
+                principal, bootstrap, "heartbeat_agent", project)
+            mismatches = sorted(
+                field for field in ("agent_id", "task_id")
+                if str(body.get(field) or "") != str(authority.get(field) or "")
+            )
+            if mismatches:
+                raise HTTPException(403, {
+                    "error_code": "agent_host_bootstrap_request_mismatch",
+                    "mismatches": mismatches,
+                })
         return store.heartbeat((body.get("agent_id") or "").strip(),
                                actor=auth.actor(principal), project=project)
 

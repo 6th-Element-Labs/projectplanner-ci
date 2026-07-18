@@ -77,7 +77,7 @@ def check_agent_host_bootstrap_authority(
         }
     if action not in {
             "create_work_session", "claim_task", "expire_work_session",
-            "complete_wake"}:
+            "complete_wake", "register_agent", "heartbeat_agent"}:
         return {"allowed": False, "error_code": "agent_host_bootstrap_action_denied"}
 
     now = time.time()
@@ -108,7 +108,8 @@ def check_agent_host_bootstrap_authority(
     wake_status = str(wake["status"] or "") if wake else ""
     allowed_wake_statuses = (
         {"claimed", "completed", "failed", "cancelled", "expired"}
-        if action == "expire_work_session" else {"claimed"}
+        if action == "expire_work_session" else
+        ({"claimed", "completed"} if action == "heartbeat_agent" else {"claimed"})
     )
     if (not wake or wake_status not in allowed_wake_statuses
             or str(wake["claimed_by_host"] or "") != supplied["host_id"]):
@@ -129,6 +130,7 @@ def check_agent_host_bootstrap_authority(
         expected_runner = {
             "host_id": supplied["host_id"],
             "agent_id": supplied["agent_id"],
+            "runtime": str(selector.get("runtime") or ""),
             "task_id": supplied["task_id"],
             "principal_id": str(principal_id or ""),
         }
@@ -138,7 +140,14 @@ def check_agent_host_bootstrap_authority(
                 actual = actual.upper()
             if actual != expected:
                 reasons.append(f"runner_{field}_mismatch")
-        if (action not in {"expire_work_session", "complete_wake"}
+        claim_bound_heartbeat = (
+            action == "heartbeat_agent"
+            and bool(str(runner["claim_id"] or ""))
+            and bool(str(metadata.get("work_session_id") or ""))
+            and str(metadata.get("credential_admission_phase") or "") == "claim_bound"
+            and str(runner["status"] or "").lower() in {"ready", "running"}
+        )
+        if (action not in {"expire_work_session", "complete_wake", "heartbeat_agent"}
                 and str(runner["claim_id"] or "")):
             reasons.append("runner_already_claim_bound")
         runner_status = str(runner["status"] or "").lower()
@@ -162,10 +171,10 @@ def check_agent_host_bootstrap_authority(
             )
             if runner_status not in allowed_completion_statuses:
                 reasons.append("runner_completion_status_invalid")
-        elif (action != "expire_work_session"
+        elif (action != "expire_work_session" and not claim_bound_heartbeat
               and runner_status != "starting"):
             reasons.append("runner_not_preclaim_starting")
-        if (action != "complete_wake"
+        if (action != "complete_wake" and not claim_bound_heartbeat
                 and str(metadata.get("credential_admission_phase") or "") != "preclaim"):
             reasons.append("runner_preclaim_metadata_mismatch")
         if str(metadata.get("wake_id") or "") != supplied["wake_id"]:
@@ -202,6 +211,7 @@ def check_agent_host_bootstrap_authority(
         "schema": "switchboard.agent_host_bootstrap_authority.v1",
         "action": action,
         **supplied,
+        "runtime": str(runner["runtime"] or "") if runner else None,
         "work_session_id": str(work_session_id or "") or None,
     }
 
@@ -849,6 +859,95 @@ def _native_agent_host_runner_allowed_in(
     return True
 
 
+def _renew_exact_preclaim_runner_in(
+        c: sqlite3.Connection, record: Dict[str, Any], principal_id: str,
+        actor: str, now: float) -> Optional[Dict[str, Any]]:
+    """Atomically refresh one preclaim row without permitting a bind downgrade.
+
+    ``None`` means this is an ordinary runner upsert.  A renewal either refreshes
+    the exact still-preclaim row, returns a concurrently claim-bound row unchanged,
+    or fails closed.  It never feeds preclaim metadata into the generic upsert.
+    """
+    incoming_metadata = (
+        record.get("metadata") if isinstance(record.get("metadata"), dict) else {})
+    if incoming_metadata.get("preclaim_renewal") is not True:
+        return None
+    runner_session_id = str(
+        record.get("runner_session_id") or record.get("id") or "").strip()
+    existing_row = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+        (runner_session_id,),
+    ).fetchone()
+    if not existing_row:
+        return {
+            "error": "preclaim runner not found",
+            "error_code": "preclaim_renewal_denied",
+            "reason_codes": ["preclaim_runner_not_found"],
+        }
+    existing = dict(existing_row)
+    existing_metadata = _json_obj(existing.get("metadata_json", "{}"), {})
+    mismatches = sorted(
+        field for field in ("host_id", "agent_id", "runtime", "task_id")
+        if str(record.get(field) or "") != str(existing.get(field) or ""))
+    if str(existing.get("principal_id") or "") != str(principal_id or ""):
+        mismatches.append("principal_id")
+    if str(incoming_metadata.get("wake_id") or "") != str(
+            existing_metadata.get("wake_id") or ""):
+        mismatches.append("wake_id")
+    phase = str(existing_metadata.get("credential_admission_phase") or "")
+    status = str(existing.get("status") or "").lower()
+    claim_bound = (
+        bool(str(existing.get("claim_id") or ""))
+        and bool(str(existing_metadata.get("work_session_id") or ""))
+        and phase == "claim_bound"
+        and status in {"ready", "running"}
+    )
+    if not mismatches and claim_bound:
+        return _runner_session_row(
+            existing_row, now=now, include_claim=True, c=c)
+    if (mismatches or existing.get("claim_id") or phase != "preclaim"
+            or status != "starting"):
+        reason_codes = [f"{field}_mismatch" for field in sorted(set(mismatches))]
+        if existing.get("claim_id"):
+            reason_codes.append("runner_already_claim_bound")
+        if phase != "preclaim":
+            reason_codes.append("runner_preclaim_metadata_mismatch")
+        if status != "starting":
+            reason_codes.append("runner_not_preclaim_starting")
+        return {
+            "error": "preclaim renewal does not match the live runner",
+            "error_code": "preclaim_renewal_denied",
+            "reason_codes": sorted(set(reason_codes)),
+        }
+    heartbeat_ttl_s = max(10, int(
+        record.get("heartbeat_ttl_s") or record.get("ttl_s")
+        or existing.get("heartbeat_ttl_s") or 60))
+    c.execute(
+        "UPDATE runner_sessions SET heartbeat_at=?, heartbeat_ttl_s=?, updated_at=? "
+        "WHERE runner_session_id=? AND claim_id IS NULL AND status='starting' "
+        "AND principal_id=?",
+        (now, heartbeat_ttl_s, now, runner_session_id, principal_id),
+    )
+    row = c.execute(
+        "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+        (runner_session_id,),
+    ).fetchone()
+    # SQLite serializes this transaction, but preserve the same no-downgrade
+    # response if a future backend permits a concurrent bind between statements.
+    if not row:
+        return {
+            "error": "preclaim runner disappeared during renewal",
+            "error_code": "preclaim_renewal_denied",
+        }
+    c.execute(
+        "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (existing.get("task_id") or None, actor, "runner.preclaim_renewed",
+         json.dumps({"runner_session_id": runner_session_id}, sort_keys=True), now),
+    )
+    return _runner_session_row(row, now=now, include_claim=True, c=c)
+
+
 def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                               principal_id: str, actor: str, now: float) -> Dict[str, Any]:
     runner_session_id = (record.get("runner_session_id") or record.get("id") or "").strip()
@@ -892,6 +991,19 @@ def _upsert_runner_session_in(c: sqlite3.Connection, record: Dict[str, Any],
                 "failure_class": "unbound_identity",
                 "runner_session_id": runner_session_id,
             }
+    renewal_requested = bool(
+        isinstance(record.get("metadata"), dict)
+        and record["metadata"].get("preclaim_renewal") is True)
+    if renewal_requested:
+        if not narrow_host:
+            return {
+                "error": "preclaim renewal requires a narrow Agent Host principal",
+                "error_code": "preclaim_renewal_denied",
+            }
+        renewed = _renew_exact_preclaim_runner_in(
+            c, record, principal_id, actor, now)
+        if renewed is not None:
+            return renewed
     record = _merge_existing_runner_record(c, record)
     host_id = (record.get("host_id") or "").strip()
     control = _normalize_runner_control(record.get("control") or {}, host_id)

@@ -152,10 +152,17 @@ def handshake(project, agent_id, runtime, base=None, token=None, model="", lane=
             raise
         agreement = None
     try:
+        payload = {
+            "project": project, "agent_id": agent_id, "runtime": runtime,
+            "model": model, "lane": lane, "control": control,
+            "protocol": SUPPORTED_PROTOCOL,
+        }
+        bootstrap = _agent_host_bootstrap_binding(agent_id=agent_id)
+        if bootstrap:
+            payload["task_id"] = bootstrap["task_id"]
+            payload["agent_host_bootstrap_binding"] = bootstrap
         _http("POST", "/ixp/v1/register_agent",
-              {"project": project, "agent_id": agent_id, "runtime": runtime,
-               "model": model, "lane": lane, "control": control,
-               "protocol": SUPPORTED_PROTOCOL}, base=base, token=token)
+              payload, base=base, token=token)
     except Exception:
         pass
     return agreement
@@ -289,7 +296,12 @@ def evaluate_tool(project, me, tool_name, tool_input, cwd=None, base=None, token
 # ---- TXP dispatch helpers + the self-driving session loop (autonomy) --------------------
 def heartbeat(project, agent_id, base=None, token=None):
     try:
-        _http("POST", "/ixp/v1/heartbeat", {"project": project, "agent_id": agent_id}, base=base, token=token)
+        payload = {"project": project, "agent_id": agent_id}
+        bootstrap = _agent_host_bootstrap_binding(agent_id=agent_id)
+        if bootstrap:
+            payload["task_id"] = bootstrap["task_id"]
+            payload["agent_host_bootstrap_binding"] = bootstrap
+        _http("POST", "/ixp/v1/heartbeat", payload, base=base, token=token)
     except Exception:
         pass  # fail-open: a missed heartbeat just lets presence lapse
 

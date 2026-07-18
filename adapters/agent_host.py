@@ -1470,7 +1470,7 @@ def _runner_session_id_for_wake(wake, host_id):
     return "run_" + hashlib.sha256(source.encode()).hexdigest()[:16]
 
 
-def _register_preclaim_runner(wake, inventory, runner_session_id):
+def _register_preclaim_runner(wake, inventory, runner_session_id, *, renewal=False):
     binding = ((wake.get("policy") or {}).get("account_binding") or {})
     selector = wake.get("selector") or {}
     return register_runner_session({
@@ -1482,7 +1482,10 @@ def _register_preclaim_runner(wake, inventory, runner_session_id):
         "status": "starting",
         "cwd": inventory.get("repo_root"),
         "control": {"tier": "T3", "runner_kill": True, "managed_process": True},
-        "metadata": {"credential_admission_phase": "preclaim"},
+        "metadata": {
+            "credential_admission_phase": "preclaim",
+            **({"preclaim_renewal": True} if renewal else {}),
+        },
     }, wake, inventory)
 
 
@@ -1496,6 +1499,9 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
     timeout_s = float(timeout_s if timeout_s is not None else os.environ.get(
         "PM_AGENT_HOST_BIND_TIMEOUT_S", "90"))
     deadline = monotonic() + max(0.0, timeout_s)
+    renew_interval_s = max(1.0, float(os.environ.get(
+        "PM_AGENT_HOST_PRECLAIM_RENEW_INTERVAL_S", "15")))
+    next_renewal = monotonic() + renew_interval_s
     expected = {
         "runner_session_id": str(runner_session_id or ""),
         "task_id": str(wake.get("task_id") or ""),
@@ -1533,6 +1539,25 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
                     and not row.get("stale")
                     and status in {"ready", "running"}):
                 return {"bound": True, "session": row}
+            exact_preclaim = (
+                str(row.get("task_id") or "") == expected["task_id"]
+                and str(row.get("host_id") or "") == expected["host_id"]
+                and str(row.get("agent_id") or "") == expected["agent_id"]
+                and str(row.get("runtime") or "") == expected["runtime"]
+                and str(metadata.get("wake_id") or "") == expected["wake_id"]
+                and not row.get("claim_id")
+                and not metadata.get("work_session_id")
+                and phase == "preclaim"
+                and status == "starting"
+            )
+            now_mono = monotonic()
+            if exact_preclaim and now_mono >= next_renewal:
+                # The server performs an atomic compare-and-refresh.  If the child
+                # bound between this read and POST, it returns the stronger row
+                # unchanged instead of letting this preclaim record downgrade it.
+                _register_preclaim_runner(
+                    wake, inventory, runner_session_id, renewal=True)
+                next_renewal = now_mono + renew_interval_s
         if monotonic() >= deadline:
             break
         sleep(min(1.0, max(0.0, deadline - monotonic())))
