@@ -168,12 +168,24 @@ def process(source, external_id, sender, subject, text, headers=None, project=No
     headers = headers or {}
     headers.setdefault("from", sender)
     _learn_contacts(headers.get("from") or sender, headers.get("to"), headers.get("cc"))
-    result = intake.ingest_and_triage("email", subject or source, text,
-                                      applied_mode=_autonomous(), headers=headers, project=project)
+    triage_error = ""
+    try:
+        result = intake.ingest_and_triage("email", subject or source, text,
+                                          applied_mode=_autonomous(), headers=headers, project=project)
+    except Exception as e:
+        # A triage/LLM outage must never drop inbound mail: queue the raw item for
+        # human review (no apply, no auto-reply) and record why triage is missing.
+        first_line = ((text or "").strip().splitlines() or [subject or source or ""])[0]
+        result = {"summary": first_line[:280], "proposals": [], "new_tasks": [], "sources": []}
+        triage_error = str(e)
     triage = {"proposals": result.get("proposals", []), "new_tasks": result.get("new_tasks", []),
               "sources": result.get("sources", [])}
+    if triage_error:
+        triage["triage_error"] = triage_error
     applied, reply_res, status, to, cc, dispatched = {}, None, "pending", [], [], []
-    if _autonomous():
+    if triage_error:
+        pass   # degraded intake: stays pending, a human decides from the queue
+    elif _autonomous():
         applied = apply(triage["proposals"], triage["new_tasks"], project=project)
         status = "applied"
         dispatched = _dispatch_dev(result.get("dispatch_targets"), applied, project=project)

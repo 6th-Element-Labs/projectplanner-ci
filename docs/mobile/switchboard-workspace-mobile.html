@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Workspace on mobile — the channel in your pocket</title>
+<style>
+*,*::before,*::after{ box-sizing:border-box; } body{ margin:0; } svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+:root{
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --primary:#c0392b; --primary-rgb:192,57,43; --green:#2fb344; --green-rgb:47,179,68; --orange:#f76707; --orange-rgb:247,103,7;
+  --blue:#206bc4; --purple:#ae3ec9;
+  --ink:#1a2230; --ink-2:#5a6577; --ink-3:#8b95a5; --card:#fff; --hair:#e6e9ef; --hair-2:#eff1f4; --chip:#f1f3f6; --bg:#f8f9fb;
+}
+body{ font-family:var(--ui); background:#eef0f4; color:var(--ink); -webkit-font-smoothing:antialiased; letter-spacing:-.008em;
+  min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:16px; padding:26px 14px 44px; }
+.page-h{ text-align:center; max-width:560px; }
+.page-h .ey{ font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--primary); font-weight:600; }
+.page-h h1{ font-size:22px; font-weight:720; letter-spacing:-.02em; margin:6px 0 4px; }
+.page-h p{ color:var(--ink-2); font-size:13.5px; margin:0; }
+.phone{ width:378px; border-radius:52px; padding:11px; background:linear-gradient(160deg,#24262c,#0e0f12 60%); box-shadow:0 2px 6px rgba(16,24,40,.06),0 30px 70px -20px rgba(16,24,40,.5); }
+.screen{ position:relative; border-radius:42px; overflow:hidden; background:var(--card); height:800px; display:flex; flex-direction:column; }
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%); width:112px; height:30px; background:#000; border-radius:20px; z-index:40; }
+.sb{ height:50px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between; padding:0 26px 7px; font-size:13px; font-weight:650; background:var(--card); }
+.mono{ font-family:var(--mono); }
+
+/* channel header */
+.top{ display:flex; align-items:center; gap:9px; padding:7px 14px 10px; background:var(--card); border-bottom:1px solid var(--hair); flex:0 0 auto; }
+.back{ color:var(--ink-3); font-size:19px; font-weight:600; padding:0 2px; }
+.top .t{ font-weight:700; font-size:14.5px; display:flex; align-items:center; gap:4px; } .top .t .h{ opacity:.4; font-family:var(--mono); }
+.top .s{ font-size:10.5px; color:var(--ink-3); }
+.briefbtn{ margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:650; border:1px solid var(--hair); border-radius:8px; padding:5px 9px; background:var(--card); box-shadow:0 1px 2px rgba(16,24,40,.05); }
+.vchip{ font-family:var(--mono); font-size:9.5px; font-weight:700; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:5px; padding:0 5px; }
+
+/* chat */
+.chat{ flex:1; overflow:auto; padding:12px 0 6px; background:var(--card); }
+.day{ display:flex; align-items:center; gap:10px; padding:4px 14px 8px; }
+.day::before,.day::after{ content:''; flex:1; height:1px; background:var(--hair-2); }
+.day span{ font-size:10px; font-weight:600; color:var(--ink-3); border:1px solid var(--hair); border-radius:999px; padding:1px 8px; white-space:nowrap; }
+.msg{ display:flex; gap:9px; padding:6px 14px; }
+.msg .mav{ width:30px; height:30px; border-radius:8px; display:grid; place-items:center; color:#fff; font-weight:700; font-size:11px; flex:0 0 auto; margin-top:2px; }
+.msg .mb{ flex:1; min-width:0; }
+.msg .mh{ display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; }
+.msg .mn{ font-weight:700; font-size:12.5px; } .msg .mt{ font-family:var(--mono); font-size:9px; color:var(--ink-3); }
+.tag{ font-size:8px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; border-radius:4px; padding:1px 5px; }
+.tag.ai{ color:var(--primary); background:rgba(var(--primary-rgb),.09); }
+.tag.guest{ color:var(--blue); background:rgba(32,107,196,.09); }
+.msg .tx{ font-size:12.5px; line-height:1.5; margin-top:1px; } .msg .tx b{ font-weight:650; }
+.mention{ color:var(--primary); background:rgba(var(--primary-rgb),.08); border-radius:4px; padding:0 3px; font-weight:600; }
+.quoteline{ border-left:3px solid var(--hair); padding:2px 0 2px 9px; margin-top:5px; font-size:11.5px; color:var(--ink-2); font-style:italic; }
+.quoteline .src{ font-style:normal; font-family:var(--mono); font-size:9px; color:var(--ink-3); display:block; margin-top:1px; }
+.ccard{ border:1px solid var(--hair); border-radius:12px; margin-top:7px; overflow:hidden; background:var(--card); box-shadow:0 1px 2px rgba(16,24,40,.04); }
+.ccard .ch{ display:flex; align-items:center; gap:7px; padding:8px 11px; border-bottom:1px solid var(--hair-2); }
+.ccard .ch .k{ font-family:var(--mono); font-size:8.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); font-weight:600; }
+.ccard .ch .grow{ flex:1; }
+.redline{ font-size:12px; padding:10px 11px; }
+.redline s{ color:var(--ink-3); } .redline mark{ background:rgba(var(--green-rgb),.2); border-radius:3px; padding:0 2px; color:inherit; }
+.cact{ display:flex; gap:7px; padding:9px 11px; border-top:1px solid var(--hair-2); }
+.cact button{ flex:1; font-size:12.5px; font-weight:650; padding:10px; border-radius:10px; border:1px solid var(--hair); background:var(--card); }
+.cact .ap{ background:var(--primary); color:#fff; border-color:var(--primary); box-shadow:0 2px 10px rgba(var(--primary-rgb),.28); }
+.okline{ display:flex; align-items:center; gap:7px; padding:9px 11px; font-size:11.5px; color:var(--green); font-weight:600; }
+.reacts{ display:flex; gap:4px; margin-top:5px; }
+.react{ font-size:10px; border:1px solid var(--hair); border-radius:999px; padding:1px 7px; background:var(--chip); color:var(--ink-2); font-weight:600; }
+.react.you{ border-color:rgba(var(--primary-rgb),.4); background:rgba(var(--primary-rgb),.06); color:var(--primary); }
+.typing{ display:flex; align-items:center; gap:8px; padding:4px 14px 8px 53px; font-size:10.5px; color:var(--ink-3); }
+.typing .dots i{ display:inline-block; width:4px; height:4px; border-radius:50%; background:var(--ink-3); margin-right:2px; animation:ty 1.2s infinite; }
+.typing .dots i:nth-child(2){ animation-delay:.15s; } .typing .dots i:nth-child(3){ animation-delay:.3s; }
+@keyframes ty{ 0%,60%,100%{ opacity:.25; transform:translateY(0);} 30%{ opacity:1; transform:translateY(-2px);} }
+
+/* composer + tabbar */
+.comp{ flex:0 0 auto; padding:8px 12px; border-top:1px solid var(--hair); background:var(--card); display:flex; gap:8px; align-items:center; }
+.comp .in{ flex:1; display:flex; align-items:center; gap:8px; background:var(--bg); border:1px solid var(--hair); border-radius:12px; padding:9px 12px; }
+.comp input{ flex:1; border:0; outline:none; background:none; font:inherit; font-size:12.5px; color:var(--ink); min-width:0; }
+.comp input::placeholder{ color:var(--ink-3); }
+.snd{ width:36px; height:36px; border-radius:10px; background:var(--primary); color:#fff; display:grid; place-items:center; flex:0 0 auto; font-size:14px; }
+.tabbar{ flex:0 0 auto; display:flex; border-top:1px solid var(--hair); background:var(--card); padding:6px 8px 24px; }
+.tab{ flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; font-size:9.5px; font-weight:600; color:var(--ink-3); position:relative; }
+.tab.on{ color:var(--primary); }
+.tab .ico{ font-size:17px; line-height:1; }
+.tbadge{ position:absolute; top:-3px; right:calc(50% - 16px); font-size:8.5px; font-weight:700; background:var(--orange); color:#fff; border-radius:999px; padding:0 5px; }
+
+/* brief bottom sheet */
+.scrim{ position:absolute; inset:0; background:rgba(12,17,26,.38); opacity:0; pointer-events:none; transition:opacity .2s; z-index:45; }
+.scrim.on{ opacity:1; pointer-events:auto; }
+.bsheet{ position:absolute; left:0; right:0; bottom:0; max-height:78%; overflow:auto; background:var(--bg); border-radius:22px 22px 0 0; box-shadow:0 -18px 50px -18px rgba(10,16,28,.5); transform:translateY(105%); transition:transform .24s; padding:12px 16px 30px; z-index:50; }
+.bsheet.on{ transform:none; }
+.grab{ width:44px; height:5px; border-radius:99px; background:var(--hair); margin:0 auto 12px; }
+.bh{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.bh .t{ font-weight:700; font-size:14px; } .bh .grow{ flex:1; }
+.doc{ background:var(--card); border:1px solid var(--hair); border-radius:14px; overflow:hidden; }
+.dsec{ padding:13px 15px; } .dsec + .dsec{ border-top:1px solid var(--hair-2); }
+.dsec .k{ font-family:var(--mono); font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:5px; }
+.dsec p{ margin:0; font-size:12.5px; line-height:1.55; } .dsec p b{ font-weight:650; }
+mark.hl{ background:linear-gradient(transparent 62%, rgba(var(--orange-rgb),.25) 62%); color:inherit; padding:0; }
+.dstat{ display:grid; grid-template-columns:repeat(3,1fr); }
+.dstat > div{ padding:11px 13px; } .dstat > div + div{ border-left:1px solid var(--hair-2); }
+.dstat .n{ font-size:15px; font-weight:730; letter-spacing:-.02em; } .dstat .n small{ font-size:10px; font-weight:500; color:var(--ink-2); }
+.dstat .l{ font-family:var(--mono); font-size:7.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); margin-top:1px; }
+.dl{ display:flex; gap:7px; font-size:11.5px; padding:3px 0; }
+.dl .ck{ width:15px; height:15px; border-radius:50%; background:rgba(var(--green-rgb),.13); color:var(--green); display:grid; place-items:center; flex:0 0 auto; font-size:8px; margin-top:1px; }
+.kick{ display:flex; align-items:center; justify-content:center; gap:8px; width:100%; font-size:13px; font-weight:650; padding:12px; border-radius:12px; background:var(--primary); color:#fff; box-shadow:0 2px 12px rgba(var(--primary-rgb),.3); margin-top:11px; }
+.flash{ animation:fb 1.4s; } @keyframes fb{ 0%{ background:rgba(var(--green-rgb),.18);} 100%{ background:transparent;} }
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:128px; height:5px; border-radius:999px; background:#111; opacity:.22; z-index:60; }
+.hint{ text-align:center; color:var(--ink-3); font-size:12px; max-width:380px; } .hint b{ color:var(--primary); }
+</style>
+</head>
+<body>
+<div class="page-h">
+  <div class="ey">Switchboard mobile · the workspace</div>
+  <h1>The channel in your pocket</h1>
+  <p>Same app as the desktop — chat drives, the brief rides along. Tap <b>Apply → v8</b> in the chat, then <b>Brief</b> to see the document already updated.</p>
+</div>
+
+<div class="phone"><div class="island"></div><div class="screen">
+  <div class="sb"><span>9:41</span><span class="mono" style="font-size:11px;color:#8a95a3">●●●</span></div>
+
+  <div class="top">
+    <button class="back">‹</button>
+    <div><div class="t"><span class="h">#</span>northwind-energy · scope</div><div class="s">you, Taikun, Jordan + A. Reyes (guest)</div></div>
+    <button class="briefbtn" id="briefBtn">📄 Brief <span class="vchip" id="vchip">v7</span></button>
+  </div>
+
+  <div class="chat" id="chat">
+    <div class="day"><span>Today — brief v5 → v7</span></div>
+
+    <div class="msg"><span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span><div class="mb">
+      <div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">9:02</span></div>
+      <div class="tx">Re-read <b>discovery-call.vtt</b> overnight, re-priced from the ledger — <b>$3.6k → $3.4k</b>. Brief at <b>v6</b>. Two human calls left: <b>SCIM</b> and <b>model tier</b>.</div>
+      <div class="reacts"><span class="react you">👍 2</span><span class="react">⚡ 1</span></div>
+    </div></div>
+
+    <div class="msg"><span class="mav" style="background:#5a6577">AR</span><div class="mb">
+      <div class="mh"><span class="mn">A. Reyes</span><span class="tag guest">guest</span><span class="mt">9:31</span></div>
+      <div class="tx">The <b>go-live date</b> is contractual with TotalEnergies. What's the slack if something slips?</div>
+    </div></div>
+
+    <div class="msg"><span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span><div class="mb">
+      <div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">9:32</span></div>
+      <div class="tx">Plan is <b>parity-first</b> — the riskiest proof runs week 1, so slips surface in days, not at the deadline.</div>
+      <div class="quoteline">"we can't miss the TotalEnergies window — that date is fixed."<span class="src">discovery-call.vtt · 31:12</span></div>
+      <div class="tx" style="margin-top:4px">Current buffer: <b>4 business days</b>.</div>
+    </div></div>
+
+    <div class="msg"><span class="mav" style="background:#1a2230">S</span><div class="mb">
+      <div class="mh"><span class="mn">Steve</span><span class="mt">9:40</span></div>
+      <div class="tx"><span class="mention">@Taikun</span> make it 2 weeks total — more buffer for Adriana.</div>
+    </div></div>
+
+    <div class="msg"><span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span><div class="mb">
+      <div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">9:40</span></div>
+      <div class="tx">Doable without cutting scope — parallelize <b>DATA-7</b> with INT-1/2 on one extra runner:</div>
+      <div class="ccard" id="diffCard">
+        <div class="ch"><span class="k">Proposed · edits the brief</span><span class="grow"></span><span class="vchip">v7 → v8</span></div>
+        <div class="redline"><s>~9 days · $3.4k</s> → <mark>~6 days · $3.7k</mark> · buffer <b>7 days</b></div>
+        <div class="cact"><button id="pushBack">Push back</button><button class="ap" id="applyBtn">Apply → v8</button></div>
+      </div>
+    </div></div>
+
+    <div class="typing" id="typing" style="display:none"><span class="dots"><i></i><i></i><i></i></span>Taikun is re-checking the plan…</div>
+  </div>
+
+  <div class="comp">
+    <div class="in"><input id="compIn" placeholder="Message · @Taikun re-plans as you type"></div>
+    <button class="snd" id="sendBtn">➤</button>
+  </div>
+  <div class="tabbar">
+    <button class="tab on"><span class="ico">💬</span>Home</button>
+    <button class="tab"><span class="ico">🔔</span>Needs you<span class="tbadge">3</span></button>
+    <button class="tab"><span class="ico">📊</span>Tally</button>
+    <button class="tab"><span class="ico">👤</span>You</button>
+  </div>
+
+  <!-- brief sheet -->
+  <div class="scrim" id="scrim"></div>
+  <div class="bsheet" id="bsBrief"><div class="grab"></div>
+    <div class="bh"><span class="t">The brief — SSO &amp; Identity</span><span class="vchip" id="vchipB">v7</span><span class="grow"></span><button class="briefbtn" style="margin:0">Present deck</button></div>
+    <div class="doc">
+      <div class="dsec"><div class="k">What we're doing, and why</div>
+        <p>Not a login problem — a <mark class="hl">go-live problem</mark>. <b>Entra/SAML</b>, auto-provisioned, gated on <b>CI parity</b> from week one. Okta stays as fallback.</p></div>
+      <div class="dstat" id="dealRow">
+        <div><div class="n" id="dCost">$3.4k<small> est</small></div><div class="l">agent cost</div></div>
+        <div><div class="n" id="dDays">~9 days</div><div class="l">autopilot</div></div>
+        <div><div class="n" id="dBuf">4 days</div><div class="l">buffer</div></div>
+      </div>
+      <div class="dsec"><div class="k">Done means</div>
+        <div class="dl"><span class="ck">✓</span><span>≥95% sign-in · zero manual provisioning · MTTA ≤ 15m</span></div>
+        <div class="dl"><span class="ck">✓</span><span>Parity green · Okta fallback verified · design system v3</span></div>
+        <div class="dl"><span class="ck">✓</span><span>21 tasks, every one a merged PR</span></div></div>
+      <div class="dsec" style="font-size:10.5px;color:var(--ink-3)">Priced from <b style="color:var(--ink-2)">your ledger</b> · SOW $48k signed · every version came from the chat.</div>
+    </div>
+    <button class="kick" id="kickBtn">⚡ Kick off — dispatch wave 1</button>
+  </div>
+  <div class="homebar"></div>
+</div></div>
+<div class="hint">Chat decides → the brief updates → <b>one thumb</b> runs the firm. Same objects as desktop: channels, diff cards, versions.</div>
+
+<script>
+(function(){
+  var scrim=document.getElementById('scrim'), sheet=document.getElementById('bsBrief');
+  function openB(){ scrim.classList.add('on'); sheet.classList.add('on'); }
+  function closeB(){ scrim.classList.remove('on'); sheet.classList.remove('on'); }
+  document.getElementById('briefBtn').addEventListener('click',openB);
+  scrim.addEventListener('click',closeB);
+
+  var chat=document.getElementById('chat'), typing=document.getElementById('typing');
+  function aiMsg(html){ var d=document.createElement('div'); d.className='msg';
+    d.innerHTML='<span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span><div class="mb"><div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">now</span></div>'+html+'</div>';
+    chat.insertBefore(d,typing); chat.scrollTop=chat.scrollHeight; }
+  function youMsg(t){ var d=document.createElement('div'); d.className='msg';
+    d.innerHTML='<span class="mav" style="background:#1a2230">S</span><div class="mb"><div class="mh"><span class="mn">Steve</span><span class="mt">now</span></div><div class="tx">'+t+'</div></div>';
+    chat.insertBefore(d,typing); chat.scrollTop=chat.scrollHeight; }
+
+  document.getElementById('applyBtn').addEventListener('click',function(){
+    document.getElementById('diffCard').innerHTML='<div class="okline">✓ Applied — brief v7 → <b>v8</b> · ~6 days · $3.7k · buffer 7 days</div>';
+    document.getElementById('vchip').textContent='v8'; document.getElementById('vchipB').textContent='v8';
+    document.getElementById('dCost').innerHTML='$3.7k<small> est</small>';
+    document.getElementById('dDays').textContent='~6 days';
+    document.getElementById('dBuf').textContent='7 days';
+    aiMsg('<div class="tx">Applied — <b>v8</b>. Buffer is now <b>7 business days</b>. Deck re-presents from v8; nothing dispatches until you kick off.</div>');
+    setTimeout(function(){ openB(); var r=document.getElementById('dealRow'); r.classList.add('flash'); setTimeout(function(){ r.classList.remove('flash'); },1400); },700);
+  });
+  document.getElementById('pushBack').addEventListener('click',function(){
+    document.getElementById('diffCard').innerHTML='<div class="okline" style="color:var(--ink-3)">Discarded.</div>';
+    aiMsg('<div class="tx">Dropped. What\'s load-bearing — the budget or the date? I\'ll re-plan around it.</div>');
+  });
+
+  var compIn=document.getElementById('compIn');
+  function send(){ var v=compIn.value.trim(); if(!v) return; compIn.value='';
+    youMsg(v.replace(/@taikun/ig,'<span class="mention">@Taikun</span>'));
+    typing.style.display='flex'; chat.scrollTop=chat.scrollHeight;
+    setTimeout(function(){ typing.style.display='none';
+      aiMsg('<div class="tx">Drafting that as a redline — you\'ll get an <b>Apply</b> card here, and the brief updates the moment you accept.</div>'); },900); }
+  document.getElementById('sendBtn').addEventListener('click',send);
+  compIn.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
+
+  document.getElementById('kickBtn').addEventListener('click',function(){
+    closeB(); aiMsg('<div class="tx">⚡ <b>Wave 1 dispatched</b> — SEN-7 · DATA-3 · QA-2 · parity gate in parallel. Follow along in <b>› build</b>.</div>'); });
+})();
+</script>
+</body>
+</html>

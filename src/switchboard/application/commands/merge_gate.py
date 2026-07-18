@@ -276,6 +276,18 @@ def merge_gate(payload: Dict[str, Any], actor: str = "system",
             "unknown_project", f"Unknown project: {project}", "invalid_input"))
         return {"schema": MERGE_GATE_SCHEMA, "ok": False, "status": "blocked",
                 "project": project, "task_id": task_id, "findings": findings}
+    # UI-31: with enforcement armed (PM_KICKOFF_ENFORCE), an incomplete kickoff
+    # record blocks merges outright — the finding names the gate to approve.
+    _ko = _store_facade()
+    if hasattr(_ko, "kickoff_enforcement"):
+        _gate = _ko.kickoff_enforcement(project)
+        if _gate.get("enforced") and not _gate.get("authorized"):
+            findings.append(_merge_gate_finding(
+                "kickoff_blocked",
+                _gate.get("reason") or "kickoff record incomplete",
+                "policy", details={"blocking_gate": _gate.get("blocking_gate") or ""}))
+            return {"schema": MERGE_GATE_SCHEMA, "ok": False, "status": "blocked",
+                    "project": project, "task_id": task_id, "findings": findings}
     topology = get_project_repo_topology(project)
     roles = topology.get("roles") or {}
     canonical = roles.get("canonical") or {}

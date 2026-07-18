@@ -54,6 +54,8 @@ from switchboard.api.routers.claims import create_router as _create_claims_route
 from switchboard.api.routers.wakes import create_router as _create_wakes_router  # noqa: E402
 from switchboard.api.routers.agents import create_router as _create_agents_router  # noqa: E402
 from switchboard.api.routers.messaging import create_router as _create_messaging_router  # noqa: E402
+from switchboard.api.routers.attention import create_router as _create_attention_router  # noqa: E402
+from switchboard.api.routers.kickoff import create_router as _create_kickoff_router  # noqa: E402
 from switchboard.api.routers.access import create_router as _create_access_router  # noqa: E402
 from switchboard.api.routers.board import create_router as _create_board_router  # noqa: E402
 from switchboard.api.routers.resource_leases import create_router as _create_resource_leases_router  # noqa: E402
@@ -241,6 +243,19 @@ app.include_router(_create_messaging_router(
     resolve_project=_proj,
     resolve_principal=_principal,
     resolve_body_project=_body_project,
+))
+app.include_router(_create_attention_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    list_pending_acks=store.list_pending_acks,
+    list_inbox=store.list_inbox,
+))
+app.include_router(_create_kickoff_router(
+    resolve_project=_proj,
+    resolve_principal=_principal,
+    get_state=store.get_kickoff_state,
+    approve_gate=store.approve_kickoff_gate,
+    revise_gate=store.revise_kickoff_gate,
 ))
 app.include_router(_create_project_router(
     resolve_project=_proj,

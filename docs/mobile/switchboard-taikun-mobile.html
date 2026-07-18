@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<!--
+    switchboard-taikun-mobile.html — the Switchboard app on a phone,
+    in the house design system (Tabler 1.4.0 pinned + taikun-tabler tokens).
+    Same objects as the backend: brief versions, human gates, waves, work
+    sessions, Tally buckets. Bottom tabs: Overview · Brief · Fleet · Tally ·
+    Needs you. Wireframe: all data illustrative.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Switchboard mobile | Taikun</title>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
+<style>
+:root{
+  --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
+  --tblr-body-bg:#ffffff; --tblr-body-color:#101114; --tblr-secondary:#5b626e;
+  --tblr-border-color:#e2e5ea; --tblr-border-radius:.65rem; --tblr-border-radius-lg:.85rem;
+  --tblr-font-sans-serif:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+body{ -webkit-font-smoothing:antialiased; letter-spacing:-.005em; background:#eef0f4 !important;
+  min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:16px; padding:26px 14px 44px; }
+.card{ border:1px solid var(--tblr-border-color); border-radius:.9rem; box-shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08); }
+.btn{ border-radius:.6rem; font-weight:600; }
+.page-h{ text-align:center; max-width:560px; }
+.page-h .ey{ font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--tblr-primary); font-weight:600; }
+.page-h h1{ font-size:22px; font-weight:720; letter-spacing:-.02em; margin:6px 0 4px; }
+.page-h p{ color:var(--tblr-secondary); font-size:13.5px; margin:0; }
+.mono{ font-family:ui-monospace,Menlo,monospace; font-variant-numeric:tabular-nums; }
+.tk-eyebrow{ font-size:.62rem; text-transform:uppercase; letter-spacing:.08em; color:var(--tblr-secondary); font-weight:600; }
+/* phone frame */
+.phone{ width:378px; border-radius:52px; padding:11px; background:linear-gradient(160deg,#24262c,#0e0f12 60%); box-shadow:0 2px 6px rgba(16,24,40,.06),0 30px 70px -20px rgba(16,24,40,.5); }
+.screen{ position:relative; border-radius:42px; overflow:hidden; background:#f6f7f9; height:800px; display:flex; flex-direction:column; font-size:.85rem; }
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%); width:112px; height:30px; background:#000; border-radius:20px; z-index:40; }
+.sb{ height:50px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between; padding:0 26px 7px; font-size:13px; font-weight:650; background:#fff; }
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:128px; height:5px; border-radius:999px; background:#111; opacity:.22; z-index:60; }
+/* app bar */
+.appbar{ display:flex; align-items:center; gap:8px; padding:6px 14px 10px; background:#fff; border-bottom:1px solid var(--tblr-border-color); flex:0 0 auto; }
+.appbar .brand{ display:flex; align-items:center; gap:7px; min-width:0; }
+.appbar .lk{ font-size:12px; font-weight:500; letter-spacing:.12em; white-space:nowrap; } .appbar .lk b{ font-weight:400; color:var(--tblr-primary); }
+.appbar .sub{ font-size:9.5px; color:var(--tblr-secondary); font-family:ui-monospace,Menlo,monospace; }
+.scroll{ flex:1; overflow:auto; padding:12px 12px 8px; }
+.pane{ display:none; } .pane.on{ display:block; }
+/* bottom tabs */
+.tabbar{ flex:0 0 auto; display:flex; border-top:1px solid var(--tblr-border-color); background:#fff; padding:6px 4px 24px; }
+.tab{ flex:1; display:flex; flex-direction:column; align-items:center; gap:1px; font-size:9px; font-weight:600; color:var(--tblr-secondary); position:relative; background:none; border:0; }
+.tab .ti{ font-size:19px; } .tab.on{ color:var(--tblr-primary); }
+.tbadge{ position:absolute; top:-2px; right:calc(50% - 17px); font-size:8.5px; font-weight:700; background:#d63939; color:#fff; border-radius:999px; padding:0 5px; }
+/* brief bits */
+.tk-cm{ background:rgba(247,103,7,.13); box-shadow:inset 0 -2px 0 rgba(247,103,7,.5); border-radius:2px; padding:0 1px; }
+.tk-cm.res{ background:transparent; box-shadow:inset 0 -2px 0 var(--tblr-border-color); }
+.tk-ed:focus{ outline:none; background:#f6f7f9; box-shadow:inset 2.5px 0 0 var(--tblr-primary); border-radius:.35rem; }
+.tk-redl s{ color:var(--tblr-secondary); } .tk-redl mark{ background:rgba(47,179,68,.18); border-radius:3px; padding:0 2px; }
+.tk-flash{ animation:tkflash 1.4s; } @keyframes tkflash{ 0%{ background:rgba(47,179,68,.16);} 100%{ background:transparent;} }
+.tk-wt{ font-family:ui-monospace,Menlo,monospace; font-size:.66rem; font-weight:600; padding:.12rem .45rem; border-radius:.4rem; background:#f6f7f9; color:var(--tblr-secondary); border:1px solid var(--tblr-border-color); }
+.tk-wt.ghost{ opacity:.5; border-style:dashed; background:transparent; }
+/* terminal sheet */
+.scrim{ position:absolute; inset:0; background:rgba(12,17,26,.38); opacity:0; pointer-events:none; transition:opacity .2s; z-index:45; } .scrim.on{ opacity:1; pointer-events:auto; }
+.bsheet{ position:absolute; left:0; right:0; bottom:0; max-height:82%; overflow:auto; background:#fff; border-radius:22px 22px 0 0; box-shadow:0 -18px 50px -18px rgba(10,16,28,.5); transform:translateY(105%); transition:transform .24s; padding:12px 14px 30px; z-index:50; }
+.bsheet.on{ transform:none; }
+.grab{ width:44px; height:5px; border-radius:99px; background:var(--tblr-border-color); margin:0 auto 12px; }
+.tk-trm{ background:#0d0f13; color:#c9ced6; border-radius:.65rem; padding:.7rem .8rem; font-family:ui-monospace,Menlo,monospace; font-size:.68rem; line-height:1.7; overflow-x:auto; }
+.tk-trm .tl{ color:#7cc4ff; } .tk-trm .rs{ color:#8b95a5; padding-left:.8rem; } .tk-trm .rs.ok{ color:#5fd38a; } .tk-trm .rs.pr{ color:#f5b153; }
+.tk-trm .ad{ color:#5fd38a; } .tk-trm .de{ color:#ff8d84; } .tk-trm .as{ color:#e7ebf1; }
+.tk-trm .tm{ color:#525c6b; font-size:.58rem; } .tk-trm .c-you{ color:#f0d264; margin-top:.35rem; } .tk-trm .c-ack{ color:#5fd38a; padding-left:.8rem; }
+.tk-toast{ position:absolute; left:50%; bottom:120px; transform:translateX(-50%) translateY(8px); background:#101114; color:#fff; font-size:.72rem; font-weight:600; padding:.55rem .9rem; border-radius:.6rem; opacity:0; pointer-events:none; transition:opacity .2s,transform .2s; z-index:70; max-width:86%; text-align:center; }
+.tk-toast.on{ opacity:1; transform:translateX(-50%) translateY(0); }
+.hint{ text-align:center; color:var(--tblr-secondary); font-size:12px; max-width:390px; } .hint b{ color:var(--tblr-primary); }
+/* Shape workspace: section switcher + readiness rail */
+.mseg{ display:flex; gap:.15rem; background:#f6f7f9; border:1px solid var(--tblr-border-color); border-radius:.6rem; padding:.2rem; }
+.mseg button{ flex:1; display:flex; flex-direction:column; align-items:center; gap:.12rem; font-size:.64rem; font-weight:650; padding:.32rem .1rem; border:0; background:transparent; border-radius:.4rem; color:var(--tblr-secondary); }
+.mseg button.on{ background:#fff; color:var(--tblr-body-color); box-shadow:0 1px 2px rgba(16,24,40,.08); }
+.mseg button .st{ width:1.05rem; height:1.05rem; border-radius:50%; display:grid; place-items:center; font-size:.55rem; border:1.5px solid var(--tblr-border-color); }
+.mseg button.done .st{ background:#2fb344; border-color:#2fb344; color:#fff; }
+.mseg button.now .st{ border-color:var(--tblr-primary); color:var(--tblr-primary); }
+.mseg button.stale .st{ border-color:#f76707; color:#f76707; }
+.mshape-sec{ display:none; } .mshape-sec.on{ display:block; }
+.mfoot{ display:flex; align-items:center; gap:.5rem; padding:.6rem .8rem; border-top:1px solid var(--tblr-border-color); font-size:.72rem; }
+.mfoot.done{ color:#2fb344; }
+.krow{ display:flex; align-items:center; gap:.5rem; width:100%; text-align:left; padding:.4rem .2rem; border:0; background:transparent; }
+.krow+.krow{ border-top:1px solid #eff1f4; }
+.krow .rn{ width:1.25rem; height:1.25rem; border-radius:50%; display:grid; place-items:center; font-size:.6rem; font-weight:700; border:2px solid var(--tblr-border-color); color:var(--tblr-secondary); flex:0 0 auto; }
+.krow.done .rn{ background:#2fb344; border-color:#2fb344; color:#fff; }
+.krow.now .rn{ border-color:var(--tblr-primary); color:var(--tblr-primary); }
+.krow.stale .rn{ border-color:#f76707; color:#f76707; }
+.krow .kt{ flex:1; font-size:.76rem; font-weight:600; } .krow.blocked .kt{ color:var(--tblr-secondary); font-weight:500; }
+.krow .km{ font-size:.62rem; color:var(--tblr-secondary); white-space:nowrap; }
+.tk-dots{ display:flex; flex-direction:column; gap:.25rem; font-size:.74rem; } .tk-dots .r{ display:flex; align-items:center; gap:.4rem; } .tk-dots .r .d{ width:.5rem; height:.5rem; border-radius:50%; flex:0 0 auto; }
+.found-mode2{ display:flex; flex-direction:column; gap:.4rem; } .found-mode2 label{ border:1.5px solid var(--tblr-border-color); border-radius:.5rem; padding:.5rem .6rem; font-size:.76rem; } .found-mode2 label.on{ border-color:var(--tblr-primary); background:rgba(var(--tblr-primary-rgb),.04); }
+.found-drop2{ border:1.5px dashed var(--tblr-border-color); border-radius:.55rem; padding:.7rem; text-align:center; color:var(--tblr-secondary); font-size:.72rem; background:#f6f7f9; }
+/* the mission DAG — mermaid-rendered, swipe sideways */
+.dag-scroll{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.mission-dag-graph svg{ max-width:none; height:220px; display:block; }
+.mission-dag-graph .node{ cursor:pointer; }
+.mission-dag-graph .node rect{ rx:8px; ry:8px; }
+.mission-dag-graph .nodeLabel{ font-family:var(--tblr-font-sans-serif); font-size:10.5px; line-height:1.3; }
+.mission-dag-graph .nodeLabel b{ font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+.mission-dag-graph .cluster rect{ fill:transparent !important; stroke:var(--tblr-border-color) !important; rx:12px; ry:12px; }
+.mission-dag-graph .cluster-label .nodeLabel{ font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:#8b95a5; font-weight:600; }
+.mission-dag-graph .flowchart-link{ stroke:#c9ced6 !important; stroke-width:1.5px !important; }
+.mission-dag-graph .marker{ fill:#c2c8d0 !important; stroke:#c2c8d0 !important; }
+</style>
+</head>
+<body>
+<div class="page-h">
+  <div class="ey">Switchboard mobile · the house design system</div>
+  <h1>The whole firm, one thumb</h1>
+  <p>Same Tabler shell as the web app. Decide gates, redline the brief, watch a work session live, read Tally — <b>end to end</b>.</p>
+</div>
+
+<div class="phone"><div class="island"></div><div class="screen">
+  <div class="sb"><span>9:41</span><span class="mono" style="font-size:11px;color:#8a95a3">●●●</span></div>
+
+  <div class="appbar">
+    <div class="brand">
+      <i class="ti ti-settings-bolt" style="font-size:22px;color:var(--tblr-primary)"></i>
+      <div style="min-width:0"><div class="lk">TAIKUN<b> SWITCHBOARD</b></div><div class="sub">Northwind · SSO &amp; Identity · <span id="stageM">brief v7</span></div></div>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary ms-auto" id="newProjM" style="font-size:.7rem;padding:.25rem .5rem" title="New project"><i class="ti ti-folder-plus"></i></button>
+    <button class="btn btn-sm btn-primary" id="kickM" style="font-size:.7rem;padding:.25rem .6rem"><i class="ti ti-bolt me-1"></i>Kick off</button>
+  </div>
+
+  <div class="scroll">
+    <!-- ═══ OVERVIEW ═══ -->
+    <div class="pane on" id="p-overview">
+      <div class="tk-eyebrow mb-1">mission M-114 · Found ✓ → <b>Scope</b> → Plan → Build → Ship</div>
+
+      <!-- kickoff banner — status only; the ladder lives in Shape -->
+      <button class="card mb-2 w-100 text-start" id="ovKoBanner" data-go="p-shape" style="border-color:rgba(247,103,7,.4);border-width:1px">
+        <div class="card-body p-3 d-flex align-items-center gap-2">
+          <i class="ti ti-shield-lock" id="ovKoIcon" style="font-size:1.3rem;color:#f76707"></i>
+          <div class="flex-fill" style="min-width:0">
+            <div class="fw-bold" style="font-size:.82rem" id="ovKoTitle">Build blocked — 2 of 5 gates</div>
+            <div class="text-secondary" style="font-size:.7rem" id="ovKoSub">Next: approve Architecture in Scope →</div>
+          </div>
+          <i class="ti ti-chevron-right text-secondary"></i>
+        </div>
+      </button>
+
+      <div class="row g-2">
+        <div class="col-6"><div class="card"><div class="card-body p-3"><div class="tk-eyebrow">Agent cost</div><div class="h2 mb-0" id="ovCostM">$3.4k</div><div class="text-secondary" style="font-size:.68rem">from your ledger</div></div></div></div>
+        <div class="col-6"><div class="card"><div class="card-body p-3"><div class="tk-eyebrow">Autopilot</div><div class="h2 mb-0" id="ovDaysM">~9 days</div><div class="text-secondary" style="font-size:.68rem" id="ovBufM">buffer: 4 days</div></div></div></div>
+        <div class="col-6"><div class="card"><div class="card-body p-3"><div class="tk-eyebrow">Plan</div><div class="h2 mb-0">21 tasks</div><div class="text-secondary" style="font-size:.68rem">2 parallel waves</div></div></div></div>
+        <div class="col-6"><div class="card"><div class="card-body p-3"><div class="tk-eyebrow">SOW</div><div class="h2 mb-0">$48k</div><div class="text-secondary" style="font-size:.68rem">signed · A. Reyes</div></div></div></div>
+      </div>
+      <div class="card mt-2"><div class="card-body p-3">
+        <div class="d-flex align-items-center"><span class="tk-eyebrow"><i class="ti ti-activity-heartbeat me-1"></i>Pulse</span><button class="btn btn-sm btn-outline-secondary ms-auto" id="digestM" style="font-size:.68rem;padding:.2rem .5rem"><i class="ti ti-sparkles me-1"></i>Digest</button></div>
+        <div class="text-secondary mt-2" style="font-size:.75rem" id="digestOutM">Tap Digest for the chief-of-staff brief: what changed, what's slipping, what to pick up next.</div>
+      </div></div>
+      <div class="card mt-2"><div class="list-group list-group-flush" style="font-size:.75rem">
+        <div class="list-group-item py-2 d-flex gap-2 align-items-center"><span class="badge bg-purple-lt mono">SEN-6</span>keystone in review — merging unlocks 5 tasks<span class="badge bg-orange-lt ms-auto">PR #412</span></div>
+        <div class="list-group-item py-2 d-flex gap-2 align-items-center"><span class="badge bg-green-lt mono">M1</span>playback accepted · $12k invoice released</div>
+      </div></div>
+    </div>
+
+    <!-- ═══ SHAPE — author the four artifacts, readiness below ═══ -->
+    <div class="pane" id="p-shape">
+      <div class="d-flex align-items-center mb-2"><div class="tk-eyebrow">Scope · author the kickoff record</div><span class="badge bg-secondary-lt mono ms-2" id="briefVM">v7</span></div>
+
+      <div class="mseg mb-2" id="mseg">
+        <button data-sec="vision"><span class="st"></span>Vision</button>
+        <button data-sec="prd"><span class="st"></span>PRD</button>
+        <button data-sec="arch"><span class="st"></span>Arch</button>
+        <button data-sec="rules"><span class="st"></span>Rules</button>
+      </div>
+
+      <div class="card" id="docM">
+        <!-- VISION -->
+        <div class="mshape-sec" id="msec-vision">
+          <div class="card-body p-3">
+            <div class="tk-eyebrow mb-1">Thesis · why-now · non-goals · <span style="text-transform:none;letter-spacing:0">tap to edit</span></div>
+            <p class="tk-ed mb-0" contenteditable="true" spellcheck="false" data-sec="the vision" style="font-size:.8rem;line-height:1.6">Not a login problem — a <b>go-live problem</b>. <b>Entra/SAML</b>, auto-provisioned, gated on <b>CI parity</b> from week one. <span class="tk-cm res" data-th="okta">Okta stays as a silent fallback.</span> Non-goals: SCIM, non-pilot tenants.</p>
+          </div>
+          <div class="card-body border-top p-3">
+            <div class="row text-center">
+              <div class="col-4"><div class="h3 mb-0"><span class="tk-cm" data-th="cost" id="dCostM">$3.4k</span></div><div class="tk-eyebrow">cost</div></div>
+              <div class="col-4 border-start"><div class="h3 mb-0" id="dDaysM">~9 days</div><div class="tk-eyebrow">autopilot</div></div>
+              <div class="col-4 border-start"><div class="h3 mb-0" id="dBufM">4 days</div><div class="tk-eyebrow">buffer</div></div>
+            </div>
+          </div>
+          <div class="card-body border-top p-3" id="redlineM">
+            <div class="tk-eyebrow mb-1"><i class="ti ti-git-compare me-1"></i>Proposed · "make it 2 weeks"</div>
+            <div class="tk-redl mb-2" style="font-size:.78rem"><s>~9d · $3.4k · 3 waves</s> → <mark>~6d · $3.7k · 2 waves</mark> · buffer <b>7 days</b></div>
+            <div class="d-flex gap-2"><button class="btn btn-sm btn-outline-secondary w-50" id="pushBackM">Push back</button><button class="btn btn-sm btn-primary w-50" id="applyM">Apply → v8</button></div>
+          </div>
+          <div class="mfoot" data-foot="vision"></div>
+        </div>
+        <!-- PRD -->
+        <div class="mshape-sec" id="msec-prd">
+          <div class="card-body p-3" style="font-size:.78rem">
+            <div class="tk-eyebrow mb-1">In / out of scope · acceptance</div>
+            <div><i class="ti ti-circle-check text-green me-1"></i>≥95% sign-in · zero manual provisioning · MTTA ≤ 15m</div>
+            <div><i class="ti ti-circle-check text-green me-1"></i>Parity green · fallback verified · design system v3</div>
+            <div><i class="ti ti-circle-check text-green me-1"></i><b>done means merged</b> — every task a tested PR</div>
+            <div class="text-secondary mt-1">Out of scope: SCIM, non-pilot tenants, custom MFA.</div>
+          </div>
+          <div class="card-body border-top p-3">
+            <div class="tk-eyebrow mb-2"><i class="ti ti-help-circle me-1"></i>Open questions — need you <span id="prdCount">· 2</span></div>
+            <div id="prdGates">
+              <div class="mb-2" data-gate>
+                <div style="font-size:.76rem"><b>SCIM provisioning</b> — +5 tasks, ~1 week if included.</div>
+                <div class="d-flex gap-2 mt-1"><button class="btn btn-sm btn-outline-secondary w-50" data-r="SCIM deferred — logged as ADR">Defer</button><button class="btn btn-sm btn-outline-secondary w-50" data-r="SCIM included — plan re-cut">Include</button></div>
+              </div>
+              <div data-gate>
+                <div style="font-size:.76rem"><b>Model tier</b> — balanced (~$2.9k) or high-reasoning on auth?</div>
+                <div class="d-flex gap-2 mt-1"><button class="btn btn-sm btn-outline-secondary w-50" data-r="Balanced tier locked">Balanced</button><button class="btn btn-sm btn-outline-secondary w-50" data-r="High tier locked for identity">High</button></div>
+              </div>
+            </div>
+            <div class="text-secondary mt-2" style="font-size:.7rem">A PRD with open questions can't be approved — no silent unknowns.</div>
+          </div>
+          <div class="mfoot" data-foot="prd"></div>
+        </div>
+        <!-- ARCHITECTURE -->
+        <div class="mshape-sec" id="msec-arch">
+          <div class="card-body p-3">
+            <div class="tk-eyebrow mb-1">Reuse map · no new engines</div>
+            <div class="tk-dots mb-2">
+              <div class="r"><span class="d" style="background:#2fb344"></span><b>Shipped</b> — reuse <span class="mono">claim_next</span>, <span class="mono">mission_graph</span></div>
+              <div class="r"><span class="d" style="background:#f59f00"></span><b>Thin</b> — extend <span class="mono">Tally</span> two-stream</div>
+              <div class="r"><span class="d" style="background:#d63939"></span><b>New</b> — none. No new engines.</div>
+            </div>
+            <div class="tk-eyebrow mb-1 mt-2">Components · boundaries · <span style="text-transform:none;letter-spacing:0">tap to edit</span></div>
+            <p class="tk-ed mb-0" contenteditable="true" spellcheck="false" data-sec="architecture" style="font-size:.78rem;line-height:1.55">Entra app registration → SAML handler → directory sync into the shared contract. Auth boundary at the tenant edge; secrets via the existing vault lease. Phased: contract → identity → parity gate.</p>
+          </div>
+          <div class="mfoot" data-foot="arch"></div>
+        </div>
+        <!-- OPERATING RULES -->
+        <div class="mshape-sec" id="msec-rules">
+          <div class="card-body p-3">
+            <div class="tk-eyebrow mb-1">Working agreement · <span style="text-transform:none;letter-spacing:0">tap to edit</span></div>
+            <p class="tk-ed mb-2" contenteditable="true" spellcheck="false" data-sec="operating rules" style="font-size:.78rem;line-height:1.55">Branch per task off <span class="mono">main</span>; DoD = merged PR with green CI + closure gate. Read the Architecture before inventing anything. <span class="mono">pytest -q</span>; every change ships a test.</p>
+            <div class="tk-eyebrow mb-1 mt-2">Lane ownership — leases</div>
+            <div class="tk-dots">
+              <div class="r"><span class="d" style="background:#206bc4"></span><span class="mono">sso/entra</span> — identity lane</div>
+              <div class="r"><span class="d" style="background:#ae3ec9"></span><span class="mono">directory/sync</span> — data lane</div>
+            </div>
+          </div>
+          <div class="mfoot" data-foot="rules"></div>
+        </div>
+        <div class="card-footer p-2 d-flex gap-2 align-items-center">
+          <i class="ti ti-sparkles" style="color:var(--tblr-primary)"></i>
+          <input class="form-control form-control-sm border-0 shadow-none p-0" id="sayM" placeholder='Say it — "why $3.4k?", "drop the fallback"…' style="font-size:.75rem">
+          <button class="btn btn-sm btn-primary" id="sayGoM" style="padding:.2rem .5rem"><i class="ti ti-send"></i></button>
+        </div>
+      </div>
+
+      <!-- readiness rail -->
+      <div class="card mt-2" id="koCard" style="border-color:rgba(247,103,7,.4)">
+        <div class="card-body p-3">
+          <div class="d-flex align-items-center mb-2"><span class="tk-eyebrow"><i class="ti ti-rocket me-1"></i>Kickoff readiness</span><span class="badge ms-auto" id="koPill" style="background:rgba(247,103,7,.12);color:#f76707"><i class="ti ti-lock me-1"></i>build blocked</span></div>
+          <div id="koRows"></div>
+        </div>
+        <div class="card-footer p-2 d-flex align-items-center gap-2"><span id="koVerdictM" class="text-secondary" style="font-size:.7rem">2 gates remain — next: Architecture</span><button class="btn btn-sm btn-primary ms-auto" id="koReleaseM" disabled style="font-size:.68rem;padding:.2rem .55rem"><i class="ti ti-bolt me-1"></i>Release W1</button></div>
+      </div>
+
+      <div class="card mt-2"><div class="list-group list-group-flush" id="vListM" style="font-size:.72rem">
+        <div class="list-group-item py-2"><span class="mono text-secondary me-1">v7</span>Tier call raised · high-reasoning proposed</div>
+        <div class="list-group-item py-2"><span class="mono text-secondary me-1">v5</span>"prove parity early" → gate into wave 1</div>
+        <div class="list-group-item py-2"><span class="mono text-secondary me-1">v2</span>"Okta must stay" → fallback in plan (+1 task)</div>
+      </div></div>
+    </div>
+
+    <!-- ═══ FLEET ═══ -->
+    <div class="pane" id="p-fleet">
+      <div class="tk-eyebrow mb-1">day 6 of ~9 · claim_next · leases hold</div>
+      <div class="card mb-2"><div class="card-body p-3">
+        <div class="d-flex mb-1" style="font-size:.75rem"><b>Build — 68%, on track</b><span class="text-secondary ms-auto">7/21 merged</span></div>
+        <div class="progress" style="height:8px"><div class="progress-bar bg-green" style="width:68%"></div></div>
+      </div></div>
+      <div class="card"><div class="list-group list-group-flush">
+        <button class="list-group-item list-group-item-action py-2" data-sess="atlas">
+          <div class="d-flex align-items-center gap-2" style="font-size:.78rem"><span class="avatar avatar-xs" style="background:var(--tblr-primary);color:#fff">A</span><b>Atlas</b><span class="mono text-secondary" style="font-size:.66rem">SEN-6</span><span class="ms-auto" style="font-size:.68rem;color:#d63939"><span style="display:inline-block;width:.45rem;height:.45rem;border-radius:50%;background:#d63939"></span> live</span></div>
+          <div class="text-secondary mt-1" style="font-size:.7rem;padding-left:32px">Wire Entra app registration · keystone · PR #412 · CI 3/4 · $1.10</div>
+        </button>
+        <button class="list-group-item list-group-item-action py-2" data-sess="codex">
+          <div class="d-flex align-items-center gap-2" style="font-size:.78rem"><span class="avatar avatar-xs" style="background:#206bc4;color:#fff">C</span><b>Codex</b><span class="mono text-secondary" style="font-size:.66rem">DATA-3</span><span class="ms-auto text-secondary" style="font-size:.68rem"><span style="display:inline-block;width:.45rem;height:.45rem;border-radius:50%;background:#2fb344"></span> tests green</span></div>
+          <div class="text-secondary mt-1" style="font-size:.7rem;padding-left:32px">Directory attribute sync · $0.60</div>
+        </button>
+        <button class="list-group-item list-group-item-action py-2" data-sess="nova">
+          <div class="d-flex align-items-center gap-2" style="font-size:.78rem"><span class="avatar avatar-xs" style="background:#2fb344;color:#fff">N</span><b>Nova</b><span class="mono text-secondary" style="font-size:.66rem">QA-2</span><span class="ms-auto text-secondary" style="font-size:.68rem"><span style="display:inline-block;width:.45rem;height:.45rem;border-radius:50%;background:#2fb344"></span> e2e 7/7</span></div>
+          <div class="text-secondary mt-1" style="font-size:.7rem;padding-left:32px">e2e smoke vs. the prototype · $0.30</div>
+        </button>
+      </div>
+      <div class="card-footer py-2 text-secondary" style="font-size:.68rem"><i class="ti ti-hand-stop text-orange me-1"></i><b>SEN-4 done without a PR</b> — decide in Needs you</div></div>
+      <div class="card mt-2">
+        <div class="card-body p-3 pb-1">
+          <div class="tk-eyebrow"><i class="ti ti-topology-star-3 me-1"></i>The map · mission_graph — swipe →</div>
+        </div>
+        <div class="dag-scroll px-2 pb-2"><div id="dagHostM" class="mission-dag-graph" aria-label="Mission dependency graph"><div class="text-secondary py-4 text-center" style="font-size:.72rem">Rendering dependency map…</div></div></div>
+        <div class="card-footer py-2 d-flex gap-3 flex-wrap" style="font-size:.68rem;color:var(--tblr-secondary)">
+          <span><span class="sdot" style="background:#2fb344;width:.45rem;height:.45rem;display:inline-block;border-radius:50%"></span> merged</span>
+          <span><span style="background:#206bc4;width:.45rem;height:.45rem;display:inline-block;border-radius:50%"></span> in progress</span>
+          <span><span style="background:#f76707;width:.45rem;height:.45rem;display:inline-block;border-radius:50%"></span> in review</span>
+          <span><span style="background:#c9ced6;width:.45rem;height:.45rem;display:inline-block;border-radius:50%"></span> blocked</span>
+          <span class="ms-auto">tap a live node → its session</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TALLY ═══ -->
+    <div class="pane" id="p-tally">
+      <div class="tk-eyebrow mb-1">two streams, reconciled</div>
+      <div class="row g-2">
+        <div class="col-6"><div class="card"><div class="card-body p-3"><div class="tk-eyebrow">Provider actual</div><div class="h2 mb-0">$3.12k</div><div class="text-secondary" style="font-size:.66rem">gateway · truth</div></div></div></div>
+        <div class="col-6"><div class="card"><div class="card-body p-3"><div class="tk-eyebrow">Agent reported</div><div class="h2 mb-0">$3.31k</div><span class="badge bg-green-lt" style="font-size:.62rem">Δ −5.7% ok</span></div></div></div>
+        <div class="col-6"><div class="card"><div class="card-body p-3"><div class="tk-eyebrow">$ / verified outcome</div><div class="h2 mb-0">$162</div><div class="text-secondary" style="font-size:.66rem">merged-PR proven</div></div></div></div>
+        <div class="col-6"><div class="card"><div class="card-body p-3"><div class="tk-eyebrow">Margin at SOW</div><div class="h2 mb-0 text-green">93%</div><div class="text-secondary" style="font-size:.66rem">$48k / ~$3.4k</div></div></div></div>
+      </div>
+      <div class="card mt-2"><div class="list-group list-group-flush" style="font-size:.74rem">
+        <div class="list-group-item py-2 d-flex gap-2 align-items-center"><span class="mono">M1</span> Shared contract<span class="badge bg-green-lt mono ms-auto">$0.48k proven</span><span class="badge bg-green-lt">$12k inv ✓</span></div>
+        <div class="list-group-item py-2 d-flex gap-2 align-items-center"><span class="mono">M2</span> Core impl<span class="badge bg-green-lt mono ms-auto">$1.40k</span><span class="badge bg-orange-lt mono">$0.52k rev</span></div>
+        <div class="list-group-item py-2 d-flex gap-2 align-items-center"><span class="mono">M3</span> Integration<span class="badge bg-orange-lt mono ms-auto">$0.18k rev</span></div>
+        <div class="list-group-item py-2 d-flex gap-2 align-items-center"><span class="mono">M4</span> Parity &amp; ship<span class="text-secondary ms-auto" style="font-size:.68rem">final $16k</span></div>
+      </div>
+      <div class="card-footer py-2 text-secondary" style="font-size:.66rem">Every proven dollar traces to a merged PR — the case study quotes this table.</div></div>
+    </div>
+
+    <!-- ═══ NEEDS YOU — one universal queue (Switchboard /api/attention view) ═══ -->
+    <div class="pane" id="p-inbox">
+      <div id="qMobList">
+        <div class="tk-eyebrow mb-1">One queue · every source that needs you</div>
+        <div class="text-secondary mb-2" style="font-size:.74rem">Agent questions, <span class="mono">plan@taikunai.com</span>, decisions — ranked by blast radius. Tap to answer; the source resumes.</div>
+        <div class="d-flex gap-1 mb-2" id="qMobFilters" style="overflow-x:auto"></div>
+        <div id="qMobCards"></div>
+      </div>
+      <div id="qMobDetail" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- bottom tabs -->
+  <div class="tabbar">
+    <button class="tab on" data-go="p-overview"><i class="ti ti-layout-dashboard"></i>Overview</button>
+    <button class="tab" data-go="p-shape"><i class="ti ti-file-text"></i>Scope<span class="tbadge" id="tbBrief">3</span></button>
+    <button class="tab" data-go="p-fleet"><i class="ti ti-server-bolt"></i>Fleet</button>
+    <button class="tab" data-go="p-tally"><i class="ti ti-report-money"></i>Tally</button>
+    <button class="tab" data-go="p-inbox"><i class="ti ti-inbox"></i>Needs you<span class="tbadge" id="tbInbox">1</span></button>
+  </div>
+
+  <!-- work session sheet -->
+  <div class="scrim" id="scrim"></div>
+  <div class="bsheet" id="bsSess"><div class="grab"></div>
+    <div class="d-flex align-items-center gap-2 mb-2">
+      <span class="avatar avatar-xs" id="sAv" style="background:var(--tblr-primary);color:#fff">A</span>
+      <div style="min-width:0"><div class="fw-bold text-truncate" style="font-size:.78rem" id="sT">Atlas · SEN-6</div><div class="text-secondary mono" style="font-size:.62rem" id="sSub">claude-code · sess_7fa1</div></div>
+      <span class="badge bg-red-lt ms-auto" id="sLive">● live</span>
+    </div>
+    <div class="tk-trm" id="sStream"></div>
+    <div class="d-flex gap-1 flex-wrap mt-2">
+      <button class="btn btn-sm btn-outline-secondary" style="font-size:.66rem" data-steer="hold">Hold</button>
+      <button class="btn btn-sm btn-outline-secondary" style="font-size:.66rem" data-steer="approve">Approve merge</button>
+    </div>
+    <div class="d-flex gap-2 mt-2"><input class="form-control form-control-sm" id="steerM" placeholder="Steer — it hears you mid-flight" style="font-size:.72rem"><button class="btn btn-sm btn-primary" id="steerGoM"><i class="ti ti-send"></i></button></div>
+  </div>
+
+  <!-- Found: new-project intake sheet -->
+  <div class="bsheet" id="bsFound"><div class="grab"></div>
+    <div class="d-flex align-items-center mb-1"><b style="font-size:.9rem">New project</b><span class="text-secondary ms-2" style="font-size:.68rem">Found</span></div>
+    <div class="text-secondary mb-2" style="font-size:.72rem">Nothing is claimable until you shape &amp; approve the kickoff record.</div>
+    <label class="form-label" style="font-size:.72rem">Project name</label>
+    <input class="form-control form-control-sm mb-2" id="foundNameM" placeholder="Northwind Energy — SSO &amp; Identity" style="font-size:.78rem">
+    <label class="form-label" style="font-size:.72rem">Purpose · one sentence</label>
+    <input class="form-control form-control-sm mb-2" placeholder="Ship SSO so the pilot can go live." style="font-size:.78rem">
+    <label class="form-label" style="font-size:.72rem">Boundary · what does NOT belong</label>
+    <input class="form-control form-control-sm mb-2" placeholder="Billing, non-pilot tenants." style="font-size:.78rem">
+    <label class="form-label" style="font-size:.72rem">Mode</label>
+    <div class="found-mode2 mb-2" id="foundModeM">
+      <label class="on"><input type="radio" name="modeM" checked class="me-1">Existing product — feature on a live repo</label>
+      <label><input type="radio" name="modeM" class="me-1">Greenfield — new product, new repo</label>
+    </div>
+    <div class="found-drop2 mb-3"><i class="ti ti-file-upload me-1"></i>Drop the transcript — Taikun drafts the Vision from it</div>
+    <button class="btn btn-primary w-100" id="foundCreateM"><i class="ti ti-sparkles me-1"></i>Create &amp; start shaping</button>
+  </div>
+
+  <div class="tk-toast" id="toastM"></div>
+  <div class="homebar"></div>
+</div></div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<div class="hint">Same shell, objects, and receipts as the web app — <b>Tabler + taikun tokens</b>, human gates, versions, waves, sessions, Tally.</div>
+
+<script>
+(function(){
+  var toastEl=document.getElementById('toastM'),tmr=null;
+  function toast(m){ toastEl.textContent=m; toastEl.classList.add('on'); clearTimeout(tmr); tmr=setTimeout(function(){ toastEl.classList.remove('on'); },3200); }
+  function go(p){ document.querySelectorAll('.pane').forEach(function(x){ x.classList.toggle('on',x.id===p); });
+    document.querySelectorAll('.tab').forEach(function(t){ t.classList.toggle('on',t.dataset.go===p); });
+    document.querySelector('.scroll').scrollTop=0;
+    if(p==='p-fleet'&&!window.__dagDoneM){ window.__dagDoneM=true; renderDagM(); } }
+  document.querySelectorAll('[data-go]').forEach(function(b){ b.addEventListener('click',function(){ go(b.dataset.go); }); });
+
+  function refresh(){
+    var inbox=document.querySelectorAll('#p-inbox [data-gate]').length, prd=document.querySelectorAll('#prdGates [data-gate]').length;
+    var tb=document.getElementById('tbInbox'); tb.textContent=inbox; tb.style.display=inbox?'':'none';
+    var pc=document.getElementById('prdCount'); if(pc) pc.textContent=prd?('· '+prd):'· all resolved';
+    var bb=document.getElementById('tbBrief'); var koleft=KO.filter(function(a){return koS[a.id]!=='ok';}).length; bb.textContent=koleft||'✓'; bb.style.display='';
+  }
+  document.querySelectorAll('[data-gate] [data-r]').forEach(function(btn){ btn.addEventListener('click',function(){
+    var it=btn.closest('[data-gate]');
+    it.innerHTML='<div class="d-flex gap-2 align-items-center text-secondary py-1" style="font-size:.74rem"><i class="ti ti-circle-check text-green"></i>'+btn.dataset.r+' · logged</div>';
+    refresh(); koRender(); toast('Decided — receipt logged'); }); });
+
+  var v=7;
+  function bump(why){ v++; document.getElementById('briefVM').textContent='v'+v; document.getElementById('stageM').textContent='brief v'+v;
+    var li=document.createElement('div'); li.className='list-group-item py-2';
+    li.innerHTML='<span class="mono text-secondary me-1">v'+v+'</span>'+why;
+    var vl=document.getElementById('vListM'); vl.insertBefore(li,vl.firstChild); toast('brief v'+v+' — '+why); }
+  var SEC2GATE={'the vision':'vision','architecture':'arch','operating rules':'rules'};
+  document.querySelectorAll('.tk-ed[contenteditable]').forEach(function(el){
+    el.addEventListener('focus',function(){ el._was=el.innerHTML; });
+    el.addEventListener('blur',function(){ if(el._was!==undefined&&el._was!==el.innerHTML){ var g=SEC2GATE[el.dataset.sec];
+      bump('you edited '+(el.dataset.sec||'the brief')+' — plan re-checked');
+      if(g && koS[g]==='ok') koInvalFrom(g); } el._was=undefined; }); });
+  document.getElementById('applyM').addEventListener('click',function(){
+    document.getElementById('dCostM').textContent='$3.7k'; document.getElementById('dDaysM').textContent='~6 days'; document.getElementById('dBufM').textContent='7 days';
+    document.getElementById('ovCostM').textContent='$3.7k'; document.getElementById('ovDaysM').textContent='~6 days'; document.getElementById('ovBufM').textContent='buffer: 7 days';
+    document.getElementById('redlineM').innerHTML='<div class="d-flex gap-2 align-items-center text-green" style="font-size:.75rem"><i class="ti ti-circle-check"></i><b>Applied — v8.</b> ~6d · $3.7k · buffer 7 days</div>';
+    var d=document.getElementById('docM'); d.classList.add('tk-flash'); setTimeout(function(){ d.classList.remove('tk-flash'); },1400);
+    bump('compressed to ~6 days (+$0.3k)'); });
+  document.getElementById('pushBackM').addEventListener('click',function(){
+    document.getElementById('redlineM').innerHTML='<div class="text-secondary" style="font-size:.74rem">Discarded — tell Taikun the real constraint and it re-plans.</div>'; });
+  function say(){ var i=document.getElementById('sayM'); if(!i.value.trim())return; i.value=''; toast('Taikun is drafting that as a redline — Apply lands in the doc'); }
+  document.getElementById('sayGoM').addEventListener('click',say);
+  document.getElementById('sayM').addEventListener('keydown',function(e){ if(e.key==='Enter') say(); });
+
+  var SESS={
+    atlas:{av:'A',bg:'var(--tblr-primary)',live:true,t:'Atlas · SEN-6 — Entra app registration',sub:'claude-code · sess_7fa1 · lease sso/entra',
+      html:'<div class="tm">09:38</div><div class="tl">⏺ claim_next → SEN-6 · lease sso/entra</div><div class="as">Wiring the Entra app registration.</div><div class="tl">⏺ Update(directory/entra.py)</div><div class="ad">  + def resolve_entra_app(tenant_id) -&gt; AppReg:</div><div class="de">  -     raise NotImplementedError</div><div class="tl">⏺ Bash(pytest -q tests/test_entra.py)</div><div class="rs ok">⎿ ✓ 12 passed in 3.2s</div><div class="tl">⏺ Bash(gh pr create …)</div><div class="rs pr">⎿ PR #412 · CI 3/4 green</div><div class="tm">09:41 · now</div>'},
+    codex:{av:'C',bg:'#206bc4',live:false,t:'Codex · DATA-3 — attribute sync',sub:'codex-cli · sess_2be4 · lease directory/sync',
+      html:'<div class="tm">09:36</div><div class="tl">⏺ claim_next → DATA-3</div><div class="tl">⏺ Update(directory/sync.py)</div><div class="ad">  + FIELD_MAP = {"mail": "email"}</div><div class="tl">⏺ Bash(pytest -q)</div><div class="rs ok">⎿ ✓ 8 passed</div><div class="as">Contract matched. Pagination next.</div><div class="tm">09:44 · now</div>'},
+    nova:{av:'N',bg:'#2fb344',live:false,t:'Nova · QA-2 — e2e smoke',sub:'cursor-agent · sess_9c11',
+      html:'<div class="tm">09:39</div><div class="tl">⏺ Bash(npx playwright test signin.spec.ts)</div><div class="rs ok">⎿ ✓ 7 of 7 · matches the prototype</div><div class="as">All paths green. Writing the report.</div><div class="tm">09:47 · now</div>'}
+  };
+  var scrim=document.getElementById('scrim'),sheet=document.getElementById('bsSess');
+  function openS(k){ var d=SESS[k];
+    document.getElementById('sAv').textContent=d.av; document.getElementById('sAv').style.background=d.bg;
+    document.getElementById('sT').textContent=d.t; document.getElementById('sSub').textContent=d.sub;
+    document.getElementById('sLive').style.display=d.live?'':'none';
+    document.getElementById('sStream').innerHTML=d.html;
+    scrim.classList.add('on'); sheet.classList.add('on'); }
+  document.querySelectorAll('[data-sess]').forEach(function(b){ b.addEventListener('click',function(){ openS(b.dataset.sess); }); });
+  scrim.addEventListener('click',function(){ scrim.classList.remove('on'); sheet.classList.remove('on'); });
+  function steer(t,a){ var st=document.getElementById('sStream');
+    st.insertAdjacentHTML('beforeend','<div class="c-you">&gt; '+t+'</div>');
+    setTimeout(function(){ st.insertAdjacentHTML('beforeend','<div class="c-ack">⎿ '+a+'</div>'); },600); }
+  var STEERS={hold:['hold after the current test run','pausing at the next safe boundary'],approve:['approve merge of PR #412 when green','merge queued behind CI · closure gate stamps it']};
+  document.querySelectorAll('[data-steer]').forEach(function(b){ b.addEventListener('click',function(){ var s=STEERS[b.dataset.steer]; steer(s[0],s[1]); }); });
+  document.getElementById('steerGoM').addEventListener('click',function(){ var i=document.getElementById('steerM'); if(i.value.trim()){ steer(i.value.trim(),'acknowledged — adjusting course'); i.value=''; } });
+
+  // ══ kickoff readiness — same invariant as web: 4 doc gates + scope in a rail ══
+  var KO=[{id:'vision',n:'Vision'},{id:'prd',n:'PRD'},{id:'arch',n:'Architecture'},{id:'rules',n:'Operating rules'},{id:'scope',n:'Scope breakdown'}];
+  var koS={vision:'ok',prd:'ok',arch:'now',rules:'wait',scope:'wait'};
+  var curSec='arch';
+  function koFr(){ for(var i=0;i<KO.length;i++){ if(koS[KO[i].id]!=='ok') return i; } return -1; }
+  function koAuthed(){ return koFr()===-1; }
+  function normalize(){ var nf=koFr(); KO.forEach(function(a,i){ if(koS[a.id]!=='ok'&&koS[a.id]!=='stale') koS[a.id]=(i===nf?'now':'wait'); }); }
+  function showSec(id){
+    curSec=id;
+    document.querySelectorAll('.mshape-sec').forEach(function(s){ s.classList.toggle('on', s.id==='msec-'+id); });
+    document.querySelectorAll('#mseg button').forEach(function(b){ b.classList.toggle('on', b.dataset.sec===id); });
+    document.querySelectorAll('#koRows .krow').forEach(function(r){ r.classList.toggle('active', r.dataset.gate===id); });
+  }
+  document.querySelectorAll('#mseg button').forEach(function(b){ b.addEventListener('click',function(){ showSec(b.dataset.sec); }); });
+  function koRender(){
+    var fr=koFr();
+    // rail rows
+    document.getElementById('koRows').innerHTML=KO.map(function(a,i){
+      var s=koS[a.id],cls,node,meta;
+      if(s==='ok'){ cls='done'; node='<i class="ti ti-check"></i>'; meta='Approved'; }
+      else if(i===fr){ cls=(s==='stale')?'stale':'now'; node=(i+1); meta=(s==='stale')?'Superseded':'Approve'; }
+      else if(s==='stale'){ cls='stale'; node='<i class="ti ti-alert-triangle"></i>'; meta='Stale'; }
+      else { cls='blocked'; node='<i class="ti ti-lock" style="font-size:.55rem"></i>'; meta='Locked'; }
+      var loc=a.id==='scope'?' · inline':'';
+      return '<button class="krow '+cls+(a.id===curSec?' active':'')+'" data-gate="'+a.id+'"><span class="rn">'+node+'</span><span class="kt">'+a.n+'</span><span class="km">'+meta+loc+'</span></button>';
+    }).join('');
+    document.querySelectorAll('#koRows .krow').forEach(function(r){ r.addEventListener('click',function(){
+      var id=r.dataset.gate;
+      if(id==='scope'){ if(koFr()>-1&&KO[koFr()].id==='scope') koApprove('scope'); else toast('Approve the four Scope artifacts first — the breakdown releases Wave 1.'); return; }
+      showSec(id);
+    }); });
+    renderSwitch(fr); renderFooters(fr); koSync();
+  }
+  function renderSwitch(fr){
+    ['vision','prd','arch','rules'].forEach(function(id){
+      var b=document.querySelector('#mseg button[data-sec="'+id+'"]'); if(!b) return;
+      var s=koS[id], i=KO.findIndex(function(a){return a.id===id;}), stEl=b.querySelector('.st');
+      b.classList.remove('done','now','stale');
+      if(s==='ok'){ b.classList.add('done'); stEl.innerHTML='<i class="ti ti-check"></i>'; }
+      else if(i===fr){ b.classList.add(s==='stale'?'stale':'now'); stEl.textContent=(i+1); }
+      else if(s==='stale'){ b.classList.add('stale'); stEl.textContent='!'; }
+      else { stEl.innerHTML='<i class="ti ti-lock" style="font-size:.5rem"></i>'; }
+    });
+  }
+  function renderFooters(fr){
+    ['vision','prd','arch','rules'].forEach(function(id){
+      var el=document.querySelector('.mfoot[data-foot="'+id+'"]'); if(!el) return;
+      var s=koS[id], i=KO.findIndex(function(a){return a.id===id;});
+      el.className='mfoot';
+      if(s==='ok'){ el.classList.add('done'); el.innerHTML='<i class="ti ti-circle-check"></i><span>Approved · you</span>'; }
+      else if(i===fr){
+        if(id==='prd' && document.querySelectorAll('#prdGates [data-gate]').length){ el.innerHTML='<i class="ti ti-help-circle" style="color:#f76707"></i><span class="text-secondary">Resolve the open questions above first.</span>'; }
+        else { var stale=s==='stale'; el.innerHTML='<span class="text-secondary flex-fill">'+(stale?'Superseded — re-approve to restore.':'Reviewed? Approve to unlock the next.')+'</span><button class="btn btn-sm btn-primary" data-ko="'+id+'" style="font-size:.68rem;padding:.15rem .55rem">'+(stale?'Re-approve':'Approve')+'</button>'; }
+      }
+      else if(s==='stale'){ el.innerHTML='<i class="ti ti-alert-triangle" style="color:#f76707"></i><span class="text-secondary">Stale — re-approve upstream first.</span>'; }
+      else { el.innerHTML='<i class="ti ti-lock text-secondary"></i><span class="text-secondary">Unlocks after '+KO[i-1].n+'.</span>'; }
+    });
+    document.querySelectorAll('.mfoot [data-ko]').forEach(function(b){ b.addEventListener('click',function(){ koApprove(b.dataset.ko); }); });
+  }
+  function koApprove(id){ koS[id]='ok'; normalize();
+    toast('Approved: '+KO.find(function(a){return a.id===id;}).n+' — recorded'); refresh(); koRender();
+    if(koAuthed()) toast('✓ Build authorized — Wave 1 claimable'); }
+  function koInvalFrom(id){ var idx=KO.findIndex(function(a){return a.id===id;}), hit=[];
+    KO.forEach(function(a,i){ if(i>idx && koS[a.id]==='ok'){ koS[a.id]='stale'; hit.push(a.n); } });
+    normalize(); refresh(); koRender();
+    if(hit.length) toast(KO[idx].n+' revised → '+hit.join(', ')+' stale · build de-authorized'); }
+  function koSync(){ var authed=koAuthed(),fr=koFr(),rem=KO.filter(function(a){return koS[a.id]!=='ok';}).length;
+    var pill=document.getElementById('koPill'),card=document.getElementById('koCard'),vd=document.getElementById('koVerdictM'),rel=document.getElementById('koReleaseM'),kick=document.getElementById('kickM');
+    if(authed){ pill.innerHTML='<i class="ti ti-lock-open me-1"></i>build authorized'; pill.style.background='rgba(47,179,68,.14)'; pill.style.color='#2fb344'; card.style.borderColor='rgba(47,179,68,.5)';
+      vd.innerHTML='All 5 green — claim_next serves Wave 1'; rel.disabled=false;
+      kick.disabled=false; kick.className='btn btn-sm btn-primary'; kick.innerHTML='<i class="ti ti-bolt me-1"></i>Kick off'; }
+    else { pill.innerHTML='<i class="ti ti-lock me-1"></i>build blocked'; pill.style.background='rgba(247,103,7,.12)'; pill.style.color='#f76707'; card.style.borderColor='rgba(247,103,7,.4)';
+      vd.innerHTML=rem+' gate'+(rem>1?'s':'')+' remain — next: <b>'+(fr>-1?KO[fr].n:'')+'</b>'; rel.disabled=true;
+      kick.disabled=false; kick.className='btn btn-sm btn-outline-secondary'; kick.innerHTML='<i class="ti ti-lock me-1"></i>Blocked'; }
+    // overview banner
+    var ic=document.getElementById('ovKoIcon'),ti=document.getElementById('ovKoTitle'),su=document.getElementById('ovKoSub');
+    if(ti){ if(authed){ ic.className='ti ti-lock-open'; ic.style.color='#2fb344'; ti.textContent='Build authorized — 5 of 5 gates'; su.textContent='Wave 1 is claimable. Open Scope →'; }
+      else { ic.className='ti ti-shield-lock'; ic.style.color='#f76707'; ti.textContent='Build blocked — '+(5-rem)+' of 5 gates'; su.textContent='Next: approve '+(fr>-1?KO[fr].n:'')+' in Scope →'; } }
+  }
+  function koRelease(){ if(!koAuthed()) return; go('p-fleet'); document.getElementById('stageM').textContent='build · wave 1 live'; toast('⚡ Wave 1 released — 4 tasks claimable in parallel'); }
+  document.getElementById('koReleaseM').addEventListener('click',koRelease);
+
+  document.getElementById('kickM').addEventListener('click',function(){
+    if(!koAuthed()){ var fr=koFr(); toast('Kickoff blocked — approve '+(fr>-1?KO[fr].n:'the open gate')+' first'); go('p-shape'); if(fr>-1&&KO[fr].id!=='scope') showSec(KO[fr].id); return; }
+    koRelease(); });
+  document.getElementById('digestM').addEventListener('click',function(){
+    document.getElementById('digestOutM').innerHTML='<b>Week of Jul 13.</b> Brief v5→v'+v+'. '+(koAuthed()?'Kickoff complete — build authorized.':'Kickoff incomplete — '+(KO.filter(function(a){return koS[a.id]!=='ok';}).length)+' gates open; no build task claimable.')+' <i>Next: '+(koAuthed()?'release Wave 1':'approve '+KO[koFr()].n)+'.</i>'; });
+
+  // ── Found: new-project intake sheet ──
+  var found=document.getElementById('bsFound');
+  document.getElementById('newProjM').addEventListener('click',function(){ scrim.classList.add('on'); found.classList.add('on'); });
+  scrim.addEventListener('click',function(){ found.classList.remove('on'); });
+  document.querySelectorAll('#foundModeM label').forEach(function(l){ l.addEventListener('click',function(){ document.querySelectorAll('#foundModeM label').forEach(function(x){ x.classList.toggle('on',x===l); }); }); });
+  document.getElementById('foundCreateM').addEventListener('click',function(){
+    var nm=(document.getElementById('foundNameM').value||'New project').trim();
+    scrim.classList.remove('on'); found.classList.remove('on'); go('p-shape'); showSec('vision');
+    var vEl=document.querySelector('#msec-vision .tk-ed'), prev=vEl.innerHTML;
+    vEl.innerHTML='<span class="text-secondary" style="font-style:italic">Taikun is drafting the Vision from your transcript…</span>';
+    toast('Project created: '+nm+' — founding mission in phase shape.');
+    setTimeout(function(){ vEl.innerHTML=prev; toast('Vision drafted — review, then approve to unlock the PRD.'); },1500);
+  });
+
+  // ── the mission DAG — mermaid-rendered, same agent-authored text as web ──
+  var DAG_SRC=[
+    'flowchart LR',
+    '  CON_1["<b>CON-1</b><br/>Draft shared contract"]',
+    '  CON_2["<b>CON-2</b><br/>Version + publish pipeline"]',
+    '  CON_3["<b>CON-3</b><br/>Consumer conformance tests"]',
+    '  SEN_2["<b>SEN-2</b><br/>SAML response handler"]',
+    '  SEN_3["<b>SEN-3</b><br/>Session issuance"]',
+    '  SEN_4["<b>SEN-4</b><br/>Session persistence"]',
+    '  SEN_6["<b>SEN-6</b><br/>Wire Entra app registration"]',
+    '  SEN_8["<b>SEN-8</b><br/>Provisioning hooks"]',
+    '  SEN_9["<b>SEN-9</b><br/>Fallback edge cases"]',
+    '  INT_1["<b>INT-1</b><br/>Portal session integration"]',
+    '  INT_2["<b>INT-2</b><br/>Admin role mapping"]',
+    '  QA_2["<b>QA-2</b><br/>e2e smoke vs prototype"]',
+    '  QA_3["<b>QA-3</b><br/>Cross-board e2e"]',
+    '  SHIP_1["<b>SHIP-1</b><br/>Cutover runbook"]',
+    '  SHIP_2["<b>SHIP-2</b><br/>Go-live + rollback drill"]',
+    '  DATA_3["<b>DATA-3</b><br/>Directory attribute sync"]',
+    '  PAR_1["<b>PAR-1</b><br/>Parity gate vs Helm baseline"]',
+    '  HELM_BASE["<b>HELM-BASE</b><br/>Helm baseline pipeline"]',
+    '  CON_1 --> SEN_2',
+    '  CON_2 --> SEN_3',
+    '  CON_2 --> SEN_4',
+    '  CON_3 --> DATA_3',
+    '  CON_3 --> QA_2',
+    '  SEN_2 --> SEN_6',
+    '  SEN_3 --> SEN_6',
+    '  SEN_4 --> SEN_6',
+    '  SEN_6 --> SEN_8',
+    '  SEN_6 --> SEN_9',
+    '  SEN_6 --> INT_1',
+    '  SEN_6 --> INT_2',
+    '  DATA_3 --> INT_1',
+    '  SEN_8 --> QA_3',
+    '  SEN_9 --> QA_3',
+    '  INT_1 --> QA_3',
+    '  INT_2 --> QA_3',
+    '  QA_3 --> SHIP_1',
+    '  PAR_1 --> SHIP_1',
+    '  HELM_BASE -.-> PAR_1',
+    '',
+    '  classDef doneNode fill:#eaf7ee,stroke:#2fb344,color:#101114',
+    '  classDef doneUnprovenNode fill:#e6f7f1,stroke:#12b886,color:#101114',
+    '  classDef progressNode fill:#eaf1fa,stroke:#206bc4,color:#101114',
+    '  classDef reviewNode fill:#fdf0e7,stroke:#f76707,color:#101114',
+    '  classDef blockedNode fill:#fdecec,stroke:#d63939,color:#101114',
+    '  classDef todoNode fill:#f6f7f9,stroke:#c9ced6,color:#8b95a5',
+    '  classDef externalNode fill:#fbfbfc,stroke:#adb5bd,color:#8b95a5,stroke-dasharray: 4 2',
+    '  class CON_1,CON_2,CON_3,SEN_2,SEN_3,QA_2 doneNode',
+    '  class SEN_4 doneUnprovenNode',
+    '  class DATA_3,PAR_1 progressNode',
+    '  class SEN_6 reviewNode',
+    '  class SEN_8,SEN_9,INT_1,INT_2,QA_3,SHIP_1,SHIP_2 todoNode',
+    '  class HELM_BASE externalNode'
+  ].join('\n');
+
+  var DAG_META={
+    'SEN-6':{sess:'atlas',av:'A',color:'#c0392b',key:true,t:'in review · PR #412 · CI 3/4 — Atlas live'},
+    'DATA-3':{sess:'codex',av:'C',color:'#206bc4',t:'in progress — Codex live'},
+    'QA-2':{t:'done · proven — PR #410 merged'},
+    'SEN-4':{t:'done — UNPROVEN: no merge provenance · decide in Needs you'},
+    'CON-1':{t:'done · proven'},'CON-2':{t:'done · proven'},'CON-3':{t:'done · proven'},
+    'SEN-2':{t:'done · proven'},'SEN-3':{t:'done · proven'},
+    'SEN-8':{t:'not started — waits on SEN-6 · wave 2'},'SEN-9':{t:'not started — waits on SEN-6 · wave 2'},
+    'INT-1':{t:'not started — waits on SEN-6 + DATA-3'},'INT-2':{t:'not started — waits on SEN-6'},
+    'QA-3':{t:'not started — waits on wave 2'},'PAR-1':{t:'in progress — gate, green 11 merges'},
+    'SHIP-1':{t:'not started — waits on QA-3 + PAR-1'},'SHIP-2':{t:'not started — waits on SHIP-1'},
+    'HELM-BASE':{t:'external — tracked, built elsewhere'}
+  };
+  function renderDagM(){
+    var host=document.getElementById('dagHostM'); if(!host) return;
+    if(!window.mermaid){ host.innerHTML='<div class="text-secondary py-3 text-center" style="font-size:.72rem">Map renderer unavailable — reload to retry.</div>'; return; }
+    if(!window.__dagInitM){
+      window.mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme:'neutral',
+        themeVariables:{ fontSize:'12px' },
+        flowchart:{ useMaxWidth:false, htmlLabels:true, curve:'linear', nodeSpacing:20, rankSpacing:38, padding:8, subGraphTitleMargin:{top:4,bottom:8} } });
+      window.__dagInitM=true;
+    }
+    window.mermaid.render('mission-dag-m1', DAG_SRC).then(function(r){
+      host.innerHTML=r.svg; var SVGNS='http://www.w3.org/2000/svg';
+      host.querySelectorAll('.node').forEach(function(nodeEl){
+        var b=nodeEl.querySelector('b'); var id=(b?b.textContent:'').trim();
+        var meta=DAG_META[id]||{};
+        nodeEl.addEventListener('click',function(e){ e.preventDefault();
+          if(meta.sess){ openS(meta.sess); } else { toast(id+' — '+(meta.t||'waits on its dependencies')); } });
+        var rectEl=nodeEl.querySelector('rect'); if(!rectEl) return; var bb=rectEl.getBBox();
+        if(meta.key){ var ring=document.createElementNS(SVGNS,'rect');
+          ring.setAttribute('x',bb.x-4); ring.setAttribute('y',bb.y-4); ring.setAttribute('width',bb.width+8); ring.setAttribute('height',bb.height+8);
+          ring.setAttribute('rx',11); ring.setAttribute('fill','none'); ring.setAttribute('stroke','#ae3ec9'); ring.setAttribute('stroke-width','1.5'); ring.setAttribute('stroke-dasharray','3 3');
+          nodeEl.insertBefore(ring,nodeEl.firstChild); }
+        if(meta.sess){ var c=document.createElementNS(SVGNS,'circle');
+          c.setAttribute('cx',bb.x+bb.width-2); c.setAttribute('cy',bb.y+2); c.setAttribute('r',7);
+          c.setAttribute('fill',meta.color); c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','1.5');
+          var tx=document.createElementNS(SVGNS,'text');
+          tx.setAttribute('x',bb.x+bb.width-2); tx.setAttribute('y',bb.y+5); tx.setAttribute('text-anchor','middle');
+          tx.setAttribute('fill','#fff'); tx.setAttribute('font-size','8'); tx.setAttribute('font-weight','700'); tx.textContent=meta.av;
+          nodeEl.appendChild(c); nodeEl.appendChild(tx); }
+      });
+    }).catch(function(e){ host.innerHTML='<pre style="font-size:.6rem;white-space:pre-wrap"></pre>'; host.querySelector('pre').textContent=DAG_SRC; });
+  }
+
+  refresh(); koRender(); showSec('arch');
+  // ══ Needs-you universal queue (mobile) — Switchboard /api/attention view ══
+  var MQS=[
+    {id:'apr_7f21',src:'agent',from:'atlas · claude-code',task:'SEN-6',title:'Wire Entra app registration',av:'A',color:'#c0392b',blast:5,age:'6m',
+     story:'As a pilot operator, I sign in with my Entra account so I never touch a separate Okta password.',
+     q:'To resolve Entra tokens I can add the msal library (one new dependency), or reuse the vault client already wired in directory/entra.py. Which?',
+     did:[['#2fb344','claim_next → SEN-6 · lease sso/entra'],['#2fb344','SAML handler + session issuance merged'],['#f76707','stopped: two approaches, one adds a dependency']],
+     opts:[['reuse','Reuse the vault client','recommended'],['msal','Add msal','adds a dependency']],def:'reuse'},
+    {id:'inb_318',src:'email',from:'plan@taikunai.com',task:'SHIP-1',title:'Cutover runbook',av:'@',color:'#4299e1',blast:2,age:'22m',
+     story:'As the pilot lead, go-live only happens in an approved change window.',
+     q:'Northwind IT moved the cutover window to Sat 02:00–04:00. Shift SHIP-1/SHIP-2 dates to match?',
+     did:[['#4299e1','inbound email triaged from it-ops@northwind.example']],
+     opts:[['apply','Apply the date shift','recommended'],['keep','Keep current dates','']],def:'apply'},
+    {id:'apr_2be4',src:'agent',from:'codex · codex-cli',task:'DATA-3',title:'Directory attribute sync',av:'C',color:'#206bc4',blast:2,age:'12m',
+     story:'As an admin, users are provisioned automatically from our directory.',
+     q:'The contract needs well_id, but the directory has three candidate fields. Which maps to it?',
+     did:[['#2fb344','mapped mail→email, displayName→name'],['#f76707','stopped: no obvious source for the well-site id']],
+     opts:[['employeeId','employeeId','recommended · contract v1'],['extensionAttribute3','extensionAttribute3','custom']],def:'employeeId'},
+    {id:'dec_12',src:'decision',from:'plan decision register',task:'SHIP-1',title:'SAML cert rotation timing',av:'?',color:'#f76707',blast:1,age:'1h',
+     story:'As a pilot operator, sign-in never breaks mid-pilot because a cert rotated at a bad time.',
+     q:'Rotate the SAML cert during the pilot or after? Recommended: after — the Okta fallback covers the window.',
+     did:[['#8b95a5','cert expires in 40 days; the pilot ends in 21']],
+     opts:[['after','After the pilot','recommended'],['during','During the pilot','riskier']],def:'after'},
+    {id:'apr_9c11',src:'agent',from:'orion · cursor-agent',task:'SEN-9',title:'Fallback edge cases',av:'O',color:'#ae3ec9',blast:1,age:'3m',
+     story:'As a pilot operator, if Entra is down I still get in via Okta.',
+     q:'What should the Okta-fallback banner say to the operator? The PRD doesn\'t specify the wording.',
+     did:[['#f76707','stopped: prototype shows a banner but the PRD gives no copy']],
+     opts:null,def:null}
+  ];
+  var MSRC={agent:['#c0392b','ti-robot','Agent'],email:['#4299e1','ti-mail','plan@taikunai.com'],decision:['#f76707','ti-help-circle','Decision']};
+  var mqF='all';
+  function mqMatch(x){ return mqF==='all'||x.src===mqF; }
+  function mqList(){
+    var fw=document.getElementById('qMobFilters');
+    var counts={all:MQS.length}; Object.keys(MSRC).forEach(function(k){ counts[k]=MQS.filter(function(x){return x.src===k;}).length; });
+    var chips=[['all','ti-inbox','All']].concat(Object.keys(MSRC).map(function(k){return [k,MSRC[k][1],MSRC[k][2]];}));
+    fw.innerHTML=chips.map(function(c){ return '<button class="btn btn-sm '+(mqF===c[0]?'btn-primary':'btn-outline-secondary')+'" data-mqf="'+c[0]+'" style="white-space:nowrap;font-size:.7rem"><i class="ti '+c[1]+' me-1"></i>'+c[2]+' '+(counts[c[0]]||0)+'</button>'; }).join('');
+    fw.querySelectorAll('[data-mqf]').forEach(function(b){ b.addEventListener('click',function(){ mqF=b.dataset.mqf; mqList(); }); });
+    var cards=document.getElementById('qMobCards'); var shown=MQS.filter(mqMatch);
+    if(!shown.length){ cards.innerHTML='<div class="text-secondary text-center py-5" style="font-size:.8rem"><i class="ti ti-checks" style="font-size:1.6rem"></i><div class="mt-2">Queue is clear.</div></div>'; return; }
+    cards.innerHTML=shown.map(function(x){ var s=MSRC[x.src];
+      return '<div class="card mb-2" data-mq="'+x.id+'"><div class="card-body p-2">'
+        +'<div class="d-flex align-items-center gap-2 mb-1"><span class="avatar avatar-xs" style="background:'+x.color+';color:#fff;width:1.4rem;height:1.4rem;font-size:.7rem">'+x.av+'</span>'
+        +'<span class="mono text-secondary" style="font-size:.72rem">'+x.task+'</span>'
+        +'<span class="sdot" style="background:'+s[0]+'"></span>'
+        +'<span class="ms-auto mono" style="font-size:.66rem;color:'+(x.blast>=3?'#d63939':'#8b95a5')+'">blocks '+x.blast+'</span></div>'
+        +'<div style="font-size:.8rem;font-weight:600;line-height:1.3">'+x.q+'</div>'
+        +'<div class="text-secondary mt-1" style="font-size:.68rem">'+s[2]+' · '+x.age+' ago</div></div></div>'; }).join('');
+    cards.querySelectorAll('[data-mq]').forEach(function(c){ c.addEventListener('click',function(){ mqOpen(c.dataset.mq); }); });
+  }
+  function mqOpen(id){
+    var x=MQS.find(function(q){return q.id===id;}); if(!x) return; var s=MSRC[x.src];
+    document.getElementById('qMobList').style.display='none';
+    var d=document.getElementById('qMobDetail'); d.style.display='';
+    var did=x.did.map(function(r){return '<div class="d-flex gap-2 align-items-start" style="font-size:.76rem;padding:.1rem 0"><span class="sdot mt-1" style="background:'+r[0]+'"></span><span class="text-secondary">'+r[1]+'</span></div>';}).join('');
+    var ans=x.opts?x.opts.map(function(o){var isD=o[0]===x.def;return '<button class="btn '+(isD?'btn-primary':'btn-outline-secondary')+' w-100 text-start mb-2" data-mans="'+o[0]+'" style="font-size:.8rem"><b>'+o[1]+'</b>'+(o[2]?'<span class="text-secondary d-block" style="font-size:.68rem">'+o[2]+(isD?' · default':'')+'</span>':'')+'</button>';}).join(''):'<div class="text-secondary mb-2" style="font-size:.74rem">Open question — type the answer below.</div>';
+    d.innerHTML='<button class="btn btn-sm btn-ghost-secondary mb-2" id="mqBack"><i class="ti ti-arrow-left me-1"></i>Queue</button>'
+      +'<div class="d-flex align-items-center gap-2 mb-1"><span class="mono text-secondary" style="font-size:.72rem">'+x.id+'</span><span class="stx" style="font-size:.68rem"><span class="sdot" style="background:'+s[0]+'"></span>'+s[2]+'</span></div>'
+      +'<div class="d-flex align-items-baseline gap-2 mb-1"><span class="mono" style="font-size:1.1rem;font-weight:700">'+x.task+'</span><span style="font-size:.85rem">'+x.title+'</span></div>'
+      +'<div class="text-secondary mb-2" style="font-size:.7rem">from '+x.from+'</div>'
+      +'<div class="tk-eyebrow mb-1">User story</div><div style="border-left:3px solid var(--tblr-primary);padding:.3rem .6rem;background:rgba(192,57,43,.04);border-radius:.3rem;font-size:.8rem" class="mb-2">'+x.story+'</div>'
+      +'<div style="font-size:.98rem;font-weight:600;line-height:1.35" class="mb-2">'+x.q+'</div>'
+      +'<div class="tk-eyebrow mb-1">What it\'s done so far</div><div class="mb-2">'+did+'</div>'
+      +'<div class="bg-azure-lt rounded-3 p-2 mb-2 d-flex gap-2" style="font-size:.7rem"><i class="ti ti-snowflake"></i><span class="text-secondary">Frozen at gate time — the effect can\'t drift.</span></div>'
+      +'<div class="tk-eyebrow mb-1">Your answer</div>'+ans
+      +'<div class="d-flex gap-2 mt-1"><input class="form-control form-control-sm" id="mqReply" placeholder="'+(x.opts?'…or reply in words':'Type your answer')+'" style="font-size:.8rem"><button class="btn btn-sm btn-primary" id="mqSend"><i class="ti ti-send"></i></button></div>';
+    document.getElementById('mqBack').addEventListener('click',mqClose);
+    d.querySelectorAll('[data-mans]').forEach(function(b){ b.addEventListener('click',function(){ mqAnswer(x,b.dataset.mans); }); });
+    var send=document.getElementById('mqSend'),rin=document.getElementById('mqReply');
+    send.addEventListener('click',function(){ if(rin.value.trim()) mqAnswer(x,rin.value.trim()); });
+    rin.addEventListener('keydown',function(e){ if(e.key==='Enter'&&rin.value.trim()) mqAnswer(x,rin.value.trim()); });
+  }
+  function mqClose(){ document.getElementById('qMobDetail').style.display='none'; document.getElementById('qMobList').style.display=''; }
+  function mqAnswer(x,ans){   // → POST /api/attention/{id}/decide
+    MQS=MQS.filter(function(q){return q.id!==x.id;});
+    var tb=document.getElementById('tbInbox'); if(tb){ if(MQS.length) tb.textContent=MQS.length; else tb.style.display='none'; }
+    mqClose(); mqList();
+    toast(x.task+' decided → "'+ans+'" — '+x.from.split(' · ')[0]+' resumes');
+  }
+  document.getElementById('tbInbox').textContent=MQS.length;
+  mqList();
+
+})();
+</script>
+</body>
+</html>

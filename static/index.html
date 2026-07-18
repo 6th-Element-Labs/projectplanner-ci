@@ -27,6 +27,7 @@
     <!-- taikun-ui: brand + polish layer over Tabler (white canvas, soft cards, refined tabs/modal).
          Loaded after taikun-tabler.css?v=23 so it wins. -->
     <link href="taikun-ui.css?v=23" rel="stylesheet"/>
+    <link href="taikun-scope.css?v=1" rel="stylesheet"/>
     <style>
       .epic-head{cursor:pointer}
       .epic-head .epic-chev{transition:transform .15s ease}
@@ -218,6 +219,8 @@
                     </div>
                     <ul class="navbar-nav pt-lg-1" id="main-nav" role="tablist">
                         <li class="nav-item"><a class="nav-link active" id="toptab-overview" data-bs-toggle="tab" href="#tab-exec" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Overview</span></a></li>
+                        <!-- UI-28: Scope sits above Plan — scope the work, then plan it. Advisory slice. -->
+                        <li class="nav-item"><a class="nav-link" id="toptab-scope" data-bs-toggle="tab" href="#tab-scope" role="tab"><span class="nav-link-icon"><i class="ti ti-file-text"></i></span><span class="nav-link-title">Scope</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-plan" data-bs-toggle="tab" href="#tab-plan-hub" role="tab"><span class="nav-link-icon"><i class="ti ti-layout-kanban"></i></span><span class="nav-link-title">Plan</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-mission" data-bs-toggle="tab" href="#tab-mission" role="tab"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverable</span></a></li>
                         <li class="nav-item"><a class="nav-link" id="toptab-fleet" data-bs-toggle="tab" href="#tab-fleet" role="tab"><span class="nav-link-icon"><i class="ti ti-server-bolt"></i></span><span class="nav-link-title">Fleet</span></a></li>
@@ -285,6 +288,74 @@
 
                         <!-- PLAN — one dataset, four views. Board / List / Timeline / Milestones
                              switch via the segmented sub-nav instead of four separate top tabs. -->
+
+                        <!-- UI-28 slice 1: SCOPE — the gated kickoff ladder, ADVISORY (see js/scope.js).
+                             Sits above Plan in the nav: scope the work, then plan it. -->
+                        <div class="tab-pane" id="tab-scope" role="tabpanel">
+                            <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
+                                <div>
+                                    <h2 class="page-title m-0"><i class="ti ti-file-text me-2"></i>Scope</h2>
+                                    <div class="text-secondary small">Vision → PRD → Architecture → Operating rules → Scope breakdown. Approving one unlocks the next.</div>
+                                </div>
+                                <div class="ms-auto text-secondary small"><i class="ti ti-flask me-1"></i>Approvals are recorded on the project (shared, attributed). Enforcement follows PM_KICKOFF_ENFORCE — the verdict card below shows this deployment's posture. <a href="#" id="scope-refresh" class="ms-1">refresh</a></div>
+                            </div>
+                            <div id="scope-flash" class="alert alert-info py-2 px-3 d-none" role="status"></div>
+                            <div class="row row-cards">
+                                <div class="col-lg-8">
+                                    <div class="card">
+                                        <div class="card-header py-2">
+                                            <div class="scope-switch" id="scope-switch">
+                                                <button type="button" data-sec="vision"><span class="st">1</span>Vision</button>
+                                                <button type="button" data-sec="prd"><span class="st">2</span>PRD</button>
+                                                <button type="button" data-sec="arch"><span class="st">3</span>Architecture</button>
+                                                <button type="button" data-sec="rules"><span class="st">4</span>Operating rules</button>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="scope-sec on" id="scope-sec-vision">
+                                                <div class="tk-eyebrow mb-2">Thesis · user · why-now · non-goals · success metrics</div>
+                                                <p class="mb-2">Write the one-page point of view this project exists to prove: who it serves, why now, what success measurably looks like — and what this board will <em>not</em> do.</p>
+                                                <p class="text-secondary mb-0">Draft it here or paste from the discovery call; Ask Taikun can assemble a first cut from the intake corpus.</p>
+                                                <div class="scope-foot" data-foot="vision"></div>
+                                            </div>
+                                            <div class="scope-sec" id="scope-sec-prd">
+                                                <div class="tk-eyebrow mb-2">In / out of scope · journeys · requirements · open questions</div>
+                                                <p class="mb-2">The PRD closes the silent unknowns: every journey named, every requirement testable, every open question either answered or explicitly carried as a decision.</p>
+                                                <p class="text-secondary mb-0">Open questions belong in Inbox → Decisions with an owner and a needed-by date.</p>
+                                                <div class="scope-foot" data-foot="prd"></div>
+                                            </div>
+                                            <div class="scope-sec" id="scope-sec-arch">
+                                                <div class="tk-eyebrow mb-2">Components · data model · trust boundaries · SHIPPED / THIN / NEW</div>
+                                                <p class="mb-2">One page an agent can execute against. The reuse map is the point: name what is <strong>SHIPPED</strong> (reuse as-is), <strong>THIN</strong> (extend), and <strong>NEW</strong> — and challenge every NEW.</p>
+                                                <p class="text-secondary mb-0">"Don't invent engines" starts here, verified against the live repo.</p>
+                                                <div class="scope-foot" data-foot="arch"></div>
+                                            </div>
+                                            <div class="scope-sec" id="scope-sec-rules">
+                                                <div class="tk-eyebrow mb-2">Branching · definition of done · file/lane ownership · test &amp; CI policy</div>
+                                                <p class="mb-2">The working agreement every session inherits: lease boundaries per lane, done-means-merged with green CI, and the standing prohibitions.</p>
+                                                <p class="text-secondary mb-0">Injected into agent context via <code>get_working_agreement</code> once enforcement lands.</p>
+                                                <div class="scope-foot" data-foot="rules"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-lg-4">
+                                    <div class="card mb-3">
+                                        <div class="card-header py-2"><h3 class="card-title"><i class="ti ti-ladder me-2"></i>Kickoff readiness</h3></div>
+                                        <div class="card-body py-2 scope-rail" id="scope-rail"></div>
+                                        <div class="card-footer py-2 small" id="scope-gate-row"></div>
+                                    </div>
+                                    <div class="scope-verdict" id="scope-verdict">
+                                        <i id="scope-verdict-icon" class="ti ti-shield-lock" style="font-size:1.25rem;color:#f76707"></i>
+                                        <div>
+                                            <div class="fw-bold" id="scope-verdict-title">Build authorization: blocked (advisory)</div>
+                                            <div class="text-secondary small" id="scope-verdict-sub">Loading…</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="tab-pane" id="tab-plan-hub" role="tabpanel">
                             <ul class="nav nav-pills tk-subnav mt-3 mb-1" role="tablist">
                                 <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#tab-epics" role="tab"><i class="ti ti-list-check me-1"></i>Epics</a></li>
@@ -343,13 +414,26 @@
                              open decisions and risks, together instead of three separate tabs. -->
                         <div class="tab-pane" id="tab-inbox-hub" role="tabpanel">
                             <ul class="nav nav-pills tk-subnav mt-3 mb-1" role="tablist">
-                                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-checklist me-1"></i>Action Queue</a></li>
+                                <!-- UI-29: Needs you — the universal attention queue, first and default -->
+                                <li class="nav-item" role="presentation"><a class="nav-link active" data-bs-toggle="tab" href="#tab-needs" role="tab"><i class="ti ti-hand-stop me-1"></i>Needs you <span id="needs-count" class="tk-mono ms-1 text-secondary"></span></a></li>
+                                <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-inbox" role="tab"><i class="ti ti-checklist me-1"></i>Action Queue</a></li>
                                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-decisions" role="tab"><i class="ti ti-help-circle me-1"></i>Decisions</a></li>
                                 <li class="nav-item" role="presentation"><a class="nav-link" data-bs-toggle="tab" href="#tab-risks" role="tab"><i class="ti ti-alert-triangle me-1"></i>Risks</a></li>
                             </ul>
                             <div class="tab-content">
+                                <!-- UI-29: Needs you — GET /api/attention; decides route to the owning stores -->
+                                <div class="tab-pane active show" id="tab-needs" role="tabpanel">
+                                    <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-2">
+                                        <div class="text-secondary small">One queue, every source that needs a human — unacked agent messages and pending inbound, ranked. Answer here; the source resumes.</div>
+                                        <div class="ms-auto btn-list" id="needs-filters"></div>
+                                    </div>
+                                    <div class="row g-3">
+                                        <div class="col-lg-4" id="needs-list"></div>
+                                        <div class="col-lg-8"><div class="card"><div class="card-body" id="needs-detail"></div></div></div>
+                                    </div>
+                                </div>
                                 <!-- Action Queue (Live Inbox: email-triaged updates awaiting review) -->
-                                <div class="tab-pane active show" id="tab-inbox" role="tabpanel">
+                                <div class="tab-pane" id="tab-inbox" role="tabpanel">
                                     <div class="d-flex align-items-center flex-wrap gap-2 mt-3 mb-3">
                                         <div>
                                             <h3 class="m-0"><i class="ti ti-checklist me-2"></i>Action Queue</h3>
@@ -742,6 +826,8 @@
         </div>
     </div>
 
+    <!-- fonts-ready flag (the opening tag was lost in a refactor — the IIFE rendered as page text) -->
+    <script>
       (function () {
         if (document.fonts && document.fonts.ready) {
           document.fonts.ready.then(function () { document.documentElement.classList.add('fonts-ready'); });
@@ -809,6 +895,8 @@
     <script src="js/proof-console.js?v=1"></script>
     <script src="js/project-admin.js?v=1"></script>
     <script src="js/settings.js?v=1"></script>
+    <script src="js/scope.js?v=1"></script>
+    <script src="js/attention.js?v=1"></script>
     <script src="app.js?v=45"></script>
     <script src="taikun-ui.js?v=9"></script>
     <script src="saturation-panel.js?v=1"></script>

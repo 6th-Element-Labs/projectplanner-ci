@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -97,10 +98,16 @@ def _node_label(task_id: str, title: str, state: str, external: bool = False) ->
     t = _clean_title(tid, title)
     if len(t) > 34:
         t = t[:33].rstrip() + "…"
-    head = f"<b>{html.escape(tid, quote=True)}</b>"
+    def _esc(v: str) -> str:
+        # Keep apostrophes literal — mermaid re-escapes &#x27; into visible junk
+        # (seen on real titles like "operator's"). Double quotes still escape,
+        # since the label sits inside a "..." mermaid string.
+        return html.escape(v, quote=False).replace('"', "&quot;")
+
+    head = f"<b>{_esc(tid)}</b>"
     if not t or t.lower() == tid.lower():
         return head
-    return f"{head}<br/>{html.escape(t, quote=True)}"
+    return f"{head}<br/>{_esc(t)}"
 
 
 def build_dependency_graph(
@@ -296,7 +303,11 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
         groups[ws].append(node)
 
     boxed_ids: Set[str] = set()
-    for ws in group_order:
+    # UI-32: flat flowchart LR by default — no workstream bundling; state color
+    # carries the story. PM_MISSION_GRAPH_SUBGRAPHS=1 restores the boxed layout.
+    subgraphs_on = (os.environ.get("PM_MISSION_GRAPH_SUBGRAPHS", "0").strip().lower()
+                    in ("1", "true", "yes"))
+    for ws in (group_order if subgraphs_on else []):
         members = groups[ws]
         if len(members) < 2:
             continue
@@ -322,13 +333,15 @@ def render_mermaid_flowchart(nodes: List[Dict[str, Any]],
             lines.append(f"  {src} --> {dst}")
     lines.extend([
         "",
-        "  classDef doneNode fill:#a3d9b7,stroke:#1e7e34,color:#0b3d1c",
-        "  classDef doneUnprovenNode fill:#a6e3d0,stroke:#12b886,color:#0b3d2e",
-        "  classDef progressNode fill:#8fb8fd,stroke:#0b5ed7,color:#062b63",
-        "  classDef reviewNode fill:#ffe083,stroke:#e0a800,color:#6b4e00",
-        "  classDef blockedNode fill:#f5a3a9,stroke:#c82333,color:#5c161c",
-        "  classDef todoNode fill:#e9ecef,stroke:#6c757d,color:#495057",
-        "  classDef externalNode fill:#f8f9fa,stroke:#adb5bd,color:#6c757d,stroke-dasharray: 4 2",
+        # UI-32: the house palette — soft fills, saturated strokes, near-black
+        # text; waiting work recedes (grey text), live work reads at a glance.
+        "  classDef doneNode fill:#eaf7ee,stroke:#2fb344,color:#101114",
+        "  classDef doneUnprovenNode fill:#e6f7f1,stroke:#12b886,color:#101114",
+        "  classDef progressNode fill:#eaf1fa,stroke:#206bc4,color:#101114",
+        "  classDef reviewNode fill:#fdf0e7,stroke:#f76707,color:#101114",
+        "  classDef blockedNode fill:#fdecec,stroke:#d63939,color:#101114",
+        "  classDef todoNode fill:#f6f7f9,stroke:#c9ced6,color:#8b95a5",
+        "  classDef externalNode fill:#fbfbfc,stroke:#adb5bd,color:#8b95a5,stroke-dasharray: 4 2",
     ])
     by_class: Dict[str, List[str]] = {}
     node_styles: Dict[str, List[str]] = {}   # mid -> extra style props, merged into one line

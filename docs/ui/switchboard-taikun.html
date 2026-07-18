@@ -1,0 +1,1507 @@
+<!DOCTYPE html>
+<!--
+    switchboard-taikun.html — the end-to-end Switchboard, in our own house style.
+
+    Not a Slack clone: this is a page of the REAL app. Same shell as
+    static/index.html (Tabler 1.4.0 pinned + taikun-tabler tokens + taikun-ui
+    polish, brand lockup, navbar-vertical rail, tk-subnav, cmdk), same objects
+    as the backend: missions, the living brief, decisions_store ADRs, the
+    attention model ("Needs you" = human gates), mission_graph waves + keystone,
+    claim_next work sessions, Tally's two-stream ledger, deliverable_closure
+    PASS/WAIVE/HOLD. One mission, end to end: Intake → Brief → Plan → Fleet →
+    Tally → Results. Wireframe: all data is illustrative.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Northwind Energy · SSO &amp; Identity | Taikun Switchboard</title>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
+<style>
+/* ── taikun-tabler.css tokens (inlined verbatim — the single token source) ── */
+:root{
+  --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
+  --tblr-body-bg:#ffffff; --tblr-body-color:#101114; --tblr-secondary:#5b626e;
+  --tblr-border-color:#e2e5ea; --tblr-border-color-translucent:#e2e5ea;
+  --tk-radius-sm:.5rem; --tk-radius:.65rem; --tk-radius-lg:.9rem;
+  --tblr-border-radius:.65rem; --tblr-border-radius-lg:.85rem;
+  --tblr-font-sans-serif:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --tk-header-h:3rem;
+}
+/* ── taikun-ui.css polish §2 — inlined fully (the demo's look comes from this layer) ── */
+body{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; letter-spacing:-.005em; }
+.page-wrapper{ background:var(--tblr-body-bg); }
+.navbar-vertical{ background:var(--tblr-bg-surface); border-right:1px solid var(--tblr-border-color); box-shadow:none; }
+.navbar-vertical .nav-link{ border-radius:.55rem; }
+.navbar-vertical .nav-link-icon{ font-size:1.15rem; margin-inline-end:.6rem; color:var(--tblr-body-color); }
+#main-nav{ width:100%; padding-right:.4rem; }
+#main-nav .nav-link{ display:flex; align-items:center; width:100%; padding-right:.75rem; }
+#main-nav .nav-link .badge{ flex:0 0 auto; }
+#main-nav .nav-link-title{ flex:1; min-width:0; }
+.card{ background:var(--tblr-bg-surface); border:1px solid var(--tblr-border-color); border-radius:.9rem;
+  box-shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08);
+  transition:box-shadow .16s ease, transform .16s ease; }
+.card-sm{ border-radius:.8rem; }
+.card-header{ border-bottom:1px solid var(--tblr-border-color); }
+.card-footer{ border-top:1px solid var(--tblr-border-color); background:transparent; }
+/* refined sticky page-header — white, hairline base, faint shadow (sits below the toolbar) */
+.page-header{
+  position:sticky; top:var(--tk-header-h); z-index:20;
+  background:color-mix(in srgb, var(--tblr-bg-surface) 92%, transparent); backdrop-filter:saturate(180%) blur(8px);
+  border-bottom:1px solid var(--tblr-border-color);
+  box-shadow:0 1px 0 rgba(16,24,40,.02), 0 6px 18px -14px rgba(16,24,40,.35);
+  margin-bottom:0; padding-top:1rem; padding-bottom:1rem; }
+.page-title{ letter-spacing:-.02em; }
+.page-pretitle{ font-size:.67rem; text-transform:uppercase; letter-spacing:.08em; color:var(--tblr-secondary); font-weight:600; }
+.page-body{ padding-top:1.25rem; padding-bottom:2.5rem; }
+.btn{ border-radius:.6rem; font-weight:600; } .btn-sm{ border-radius:.5rem; }
+.btn-primary{ box-shadow:0 1px 2px rgba(var(--tblr-primary-rgb),.35); }
+.btn-primary:hover{ box-shadow:0 2px 8px rgba(var(--tblr-primary-rgb),.30); }
+.avatar{ box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px var(--tblr-border-color); font-weight:600; }
+.list-group-item{ border-color:var(--tblr-border-color); }
+.subheader{ letter-spacing:.05em; }
+.table tbody tr{ transition:background .1s ease; }
+::-webkit-scrollbar{ height:11px; width:11px; }
+::-webkit-scrollbar-thumb{ background:#dfe2e7; border-radius:20px; border:3px solid #fff; }
+::-webkit-scrollbar-thumb:hover{ background:#cdd2da; }
+::-webkit-scrollbar-track{ background:transparent; }
+.tk-toolbar{ background:var(--tblr-bg-surface); border-bottom:1px solid var(--tblr-border-color); min-height:var(--tk-header-h); position:sticky; top:0; z-index:1035; }
+#btn-inbox{ width:2rem; height:2rem; }
+#btn-inbox .badge-notification{ top:3px; right:3px; left:auto; transform:none; width:.5rem; height:.5rem; min-width:0; padding:0; border-radius:50%; font-size:0; border:2px solid var(--tblr-bg-surface); }
+.tk-subnav{ display:flex; gap:.25rem; flex-wrap:nowrap; overflow-x:auto; padding-bottom:.15rem; border-bottom:0; }
+.tk-subnav .nav-link{ white-space:nowrap; font-size:.8125rem; padding:.35rem .8rem; border-radius:.5rem; color:var(--tblr-secondary); border:0; }
+.tk-subnav .nav-link:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); color:var(--tblr-body-color); }
+.tk-subnav .nav-link.active{ background:var(--tblr-primary); color:#fff; }
+.tk-act-item{ cursor:pointer; } .tk-act-item:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+@media (min-width:992px){ .navbar-vertical{ inset-block-start:var(--tk-header-h) !important; } }
+
+/* ── page-local (wireframe interactions; consumes tokens only) ── */
+.mono{ font-family:var(--tblr-font-monospace,ui-monospace,SFMono-Regular,Menlo,monospace); font-variant-numeric:tabular-nums; }
+.tk-eyebrow{ font-size:.67rem; text-transform:uppercase; letter-spacing:.08em; color:var(--tblr-secondary); font-weight:600; }
+.tab-pane{ display:none; } .tab-pane.active{ display:block; }
+/* the living brief */
+.tk-doc p{ font-size:.95rem; line-height:1.65; }
+.tk-cm{ background:rgba(247,103,7,.13); box-shadow:inset 0 -2px 0 rgba(247,103,7,.5); border-radius:2px; cursor:pointer; padding:0 1px; }
+.tk-cm.res{ background:transparent; box-shadow:inset 0 -2px 0 var(--tblr-border-color); }
+.tk-cm:hover{ background:rgba(247,103,7,.22); }
+.tk-ed:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); cursor:text; border-radius:.4rem; }
+.tk-ed:focus{ outline:none; background:var(--tblr-bg-surface-secondary,#f6f7f9); box-shadow:inset 2.5px 0 0 var(--tblr-primary); border-radius:.4rem; }
+.tk-redl s{ color:var(--tblr-secondary); } .tk-redl mark{ background:rgba(47,179,68,.18); border-radius:3px; padding:0 3px; }
+.tk-thread{ position:fixed; z-index:1080; width:min(400px,92vw); display:none; }
+.tk-thread.on{ display:block; }
+.tk-flash{ animation:tkflash 1.4s; } @keyframes tkflash{ 0%{ background:rgba(47,179,68,.16);} 100%{ background:transparent;} }
+/* work session terminal (the agent window — CLI in the browser) */
+.tk-session{ position:fixed; top:0; right:0; bottom:0; width:min(600px,96vw); z-index:1070; background:var(--tblr-bg-surface);
+  border-left:1px solid var(--tblr-border-color); box-shadow:-24px 0 70px -24px rgba(16,24,40,.4); transform:translateX(103%); transition:transform .2s; display:flex; flex-direction:column; }
+.tk-session.on{ transform:none; }
+.tk-trm{ background:#0d0f13; color:#c9ced6; border-radius:.65rem; padding:.8rem 1rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.78rem; line-height:1.75; overflow-x:auto; }
+.tk-trm .tl{ color:#7cc4ff; } .tk-trm .rs{ color:#8b95a5; padding-left:1rem; } .tk-trm .rs.ok{ color:#5fd38a; } .tk-trm .rs.pr{ color:#f5b153; }
+.tk-trm .ad{ color:#5fd38a; } .tk-trm .de{ color:#ff8d84; } .tk-trm .as{ color:#e7ebf1; }
+.tk-trm .tm{ color:#525c6b; font-size:.66rem; } .tk-trm .c-you{ color:#f0d264; margin-top:.4rem; } .tk-trm .c-ack{ color:#5fd38a; padding-left:1rem; }
+/* task panel — asking a finished transcript, briefing a future agent */
+.tp-qa .q{ font-size:.85rem; font-weight:600; margin-top:.65rem; }
+.tp-qa .a{ font-size:.82rem; color:var(--tblr-secondary); border-left:2px solid var(--tblr-border-color); padding-left:.7rem; margin-top:.3rem; }
+.tk-scrim{ position:fixed; inset:0; z-index:1060; background:rgba(20,22,28,.32); display:none; } .tk-scrim.on{ display:block; }
+/* waves */
+.tk-wt{ font-family:ui-monospace,Menlo,monospace; font-size:.72rem; font-weight:600; padding:.15rem .55rem; border-radius:.45rem; background:var(--tblr-bg-surface-secondary,#f6f7f9); color:var(--tblr-secondary); border:1px solid var(--tblr-border-color); }
+.tk-wt.ghost{ opacity:.5; border-style:dashed; background:transparent; }
+/* ⌘K — the real app's cmdk classes */
+#cmdk-backdrop{ position:fixed; inset:0; z-index:1090; background:rgba(20,22,28,.45); display:none; align-items:flex-start; justify-content:center; padding-top:11vh; }
+#cmdk-backdrop.show{ display:flex; }
+.cmdk-box{ width:min(580px,92vw); background:var(--tblr-bg-surface,#fff); border:1px solid var(--tblr-border-color); border-radius:14px; box-shadow:0 24px 64px rgba(0,0,0,.32); overflow:hidden; max-height:72vh; display:flex; flex-direction:column; }
+.cmdk-input{ border:0 !important; border-bottom:1px solid var(--tblr-border-color) !important; border-radius:0; font-size:1.05rem; padding:.85rem 1rem; box-shadow:none !important; }
+.cmdk-list{ overflow-y:auto; padding:.3rem 0; }
+.cmdk-group{ font-size:.67rem; text-transform:uppercase; letter-spacing:.05em; color:var(--tblr-secondary); padding:.5rem .9rem .15rem; }
+.cmdk-item{ display:flex; align-items:center; gap:.6rem; padding:.5rem .9rem; cursor:pointer; font-size:.9rem; color:var(--tblr-body-color); }
+.cmdk-item>i{ font-size:1.05rem; color:var(--tblr-secondary); width:1.2rem; text-align:center; flex:0 0 auto; }
+.cmdk-item .cmdk-meta{ margin-left:auto; color:var(--tblr-secondary); font-size:.75rem; }
+.cmdk-item.active{ background:var(--tblr-primary); color:#fff; } .cmdk-item.active>i,.cmdk-item.active .cmdk-meta{ color:#fff; }
+.cmdk-hint{ border-top:1px solid var(--tblr-border-color); padding:.4rem .9rem; font-size:.72rem; color:var(--tblr-secondary); display:flex; gap:1rem; }
+.cmdk-hint kbd{ background:var(--tblr-bg-surface-secondary,#f6f7f9); border:1px solid var(--tblr-border-color); border-radius:4px; padding:0 .3rem; font-size:.72rem; color:var(--tblr-secondary); }
+.tk-toast{ position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(10px); background:#101114; color:#fff; font-size:.83rem; font-weight:600; padding:.7rem 1.1rem; border-radius:.7rem; box-shadow:0 16px 44px -12px rgba(10,16,28,.55); opacity:0; pointer-events:none; transition:opacity .2s,transform .2s; z-index:1095; max-width:90vw; text-align:center; }
+.tk-toast.on{ opacity:1; transform:translateX(-50%) translateY(0); }
+.tk-stepper{ display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; }
+.tk-step{ display:inline-flex; align-items:center; gap:.4rem; font-size:.78rem; font-weight:600; color:var(--tblr-secondary); }
+.tk-step .dot{ width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font-size:.68rem; border:1.5px solid var(--tblr-border-color); background:var(--tblr-bg-surface); }
+.tk-step.done .dot{ background:rgba(47,179,68,.12); border-color:transparent; color:#2fb344; }
+.tk-step.now .dot{ background:var(--tblr-primary); border-color:var(--tblr-primary); color:#fff; }
+.tk-step.now{ color:var(--tblr-body-color); }
+.tk-step .sep{ width:26px; height:1.5px; background:var(--tblr-border-color); }
+
+/* ── kickoff readiness: a vertical stepper with a connected spine (no badges) ── */
+.ko-wrap{ max-width:720px; }
+.ko-status{ display:flex; align-items:center; gap:.5rem; font-size:.9rem; font-weight:600; margin-top:.35rem; }
+.ko-status .bar{ flex:1; max-width:180px; height:5px; border-radius:99px; background:var(--tblr-border-color); overflow:hidden; }
+.ko-status .bar i{ display:block; height:100%; border-radius:99px; background:var(--tblr-primary); transition:width .3s; }
+.ko-status.ok{ color:#2fb344; } .ko-status.ok .bar i{ background:#2fb344; }
+.ko-step2{ position:relative; display:grid; grid-template-columns:2.2rem 1fr; gap:.85rem; padding:0 0 1.5rem; }
+.ko-step2:last-child{ padding-bottom:0; }
+.ko-step2::before{ content:""; position:absolute; left:1.1rem; top:2.2rem; bottom:-.2rem; width:2px; background:var(--tblr-border-color); transform:translateX(-1px); }
+.ko-step2:last-child::before{ display:none; }
+.ko-step2.done::before{ background:#2fb344; }
+.ko-node{ width:2.2rem; height:2.2rem; border-radius:50%; display:grid; place-items:center; font-weight:700; font-size:.85rem;
+  border:2px solid var(--tblr-border-color); background:var(--tblr-bg-surface); color:var(--tblr-secondary); z-index:1; }
+.ko-step2.done .ko-node{ background:#2fb344; border-color:#2fb344; color:#fff; }
+.ko-step2.now .ko-node{ border-color:var(--tblr-primary); color:var(--tblr-primary); box-shadow:0 0 0 4px rgba(var(--tblr-primary-rgb),.1); }
+.ko-step2.stale .ko-node{ border-color:#f76707; color:#f76707; box-shadow:0 0 0 4px rgba(247,103,7,.1); }
+.ko-hd{ display:flex; align-items:center; gap:.5rem; min-height:2.2rem; flex-wrap:wrap; }
+.ko-hd .nm{ font-weight:650; font-size:1rem; }
+.ko-step2.blocked .ko-hd .nm,.ko-step2.blocked .ko-desc{ color:var(--tblr-secondary); opacity:.75; }
+.ko-meta{ font-size:.8rem; color:var(--tblr-secondary); }
+.ko-meta.stale{ color:#f76707; font-weight:600; }
+.ko-desc{ font-size:.82rem; color:var(--tblr-secondary); margin-top:.15rem; }
+.ko-extra{ margin-top:.55rem; }
+.ko-tags{ display:flex; flex-direction:column; gap:.3rem; margin-top:.4rem; font-size:.8rem; }
+.ko-tag{ display:flex; align-items:center; gap:.5rem; }
+.ko-tag .d{ width:.55rem; height:.55rem; border-radius:50%; flex:0 0 auto; }
+.ko-edit{ font-size:.78rem; margin-left:.35rem; }
+.ko-verdict{ display:flex; align-items:center; gap:1rem; padding:1rem 1.15rem; border-radius:var(--tblr-border-radius-lg);
+  border:1px solid var(--tblr-border-color); background:var(--tblr-bg-surface); }
+.ko-verdict.blocked{ border-color:rgba(247,103,7,.35); background:rgba(247,103,7,.04); }
+.ko-verdict.ok{ border-color:rgba(47,179,68,.4); background:rgba(47,179,68,.05); }
+
+/* ── Shape workspace: section switcher + readiness rail as one surface ── */
+.shape-switch{ display:flex; gap:.2rem; padding:.35rem; background:var(--tblr-bg-surface-secondary,#f6f7f9); border-radius:.6rem; flex-wrap:wrap; }
+.shape-switch button{ display:flex; align-items:center; gap:.4rem; font-size:.82rem; font-weight:600; padding:.4rem .7rem; border-radius:.45rem; color:var(--tblr-secondary); border:0; background:transparent; }
+.shape-switch button:hover{ color:var(--tblr-body-color); }
+.shape-switch button.on{ background:var(--tblr-bg-surface); color:var(--tblr-body-color); box-shadow:0 1px 2px rgba(16,24,40,.08); }
+.shape-switch button .st{ width:1.15rem; height:1.15rem; border-radius:50%; display:grid; place-items:center; font-size:.62rem; border:1.5px solid var(--tblr-border-color); flex:0 0 auto; }
+.shape-switch button.done .st{ background:#2fb344; border-color:#2fb344; color:#fff; }
+.shape-switch button.now .st{ border-color:var(--tblr-primary); color:var(--tblr-primary); }
+.shape-switch button.stale .st{ border-color:#f76707; color:#f76707; }
+.shape-sec{ display:none; } .shape-sec.on{ display:block; }
+.shape-foot{ display:flex; align-items:center; gap:.6rem; padding:.85rem 1.15rem; border-top:1px solid var(--tblr-border-color); font-size:.85rem; }
+.shape-foot.done{ color:#2fb344; } .shape-foot.blocked{ color:var(--tblr-secondary); }
+/* rail rows */
+.rail-step{ display:flex; align-items:center; gap:.6rem; width:100%; text-align:left; padding:.55rem .35rem; border:0; background:transparent; border-radius:.5rem; }
+.rail-step:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.rail-step.active{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.rail-step .rn{ width:1.5rem; height:1.5rem; border-radius:50%; display:grid; place-items:center; font-size:.72rem; font-weight:700; border:2px solid var(--tblr-border-color); color:var(--tblr-secondary); flex:0 0 auto; }
+.rail-step.done .rn{ background:#2fb344; border-color:#2fb344; color:#fff; }
+.rail-step.now .rn{ border-color:var(--tblr-primary); color:var(--tblr-primary); }
+.rail-step.stale .rn{ border-color:#f76707; color:#f76707; }
+.rail-step .rt{ flex:1; min-width:0; font-size:.86rem; font-weight:600; }
+.rail-step.blocked .rt{ color:var(--tblr-secondary); font-weight:500; }
+.rail-step .rm{ font-size:.72rem; color:var(--tblr-secondary); font-weight:400; }
+.tk-dots{ display:flex; flex-direction:column; gap:.3rem; font-size:.84rem; }
+.tk-dots .r{ display:flex; align-items:center; gap:.5rem; } .tk-dots .r .d{ width:.55rem; height:.55rem; border-radius:50%; flex:0 0 auto; }
+/* quiet status — a dot and words, never a pill */
+.sdot{ display:inline-block; width:.55rem; height:.55rem; border-radius:50%; flex:0 0 auto; vertical-align:middle; }
+.sdot.live{ animation:sdpulse 1.8s infinite; }
+@keyframes sdpulse{ 0%{ box-shadow:0 0 0 0 rgba(214,57,57,.4);} 70%{ box-shadow:0 0 0 6px rgba(214,57,57,0);} }
+.stx{ display:inline-flex; align-items:center; gap:.45rem; white-space:nowrap; }
+/* deliverables — master list + cockpit */
+.dl-row{ display:flex; align-items:center; gap:.7rem; width:100%; text-align:left; padding:.8rem 1rem; border:0; background:transparent; border-bottom:1px solid var(--tblr-border-color); }
+.dl-row:last-child{ border-bottom:0; }
+.dl-row:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.dl-row.active{ background:var(--tblr-bg-surface-secondary,#f6f7f9); box-shadow:inset 3px 0 0 var(--tblr-primary); }
+.dl-row .nm{ flex:1; min-width:0; font-weight:600; font-size:.9rem; }
+.dl-row .ms{ font-size:.74rem; color:var(--tblr-secondary); }
+.dl-task{ display:flex; align-items:center; gap:.6rem; padding:.45rem 0; font-size:.86rem; border-top:1px solid var(--tblr-border-color); }
+.dl-task:first-child{ border-top:0; }
+.dl-task .tt{ flex:1; min-width:0; } .dl-task .tm2{ font-size:.76rem; color:var(--tblr-secondary); white-space:nowrap; }
+.dl-next{ display:flex; align-items:flex-start; gap:.7rem; padding:.85rem 1rem; border:1px solid rgba(var(--tblr-primary-rgb),.25); background:rgba(var(--tblr-primary-rgb),.03); border-radius:.7rem; }
+#dl-detail>summary{ cursor:pointer; list-style:none; font-weight:500; color:var(--tblr-secondary); }
+#dl-detail>summary::-webkit-details-marker{ display:none; }
+#dl-detail>summary:hover{ color:var(--tblr-body-color); }
+#dl-detail .chev{ transition:transform .15s ease; display:inline-block; }
+#dl-detail[open]>summary .chev{ transform:rotate(90deg); }
+/* the mission DAG — mermaid-rendered (agents author the flowchart text; this is only the house restyle) */
+.mission-dag-graph{ overflow:auto; min-height:8rem; }
+.mission-dag-graph svg{ max-width:none; height:auto; display:block; margin:0 auto; }
+.mission-dag-graph .node{ cursor:pointer; }
+.mission-dag-graph .node rect{ rx:8px; ry:8px; }
+.mission-dag-graph .nodeLabel{ font-family:var(--tblr-font-sans-serif); font-size:10.5px; color:inherit; line-height:1.3; }
+.mission-dag-graph .nodeLabel b{ font-family:var(--tblr-font-monospace,ui-monospace,Menlo,monospace); font-size:11px; letter-spacing:0; }
+.mission-dag-graph .cluster rect{ fill:transparent !important; stroke:var(--tblr-border-color) !important; rx:12px; ry:12px; }
+.mission-dag-graph .cluster-label .nodeLabel{ font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:#8b95a5; font-weight:600; }
+.mission-dag-graph .flowchart-link{ stroke:#c9ced6 !important; stroke-width:1.5px !important; }
+.mission-dag-graph .marker{ fill:#c2c8d0 !important; stroke:#c2c8d0 !important; }
+.mission-dag-graph .node.dim{ opacity:.28; }
+.dag-legend{ display:flex; gap:1.1rem; flex-wrap:wrap; font-size:.76rem; color:var(--tblr-secondary); }
+.dag-legend .stx{ gap:.35rem; }
+
+/* ── Found: new-project intake overlay ── */
+.found-back{ position:fixed; inset:0; z-index:1085; background:rgba(20,22,28,.5); backdrop-filter:blur(3px); display:none; align-items:flex-start; justify-content:center; padding:6vh 1rem; overflow:auto; }
+.found-back.on{ display:flex; }
+.found-card{ width:min(680px,100%); background:var(--tblr-bg-surface); border-radius:1rem; box-shadow:0 30px 80px -20px rgba(0,0,0,.5); overflow:hidden; }
+.found-drop{ border:1.5px dashed var(--tblr-border-color); border-radius:.7rem; padding:1.1rem; text-align:center; color:var(--tblr-secondary); font-size:.85rem; background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.found-mode{ display:flex; gap:.5rem; } .found-mode label{ flex:1; border:1.5px solid var(--tblr-border-color); border-radius:.6rem; padding:.6rem .8rem; cursor:pointer; font-size:.85rem; }
+.found-mode input{ margin-right:.4rem; } .found-mode label.on{ border-color:var(--tblr-primary); background:rgba(var(--tblr-primary-rgb),.04); }
+.drafting{ display:flex; align-items:center; gap:.5rem; color:var(--tblr-secondary); font-size:.85rem; font-style:italic; }
+.drafting .sp{ width:1rem; height:1rem; border:2px solid var(--tblr-border-color); border-top-color:var(--tblr-primary); border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+/* phones: the rail opens as an overlay from the hamburger (no bootstrap JS here) */
+@media (max-width: 991.98px){
+  aside.navbar-vertical{ position:fixed; inset:auto; top:0; left:0; bottom:0; width:min(300px,86vw); z-index:1085;
+    background:var(--tblr-bg-surface,#fff); border-right:1px solid var(--tblr-border-color);
+    transform:translateX(-104%); transition:transform .2s; overflow-y:auto; }
+  aside.navbar-vertical.on{ transform:none; box-shadow:24px 0 70px -24px rgba(16,24,40,.4); }
+  aside.navbar-vertical .navbar-collapse{ display:block!important; }
+}
+</style>
+</head>
+<body class="layout-fluid">
+<div class="page">
+
+  <!-- ═══ top toolbar — the real app's header, verbatim structure ═══ -->
+  <header class="navbar navbar-expand-md d-print-none tk-toolbar py-1">
+    <div class="container-fluid d-flex align-items-center">
+      <button class="btn btn-sm btn-icon btn-ghost-secondary d-lg-none me-2" id="railTgl" aria-label="Menu"><i class="ti ti-menu-2"></i></button>
+      <h1 class="navbar-brand navbar-brand-autodark pe-0 pe-md-3 me-md-3 mb-0">
+        <a href="#" class="d-flex align-items-center text-decoration-none" aria-label="Taikun Switchboard — home" style="gap:10px">
+          <i class="ti ti-settings-bolt" style="font-size:26px;color:var(--tblr-primary)"></i>
+          <span style="font-size:18px;font-weight:500;letter-spacing:.14em;color:var(--tblr-body-color);line-height:1;white-space:nowrap">TAIKUN<span style="font-weight:400;color:var(--tblr-primary);margin-left:.4em">SWITCHBOARD</span></span>
+        </a>
+      </h1>
+      <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0">
+        <div class="input-icon d-none d-sm-block" style="width:220px">
+          <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+          <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search…  ⌘K" autocomplete="off"/>
+        </div>
+        <button id="btn-inbox" class="btn btn-sm btn-icon btn-ghost-secondary position-relative" type="button" title="Needs you" aria-label="Needs you"><i class="ti ti-bell"></i><span id="inbox-count" class="badge bg-red badge-notification badge-pill">3</span></button>
+        <button id="btn-kickoff" class="btn btn-sm btn-primary" style="width:7.5rem" disabled><i class="ti ti-bolt me-1"></i>Kick off</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══ left rail — navbar-vertical, project switcher on top ═══ -->
+  <aside class="navbar navbar-vertical navbar-expand-lg">
+    <div class="container-fluid">
+      <div class="collapse navbar-collapse" id="sidebar-menu">
+        <div class="px-2 pt-2 pb-1">
+          <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project">
+            <option selected>Northwind Energy — SSO &amp; Identity</option>
+            <option>Meridian Labs — Churn Copilot (1 needs you)</option>
+            <option>Atlas Freight — Rate Portal (shipped)</option>
+          </select>
+        </div>
+        <ul class="navbar-nav pt-lg-1" id="main-nav">
+          <li class="nav-item"><a class="nav-link active" data-tab="tab-overview" href="#"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Overview</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-shape" href="#"><span class="nav-link-icon"><i class="ti ti-file-text"></i></span><span class="nav-link-title">Scope</span><span class="ms-auto small text-secondary" id="nav-kickoff-badge">3 left</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-plan" href="#"><span class="nav-link-icon"><i class="ti ti-layout-kanban"></i></span><span class="nav-link-title">Plan</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-deliv" href="#"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverables</span><span class="ms-auto small text-secondary">3 live</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-tally" href="#"><span class="nav-link-icon"><i class="ti ti-report-money"></i></span><span class="nav-link-title">Tally</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-results" href="#"><span class="nav-link-icon"><i class="ti ti-trophy"></i></span><span class="nav-link-title">Results</span></a></li>
+        </ul>
+        <div class="mt-auto px-2 pb-2">
+          <button id="btn-new-project" class="btn btn-sm btn-outline-secondary w-100 mb-2"><i class="ti ti-folder-plus me-1"></i>New project</button>
+          <div class="d-flex align-items-center px-2 py-1">
+            <span class="avatar avatar-xs me-2" style="background:#101114;color:#fff">S</span>
+            <span class="small text-truncate">steve@taikunai.com</span>
+            <i class="ti ti-dots-vertical ms-auto text-secondary"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="page-wrapper">
+    <div class="tab-content">
+
+          <!-- ═══════════ OVERVIEW — exec summary + pulse ═══════════ -->
+          <div class="tab-pane active" id="tab-overview">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">Northwind Energy · mission M-114 · <span id="stageBadge">Scope · brief v7</span></div>
+                  <h2 class="page-title">SSO &amp; Identity Platform</h2>
+                </div>
+                <div class="col-auto ms-auto">
+                  <div class="tk-stepper" id="ovStepper">
+                    <span class="tk-step done" data-ph="found"><span class="dot"><i class="ti ti-check"></i></span>Found</span><span class="tk-step"><span class="sep"></span></span>
+                    <span class="tk-step now" data-ph="shape"><span class="dot">2</span>Scope <span class="mono" id="ovV">v7</span></span><span class="tk-step"><span class="sep"></span></span>
+                    <span class="tk-step" data-ph="scope"><span class="dot">3</span>Plan</span><span class="tk-step"><span class="sep"></span></span>
+                    <span class="tk-step" data-ph="build"><span class="dot">4</span>Build</span><span class="tk-step"><span class="sep"></span></span>
+                    <span class="tk-step" data-ph="ship"><span class="dot">5</span>Ship</span>
+                  </div>
+                </div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+            <div class="row row-cards">
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Agent cost · est</div><div class="h1 mb-0 mt-1" id="ovCost">$3.4k</div><div class="text-secondary small">median of 14 similar shipped tasks</div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">On autopilot</div><div class="h1 mb-0 mt-1" id="ovDays">~9 days</div><div class="text-secondary small" id="ovBuf">buffer to contract date: 4 days</div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Plan</div><div class="h1 mb-0 mt-1">21 tasks</div><div class="text-secondary small" id="ovWaves">4 milestones · 2 parallel waves</div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">SOW</div><div class="h1 mb-0 mt-1">$48k</div><div class="text-secondary small">fixed · signed by A. Reyes · Jul 13</div></div></div></div>
+            </div>
+            <div class="alert mt-3 d-flex align-items-center" role="alert" id="ovKickoffBanner" style="border-color:rgba(247,103,7,.4);background:rgba(247,103,7,.07)">
+              <i class="ti ti-shield-lock me-2" style="font-size:1.2rem;color:#f76707"></i>
+              <div><strong id="ovKickoffMsg">Build blocked — 3 of 5 kickoff gates approved.</strong> <span class="text-secondary" id="ovKickoffNext">Next: approve the Architecture note. No implementation task can be claimed until the kickoff record is complete.</span></div>
+              <button class="btn btn-sm btn-primary ms-auto" data-goto="tab-shape">Open Scope</button>
+            </div>
+            <div class="card mt-3">
+              <div class="card-header"><h3 class="card-title"><i class="ti ti-activity-heartbeat me-2"></i>Pulse — weekly digest</h3>
+                <div class="card-actions"><button id="digest-gen" class="btn btn-primary btn-sm"><i class="ti ti-sparkles me-1"></i>Generate digest</button></div></div>
+              <div class="card-body" id="digest-latest"><span class="text-secondary">No digest yet — click <strong>Generate digest</strong> for a chief-of-staff brief: what changed, what's slipping, and what to pick up next.</span></div>
+            </div>
+            </div></div>
+          </div>
+
+          <!-- ═══════════ SHAPE — one workspace: author the four artifacts, readiness rail inside it ═══════════ -->
+          <div class="tab-pane" id="tab-shape">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">mission M-114 · <span class="mono">existing-product-feature</span> · phase <span class="mono" id="koPhase">scope</span></div>
+                  <h2 class="page-title">Scope <span class="text-secondary fs-4 fw-normal mono ms-1" id="briefV">v7</span></h2>
+                </div>
+                <div class="col-auto ms-auto">
+                  <div class="ko-status" id="koStatus"><i class="ti ti-lock" style="color:#f76707"></i><span id="koStatusText" style="color:#f76707">Build blocked</span><span class="text-secondary fw-normal" id="koStatusCount">· 3 of 5 gates approved</span><span class="bar"><i id="koBar" style="width:60%"></i></span></div>
+                </div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+            <p class="text-secondary mb-3" style="font-size:.88rem">The kickoff record is four artifacts you author here plus the scope breakdown in Plan. Each is versioned and approved on record — approving one unlocks the next. No build task is claimable until all five are green.</p>
+
+            <div class="row">
+              <div class="col-lg-8">
+                <div class="card tk-doc" id="briefDoc">
+                  <div class="card-header py-2 d-flex align-items-center gap-2">
+                    <div class="shape-switch" id="shapeSwitch">
+                      <button data-sec="vision"><span class="st"></span>Vision</button>
+                      <button data-sec="prd"><span class="st"></span>PRD</button>
+                      <button data-sec="arch"><span class="st"></span>Architecture</button>
+                      <button data-sec="rules"><span class="st"></span>Operating rules</button>
+                    </div>
+                    <span class="ms-auto small text-secondary mono" id="saveState"><i class="ti ti-circle-check text-green me-1"></i>saved</span>
+                  </div>
+
+                  <!-- VISION -->
+                  <div class="shape-sec" id="sec-vision">
+                    <div class="card-body">
+                      <div class="tk-eyebrow mb-2">Thesis · why-now · non-goals</div>
+                      <p class="tk-ed" contenteditable="true" spellcheck="false" data-sec="the vision">This isn't a login problem — it's a <strong>go-live problem</strong>. Pilot operators sign in with <strong>Entra/SAML</strong>, auto-provisioned from the directory, gated on <strong>CI parity</strong> — proven from week one, so the TotalEnergies date holds. <span class="tk-cm res" data-th="okta">Okta stays as a silent fallback.</span></p>
+                      <p class="text-secondary small mb-0"><strong class="text-body">The bet:</strong> prove parity inside the window and Northwind becomes the flagship reference — miss it and this is a stalled pilot. <strong class="text-body">Non-goals:</strong> SSO for non-pilot tenants, SCIM (phase 2).</p>
+                    </div>
+                    <div class="card-body border-top">
+                      <div class="row text-center">
+                        <div class="col-4"><div class="h2 mb-0"><span class="tk-cm" data-th="cost" id="dCost">$3.4k</span></div><div class="tk-eyebrow">agent cost · est</div></div>
+                        <div class="col-4 border-start"><div class="h2 mb-0" id="dDays">~9 days</div><div class="tk-eyebrow">autopilot</div></div>
+                        <div class="col-4 border-start"><div class="h2 mb-0" id="dBuf">4 days</div><div class="tk-eyebrow">buffer to contract</div></div>
+                      </div>
+                      <div class="text-secondary small mt-2 text-center">Priced from <strong>your ledger</strong> — median of 14 similar shipped tasks, each proven with a merged PR.</div>
+                    </div>
+                    <div class="card-body border-top" id="redlineBlock">
+                      <div class="tk-eyebrow mb-2"><i class="ti ti-git-compare me-1"></i>Proposed · from "make it 2 weeks" · re-plan, nothing cut</div>
+                      <div class="tk-redl mb-2"><s>~9 days · $3.4k · 3 waves</s> → <mark>~6 days · $3.7k · 2 waves</mark> · buffer becomes <strong>7 days</strong>.</div>
+                      <div class="d-flex gap-2"><button class="btn btn-sm btn-outline-secondary" id="pushBack">Push back</button><button class="btn btn-sm btn-primary" id="applyBtn"><i class="ti ti-check me-1"></i>Apply → v8</button></div>
+                    </div>
+                    <div class="shape-foot" data-foot="vision"></div>
+                  </div>
+
+                  <!-- PRD -->
+                  <div class="shape-sec" id="sec-prd">
+                    <div class="card-body">
+                      <div class="tk-eyebrow mb-2">In / out of scope · acceptance</div>
+                      <div class="d-flex align-items-start mb-1"><i class="ti ti-circle-check text-green me-2 mt-1"></i><span class="tk-ed" contenteditable="true" spellcheck="false" data-sec="acceptance">≥95% sign-in success · zero manual provisioning · MTTA ≤ 15m</span></div>
+                      <div class="d-flex align-items-start mb-1"><i class="ti ti-circle-check text-green me-2 mt-1"></i><span>CI parity green vs. your Helm baseline · Okta fallback verified</span></div>
+                      <div class="d-flex align-items-start"><i class="ti ti-circle-check text-green me-2 mt-1"></i><span>Every task a merged, tested PR — <strong>done means merged</strong> · UI on <strong>design system v3</strong></span></div>
+                      <div class="mt-2 small text-secondary"><strong>Out of scope:</strong> SCIM provisioning, non-pilot tenants, custom MFA.</div>
+                    </div>
+                    <div class="card-body border-top">
+                      <div class="tk-eyebrow mb-2"><i class="ti ti-help-circle me-1"></i>Open questions — need you <span class="text-secondary fw-normal" id="gateCount">· 2</span></div>
+                      <div id="gateList">
+                        <div class="mb-2" data-gate>
+                          <div class="small"><strong>SCIM provisioning</strong> — mentioned in passing on the call. Adds ~5 tasks and a week.</div>
+                          <div class="d-flex gap-2 mt-1"><button class="btn btn-sm btn-outline-secondary" data-r="SCIM deferred — v1 stays tight, parked for phase 2">Defer</button><button class="btn btn-sm btn-outline-secondary" data-r="SCIM included — +5 tasks, ~1 week; estimate ~$4.3k">Include</button></div>
+                        </div>
+                        <div data-gate>
+                          <div class="small"><strong>Model tier for identity work</strong> — auth code is unforgiving.</div>
+                          <div class="d-flex gap-2 mt-1"><button class="btn btn-sm btn-outline-secondary" data-r="Balanced tier — estimate drops to ~$2.9k">Balanced</button><button class="btn btn-sm btn-outline-secondary" data-r="High-reasoning tier locked for identity work">High</button></div>
+                        </div>
+                      </div>
+                      <div class="small text-secondary mt-2">A PRD with open questions can't be approved — resolve these first. No silent unknowns.</div>
+                    </div>
+                    <div class="shape-foot" data-foot="prd"></div>
+                  </div>
+
+                  <!-- ARCHITECTURE -->
+                  <div class="shape-sec" id="sec-arch">
+                    <div class="card-body">
+                      <div class="tk-eyebrow mb-2">Reuse map · no new engines</div>
+                      <div class="tk-dots mb-2">
+                        <div class="r"><span class="d" style="background:#2fb344"></span><b>Shipped</b> — reuse <span class="mono">claim_next</span>, <span class="mono">mission_graph</span>, <span class="mono">deliverable_closure</span></div>
+                        <div class="r"><span class="d" style="background:#f59f00"></span><b>Thin</b> — extend <span class="mono">Tally</span> two-stream for this deliverable</div>
+                        <div class="r"><span class="d" style="background:#d63939"></span><b>New</b> — none. No new engines invented.</div>
+                      </div>
+                      <div class="tk-eyebrow mb-1 mt-3">Components · data model · trust boundaries</div>
+                      <p class="tk-ed mb-0" contenteditable="true" spellcheck="false" data-sec="architecture" style="font-size:.9rem">Entra app registration → SAML handler → directory sync into the shared contract. Auth boundary at the tenant edge; secrets via the existing vault lease. Phased: contract first, then identity, then parity gate. One page an agent can execute against.</p>
+                    </div>
+                    <div class="shape-foot" data-foot="arch"></div>
+                  </div>
+
+                  <!-- OPERATING RULES -->
+                  <div class="shape-sec" id="sec-rules">
+                    <div class="card-body">
+                      <div class="tk-eyebrow mb-2">Working agreement · lane boundaries</div>
+                      <p class="tk-ed mb-2" contenteditable="true" spellcheck="false" data-sec="operating rules" style="font-size:.9rem">Branch per task off <span class="mono">main</span>; DoD = merged PR with green CI + closure gate. Read the Architecture before inventing anything. Test command <span class="mono">pytest -q</span>; every change ships a test.</p>
+                      <div class="tk-eyebrow mb-1 mt-3">File / lane ownership — leases</div>
+                      <div class="tk-dots">
+                        <div class="r"><span class="d" style="background:#206bc4"></span><span class="mono">sso/entra</span> — identity lane</div>
+                        <div class="r"><span class="d" style="background:#ae3ec9"></span><span class="mono">directory/sync</span> — data lane</div>
+                      </div>
+                      <div class="small text-secondary mt-2">Injected into every agent via <span class="mono">get_working_agreement</span>.</div>
+                    </div>
+                    <div class="shape-foot" data-foot="rules"></div>
+                  </div>
+
+                  <div class="card-footer d-flex gap-2 align-items-center">
+                    <i class="ti ti-sparkles" style="color:var(--tblr-primary)"></i>
+                    <input class="form-control form-control-sm border-0 shadow-none" id="sayIn" placeholder='Change anything — "drop the fallback", "why $3.4k?", "make it 2 weeks"…'>
+                    <button class="btn btn-sm btn-primary" id="sayGo"><i class="ti ti-send"></i></button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- readiness rail -->
+              <div class="col-lg-4">
+                <div class="card mb-3">
+                  <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-rocket me-2"></i>Kickoff readiness</h3></div>
+                  <div class="card-body py-2" id="koLadder"><!-- rail rows injected --></div>
+                  <div class="ko-verdict blocked" id="koVerdictCard" style="border-radius:0;border-left:0;border-right:0;border-bottom:0">
+                    <i class="ti ti-shield-lock" id="koVerdictIcon" style="font-size:1.3rem;color:#f76707"></i>
+                    <div class="flex-fill">
+                      <div class="fw-bold small" id="koVerdictTitle">Build blocked</div>
+                      <div class="text-secondary" style="font-size:.78rem" id="koVerdictSub">2 gates remain. <code>claim_next</code> excludes build tasks.</div>
+                    </div>
+                  </div>
+                  <div class="card-footer py-2"><button class="btn btn-primary w-100" id="koKick" disabled><i class="ti ti-bolt me-1"></i>Release Wave 1</button></div>
+                </div>
+                <div class="card mb-3">
+                  <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-versions me-2"></i>Versions</h3></div>
+                  <div class="list-group list-group-flush" id="vList" style="max-height:220px;overflow:auto">
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v7</span>Tier call raised · high-reasoning proposed</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v6</span>Re-priced from ledger — $3.6k → $3.4k</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v5</span>"prove parity early" → gate into wave 1</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v4</span>Direction: Parity-First · ADR recorded</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v2</span>"Okta must stay" → fallback +1 task</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v1</span>Assembled from discovery-call.vtt</div>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-gavel me-2"></i>Decisions <span class="text-secondary small fw-normal">· ADR log</span></h3></div>
+                  <div class="list-group list-group-flush">
+                    <div class="list-group-item py-2 small"><span class="mono text-secondary me-2">ADR-3</span>Parity-First over 2 alternatives</div>
+                    <div class="list-group-item py-2 small"><span class="mono text-secondary me-2">ADR-2</span>Okta kept as silent fallback</div>
+                    <div class="list-group-item py-2 small"><span class="mono text-secondary me-2">ADR-1</span>SCIM out of v1 scope</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            </div></div>
+          </div>
+
+          <!-- ═══════════ PLAN — milestones · waves · board ═══════════ -->
+          <div class="tab-pane" id="tab-plan">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">mission_graph · 21 tasks · <span class="mono">propose_deliverable_breakdown</span></div>
+                  <h2 class="page-title">Plan</h2>
+                </div>
+                <div class="col-auto ms-auto">
+                  <ul class="nav nav-pills tk-subnav">
+                    <li class="nav-item"><a class="nav-link active" href="#"><i class="ti ti-flag me-1"></i>Milestones</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#"><i class="ti ti-layout-kanban me-1"></i>Board</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#"><i class="ti ti-timeline-event me-1"></i>Timeline</a></li>
+                  </ul>
+                </div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+            <div class="ko-verdict blocked mb-3" id="scopeGate">
+              <i class="ti ti-list-check" style="font-size:1.5rem;color:#f76707"></i>
+              <div class="flex-fill">
+                <div class="fw-bold" id="scopeGateTitle">Scope breakdown — the fifth kickoff gate</div>
+                <div class="text-secondary small" id="scopeGateSub">Approving this proposed graph materializes <strong>Wave 1 (4 tasks)</strong> as claimable; Wave 2 stays blocked on deps. Approve the four Scope artifacts first.</div>
+              </div>
+              <button class="btn btn-primary" id="scopeApprove" disabled><i class="ti ti-shield-check me-1"></i>Approve breakdown</button>
+            </div>
+            <div class="card">
+              <div class="list-group list-group-flush">
+                <button class="list-group-item list-group-item-action d-flex align-items-center gap-2" data-open-dl="m1"><span class="mono text-secondary">M1</span><strong>Define shared contract</strong><span class="text-secondary small">· 3 tasks</span><span class="stx small ms-auto text-secondary"><span class="sdot" style="background:#2fb344"></span>closed · $12k released</span></button>
+                <button class="list-group-item list-group-item-action d-flex align-items-center gap-2" data-open-dl="m2"><span class="mono text-secondary">M2</span><strong>Build core implementation</strong><span class="text-secondary small">· 9 tasks</span><span class="stx small ms-auto text-secondary"><span class="sdot" style="background:#206bc4"></span>building</span></button>
+                <button class="list-group-item list-group-item-action d-flex align-items-center gap-2" data-open-dl="m3"><span class="mono text-secondary">M3</span><strong>Integrate cross-board</strong><span class="text-secondary small">· 5 tasks</span><span class="stx small ms-auto text-secondary"><span class="sdot" style="background:#8b95a5"></span>wave 2</span></button>
+                <button class="list-group-item list-group-item-action d-flex align-items-center gap-2" data-open-dl="m4"><span class="mono text-secondary">M4</span><strong>Prove parity &amp; ship</strong><span class="text-secondary small">· 4 tasks</span><span class="stx small ms-auto text-secondary"><span class="sdot" style="background:#f76707"></span>gated on parity</span></button>
+              </div>
+              <div class="card-footer py-2 small text-secondary">Each milestone is a deliverable — click through for its end state, tasks, and closure.</div>
+            </div>
+            <div class="card mt-3">
+              <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-wave-sine me-2"></i>Waves <span class="text-secondary small fw-normal">· ready_wave — what runs in parallel at kickoff</span></h3></div>
+              <div class="card-body">
+                <div class="d-flex align-items-center gap-2 flex-wrap mb-2"><span class="tk-eyebrow" style="width:56px">Wave 1</span><span class="tk-wt">SEN-7</span><span class="tk-wt">DATA-3</span><span class="tk-wt">QA-2</span><span class="tk-wt">parity gate</span><span class="text-secondary small">— dispatch in parallel at kickoff</span></div>
+                <div class="d-flex align-items-center gap-2 mb-2 small"><span class="badge bg-purple-lt mono">SEN-6</span><span>is the <strong>keystone</strong> — when it merges, 5 more tasks unlock on their own</span></div>
+                <div class="d-flex align-items-center gap-2 flex-wrap"><span class="tk-eyebrow" style="width:56px">Wave 2</span><span class="tk-wt ghost">SEN-8</span><span class="tk-wt ghost">SEN-9</span><span class="tk-wt ghost">INT-1</span><span class="tk-wt ghost">INT-2</span><span class="tk-wt ghost">QA-3</span></div>
+              </div>
+            </div>
+            </div></div>
+          </div>
+
+          <!-- ═══════════ DELIVERABLES — the cockpit: end state, next action, blockers lead ═══════════ -->
+          <div class="tab-pane" id="tab-deliv">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">deliverables_store · end_state · acceptance · proof</div>
+                  <h2 class="page-title">Deliverables</h2>
+                </div>
+                <div class="col-auto ms-auto text-secondary small">4 deliverables · 1 closed · 1 building · 3 sessions live · invoices ride on playbacks</div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+
+            <!-- the map leads — mission_graph, clickable -->
+            <div class="card mb-3">
+              <div class="card-header py-2">
+                <h3 class="card-title fs-5 mb-0"><i class="ti ti-topology-star-3 me-2"></i>The map <span class="text-secondary small fw-normal">· mission_graph — every task, its dependencies, what's blocking what</span></h3>
+                <div class="ms-auto stx small text-secondary"><span class="sdot" style="background:#ae3ec9"></span>SEN-6 is the keystone — merging it opens wave 2</div>
+              </div>
+              <div class="card-body py-3"><div id="dagHost" class="mission-dag-graph" aria-label="Mission dependency graph"><div class="text-secondary small py-4 text-center">Rendering dependency map…</div></div></div>
+              <div class="card-footer py-2 d-flex align-items-center gap-2 flex-wrap" id="fleetStrip">
+                <span class="small fw-semibold">Build 68%</span>
+                <div class="progress" style="width:110px;height:6px"><div class="progress-bar bg-green" style="width:68%"></div></div>
+                <span class="small text-secondary mono">7/21 merged</span>
+                <span class="vr mx-1 d-none d-md-inline-block"></span>
+                <button class="btn btn-sm btn-ghost-secondary" data-sess="atlas"><span class="avatar me-2" style="background:var(--tblr-primary);color:#fff;width:1.15rem;height:1.15rem;font-size:.6rem">A</span>Atlas · SEN-6<span class="mono text-secondary ms-2">$1.10</span><span class="sdot live ms-2" style="background:#d63939;width:.4rem;height:.4rem"></span></button>
+                <button class="btn btn-sm btn-ghost-secondary" data-sess="codex"><span class="avatar me-2" style="background:#206bc4;color:#fff;width:1.15rem;height:1.15rem;font-size:.6rem">C</span>Codex · DATA-3<span class="mono text-secondary ms-2">$0.60</span></button>
+                <button class="btn btn-sm btn-ghost-secondary" data-sess="nova"><span class="avatar me-2" style="background:#2fb344;color:#fff;width:1.15rem;height:1.15rem;font-size:.6rem">N</span>Nova · QA-2<span class="mono text-secondary ms-2">$0.30</span></button>
+                <span class="ms-auto small text-secondary">pace ~$3.3k at ship · leases hold</span>
+              </div>
+              <div class="card-footer py-2 dag-legend">
+                <span class="stx"><span class="sdot" style="background:#2fb344"></span>done · proven</span>
+                <span class="stx"><span class="sdot" style="background:#12b886"></span>done · unproven</span>
+                <span class="stx"><span class="sdot" style="background:#206bc4"></span>in progress</span>
+                <span class="stx"><span class="sdot" style="background:#f76707"></span>in review</span>
+                <span class="stx"><span class="sdot" style="background:#8b95a5"></span>not started</span>
+                <span class="stx"><span class="sdot" style="background:#adb5bd;border:1px dashed #8b95a5"></span>external</span>
+                <span class="ms-auto">every node opens its state card — live ones carry Watch; hover for narration</span>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col-lg-4">
+                <div class="card" id="dlList"><!-- rows injected --></div>
+                <div class="text-secondary small mt-2 px-1">Each deliverable closes through its gates — scope, functional, proof. The invoice releases on the client playback.</div>
+              </div>
+              <div class="col-lg-8">
+                <div class="card">
+                  <div class="card-header py-3">
+                    <div>
+                      <div class="d-flex align-items-center gap-2"><span class="mono text-secondary" id="dlId">M2</span><h3 class="card-title mb-0" id="dlName">Build core implementation</h3></div>
+                      <div class="stx small mt-1" id="dlState"><span class="sdot" style="background:#206bc4"></span>building · 4 of 9 merged</div>
+                    </div>
+                    <div class="ms-auto text-end">
+                      <div class="tk-eyebrow">Closure</div>
+                      <div class="small" id="dlClosure">open — 2 gates pending</div>
+                    </div>
+                  </div>
+                  <div class="card-body border-bottom">
+                    <div class="tk-eyebrow mb-1">End state</div>
+                    <p class="mb-0" style="font-size:.95rem" id="dlEnd">Entra/SAML sign-in works end-to-end for pilot operators — auto-provisioned from the directory, Okta fallback intact, every path covered by a merged, tested PR.</p>
+                  </div>
+                  <div class="card-body border-bottom" id="dlNextWrap">
+                    <div class="dl-next">
+                      <i class="ti ti-player-track-next mt-1" style="color:var(--tblr-primary)"></i>
+                      <div class="flex-fill"><div class="fw-semibold" style="font-size:.9rem">Next action</div><div class="text-secondary small" id="dlNext">SEN-6 (keystone) is in review — approve the merge when CI goes green; 5 tasks unlock on their own.</div></div>
+                      <button class="btn btn-sm btn-ghost-secondary" data-sess="atlas" id="dlNextBtn"><i class="ti ti-terminal-2 me-1"></i>Watch</button>
+                    </div>
+                    <div class="stx small mt-2" id="dlBlock"><span class="sdot" style="background:#f76707"></span><span><strong>Blocker:</strong> SEN-4 marked done without a merged PR — decide in Needs&nbsp;you before closure can pass.</span></div>
+                  </div>
+                  <div class="card-body border-bottom">
+                    <div class="tk-eyebrow mb-2">Acceptance · proof required</div>
+                    <div class="tk-dots" id="dlAccept">
+                      <div class="r"><span class="d" style="background:#2fb344"></span>Sign-in + provisioning paths pass e2e against the prototype flow</div>
+                      <div class="r"><span class="d" style="background:#2fb344"></span>Okta fallback verified · UI on design system v3</div>
+                      <div class="r"><span class="d" style="background:#8b95a5"></span><strong>done means merged</strong> — every task a merged PR with green CI, exact-SHA evidence</div>
+                    </div>
+                  </div>
+                  <div class="card-body border-bottom">
+                    <div class="tk-eyebrow mb-1">Tasks</div>
+                    <div id="dlTasks"><!-- injected --></div>
+                  </div>
+                  <div class="card-body py-2 d-flex align-items-center gap-3 small border-bottom" id="dlTally">
+                    <span class="tk-eyebrow">Tally</span>
+                    <span class="mono">spend $1.92k</span>
+                    <span class="mono text-green">proven $1.40k</span>
+                    <span class="mono" style="color:#f76707">in review $0.52k</span>
+                    <span class="text-secondary ms-auto">invoice on playback accept</span>
+                  </div>
+                  <div class="card-body py-2">
+                    <details id="dl-detail">
+                      <summary class="small py-1"><span class="chev me-1">›</span>Full detail — provenance, ADRs, playbacks, session history</summary>
+                      <div class="tk-dots mt-2 small">
+                        <div class="r"><span class="d" style="background:#8b95a5"></span>ADR-3 Parity-First governs sequencing · working agreement injected per session</div>
+                        <div class="r"><span class="d" style="background:#8b95a5"></span>Playback scheduled with A. Reyes on closure · releases the milestone invoice</div>
+                        <div class="r"><span class="d" style="background:#8b95a5"></span>9 work sessions so far · $1.92k across 3 agents · all leases clean</div>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+
+            </div></div>
+          </div>
+
+          <!-- ═══════════ TALLY — two-stream ledger ═══════════ -->
+          <div class="tab-pane" id="tab-tally">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">two streams, reconciled — provider-actual vs agent-reported</div>
+                  <h2 class="page-title">Tally</h2>
+                </div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+            <div class="row row-cards">
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Provider actual · gateway</div><div class="h1 mb-0 mt-1">$3.12k</div><div class="text-secondary small">source of truth</div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Agent reported</div><div class="h1 mb-0 mt-1">$3.31k</div><div class="small"><span class="text-green fw-semibold">Δ −5.7%</span> <span class="text-secondary">· within tolerance</span></div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Cost / verified outcome</div><div class="h1 mb-0 mt-1">$162</div><div class="text-secondary small">merged-PR proven only</div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Margin at SOW</div><div class="h1 mb-0 mt-1 text-green">93%</div><div class="text-secondary small">$48k for ~$3.4k</div></div></div></div>
+            </div>
+            <div class="card mt-3">
+              <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-receipt me-2"></i>Deliverable tally — spend lands in buckets, proof moves it</h3></div>
+              <div class="table-responsive"><table class="table table-vcenter card-table">
+                <thead><tr><th>Deliverable</th><th class="text-end">Spend</th><th class="text-end">Proven</th><th class="text-end">In review</th><th>Invoice</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="mono text-secondary me-1">M1</span> Shared contract</td><td class="mono text-end">$0.48k</td><td class="mono text-end text-green">$0.48k</td><td class="mono text-end text-secondary">—</td><td><span class="stx small"><span class="sdot" style="background:#2fb344"></span>$12k released</span></td></tr>
+                  <tr><td><span class="mono text-secondary me-1">M2</span> Core implementation</td><td class="mono text-end">$1.92k</td><td class="mono text-end text-green">$1.40k</td><td class="mono text-end" style="color:#f76707">$0.52k</td><td class="text-secondary small">on playback accept</td></tr>
+                  <tr><td><span class="mono text-secondary me-1">M3</span> Cross-board integration</td><td class="mono text-end">$0.51k</td><td class="mono text-end text-secondary">—</td><td class="mono text-end" style="color:#f76707">$0.18k</td><td class="text-secondary small">—</td></tr>
+                  <tr><td><span class="mono text-secondary me-1">M4</span> Parity &amp; ship</td><td class="mono text-end">$0.21k</td><td class="mono text-end text-secondary">—</td><td class="mono text-end text-secondary">—</td><td class="text-secondary small">final $16k</td></tr>
+                </tbody>
+              </table></div>
+              <div class="card-footer small text-secondary py-2">Every "proven" dollar traces to a merged PR through <span class="mono">deliverable_tally</span> — the case study quotes this table.</div>
+            </div>
+            </div></div>
+          </div>
+
+          <!-- ═══════════ RESULTS — closure gates · KPIs · case study ═══════════ -->
+          <div class="tab-pane" id="tab-results">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">deliverable_closure · shipped Jul 27</div>
+                  <h2 class="page-title">Results <span class="text-secondary fs-4 fw-normal ms-1">it moved the number</span></h2>
+                </div>
+                <div class="col-auto ms-auto"><button class="btn btn-outline-secondary"><i class="ti ti-share me-1"></i>Share case study</button></div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+            <div class="row row-cards">
+              <div class="col-lg-7">
+                <div class="card mb-3">
+                  <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-shield-check me-2"></i>Closure gates</h3></div>
+                  <div class="list-group list-group-flush">
+                    <div class="list-group-item py-2 d-flex align-items-center gap-2 small"><span class="badge bg-green-lt">PASS</span>Scope gate — all 21 tasks trace to brief v8 acceptance</div>
+                    <div class="list-group-item py-2 d-flex align-items-center gap-2 small"><span class="badge bg-green-lt">PASS</span>Functional gate — parity green vs. Helm baseline · fallback e2e verified</div>
+                    <div class="list-group-item py-2 d-flex align-items-center gap-2 small"><span class="badge bg-yellow-lt">WAIVE</span>Perf gate — P95 sign-in 1.9s vs 1.5s target · waived by you, logged ADR-7</div>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-chart-line me-2"></i>KPIs on watch · 90 days <span class="text-secondary small fw-normal">· outcome_kpi_links</span></h3></div>
+                  <div class="card-body">
+                    <div class="row text-center">
+                      <div class="col-4"><div class="h1 mb-0 text-green">97.4%</div><div class="tk-eyebrow">SSO success · ≥95 target</div></div>
+                      <div class="col-4 border-start"><div class="h1 mb-0 text-green">0</div><div class="tk-eyebrow">manual provisioning</div></div>
+                      <div class="col-4 border-start"><div class="h1 mb-0">11m</div><div class="tk-eyebrow">MTTA · ≤15m target</div></div>
+                    </div>
+                    <div class="text-secondary small mt-2 text-center">If one slips, you get one ping with a fix already scoped.</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-5">
+                <div class="card mb-3">
+                  <div class="card-body" style="background:radial-gradient(120% 150% at 80% 8%, #2a3550 0%, #141b28 55%, #0d1117 100%);border-radius:calc(.9rem - 1px);color:#fff">
+                    <div class="tk-eyebrow" style="color:rgba(255,255,255,.55)">Case study · Identity · 2026</div>
+                    <h3 class="mt-1 mb-1" style="color:#fff">Sign-in that unblocked a flagship account in 3 weeks</h3>
+                    <div class="small" style="color:rgba(255,255,255,.7)">97.4% SSO · $3.4k delivered · 93% margin — every number ledger-bound.</div>
+                    <button class="btn btn-sm btn-light mt-3"><i class="ti ti-share me-1"></i>Share case study</button>
+                  </div>
+                </div>
+                <div class="card"><div class="card-body py-3 d-flex gap-2 align-items-start">
+                  <i class="ti ti-sparkles mt-1" style="color:#ae3ec9"></i>
+                  <div class="small"><strong>Logged to memory:</strong> "Parity-first cut end-of-project risk · claude-code on identity, 3/3 clean." The next engagement routes on this precedent.</div>
+                </div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══════════ NEEDS YOU — the attention model, all-up ═══════════ -->
+          <div class="tab-pane" id="tab-inbox">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">_mission_next_actions · the only interruptions</div>
+                  <h2 class="page-title">Needs you <span class="text-secondary fs-4 fw-normal mono ms-1" id="inboxH">3</span></h2>
+                </div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+            <div class="card">
+              <div class="list-group list-group-flush" id="inboxList">
+                <div class="list-group-item" data-gate><div class="d-flex align-items-center gap-2"><span class="badge bg-orange-lt">brief</span><div class="small flex-fill"><strong>SCIM provisioning</strong> — include now (+5 tasks, ~1 week) or defer to phase 2?</div><button class="btn btn-sm btn-outline-secondary" data-r="SCIM deferred — logged as ADR">Defer</button><button class="btn btn-sm btn-outline-secondary" data-r="SCIM included — plan re-cut">Include</button></div></div>
+                <div class="list-group-item" data-gate><div class="d-flex align-items-center gap-2"><span class="badge bg-orange-lt">brief</span><div class="small flex-fill"><strong>Model tier for identity work</strong> — balanced (~$2.9k) or high-reasoning (careful on auth)?</div><button class="btn btn-sm btn-outline-secondary" data-r="Balanced tier locked">Balanced</button><button class="btn btn-sm btn-outline-secondary" data-r="High tier locked for identity work">High</button></div></div>
+                <div class="list-group-item" data-gate><div class="d-flex align-items-center gap-2"><span class="badge bg-red-lt">trust</span><div class="small flex-fill"><strong>SEN-4 marked done without a merged PR</strong> — reopen and re-dispatch, or let it stand with your name on the log?</div><button class="btn btn-sm btn-outline-secondary" data-r="SEN-4 reopened → Ready, re-dispatched to Codex">Reopen</button><button class="btn btn-sm btn-outline-secondary" data-r="SEN-4 stands — logged with your sign-off">Let stand</button></div></div>
+              </div>
+              <div class="card-footer small text-secondary py-2">Everything else runs itself. Decide here or on the object — same gate, same receipt.</div>
+            </div>
+            </div></div>
+          </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- anchored thread popover (brief) -->
+<div class="tk-thread card" id="thread">
+  <div class="card-header py-2 small text-secondary" id="thQ"></div>
+  <div class="card-body py-2 small" id="thB"></div>
+  <div class="card-footer py-2 d-flex gap-2">
+    <input class="form-control form-control-sm" id="thIn" placeholder="Reply — Taikun answers in-thread">
+    <button class="btn btn-sm btn-primary" id="thSend"><i class="ti ti-send"></i></button>
+  </div>
+</div>
+
+<!-- work-session panel — the agent window: CLI in the browser -->
+<div class="tk-scrim" id="scrim"></div>
+<div class="tk-session" id="sessPanel">
+  <div class="card-header d-flex align-items-center gap-2" style="border-bottom:1px solid var(--tblr-border-color)">
+    <span class="avatar avatar-xs" id="sessAv" style="background:var(--tblr-primary);color:#fff">A</span>
+    <div style="min-width:0"><div class="fw-bold small text-truncate" id="sessTitle">Atlas · SEN-6 — Wire Entra app registration</div><div class="text-secondary mono" style="font-size:.68rem" id="sessSub">claude-code · sess_7fa1 · lease sso/entra</div></div>
+    <span class="badge bg-red-lt ms-auto" id="sessLive">● live</span>
+    <button class="btn btn-sm btn-outline-secondary" id="sessX"><i class="ti ti-x"></i></button>
+  </div>
+  <div class="p-3" style="flex:1;overflow:auto">
+    <div class="d-flex gap-1 flex-wrap mb-2" id="sessMeta"></div>
+    <div class="tk-trm" id="sessStream"></div>
+    <div class="text-secondary small text-center mt-2">The agent's actual session — what you'd see in the CLI, in the browser.</div>
+  </div>
+  <div class="p-3 border-top">
+    <div class="d-flex gap-1 flex-wrap mb-2">
+      <button class="btn btn-sm btn-outline-secondary" data-steer="redirect">Redirect</button>
+      <button class="btn btn-sm btn-outline-secondary" data-steer="hold">Hold</button>
+      <button class="btn btn-sm btn-outline-secondary" data-steer="approve">Approve merge</button>
+    </div>
+    <div class="d-flex gap-2"><input class="form-control form-control-sm" id="steerIn" placeholder="Steer — it hears you mid-flight, even on autopilot"><button class="btn btn-sm btn-primary" id="steerGo"><i class="ti ti-send"></i></button></div>
+  </div>
+</div>
+
+<!-- ⌘K — the real app's palette -->
+<div id="cmdk-backdrop"><div class="cmdk-box">
+  <input class="form-control cmdk-input" id="cmdkIn" placeholder="Jump, decide, or act…">
+  <div class="cmdk-list" id="cmdkList"></div>
+  <div class="cmdk-hint"><span><kbd>↑↓</kbd> navigate</span><span><kbd>↵</kbd> run</span><span><kbd>esc</kbd> close</span></div>
+</div></div>
+
+<!-- Found: new-project intake -->
+<div class="found-back" id="foundBack"><div class="found-card">
+  <div class="card-header d-flex align-items-center">
+    <h3 class="card-title mb-0"><i class="ti ti-folder-plus me-2"></i>New project</h3>
+    <div class="text-secondary small ms-2">Found — nothing is claimable until you shape &amp; approve the kickoff record</div>
+    <button class="btn btn-sm btn-outline-secondary ms-auto" id="foundX"><i class="ti ti-x"></i></button>
+  </div>
+  <div class="card-body">
+    <div class="mb-3">
+      <label class="form-label">Project name</label>
+      <input class="form-control" id="foundName" placeholder="e.g. Northwind Energy — SSO &amp; Identity">
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Purpose <span class="text-secondary small fw-normal">· one sentence, the control-plane reason this board exists</span></label>
+      <input class="form-control" placeholder="Ship SSO so the TotalEnergies pilot can go live.">
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Boundary <span class="text-secondary small fw-normal">· what does NOT belong on this board</span></label>
+      <input class="form-control" placeholder="Billing, non-pilot tenants, the mobile app.">
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Mode</label>
+      <div class="found-mode" id="foundMode">
+        <label class="on"><input type="radio" name="mode" checked>Existing product — a feature on a live repo <span class="text-secondary small d-block">Architecture must cite SHIPPED/THIN/NEW</span></label>
+        <label><input type="radio" name="mode">Greenfield — new product, new repo <span class="text-secondary small d-block">Wave 1 scaffolds stack + CI</span></label>
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Repository</label>
+      <div class="d-flex gap-2"><button class="btn btn-outline-secondary flex-fill"><i class="ti ti-brand-github me-1"></i>Bind a GitHub repo</button><button class="btn btn-outline-secondary">Docs-only for now</button></div>
+    </div>
+    <div class="mb-1">
+      <label class="form-label">Seed the corpus</label>
+      <div class="found-drop"><i class="ti ti-file-upload me-1"></i>Drop the discovery call, transcript, or notes — Taikun drafts the Vision from it</div>
+    </div>
+  </div>
+  <div class="card-footer d-flex align-items-center">
+    <span class="text-secondary small">Creating spawns the founding mission in phase <span class="mono">found</span> → <span class="mono">shape</span>.</span>
+    <button class="btn btn-primary ms-auto" id="foundCreate"><i class="ti ti-sparkles me-1"></i>Create &amp; start shaping</button>
+  </div>
+</div></div>
+
+<!-- task panel — every node opens the conversation with its session: live, finished, or future -->
+<div class="tk-session" id="taskPanel" style="width:min(560px,96vw)">
+  <div class="card-header d-flex align-items-center gap-2" id="tpHead" style="border-bottom:1px solid var(--tblr-border-color)"></div>
+  <div class="p-3" id="tpBody" style="flex:1;overflow:auto"></div>
+  <div class="p-3 border-top" id="tpFoot">
+    <div class="d-flex gap-1 flex-wrap mb-2" id="tpChips"></div>
+    <div class="d-flex gap-2"><input class="form-control form-control-sm" id="tpIn" placeholder="Steer, ask, or brief…"><button class="btn btn-sm btn-primary" id="tpSend"><i class="ti ti-send"></i></button></div>
+  </div>
+</div>
+
+<div class="tk-toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script>
+(function(){
+  var toastEl=document.getElementById('toast'),tmr=null;
+  function toast(m){ toastEl.textContent=m; toastEl.classList.add('on'); clearTimeout(tmr); tmr=setTimeout(function(){ toastEl.classList.remove('on'); },3400); }
+
+  var railT=document.getElementById('railTgl'),railEl=document.querySelector('aside.navbar-vertical');
+  if(railT) railT.addEventListener('click',function(){ railEl.classList.toggle('on'); });
+  // ── nav: rail links switch tab panes (the real app uses bootstrap tabs; same idea) ──
+  function go(tab){
+    document.querySelectorAll('#main-nav .nav-link').forEach(function(a){ a.classList.toggle('active', a.dataset.tab===tab); });
+    document.querySelectorAll('.tab-pane').forEach(function(p){ p.classList.toggle('active', p.id===tab); });
+    window.scrollTo(0,0); hideThread(); if(railEl) railEl.classList.remove('on');
+    // the map renders on first open — getBBox in a hidden pane measures zero
+    if(tab==='tab-deliv'&&!window.__dagDone){ window.__dagDone=true; renderDag(); }
+  }
+  document.querySelectorAll('#main-nav .nav-link').forEach(function(a){ a.addEventListener('click',function(e){ e.preventDefault(); go(a.dataset.tab); }); });
+  document.querySelectorAll('[data-goto]').forEach(function(b){ b.addEventListener('click',function(){ go(b.dataset.goto); }); });
+  document.getElementById('btn-inbox').addEventListener('click',function(){ go('tab-inbox'); });
+
+  // ── human gates: decide anywhere, one receipt ──
+  var open=3;
+  function refreshGates(){
+    var b=[document.getElementById('inbox-count'),document.getElementById('nav-inbox-badge'),document.getElementById('inboxH')];
+    b.forEach(function(x){ if(x) x.textContent=open; });
+    var briefOpen=document.querySelectorAll('#gateList [data-gate]').length;
+    var gc=document.getElementById('gateCount'); if(gc) gc.textContent=briefOpen?('· '+briefOpen):'· all resolved';
+  }
+  document.querySelectorAll('[data-gate] [data-r]').forEach(function(btn){ btn.addEventListener('click',function(){
+    var item=btn.closest('[data-gate]');
+    item.innerHTML='<div class="d-flex align-items-center gap-2 small text-secondary py-1"><i class="ti ti-circle-check text-green"></i>'+btn.dataset.r+' · logged to decisions</div>';
+    open=Math.max(0,open-1); refreshGates(); if(typeof renderLadder==='function') renderLadder(); toast('Decided — receipt logged, the plan re-cut where needed');
+  }); });
+
+  // ── the living brief: direct edit ──
+  document.querySelectorAll('.tk-ed[contenteditable]').forEach(function(el){
+    el.addEventListener('focus',function(){ el._was=el.innerHTML; });
+    el.addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } e.stopPropagation(); });
+    el.addEventListener('blur',function(){ if(el._was!==undefined&&el._was!==el.innerHTML){ bumpV('you edited '+(el.dataset.sec||'the brief')); } el._was=undefined; });
+  });
+  var v=7;
+  function bumpV(why){ v++; ['briefV','ovV'].forEach(function(id){ var el=document.getElementById(id); if(el) el.textContent='v'+v; });
+    document.getElementById('stageBadge').textContent='Scope · brief v'+v;
+    var li=document.createElement('div'); li.className='list-group-item tk-act-item py-2 small';
+    li.innerHTML='<span class="badge bg-secondary-lt mono me-2">v'+v+'</span>'+why+' — Taikun re-checked the plan';
+    var vl=document.getElementById('vList'); vl.insertBefore(li,vl.firstChild);
+    toast('brief v'+v+' — '+why); }
+
+  // ── anchored threads on highlights ──
+  var thread=document.getElementById('thread'),thQ=document.getElementById('thQ'),thB=document.getElementById('thB');
+  var TH={ okta:{q:'"Okta stays as a silent fallback" — resolved · v2',b:'<strong>You:</strong> Does Okta really have to stay?<br><strong>Taikun:</strong> From the call at 12:40 — <em>"it has to stay as a fallback."</em> Folded into the plan (+1 task) and acceptance. Applied as v2.'},
+           cost:{q:'Open — "Why $3.4k?"',b:'<strong>Taikun:</strong> 21 tasks × the median of your last 14 similar shipped tasks ($162/outcome, each a merged PR), plus the high-tier premium on identity work. Balanced tier ~$2.9k — but auth code is where careful pays.'} };
+  function hideThread(){ thread.classList.remove('on'); }
+  document.querySelectorAll('.tk-cm').forEach(function(c){ c.addEventListener('click',function(e){ e.stopPropagation();
+    var t=TH[c.dataset.th]; thQ.textContent=t.q; thB.innerHTML=t.b;
+    var r=c.getBoundingClientRect(); thread.style.left=Math.min(r.left,innerWidth-420)+'px'; thread.style.top=(r.bottom+8)+'px';
+    thread.classList.add('on'); }); });
+  document.addEventListener('click',function(e){ if(thread.classList.contains('on')&&!thread.contains(e.target)&&!e.target.closest('.tk-cm')) hideThread(); });
+  document.getElementById('thSend').addEventListener('click',function(){ var i=document.getElementById('thIn'); if(!i.value.trim())return;
+    thB.innerHTML+='<br><strong>You:</strong> '+i.value.trim()+'<br><strong>Taikun:</strong> Noted — say "apply" and I\'ll draft the redline.'; i.value=''; });
+
+  // ── composer: say it, get a redline ──
+  function say(){ var i=document.getElementById('sayIn'),vl=i.value.trim(); if(!vl)return; i.value='';
+    toast('Taikun is drafting that as a redline on the brief — Apply lands in the doc'); }
+  document.getElementById('sayGo').addEventListener('click',say);
+  document.getElementById('sayIn').addEventListener('keydown',function(e){ if(e.key==='Enter') say(); });
+
+  // ── the redline: apply / push back ──
+  document.getElementById('applyBtn').addEventListener('click',function(){
+    document.getElementById('dCost').textContent='$3.7k'; document.getElementById('dDays').textContent='~6 days'; document.getElementById('dBuf').textContent='7 days';
+    ['ovCost','ovDays'].forEach(function(id,ix){ var el=document.getElementById(id); if(el) el.textContent=ix?'~6 days':'$3.7k'; });
+    var ob=document.getElementById('ovBuf'); if(ob) ob.textContent='buffer to contract date: 7 days';
+    var ow=document.getElementById('ovWaves'); if(ow) ow.textContent='4 milestones · 2 waves (was 3)';
+    document.getElementById('redlineBlock').innerHTML='<div class="d-flex align-items-center gap-2 small text-green"><i class="ti ti-circle-check"></i><strong>Applied — v8.</strong> ~6 days · $3.7k · buffer 7 days. Kickoff deck re-presents from v8.</div>';
+    var doc=document.getElementById('briefDoc'); doc.classList.add('tk-flash'); setTimeout(function(){ doc.classList.remove('tk-flash'); },1400);
+    bumpV('compressed to ~6 days (+$0.3k), 3 waves → 2');
+  });
+  document.getElementById('pushBack').addEventListener('click',function(){
+    document.getElementById('redlineBlock').innerHTML='<div class="small text-secondary">Discarded — tell Taikun the real constraint (budget or date) and it re-plans around it.</div>';
+  });
+
+  // ── fleet: work sessions ──
+  var SESS={
+    atlas:{av:'A',bg:'var(--tblr-primary)',live:true,t:'Atlas · SEN-6 — Wire Entra app registration',sub:'claude-code · sess_7fa1 · lease sso/entra',
+      meta:['high tier','$1.10 so far','42k tokens','pinned to system v3'],
+      html:'<div class="tm">09:38</div><div class="tl">⏺ claim_next → SEN-6 · lease sso/entra · clean tree</div><div class="as">Wiring the Entra app registration. Reading the directory module first.</div><div class="tl">⏺ Read(directory/entra.py)</div><div class="rs">⎿ 214 lines</div><div class="tl">⏺ Update(directory/entra.py)</div><div class="ad">  + def resolve_entra_app(tenant_id: str) -&gt; AppReg:</div><div class="ad">  +     return _graph.app_registrations.get(tenant_id)</div><div class="de">  -     raise NotImplementedError</div><div class="tl">⏺ Bash(pytest -q tests/test_entra.py)</div><div class="rs ok">⎿ ✓ 12 passed in 3.2s</div><div class="as">Tests green. Opening the PR and running the parity gate.</div><div class="tl">⏺ Bash(gh pr create --title "Wire Entra app registration")</div><div class="rs pr">⎿ PR #412 opened · CI running · 3/4 checks green</div><div class="tm">09:41 · now</div>'},
+    codex:{av:'C',bg:'#206bc4',live:false,t:'Codex · DATA-3 — Directory attribute sync',sub:'codex-cli · sess_2be4 · lease directory/sync',
+      meta:['balanced tier','$0.60 so far','28k tokens'],
+      html:'<div class="tm">09:36</div><div class="tl">⏺ claim_next → DATA-3 · lease directory/sync</div><div class="as">Mapping directory attributes to the shared contract from M1.</div><div class="tl">⏺ Update(directory/sync.py)</div><div class="ad">  + FIELD_MAP = {"mail": "email", "employeeId": "well_id"}</div><div class="tl">⏺ Bash(pytest -q tests/test_sync.py)</div><div class="rs ok">⎿ ✓ 8 passed in 1.9s</div><div class="as">Mapping matches the contract. Adding pagination for large directories next.</div><div class="tm">09:44 · now</div>'},
+    nova:{av:'N',bg:'#2fb344',live:false,t:'Nova · QA-2 — e2e smoke on the sign-in flow',sub:'cursor-agent · sess_9c11 · runs vs. the prototype',
+      meta:['cheap tier','$0.30 so far','11k tokens'],
+      html:'<div class="tm">09:39</div><div class="tl">⏺ claim_next → QA-2 · no file lease needed</div><div class="tl">⏺ Bash(npx playwright test signin.spec.ts)</div><div class="rs ok">⎿ ✓ 7 of 7 passed · flow matches the prototype exactly</div><div class="as">Sign-in, fallback, and provisioning paths all green. Writing the report.</div><div class="tm">09:47 · now</div>'}
+  };
+  var scrim=document.getElementById('scrim'),panel=document.getElementById('sessPanel');
+  function openSess(k){ var d=SESS[k];
+    document.getElementById('sessAv').textContent=d.av; document.getElementById('sessAv').style.background=d.bg;
+    document.getElementById('sessTitle').textContent=d.t; document.getElementById('sessSub').textContent=d.sub;
+    document.getElementById('sessLive').style.display=d.live?'':'none';
+    document.getElementById('sessMeta').innerHTML=d.meta.map(function(m){ return '<span class="badge bg-secondary-lt">'+m+'</span>'; }).join('');
+    document.getElementById('sessStream').innerHTML=d.html;
+    scrim.classList.add('on'); panel.classList.add('on'); }
+  function closeSess(){ scrim.classList.remove('on'); panel.classList.remove('on'); }
+  document.querySelectorAll('[data-sess]').forEach(function(b){ b.addEventListener('click',function(){ openSess(b.dataset.sess); }); });
+  scrim.addEventListener('click',closeSess); document.getElementById('sessX').addEventListener('click',closeSess);
+  var STEERS={redirect:['use the shared session_store, not a new table','acknowledged — refactoring against session_store'],
+              hold:['hold after the current test run','will pause at the next safe boundary; nothing killed mid-thought'],
+              approve:['approve merge of PR #412 once CI is green','merge queued behind CI · closure gate will stamp it']};
+  function steer(t,a){ var st=document.getElementById('sessStream');
+    st.insertAdjacentHTML('beforeend','<div class="c-you">&gt; '+t+'</div>');
+    setTimeout(function(){ st.insertAdjacentHTML('beforeend','<div class="c-ack">⎿ '+a+'</div>'); st.parentElement.scrollTop=1e6; },600); st.parentElement.scrollTop=1e6; }
+  document.querySelectorAll('[data-steer]').forEach(function(b){ b.addEventListener('click',function(){ var s=STEERS[b.dataset.steer]; steer(s[0],s[1]); }); });
+  document.getElementById('steerGo').addEventListener('click',function(){ var i=document.getElementById('steerIn'); if(i.value.trim()){ steer(i.value.trim(),'acknowledged — adjusting course'); i.value=''; } });
+  document.getElementById('steerIn').addEventListener('keydown',function(e){ if(e.key==='Enter') document.getElementById('steerGo').click(); });
+
+  // ══ deliverables — the cockpit: end state, next action, blockers lead; detail folds ══
+  var DELIVS={
+    m1:{ id:'M1', name:'Define shared contract', dot:'#2fb344', state:'closed · 3 of 3 merged', closure:'PASS — all gates green',
+      end:'One shared contract for identity data that every downstream task builds against — versioned, published, frozen for v1.',
+      next:null, nextNote:'Closed Jul 15 — playback accepted, $12k invoice released.', block:null,
+      accept:[['#2fb344','Contract published and pinned · consumed by M2/M3 tasks'],['#2fb344','Breaking-change policy recorded as ADR'],['#2fb344','done means merged — 3 merged PRs, green CI']],
+      tasks:[['#2fb344','CON-1','Draft the shared contract','merged'],['#2fb344','CON-2','Version + publish pipeline','merged'],['#2fb344','CON-3','Consumer conformance tests','merged']],
+      tally:['spend $0.48k','proven $0.48k','—','$12k released'] },
+    m2:{ id:'M2', name:'Build core implementation', dot:'#206bc4', state:'building · 4 of 9 merged', closure:'open — 2 gates pending',
+      end:'Entra/SAML sign-in works end-to-end for pilot operators — auto-provisioned from the directory, Okta fallback intact, every path covered by a merged, tested PR.',
+      next:'SEN-6 (keystone) is in review — approve the merge when CI goes green; 5 tasks unlock on their own.', nextSess:'atlas',
+      block:'SEN-4 marked done without a merged PR — decide in Needs you before closure can pass.',
+      accept:[['#2fb344','Sign-in + provisioning paths pass e2e against the prototype flow'],['#2fb344','Okta fallback verified · UI on design system v3'],['#8b95a5','done means merged — every task a merged PR with green CI, exact-SHA evidence']],
+      tasks:[['#f76707','SEN-6','Wire Entra app registration','in review · PR #412 · keystone'],['#206bc4','DATA-3','Directory attribute sync','in progress · Codex'],['#2fb344','SEN-2','SAML response handler','merged'],['#2fb344','SEN-3','Session issuance','merged'],['#8b95a5','SEN-8','Provisioning hooks','blocked by SEN-6']],
+      tally:['spend $1.92k','proven $1.40k','in review $0.52k','invoice on playback accept'] },
+    m3:{ id:'M3', name:'Integrate cross-board', dot:'#8b95a5', state:'waiting · opens on SEN-6 merge', closure:'not started',
+      end:'Identity flows wired into the ops portal and admin surfaces — no seams a pilot operator can feel.',
+      next:'Nothing for you — wave 2 opens automatically when the keystone merges.', nextSess:null, block:null,
+      accept:[['#8b95a5','Portal + admin surfaces consume the shared contract'],['#8b95a5','No manual provisioning path remains'],['#8b95a5','done means merged']],
+      tasks:[['#8b95a5','INT-1','Portal session integration','wave 2'],['#8b95a5','INT-2','Admin role mapping','wave 2'],['#8b95a5','QA-3','Cross-board e2e','wave 2']],
+      tally:['spend $0.51k','—','in review $0.18k','—'] },
+    m4:{ id:'M4', name:'Prove parity & ship', dot:'#f76707', state:'gate armed · runs continuously', closure:'gated on parity green',
+      end:'CI parity green against the Helm baseline — go-live proof, not a demo. Ship inside the TotalEnergies window with 4+ days of buffer.',
+      next:'Parity gate runs on every merge — it will page you only if it goes red.', nextSess:null, block:null,
+      accept:[['#2fb344','Parity gate wired from week 1 · runs on every merge'],['#8b95a5','Fallback e2e + load smoke before ship'],['#8b95a5','Client playback → final $16k invoice']],
+      tasks:[['#206bc4','PAR-1','Parity gate vs Helm baseline','running · green'],['#8b95a5','SHIP-1','Cutover runbook','wave 2'],['#8b95a5','SHIP-2','Go-live + rollback drill','wave 2']],
+      tally:['spend $0.21k','—','—','final $16k'] }
+  };
+  var curDl='m2';
+  function renderDlList(){
+    document.getElementById('dlList').innerHTML=Object.keys(DELIVS).map(function(k){ var d=DELIVS[k];
+      return '<button class="dl-row'+(k===curDl?' active':'')+'" data-dl="'+k+'"><span class="sdot" style="background:'+d.dot+'"></span><span class="nm">'+d.id+' · '+d.name+'</span><span class="ms">'+d.state.split('·')[0].trim()+'</span></button>'; }).join('');
+    document.querySelectorAll('#dlList .dl-row').forEach(function(r){ r.addEventListener('click',function(){ selectDl(r.dataset.dl); }); });
+  }
+  function selectDl(k){ curDl=k; var d=DELIVS[k];
+    document.getElementById('dlId').textContent=d.id;
+    document.getElementById('dlName').textContent=d.name;
+    document.getElementById('dlState').innerHTML='<span class="sdot" style="background:'+d.dot+'"></span>'+d.state;
+    document.getElementById('dlClosure').textContent=d.closure;
+    document.getElementById('dlEnd').textContent=d.end;
+    var nw=document.getElementById('dlNextWrap');
+    var nextHtml='<div class="dl-next"><i class="ti ti-player-track-next mt-1" style="color:var(--tblr-primary)"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.9rem">Next action</div><div class="text-secondary small">'+(d.next||d.nextNote)+'</div></div>'+(d.nextSess?'<button class="btn btn-sm btn-ghost-secondary" data-sess="'+d.nextSess+'"><i class="ti ti-terminal-2 me-1"></i>Watch</button>':'')+'</div>';
+    if(d.block) nextHtml+='<div class="stx small mt-2" style="white-space:normal"><span class="sdot" style="background:#f76707"></span><span><strong>Blocker:</strong> '+d.block+'</span></div>';
+    nw.innerHTML=nextHtml;
+    nw.querySelectorAll('[data-sess]').forEach(function(b){ b.addEventListener('click',function(){ openSess(b.dataset.sess); }); });
+    document.getElementById('dlAccept').innerHTML=d.accept.map(function(a){ return '<div class="r"><span class="d" style="background:'+a[0]+'"></span>'+a[1]+'</div>'; }).join('');
+    document.getElementById('dlTasks').innerHTML=d.tasks.map(function(t){ return '<div class="dl-task"><span class="sdot" style="background:'+t[0]+'"></span><span class="mono text-secondary">'+t[1]+'</span><span class="tt">'+t[2]+'</span><span class="tm2">'+t[3]+'</span></div>'; }).join('');
+    document.getElementById('dlTally').innerHTML='<span class="tk-eyebrow">Tally</span><span class="mono">'+d.tally[0]+'</span>'+(d.tally[1]!=='—'?'<span class="mono text-green">'+d.tally[1]+'</span>':'')+(d.tally[2]!=='—'?'<span class="mono" style="color:#f76707">'+d.tally[2]+'</span>':'')+'<span class="text-secondary ms-auto">'+d.tally[3]+'</span>';
+    renderDlList(); dagHighlight(k);
+  }
+
+  // ── the mission DAG — mermaid-rendered, same pipeline as the live system ──
+  // Agents author the flowchart TEXT (mission_graph.render_mermaid_flowchart shape:
+  // workstream subgraphs, <b>ID</b><br/>title labels, state classes). Mermaid owns
+  // layout; the UI owns one init config + a post-render decorator (keystone ring,
+  // agent avatars, click wiring, dim-on-select). No hand coordinates anywhere.
+  // ── the map — EXACT mission_graph.render_mermaid_flowchart output for this
+  // mission (bare-workstream subgraph labels, <b>ID</b><br/>title labels ≤34
+  // chars, --> internal / -.-> external, the 7 production state classes),
+  // restyled only via the classDef colors. States follow node_execution_state:
+  // done | done_unproven | in_progress | in_review | blocked | todo | external.
+  var DAG_SRC=[
+    'flowchart LR',
+    '  CON_1["<b>CON-1</b><br/>Draft shared contract"]',
+    '  CON_2["<b>CON-2</b><br/>Version + publish pipeline"]',
+    '  CON_3["<b>CON-3</b><br/>Consumer conformance tests"]',
+    '  SEN_2["<b>SEN-2</b><br/>SAML response handler"]',
+    '  SEN_3["<b>SEN-3</b><br/>Session issuance"]',
+    '  SEN_4["<b>SEN-4</b><br/>Session persistence"]',
+    '  SEN_6["<b>SEN-6</b><br/>Wire Entra app registration"]',
+    '  SEN_8["<b>SEN-8</b><br/>Provisioning hooks"]',
+    '  SEN_9["<b>SEN-9</b><br/>Fallback edge cases"]',
+    '  INT_1["<b>INT-1</b><br/>Portal session integration"]',
+    '  INT_2["<b>INT-2</b><br/>Admin role mapping"]',
+    '  QA_2["<b>QA-2</b><br/>e2e smoke vs prototype"]',
+    '  QA_3["<b>QA-3</b><br/>Cross-board e2e"]',
+    '  SHIP_1["<b>SHIP-1</b><br/>Cutover runbook"]',
+    '  SHIP_2["<b>SHIP-2</b><br/>Go-live + rollback drill"]',
+    '  DATA_3["<b>DATA-3</b><br/>Directory attribute sync"]',
+    '  PAR_1["<b>PAR-1</b><br/>Parity gate vs Helm baseline"]',
+    '  HELM_BASE["<b>HELM-BASE</b><br/>Helm baseline pipeline"]',
+    '  CON_1 --> SEN_2',
+    '  CON_2 --> SEN_3',
+    '  CON_2 --> SEN_4',
+    '  CON_3 --> DATA_3',
+    '  CON_3 --> QA_2',
+    '  SEN_2 --> SEN_6',
+    '  SEN_3 --> SEN_6',
+    '  SEN_4 --> SEN_6',
+    '  SEN_6 --> SEN_8',
+    '  SEN_6 --> SEN_9',
+    '  SEN_6 --> INT_1',
+    '  SEN_6 --> INT_2',
+    '  DATA_3 --> INT_1',
+    '  SEN_8 --> QA_3',
+    '  SEN_9 --> QA_3',
+    '  INT_1 --> QA_3',
+    '  INT_2 --> QA_3',
+    '  QA_3 --> SHIP_1',
+    '  PAR_1 --> SHIP_1',
+    '  HELM_BASE -.-> PAR_1',
+    '',
+    '  classDef doneNode fill:#eaf7ee,stroke:#2fb344,color:#101114',
+    '  classDef doneUnprovenNode fill:#e6f7f1,stroke:#12b886,color:#101114',
+    '  classDef progressNode fill:#eaf1fa,stroke:#206bc4,color:#101114',
+    '  classDef reviewNode fill:#fdf0e7,stroke:#f76707,color:#101114',
+    '  classDef blockedNode fill:#fdecec,stroke:#d63939,color:#101114',
+    '  classDef todoNode fill:#f6f7f9,stroke:#c9ced6,color:#8b95a5',
+    '  classDef externalNode fill:#fbfbfc,stroke:#adb5bd,color:#8b95a5,stroke-dasharray: 4 2',
+    '  class CON_1,CON_2,CON_3,SEN_2,SEN_3,QA_2 doneNode',
+    '  class SEN_4 doneUnprovenNode',
+    '  class DATA_3,PAR_1 progressNode',
+    '  class SEN_6 reviewNode',
+    '  class SEN_8,SEN_9,INT_1,INT_2,QA_3,SHIP_1,SHIP_2 todoNode',
+    '  class HELM_BASE externalNode'
+  ].join('\n');
+
+  // node records — what missionStatus.linked_tasks[].task_detail carries
+  var DAG_META={
+    'CON-1':{m:'m1',st:'done',t:'Draft shared contract',pr:'PR #391 merged',sha:'a41c2e9',spend:'$0.14k',nar:'Contract drafted from the intake constraints; consumers reviewed.'},
+    'CON-2':{m:'m1',st:'done',t:'Version + publish pipeline',pr:'PR #395 merged',sha:'0f7d311',spend:'$0.18k',nar:'Publish pipeline live; v1 frozen and pinned.'},
+    'CON-3':{m:'m1',st:'done',t:'Consumer conformance tests',pr:'PR #402 merged',sha:'6cc90ab',spend:'$0.16k',nar:'Conformance suite green for both consumers.'},
+    'SEN-2':{m:'m2',st:'done',t:'SAML response handler',pr:'PR #405 merged',sha:'b3e871d',spend:'$0.31k',nar:'Handler merged with 12 new tests; parity untouched.'},
+    'SEN-3':{m:'m2',st:'done',t:'Session issuance',pr:'PR #408 merged',sha:'9d24f60',spend:'$0.27k',nar:'Sessions issued off the shared contract claims.'},
+    'SEN-4':{m:'m2',st:'done_unproven',t:'Session persistence',spend:'$0.22k',nar:'Marked Done by the agent — no merge provenance recorded.'},
+    'SEN-6':{m:'m2',st:'in_review',t:'Wire Entra app registration',key:true,sess:'atlas',av:'A',color:'#c0392b',agent:'atlas · claude-code/high',pr:'PR #412 open',ci:'CI 3 of 4 green',spend:'$1.10',nar:'Opened PR #412; parity gate green on first run, one flaky e2e retrying.'},
+    'SEN-8':{m:'m2',st:'todo',t:'Provisioning hooks',deps:['SEN-6'],wave:'wave 2',est:'~$0.20k'},
+    'SEN-9':{m:'m2',st:'todo',t:'Fallback edge cases',deps:['SEN-6'],wave:'wave 2',est:'~$0.25k'},
+    'DATA-3':{m:'m2',st:'in_progress',t:'Directory attribute sync',sess:'codex',av:'C',color:'#206bc4',agent:'codex · codex-cli/balanced',spend:'$0.60',nar:'Mapping matches the contract; adding pagination for large directories.'},
+    'QA-2':{m:'m2',st:'done',t:'e2e smoke vs prototype',sess:'nova',av:'N',color:'#2fb344',pr:'PR #410 merged',sha:'e1f5c02',spend:'$0.30',nar:'7/7 green — flow matches the approved prototype exactly.'},
+    'INT-1':{m:'m3',st:'todo',t:'Portal session integration',deps:['SEN-6','DATA-3'],wave:'wave 2',est:'~$0.30k'},
+    'INT-2':{m:'m3',st:'todo',t:'Admin role mapping',deps:['SEN-6'],wave:'wave 2',est:'~$0.22k'},
+    'QA-3':{m:'m3',st:'todo',t:'Cross-board e2e',deps:['SEN-8','SEN-9','INT-1','INT-2'],wave:'wave 2',est:'~$0.28k'},
+    'PAR-1':{m:'m4',st:'in_progress',t:'Parity gate vs Helm baseline',agent:'gate · runs on every merge',spend:'$0.21k',nar:'Green for 11 consecutive merges.'},
+    'SHIP-1':{m:'m4',st:'todo',t:'Cutover runbook',deps:['QA-3','PAR-1'],wave:'wave 2',est:'~$0.15k'},
+    'SHIP-2':{m:'m4',st:'todo',t:'Go-live + rollback drill',deps:['SHIP-1'],wave:'wave 2',est:'~$0.18k'},
+    'HELM-BASE':{m:'m4',st:'external',t:'Helm baseline pipeline',nar:'External dependency — tracked here, built elsewhere. Its real state colors the node.'}
+  };
+  var ST_LABEL={done:['#2fb344','done · proven'],done_unproven:['#12b886','done — unproven'],in_progress:['#206bc4','in progress'],in_review:['#f76707','in review'],blocked:['#d63939','blocked'],todo:['#8b95a5','not started'],external:['#adb5bd','external']};
+
+  function renderDag(){
+    var host=document.getElementById('dagHost'); if(!host) return;
+    if(!window.mermaid){ host.innerHTML='<div class="text-secondary small py-3 text-center">Dependency map renderer is unavailable right now — reload to retry.</div>'; return; }
+    if(!window.__dagInit){
+      window.mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme:'neutral',
+        themeVariables:{ fontSize:'12px', fontFamily:"'Inter Var','Inter',-apple-system,sans-serif" },
+        flowchart:{ useMaxWidth:false, htmlLabels:true, curve:'linear', nodeSpacing:22, rankSpacing:42, padding:8, subGraphTitleMargin:{top:4,bottom:8} } });
+      window.__dagInit=true;
+    }
+    window.mermaid.render('mission-dag-1', DAG_SRC).then(function(r){
+      host.innerHTML=r.svg; decorateDag(host); dagHighlight(curDl);
+    }).catch(function(e){
+      host.innerHTML='<div class="alert alert-warning mb-2">Could not render graph: '+e.message+'</div><pre class="small mb-0" style="white-space:pre-wrap"></pre>';
+      host.querySelector('pre').textContent=DAG_SRC;
+    });
+  }
+  function decorateDag(host){
+    var SVGNS='http://www.w3.org/2000/svg';
+    host.querySelectorAll('.node').forEach(function(nodeEl){
+      var b=nodeEl.querySelector('b'); var id=(b?b.textContent:'').trim();
+      var meta=DAG_META[id]; if(!meta) return;
+      nodeEl.dataset.dagId=id; nodeEl.dataset.m=meta.m;
+      // every click opens the node card (production: openNodeModal on every node)
+      nodeEl.addEventListener('click',function(e){ e.preventDefault(); openNode(id); });
+      var rectEl=nodeEl.querySelector('rect')||nodeEl; var bb=rectEl.getBBox();
+      if(meta.key){ var ring=document.createElementNS(SVGNS,'rect');
+        ring.setAttribute('x',bb.x-5); ring.setAttribute('y',bb.y-5);
+        ring.setAttribute('width',bb.width+10); ring.setAttribute('height',bb.height+10);
+        ring.setAttribute('rx',12); ring.setAttribute('fill','none');
+        ring.setAttribute('stroke','#ae3ec9'); ring.setAttribute('stroke-width','1.5'); ring.setAttribute('stroke-dasharray','3 3');
+        nodeEl.insertBefore(ring,nodeEl.firstChild); }
+      if(meta.sess&&(meta.st==='in_progress'||meta.st==='in_review')){
+        var c=document.createElementNS(SVGNS,'circle');
+        c.setAttribute('cx',bb.x+bb.width-2); c.setAttribute('cy',bb.y+2); c.setAttribute('r',8);
+        c.setAttribute('fill',meta.color); c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','1.5');
+        var tx=document.createElementNS(SVGNS,'text');
+        tx.setAttribute('x',bb.x+bb.width-2); tx.setAttribute('y',bb.y+5.5); tx.setAttribute('text-anchor','middle');
+        tx.setAttribute('fill','#fff'); tx.setAttribute('font-size','9'); tx.setAttribute('font-weight','700'); tx.textContent=meta.av;
+        nodeEl.appendChild(c); nodeEl.appendChild(tx); }
+      // tooltip in _missionNodeTooltip format: "ID — title", narration, "▶ Working now: …"
+      var tipLines=[id+' — '+meta.t];
+      if(meta.nar) tipLines.push('',meta.nar);
+      if(meta.agent&&(meta.st==='in_progress'||meta.st==='in_review')) tipLines.push('','▶ Working now: '+meta.agent);
+      var t=document.createElementNS(SVGNS,'title'); t.textContent=tipLines.join('\n');
+      nodeEl.insertBefore(t,nodeEl.firstChild);
+    });
+  }
+  function dagHighlight(k){ var host=document.getElementById('dagHost'); if(!host) return;
+    host.querySelectorAll('.node').forEach(function(n){ if(n.dataset.m) n.classList.toggle('dim', n.dataset.m!==k); }); }
+
+  // ── the task panel — every node click opens the conversation with its session ──
+  // The tense follows node_execution_state: live tasks show the CLI stream and
+  // take steering; finished tasks answer questions from their transcript; future
+  // tasks take a brief the next agent inherits on claim. The production link
+  // fields (milestone · role · blocks) and Open task detail stay underneath.
+  var MS_LABEL={m1:'M1 · Shared contract',m2:'M2 · Core implementation',m3:'M3 · Cross-board',m4:'M4 · Parity & ship'};
+  var QA_CANNED={
+    'Why this approach?':'It followed the operating rules: reuse SHIPPED modules first. The directory module already exposed the graph client, so it extended that instead of adding a dependency.',
+    'What did it test?':'The task\'s named test files plus the parity gate. New tests cover every changed public function — 12 in the last run, all green.',
+    'Summarize the diff':'Net +214/−38 across 4 files. One new public function, no schema changes, no new dependencies. The M1 contract is consumed, not modified.'};
+  function openNode(id){
+    var meta=DAG_META[id]; if(!meta) return;
+    var st=ST_LABEL[meta.st]||ST_LABEL.todo;
+    var hasTrm=(meta.st==='in_progress'||meta.st==='in_review')&&meta.sess&&SESS[meta.sess];
+    // header — identity plus ONE state action
+    var act='';
+    if(meta.st==='in_review') act='<button class="btn btn-sm btn-primary" id="tpAct">Approve when green</button>';
+    else if(meta.st==='in_progress'&&meta.sess) act='<button class="btn btn-sm btn-outline-secondary" id="tpAct">Hold</button>';
+    else if(meta.st==='done') act='<button class="btn btn-sm btn-outline-secondary" id="tpAct">Open PR</button>';
+    else if(meta.st==='done_unproven') act='<button class="btn btn-sm btn-primary" id="tpAct">Reopen</button>';
+    else if(meta.st==='todo') act='<button class="btn btn-sm btn-outline-secondary" id="tpAct">Bump</button>';
+    document.getElementById('tpHead').innerHTML=
+      '<div class="flex-fill" style="min-width:0"><div class="text-secondary" style="font-size:.68rem">Northwind Energy · '+(MS_LABEL[meta.m]||'')+'</div>'
+      +'<div class="d-flex align-items-baseline gap-2"><span class="fw-bold mono">'+id+'</span><span class="text-truncate">'+meta.t+'</span></div>'
+      +'<div class="stx" style="font-size:.72rem"><span class="sdot'+(meta.st==='in_progress'?' live':'')+'" style="background:'+st[0]+'"></span>'+st[1]+(meta.key?' · keystone — merging opens 5 tasks':'')+'</div></div>'
+      +act+'<button class="btn btn-sm btn-outline-secondary" id="tpX"><i class="ti ti-x"></i></button>';
+    // body — what the state warrants
+    var b='';
+    if(meta.st==='in_review'){
+      b+='<div class="dl-next mb-2"><i class="ti ti-git-pull-request mt-1" style="color:#f76707"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.9rem">'+meta.pr+' · '+meta.ci+'</div><div class="text-secondary small">'+meta.nar+'</div></div></div>';
+    }
+    if(hasTrm){
+      b+='<div class="d-flex align-items-center gap-2 mb-2"><span class="avatar avatar-xs" style="background:'+(meta.color||'var(--tblr-primary)')+';color:#fff">'+meta.av+'</span><span class="small fw-semibold">'+meta.agent+'</span><span class="small text-secondary mono">'+(meta.spend||'')+' spent</span><a href="#" class="small ms-auto" data-node-sess="'+meta.sess+'">Open full session ›</a></div>'
+      +'<div class="tk-trm mb-2" id="tpTrm" style="max-height:270px;overflow:auto">'+SESS[meta.sess].html+'</div>'
+      +'<div class="small text-secondary">'+(meta.st==='in_review'?'The session still holds its lease — steer it below. <span class="mono">merge_gate</span> re-checks kickoff + closure before anything lands.':'This is the live session — talk to it below; it hears you mid-flight, even on autopilot.')+'</div>';
+    } else if(meta.st==='in_progress'){
+      b+='<div class="dl-next mb-2"><i class="ti ti-player-play mt-1" style="color:var(--tblr-primary)"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.9rem">'+meta.agent+'</div><div class="text-secondary small">'+meta.nar+'</div></div></div>'
+      +'<div class="small text-secondary mono">'+(meta.spend||'')+' spent</div>';
+    }
+    if(meta.st==='done'){
+      b+='<div class="tk-dots mb-2">'
+      +'<div class="r"><span class="d" style="background:#2fb344"></span><b>'+(meta.pr||'merged')+'</b>'+(meta.sha?' · exact SHA <span class="mono">'+meta.sha+'</span>':'')+'</div>'
+      +'<div class="r"><span class="d" style="background:#2fb344"></span>CI green at merge · closure counts it as proven</div>'
+      +'<div class="r"><span class="d" style="background:#8b95a5"></span><span class="mono">'+(meta.spend||'')+'</span> spent · in the Tally proven bucket</div></div>'
+      +'<div class="small text-secondary">'+(meta.nar||'')+'</div>'
+      +'<div class="small text-secondary mt-2">The session ended; its transcript didn\'t. Ask it anything below.</div><div class="tp-qa" id="tpQa"></div>';
+    } else if(meta.st==='done_unproven'){
+      b+='<div class="dl-next mb-2" style="border-color:rgba(18,184,134,.4);background:rgba(18,184,134,.04)"><i class="ti ti-alert-triangle mt-1" style="color:#12b886"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.9rem">Done — but no merge provenance</div><div class="text-secondary small">'+meta.nar+' Closure will not count it as proven; Tally holds its spend outside the proven bucket.</div></div></div>'
+      +'<button class="btn btn-sm btn-outline-secondary" id="tpStand">Let it stand — with your sign-off</button>'
+      +'<div class="small text-secondary mt-2">Before you decide — the transcript is still queryable. Ask below what it actually did.</div><div class="tp-qa" id="tpQa"></div>';
+    } else if(meta.st==='todo'){
+      var deps=(meta.deps||[]).map(function(d){ var dm=DAG_META[d]||{}; var ds=ST_LABEL[dm.st]||ST_LABEL.todo;
+        return '<div class="r"><span class="d" style="background:'+ds[0]+'"></span><span class="mono">'+d+'</span> — '+ds[1]+'</div>'; }).join('');
+      b+='<div class="tk-eyebrow mb-1">Waits on</div><div class="tk-dots mb-2">'+deps+'</div>'
+      +'<div class="small text-secondary mb-2">No agent yet — <span class="mono">claim_next</span> dispatches one the moment the deps merge; no one schedules it. '+(meta.wave?'Planned in '+meta.wave+' · est '+(meta.est||'')+'.':'')+'</div>'
+      +'<div class="tk-eyebrow mb-1">What its agent inherits on claim</div><div class="tk-dots mb-2">'
+      +'<div class="r"><span class="d" style="background:#8b95a5"></span>Kickoff record v8 · operating rules · contract v1 pins</div>'
+      +'<div class="r"><span class="d" style="background:#8b95a5"></span>ADRs touching its files · a lease on its paths</div>'
+      +'<div class="r"><span class="d" style="background:#8b95a5"></span><span id="tpBriefNote">Your briefing notes — none yet; add one below</span></div></div>'
+      +'<div class="tp-qa" id="tpQa"></div>';
+    } else if(meta.st==='blocked'){
+      b+='<div class="dl-next mb-2" style="border-color:rgba(214,57,57,.4);background:rgba(214,57,57,.04)"><i class="ti ti-hand-stop mt-1" style="color:#d63939"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.9rem">Blocked</div><div class="text-secondary small">'+(meta.nar||'')+'</div></div></div>';
+    } else if(meta.st==='external'){
+      b+='<div class="small text-secondary mb-1">'+(meta.nar||'External dependency — tracked, not built on this board.')+'</div>'
+      +'<div class="stx small"><span class="sdot" style="background:#adb5bd"></span>its real state colors the node — a merged dep reads green, not grey</div>';
+    }
+    // the old project-management layer — same fields as the production modal
+    b+='<div class="mt-3 pt-2 border-top"><a href="#" class="small" id="tpOpenTask">Open task detail ›</a>'
+    +'<details class="mt-1" id="nodeLink"><summary class="small text-secondary" style="cursor:pointer;list-style:none">Link settings — milestone · role · blocks ›</summary>'
+    +'<div class="row g-2 mt-1"><div class="col-6"><label class="form-label small mb-1">Milestone</label><select class="form-select form-select-sm"><option>'+({m1:'M1',m2:'M2',m3:'M3',m4:'M4'}[meta.m]||'—')+'</option></select></div>'
+    +'<div class="col-6"><label class="form-label small mb-1">Role</label><select class="form-select form-select-sm"><option>contributes</option><option>required</option></select></div></div>'
+    +'<label class="form-check mt-2 small"><input class="form-check-input" type="checkbox" '+(meta.key?'checked':'')+'><span class="form-check-label">This task blocks the deliverable</span></label>'
+    +'<div class="d-flex gap-2 mt-2"><button class="btn btn-sm btn-outline-secondary" id="tpLinkSave">Save link</button><button class="btn btn-sm btn-ghost-secondary text-danger" id="tpUnlink">Unlink</button></div></details></div>';
+    document.getElementById('tpBody').innerHTML=b;
+    // composer — one input, three tenses
+    var foot=document.getElementById('tpFoot'),chipsEl=document.getElementById('tpChips'),inEl=document.getElementById('tpIn');
+    var tense=hasTrm?'steer':(meta.st==='done'||meta.st==='done_unproven')?'ask':(meta.st==='todo')?'brief':null;
+    if(!tense){ foot.style.display='none'; }
+    else{
+      foot.style.display='';
+      if(tense==='steer'){ inEl.placeholder='Steer — it hears you mid-flight, even on autopilot';
+        chipsEl.innerHTML=['Redirect','Hold','Approve merge'].map(function(c){ return '<button class="btn btn-sm btn-outline-secondary" data-tp-steer="'+c.toLowerCase().split(' ')[0]+'">'+c+'</button>'; }).join(''); }
+      else if(tense==='ask'){ inEl.placeholder='Ask the transcript — the session ended, the knowledge didn\'t';
+        chipsEl.innerHTML=Object.keys(QA_CANNED).map(function(q){ return '<button class="btn btn-sm btn-outline-secondary" data-tp-q="'+q+'">'+q+'</button>'; }).join(''); }
+      else{ inEl.placeholder='Brief the future agent — folded into its context when it claims '+id;
+        chipsEl.innerHTML=['Add a constraint','Point at prior art'].map(function(q){ return '<button class="btn btn-sm btn-outline-secondary" data-tp-q="'+q+': ">'+q+'</button>'; }).join(''); }
+    }
+    var pnl=document.getElementById('taskPanel');
+    pnl.classList.add('on'); scrim.classList.add('on');
+    function tpSay(t,a){ var trm=document.getElementById('tpTrm'); if(!trm) return;
+      trm.insertAdjacentHTML('beforeend','<div class="c-you">&gt; '+t+'</div>');
+      setTimeout(function(){ trm.insertAdjacentHTML('beforeend','<div class="c-ack">⎿ '+a+'</div>'); trm.scrollTop=1e6; },600); trm.scrollTop=1e6; }
+    function tpAsk(q){ var qa=document.getElementById('tpQa'); if(!qa) return;
+      var a=QA_CANNED[q]||('From the transcript: '+(meta.nar||'the run completed within its lease; the full log is on the task record.'));
+      qa.insertAdjacentHTML('beforeend','<div class="q">'+q+'</div><div class="a">'+a+'</div>');
+      document.getElementById('tpBody').scrollTop=1e6; }
+    function tpBrief(t){ var qa=document.getElementById('tpQa'); if(!qa) return;
+      qa.insertAdjacentHTML('beforeend','<div class="q">Brief for '+id+'</div><div class="a">'+t+'</div>');
+      var n=document.getElementById('tpBriefNote'); if(n) n.textContent='1 briefing note — injected when the agent claims';
+      toast('Saved — '+id+'\'s agent reads this before its first token'); }
+    document.getElementById('tpX').addEventListener('click',closeNode);
+    var acts={in_review:function(){ closeNode(); toast('Merge approved pending green CI — merge_gate re-checks and stamps it'); },
+              in_progress:function(){ tpSay('hold after the current test run','will pause at the next safe boundary; nothing killed mid-thought'); },
+              done:function(){ toast('Opening '+(meta.pr||'the merged PR')+' on GitHub'); },
+              done_unproven:function(){ closeNode(); toast(id+' reopened → Ready · re-dispatched — trust gate logged'); },
+              todo:function(){ closeNode(); toast(id+' bumped — claim_next will prefer it when its deps clear'); }};
+    var ab=document.getElementById('tpAct'); if(ab&&acts[meta.st]) ab.addEventListener('click',acts[meta.st]);
+    pnl.querySelectorAll('[data-node-sess]').forEach(function(w){ w.addEventListener('click',function(e){ e.preventDefault(); closeNode(); openSess(w.dataset.nodeSess); }); });
+    var stnd=document.getElementById('tpStand'); if(stnd) stnd.addEventListener('click',function(){ closeNode(); toast(id+' stands — logged with your sign-off; stays unproven in Tally'); });
+    document.getElementById('tpOpenTask').addEventListener('click',function(e){ e.preventDefault(); toast('Task detail — the full record behind this node'); });
+    var ls=document.getElementById('tpLinkSave'); if(ls) ls.addEventListener('click',function(){ toast('Link saved — milestone · role · blocks'); });
+    var ul=document.getElementById('tpUnlink'); if(ul) ul.addEventListener('click',function(){ closeNode(); toast(id+' unlinked from the deliverable'); });
+    function tpSend(){ var v=inEl.value.trim(); if(!v) return; inEl.value='';
+      if(tense==='steer') tpSay(v,'acknowledged — adjusting course');
+      else if(tense==='ask') tpAsk(v);
+      else if(tense==='brief') tpBrief(v); }
+    document.getElementById('tpSend').onclick=tpSend;
+    inEl.onkeydown=function(e){ if(e.key==='Enter') tpSend(); };
+    chipsEl.querySelectorAll('[data-tp-steer]').forEach(function(c){ c.addEventListener('click',function(){ var s=STEERS[c.dataset.tpSteer]; if(s) tpSay(s[0],s[1]); }); });
+    chipsEl.querySelectorAll('[data-tp-q]').forEach(function(c){ c.addEventListener('click',function(){ if(tense==='ask') tpAsk(c.dataset.tpQ); else{ inEl.value=c.dataset.tpQ; inEl.focus(); } }); });
+  }
+  function closeNode(){ document.getElementById('taskPanel').classList.remove('on'); scrim.classList.remove('on'); }
+  scrim.addEventListener('click',function(){ closeNode(); });
+
+  renderDlList(); selectDl('m2');
+  document.querySelectorAll('[data-open-dl]').forEach(function(b){ b.addEventListener('click',function(){ selectDl(b.dataset.openDl); go('tab-deliv'); }); });
+
+  // ══ the gated kickoff ladder — the product invariant, made visible ══
+  // Each gate is a versioned artifact with an approval on record. Approving one
+  // unlocks the next. build_authorized is true only when all five are green;
+  // everything downstream (claim_next, sessions, merge, the top Kick-off button)
+  // derives from it. Editing an upstream artifact invalidates dependents.
+  var LADDER=[
+    {id:'vision',name:'Vision / POV',answers:'Thesis · user · why-now · non-goals · success metrics',
+      extra:'Parity-first thesis accepted · recorded as ADR-1.'},
+    {id:'prd',name:'PRD',answers:'In / out of scope · journeys · requirements · constraints · open questions',
+      extra:'No silent unknowns — 2 open questions resolved on the brief.'},
+    {id:'arch',name:'Architecture',answers:'Components · data model · trust/auth boundaries · phases',
+      extra:'<div class="ko-tags"><div class="ko-tag"><span class="d" style="background:#2fb344"></span><b>Shipped</b> — claim_next, mission_graph, deliverable_closure reused</div><div class="ko-tag"><span class="d" style="background:#f59f00"></span><b>Thin</b> — Tally two-stream extended</div><div class="ko-tag"><span class="d" style="background:#d63939"></span><b>New</b> — none. No new engines invented.</div></div><div class="text-secondary mt-2" style="font-size:.78rem">Reuse points named · table verified against the live repo.</div>'},
+    {id:'rules',name:'Operating rules',icon:'ti-gavel',answers:'Branching · DoD · file/lane ownership · test/CI · "don\'t invent engines"',
+      extra:'Injected via <span class="mono">get_working_agreement</span> · lease boundaries: <span class="mono">sso/entra</span>, <span class="mono">directory/sync</span>.'},
+    {id:'scope',name:'Scope breakdown',icon:'ti-list-check',answers:'A specific proposed task graph — approving releases Wave 1 only',
+      extra:'<span class="mono">propose_deliverable_breakdown</span> → 21 tasks across 4 milestones. Approve materializes <strong>Wave 1 (4 tasks)</strong>; Wave 2 stays blocked on deps.'}
+  ];
+  // seed state: vision+prd approved, arch is the frontier
+  var koState={ vision:{s:'ok',by:'you · Jul 13',v:'v2'}, prd:{s:'ok',by:'you · Jul 14',v:'v3'}, arch:{s:'now'}, rules:{s:'wait'}, scope:{s:'wait'} };
+  function frontier(){ for(var i=0;i<LADDER.length;i++){ if(koState[LADDER[i].id].s!=='ok') return i; } return -1; }
+  function buildAuthorized(){ return frontier()===-1; }
+  var SHORT={vision:'Vision',prd:'PRD',arch:'Architecture',rules:'Operating rules',scope:'Scope breakdown'};
+  var curSec='arch';
+  // the rail = compact stepper; click a gate to open its artifact section
+  function renderLadder(){
+    var fr=frontier();
+    document.getElementById('koLadder').innerHTML=LADDER.map(function(a,i){
+      var st=koState[a.id], cls,node,meta;
+      if(st.s==='ok'){ cls='done'; node='<i class="ti ti-check"></i>'; meta='Approved '+st.v; }
+      else if(i===fr){ cls=(st.s==='stale')?'stale':'now'; node=(i+1); meta=(st.s==='stale')?'Superseded':'Ready to approve'; }
+      else if(st.s==='stale'){ cls='stale'; node='<i class="ti ti-alert-triangle"></i>'; meta='Stale'; }
+      else { cls='blocked'; node='<i class="ti ti-lock" style="font-size:.7rem"></i>'; meta='Locked'; }
+      var loc=a.id==='scope'?' · in Plan':'';
+      return '<button class="rail-step '+cls+(a.id===curSec?' active':'')+'" data-gate="'+a.id+'"><span class="rn">'+node+'</span><span class="rt">'+SHORT[a.id]+'</span><span class="rm">'+meta+loc+'</span></button>';
+    }).join('');
+    document.querySelectorAll('#koLadder .rail-step').forEach(function(r){ r.addEventListener('click',function(){ showSection(r.dataset.gate); }); });
+    renderSwitchStates(fr); renderFooters(fr); syncVerdict();
+  }
+  function renderSwitchStates(fr){
+    ['vision','prd','arch','rules'].forEach(function(id){
+      var b=document.querySelector('#shapeSwitch button[data-sec="'+id+'"]'); if(!b) return;
+      var st=koState[id], i=LADDER.findIndex(function(a){return a.id===id;}), stEl=b.querySelector('.st');
+      b.classList.remove('done','now','stale');
+      if(st.s==='ok'){ b.classList.add('done'); stEl.innerHTML='<i class="ti ti-check"></i>'; }
+      else if(i===fr){ b.classList.add(st.s==='stale'?'stale':'now'); stEl.textContent=(i+1); }
+      else if(st.s==='stale'){ b.classList.add('stale'); stEl.textContent='!'; }
+      else { stEl.innerHTML='<i class="ti ti-lock" style="font-size:.55rem"></i>'; }
+    });
+  }
+  function renderFooters(fr){
+    ['vision','prd','arch','rules'].forEach(function(id){
+      var el=document.querySelector('.shape-foot[data-foot="'+id+'"]'); if(!el) return;
+      var st=koState[id], i=LADDER.findIndex(function(a){return a.id===id;});
+      el.className='shape-foot';
+      if(st.s==='ok'){ el.classList.add('done');
+        var edit=(id==='arch'||id==='prd')?' · <a href="#" data-edit="'+id+'" class="ko-edit">revise</a>':'';
+        el.innerHTML='<i class="ti ti-circle-check"></i><span>Approved '+st.v+' · '+st.by+edit+'</span>'; }
+      else if(i===fr){
+        if(id==='prd' && document.querySelectorAll('#gateList [data-gate]').length){
+          el.innerHTML='<i class="ti ti-help-circle" style="color:#f76707"></i><span class="text-secondary">Resolve the open questions above before this can be approved.</span>'; }
+        else { var stale=st.s==='stale';
+          el.innerHTML='<span class="text-secondary flex-fill">'+(stale?'Superseded — re-approve to restore build authorization.':'Reviewed it? Approve to unlock the next artifact.')+'</span><button class="btn btn-sm btn-primary" data-approve="'+id+'">'+(stale?'Re-approve':'Approve')+'</button>'; }
+      }
+      else if(st.s==='stale'){ el.classList.add('blocked'); el.innerHTML='<i class="ti ti-alert-triangle" style="color:#f76707"></i><span>Stale — re-approve '+(fr>-1?LADDER[fr].name:'upstream')+' first.</span>'; }
+      else { el.classList.add('blocked'); el.innerHTML='<i class="ti ti-lock"></i><span>Unlocks after '+LADDER[i-1].name+' is approved.</span>'; }
+    });
+    document.querySelectorAll('.shape-foot [data-approve]').forEach(function(b){ b.addEventListener('click',function(){ approve(b.dataset.approve); }); });
+    document.querySelectorAll('.shape-foot [data-edit]').forEach(function(b){ b.addEventListener('click',function(e){ e.preventDefault(); invalidate(b.dataset.edit); }); });
+  }
+  function showSection(id){
+    if(id==='scope'){ go('tab-plan'); toast('Scope breakdown is approved in Plan — the fifth gate.'); return; }
+    curSec=id;
+    document.querySelectorAll('.shape-sec').forEach(function(s){ s.classList.toggle('on', s.id==='sec-'+id); });
+    document.querySelectorAll('#shapeSwitch button').forEach(function(b){ b.classList.toggle('on', b.dataset.sec===id); });
+    document.querySelectorAll('#koLadder .rail-step').forEach(function(r){ r.classList.toggle('active', r.dataset.gate===id); });
+  }
+  document.querySelectorAll('#shapeSwitch button').forEach(function(b){ b.addEventListener('click',function(){ showSection(b.dataset.sec); }); });
+  function approve(id){ koState[id]={s:'ok',by:'you · now',v:(id==='arch'?'v3':id==='rules'?'v1':'v1')};
+    // unlock next
+    var fr=frontier(); if(fr>-1) koState[LADDER[fr].id].s= koState[LADDER[fr].id].s==='wait'?'now':koState[LADDER[fr].id].s;
+    // normalize: the new frontier becomes 'now'
+    var nf=frontier(); LADDER.forEach(function(a,i){ if(koState[a.id].s!=='ok'&&koState[a.id].s!=='stale') koState[a.id].s=(i===nf?'now':'wait'); });
+    var nm=LADDER.find(function(a){return a.id===id;}).name;
+    toast('Approved: '+nm+' — recorded with approver, timestamp & version hash');
+    renderLadder();
+    if(buildAuthorized()) toast('✓ Build authorized — Wave 1 is now claimable');
+  }
+  function invalidate(id){
+    // editing arch invalidates rules+scope; editing prd invalidates arch+rules+scope
+    var chain = id==='prd' ? ['arch','rules','scope'] : ['rules','scope'];
+    var hit=[];
+    chain.forEach(function(k){ if(koState[k].s==='ok'){ koState[k].s='stale'; hit.push(LADDER.find(function(a){return a.id===k;}).name); } });
+    // the edited artifact stays approved but bumps; frontier recomputed
+    var nf=frontier(); LADDER.forEach(function(a,i){ if(koState[a.id].s!=='ok'&&koState[a.id].s!=='stale') koState[a.id].s=(i===nf?'now':'wait'); });
+    renderLadder();
+    toast(hit.length? (LADDER.find(function(a){return a.id===id;}).name)+' revised → '+hit.join(' & ')+' now stale · build de-authorized until re-approved' : 'Revised — no downstream approvals affected');
+  }
+  function syncVerdict(){
+    var fr=frontier(), authed=buildAuthorized();
+    var remaining=LADDER.filter(function(a){ return koState[a.id].s!=='ok'; }).length;
+    var approvedN=5-remaining, next=fr>-1?LADDER[fr].name:'';
+    // scope gate in Plan (the 5th gate)
+    var sg=document.getElementById('scopeGate'),sgt=document.getElementById('scopeGateTitle'),sgs=document.getElementById('scopeGateSub'),sa=document.getElementById('scopeApprove');
+    if(sg){ var ss=koState.scope.s, scopeFrontier=(fr>-1&&LADDER[fr].id==='scope');
+      if(ss==='ok'){ sg.className='ko-verdict ok mb-3'; sgt.textContent='Scope breakdown approved — Wave 1 released'; sgs.innerHTML='4 tasks are claimable; Wave 2 unlocks on dependency. <code>claim_next</code> now serves this milestone.'; sa.disabled=true; sa.innerHTML='<i class="ti ti-check me-1"></i>Approved'; }
+      else if(scopeFrontier){ sg.className='ko-verdict blocked mb-3'; sgt.textContent='Scope breakdown — ready to approve'; sgs.innerHTML='All four Scope artifacts are green. Approving this graph materializes <strong>Wave 1 (4 tasks)</strong>; Wave 2 stays blocked on deps.'; sa.disabled=false; sa.innerHTML='<i class="ti ti-shield-check me-1"></i>Approve breakdown'; }
+      else { sg.className='ko-verdict blocked mb-3'; sgt.textContent='Scope breakdown — the fifth kickoff gate'; sgs.innerHTML='Approve the four Scope artifacts first — this stays locked until then. Nothing here is claimable yet.'; sa.disabled=true; sa.innerHTML='<i class="ti ti-lock me-1"></i>Locked'; } }
+    // nav item: plain count, not a coloured pill (kept minimal)
+    var nkb=document.getElementById('nav-kickoff-badge'); if(nkb){ nkb.textContent=authed?'✓':remaining+' left'; nkb.className='ms-auto small '+(authed?'text-green':'text-secondary'); }
+    // header status line
+    var st1=document.getElementById('koStatus'),stt=document.getElementById('koStatusText'),stc=document.getElementById('koStatusCount'),bar=document.getElementById('koBar');
+    if(bar) bar.style.width=(approvedN/5*100)+'%';
+    if(st1){ st1.classList.toggle('ok',authed);
+      st1.querySelector('i').className='ti '+(authed?'ti-lock-open':'ti-lock'); st1.querySelector('i').style.color=authed?'#2fb344':'#f76707';
+      stt.textContent=authed?'Build authorized':'Build blocked'; stt.style.color=authed?'#2fb344':'#f76707';
+      stc.textContent='· '+approvedN+' of 5 gates approved'; }
+    // verdict strip
+    var vc=document.getElementById('koVerdictCard'),vi=document.getElementById('koVerdictIcon'),vt=document.getElementById('koVerdictTitle'),vs=document.getElementById('koVerdictSub'),kk=document.getElementById('koKick');
+    vc.className='ko-verdict '+(authed?'ok':'blocked')+' mt-1';
+    if(authed){ vi.className='ti ti-lock-open'; vi.style.color='#2fb344';
+      vt.textContent='Build authorization: granted'; vt.className='fw-bold text-green';
+      vs.innerHTML='All 5 gates green. <code>claim_next</code> now serves Wave 1 (4 tasks); <code>merge_gate</code> re-checks on completion.';
+      kk.disabled=false; }
+    else { vi.className='ti ti-shield-lock'; vi.style.color='#f76707';
+      vt.textContent='Build authorization: blocked'; vt.className='fw-bold';
+      var stale=LADDER.some(function(a){return koState[a.id].s==='stale';});
+      vs.innerHTML=(stale?'A supersede left downstream gates stale. ':'')+remaining+' gate'+(remaining>1?'s':'')+' remain'+(remaining===1?'s':'')+' — next: <strong>'+next+'</strong>. <code>claim_next</code> excludes every implementation task.';
+      kk.disabled=true; }
+    // overview banner + top button
+    var okb=document.getElementById('ovKickoffBanner'),okm=document.getElementById('ovKickoffMsg'),okn=document.getElementById('ovKickoffNext');
+    var approved=5-remaining;
+    if(authed){ if(okb){ okb.style.borderColor='rgba(47,179,68,.4)'; okb.style.background='rgba(47,179,68,.07)'; } if(okm) okm.textContent='Kickoff complete — build authorized.'; if(okn) okn.innerHTML='Wave 1 is claimable. The kickoff record (vision · PRD · architecture · rules · scope) is on file.'; }
+    else { if(okb){ okb.style.borderColor='rgba(247,103,7,.4)'; okb.style.background='rgba(247,103,7,.07)'; } if(okm) okm.textContent='Build blocked — '+approved+' of 5 kickoff gates approved.'; if(okn) okn.textContent='Next: approve '+(fr>-1?LADDER[fr].name:'')+'. No implementation task can be claimed until the kickoff record is complete.'; }
+    // stepper: shape done when rules approved; scope done when scope approved; build now when authorized
+    setStep('scope', koState.rules.s==='ok'?(authed?'done':'now'):'');
+    setStep('shape', koState.rules.s==='ok'?'done':'now');
+    setStep('build', authed?'now':'');
+    // one CTA, one look — only the enabled state changes
+    var kf=document.getElementById('btn-kickoff');
+    if(kf){ kf.disabled=!authed; kf.title=authed?'Dispatch wave 1':'Blocked — '+remaining+' kickoff gate'+(remaining>1?'s':'')+' open'; }
+  }
+  function setStep(ph,state){ var el=document.querySelector('#ovStepper [data-ph="'+ph+'"]'); if(!el) return; el.classList.remove('now','done'); if(state) el.classList.add(state); }
+
+  function releaseWave(){
+    if(!buildAuthorized()) return;
+    go('tab-deliv'); document.getElementById('stageBadge').textContent='Build · wave 1 live'; document.getElementById('koPhase').textContent='build';
+    toast('⚡ Wave 1 released — SEN-7 · DATA-3 · QA-2 · parity gate, claimable in parallel'); }
+  document.getElementById('koKick').addEventListener('click',releaseWave);
+  document.getElementById('scopeApprove').addEventListener('click',function(){ if(koState.scope.s!=='ok'&&frontier()>-1&&LADDER[frontier()].id==='scope') approve('scope'); });
+
+  // top-bar Kick off derives from the same gate (disabled while blocked)
+  function tryKickoff(){
+    if(!buildAuthorized()){ var fr=frontier(); toast('Kickoff blocked — approve '+(fr>-1?LADDER[fr].name:'the open gate')+' first. No build task is claimable yet.'); go('tab-shape'); if(fr>-1&&LADDER[fr].id!=='scope') showSection(LADDER[fr].id); return; }
+    releaseWave(); }
+  document.getElementById('btn-kickoff').addEventListener('click',tryKickoff);
+
+  // ── pulse digest ──
+  document.getElementById('digest-gen').addEventListener('click',function(){
+    document.getElementById('digest-latest').innerHTML='<div class="small"><strong>Week of Jul 13.</strong> The brief moved v5→v'+v+' (parity gate into wave 1, ledger re-price, tier call raised). Two human gates open — SCIM and model tier; nothing dispatches past them. Fleet idle by design until kickoff. Risk watch: the TotalEnergies date has 4 days of buffer — the "2 weeks" redline on the brief buys 3 more. <em>Suggested next: decide the two gates, apply the redline, kick off.</em></div>'; });
+
+  // ── ⌘K — jump, decide, act ──
+  var back=document.getElementById('cmdk-backdrop'),cin=document.getElementById('cmdkIn'),clist=document.getElementById('cmdkList'),csel=0;
+  var CMDS=[
+    {g:'Jump',l:'Overview',i:'ti-layout-dashboard',f:function(){go('tab-overview');}},
+    {g:'Jump',l:'Scope — author the four artifacts',i:'ti-file-text',m:'v7',f:function(){go('tab-shape');}},
+    {g:'Jump',l:'Plan — milestones & waves',i:'ti-layout-kanban',f:function(){go('tab-plan');}},
+    {g:'Jump',l:'Deliverables — the cockpit',i:'ti-target-arrow',m:'M2 building',f:function(){go('tab-deliv');}},
+    {g:'Jump',l:'Tally — two-stream ledger',i:'ti-report-money',f:function(){go('tab-tally');}},
+    {g:'Jump',l:'Results — closure & KPIs',i:'ti-trophy',f:function(){go('tab-results');}},
+    {g:'Act',l:'Apply redline → v8 (make it 2 weeks)',i:'ti-git-compare',f:function(){go('tab-shape');showSection('vision');document.getElementById('applyBtn')&&document.getElementById('applyBtn').click();}},
+    {g:'Act',l:'Kick off wave 1',i:'ti-bolt',f:function(){tryKickoff();}},
+    {g:'Act',l:'Generate Pulse digest',i:'ti-sparkles',f:function(){go('tab-overview');document.getElementById('digest-gen').click();}},
+    {g:'Act',l:'Watch Atlas · SEN-6 (keystone)',i:'ti-terminal-2',m:'sess_7fa1',f:function(){go('tab-deliv');openSess('atlas');}},
+    {g:'Decide',l:'Needs you — 3 open gates',i:'ti-hand-stop',f:function(){go('tab-inbox');}}
+  ];
+  function render(q){ var rows=CMDS.filter(function(c){ return !q||(c.g+' '+c.l).toLowerCase().indexOf(q)>-1; });
+    csel=Math.min(csel,Math.max(0,rows.length-1)); var html='',g='';
+    rows.forEach(function(c,i){ if(c.g!==g){ html+='<div class="cmdk-group">'+c.g+'</div>'; g=c.g; }
+      html+='<div class="cmdk-item'+(i===csel?' active':'')+'" data-i="'+i+'"><i class="ti '+c.i+'"></i>'+c.l+(c.m?'<span class="cmdk-meta">'+c.m+'</span>':'')+'</div>'; });
+    clist.innerHTML=html||'<div class="cmdk-empty">No match.</div>'; back._rows=rows;
+    clist.querySelectorAll('.cmdk-item').forEach(function(el){ el.addEventListener('click',function(){ run(rows[+el.dataset.i]); }); }); }
+  function run(c){ hide(); if(c) c.f(); }
+  function show(){ back.classList.add('show'); cin.value=''; csel=0; render(''); setTimeout(function(){ cin.focus(); },30); }
+  function hide(){ back.classList.remove('show'); }
+  cin.addEventListener('input',function(){ csel=0; render(cin.value.trim().toLowerCase()); });
+  cin.addEventListener('keydown',function(e){ var rows=back._rows||[];
+    if(e.key==='ArrowDown'){ e.preventDefault(); csel=Math.min(csel+1,rows.length-1); render(cin.value.trim().toLowerCase()); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); csel=Math.max(csel-1,0); render(cin.value.trim().toLowerCase()); }
+    else if(e.key==='Enter'){ e.preventDefault(); run(rows[csel]); }
+    else if(e.key==='Escape'){ hide(); } e.stopPropagation(); });
+  back.addEventListener('click',function(e){ if(e.target===back) hide(); });
+  document.getElementById('f-search').addEventListener('focus',function(){ this.blur(); show(); });
+  document.addEventListener('keydown',function(e){
+    if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); back.classList.contains('show')?hide():show(); }
+    if(e.key==='Escape'){ hide(); hideThread(); closeSess(); if(typeof closeNode==='function') closeNode(); } });
+
+  // ── Found: new-project intake ──
+  var fb=document.getElementById('foundBack');
+  function openFound(){ fb.classList.add('on'); }
+  function closeFound(){ fb.classList.remove('on'); }
+  document.getElementById('btn-new-project').addEventListener('click',openFound);
+  document.getElementById('foundX').addEventListener('click',closeFound);
+  fb.addEventListener('click',function(e){ if(e.target===fb) closeFound(); });
+  document.querySelectorAll('#foundMode label').forEach(function(l){ l.addEventListener('click',function(){
+    document.querySelectorAll('#foundMode label').forEach(function(x){ x.classList.toggle('on',x===l); }); }); });
+  document.getElementById('foundCreate').addEventListener('click',function(){
+    var nm=(document.getElementById('foundName').value||'New project').trim();
+    closeFound(); go('tab-shape');
+    // reset the shape doc into a "drafting" state, then let the AI fill section 1
+    var sw=document.getElementById('koStatus');
+    document.querySelector('.shape-sec.on') || showSection('vision');
+    showSection('vision');
+    var v=document.getElementById('sec-vision').querySelector('.tk-ed');
+    var prev=v.innerHTML; v.innerHTML='<span class="drafting"><span class="sp"></span>Taikun is drafting the Vision from your transcript…</span>';
+    toast('Project created: '+nm+' — founding mission in phase shape. Nothing is claimable until you approve the kickoff record.');
+    setTimeout(function(){ v.innerHTML=prev; toast('Vision drafted — review it, then approve to unlock the PRD.'); },1600);
+  });
+
+  refreshGates(); renderLadder(); showSection('arch');
+})();
+</script>
+</body>
+</html>

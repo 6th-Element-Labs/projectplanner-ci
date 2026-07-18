@@ -1,0 +1,1868 @@
+<!DOCTYPE html>
+<!--
+    switchboard-live-restyle.html — the LIVE site, page by page, restyled additively.
+
+    Rule: every control the live app has stays. This file mirrors static/index.html
+    + app.js page for page — Overview, Plan (Epics/Board/Timeline/Milestones),
+    Deliverable (full cockpit), Fleet (hosts/wakes/runners), Ask, Inbox
+    (Queue/Decisions/Risks) — in the house style: dots-and-words instead of badge
+    pills, mono ledger numbers, the flat mermaid map, the task panel.
+    Genuinely NEW things are marked with a ✦ so they can be pulled back one by one.
+-->
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Switchboard — live site restyle, page by page</title>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css" rel="stylesheet"/>
+<style>
+
+/* ── taikun-tabler.css tokens (inlined verbatim — the single token source) ── */
+:root{
+  --tblr-primary:#c0392b; --tblr-primary-rgb:192,57,43;
+  --tblr-body-bg:#ffffff; --tblr-body-color:#101114; --tblr-secondary:#5b626e;
+  --tblr-border-color:#e2e5ea; --tblr-border-color-translucent:#e2e5ea;
+  --tk-radius-sm:.5rem; --tk-radius:.65rem; --tk-radius-lg:.9rem;
+  --tblr-border-radius:.65rem; --tblr-border-radius-lg:.85rem;
+  --tblr-font-sans-serif:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --tk-header-h:3rem;
+}
+/* ── taikun-ui.css polish §2 — inlined fully (the demo's look comes from this layer) ── */
+body{ -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; letter-spacing:-.005em; }
+.page-wrapper{ background:var(--tblr-body-bg); }
+.navbar-vertical{ background:var(--tblr-bg-surface); border-right:1px solid var(--tblr-border-color); box-shadow:none; }
+.navbar-vertical .nav-link{ border-radius:.55rem; }
+.navbar-vertical .nav-link-icon{ font-size:1rem; margin-inline-end:.6rem; color:var(--tblr-body-color); }
+#main-nav{ width:100%; padding-right:.4rem; }
+#main-nav .nav-link{ display:flex; align-items:center; width:100%; padding-right:.75rem; }
+#main-nav .nav-link .badge{ flex:0 0 auto; }
+#main-nav .nav-link-title{ flex:1; min-width:0; }
+.card{ background:var(--tblr-bg-surface); border:1px solid var(--tblr-border-color); border-radius:.9rem;
+  box-shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08);
+  transition:box-shadow .16s ease, transform .16s ease; }
+.card-sm{ border-radius:.8rem; }
+.card-header{ border-bottom:1px solid var(--tblr-border-color); }
+.card-footer{ border-top:1px solid var(--tblr-border-color); background:transparent; }
+/* refined sticky page-header — white, hairline base, faint shadow (sits below the toolbar) */
+.page-header{
+  position:sticky; top:var(--tk-header-h); z-index:20;
+  background:color-mix(in srgb, var(--tblr-bg-surface) 92%, transparent); backdrop-filter:saturate(180%) blur(8px);
+  border-bottom:1px solid var(--tblr-border-color);
+  box-shadow:0 1px 0 rgba(16,24,40,.02), 0 6px 18px -14px rgba(16,24,40,.35);
+  margin-bottom:0; padding-top:1rem; padding-bottom:1rem; }
+.page-title{ letter-spacing:-.02em; }
+.page-pretitle{ font-size:.625rem; text-transform:uppercase; letter-spacing:.08em; color:var(--tblr-secondary); font-weight:600; }
+.page-body{ padding-top:1.25rem; padding-bottom:2.5rem; }
+.btn{ border-radius:.6rem; font-weight:600; } .btn-sm{ border-radius:.5rem; }
+.btn-primary{ box-shadow:0 1px 2px rgba(var(--tblr-primary-rgb),.35); }
+.btn-primary:hover{ box-shadow:0 2px 8px rgba(var(--tblr-primary-rgb),.30); }
+.avatar{ box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px var(--tblr-border-color); font-weight:600; }
+.list-group-item{ border-color:var(--tblr-border-color); }
+.subheader{ letter-spacing:.05em; }
+.table tbody tr{ transition:background .1s ease; }
+::-webkit-scrollbar{ height:11px; width:11px; }
+::-webkit-scrollbar-thumb{ background:#dfe2e7; border-radius:20px; border:3px solid #fff; }
+::-webkit-scrollbar-thumb:hover{ background:#cdd2da; }
+::-webkit-scrollbar-track{ background:transparent; }
+.tk-toolbar{ background:var(--tblr-bg-surface); border-bottom:1px solid var(--tblr-border-color); min-height:var(--tk-header-h); position:sticky; top:0; z-index:1035; }
+#btn-inbox{ width:2rem; height:2rem; }
+#btn-inbox .badge-notification{ top:3px; right:3px; left:auto; transform:none; width:.5rem; height:.5rem; min-width:0; padding:0; border-radius:50%; font-size:0; border:2px solid var(--tblr-bg-surface); }
+.tk-subnav{ display:flex; gap:.25rem; flex-wrap:nowrap; overflow-x:auto; padding-bottom:.15rem; border-bottom:0; }
+.tk-subnav .nav-link{ white-space:nowrap; font-size:.75rem; padding:.35rem .8rem; border-radius:.5rem; color:var(--tblr-secondary); border:0; }
+.tk-subnav .nav-link:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); color:var(--tblr-body-color); }
+.tk-subnav .nav-link.active{ background:var(--tblr-primary); color:#fff; }
+.tk-act-item{ cursor:pointer; } .tk-act-item:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+@media (min-width:992px){ .navbar-vertical{ inset-block-start:var(--tk-header-h) !important; } }
+
+/* ── page-local (wireframe interactions; consumes tokens only) ── */
+.mono{ font-family:var(--tblr-font-monospace,ui-monospace,SFMono-Regular,Menlo,monospace); font-variant-numeric:tabular-nums; }
+.tk-eyebrow{ font-size:.75rem; font-weight:500; text-transform:uppercase; letter-spacing:.04em; line-height:1rem; color:var(--tblr-secondary); }
+.tab-pane{ display:none; } .tab-pane.active{ display:block; }
+/* the living brief */
+.tk-doc p{ font-size:.875rem; line-height:1.65; }
+.tk-cm{ background:rgba(247,103,7,.13); box-shadow:inset 0 -2px 0 rgba(247,103,7,.5); border-radius:2px; cursor:pointer; padding:0 1px; }
+.tk-cm.res{ background:transparent; box-shadow:inset 0 -2px 0 var(--tblr-border-color); }
+.tk-cm:hover{ background:rgba(247,103,7,.22); }
+.tk-ed:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); cursor:text; border-radius:.4rem; }
+.tk-ed:focus{ outline:none; background:var(--tblr-bg-surface-secondary,#f6f7f9); box-shadow:inset 2.5px 0 0 var(--tblr-primary); border-radius:.4rem; }
+.tk-redl s{ color:var(--tblr-secondary); } .tk-redl mark{ background:rgba(47,179,68,.18); border-radius:3px; padding:0 3px; }
+.tk-thread{ position:fixed; z-index:1080; width:min(400px,92vw); display:none; }
+.tk-thread.on{ display:block; }
+.tk-flash{ animation:tkflash 1.4s; } @keyframes tkflash{ 0%{ background:rgba(47,179,68,.16);} 100%{ background:transparent;} }
+/* work session terminal (the agent window — CLI in the browser) */
+.tk-session{ position:fixed; top:0; right:0; bottom:0; width:min(600px,96vw); z-index:1070; background:var(--tblr-bg-surface);
+  border-left:1px solid var(--tblr-border-color); box-shadow:-24px 0 70px -24px rgba(16,24,40,.4); transform:translateX(103%); transition:transform .2s; display:flex; flex-direction:column; }
+.tk-session.on{ transform:none; }
+.tk-trm{ background:#0d0f13; color:#c9ced6; border-radius:.65rem; padding:.8rem 1rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.75rem; line-height:1.75; overflow-x:auto; }
+.tk-trm .tl{ color:#7cc4ff; } .tk-trm .rs{ color:#8b95a5; padding-left:1rem; } .tk-trm .rs.ok{ color:#5fd38a; } .tk-trm .rs.pr{ color:#f5b153; }
+.tk-trm .ad{ color:#5fd38a; } .tk-trm .de{ color:#ff8d84; } .tk-trm .as{ color:#e7ebf1; }
+.tk-trm .tm{ color:#525c6b; font-size:.625rem; } .tk-trm .c-you{ color:#f0d264; margin-top:.4rem; } .tk-trm .c-ack{ color:#5fd38a; padding-left:1rem; }
+/* task panel — asking a finished transcript, briefing a future agent */
+.tp-qa .q{ font-size:.875rem; font-weight:600; margin-top:.65rem; }
+.tp-qa .a{ font-size:.875rem; color:var(--tblr-secondary); border-left:2px solid var(--tblr-border-color); padding-left:.7rem; margin-top:.3rem; }
+.tk-scrim{ position:fixed; inset:0; z-index:1060; background:rgba(20,22,28,.32); display:none; } .tk-scrim.on{ display:block; }
+/* waves */
+.tk-wt{ font-family:ui-monospace,Menlo,monospace; font-size:.75rem; font-weight:600; padding:.15rem .55rem; border-radius:.45rem; background:var(--tblr-bg-surface-secondary,#f6f7f9); color:var(--tblr-secondary); border:1px solid var(--tblr-border-color); }
+.tk-wt.ghost{ opacity:.5; border-style:dashed; background:transparent; }
+/* ⌘K — the real app's cmdk classes */
+#cmdk-backdrop{ position:fixed; inset:0; z-index:1090; background:rgba(20,22,28,.45); display:none; align-items:flex-start; justify-content:center; padding-top:11vh; }
+#cmdk-backdrop.show{ display:flex; }
+.cmdk-box{ width:min(580px,92vw); background:var(--tblr-bg-surface,#fff); border:1px solid var(--tblr-border-color); border-radius:14px; box-shadow:0 24px 64px rgba(0,0,0,.32); overflow:hidden; max-height:72vh; display:flex; flex-direction:column; }
+.cmdk-input{ border:0 !important; border-bottom:1px solid var(--tblr-border-color) !important; border-radius:0; font-size:1rem; padding:.85rem 1rem; box-shadow:none !important; }
+.cmdk-list{ overflow-y:auto; padding:.3rem 0; }
+.cmdk-group{ font-size:.625rem; text-transform:uppercase; letter-spacing:.05em; color:var(--tblr-secondary); padding:.5rem .9rem .15rem; }
+.cmdk-item{ display:flex; align-items:center; gap:.6rem; padding:.5rem .9rem; cursor:pointer; font-size:.875rem; color:var(--tblr-body-color); }
+.cmdk-item>i{ font-size:1rem; color:var(--tblr-secondary); width:1.2rem; text-align:center; flex:0 0 auto; }
+.cmdk-item .cmdk-meta{ margin-left:auto; color:var(--tblr-secondary); font-size:.75rem; }
+.cmdk-item.active{ background:var(--tblr-primary); color:#fff; } .cmdk-item.active>i,.cmdk-item.active .cmdk-meta{ color:#fff; }
+.cmdk-hint{ border-top:1px solid var(--tblr-border-color); padding:.4rem .9rem; font-size:.75rem; color:var(--tblr-secondary); display:flex; gap:1rem; }
+.cmdk-hint kbd{ background:var(--tblr-bg-surface-secondary,#f6f7f9); border:1px solid var(--tblr-border-color); border-radius:4px; padding:0 .3rem; font-size:.75rem; color:var(--tblr-secondary); }
+.tk-toast{ position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(10px); background:#101114; color:#fff; font-size:.875rem; font-weight:600; padding:.7rem 1.1rem; border-radius:.7rem; box-shadow:0 16px 44px -12px rgba(10,16,28,.55); opacity:0; pointer-events:none; transition:opacity .2s,transform .2s; z-index:1095; max-width:90vw; text-align:center; }
+.tk-toast.on{ opacity:1; transform:translateX(-50%) translateY(0); }
+.tk-stepper{ display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; }
+.tk-step{ display:inline-flex; align-items:center; gap:.4rem; font-size:.75rem; font-weight:600; color:var(--tblr-secondary); }
+.tk-step .dot{ width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font-size:.625rem; border:1.5px solid var(--tblr-border-color); background:var(--tblr-bg-surface); }
+.tk-step.done .dot{ background:rgba(47,179,68,.12); border-color:transparent; color:#2fb344; }
+.tk-step.now .dot{ background:var(--tblr-primary); border-color:var(--tblr-primary); color:#fff; }
+.tk-step.now{ color:var(--tblr-body-color); }
+.tk-step .sep{ width:26px; height:1.5px; background:var(--tblr-border-color); }
+
+/* ── kickoff readiness: a vertical stepper with a connected spine (no badges) ── */
+.ko-wrap{ max-width:720px; }
+.ko-status{ display:flex; align-items:center; gap:.5rem; font-size:.875rem; font-weight:600; margin-top:.35rem; }
+.ko-status .bar{ flex:1; max-width:180px; height:5px; border-radius:99px; background:var(--tblr-border-color); overflow:hidden; }
+.ko-status .bar i{ display:block; height:100%; border-radius:99px; background:var(--tblr-primary); transition:width .3s; }
+.ko-status.ok{ color:#2fb344; } .ko-status.ok .bar i{ background:#2fb344; }
+.ko-step2{ position:relative; display:grid; grid-template-columns:2.2rem 1fr; gap:.85rem; padding:0 0 1.5rem; }
+.ko-step2:last-child{ padding-bottom:0; }
+.ko-step2::before{ content:""; position:absolute; left:1.1rem; top:2.2rem; bottom:-.2rem; width:2px; background:var(--tblr-border-color); transform:translateX(-1px); }
+.ko-step2:last-child::before{ display:none; }
+.ko-step2.done::before{ background:#2fb344; }
+.ko-node{ width:2.2rem; height:2.2rem; border-radius:50%; display:grid; place-items:center; font-weight:700; font-size:.875rem;
+  border:2px solid var(--tblr-border-color); background:var(--tblr-bg-surface); color:var(--tblr-secondary); z-index:1; }
+.ko-step2.done .ko-node{ background:#2fb344; border-color:#2fb344; color:#fff; }
+.ko-step2.now .ko-node{ border-color:var(--tblr-primary); color:var(--tblr-primary); box-shadow:0 0 0 4px rgba(var(--tblr-primary-rgb),.1); }
+.ko-step2.stale .ko-node{ border-color:#f76707; color:#f76707; box-shadow:0 0 0 4px rgba(247,103,7,.1); }
+.ko-hd{ display:flex; align-items:center; gap:.5rem; min-height:2.2rem; flex-wrap:wrap; }
+.ko-hd .nm{ font-weight:650; font-size:1rem; }
+.ko-step2.blocked .ko-hd .nm,.ko-step2.blocked .ko-desc{ color:var(--tblr-secondary); opacity:.75; }
+.ko-meta{ font-size:.75rem; color:var(--tblr-secondary); }
+.ko-meta.stale{ color:#f76707; font-weight:600; }
+.ko-desc{ font-size:.875rem; color:var(--tblr-secondary); margin-top:.15rem; }
+.ko-extra{ margin-top:.55rem; }
+.ko-tags{ display:flex; flex-direction:column; gap:.3rem; margin-top:.4rem; font-size:.75rem; }
+.ko-tag{ display:flex; align-items:center; gap:.5rem; }
+.ko-tag .d{ width:.55rem; height:.55rem; border-radius:50%; flex:0 0 auto; }
+.ko-edit{ font-size:.75rem; margin-left:.35rem; }
+.ko-verdict{ display:flex; align-items:center; gap:1rem; padding:1rem 1.15rem; border-radius:var(--tblr-border-radius-lg);
+  border:1px solid var(--tblr-border-color); background:var(--tblr-bg-surface); }
+.ko-verdict.blocked{ border-color:rgba(247,103,7,.35); background:rgba(247,103,7,.04); }
+.ko-verdict.ok{ border-color:rgba(47,179,68,.4); background:rgba(47,179,68,.05); }
+
+/* ── Shape workspace: section switcher + readiness rail as one surface ── */
+.shape-switch{ display:flex; gap:.2rem; padding:.35rem; background:var(--tblr-bg-surface-secondary,#f6f7f9); border-radius:.6rem; flex-wrap:wrap; }
+.shape-switch button{ display:flex; align-items:center; gap:.4rem; font-size:.875rem; font-weight:600; padding:.4rem .7rem; border-radius:.45rem; color:var(--tblr-secondary); border:0; background:transparent; }
+.shape-switch button:hover{ color:var(--tblr-body-color); }
+.shape-switch button.on{ background:var(--tblr-bg-surface); color:var(--tblr-body-color); box-shadow:0 1px 2px rgba(16,24,40,.08); }
+.shape-switch button .st{ width:1.15rem; height:1.15rem; border-radius:50%; display:grid; place-items:center; font-size:.625rem; border:1.5px solid var(--tblr-border-color); flex:0 0 auto; }
+.shape-switch button.done .st{ background:#2fb344; border-color:#2fb344; color:#fff; }
+.shape-switch button.now .st{ border-color:var(--tblr-primary); color:var(--tblr-primary); }
+.shape-switch button.stale .st{ border-color:#f76707; color:#f76707; }
+.shape-sec{ display:none; } .shape-sec.on{ display:block; }
+.shape-foot{ display:flex; align-items:center; gap:.6rem; padding:.85rem 1.15rem; border-top:1px solid var(--tblr-border-color); font-size:.875rem; }
+.shape-foot.done{ color:#2fb344; } .shape-foot.blocked{ color:var(--tblr-secondary); }
+/* rail rows */
+.rail-step{ display:flex; align-items:center; gap:.6rem; width:100%; text-align:left; padding:.55rem .35rem; border:0; background:transparent; border-radius:.5rem; }
+.rail-step:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.rail-step.active{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.rail-step .rn{ width:1.5rem; height:1.5rem; border-radius:50%; display:grid; place-items:center; font-size:.75rem; font-weight:700; border:2px solid var(--tblr-border-color); color:var(--tblr-secondary); flex:0 0 auto; }
+.rail-step.done .rn{ background:#2fb344; border-color:#2fb344; color:#fff; }
+.rail-step.now .rn{ border-color:var(--tblr-primary); color:var(--tblr-primary); }
+.rail-step.stale .rn{ border-color:#f76707; color:#f76707; }
+.rail-step .rt{ flex:1; min-width:0; font-size:.875rem; font-weight:600; }
+.rail-step.blocked .rt{ color:var(--tblr-secondary); font-weight:500; }
+.rail-step .rm{ font-size:.75rem; color:var(--tblr-secondary); font-weight:400; }
+.tk-dots{ display:flex; flex-direction:column; gap:.3rem; font-size:.875rem; }
+.tk-dots .r{ display:flex; align-items:center; gap:.5rem; } .tk-dots .r .d{ width:.55rem; height:.55rem; border-radius:50%; flex:0 0 auto; }
+/* quiet status — a dot and words, never a pill */
+.sdot{ display:inline-block; width:.55rem; height:.55rem; border-radius:50%; flex:0 0 auto; vertical-align:middle; }
+.sdot.live{ animation:sdpulse 1.8s infinite; }
+@keyframes sdpulse{ 0%{ box-shadow:0 0 0 0 rgba(214,57,57,.4);} 70%{ box-shadow:0 0 0 6px rgba(214,57,57,0);} }
+.stx{ display:inline-flex; align-items:center; gap:.45rem; white-space:nowrap; }
+/* deliverables — master list + cockpit */
+.dl-row{ display:flex; align-items:center; gap:.7rem; width:100%; text-align:left; padding:.8rem 1rem; border:0; background:transparent; border-bottom:1px solid var(--tblr-border-color); }
+.dl-row:last-child{ border-bottom:0; }
+.dl-row:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.dl-row.active{ background:var(--tblr-bg-surface-secondary,#f6f7f9); box-shadow:inset 3px 0 0 var(--tblr-primary); }
+.dl-row .nm{ flex:1; min-width:0; font-weight:600; font-size:.875rem; }
+.dl-row .ms{ font-size:.75rem; color:var(--tblr-secondary); }
+.dl-task{ display:flex; align-items:center; gap:.6rem; padding:.45rem 0; font-size:.875rem; border-top:1px solid var(--tblr-border-color); }
+.dl-task:first-child{ border-top:0; }
+.dl-task .tt{ flex:1; min-width:0; } .dl-task .tm2{ font-size:.75rem; color:var(--tblr-secondary); white-space:nowrap; }
+.dl-next{ display:flex; align-items:flex-start; gap:.7rem; padding:.85rem 1rem; border:1px solid rgba(var(--tblr-primary-rgb),.25); background:rgba(var(--tblr-primary-rgb),.03); border-radius:.7rem; }
+#dl-detail>summary{ cursor:pointer; list-style:none; font-weight:500; color:var(--tblr-secondary); }
+#dl-detail>summary::-webkit-details-marker{ display:none; }
+#dl-detail>summary:hover{ color:var(--tblr-body-color); }
+#dl-detail .chev{ transition:transform .15s ease; display:inline-block; }
+#dl-detail[open]>summary .chev{ transform:rotate(90deg); }
+/* the mission DAG — mermaid-rendered (agents author the flowchart text; this is only the house restyle) */
+.mission-dag-graph{ overflow:auto; min-height:8rem; }
+.mission-dag-graph svg{ max-width:none; height:auto; display:block; margin:0 auto; }
+.mission-dag-graph .node{ cursor:pointer; }
+.mission-dag-graph .node rect{ rx:8px; ry:8px; }
+.mission-dag-graph .nodeLabel{ font-family:var(--tblr-font-sans-serif); font-size:10.5px; color:inherit; line-height:1.3; }
+.mission-dag-graph .nodeLabel b{ font-family:var(--tblr-font-monospace,ui-monospace,Menlo,monospace); font-size:11px; letter-spacing:0; }
+.mission-dag-graph .cluster rect{ fill:transparent !important; stroke:var(--tblr-border-color) !important; rx:12px; ry:12px; }
+.mission-dag-graph .cluster-label .nodeLabel{ font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:#8b95a5; font-weight:600; }
+.mission-dag-graph .flowchart-link{ stroke:#c9ced6 !important; stroke-width:1.5px !important; }
+.mission-dag-graph .marker{ fill:#c2c8d0 !important; stroke:#c2c8d0 !important; }
+.mission-dag-graph .node.dim{ opacity:.28; }
+.dag-legend{ display:flex; gap:1.1rem; flex-wrap:wrap; font-size:.75rem; color:var(--tblr-secondary); }
+.dag-legend .stx{ gap:.35rem; }
+
+/* ── Found: new-project intake overlay ── */
+.found-back{ position:fixed; inset:0; z-index:1085; background:rgba(20,22,28,.5); backdrop-filter:blur(3px); display:none; align-items:flex-start; justify-content:center; padding:6vh 1rem; overflow:auto; }
+.found-back.on{ display:flex; }
+.found-card{ width:min(680px,100%); background:var(--tblr-bg-surface); border-radius:1rem; box-shadow:0 30px 80px -20px rgba(0,0,0,.5); overflow:hidden; }
+.found-drop{ border:1.5px dashed var(--tblr-border-color); border-radius:.7rem; padding:1.1rem; text-align:center; color:var(--tblr-secondary); font-size:.875rem; background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.found-mode{ display:flex; gap:.5rem; } .found-mode label{ flex:1; border:1.5px solid var(--tblr-border-color); border-radius:.6rem; padding:.6rem .8rem; cursor:pointer; font-size:.875rem; }
+.found-mode input{ margin-right:.4rem; } .found-mode label.on{ border-color:var(--tblr-primary); background:rgba(var(--tblr-primary-rgb),.04); }
+.drafting{ display:flex; align-items:center; gap:.5rem; color:var(--tblr-secondary); font-size:.875rem; font-style:italic; }
+.drafting .sp{ width:1rem; height:1rem; border:2px solid var(--tblr-border-color); border-top-color:var(--tblr-primary); border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+/* ── additions for the live-restyle pages ── */
+.newtag{ font-size:.625rem; font-weight:600; color:#ae3ec9; letter-spacing:.04em; white-space:nowrap; }
+.newtag i{ font-size:.625rem; }
+.tk-drop{ position:relative; }
+.tk-drop .tk-menu{ display:none; position:absolute; right:0; top:calc(100% + 6px); z-index:1080; background:var(--tblr-bg-surface,#fff);
+  border:1px solid var(--tblr-border-color); border-radius:10px; box-shadow:0 14px 44px -12px rgba(16,24,40,.28); min-width:290px; padding:.75rem; }
+.tk-drop.on .tk-menu{ display:block; }
+.epic-card .epic-body{ display:none; } .epic-card.on .epic-body{ display:block; }
+.epic-card.on .epic-chev{ transform:rotate(180deg); } .epic-chev{ transition:transform .15s; }
+.kb-col{ background:var(--tblr-bg-surface-secondary,#f6f7f9); border-radius:.75rem; padding:.6rem; min-width:230px; flex:1 1 230px; }
+.kb-card{ background:var(--tblr-bg-surface,#fff); border:1px solid var(--tblr-border-color); border-radius:.6rem; padding:.55rem .7rem; margin-top:.5rem; cursor:pointer; }
+.kb-card:hover{ border-color:var(--tblr-secondary); }
+.gantt-row{ display:grid; grid-template-columns:190px 1fr; align-items:center; gap:.6rem; padding:.28rem 0; border-bottom:1px dashed var(--tblr-border-color); }
+.gantt-track{ position:relative; height:16px; background:var(--tblr-bg-surface-secondary,#f6f7f9); border-radius:5px; }
+.gantt-bar{ position:absolute; top:2px; bottom:2px; border-radius:4px; opacity:.9; }
+.q-kpi .h1{ font-family:ui-monospace,Menlo,monospace; }
+.ask-b{ border:1px solid var(--tblr-border-color); border-radius:.75rem; padding:.7rem .9rem; margin-bottom:.6rem; max-width:46rem; }
+.ask-b.you{ background:var(--tblr-bg-surface-secondary,#f6f7f9); margin-left:auto; }
+/* ── Needs-you question queue: two-pane triage ── */
+.q-triage{ display:grid; grid-template-columns:minmax(300px,360px) 1fr; gap:1rem; align-items:start; }
+@media (max-width:900px){ .q-triage{ grid-template-columns:1fr; } .q-triage .q-detail.collapsed{ display:none; } }
+.q-list{ display:flex; flex-direction:column; gap:.5rem; }
+.q-card{ border:1px solid var(--tblr-border-color); border-radius:.7rem; padding:.6rem .7rem; cursor:pointer; background:var(--tblr-bg-surface,#fff); }
+.q-card:hover{ border-color:var(--tblr-secondary); }
+.q-card.sel{ border-color:var(--tblr-primary); box-shadow:inset 3px 0 0 var(--tblr-primary); }
+.q-card .qq{ font-weight:500; line-height:1.4; }
+.q-blast{ font-family:ui-monospace,Menlo,monospace; font-size:.625rem; font-weight:600; padding:.05rem .4rem; border-radius:.4rem; background:rgba(214,57,57,.1); color:#d63939; }
+.q-blast.lo{ background:var(--tblr-bg-surface-secondary,#f6f7f9); color:var(--tblr-secondary); }
+.q-detail{ border:1px solid var(--tblr-border-color); border-radius:.8rem; padding:1.1rem 1.2rem; }
+.q-story{ border-left:3px solid var(--tblr-primary); padding:.4rem .8rem; background:rgba(192,57,43,.04); border-radius:.3rem; font-size:.875rem; }
+.q-did .r{ display:flex; gap:.5rem; align-items:flex-start; font-size:.875rem; padding:.12rem 0; }
+.q-did .r .d{ width:8px;height:8px;border-radius:50%;flex:0 0 auto;margin-top:.4rem; }
+.q-ask{ font-size:1rem; font-weight:600; line-height:1.4; }
+.q-deadline{ font-family:ui-monospace,Menlo,monospace; font-size:.75rem; }
+.q-empty{ text-align:center; color:var(--tblr-secondary); padding:3rem 1rem; }
+/* phones: the rail opens as an overlay from the hamburger (no bootstrap JS here) */
+@media (max-width: 991.98px){
+  aside.navbar-vertical{ position:fixed; inset:auto; top:0; left:0; bottom:0; width:min(300px,86vw); z-index:1085;
+    background:var(--tblr-bg-surface,#fff); border-right:1px solid var(--tblr-border-color);
+    transform:translateX(-104%); transition:transform .2s; overflow-y:auto; }
+  aside.navbar-vertical.on{ transform:none; box-shadow:24px 0 70px -24px rgba(16,24,40,.4); }
+  aside.navbar-vertical .navbar-collapse{ display:block!important; }
+}
+</style>
+</head>
+<body class="layout-fluid">
+<div class="page">
+
+  <!-- ═══ toolbar — the PRODUCTION toolbar, complete: search · Filters · bell · New task · Export · Kick off(✦) ═══ -->
+  <header class="navbar navbar-expand-md d-print-none tk-toolbar py-1">
+    <div class="container-fluid d-flex align-items-center">
+      <button class="btn btn-sm btn-icon btn-ghost-secondary d-lg-none me-2" id="railTgl" aria-label="Menu"><i class="ti ti-menu-2"></i></button>
+      <h1 class="navbar-brand navbar-brand-autodark pe-0 pe-md-3 me-md-3 mb-0">
+        <a href="#" class="d-flex align-items-center text-decoration-none" aria-label="Taikun Switchboard — home" style="gap:10px">
+          <i class="ti ti-settings-bolt" style="font-size:26px;color:var(--tblr-primary)"></i>
+          <span style="font-size:18px;font-weight:500;letter-spacing:.14em;color:var(--tblr-body-color);line-height:1;white-space:nowrap">TAIKUN<span style="font-weight:400;color:var(--tblr-primary);margin-left:.4em">SWITCHBOARD</span></span>
+        </a>
+      </h1>
+      <div id="toolbar-context" class="d-none d-lg-flex align-items-center gap-1 text-secondary text-truncate small" style="min-width:0">Northwind Energy · SSO &amp; Identity</div>
+      <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0">
+        <div class="input-icon d-none d-sm-block" style="width:210px">
+          <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+          <input id="f-search" type="text" class="form-control form-control-sm" placeholder="Search…  ⌘K" autocomplete="off"/>
+        </div>
+        <div class="tk-drop" id="drop-filters">
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-drop="drop-filters"><i class="ti ti-filter me-1"></i>Filters<span class="ms-1 mono small" id="filter-count" style="display:none">2</span></button>
+          <div class="tk-menu">
+            <div class="mb-2"><select id="f-ws" class="form-select form-select-sm"><option>All workstreams</option><option>CON — Shared contract</option><option>SEN — SSO Entra</option><option>INT — Integration</option><option>QA — Verification</option><option>SHIP — Cutover</option></select></div>
+            <div class="mb-2"><select id="f-owner" class="form-select form-select-sm"><option>All orgs</option><option>Taikun</option><option>Northwind</option></select></div>
+            <div class="mb-2"><select id="f-assignee" class="form-select form-select-sm"><option>All owners</option><option>Steve Ridder</option><option>Priya N</option><option>Agent fleet</option></select></div>
+            <div class="mb-2"><select id="f-risk" class="form-select form-select-sm"><option>All risk</option><option>High risk</option><option>Medium risk</option><option>Low risk</option></select></div>
+            <label class="form-check form-switch"><input id="f-blocking" class="form-check-input" type="checkbox"/><span class="form-check-label">Blocking only</span></label>
+            <label class="form-check form-switch m-0"><input id="f-hidedone" class="form-check-input" type="checkbox" checked/><span class="form-check-label">Hide done</span></label>
+          </div>
+        </div>
+        <button id="btn-ack-inbox" class="btn btn-sm btn-icon btn-ghost-secondary position-relative" type="button" title="Agent ack inbox" aria-label="Agent ack inbox"><i class="ti ti-bell"></i><span class="badge bg-red badge-notification badge-pill">2</span></button>
+        <button id="btn-new-task" class="btn btn-sm btn-primary"><i class="ti ti-plus me-1"></i>New task</button>
+        <div class="tk-drop" id="drop-export">
+          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" title="Export" data-drop="drop-export"><i class="ti ti-download"></i></button>
+          <div class="tk-menu" style="min-width:230px">
+            <a class="dropdown-item px-2 rounded" href="#" data-toast="Exporting Excel — api/export.xlsx"><i class="ti ti-file-spreadsheet me-2"></i>Excel</a>
+            <a class="dropdown-item px-2 rounded" href="#" data-toast="Exporting MS Project — api/export.xml"><i class="ti ti-brand-windows me-2"></i>MS Project</a>
+            <div class="border-top mt-2 pt-2 small text-secondary px-2">Data live · plan v8 · generated 09:12</div>
+          </div>
+        </div>
+        <button id="btn-kickoff" class="btn btn-sm btn-primary" type="button" disabled><i class="ti ti-bolt me-1"></i>Kick off <span class="newtag ms-1">✦</span></button>
+        <!-- UI-23: user menu top right — canonical way into Settings -->
+        <div class="tk-drop" id="drop-user">
+          <a href="#" class="d-flex align-items-center text-reset text-decoration-none" data-drop="drop-user">
+            <span class="avatar avatar-sm" style="background:rgba(192,57,43,.12);color:var(--tblr-primary)"><i class="ti ti-user"></i></span>
+            <div class="d-none d-xl-block ps-2 lh-1"><div class="small fw-bold">steve@taikunai.com</div><div class="small text-secondary mt-1">Settings</div></div>
+          </a>
+          <div class="tk-menu" style="min-width:220px">
+            <a class="dropdown-item px-2 rounded" href="#" data-toast="Settings — repo topology · CI runs · publication · reconcile · verify · Access tokens · Communications · Members (UI-18/UI-20 sections, unchanged)"><i class="ti ti-settings me-2"></i>Settings</a>
+            <a class="dropdown-item px-2 rounded" href="#" data-toast="Account &amp; password — unchanged"><i class="ti ti-key me-2"></i>Account &amp; password</a>
+            <a class="dropdown-item px-2 rounded" href="#" data-toast="/coordination — live agent conversation page, unchanged"><i class="ti ti-messages me-2"></i>Agent coordination</a>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item px-2 rounded" href="#" data-toast="Signed out"><i class="ti ti-logout me-2"></i>Sign out</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══ left rail — LIVE nav names + rail utilities, plus the one new page marked ✦ ═══ -->
+  <aside class="navbar navbar-vertical navbar-expand-lg">
+    <div class="container-fluid">
+      <div class="collapse navbar-collapse" id="sidebar-menu">
+        <div class="px-2 pt-2 pb-1">
+          <select id="project-switcher" class="form-select form-select-sm" aria-label="Switch project">
+            <option selected>Northwind Energy — SSO &amp; Identity</option>
+            <option>Meridian Labs — Churn Copilot</option>
+            <option>Atlas Freight — Rate Portal (archived)</option>
+          </select>
+        </div>
+        <ul class="navbar-nav pt-lg-1" id="main-nav">
+          <li class="nav-item"><a class="nav-link active" data-tab="tab-overview" href="#"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Overview</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-plan" href="#"><span class="nav-link-icon"><i class="ti ti-layout-kanban"></i></span><span class="nav-link-title">Plan</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-deliverable" href="#"><span class="nav-link-icon"><i class="ti ti-target-arrow"></i></span><span class="nav-link-title">Deliverable</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-fleet" href="#"><span class="nav-link-icon"><i class="ti ti-server-bolt"></i></span><span class="nav-link-title">Fleet</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-ask" href="#"><span class="nav-link-icon"><i class="ti ti-sparkles"></i></span><span class="nav-link-title">Ask</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-inbox" href="#"><span class="nav-link-icon"><i class="ti ti-inbox"></i></span><span class="nav-link-title">Inbox</span><span class="ms-auto small text-secondary">2</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-scope" href="#"><span class="nav-link-icon"><i class="ti ti-file-text"></i></span><span class="nav-link-title">Scope <span class="newtag">✦</span></span><span class="ms-auto small text-secondary" id="nav-kickoff-badge">3 left</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-tab="tab-tally" href="#"><span class="nav-link-icon"><i class="ti ti-report-money"></i></span><span class="nav-link-title">Tally <span class="newtag">✦</span></span></a></li>
+        </ul>
+        <div class="mt-auto px-2 pb-2">
+          <!-- UI-20: Connect repo / Communications / Members / API keys retired into Settings;
+               UI-23: user menu moved to the top-right. Only New project stays on the rail. -->
+          <button class="btn btn-sm btn-outline-secondary w-100 mb-2" data-toast="New project — same modal as live (name · visibility · optional repo)"><i class="ti ti-folder-plus me-1"></i>New project</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="page-wrapper">
+    <div class="tab-content">
+
+    <!-- ════════════ OVERVIEW — exec summary · Action Queue · Pulse digest (all live features) ════════════ -->
+    <div class="tab-pane active" id="tab-overview">
+      <div class="page-header d-print-none"><div class="container-xl">
+        <div class="row align-items-center">
+          <div class="col">
+            <div class="page-pretitle">EXEC_SUMMARY · ACTION_QUEUE · PULSE</div>
+            <h2 class="page-title">Overview</h2>
+          </div>
+          <div class="col-auto stx small"><span class="sdot live" style="background:#206bc4"></span>building · wave 1 · 3 sessions live</div>
+        </div>
+      </div></div>
+      <div class="page-body"><div class="container-xl">
+        <div class="alert d-flex align-items-center" role="alert" id="ovKickoffBanner" style="border-color:rgba(247,103,7,.4);background:rgba(247,103,7,.07)">
+          <i class="ti ti-shield-lock me-2" style="font-size:1.25rem;color:#f76707"></i>
+          <div><strong id="ovKickoffMsg">Build blocked — 3 of 5 kickoff gates approved.</strong> <span class="text-secondary" id="ovKickoffNext">Next: approve the Architecture note.</span></div>
+          <button class="btn btn-sm btn-primary ms-auto" data-go="tab-scope">Open Scope</button>
+        </div>
+        <!-- KPI strip — same seven numbers as renderExec -->
+        <div class="row row-cards mb-3">
+          <div class="col-6 col-lg"><div class="card"><div class="card-body p-3"><div class="subheader">Workstreams</div><div class="h1 mb-0 mt-1 mono">6</div><div class="text-secondary small">across the plan</div></div></div></div>
+          <div class="col-6 col-lg"><div class="card"><div class="card-body p-3"><div class="subheader">Tasks</div><div class="h1 mb-0 mt-1 mono">21</div><div class="text-secondary small">64 effort-days</div></div></div></div>
+          <div class="col-6 col-lg"><div class="card"><div class="card-body p-3"><div class="subheader">My open work</div><div class="h1 mb-0 mt-1 mono">4</div><div class="text-secondary small">SR · Taikun</div></div></div></div>
+          <div class="col-6 col-lg"><div class="card"><div class="card-body p-3"><div class="subheader">Blocking</div><div class="h1 mb-0 mt-1 mono text-red">3</div><div class="text-secondary small">gating other work</div></div></div></div>
+          <div class="col-6 col-lg"><div class="card"><div class="card-body p-3"><div class="subheader">Spend</div><div class="h1 mb-0 mt-1 mono">$1.92k</div><div class="text-secondary small">9 verified outcomes</div></div></div></div>
+          <div class="col-6 col-lg"><div class="card"><div class="card-body p-3"><div class="subheader">Cost / outcome</div><div class="h1 mb-0 mt-1 mono">$213</div><div class="text-secondary small">verified denominator</div></div></div></div>
+          <div class="col-6 col-lg"><div class="card"><div class="card-body p-3"><div class="subheader">Inbox to triage</div><div class="h1 mb-0 mt-1 mono">2</div><div class="text-secondary small">awaiting confirm</div></div></div></div>
+        </div>
+        <div class="row row-cards">
+          <!-- LEFT: work grouped by phase, blocking first — same table as live -->
+          <div class="col-lg-8">
+            <div class="card">
+              <div class="card-header"><h3 class="card-title">Work, grouped by phase</h3>
+                <div class="card-actions text-secondary small">sorted: blocking first · <span class="mono">12 open</span></div></div>
+              <div class="card-body bg-light py-2 border-bottom border-top"><span class="subheader text-body">Build</span><span class="text-secondary small ms-2">7 tasks</span></div>
+              <div class="table-responsive"><table class="table table-vcenter table-borderless mb-0"><tbody>
+                <tr data-toast="Task detail — same modal as live (narration · provenance · claims · monitors · spend)" style="cursor:pointer">
+                  <td class="w-1"><span class="sdot live" style="background:#f76707"></span></td>
+                  <td><div class="fw-semibold">Wire Entra app registration</div><div class="text-secondary small">PR #412 open · CI 3 of 4 · keystone</div></td>
+                  <td><span class="text-secondary small text-uppercase">SEN</span></td>
+                  <td><span class="avatar avatar-xs rounded-circle" style="background:var(--tblr-primary);color:#fff">A</span></td>
+                  <td><span class="text-secondary small">—</span></td>
+                  <td><span class="stx small"><span class="sdot" style="background:#d63939"></span>blocking</span></td>
+                  <td class="text-secondary small text-nowrap">Jul 19</td></tr>
+                <tr data-toast="Task detail — same modal as live" style="cursor:pointer">
+                  <td class="w-1"><span class="sdot live" style="background:#206bc4"></span></td>
+                  <td><div class="fw-semibold">Directory attribute sync</div><div class="text-secondary small">mapping matches contract · pagination in progress</div></td>
+                  <td><span class="text-secondary small text-uppercase">DATA</span></td>
+                  <td><span class="avatar avatar-xs rounded-circle" style="background:#206bc4;color:#fff">C</span></td>
+                  <td><span class="text-secondary small">—</span></td>
+                  <td><span class="text-secondary small">—</span></td>
+                  <td class="text-secondary small text-nowrap">Jul 20</td></tr>
+                <tr data-toast="Task detail — same modal as live" style="cursor:pointer">
+                  <td class="w-1"><span class="sdot" style="background:#12b886"></span></td>
+                  <td><div class="fw-semibold">Session persistence</div><div class="text-secondary small">done — but no merge provenance; decide in Inbox</div></td>
+                  <td><span class="text-secondary small text-uppercase">SEN</span></td>
+                  <td><span class="text-secondary small">—</span></td>
+                  <td><span class="stx small"><span class="sdot" style="background:#d63939"></span>High</span></td>
+                  <td><span class="stx small"><span class="sdot" style="background:#d63939"></span>blocking</span></td>
+                  <td class="text-secondary small text-nowrap text-red">Jul 17</td></tr>
+              </tbody></table></div>
+              <div class="card-body bg-light py-2 border-bottom border-top"><span class="subheader text-body">Cutover</span><span class="text-secondary small ms-2">2 tasks</span></div>
+              <div class="table-responsive"><table class="table table-vcenter table-borderless mb-0"><tbody>
+                <tr data-toast="Task detail — same modal as live" style="cursor:pointer">
+                  <td class="w-1"><span class="sdot" style="background:#8b95a5"></span></td>
+                  <td><div class="fw-semibold">Cutover runbook</div><div class="text-secondary small">waits on QA-3 + parity gate</div></td>
+                  <td><span class="text-secondary small text-uppercase">SHIP</span></td>
+                  <td><span class="avatar avatar-xs rounded-circle bg-secondary-lt">SR</span></td>
+                  <td><span class="text-secondary small">—</span></td><td><span class="text-secondary small">—</span></td>
+                  <td class="text-secondary small text-nowrap">Jul 24</td></tr>
+              </tbody></table></div>
+              <div class="card-footer text-secondary small">Grouped by phase · <a href="#" class="text-reset fw-bold" data-go="tab-plan">open the board</a> for the kanban</div>
+            </div>
+          </div>
+          <!-- RIGHT: Action Queue + Pulse digest — both live features, kept -->
+          <div class="col-lg-4">
+            <div class="card mb-3">
+              <div class="card-header"><h3 class="card-title">Action Queue</h3><div class="card-actions"><a href="#" class="small" data-go="tab-inbox">open Inbox ›</a></div></div>
+              <div class="list-group list-group-flush">
+                <div class="list-group-item py-2" data-toast="Queue item — same review modal as live" style="cursor:pointer"><span class="stx small"><span class="sdot" style="background:#f76707"></span>Northwind status call — 3 actions · 1 needs evidence</span><div class="text-secondary small ms-3">transcript · 2h ago</div></div>
+                <div class="list-group-item py-2" data-toast="Queue item — same review modal as live" style="cursor:pointer"><span class="stx small"><span class="sdot" style="background:#d63939"></span>RE: SAML cert rotation — 1 action</span><div class="text-secondary small ms-3">email · 5h ago</div></div>
+                <div class="list-group-item py-2 text-secondary small">confirmed earlier — IT change window <span class="mono">· 2 changes</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3 class="card-title"><i class="ti ti-activity-heartbeat me-2"></i>Pulse — weekly digest</h3>
+                <div class="card-actions"><button class="btn btn-primary btn-sm" data-toast="Digest generated — chief-of-staff brief: what changed, what's slipping, what to pick up"><i class="ti ti-sparkles me-1"></i>Generate digest</button></div></div>
+              <div class="card-body">
+                <div class="fw-semibold small mb-1">Week of Jul 14 <span class="text-secondary fw-normal">· generated Mon 09:00</span></div>
+                <div class="text-secondary small">Keystone SEN-6 reached review; SEN-4 flagged unproven; spend pace holds at ~$3.3k to ship. One decision open on cert rotation.</div>
+                <div class="d-flex gap-2 mt-2"><button class="btn btn-sm btn-outline-secondary" data-toast="Digest emailed to the recipients configured in Communications">Send</button><a href="#" class="small align-self-center" data-toast="Digest history — previous weeks, unchanged from live">history ›</a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- ════════════ PLAN — one dataset, four views: Epics / Board / Timeline / Milestones ════════════ -->
+    <div class="tab-pane" id="tab-plan">
+      <div class="page-header d-print-none"><div class="container-xl">
+        <div class="row align-items-center">
+          <div class="col"><div class="page-pretitle">EPICS · BOARD · TIMELINE · MILESTONES</div><h2 class="page-title">Plan</h2></div>
+          <div class="col-auto text-secondary small">one dataset · four views · filters up top apply to all</div>
+        </div>
+        <ul class="nav nav-pills tk-subnav mt-2" id="plan-subnav">
+          <li class="nav-item"><a class="nav-link active" data-sub="sub-epics" href="#"><i class="ti ti-list-check me-1"></i>Epics</a></li>
+          <li class="nav-item"><a class="nav-link" data-sub="sub-board" href="#"><i class="ti ti-layout-kanban me-1"></i>Board</a></li>
+          <li class="nav-item"><a class="nav-link" data-sub="sub-gantt" href="#"><i class="ti ti-timeline-event me-1"></i>Timeline</a></li>
+          <li class="nav-item"><a class="nav-link" data-sub="sub-miles" href="#"><i class="ti ti-flag me-1"></i>Milestones</a></li>
+        </ul>
+      </div></div>
+      <div class="page-body"><div class="container-xl">
+
+        <!-- the 5th kickoff gate — scope breakdown approval releases Wave 1 only ✦ -->
+        <div class="ko-verdict blocked mb-3" id="scopeGate"><div class="d-flex align-items-start gap-2 w-100">
+          <i class="ti ti-shield-lock mt-1" style="color:#f76707;font-size:1rem"></i>
+          <div class="flex-fill"><div class="fw-bold" id="scopeGateTitle">Scope breakdown — the fifth kickoff gate</div>
+          <div class="small text-secondary" id="scopeGateSub">Approve the four Scope artifacts first.</div></div>
+          <button class="btn btn-sm btn-primary" id="scopeApprove" disabled><i class="ti ti-lock me-1"></i>Locked</button>
+        </div></div>
+
+        <!-- EPICS — collapsible workstream → phase → tasks, group-by-assignee switch -->
+        <div class="plan-sub" id="sub-epics">
+          <div class="d-flex flex-wrap align-items-center mb-3 gap-2">
+            <span class="text-secondary">4 workstreams · 21 tasks · 9 done <span class="text-secondary">· hiding 9 done</span></span>
+            <label class="form-check form-switch m-0 ms-2"><input class="form-check-input" type="checkbox" data-toast="Regrouped by assignee — same toggle as live"/><span class="form-check-label">Group by assignee</span></label>
+          </div>
+          <div class="card mb-2 epic-card on">
+            <div class="card-header epic-head d-flex align-items-center" role="button" data-epic>
+              <span class="sdot me-2" style="background:#c0392b"></span><span class="h3 m-0">SEN</span>
+              <span class="text-secondary ms-2 d-none d-md-inline">SSO / Entra sign-in</span>
+              <span class="text-secondary small ms-2 mono">5 open</span>
+              <div class="ms-auto d-flex align-items-center gap-3">
+                <div class="avatar-list avatar-list-stacked d-none d-sm-flex"><span class="avatar avatar-xs" style="background:var(--tblr-primary);color:#fff">A</span><span class="avatar avatar-xs bg-secondary-lt">SR</span></div>
+                <span class="text-secondary small mono">4/9</span><i class="ti ti-chevron-down epic-chev text-secondary"></i>
+              </div>
+            </div>
+            <div class="epic-body"><div class="card-body py-2">
+              <div class="d-flex align-items-center mt-1 mb-1"><span class="sdot me-2" style="background:#206bc4"></span><span class="text-uppercase small fw-medium text-secondary">Build</span><span class="text-secondary small ms-2 mono">4</span></div>
+              <div class="card"><div class="list-group list-group-flush">
+                <div class="list-group-item py-2 d-flex align-items-center gap-2" data-toast="Task detail — unchanged" style="cursor:pointer"><input class="form-check-input m-0" type="checkbox"/><span class="mono small text-secondary">SEN-6</span><span class="fw-semibold small">Wire Entra app registration</span><span class="stx small ms-auto"><span class="sdot live" style="background:#f76707"></span>in review</span><span class="text-secondary small">Jul 19</span></div>
+                <div class="list-group-item py-2 d-flex align-items-center gap-2" data-toast="Task detail — unchanged" style="cursor:pointer"><input class="form-check-input m-0" type="checkbox"/><span class="mono small text-secondary">SEN-4</span><span class="fw-semibold small">Session persistence</span><span class="stx small ms-auto"><span class="sdot" style="background:#12b886"></span>done — unproven</span><span class="text-secondary small text-red">Jul 17</span></div>
+                <div class="list-group-item py-2 d-flex align-items-center gap-2" data-toast="Task detail — unchanged" style="cursor:pointer"><input class="form-check-input m-0" type="checkbox"/><span class="mono small text-secondary">SEN-8</span><span class="fw-semibold small">Provisioning hooks</span><span class="stx small ms-auto"><span class="sdot" style="background:#8b95a5"></span>waits on SEN-6</span><span class="text-secondary small">Jul 21</span></div>
+                <div class="list-group-item py-2 d-flex align-items-center gap-2" data-toast="Task detail — unchanged" style="cursor:pointer"><input class="form-check-input m-0" type="checkbox"/><span class="mono small text-secondary">SEN-9</span><span class="fw-semibold small">Fallback edge cases</span><span class="stx small ms-auto"><span class="sdot" style="background:#8b95a5"></span>waits on SEN-6</span><span class="text-secondary small">Jul 21</span></div>
+              </div></div>
+            </div></div>
+          </div>
+          <div class="card mb-2 epic-card">
+            <div class="card-header epic-head d-flex align-items-center" role="button" data-epic>
+              <span class="sdot me-2" style="background:#206bc4"></span><span class="h3 m-0">INT</span>
+              <span class="text-secondary ms-2 d-none d-md-inline">Portal integration</span><span class="text-secondary small ms-2 mono">2 open</span>
+              <div class="ms-auto d-flex align-items-center gap-3"><span class="text-secondary small mono">0/2</span><i class="ti ti-chevron-down epic-chev text-secondary"></i></div>
+            </div>
+            <div class="epic-body"><div class="card-body py-2 text-secondary small">INT-1 Portal session integration · INT-2 Admin role mapping — both wait on the keystone.</div></div>
+          </div>
+          <div class="card mb-2 epic-card">
+            <div class="card-header epic-head d-flex align-items-center" role="button" data-epic>
+              <span class="sdot me-2" style="background:#2fb344"></span><span class="h3 m-0">CON</span>
+              <span class="text-secondary ms-2 d-none d-md-inline">Shared contract</span><span class="stx small ms-2"><span class="sdot" style="background:#2fb344"></span>done</span>
+              <div class="ms-auto d-flex align-items-center gap-3"><span class="text-secondary small mono">3/3</span><i class="ti ti-chevron-down epic-chev text-secondary"></i></div>
+            </div>
+            <div class="epic-body"><div class="card-body py-2 text-secondary small"><i class="ti ti-check me-1"></i>All 3 tasks complete — merged with green CI.</div></div>
+          </div>
+        </div>
+
+        <!-- BOARD — kanban + session health strip -->
+        <div class="plan-sub" id="sub-board" style="display:none">
+          <div class="d-flex align-items-center gap-3 mb-2 small">
+            <span class="tk-eyebrow">SESSION HEALTH</span>
+            <span class="stx"><span class="sdot live" style="background:#c0392b"></span>atlas · SEN-6 · 42k tok</span>
+            <span class="stx"><span class="sdot live" style="background:#206bc4"></span>codex · DATA-3 · 28k tok</span>
+            <span class="stx"><span class="sdot" style="background:#2fb344"></span>nova · finished QA-2</span>
+          </div>
+          <div class="d-flex gap-2" style="overflow-x:auto">
+            <div class="kb-col"><div class="tk-eyebrow">READY · 2</div>
+              <div class="kb-card" data-toast="Task detail — unchanged"><div class="mono small text-secondary">SEN-8</div><div class="fw-semibold small">Provisioning hooks</div><div class="text-secondary small">waits on SEN-6 · wave 2</div></div>
+              <div class="kb-card" data-toast="Task detail — unchanged"><div class="mono small text-secondary">SEN-9</div><div class="fw-semibold small">Fallback edge cases</div><div class="text-secondary small">waits on SEN-6 · wave 2</div></div></div>
+            <div class="kb-col"><div class="tk-eyebrow">IN PROGRESS · 2</div>
+              <div class="kb-card" data-toast="Task detail — unchanged"><div class="d-flex"><div class="mono small text-secondary">DATA-3</div><span class="avatar avatar-xs ms-auto" style="background:#206bc4;color:#fff">C</span></div><div class="fw-semibold small">Directory attribute sync</div><div class="stx small"><span class="sdot live" style="background:#206bc4"></span>codex · $0.60</div></div>
+              <div class="kb-card" data-toast="Task detail — unchanged"><div class="mono small text-secondary">PAR-1</div><div class="fw-semibold small">Parity gate vs Helm baseline</div><div class="text-secondary small">green 11 merges running</div></div></div>
+            <div class="kb-col"><div class="tk-eyebrow">IN REVIEW · 1</div>
+              <div class="kb-card" data-toast="Task detail — unchanged"><div class="d-flex"><div class="mono small text-secondary">SEN-6</div><span class="avatar avatar-xs ms-auto" style="background:var(--tblr-primary);color:#fff">A</span></div><div class="fw-semibold small">Wire Entra app registration</div><div class="stx small"><span class="sdot live" style="background:#f76707"></span>PR #412 · CI 3/4 · keystone</div></div></div>
+            <div class="kb-col"><div class="tk-eyebrow">BLOCKED · 1</div>
+              <div class="kb-card" data-toast="Task detail — unchanged"><div class="mono small text-secondary">SEN-4</div><div class="fw-semibold small">Session persistence</div><div class="stx small"><span class="sdot" style="background:#12b886"></span>done — unproven · decide</div></div></div>
+            <div class="kb-col"><div class="tk-eyebrow">DONE · 9</div>
+              <div class="kb-card" data-toast="Task detail — unchanged"><div class="mono small text-secondary">QA-2</div><div class="fw-semibold small">e2e smoke vs prototype</div><div class="text-secondary small">merged · 7/7 green</div></div>
+              <div class="kb-card" data-toast="Task detail — unchanged"><div class="mono small text-secondary">SEN-2 · SEN-3 · CON-1…</div><div class="text-secondary small">8 more merged</div></div></div>
+          </div>
+        </div>
+
+        <!-- TIMELINE — gantt, by task / by workstream -->
+        <div class="plan-sub" id="sub-gantt" style="display:none">
+          <div class="card"><div class="card-header d-flex flex-wrap gap-2 align-items-center">
+            <h3 class="card-title m-0">Schedule (Gantt)</h3>
+            <div class="btn-group btn-group-sm" role="group">
+              <input type="radio" class="btn-check" name="gantt-mode" id="gm-task" checked/><label class="btn" for="gm-task">By task</label>
+              <input type="radio" class="btn-check" name="gantt-mode" id="gm-ws"/><label class="btn" for="gm-ws">By workstream</label>
+            </div>
+            <div class="ms-auto d-flex flex-wrap gap-3 small">
+              <span class="stx"><span class="sdot" style="background:#4299e1"></span>Kickoff</span>
+              <span class="stx"><span class="sdot" style="background:#ae3ec9"></span>Bootstrap</span>
+              <span class="stx"><span class="sdot" style="background:#206bc4"></span>Build</span>
+              <span class="stx"><span class="sdot" style="background:#f76707"></span>Cutover</span>
+              <span class="stx"><span class="sdot" style="background:#2fb344"></span>Operate</span>
+            </div></div>
+            <div class="card-body">
+              <div class="text-secondary small mb-2">Schedule assumes wave 2 opens on the SEN-6 merge. Tip: switch By workstream / By task; click a bar to drill in.</div>
+              <div class="gantt-row"><span class="mono small">CON-1…3 · contract</span><div class="gantt-track"><div class="gantt-bar" style="left:0%;width:18%;background:#ae3ec9"></div></div></div>
+              <div class="gantt-row"><span class="mono small">SEN-2/3/4 · handlers</span><div class="gantt-track"><div class="gantt-bar" style="left:14%;width:22%;background:#206bc4"></div></div></div>
+              <div class="gantt-row"><span class="mono small">SEN-6 · keystone</span><div class="gantt-track"><div class="gantt-bar" style="left:34%;width:14%;background:#f76707"></div></div></div>
+              <div class="gantt-row"><span class="mono small">DATA-3 · sync</span><div class="gantt-track"><div class="gantt-bar" style="left:30%;width:16%;background:#206bc4"></div></div></div>
+              <div class="gantt-row"><span class="mono small">SEN-8/9 · INT-1/2</span><div class="gantt-track"><div class="gantt-bar" style="left:48%;width:22%;background:#206bc4;opacity:.45"></div></div></div>
+              <div class="gantt-row"><span class="mono small">QA-3 · cross-board</span><div class="gantt-track"><div class="gantt-bar" style="left:66%;width:12%;background:#206bc4;opacity:.45"></div></div></div>
+              <div class="gantt-row"><span class="mono small">SHIP-1/2 · cutover</span><div class="gantt-track"><div class="gantt-bar" style="left:76%;width:18%;background:#f76707;opacity:.45"></div></div></div>
+              <div class="text-secondary small mt-2">solid = committed · faded = opens with wave 2 (post-keystone)</div>
+            </div></div>
+        </div>
+
+        <!-- MILESTONES + CRITICAL PATH -->
+        <div class="plan-sub" id="sub-miles" style="display:none">
+          <div class="card"><div class="card-header"><h3 class="card-title">Milestones</h3></div>
+            <div class="table-responsive"><table class="table table-vcenter mb-0">
+              <thead><tr><th>Milestone</th><th>Target</th><th>Gate criteria</th></tr></thead><tbody>
+              <tr><td class="fw-semibold">M1 · Shared contract frozen</td><td class="mono small">W2</td><td class="text-secondary small">published · pinned · consumers conformant</td></tr>
+              <tr><td class="fw-semibold">M2 · Core sign-in works e2e</td><td class="mono small">W4</td><td class="text-secondary small">every path a merged, tested PR · Okta fallback intact</td></tr>
+              <tr><td class="fw-semibold">M3 · Cross-board integrated</td><td class="mono small">W5</td><td class="text-secondary small">no seams a pilot operator can feel</td></tr>
+              <tr><td class="fw-semibold">M4 · Parity proven &amp; shipped</td><td class="mono small">W6</td><td class="text-secondary small">parity gate green · runbook rehearsed · rollback drilled</td></tr>
+            </tbody></table></div></div>
+          <div class="card mt-3"><div class="card-header"><h3 class="card-title">Critical path</h3></div>
+            <div class="table-responsive"><table class="table table-vcenter mb-0">
+              <thead><tr><th class="w-1">#</th><th>Task</th><th>Workstream</th><th>Why on the critical path</th></tr></thead><tbody>
+              <tr><td class="mono">1</td><td class="mono small">SEN-6</td><td><span class="text-uppercase small text-secondary">SEN</span></td><td class="text-secondary small">keystone — merging opens 5 tasks</td></tr>
+              <tr><td class="mono">2</td><td class="mono small">INT-1</td><td><span class="text-uppercase small text-secondary">INT</span></td><td class="text-secondary small">portal session is the pilot's front door</td></tr>
+              <tr><td class="mono">3</td><td class="mono small">QA-3</td><td><span class="text-uppercase small text-secondary">QA</span></td><td class="text-secondary small">gates the cutover runbook</td></tr>
+              <tr><td class="mono">4</td><td class="mono small">SHIP-1</td><td><span class="text-uppercase small text-secondary">SHIP</span></td><td class="text-secondary small">go-live requires the rehearsed runbook</td></tr>
+            </tbody></table></div></div>
+        </div>
+
+      </div></div>
+    </div>
+
+    <!-- ════════════ DELIVERABLE — the full live cockpit + the restyled map & task panel (✦) ════════════ -->
+    <div class="tab-pane" id="tab-deliverable">
+      <div class="page-header d-print-none"><div class="container-xl">
+        <div class="row align-items-center">
+          <div class="col"><div class="page-pretitle">DELIVERABLES_STORE · END_STATE · ACCEPTANCE · PROOF</div><h2 class="page-title">Deliverable</h2></div>
+          <div class="col-auto d-flex align-items-center gap-2 flex-wrap">
+            <select class="form-select form-select-sm" style="min-width:15rem"><option>M2 — Build core implementation</option><option>M1 — Define shared contract (closed)</option><option>M3 — Integrate cross-board</option><option>M4 — Prove parity &amp; ship</option></select>
+            <label class="form-check form-check-inline mb-0 small text-secondary"><input class="form-check-input" type="checkbox"><span class="form-check-label">Show archived</span></label>
+            <button class="btn btn-sm btn-outline-secondary" data-toast="Archive — unchanged from live"><i class="ti ti-archive me-1"></i>Archive</button>
+            <button class="btn btn-sm btn-outline-secondary" data-toast="Refreshed"><i class="ti ti-refresh me-1"></i>Refresh</button>
+            <button class="btn btn-sm btn-primary" data-toast="Brief generated from the deliverable record"><i class="ti ti-sparkles me-1"></i>Generate brief</button>
+          </div>
+        </div>
+      </div></div>
+      <div class="page-body"><div class="container-xl">
+
+        <!-- end state + economics -->
+        <div class="row row-cards mb-3">
+          <div class="col-lg-8"><div class="card h-100"><div class="card-body">
+            <div class="tk-eyebrow mb-1">END STATE</div>
+            <div style="font-size:1rem">Entra/SAML sign-in works end-to-end for pilot operators — auto-provisioned from the directory, Okta fallback intact, every path covered by a merged, tested PR.</div>
+            <div class="d-flex gap-3 mt-2 small">
+              <span class="stx"><span class="sdot live" style="background:#206bc4"></span>building · 4 of 9 merged</span>
+              <span class="stx"><span class="sdot" style="background:#f76707"></span>closure open — 2 gates pending</span>
+            </div>
+          </div></div></div>
+          <div class="col-lg-4"><div class="card h-100"><div class="card-body">
+            <div class="tk-eyebrow mb-2">MISSION ECONOMICS</div>
+            <div class="d-flex justify-content-between small py-1 border-bottom"><span class="text-secondary">spend to date</span><span class="mono">$1.92k</span></div>
+            <div class="d-flex justify-content-between small py-1 border-bottom"><span class="text-secondary">proven (merged, green CI)</span><span class="mono">$1.40k</span></div>
+            <div class="d-flex justify-content-between small py-1 border-bottom"><span class="text-secondary">in review</span><span class="mono">$0.52k</span></div>
+            <div class="d-flex justify-content-between small py-1"><span class="text-secondary">pace to ship</span><span class="mono">~$3.3k</span></div>
+          </div></div></div>
+        </div>
+
+        <!-- THE MAP — mermaid, flat flowchart LR; node click opens the task panel ✦ -->
+        <div class="card mb-3">
+          <div class="card-header py-2">
+            <div class="d-flex align-items-center gap-2 w-100">
+              <i class="ti ti-topology-star-3 text-secondary"></i><span class="fw-semibold">The map</span>
+              <span class="text-secondary small">· mission_graph — every task, its dependencies, what's blocking what</span>
+              <span class="ms-auto d-flex align-items-center gap-2" id="apCtl">
+                <span class="stx small" id="apWords"><span class="sdot" style="background:#8b95a5"></span>autopilot: not started — drains only what you start</span>
+                <button class="btn btn-sm btn-primary" id="apStart"><i class="ti ti-player-play me-1"></i>Start deliverable</button>
+                <span id="apRun" style="display:none"><button class="btn btn-sm btn-outline-secondary" id="apPause"><i class="ti ti-player-pause me-1"></i>Pause</button>
+                <button class="btn btn-sm btn-outline-danger ms-1" id="apStop"><i class="ti ti-player-stop me-1"></i>Stop</button></span>
+                <span class="newtag">✦ UI-27</span>
+              </span>
+            </div>
+          </div>
+          <div class="card-body py-3" style="overflow-x:auto"><div class="mission-dag-graph" id="dagHost" style="min-height:300px"><div class="text-secondary small py-5 text-center">Rendering map…</div></div></div>
+          <div class="card-footer py-2 d-flex flex-wrap gap-3 small">
+            <span class="stx"><span class="sdot" style="background:#2fb344"></span>done · proven</span>
+            <span class="stx"><span class="sdot" style="background:#12b886"></span>done · unproven</span>
+            <span class="stx"><span class="sdot" style="background:#206bc4"></span>in progress</span>
+            <span class="stx"><span class="sdot" style="background:#f76707"></span>in review</span>
+            <span class="stx"><span class="sdot" style="background:#8b95a5"></span>not started</span>
+            <span class="stx"><span class="sdot" style="background:#adb5bd"></span>external</span>
+            <span class="text-secondary ms-auto">every node opens its panel — live ones carry the agent avatar</span>
+          </div>
+        </div>
+
+        <!-- linked tasks + next actions -->
+        <div class="row row-cards mb-3">
+          <div class="col-lg-7"><div class="card h-100">
+            <div class="card-header"><h3 class="card-title">Linked tasks</h3><div class="card-actions"><a href="#" class="small" data-toast="Link task — same modal as live (choose task · milestone · role)">+ Link a task</a></div></div>
+            <div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+              <thead><tr><th>Task</th><th>Role</th><th>State</th><th>Proof</th><th class="text-end">Autopilot <span class="newtag">✦</span></th></tr></thead><tbody>
+              <tr><td class="mono small">SEN-6</td><td class="small">required · blocks</td><td><span class="stx small"><span class="sdot live" style="background:#f76707"></span>in review</span></td><td class="small"><a href="#">PR #412</a> · CI 3/4</td><td class="text-end ap-cell"><button class="btn btn-sm btn-outline-secondary" data-ap-task="SEN-6"><i class="ti ti-player-play me-1"></i>Start task</button></td></tr>
+              <tr><td class="mono small">DATA-3</td><td class="small">contributes</td><td><span class="stx small"><span class="sdot live" style="background:#206bc4"></span>in progress</span></td><td class="text-secondary small">—</td><td class="text-end ap-cell"><button class="btn btn-sm btn-outline-secondary" data-ap-task="DATA-3"><i class="ti ti-player-play me-1"></i>Start task</button></td></tr>
+              <tr><td class="mono small">SEN-4</td><td class="small">required</td><td><span class="stx small"><span class="sdot" style="background:#12b886"></span>done — unproven</span></td><td class="text-secondary small">no merge recorded</td><td class="text-end ap-cell"><span class="text-secondary small">—</span></td></tr>
+              <tr><td class="mono small">SEN-2</td><td class="small">required</td><td><span class="stx small"><span class="sdot" style="background:#2fb344"></span>merged</span></td><td class="small"><span class="mono">b3e871d</span> · CI green</td><td class="text-end ap-cell"><span class="text-secondary small">—</span></td></tr>
+            </tbody></table></div>
+          </div></div>
+          <div class="col-lg-5"><div class="card h-100">
+            <div class="card-header"><h3 class="card-title">Next actions</h3></div>
+            <div class="card-body py-2">
+              <div class="dl-next mb-2"><i class="ti ti-git-pull-request mt-1" style="color:#f76707"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.875rem">Approve SEN-6 when CI is green</div><div class="text-secondary small">keystone — 5 tasks open on the merge</div></div><button class="btn btn-sm btn-primary" data-node-open="SEN-6">Open</button></div>
+              <div class="dl-next"><i class="ti ti-alert-triangle mt-1" style="color:#12b886"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.875rem">Decide SEN-4 — done without provenance</div><div class="text-secondary small">reopen, or let it stand with your sign-off</div></div><button class="btn btn-sm btn-outline-secondary" data-node-open="SEN-4">Decide</button></div>
+            </div>
+          </div></div>
+        </div>
+
+        <!-- closure + breakdown proposals + KPIs (all live features, kept) -->
+        <div class="row row-cards">
+          <div class="col-lg-4"><div class="card h-100">
+            <div class="card-header"><h3 class="card-title">Closure report</h3><div class="card-actions text-secondary small">deliverable_closure</div></div>
+            <div class="card-body py-2">
+              <div class="tk-dots mb-2">
+                <div class="r"><span class="d" style="background:#2fb344"></span>acceptance evidence — e2e matches prototype</div>
+                <div class="r"><span class="d" style="background:#f76707"></span>every task merged — 4 of 9, keystone in review</div>
+                <div class="r"><span class="d" style="background:#d63939"></span>provenance — SEN-4 unproven, decision open</div>
+              </div>
+              <div class="d-flex gap-2"><button class="btn btn-sm btn-outline-secondary" data-toast="Verify run queued — closure re-checks every gate">Verify</button><button class="btn btn-sm btn-outline-secondary" data-toast="WAIVE requires a reason — logged to the closure history">Waive…</button><button class="btn btn-sm btn-outline-secondary" data-toast="HOLD keeps the deliverable open — logged">Hold</button></div>
+              <div class="text-secondary small mt-2">history: HOLD Jul 15 (SEN-4) · verify Jul 14 — 2 gates green</div>
+            </div>
+          </div></div>
+          <div class="col-lg-4"><div class="card h-100">
+            <div class="card-header"><h3 class="card-title">Breakdown proposals</h3></div>
+            <div class="card-body py-2">
+              <div class="d-flex align-items-start gap-2 border-bottom pb-2 mb-2"><span class="sdot mt-1" style="background:#f76707"></span>
+                <div class="flex-fill"><div class="fw-semibold small">Split SEN-9 — fallback matrix is 2 tasks</div><div class="text-secondary small">agent-proposed after reading the PRD edge-case table</div></div>
+                <div class="d-flex gap-1"><button class="btn btn-sm btn-primary" data-toast="Approved — tasks created and linked">Approve</button><button class="btn btn-sm btn-ghost-secondary" data-toast="Dismissed">✕</button></div></div>
+              <div class="text-secondary small">approved earlier: SEN-6 split into 6/6a (wave 1)</div>
+            </div>
+          </div></div>
+          <div class="col-lg-4"><div class="card h-100">
+            <div class="card-header"><h3 class="card-title">KPIs &amp; outcomes</h3><div class="card-actions"><a href="#" class="small" data-toast="New KPI — same modal as live">+ KPI</a></div></div>
+            <div class="card-body py-2">
+              <div class="d-flex justify-content-between small py-1 border-bottom"><span>Pilot operators signed in via Entra</span><span class="mono">0 → 40 target</span></div>
+              <div class="d-flex justify-content-between small py-1 border-bottom"><span>Fallback sign-in success</span><span class="mono">99.4%</span></div>
+              <div class="d-flex gap-2 mt-2"><button class="btn btn-sm btn-outline-secondary" data-toast="Record outcome — same modal as live">Record outcome</button><a href="#" class="small align-self-center" data-toast="Link outcome to KPI — unchanged">link to KPI ›</a></div>
+            </div>
+          </div></div>
+        </div>
+
+      </div></div>
+    </div>
+
+    <!-- ════════════ FLEET — hosts · wake intents · live runners (all live tooling kept) + session windows ✦ ════════════ -->
+    <div class="tab-pane" id="tab-fleet">
+      <div class="page-header d-print-none"><div class="container-xl">
+        <div class="row align-items-center">
+          <div class="col"><div class="page-pretitle">HOSTS · WAKE QUEUE · RUNNERS</div><h2 class="page-title">Fleet</h2></div>
+          <div class="col-auto d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" data-toast="Message agent — same ack pipeline as live (send → ack → status)"><i class="ti ti-send me-1"></i>Message agent</button>
+            <a class="btn btn-sm btn-outline-secondary" href="#" data-toast="/coordination — the live agent-conversation page, unchanged"><i class="ti ti-messages me-1"></i>Coordination</a>
+            <button class="btn btn-sm btn-outline-secondary" data-toast="Refreshed"><i class="ti ti-refresh me-1"></i>Refresh</button>
+          </div>
+        </div>
+      </div></div>
+      <div class="page-body"><div class="container-xl">
+
+        <!-- ✦ UI-27 shipped task-first scopes (#592): Start/Pause/Stop live on the Deliverable page.
+             Fleet keeps the daemon view: profile status, durable project/lane pauses, run-once, audit. -->
+        <div class="card mb-3">
+          <div class="card-header py-2"><h3 class="card-title"><i class="ti ti-robot me-2"></i>Autopilot</h3><span class="newtag ms-2">✦ UI-27 · coordinator_daemon</span>
+            <div class="card-actions d-flex gap-2 align-items-center">
+              <span class="stx small" id="apState"><span class="sdot" style="background:#8b95a5"></span>0 scopes active · start from a deliverable or task</span>
+              <button class="btn btn-sm btn-outline-secondary" data-toast="Project paused — the whole loop stops between effects (durable, audited)">Pause project</button>
+              <button class="btn btn-sm btn-outline-secondary" data-toast="One tick queued — same idempotent loop (run --once)">Run once</button>
+            </div></div>
+          <div class="card-body py-2 d-flex flex-wrap gap-4 small">
+            <span class="text-secondary">profile <span class="mono">autopilot-default</span> · leader lease held · heartbeat 30s</span>
+            <span class="stx"><span class="sdot" style="background:#2fb344"></span>lane SEN — active</span>
+            <span class="stx"><span class="sdot" style="background:#2fb344"></span>lane DATA — active</span>
+            <span class="stx"><span class="sdot" style="background:#f5b153"></span>lane CO — paused <a href="#" class="ms-1" data-toast="Lane resumed — audited">resume</a></span>
+            <span class="text-secondary">·</span><a href="#" class="small" data-toast="Decision trail — every scope effect audited as coordinator.daemon.control with an ui27 idempotency key">decision trail ›</a>
+            <span class="text-secondary ms-auto">task-first: the daemon drains only operator-started scopes, ≤8 tasks per scope tick</span>
+          </div>
+        </div>
+
+        <!-- work sessions — the ✦ addition: watch the CLI in the browser -->
+        <div class="card mb-3">
+          <div class="card-header py-2"><h3 class="card-title">Work sessions</h3><span class="newtag ms-2">✦ watch the CLI in the browser</span></div>
+          <div class="card-body py-2 d-flex flex-wrap gap-2">
+            <button class="btn btn-outline-secondary" data-sess="atlas"><span class="avatar avatar-xs me-2" style="background:var(--tblr-primary);color:#fff">A</span>Atlas · SEN-6 <span class="stx small ms-2"><span class="sdot live" style="background:#c0392b"></span>live · $1.10</span></button>
+            <button class="btn btn-outline-secondary" data-sess="codex"><span class="avatar avatar-xs me-2" style="background:#206bc4;color:#fff">C</span>Codex · DATA-3 <span class="stx small ms-2"><span class="sdot live" style="background:#206bc4"></span>live · $0.60</span></button>
+            <button class="btn btn-outline-secondary" data-sess="nova"><span class="avatar avatar-xs me-2" style="background:#2fb344;color:#fff">N</span>Nova · QA-2 <span class="stx small ms-2"><span class="sdot" style="background:#2fb344"></span>finished · $0.30</span></button>
+          </div>
+        </div>
+
+        <!-- agent hosts — live table, restyled -->
+        <div class="card mb-3">
+          <div class="card-header"><h3 class="card-title"><i class="ti ti-server me-2"></i>Agent hosts</h3><span class="text-secondary small ms-2 mono">2</span></div>
+          <div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+            <thead><tr><th>Host</th><th>Status</th><th>Sessions</th><th>Runtimes</th><th class="text-end"></th></tr></thead><tbody>
+            <tr><td><div class="mono small">host-a1</div><div class="text-secondary small">gpu-01.taikun.internal</div></td>
+              <td><span class="stx small"><span class="sdot live" style="background:#2fb344"></span>live · 12s</span></td>
+              <td class="mono small">2 / 4</td><td class="small text-secondary">claude-code · codex-cli</td>
+              <td class="text-end"><button class="btn btn-sm btn-outline-secondary" data-toast="Wake modal — runtime · lane · task · reason (unchanged)"><i class="ti ti-bell-z me-1"></i>Wake…</button></td></tr>
+            <tr><td><div class="mono small">host-b2</div><div class="text-secondary small">cpu-04.taikun.internal</div></td>
+              <td><span class="stx small"><span class="sdot" style="background:#f5b153"></span>stale · 6m</span></td>
+              <td class="mono small">0 / 2</td><td class="small text-secondary">cursor-agent</td>
+              <td class="text-end"><button class="btn btn-sm btn-outline-secondary" data-toast="Wake modal — unchanged"><i class="ti ti-bell-z me-1"></i>Wake…</button></td></tr>
+          </tbody></table></div>
+        </div>
+
+        <!-- wake intents — live table, restyled -->
+        <div class="card mb-3">
+          <div class="card-header"><h3 class="card-title"><i class="ti ti-bell-z me-2"></i>Wake intents</h3><span class="text-secondary small ms-2 mono">1 queued</span></div>
+          <div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+            <thead><tr><th>Target</th><th>Task</th><th>Reason</th><th>Status</th><th>Requested</th><th class="text-end"></th></tr></thead><tbody>
+            <tr><td class="mono small">claude-code · lane sso</td><td class="mono small">SEN-8</td><td class="small">pre-warm for wave 2 open</td>
+              <td><span class="stx small"><span class="sdot" style="background:#f5b153"></span>pending</span></td>
+              <td class="text-secondary small">4m</td>
+              <td class="text-end"><button class="btn btn-sm btn-ghost-danger" data-toast="Wake cancelled">Cancel</button></td></tr>
+            <tr class="text-secondary"><td class="mono small">codex-cli</td><td class="mono small">DATA-3</td><td class="small">operator wake from Fleet</td>
+              <td><span class="stx small"><span class="sdot" style="background:#2fb344"></span>completed</span></td>
+              <td class="small">1h</td><td></td></tr>
+          </tbody></table></div>
+        </div>
+
+        <!-- live runners — live table with ALL runner actions kept -->
+        <div class="card mb-3">
+          <div class="card-header"><h3 class="card-title"><i class="ti ti-player-play me-2"></i>Live runners</h3><span class="text-secondary small ms-2 mono">2</span></div>
+          <div class="table-responsive"><table class="table table-vcenter table-sm mb-0">
+            <thead><tr><th>Session</th><th>Host</th><th>Runtime</th><th>Claim</th><th>Fidelity</th><th>Environment</th><th>Snapshot</th><th class="text-end">Actions</th></tr></thead><tbody>
+            <tr><td class="mono small">sess_7fa1</td><td class="mono small">host-a1</td><td class="small">claude-code · high</td><td class="mono small">SEN-6</td>
+              <td><span class="stx small"><span class="sdot" style="background:#2fb344"></span>healthy</span></td>
+              <td class="small text-secondary">repo@a41c2e9 · clean</td><td class="text-secondary small">3m ago</td>
+              <td class="text-end text-nowrap">
+                <button class="btn btn-sm btn-ghost-secondary" data-sess="atlas" title="Open">Open</button><button class="btn btn-sm btn-ghost-secondary" data-toast="Logs requested">Logs</button><button class="btn btn-sm btn-ghost-secondary" data-toast="Health requested">Health</button><button class="btn btn-sm btn-ghost-secondary" data-toast="Snapshot requested">Snapshot</button><button class="btn btn-sm btn-ghost-danger" data-toast="Kill requires typing the runner id — destructive, confirmed (unchanged)">Kill</button></td></tr>
+            <tr><td class="mono small">sess_2be4</td><td class="mono small">host-a1</td><td class="small">codex-cli · balanced</td><td class="mono small">DATA-3</td>
+              <td><span class="stx small"><span class="sdot" style="background:#2fb344"></span>healthy</span></td>
+              <td class="small text-secondary">repo@a41c2e9 · clean</td><td class="text-secondary small">6m ago</td>
+              <td class="text-end text-nowrap">
+                <button class="btn btn-sm btn-ghost-secondary" data-sess="codex" title="Open">Open</button><button class="btn btn-sm btn-ghost-secondary" data-toast="Logs requested">Logs</button><button class="btn btn-sm btn-ghost-secondary" data-toast="Health requested">Health</button><button class="btn btn-sm btn-ghost-secondary" data-toast="Snapshot requested">Snapshot</button><button class="btn btn-sm btn-ghost-danger" data-toast="Kill requires typing the runner id — unchanged">Kill</button></td></tr>
+          </tbody></table></div>
+        </div>
+
+      </div></div>
+    </div>
+
+    <!-- ════════════ ASK — RAG chat · propose-to-confirm · intake pipeline (all live features) ════════════ -->
+    <div class="tab-pane" id="tab-ask">
+      <div class="page-header d-print-none"><div class="container-xl">
+        <div class="row align-items-center">
+          <div class="col"><div class="page-pretitle">WHOLE BOARD · RAG OVER PLAN DOCS · PROPOSE-TO-CONFIRM</div><h2 class="page-title">Ask Taikun</h2></div>
+          <div class="col-auto d-flex gap-2">
+            <button class="btn btn-sm btn-primary" data-toast="Build project plan — same pipeline as live"><i class="ti ti-list-check me-1"></i>Build project plan</button>
+            <button class="btn btn-sm btn-outline-secondary" data-toast="Cleared"><i class="ti ti-trash me-1"></i>Clear</button>
+          </div>
+        </div>
+      </div></div>
+      <div class="page-body"><div class="container-xl" style="max-width:56rem">
+        <!-- intake — kept exactly: kind · title · file (incl. audio/video) · paste · ingest -->
+        <div class="card mb-3">
+          <div class="card-header py-2"><a class="small text-reset" href="#" data-collapse="intake-box"><i class="ti ti-file-import me-1"></i>Drop a transcript / email / document → ingest &amp; triage against the plan</a></div>
+          <div class="card-body py-2" id="intake-box" style="display:none">
+            <div class="row g-2">
+              <div class="col-6 col-md-3"><select class="form-select form-select-sm"><option>Transcript</option><option>Email</option><option>Document</option><option>Note</option></select></div>
+              <div class="col-6 col-md"><input class="form-control form-control-sm" placeholder="Title / subject (optional)"/></div>
+              <div class="col-12 col-md-auto"><input type="file" class="form-control form-control-sm"/></div>
+            </div>
+            <textarea class="form-control form-control-sm mt-2" rows="4" placeholder="Paste the transcript / email / document text…"></textarea>
+            <button class="btn btn-primary btn-sm mt-2" data-toast="Ingested — proposals land in the Inbox Action Queue"><i class="ti ti-file-import me-1"></i>Ingest &amp; triage</button>
+          </div>
+        </div>
+        <!-- the conversation, with a propose-to-confirm card -->
+        <div class="ask-b you small">What's blocking SSO, and what did the fleet do about SEN-4?</div>
+        <div class="ask-b">
+          <div class="small"><strong>SEN-6</strong> is the only blocker that matters — it's the keystone, in review on <a href="#">PR #412</a> with CI 3 of 4. <strong>SEN-4</strong> was marked Done by its agent with no merged PR; closure is holding M2 open until you decide.</div>
+          <div class="border-top mt-2 pt-2">
+            <div class="tk-eyebrow mb-1">PROPOSED CHANGE · needs your confirm</div>
+            <div class="d-flex align-items-center gap-2 small"><span class="sdot" style="background:#f76707"></span><span class="mono">SEN-4</span> → status <strong>Reopened</strong> · re-dispatch with provenance required</div>
+            <div class="d-flex gap-2 mt-2"><button class="btn btn-sm btn-primary" data-toast="Applied — SEN-4 reopened, re-dispatched">Apply</button><button class="btn btn-sm btn-outline-secondary" data-toast="Skipped">Skip</button><span class="text-secondary small align-self-center">evidence: session log · Tally entry</span></div>
+          </div>
+        </div>
+        <div class="input-group mt-3">
+          <input class="form-control" placeholder="Ask about the plan… (or: mark SSO-7 done)"/>
+          <button class="btn btn-primary" data-toast="Same queued-run chat as live — reconnects mid-run"><i class="ti ti-send me-1"></i>Send</button>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- ════════════ INBOX — Action Queue · Decisions · Risks (all live features) ════════════ -->
+    <div class="tab-pane" id="tab-inbox">
+      <div class="page-header d-print-none"><div class="container-xl">
+        <div class="row align-items-center">
+          <div class="col"><div class="page-pretitle">EVERYTHING AWAITING A HUMAN DECISION</div><h2 class="page-title">Inbox</h2></div>
+          <div class="col-auto d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" data-toast="Simulate email — same tester as live"><i class="ti ti-mail-forward me-1"></i>Simulate email</button>
+            <button class="btn btn-sm btn-outline-secondary" data-toast="Refreshed"><i class="ti ti-refresh me-1"></i>Refresh</button>
+          </div>
+        </div>
+        <ul class="nav nav-pills tk-subnav mt-2" id="inbox-subnav">
+          <li class="nav-item"><a class="nav-link active" data-sub="sub-needs" href="#"><i class="ti ti-hand-stop me-1"></i>Needs you <span class="newtag">✦</span> <span class="mono ms-1">5</span></a></li>
+          <li class="nav-item"><a class="nav-link" data-sub="sub-queue" href="#"><i class="ti ti-checklist me-1"></i>Action Queue</a></li>
+          <li class="nav-item"><a class="nav-link" data-sub="sub-decisions" href="#"><i class="ti ti-help-circle me-1"></i>Decisions</a></li>
+          <li class="nav-item"><a class="nav-link" data-sub="sub-risks" href="#"><i class="ti ti-alert-triangle me-1"></i>Risks</a></li>
+        </ul>
+      </div></div>
+      <div class="page-body"><div class="container-xl">
+
+        <!-- ✦ Needs-you: agent questions as a ranked triage queue. Each item is
+             everything you need to answer WITHOUT opening the terminal —
+             task · agent · user story · did-so-far · the question in plain English. -->
+        <div class="inbox-sub" id="sub-needs">
+          <div class="d-flex align-items-center gap-2 mb-2 small text-secondary">
+            <span>One queue, every source that needs you — agent questions, <span class="mono">plan@taikunai.com</span>, decisions. Ranked by blast radius; answer here and the source resumes.</span>
+            <span class="ms-auto">Keys: <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>↵</kbd> answer</span>
+          </div>
+          <div class="btn-list mb-3" id="qFilters"></div>
+          <div class="q-triage">
+            <div class="q-list" id="qList"></div>
+            <div class="q-detail" id="qDetail"></div>
+          </div>
+        </div>
+
+        <div class="inbox-sub" id="sub-queue" style="display:none">
+          <div class="row row-cards mb-3 q-kpi">
+            <div class="col-sm-6 col-lg-3"><div class="card"><div class="card-body py-3"><div class="d-flex align-items-center"><div class="subheader">To review</div><span class="sdot live ms-auto" style="background:#d63939"></span></div><div class="h1 mb-0 mt-1">2</div><div class="text-secondary small">pending confirm</div></div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="card"><div class="card-body py-3"><div class="d-flex align-items-center"><div class="subheader">Need evidence</div><span class="sdot ms-auto" style="background:#f76707"></span></div><div class="h1 mb-0 mt-1">1</div><div class="text-secondary small">before they can apply</div></div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="card"><div class="card-body py-3"><div class="d-flex align-items-center"><div class="subheader">Confirmed today</div><span class="sdot ms-auto" style="background:#2fb344"></span></div><div class="h1 mb-0 mt-1">3</div><div class="text-secondary small">8 task changes</div></div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="card"><div class="card-body py-3"><div class="d-flex align-items-center"><div class="subheader">Dismissed</div><span class="sdot ms-auto" style="background:#8b95a5"></span></div><div class="h1 mb-0 mt-1">1</div><div class="text-secondary small">this week</div></div></div></div>
+          </div>
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+            <select class="form-select form-select-sm" style="width:auto"><option>All types</option><option>Status changes</option><option>New tasks</option></select>
+            <select class="form-select form-select-sm" style="width:auto"><option>All sources</option><option>Calls</option><option>Email</option><option>Notes</option><option>Uploads</option></select>
+            <input class="form-control form-control-sm" style="width:200px" placeholder="Filter queue…"/>
+            <label class="form-check form-switch m-0 small"><input class="form-check-input" type="checkbox" checked/><span class="form-check-label">Hide confirmed</span></label>
+            <div class="ms-auto d-flex gap-2">
+              <button class="btn btn-sm btn-outline-secondary" data-toast="Confirmed all SAFE items (no-evidence-needed) — same bulk action as live">Confirm safe</button>
+              <button class="btn btn-sm btn-primary" data-toast="Confirmed all — same bulk action as live">Confirm all</button>
+            </div>
+          </div>
+          <div class="card"><div class="table-responsive"><table class="table table-vcenter table-hover mb-0">
+            <thead><tr><th class="w-1"></th><th>Item</th><th>Source</th><th>Proposed changes</th><th>Age</th><th class="w-1"></th></tr></thead><tbody>
+            <tr data-toast="Review modal — edit each proposal, confirm or dismiss (unchanged)" style="cursor:pointer">
+              <td><span class="sdot" style="background:#f76707"></span></td>
+              <td><div class="fw-bold">Northwind status call — week 4</div><div class="text-secondary small">transcript · 2h ago</div></td>
+              <td class="small text-secondary"><i class="ti ti-phone me-1"></i>Call</td>
+              <td><span class="small mono">3 actions</span> <span class="text-orange small">· 1 needs evidence</span><div class="text-secondary small mono">SEN-4, SEN-8, INT-2</div></td>
+              <td class="text-secondary small">2h</td>
+              <td class="text-end"><button class="btn btn-primary btn-sm">Review</button></td></tr>
+            <tr data-toast="Review modal — unchanged" style="cursor:pointer">
+              <td><span class="sdot" style="background:#2fb344"></span></td>
+              <td><div class="fw-bold">RE: SAML cert rotation window</div><div class="text-secondary small">email · 5h ago</div></td>
+              <td class="small text-secondary"><i class="ti ti-mail me-1"></i>Email</td>
+              <td><span class="small mono">1 action</span><div class="text-secondary small mono">SHIP-1</div></td>
+              <td class="text-secondary small">5h</td>
+              <td class="text-end"><button class="btn btn-primary btn-sm">Review</button></td></tr>
+          </tbody></table></div></div>
+          <div class="hr-text text-secondary mt-4 mb-2">Recently actioned</div>
+          <div class="card"><div class="table-responsive"><table class="table table-vcenter mb-0"><tbody>
+            <tr data-toast="Audit detail — unchanged" style="cursor:pointer"><td class="w-1"><span class="sdot" style="background:#2fb344"></span></td>
+              <td><span class="fw-medium small">IT change window confirmed</span> <span class="text-secondary small">· updated SHIP-1, SHIP-2</span></td>
+              <td class="text-end"><span class="stx small"><span class="sdot" style="background:#2fb344"></span>confirmed</span></td></tr>
+            <tr data-toast="Audit detail — unchanged" style="cursor:pointer"><td class="w-1"><span class="sdot" style="background:#8b95a5"></span></td>
+              <td><span class="fw-medium small">Newsletter fwd</span> <span class="text-secondary small">· no task change — ingested for reference</span></td>
+              <td class="text-end"><span class="stx small"><span class="sdot" style="background:#8b95a5"></span>dismissed</span></td></tr>
+          </tbody></table></div></div>
+        </div>
+
+        <div class="inbox-sub" id="sub-decisions" style="display:none">
+          <div class="card"><div class="card-header"><h3 class="card-title">Open decisions — close in the kickoff working session</h3></div>
+            <div class="table-responsive"><table class="table table-vcenter mb-0">
+              <thead><tr><th>Question</th><th>Owner</th><th>Recommended default</th><th>Needed by</th><th>Workstream</th></tr></thead><tbody>
+              <tr><td class="small">Rotate SAML cert during pilot or after?</td><td class="small">Northwind IT</td><td class="small text-secondary">after pilot — fallback covers the window</td><td class="mono small text-orange">Jul 22</td><td class="text-uppercase small text-secondary">SHIP</td></tr>
+              <tr><td class="small">Directory attribute for well-site id</td><td class="small">SR</td><td class="small text-secondary">employeeId → well_id (contract v1)</td><td class="mono small">Jul 25</td><td class="text-uppercase small text-secondary">DATA</td></tr>
+            </tbody></table></div></div>
+        </div>
+
+        <div class="inbox-sub" id="sub-risks" style="display:none">
+          <div class="card"><div class="card-header"><h3 class="card-title">Consolidated risk register</h3></div>
+            <div class="table-responsive"><table class="table table-vcenter mb-0">
+              <thead><tr><th>Risk</th><th>L</th><th>I</th><th>Mitigation</th><th>Owner</th><th>Workstream</th></tr></thead><tbody>
+              <tr><td class="small">Entra tenant change freeze slips the pilot</td><td><span class="stx small"><span class="sdot" style="background:#f76707"></span>M</span></td><td><span class="stx small"><span class="sdot" style="background:#d63939"></span>H</span></td><td class="small text-secondary">book the change window now; fallback stays on</td><td class="small">Northwind IT</td><td class="text-uppercase small text-secondary">SEN</td></tr>
+              <tr><td class="small">SEN-4 unproven work hides a regression</td><td><span class="stx small"><span class="sdot" style="background:#f76707"></span>M</span></td><td><span class="stx small"><span class="sdot" style="background:#f76707"></span>M</span></td><td class="small text-secondary">reopen with provenance required (proposal pending)</td><td class="small">SR</td><td class="text-uppercase small text-secondary">SEN</td></tr>
+            </tbody></table></div></div>
+        </div>
+
+      </div></div>
+    </div>
+
+<!-- ═══════════ SHAPE — one workspace: author the four artifacts, readiness rail inside it ═══════════ -->
+          <div class="tab-pane" id="tab-scope">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">mission M-114 · <span class="mono">existing-product-feature</span> · phase <span class="mono" id="koPhase">scope</span></div>
+                  <h2 class="page-title">Scope <span class="text-secondary fs-4 fw-normal mono ms-1" id="briefV">v7</span></h2>
+                </div>
+                <div class="col-auto ms-auto">
+                  <div class="ko-status" id="koStatus"><i class="ti ti-lock" style="color:#f76707"></i><span id="koStatusText" style="color:#f76707">Build blocked</span><span class="text-secondary fw-normal" id="koStatusCount">· 3 of 5 gates approved</span><span class="bar"><i id="koBar" style="width:60%"></i></span></div>
+                </div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+            <p class="text-secondary mb-3" style="font-size:.875rem">The kickoff record is four artifacts you author here plus the scope breakdown in Plan. Each is versioned and approved on record — approving one unlocks the next. No build task is claimable until all five are green.</p>
+
+            <div class="row">
+              <div class="col-lg-8">
+                <div class="card tk-doc" id="briefDoc">
+                  <div class="card-header py-2 d-flex align-items-center gap-2">
+                    <div class="shape-switch" id="shapeSwitch">
+                      <button data-sec="vision"><span class="st"></span>Vision</button>
+                      <button data-sec="prd"><span class="st"></span>PRD</button>
+                      <button data-sec="arch"><span class="st"></span>Architecture</button>
+                      <button data-sec="rules"><span class="st"></span>Operating rules</button>
+                    </div>
+                    <span class="ms-auto small text-secondary mono" id="saveState"><i class="ti ti-circle-check text-green me-1"></i>saved</span>
+                  </div>
+
+                  <!-- VISION -->
+                  <div class="shape-sec" id="sec-vision">
+                    <div class="card-body">
+                      <div class="tk-eyebrow mb-2">Thesis · why-now · non-goals</div>
+                      <p class="tk-ed" contenteditable="true" spellcheck="false" data-sec="the vision">This isn't a login problem — it's a <strong>go-live problem</strong>. Pilot operators sign in with <strong>Entra/SAML</strong>, auto-provisioned from the directory, gated on <strong>CI parity</strong> — proven from week one, so the TotalEnergies date holds. <span class="tk-cm res" data-th="okta">Okta stays as a silent fallback.</span></p>
+                      <p class="text-secondary small mb-0"><strong class="text-body">The bet:</strong> prove parity inside the window and Northwind becomes the flagship reference — miss it and this is a stalled pilot. <strong class="text-body">Non-goals:</strong> SSO for non-pilot tenants, SCIM (phase 2).</p>
+                    </div>
+                    <div class="card-body border-top">
+                      <div class="row text-center">
+                        <div class="col-4"><div class="h2 mb-0"><span class="tk-cm" data-th="cost" id="dCost">$3.4k</span></div><div class="tk-eyebrow">agent cost · est</div></div>
+                        <div class="col-4 border-start"><div class="h2 mb-0" id="dDays">~9 days</div><div class="tk-eyebrow">autopilot</div></div>
+                        <div class="col-4 border-start"><div class="h2 mb-0" id="dBuf">4 days</div><div class="tk-eyebrow">buffer to contract</div></div>
+                      </div>
+                      <div class="text-secondary small mt-2 text-center">Priced from <strong>your ledger</strong> — median of 14 similar shipped tasks, each proven with a merged PR.</div>
+                    </div>
+                    <div class="card-body border-top" id="redlineBlock">
+                      <div class="tk-eyebrow mb-2"><i class="ti ti-git-compare me-1"></i>Proposed · from "make it 2 weeks" · re-plan, nothing cut</div>
+                      <div class="tk-redl mb-2"><s>~9 days · $3.4k · 3 waves</s> → <mark>~6 days · $3.7k · 2 waves</mark> · buffer becomes <strong>7 days</strong>.</div>
+                      <div class="d-flex gap-2"><button class="btn btn-sm btn-outline-secondary" id="pushBack">Push back</button><button class="btn btn-sm btn-primary" id="applyBtn"><i class="ti ti-check me-1"></i>Apply → v8</button></div>
+                    </div>
+                    <div class="shape-foot" data-foot="vision"></div>
+                  </div>
+
+                  <!-- PRD -->
+                  <div class="shape-sec" id="sec-prd">
+                    <div class="card-body">
+                      <div class="tk-eyebrow mb-2">In / out of scope · acceptance</div>
+                      <div class="d-flex align-items-start mb-1"><i class="ti ti-circle-check text-green me-2 mt-1"></i><span class="tk-ed" contenteditable="true" spellcheck="false" data-sec="acceptance">≥95% sign-in success · zero manual provisioning · MTTA ≤ 15m</span></div>
+                      <div class="d-flex align-items-start mb-1"><i class="ti ti-circle-check text-green me-2 mt-1"></i><span>CI parity green vs. your Helm baseline · Okta fallback verified</span></div>
+                      <div class="d-flex align-items-start"><i class="ti ti-circle-check text-green me-2 mt-1"></i><span>Every task a merged, tested PR — <strong>done means merged</strong> · UI on <strong>design system v3</strong></span></div>
+                      <div class="mt-2 small text-secondary"><strong>Out of scope:</strong> SCIM provisioning, non-pilot tenants, custom MFA.</div>
+                    </div>
+                    <div class="card-body border-top">
+                      <div class="tk-eyebrow mb-2"><i class="ti ti-help-circle me-1"></i>Open questions — need you <span class="text-secondary fw-normal" id="gateCount">· 2</span></div>
+                      <div id="gateList">
+                        <div class="mb-2" data-gate>
+                          <div class="small"><strong>SCIM provisioning</strong> — mentioned in passing on the call. Adds ~5 tasks and a week.</div>
+                          <div class="d-flex gap-2 mt-1"><button class="btn btn-sm btn-outline-secondary" data-r="SCIM deferred — v1 stays tight, parked for phase 2">Defer</button><button class="btn btn-sm btn-outline-secondary" data-r="SCIM included — +5 tasks, ~1 week; estimate ~$4.3k">Include</button></div>
+                        </div>
+                        <div data-gate>
+                          <div class="small"><strong>Model tier for identity work</strong> — auth code is unforgiving.</div>
+                          <div class="d-flex gap-2 mt-1"><button class="btn btn-sm btn-outline-secondary" data-r="Balanced tier — estimate drops to ~$2.9k">Balanced</button><button class="btn btn-sm btn-outline-secondary" data-r="High-reasoning tier locked for identity work">High</button></div>
+                        </div>
+                      </div>
+                      <div class="small text-secondary mt-2">A PRD with open questions can't be approved — resolve these first. No silent unknowns.</div>
+                    </div>
+                    <div class="shape-foot" data-foot="prd"></div>
+                  </div>
+
+                  <!-- ARCHITECTURE -->
+                  <div class="shape-sec" id="sec-arch">
+                    <div class="card-body">
+                      <div class="tk-eyebrow mb-2">Reuse map · no new engines</div>
+                      <div class="tk-dots mb-2">
+                        <div class="r"><span class="d" style="background:#2fb344"></span><b>Shipped</b> — reuse <span class="mono">claim_next</span>, <span class="mono">mission_graph</span>, <span class="mono">deliverable_closure</span></div>
+                        <div class="r"><span class="d" style="background:#f59f00"></span><b>Thin</b> — extend <span class="mono">Tally</span> two-stream for this deliverable</div>
+                        <div class="r"><span class="d" style="background:#d63939"></span><b>New</b> — none. No new engines invented.</div>
+                      </div>
+                      <div class="tk-eyebrow mb-1 mt-3">Components · data model · trust boundaries</div>
+                      <p class="tk-ed mb-0" contenteditable="true" spellcheck="false" data-sec="architecture" style="font-size:.875rem">Entra app registration → SAML handler → directory sync into the shared contract. Auth boundary at the tenant edge; secrets via the existing vault lease. Phased: contract first, then identity, then parity gate. One page an agent can execute against.</p>
+                    </div>
+                    <div class="shape-foot" data-foot="arch"></div>
+                  </div>
+
+                  <!-- OPERATING RULES -->
+                  <div class="shape-sec" id="sec-rules">
+                    <div class="card-body">
+                      <div class="tk-eyebrow mb-2">Working agreement · lane boundaries</div>
+                      <p class="tk-ed mb-2" contenteditable="true" spellcheck="false" data-sec="operating rules" style="font-size:.875rem">Branch per task off <span class="mono">main</span>; DoD = merged PR with green CI + closure gate. Read the Architecture before inventing anything. Test command <span class="mono">pytest -q</span>; every change ships a test.</p>
+                      <div class="tk-eyebrow mb-1 mt-3">File / lane ownership — leases</div>
+                      <div class="tk-dots">
+                        <div class="r"><span class="d" style="background:#206bc4"></span><span class="mono">sso/entra</span> — identity lane</div>
+                        <div class="r"><span class="d" style="background:#ae3ec9"></span><span class="mono">directory/sync</span> — data lane</div>
+                      </div>
+                      <div class="small text-secondary mt-2">Injected into every agent via <span class="mono">get_working_agreement</span>.</div>
+                    </div>
+                    <div class="shape-foot" data-foot="rules"></div>
+                  </div>
+
+                  <div class="card-footer d-flex gap-2 align-items-center">
+                    <i class="ti ti-sparkles" style="color:var(--tblr-primary)"></i>
+                    <input class="form-control form-control-sm border-0 shadow-none" id="sayIn" placeholder='Change anything — "drop the fallback", "why $3.4k?", "make it 2 weeks"…'>
+                    <button class="btn btn-sm btn-primary" id="sayGo"><i class="ti ti-send"></i></button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- readiness rail -->
+              <div class="col-lg-4">
+                <div class="card mb-3">
+                  <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-rocket me-2"></i>Kickoff readiness</h3></div>
+                  <div class="card-body py-2" id="koLadder"><!-- rail rows injected --></div>
+                  <div class="ko-verdict blocked" id="koVerdictCard" style="border-radius:0;border-left:0;border-right:0;border-bottom:0">
+                    <i class="ti ti-shield-lock" id="koVerdictIcon" style="font-size:1.25rem;color:#f76707"></i>
+                    <div class="flex-fill">
+                      <div class="fw-bold small" id="koVerdictTitle">Build blocked</div>
+                      <div class="text-secondary" style="font-size:.75rem" id="koVerdictSub">2 gates remain. <code>claim_next</code> excludes build tasks.</div>
+                    </div>
+                  </div>
+                  <div class="card-footer py-2"><button class="btn btn-primary w-100" id="koKick" disabled><i class="ti ti-bolt me-1"></i>Release Wave 1</button></div>
+                </div>
+                <div class="card mb-3">
+                  <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-versions me-2"></i>Versions</h3></div>
+                  <div class="list-group list-group-flush" id="vList" style="max-height:220px;overflow:auto">
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v7</span>Tier call raised · high-reasoning proposed</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v6</span>Re-priced from ledger — $3.6k → $3.4k</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v5</span>"prove parity early" → gate into wave 1</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v4</span>Direction: Parity-First · ADR recorded</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v2</span>"Okta must stay" → fallback +1 task</div>
+                    <div class="list-group-item tk-act-item py-2 small"><span class="mono text-secondary me-2">v1</span>Assembled from discovery-call.vtt</div>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-gavel me-2"></i>Decisions <span class="text-secondary small fw-normal">· ADR log</span></h3></div>
+                  <div class="list-group list-group-flush">
+                    <div class="list-group-item py-2 small"><span class="mono text-secondary me-2">ADR-3</span>Parity-First over 2 alternatives</div>
+                    <div class="list-group-item py-2 small"><span class="mono text-secondary me-2">ADR-2</span>Okta kept as silent fallback</div>
+                    <div class="list-group-item py-2 small"><span class="mono text-secondary me-2">ADR-1</span>SCIM out of v1 scope</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            </div></div>
+          </div>
+
+<!-- ═══════════ TALLY — two-stream ledger ═══════════ -->
+          <div class="tab-pane" id="tab-tally">
+            <div class="page-header d-print-none"><div class="container-xl">
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="page-pretitle">two streams, reconciled — provider-actual vs agent-reported</div>
+                  <h2 class="page-title">Tally</h2>
+                </div>
+              </div>
+            </div></div>
+            <div class="page-body"><div class="container-xl">
+            <div class="row row-cards">
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Provider actual · gateway</div><div class="h1 mb-0 mt-1">$3.12k</div><div class="text-secondary small">source of truth</div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Agent reported</div><div class="h1 mb-0 mt-1">$3.31k</div><div class="small"><span class="text-green fw-semibold">Δ −5.7%</span> <span class="text-secondary">· within tolerance</span></div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Cost / verified outcome</div><div class="h1 mb-0 mt-1">$162</div><div class="text-secondary small">merged-PR proven only</div></div></div></div>
+              <div class="col-sm-6 col-lg-3"><div class="card card-sm"><div class="card-body"><div class="tk-eyebrow">Margin at SOW</div><div class="h1 mb-0 mt-1 text-green">93%</div><div class="text-secondary small">$48k for ~$3.4k</div></div></div></div>
+            </div>
+            <div class="card mt-3">
+              <div class="card-header py-2"><h3 class="card-title fs-5 mb-0"><i class="ti ti-receipt me-2"></i>Deliverable tally — spend lands in buckets, proof moves it</h3></div>
+              <div class="table-responsive"><table class="table table-vcenter card-table">
+                <thead><tr><th>Deliverable</th><th class="text-end">Spend</th><th class="text-end">Proven</th><th class="text-end">In review</th><th>Invoice</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="mono text-secondary me-1">M1</span> Shared contract</td><td class="mono text-end">$0.48k</td><td class="mono text-end text-green">$0.48k</td><td class="mono text-end text-secondary">—</td><td><span class="stx small"><span class="sdot" style="background:#2fb344"></span>$12k released</span></td></tr>
+                  <tr><td><span class="mono text-secondary me-1">M2</span> Core implementation</td><td class="mono text-end">$1.92k</td><td class="mono text-end text-green">$1.40k</td><td class="mono text-end" style="color:#f76707">$0.52k</td><td class="text-secondary small">on playback accept</td></tr>
+                  <tr><td><span class="mono text-secondary me-1">M3</span> Cross-board integration</td><td class="mono text-end">$0.51k</td><td class="mono text-end text-secondary">—</td><td class="mono text-end" style="color:#f76707">$0.18k</td><td class="text-secondary small">—</td></tr>
+                  <tr><td><span class="mono text-secondary me-1">M4</span> Parity &amp; ship</td><td class="mono text-end">$0.21k</td><td class="mono text-end text-secondary">—</td><td class="mono text-end text-secondary">—</td><td class="text-secondary small">final $16k</td></tr>
+                </tbody>
+              </table></div>
+              <div class="card-footer small text-secondary py-2">Every "proven" dollar traces to a merged PR through <span class="mono">deliverable_tally</span> — the case study quotes this table.</div>
+            </div>
+            </div></div>
+          </div>
+
+    </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- work-session panel — the agent window: CLI in the browser -->
+<div class="tk-scrim" id="scrim"></div>
+<div class="tk-session" id="sessPanel">
+  <div class="card-header d-flex align-items-center gap-2" style="border-bottom:1px solid var(--tblr-border-color)">
+    <span class="avatar avatar-xs" id="sessAv" style="background:var(--tblr-primary);color:#fff">A</span>
+    <div style="min-width:0"><div class="fw-bold small text-truncate" id="sessTitle">Atlas · SEN-6 — Wire Entra app registration</div><div class="text-secondary mono" style="font-size:.625rem" id="sessSub">claude-code · sess_7fa1 · lease sso/entra</div></div>
+    <span class="badge bg-red-lt ms-auto" id="sessLive">● live</span>
+    <button class="btn btn-sm btn-outline-secondary" id="sessX"><i class="ti ti-x"></i></button>
+  </div>
+  <div class="p-3" style="flex:1;overflow:auto">
+    <div class="d-flex gap-1 flex-wrap mb-2" id="sessMeta"></div>
+    <div class="tk-trm" id="sessStream"></div>
+    <div class="text-secondary small text-center mt-2">The agent's actual session — what you'd see in the CLI, in the browser.</div>
+  </div>
+  <div class="p-3 border-top">
+    <div class="d-flex gap-1 flex-wrap mb-2">
+      <button class="btn btn-sm btn-outline-secondary" data-steer="redirect">Redirect</button>
+      <button class="btn btn-sm btn-outline-secondary" data-steer="hold">Hold</button>
+      <button class="btn btn-sm btn-outline-secondary" data-steer="approve">Approve merge</button>
+    </div>
+    <div class="d-flex gap-2"><input class="form-control form-control-sm" id="steerIn" placeholder="Steer — it hears you mid-flight, even on autopilot"><button class="btn btn-sm btn-primary" id="steerGo"><i class="ti ti-send"></i></button></div>
+  </div>
+</div>
+
+<!-- task panel — every node opens the conversation with its session: live, finished, or future -->
+<div class="tk-session" id="taskPanel" style="width:min(560px,96vw)">
+  <div class="card-header d-flex align-items-center gap-2" id="tpHead" style="border-bottom:1px solid var(--tblr-border-color)"></div>
+  <div class="p-3" id="tpBody" style="flex:1;overflow:auto"></div>
+  <div class="p-3 border-top" id="tpFoot">
+    <div class="d-flex gap-1 flex-wrap mb-2" id="tpChips"></div>
+    <div class="d-flex gap-2"><input class="form-control form-control-sm" id="tpIn" placeholder="Steer, ask, or brief…"><button class="btn btn-sm btn-primary" id="tpSend"><i class="ti ti-send"></i></button></div>
+  </div>
+</div>
+
+<div class="tk-toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script>
+(function(){
+  var toastEl=document.getElementById('toast'),tmr=null;
+  function toast(m){ toastEl.textContent=m; toastEl.classList.add('on'); clearTimeout(tmr); tmr=setTimeout(function(){ toastEl.classList.remove('on'); },3400); }
+
+  var railT=document.getElementById('railTgl'),railEl=document.querySelector('aside.navbar-vertical');
+  if(railT) railT.addEventListener('click',function(){ railEl.classList.toggle('on'); });
+  // nav — rail links switch panes; the map renders on first Deliverable open
+  function go(tab){
+    document.querySelectorAll('#main-nav .nav-link').forEach(function(a){ a.classList.toggle('active', a.dataset.tab===tab); });
+    document.querySelectorAll('.tab-content > .tab-pane').forEach(function(p){ p.classList.toggle('active', p.id===tab); });
+    window.scrollTo(0,0);
+    if(railEl) railEl.classList.remove('on');
+    if(tab==='tab-deliverable'&&!window.__dagDone){ window.__dagDone=true; renderDag(); }
+  }
+  document.querySelectorAll('#main-nav .nav-link[data-tab]').forEach(function(a){ a.addEventListener('click',function(e){ e.preventDefault(); go(a.dataset.tab); }); });
+  document.querySelectorAll('[data-go]').forEach(function(a){ a.addEventListener('click',function(e){ e.preventDefault(); go(a.dataset.go); }); });
+
+  // sub-navs (Plan, Inbox)
+  function wireSub(navId, cls){
+    var nav=document.getElementById(navId); if(!nav) return;
+    nav.querySelectorAll('[data-sub]').forEach(function(a){ a.addEventListener('click',function(e){ e.preventDefault();
+      nav.querySelectorAll('.nav-link').forEach(function(x){ x.classList.toggle('active', x===a); });
+      document.querySelectorAll('.'+cls).forEach(function(p){ p.style.display = (p.id===a.dataset.sub)?'':'none'; });
+    }); });
+  }
+  wireSub('plan-subnav','plan-sub'); wireSub('inbox-subnav','inbox-sub');
+
+  // ✦ Needs-you queue — REUSES ActionEngine's AgentApproval UI component, but rides
+  // Switchboard's OWN universal view: GET /api/attention (unions inbox + agent_messages
+  // + decisions where attention=true) → POST /api/attention/{id}/decide. A Switchboard
+  // agent question IS an approval-gate row: a suspended durable run waiting on a human.
+  // same generic renderers (datagrid, evidence table, frozen-payload card, the
+  // "frozen at gate time" + governance notes). We layer on Switchboard fields the
+  // approvals row doesn't carry yet: the task's user story, agent identity, and a
+  // blast-radius rank from mission_graph. action_type='question' extends decide()
+  // from binary approve/reject to N options + a free-text reply.
+  function qesc(x){ return String(x==null?'':x).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  // — reused verbatim from AgentApproval.datagrid: generic key→value, never assumes keys —
+  function qdatagrid(obj){ var e=Object.entries(obj||{}); if(!e.length) return '<div class="text-secondary small">—</div>';
+    return '<div class="datagrid">'+e.map(function(kv){ var k=kv[0],v=kv[1];
+      return '<div class="datagrid-item"><div class="datagrid-title">'+qesc(k)+'</div><div class="datagrid-content '+(/id|command|type|lease|touches/.test(k)?'font-monospace':'')+'">'+qesc(typeof v==='object'?JSON.stringify(v):v)+'</div></div>'; }).join('')+'</div>'; }
+  // — reused from AgentApproval.evidenceHtml: evidence steps → table (this is "did so far") —
+  function qevidence(ev){ var steps=ev&&Array.isArray(ev.steps)?ev.steps:null; if(!steps) return '';
+    var col={done:'#2fb344',working:'#206bc4',waiting:'#f76707'};
+    return '<div class="table-responsive mb-3"><table class="table table-vcenter mb-0"><tbody>'+steps.map(function(d){
+      return '<tr><td class="w-1"><span class="sdot" style="background:'+(col[d.status]||'#8b95a5')+'"></span></td>'
+        +'<td class="fw-bold small" style="width:150px">'+qesc(d.source)+'</td>'
+        +'<td class="text-secondary small">'+qesc(d.detail)+'</td>'
+        +'<td class="text-end">'+(d.status?'<span class="text-secondary small">'+qesc(d.status)+'</span>':'')+'</td></tr>'; }).join('')+'</tbody></table></div>'; }
+
+  var QS=[
+    { approval_id:'apr_7f21', action_type:'question · dependency', task:'SEN-6', title:'Wire Entra app registration',
+      av:'A', color:'#c0392b', agent:'atlas · claude-code/high', run:'sess_7fa1', workflow:'M2 · SSO/Entra',
+      blast:5, age:'6m', deadline:'auto-proceeds with the default in 1h 48m', source:'agent', src_from:'atlas · claude-code',
+      story:'As a pilot operator, I sign in with my Entra account so I never touch a separate Okta password.',
+      summary:'To resolve Entra tokens I can add the <span class="mono">msal</span> library (one new dependency), or reuse the vault client already wired in <span class="mono">directory/entra.py</span>. Which do you want?',
+      action_payload:{ proposed:'add dependency: msal', alternative:'reuse directory/entra.py vault client', lease:'sso/entra', touches:'directory/entra.py' },
+      evidence:{ steps:[
+        {source:'claim_next', detail:'SEN-6 · lease sso/entra · clean tree', status:'done'},
+        {source:'deps merged', detail:'SAML handler + session issuance (SEN-2, SEN-3)', status:'done'},
+        {source:'in progress', detail:'wiring token resolution — needs a way to fetch app registrations', status:'working'},
+        {source:'blocked', detail:'two viable approaches, one adds a dependency', status:'waiting'} ]},
+      options:[['reuse','Reuse the vault client','recommended · no new dependency'],['msal','Add msal','faster, adds a dependency']], def:'reuse' },
+    { approval_id:'apr_2be4', action_type:'question · choice', task:'DATA-3', title:'Directory attribute sync',
+      av:'C', color:'#206bc4', agent:'codex · codex-cli/balanced', run:'sess_2be4', workflow:'M2 · Directory',
+      blast:2, age:'12m', deadline:'auto-proceeds with the default in 1h 33m', source:'agent', src_from:'codex · codex-cli',
+      story:'As an admin, users are provisioned automatically from our directory so I never create accounts by hand.',
+      summary:'The shared contract needs <span class="mono">well_id</span>, but the directory has three candidate fields. Which maps to it?',
+      action_payload:{ target_field:'well_id', contract:'v1', candidates:'employeeId, extensionAttribute3, sAMAccountName' },
+      evidence:{ steps:[
+        {source:'mapped', detail:'mail → email, displayName → name (contract v1)', status:'done'},
+        {source:'tests', detail:'8 sync tests green', status:'done'},
+        {source:'blocked', detail:'no obvious source field for the well-site id', status:'waiting'} ]},
+      options:[['employeeId','employeeId','recommended · matches contract v1'],['extensionAttribute3','extensionAttribute3','custom field'],['sAMAccountName','sAMAccountName','login name']], def:'employeeId' },
+    { approval_id:'apr_9c11', action_type:'question · open', task:'SEN-9', title:'Fallback edge cases',
+      av:'O', color:'#ae3ec9', agent:'orion · cursor-agent/cheap', run:'sess_9c11', workflow:'M2 · SSO/Entra',
+      blast:1, age:'3m', deadline:'no deadline — waiting on you',
+      story:'As a pilot operator, if Entra is down I still get in via Okta so a bad SSO day never blocks the boat.',
+      summary:'What should the Okta-fallback banner say to the operator? The PRD doesn\'t specify the wording.',
+      action_payload:{ surface:'fallback banner', trigger:'Entra timeout', prd_copy:'(none specified)' },
+      evidence:{ steps:[
+        {source:'built', detail:'fallback path builds; banner renders on Entra timeout', status:'done'},
+        {source:'blocked', detail:'prototype shows a banner but the PRD gives no copy', status:'waiting'} ]},
+      options:null, def:null, source:'agent', src_from:'atlas · claude-code' },
+    { approval_id:'inb_318', source:'email', action_type:'inbound · proposed change', task:'SHIP-1', title:'Cutover runbook',
+      av:'@', color:'#4299e1', agent:'plan@taikunai.com', run:'inbox #318', workflow:'M4 · Cutover',
+      blast:2, age:'22m', deadline:'no deadline — review when ready', src_from:'it-ops@northwind.example',
+      story:'As the pilot lead, go-live only happens in an approved change window so ops is never surprised.',
+      summary:'Northwind IT moved the cutover change window to <b>Sat 02:00–04:00</b>. Shift SHIP-1/SHIP-2 target dates to match?',
+      action_payload:{ from:'it-ops@northwind.example', proposes:'SHIP-1 → Sat 02:00, SHIP-2 → Sat 03:00', current:'Fri 22:00' },
+      evidence:{ steps:[ {source:'inbound email', detail:'"…change window moved to Saturday 2am per the infra freeze…"', status:'triaged'} ]},
+      options:[['apply','Apply the date shift','recommended · matches the confirmed window'],['keep','Keep current dates','']], def:'apply' },
+    { approval_id:'dec_12', source:'decision', action_type:'open decision', task:'SHIP-1', title:'SAML cert rotation timing',
+      av:'?', color:'#f76707', agent:'kickoff working session', run:'decision #12', workflow:'M4 · Cutover',
+      blast:1, age:'1h', deadline:'needed by Jul 22', src_from:'plan decision register',
+      story:'As a pilot operator, sign-in never breaks mid-pilot because a cert rotated at a bad time.',
+      summary:'Rotate the SAML cert <b>during</b> the pilot or <b>after</b>? Recommended: after — the Okta fallback covers the window.',
+      action_payload:{ options:'during pilot | after pilot', recommended:'after pilot', owner:'Northwind IT' },
+      evidence:{ steps:[ {source:'context', detail:'cert expires in 40 days; the pilot ends in 21', status:'noted'} ]},
+      options:[['after','After the pilot','recommended · fallback covers it'],['during','During the pilot','riskier']], def:'after' }
+  ];
+  // one universal queue — every source that sets attention=true: agent questions
+  // (agent_messages/approvals), plan@taikunai.com inbound (inbox), plan decisions.
+  var Q_SRC={ agent:['#c0392b','ti-robot','Agent question'], email:['#4299e1','ti-mail','plan@taikunai.com'], decision:['#f76707','ti-help-circle','Decision'] };
+  var qFilter='all';
+  function qMatch(q){ return qFilter==='all'||q.source===qFilter; }
+  var qSel=QS[0].approval_id;
+  function qRender(){
+    var list=document.getElementById('qList'); if(!list) return;
+    var fw=document.getElementById('qFilters');
+    if(fw){ var counts={all:QS.length}; Object.keys(Q_SRC).forEach(function(k){ counts[k]=QS.filter(function(x){return x.source===k;}).length; });
+      var chips=[['all','ti-inbox','All']].concat(Object.keys(Q_SRC).map(function(k){ return [k,Q_SRC[k][1],Q_SRC[k][2]]; }));
+      fw.innerHTML=chips.map(function(c){ return '<button class="btn btn-sm '+(qFilter===c[0]?'btn-primary':'btn-outline-secondary')+'" data-qf="'+c[0]+'"><i class="ti '+c[1]+' me-1"></i>'+c[2]+' <span class="mono ms-1">'+(counts[c[0]]||0)+'</span></button>'; }).join('');
+      fw.querySelectorAll('[data-qf]').forEach(function(b){ b.addEventListener('click',function(){ qFilter=b.dataset.qf; var vis=QS.filter(qMatch); qSel=vis.length?vis[0].approval_id:null; qRender(); }); }); }
+    var shown=QS.filter(qMatch);
+    list.innerHTML=shown.map(function(q){ var sc=Q_SRC[q.source]||['#8b95a5','ti-point',''];
+      return '<div class="q-card'+(q.approval_id===qSel?' sel':'')+'" data-q="'+q.approval_id+'">'
+        +'<div class="d-flex align-items-center gap-2 mb-1"><span class="avatar avatar-xs" style="background:'+q.color+';color:#fff">'+q.av+'</span>'
+        +'<span class="mono small text-secondary">'+q.task+'</span>'
+        +'<span class="stx small" title="'+sc[2]+'"><span class="sdot" style="background:'+sc[0]+'"></span></span>'
+        +'<span class="q-blast'+(q.blast>=3?'':' lo')+' ms-auto" title="blocks '+q.blast+' downstream tasks">blocks '+q.blast+'</span></div>'
+        +'<div class="qq">'+q.summary.replace(/<[^>]+>/g,'')+'</div>'
+        +'<div class="text-secondary small mt-1">'+sc[2]+' · '+q.age+' ago</div></div>';
+    }).join('');
+    list.querySelectorAll('[data-q]').forEach(function(c){ c.addEventListener('click',function(){ qSel=c.dataset.q; qRender(); }); });
+    var q=QS.find(function(x){return x.approval_id===qSel;}); if(q&&!qMatch(q)) q=shown[0]||null; var d=document.getElementById('qDetail');
+    if(!q){ d.innerHTML='<div class="q-empty"><i class="ti ti-checks" style="font-size:2rem"></i><div class="mt-2">No agent is waiting on you. The queue is clear.</div></div>'; return; }
+    var ans;
+    if(q.options){ ans=q.options.map(function(o){ var isDef=o[0]===q.def;
+      return '<button class="btn '+(isDef?'btn-primary':'btn-outline-secondary')+' w-100 text-start mb-2" data-ans="'+o[0]+'"><div class="d-flex align-items-center"><span class="fw-semibold">'+o[1]+'</span>'+(isDef?'<span class="newtag ms-2">default</span>':'')+'</div><div class="small '+(isDef?'text-white-50':'text-secondary')+'">'+o[2]+'</div></button>'; }).join(''); }
+    else { ans='<div class="text-secondary small mb-2">Open question — type the answer; it returns to the agent as your reply.</div>'; }
+    d.innerHTML=''
+      +'<div class="d-flex align-items-start gap-2 mb-2"><span class="avatar avatar-lg rounded-3" style="background:rgba(247,103,7,.12);color:#f76707"><i class="ti ti-hand-stop fs-2"></i></span>'
+      +'<div class="flex-fill"><div class="d-flex align-items-center gap-2 mb-1 flex-wrap"><span class="mono small text-secondary">'+q.approval_id+'</span>'
+      +'<span class="stx small"><span class="sdot" style="background:'+((Q_SRC[q.source]||['#d63939'])[0])+'"></span>'+((Q_SRC[q.source]||[0,0,'needs you'])[2])+'</span>'
+      +'<span class="text-secondary small">· '+q.action_type+' · from '+q.src_from+'</span></div>'
+      +'<div class="d-flex align-items-baseline gap-2"><span class="h3 mb-0 mono">'+q.task+'</span><span class="fw-semibold">'+q.title+'</span></div>'
+      +'<div class="text-secondary small mono">run '+q.run+' · '+q.workflow+'</div></div>'
+      +'<a href="#" class="btn btn-sm btn-outline-secondary" data-q-sess="'+q.approval_id+'"><i class="ti ti-terminal-2 me-1"></i>Open session</a></div>'
+      +'<div class="d-flex align-items-center gap-2 mb-3"><span class="avatar avatar-xs" style="background:'+q.color+';color:#fff">'+q.av+'</span><span class="small fw-semibold">'+q.agent+'</span></div>'
+      +'<div class="tk-eyebrow mb-1">User story</div><div class="q-story mb-3">'+q.story+'</div>'
+      +'<div class="q-ask mb-3">'+q.summary+'</div>'
+      +'<div class="tk-eyebrow mb-1">What it\'s done so far <span class="text-secondary fw-normal">· evidence</span></div>'+qevidence(q.evidence)
+      +'<div class="tk-eyebrow mb-1">Frozen action payload</div>'+qdatagrid(q.action_payload)
+      +'<div class="bg-azure-lt rounded-3 p-2 my-3 d-flex align-items-center gap-2 small text-secondary"><i class="ti ti-snowflake"></i>Frozen at gate time — the effect can\'t drift between your answer and execution.</div>'
+      +'<div class="q-deadline text-secondary mb-3"><i class="ti ti-clock me-1"></i>'+q.deadline+'</div>'
+      +'<div class="tk-eyebrow mb-2">Your answer</div>'+ans
+      +'<div class="d-flex gap-2 mt-1 mb-3"><input class="form-control form-control-sm" id="qReply" placeholder="'+(q.options?'…or reply in your own words (recorded as the decision note)':'Type your answer')+'"><button class="btn btn-sm btn-primary" id="qSend"><i class="ti ti-send"></i></button></div>'
+      +'<div class="bg-secondary-lt rounded-3 p-2 d-flex align-items-start gap-2 small text-secondary"><i class="ti ti-shield-lock mt-1"></i><div>Recorded to the audit trail and resumes the suspended durable run. Approver-role &amp; expiry come from the domain pack.</div></div>';
+    d.querySelectorAll('[data-ans]').forEach(function(b){ b.addEventListener('click',function(){ qAnswer(q,b.dataset.ans); }); });
+    d.querySelector('[data-q-sess]').addEventListener('click',function(e){ e.preventDefault(); toast('Opening '+q.agent.split(' · ')[0]+'\'s live session — the terminal you don\'t have to babysit'); });
+    var send=document.getElementById('qSend'),rin=document.getElementById('qReply');
+    send.addEventListener('click',function(){ if(rin.value.trim()) qAnswer(q,rin.value.trim()); });
+    rin.addEventListener('keydown',function(e){ if(e.key==='Enter'&&rin.value.trim()) qAnswer(q,rin.value.trim()); });
+  }
+  function qAnswer(q,ans){   // → POST /api/attention/{id}/decide {decision, note}
+    QS=QS.filter(function(x){return x.approval_id!==q.approval_id;});
+    if(QS.length) qSel=QS[0].approval_id;
+    var nav=document.querySelector('#inbox-subnav [data-sub="sub-needs"] .mono'); if(nav) nav.textContent=QS.length;
+    var bell=document.getElementById('btn-ack-inbox'); var bb=bell&&bell.querySelector('.badge'); if(bb){ if(QS.length) bb.textContent=QS.length; else bb.style.display='none'; }
+    qRender();
+    toast(q.task+' decided → "'+ans+'" — recorded to the audit trail; '+q.agent.split(' · ')[0]+'\'s durable run resumes');
+  }
+  qRender();
+  document.addEventListener('keydown',function(e){
+    var on=document.getElementById('sub-needs'); if(!on||on.style.display==='none') return;
+    if(document.activeElement&&document.activeElement.tagName==='INPUT') return;
+    var i=QS.findIndex(function(x){return x.approval_id===qSel;});
+    if(e.key==='j'&&i<QS.length-1){ qSel=QS[i+1].approval_id; qRender(); }
+    else if(e.key==='k'&&i>0){ qSel=QS[i-1].approval_id; qRender(); }
+    else if(e.key==='Enter'){ var r=document.getElementById('qReply'); if(r){ e.preventDefault(); r.focus(); } }
+  });
+  var bellBtn=document.getElementById('btn-ack-inbox');
+  if(bellBtn) bellBtn.addEventListener('click',function(){ go('tab-inbox');
+    document.querySelectorAll('#inbox-subnav .nav-link').forEach(function(x){ x.classList.toggle('active', x.dataset.sub==='sub-needs'); });
+    document.querySelectorAll('.inbox-sub').forEach(function(pp){ pp.style.display=(pp.id==='sub-needs')?'':'none'; }); });
+
+  // toolbar dropdowns (Filters, Export)
+  document.querySelectorAll('[data-drop]').forEach(function(b){ b.addEventListener('click',function(e){ e.stopPropagation();
+    var d=document.getElementById(b.dataset.drop); var was=d.classList.contains('on');
+    document.querySelectorAll('.tk-drop').forEach(function(x){ x.classList.remove('on'); });
+    if(!was) d.classList.add('on');
+  }); });
+  document.addEventListener('click',function(){ document.querySelectorAll('.tk-drop').forEach(function(x){ x.classList.remove('on'); }); });
+
+  // epic collapse + intake collapse + toast stubs
+  document.querySelectorAll('[data-epic]').forEach(function(h){ h.addEventListener('click',function(){ h.closest('.epic-card').classList.toggle('on'); }); });
+  document.querySelectorAll('[data-collapse]').forEach(function(a){ a.addEventListener('click',function(e){ e.preventDefault();
+    var el=document.getElementById(a.dataset.collapse); el.style.display = el.style.display==='none'?'':'none'; }); });
+  document.querySelectorAll('[data-toast]').forEach(function(el){ el.addEventListener('click',function(e){ e.preventDefault(); e.stopPropagation(); toast(el.dataset.toast); }); });
+
+  // ── fleet: work sessions ──
+  var SESS={
+    atlas:{av:'A',bg:'var(--tblr-primary)',live:true,t:'Atlas · SEN-6 — Wire Entra app registration',sub:'claude-code · sess_7fa1 · lease sso/entra',
+      meta:['high tier','$1.10 so far','42k tokens','pinned to system v3'],
+      html:'<div class="tm">09:38</div><div class="tl">⏺ claim_next → SEN-6 · lease sso/entra · clean tree</div><div class="as">Wiring the Entra app registration. Reading the directory module first.</div><div class="tl">⏺ Read(directory/entra.py)</div><div class="rs">⎿ 214 lines</div><div class="tl">⏺ Update(directory/entra.py)</div><div class="ad">  + def resolve_entra_app(tenant_id: str) -&gt; AppReg:</div><div class="ad">  +     return _graph.app_registrations.get(tenant_id)</div><div class="de">  -     raise NotImplementedError</div><div class="tl">⏺ Bash(pytest -q tests/test_entra.py)</div><div class="rs ok">⎿ ✓ 12 passed in 3.2s</div><div class="as">Tests green. Opening the PR and running the parity gate.</div><div class="tl">⏺ Bash(gh pr create --title "Wire Entra app registration")</div><div class="rs pr">⎿ PR #412 opened · CI running · 3/4 checks green</div><div class="tm">09:41 · now</div>'},
+    codex:{av:'C',bg:'#206bc4',live:false,t:'Codex · DATA-3 — Directory attribute sync',sub:'codex-cli · sess_2be4 · lease directory/sync',
+      meta:['balanced tier','$0.60 so far','28k tokens'],
+      html:'<div class="tm">09:36</div><div class="tl">⏺ claim_next → DATA-3 · lease directory/sync</div><div class="as">Mapping directory attributes to the shared contract from M1.</div><div class="tl">⏺ Update(directory/sync.py)</div><div class="ad">  + FIELD_MAP = {"mail": "email", "employeeId": "well_id"}</div><div class="tl">⏺ Bash(pytest -q tests/test_sync.py)</div><div class="rs ok">⎿ ✓ 8 passed in 1.9s</div><div class="as">Mapping matches the contract. Adding pagination for large directories next.</div><div class="tm">09:44 · now</div>'},
+    nova:{av:'N',bg:'#2fb344',live:false,t:'Nova · QA-2 — e2e smoke on the sign-in flow',sub:'cursor-agent · sess_9c11 · runs vs. the prototype',
+      meta:['cheap tier','$0.30 so far','11k tokens'],
+      html:'<div class="tm">09:39</div><div class="tl">⏺ claim_next → QA-2 · no file lease needed</div><div class="tl">⏺ Bash(npx playwright test signin.spec.ts)</div><div class="rs ok">⎿ ✓ 7 of 7 passed · flow matches the prototype exactly</div><div class="as">Sign-in, fallback, and provisioning paths all green. Writing the report.</div><div class="tm">09:47 · now</div>'}
+  };
+  var scrim=document.getElementById('scrim'),panel=document.getElementById('sessPanel');
+  function openSess(k){ var d=SESS[k];
+    document.getElementById('sessAv').textContent=d.av; document.getElementById('sessAv').style.background=d.bg;
+    document.getElementById('sessTitle').textContent=d.t; document.getElementById('sessSub').textContent=d.sub;
+    document.getElementById('sessLive').style.display=d.live?'':'none';
+    document.getElementById('sessMeta').innerHTML=d.meta.map(function(m){ return '<span class="badge bg-secondary-lt">'+m+'</span>'; }).join('');
+    document.getElementById('sessStream').innerHTML=d.html;
+    scrim.classList.add('on'); panel.classList.add('on'); }
+  function closeSess(){ scrim.classList.remove('on'); panel.classList.remove('on'); }
+  document.querySelectorAll('[data-sess]').forEach(function(b){ b.addEventListener('click',function(){ openSess(b.dataset.sess); }); });
+  scrim.addEventListener('click',closeSess); document.getElementById('sessX').addEventListener('click',closeSess);
+  var STEERS={redirect:['use the shared session_store, not a new table','acknowledged — refactoring against session_store'],
+              hold:['hold after the current test run','will pause at the next safe boundary; nothing killed mid-thought'],
+              approve:['approve merge of PR #412 once CI is green','merge queued behind CI · closure gate will stamp it']};
+  function steer(t,a){ var st=document.getElementById('sessStream');
+    st.insertAdjacentHTML('beforeend','<div class="c-you">&gt; '+t+'</div>');
+    setTimeout(function(){ st.insertAdjacentHTML('beforeend','<div class="c-ack">⎿ '+a+'</div>'); st.parentElement.scrollTop=1e6; },600); st.parentElement.scrollTop=1e6; }
+  document.querySelectorAll('[data-steer]').forEach(function(b){ b.addEventListener('click',function(){ var s=STEERS[b.dataset.steer]; steer(s[0],s[1]); }); });
+  document.getElementById('steerGo').addEventListener('click',function(){ var i=document.getElementById('steerIn'); if(i.value.trim()){ steer(i.value.trim(),'acknowledged — adjusting course'); i.value=''; } });
+  document.getElementById('steerIn').addEventListener('keydown',function(e){ if(e.key==='Enter') document.getElementById('steerGo').click(); });
+
+  var curDl=null;   // no cockpit selection on this page
+  var DAG_SRC=[
+    'flowchart LR',
+    '  CON_1["<b>CON-1</b><br/>Draft shared contract"]',
+    '  CON_2["<b>CON-2</b><br/>Version + publish pipeline"]',
+    '  CON_3["<b>CON-3</b><br/>Consumer conformance tests"]',
+    '  SEN_2["<b>SEN-2</b><br/>SAML response handler"]',
+    '  SEN_3["<b>SEN-3</b><br/>Session issuance"]',
+    '  SEN_4["<b>SEN-4</b><br/>Session persistence"]',
+    '  SEN_6["<b>SEN-6</b><br/>Wire Entra app registration"]',
+    '  SEN_8["<b>SEN-8</b><br/>Provisioning hooks"]',
+    '  SEN_9["<b>SEN-9</b><br/>Fallback edge cases"]',
+    '  INT_1["<b>INT-1</b><br/>Portal session integration"]',
+    '  INT_2["<b>INT-2</b><br/>Admin role mapping"]',
+    '  QA_2["<b>QA-2</b><br/>e2e smoke vs prototype"]',
+    '  QA_3["<b>QA-3</b><br/>Cross-board e2e"]',
+    '  SHIP_1["<b>SHIP-1</b><br/>Cutover runbook"]',
+    '  SHIP_2["<b>SHIP-2</b><br/>Go-live + rollback drill"]',
+    '  DATA_3["<b>DATA-3</b><br/>Directory attribute sync"]',
+    '  PAR_1["<b>PAR-1</b><br/>Parity gate vs Helm baseline"]',
+    '  HELM_BASE["<b>HELM-BASE</b><br/>Helm baseline pipeline"]',
+    '  CON_1 --> SEN_2',
+    '  CON_2 --> SEN_3',
+    '  CON_2 --> SEN_4',
+    '  CON_3 --> DATA_3',
+    '  CON_3 --> QA_2',
+    '  SEN_2 --> SEN_6',
+    '  SEN_3 --> SEN_6',
+    '  SEN_4 --> SEN_6',
+    '  SEN_6 --> SEN_8',
+    '  SEN_6 --> SEN_9',
+    '  SEN_6 --> INT_1',
+    '  SEN_6 --> INT_2',
+    '  DATA_3 --> INT_1',
+    '  SEN_8 --> QA_3',
+    '  SEN_9 --> QA_3',
+    '  INT_1 --> QA_3',
+    '  INT_2 --> QA_3',
+    '  QA_3 --> SHIP_1',
+    '  PAR_1 --> SHIP_1',
+    '  HELM_BASE -.-> PAR_1',
+    '',
+    '  classDef doneNode fill:#eaf7ee,stroke:#2fb344,color:#101114',
+    '  classDef doneUnprovenNode fill:#e6f7f1,stroke:#12b886,color:#101114',
+    '  classDef progressNode fill:#eaf1fa,stroke:#206bc4,color:#101114',
+    '  classDef reviewNode fill:#fdf0e7,stroke:#f76707,color:#101114',
+    '  classDef blockedNode fill:#fdecec,stroke:#d63939,color:#101114',
+    '  classDef todoNode fill:#f6f7f9,stroke:#c9ced6,color:#8b95a5',
+    '  classDef externalNode fill:#fbfbfc,stroke:#adb5bd,color:#8b95a5,stroke-dasharray: 4 2',
+    '  class CON_1,CON_2,CON_3,SEN_2,SEN_3,QA_2 doneNode',
+    '  class SEN_4 doneUnprovenNode',
+    '  class DATA_3,PAR_1 progressNode',
+    '  class SEN_6 reviewNode',
+    '  class SEN_8,SEN_9,INT_1,INT_2,QA_3,SHIP_1,SHIP_2 todoNode',
+    '  class HELM_BASE externalNode'
+  ].join('\n');
+
+  // node records — what missionStatus.linked_tasks[].task_detail carries
+  var DAG_META={
+    'CON-1':{m:'m1',st:'done',t:'Draft shared contract',pr:'PR #391 merged',sha:'a41c2e9',spend:'$0.14k',nar:'Contract drafted from the intake constraints; consumers reviewed.'},
+    'CON-2':{m:'m1',st:'done',t:'Version + publish pipeline',pr:'PR #395 merged',sha:'0f7d311',spend:'$0.18k',nar:'Publish pipeline live; v1 frozen and pinned.'},
+    'CON-3':{m:'m1',st:'done',t:'Consumer conformance tests',pr:'PR #402 merged',sha:'6cc90ab',spend:'$0.16k',nar:'Conformance suite green for both consumers.'},
+    'SEN-2':{m:'m2',st:'done',t:'SAML response handler',pr:'PR #405 merged',sha:'b3e871d',spend:'$0.31k',nar:'Handler merged with 12 new tests; parity untouched.'},
+    'SEN-3':{m:'m2',st:'done',t:'Session issuance',pr:'PR #408 merged',sha:'9d24f60',spend:'$0.27k',nar:'Sessions issued off the shared contract claims.'},
+    'SEN-4':{m:'m2',st:'done_unproven',t:'Session persistence',spend:'$0.22k',nar:'Marked Done by the agent — no merge provenance recorded.'},
+    'SEN-6':{m:'m2',st:'in_review',t:'Wire Entra app registration',key:true,sess:'atlas',av:'A',color:'#c0392b',agent:'atlas · claude-code/high',pr:'PR #412 open',ci:'CI 3 of 4 green',spend:'$1.10',nar:'Opened PR #412; parity gate green on first run, one flaky e2e retrying.'},
+    'SEN-8':{m:'m2',st:'todo',t:'Provisioning hooks',deps:['SEN-6'],wave:'wave 2',est:'~$0.20k'},
+    'SEN-9':{m:'m2',st:'todo',t:'Fallback edge cases',deps:['SEN-6'],wave:'wave 2',est:'~$0.25k'},
+    'DATA-3':{m:'m2',st:'in_progress',t:'Directory attribute sync',sess:'codex',av:'C',color:'#206bc4',agent:'codex · codex-cli/balanced',spend:'$0.60',nar:'Mapping matches the contract; adding pagination for large directories.'},
+    'QA-2':{m:'m2',st:'done',t:'e2e smoke vs prototype',sess:'nova',av:'N',color:'#2fb344',pr:'PR #410 merged',sha:'e1f5c02',spend:'$0.30',nar:'7/7 green — flow matches the approved prototype exactly.'},
+    'INT-1':{m:'m3',st:'todo',t:'Portal session integration',deps:['SEN-6','DATA-3'],wave:'wave 2',est:'~$0.30k'},
+    'INT-2':{m:'m3',st:'todo',t:'Admin role mapping',deps:['SEN-6'],wave:'wave 2',est:'~$0.22k'},
+    'QA-3':{m:'m3',st:'todo',t:'Cross-board e2e',deps:['SEN-8','SEN-9','INT-1','INT-2'],wave:'wave 2',est:'~$0.28k'},
+    'PAR-1':{m:'m4',st:'in_progress',t:'Parity gate vs Helm baseline',agent:'gate · runs on every merge',spend:'$0.21k',nar:'Green for 11 consecutive merges.'},
+    'SHIP-1':{m:'m4',st:'todo',t:'Cutover runbook',deps:['QA-3','PAR-1'],wave:'wave 2',est:'~$0.15k'},
+    'SHIP-2':{m:'m4',st:'todo',t:'Go-live + rollback drill',deps:['SHIP-1'],wave:'wave 2',est:'~$0.18k'},
+    'HELM-BASE':{m:'m4',st:'external',t:'Helm baseline pipeline',nar:'External dependency — tracked here, built elsewhere. Its real state colors the node.'}
+  };
+  var ST_LABEL={done:['#2fb344','done · proven'],done_unproven:['#12b886','done — unproven'],in_progress:['#206bc4','in progress'],in_review:['#f76707','in review'],blocked:['#d63939','blocked'],todo:['#8b95a5','not started'],external:['#adb5bd','external']};
+
+  function renderDag(){
+    var host=document.getElementById('dagHost'); if(!host) return;
+    if(!window.mermaid){ host.innerHTML='<div class="text-secondary small py-3 text-center">Dependency map renderer is unavailable right now — reload to retry.</div>'; return; }
+    if(!window.__dagInit){
+      window.mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme:'neutral',
+        themeVariables:{ fontSize:'12px', fontFamily:"'Inter Var','Inter',-apple-system,sans-serif" },
+        flowchart:{ useMaxWidth:false, htmlLabels:true, curve:'linear', nodeSpacing:22, rankSpacing:42, padding:8, subGraphTitleMargin:{top:4,bottom:8} } });
+      window.__dagInit=true;
+    }
+    window.mermaid.render('mission-dag-1', DAG_SRC).then(function(r){
+      host.innerHTML=r.svg; decorateDag(host); dagHighlight(curDl);
+    }).catch(function(e){
+      host.innerHTML='<div class="alert alert-warning mb-2">Could not render graph: '+e.message+'</div><pre class="small mb-0" style="white-space:pre-wrap"></pre>';
+      host.querySelector('pre').textContent=DAG_SRC;
+    });
+  }
+  function decorateDag(host){
+    var SVGNS='http://www.w3.org/2000/svg';
+    host.querySelectorAll('.node').forEach(function(nodeEl){
+      var b=nodeEl.querySelector('b'); var id=(b?b.textContent:'').trim();
+      var meta=DAG_META[id]; if(!meta) return;
+      nodeEl.dataset.dagId=id; nodeEl.dataset.m=meta.m;
+      // every click opens the node card (production: openNodeModal on every node)
+      nodeEl.addEventListener('click',function(e){ e.preventDefault(); openNode(id); });
+      var rectEl=nodeEl.querySelector('rect')||nodeEl; var bb=rectEl.getBBox();
+      if(meta.key){ var ring=document.createElementNS(SVGNS,'rect');
+        ring.setAttribute('x',bb.x-5); ring.setAttribute('y',bb.y-5);
+        ring.setAttribute('width',bb.width+10); ring.setAttribute('height',bb.height+10);
+        ring.setAttribute('rx',12); ring.setAttribute('fill','none');
+        ring.setAttribute('stroke','#ae3ec9'); ring.setAttribute('stroke-width','1.5'); ring.setAttribute('stroke-dasharray','3 3');
+        nodeEl.insertBefore(ring,nodeEl.firstChild); }
+      if(meta.sess&&(meta.st==='in_progress'||meta.st==='in_review')){
+        var c=document.createElementNS(SVGNS,'circle');
+        c.setAttribute('cx',bb.x+bb.width-2); c.setAttribute('cy',bb.y+2); c.setAttribute('r',8);
+        c.setAttribute('fill',meta.color); c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','1.5');
+        var tx=document.createElementNS(SVGNS,'text');
+        tx.setAttribute('x',bb.x+bb.width-2); tx.setAttribute('y',bb.y+5.5); tx.setAttribute('text-anchor','middle');
+        tx.setAttribute('fill','#fff'); tx.setAttribute('font-size','9'); tx.setAttribute('font-weight','700'); tx.textContent=meta.av;
+        nodeEl.appendChild(c); nodeEl.appendChild(tx); }
+      // tooltip in _missionNodeTooltip format: "ID — title", narration, "▶ Working now: …"
+      var tipLines=[id+' — '+meta.t];
+      if(meta.nar) tipLines.push('',meta.nar);
+      if(meta.agent&&(meta.st==='in_progress'||meta.st==='in_review')) tipLines.push('','▶ Working now: '+meta.agent);
+      var t=document.createElementNS(SVGNS,'title'); t.textContent=tipLines.join('\n');
+      nodeEl.insertBefore(t,nodeEl.firstChild);
+    });
+  }
+  function dagHighlight(k){ var host=document.getElementById('dagHost'); if(!host) return;
+    host.querySelectorAll('.node').forEach(function(n){ if(n.dataset.m) n.classList.toggle('dim', n.dataset.m!==k); }); }
+
+  // ── the task panel — every node click opens the conversation with its session ──
+  // The tense follows node_execution_state: live tasks show the CLI stream and
+  // take steering; finished tasks answer questions from their transcript; future
+  // tasks take a brief the next agent inherits on claim. The production link
+  // fields (milestone · role · blocks) and Open task detail stay underneath.
+  var MS_LABEL={m1:'M1 · Shared contract',m2:'M2 · Core implementation',m3:'M3 · Cross-board',m4:'M4 · Parity & ship'};
+  var QA_CANNED={
+    'Why this approach?':'It followed the operating rules: reuse SHIPPED modules first. The directory module already exposed the graph client, so it extended that instead of adding a dependency.',
+    'What did it test?':'The task\'s named test files plus the parity gate. New tests cover every changed public function — 12 in the last run, all green.',
+    'Summarize the diff':'Net +214/−38 across 4 files. One new public function, no schema changes, no new dependencies. The M1 contract is consumed, not modified.'};
+  function openNode(id){
+    var meta=DAG_META[id]; if(!meta) return;
+    var st=ST_LABEL[meta.st]||ST_LABEL.todo;
+    var hasTrm=(meta.st==='in_progress'||meta.st==='in_review')&&meta.sess&&SESS[meta.sess];
+    // header — identity plus ONE state action
+    var act='';
+    if(meta.st==='in_review') act='<button class="btn btn-sm btn-primary" id="tpAct">Approve when green</button>';
+    else if(meta.st==='in_progress'&&meta.sess) act='<button class="btn btn-sm btn-outline-secondary" id="tpAct">Hold</button>';
+    else if(meta.st==='done') act='<button class="btn btn-sm btn-outline-secondary" id="tpAct">Open PR</button>';
+    else if(meta.st==='done_unproven') act='<button class="btn btn-sm btn-primary" id="tpAct">Reopen</button>';
+    else if(meta.st==='todo') act='<button class="btn btn-sm btn-outline-secondary" id="tpAct">Bump</button>';
+    document.getElementById('tpHead').innerHTML=
+      '<div class="flex-fill" style="min-width:0"><div class="text-secondary" style="font-size:.625rem">Northwind Energy · '+(MS_LABEL[meta.m]||'')+'</div>'
+      +'<div class="d-flex align-items-baseline gap-2"><span class="fw-bold mono">'+id+'</span><span class="text-truncate">'+meta.t+'</span></div>'
+      +'<div class="stx" style="font-size:.75rem"><span class="sdot'+(meta.st==='in_progress'?' live':'')+'" style="background:'+st[0]+'"></span>'+st[1]+(meta.key?' · keystone — merging opens 5 tasks':'')+'</div></div>'
+      +act+'<button class="btn btn-sm btn-outline-secondary" id="tpX"><i class="ti ti-x"></i></button>';
+    // body — what the state warrants
+    var b='';
+    if(meta.st==='in_review'){
+      b+='<div class="dl-next mb-2"><i class="ti ti-git-pull-request mt-1" style="color:#f76707"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.875rem">'+meta.pr+' · '+meta.ci+'</div><div class="text-secondary small">'+meta.nar+'</div></div></div>';
+    }
+    if(hasTrm){
+      b+='<div class="d-flex align-items-center gap-2 mb-2"><span class="avatar avatar-xs" style="background:'+(meta.color||'var(--tblr-primary)')+';color:#fff">'+meta.av+'</span><span class="small fw-semibold">'+meta.agent+'</span><span class="small text-secondary mono">'+(meta.spend||'')+' spent</span><a href="#" class="small ms-auto" data-node-sess="'+meta.sess+'">Open full session ›</a></div>'
+      +'<div class="tk-trm mb-2" id="tpTrm" style="max-height:270px;overflow:auto">'+SESS[meta.sess].html+'</div>'
+      +'<div class="small text-secondary">'+(meta.st==='in_review'?'The session still holds its lease — steer it below. <span class="mono">merge_gate</span> re-checks kickoff + closure before anything lands.':'This is the live session — talk to it below; it hears you mid-flight, even on autopilot.')+'</div>';
+    } else if(meta.st==='in_progress'){
+      b+='<div class="dl-next mb-2"><i class="ti ti-player-play mt-1" style="color:var(--tblr-primary)"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.875rem">'+meta.agent+'</div><div class="text-secondary small">'+meta.nar+'</div></div></div>'
+      +'<div class="small text-secondary mono">'+(meta.spend||'')+' spent</div>';
+    }
+    if(meta.st==='done'){
+      b+='<div class="tk-dots mb-2">'
+      +'<div class="r"><span class="d" style="background:#2fb344"></span><b>'+(meta.pr||'merged')+'</b>'+(meta.sha?' · exact SHA <span class="mono">'+meta.sha+'</span>':'')+'</div>'
+      +'<div class="r"><span class="d" style="background:#2fb344"></span>CI green at merge · closure counts it as proven</div>'
+      +'<div class="r"><span class="d" style="background:#8b95a5"></span><span class="mono">'+(meta.spend||'')+'</span> spent · in the Tally proven bucket</div></div>'
+      +'<div class="small text-secondary">'+(meta.nar||'')+'</div>'
+      +'<div class="small text-secondary mt-2">The session ended; its transcript didn\'t. Ask it anything below.</div><div class="tp-qa" id="tpQa"></div>';
+    } else if(meta.st==='done_unproven'){
+      b+='<div class="dl-next mb-2" style="border-color:rgba(18,184,134,.4);background:rgba(18,184,134,.04)"><i class="ti ti-alert-triangle mt-1" style="color:#12b886"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.875rem">Done — but no merge provenance</div><div class="text-secondary small">'+meta.nar+' Closure will not count it as proven; Tally holds its spend outside the proven bucket.</div></div></div>'
+      +'<button class="btn btn-sm btn-outline-secondary" id="tpStand">Let it stand — with your sign-off</button>'
+      +'<div class="small text-secondary mt-2">Before you decide — the transcript is still queryable. Ask below what it actually did.</div><div class="tp-qa" id="tpQa"></div>';
+    } else if(meta.st==='todo'){
+      var deps=(meta.deps||[]).map(function(d){ var dm=DAG_META[d]||{}; var ds=ST_LABEL[dm.st]||ST_LABEL.todo;
+        return '<div class="r"><span class="d" style="background:'+ds[0]+'"></span><span class="mono">'+d+'</span> — '+ds[1]+'</div>'; }).join('');
+      b+='<div class="tk-eyebrow mb-1">Waits on</div><div class="tk-dots mb-2">'+deps+'</div>'
+      +'<div class="small text-secondary mb-2">No agent yet — <span class="mono">claim_next</span> dispatches one the moment the deps merge; no one schedules it. '+(meta.wave?'Planned in '+meta.wave+' · est '+(meta.est||'')+'.':'')+'</div>'
+      +'<div class="tk-eyebrow mb-1">What its agent inherits on claim</div><div class="tk-dots mb-2">'
+      +'<div class="r"><span class="d" style="background:#8b95a5"></span>Kickoff record v8 · operating rules · contract v1 pins</div>'
+      +'<div class="r"><span class="d" style="background:#8b95a5"></span>ADRs touching its files · a lease on its paths</div>'
+      +'<div class="r"><span class="d" style="background:#8b95a5"></span><span id="tpBriefNote">Your briefing notes — none yet; add one below</span></div></div>'
+      +'<div class="tp-qa" id="tpQa"></div>';
+    } else if(meta.st==='blocked'){
+      b+='<div class="dl-next mb-2" style="border-color:rgba(214,57,57,.4);background:rgba(214,57,57,.04)"><i class="ti ti-hand-stop mt-1" style="color:#d63939"></i><div class="flex-fill"><div class="fw-semibold" style="font-size:.875rem">Blocked</div><div class="text-secondary small">'+(meta.nar||'')+'</div></div></div>';
+    } else if(meta.st==='external'){
+      b+='<div class="small text-secondary mb-1">'+(meta.nar||'External dependency — tracked, not built on this board.')+'</div>'
+      +'<div class="stx small"><span class="sdot" style="background:#adb5bd"></span>its real state colors the node — a merged dep reads green, not grey</div>';
+    }
+    // the old project-management layer — same fields as the production modal
+    b+='<div class="mt-3 pt-2 border-top"><a href="#" class="small" id="tpOpenTask">Open task detail ›</a>'
+    +'<details class="mt-1" id="nodeLink"><summary class="small text-secondary" style="cursor:pointer;list-style:none">Link settings — milestone · role · blocks ›</summary>'
+    +'<div class="row g-2 mt-1"><div class="col-6"><label class="form-label small mb-1">Milestone</label><select class="form-select form-select-sm"><option>'+({m1:'M1',m2:'M2',m3:'M3',m4:'M4'}[meta.m]||'—')+'</option></select></div>'
+    +'<div class="col-6"><label class="form-label small mb-1">Role</label><select class="form-select form-select-sm"><option>contributes</option><option>required</option></select></div></div>'
+    +'<label class="form-check mt-2 small"><input class="form-check-input" type="checkbox" '+(meta.key?'checked':'')+'><span class="form-check-label">This task blocks the deliverable</span></label>'
+    +'<div class="d-flex gap-2 mt-2"><button class="btn btn-sm btn-outline-secondary" id="tpLinkSave">Save link</button><button class="btn btn-sm btn-ghost-secondary text-danger" id="tpUnlink">Unlink</button></div></details></div>';
+    document.getElementById('tpBody').innerHTML=b;
+    // composer — one input, three tenses
+    var foot=document.getElementById('tpFoot'),chipsEl=document.getElementById('tpChips'),inEl=document.getElementById('tpIn');
+    var tense=hasTrm?'steer':(meta.st==='done'||meta.st==='done_unproven')?'ask':(meta.st==='todo')?'brief':null;
+    if(!tense){ foot.style.display='none'; }
+    else{
+      foot.style.display='';
+      if(tense==='steer'){ inEl.placeholder='Steer — it hears you mid-flight, even on autopilot';
+        chipsEl.innerHTML=['Redirect','Hold','Approve merge'].map(function(c){ return '<button class="btn btn-sm btn-outline-secondary" data-tp-steer="'+c.toLowerCase().split(' ')[0]+'">'+c+'</button>'; }).join(''); }
+      else if(tense==='ask'){ inEl.placeholder='Ask the transcript — the session ended, the knowledge didn\'t';
+        chipsEl.innerHTML=Object.keys(QA_CANNED).map(function(q){ return '<button class="btn btn-sm btn-outline-secondary" data-tp-q="'+q+'">'+q+'</button>'; }).join(''); }
+      else{ inEl.placeholder='Brief the future agent — folded into its context when it claims '+id;
+        chipsEl.innerHTML=['Add a constraint','Point at prior art'].map(function(q){ return '<button class="btn btn-sm btn-outline-secondary" data-tp-q="'+q+': ">'+q+'</button>'; }).join(''); }
+    }
+    var pnl=document.getElementById('taskPanel');
+    pnl.classList.add('on'); scrim.classList.add('on');
+    function tpSay(t,a){ var trm=document.getElementById('tpTrm'); if(!trm) return;
+      trm.insertAdjacentHTML('beforeend','<div class="c-you">&gt; '+t+'</div>');
+      setTimeout(function(){ trm.insertAdjacentHTML('beforeend','<div class="c-ack">⎿ '+a+'</div>'); trm.scrollTop=1e6; },600); trm.scrollTop=1e6; }
+    function tpAsk(q){ var qa=document.getElementById('tpQa'); if(!qa) return;
+      var a=QA_CANNED[q]||('From the transcript: '+(meta.nar||'the run completed within its lease; the full log is on the task record.'));
+      qa.insertAdjacentHTML('beforeend','<div class="q">'+q+'</div><div class="a">'+a+'</div>');
+      document.getElementById('tpBody').scrollTop=1e6; }
+    function tpBrief(t){ var qa=document.getElementById('tpQa'); if(!qa) return;
+      qa.insertAdjacentHTML('beforeend','<div class="q">Brief for '+id+'</div><div class="a">'+t+'</div>');
+      var n=document.getElementById('tpBriefNote'); if(n) n.textContent='1 briefing note — injected when the agent claims';
+      toast('Saved — '+id+'\'s agent reads this before its first token'); }
+    document.getElementById('tpX').addEventListener('click',closeNode);
+    var acts={in_review:function(){ closeNode(); toast('Merge approved pending green CI — merge_gate re-checks and stamps it'); },
+              in_progress:function(){ tpSay('hold after the current test run','will pause at the next safe boundary; nothing killed mid-thought'); },
+              done:function(){ toast('Opening '+(meta.pr||'the merged PR')+' on GitHub'); },
+              done_unproven:function(){ closeNode(); toast(id+' reopened → Ready · re-dispatched — trust gate logged'); },
+              todo:function(){ closeNode(); toast(id+' bumped — claim_next will prefer it when its deps clear'); }};
+    var ab=document.getElementById('tpAct'); if(ab&&acts[meta.st]) ab.addEventListener('click',acts[meta.st]);
+    pnl.querySelectorAll('[data-node-sess]').forEach(function(w){ w.addEventListener('click',function(e){ e.preventDefault(); closeNode(); openSess(w.dataset.nodeSess); }); });
+    var stnd=document.getElementById('tpStand'); if(stnd) stnd.addEventListener('click',function(){ closeNode(); toast(id+' stands — logged with your sign-off; stays unproven in Tally'); });
+    document.getElementById('tpOpenTask').addEventListener('click',function(e){ e.preventDefault(); toast('Task detail — the full record behind this node'); });
+    var ls=document.getElementById('tpLinkSave'); if(ls) ls.addEventListener('click',function(){ toast('Link saved — milestone · role · blocks'); });
+    var ul=document.getElementById('tpUnlink'); if(ul) ul.addEventListener('click',function(){ closeNode(); toast(id+' unlinked from the deliverable'); });
+    function tpSend(){ var v=inEl.value.trim(); if(!v) return; inEl.value='';
+      if(tense==='steer') tpSay(v,'acknowledged — adjusting course');
+      else if(tense==='ask') tpAsk(v);
+      else if(tense==='brief') tpBrief(v); }
+    document.getElementById('tpSend').onclick=tpSend;
+    inEl.onkeydown=function(e){ if(e.key==='Enter') tpSend(); };
+    chipsEl.querySelectorAll('[data-tp-steer]').forEach(function(c){ c.addEventListener('click',function(){ var s=STEERS[c.dataset.tpSteer]; if(s) tpSay(s[0],s[1]); }); });
+    chipsEl.querySelectorAll('[data-tp-q]').forEach(function(c){ c.addEventListener('click',function(){ if(tense==='ask') tpAsk(c.dataset.tpQ); else{ inEl.value=c.dataset.tpQ; inEl.focus(); } }); });
+  }
+  function closeNode(){ document.getElementById('taskPanel').classList.remove('on'); scrim.classList.remove('on'); }
+  scrim.addEventListener('click',function(){ closeNode(); });
+
+  dagHighlight=function(){};   // no cockpit selection on this page — never dim
+
+  // ══ the gated kickoff ladder — the product invariant, made visible ══
+  // Each gate is a versioned artifact with an approval on record. Approving one
+  // unlocks the next. build_authorized is true only when all five are green;
+  // everything downstream (claim_next, sessions, merge, the top Kick-off button)
+  // derives from it. Editing an upstream artifact invalidates dependents.
+  var LADDER=[
+    {id:'vision',name:'Vision / POV',answers:'Thesis · user · why-now · non-goals · success metrics',
+      extra:'Parity-first thesis accepted · recorded as ADR-1.'},
+    {id:'prd',name:'PRD',answers:'In / out of scope · journeys · requirements · constraints · open questions',
+      extra:'No silent unknowns — 2 open questions resolved on the brief.'},
+    {id:'arch',name:'Architecture',answers:'Components · data model · trust/auth boundaries · phases',
+      extra:'<div class="ko-tags"><div class="ko-tag"><span class="d" style="background:#2fb344"></span><b>Shipped</b> — claim_next, mission_graph, deliverable_closure reused</div><div class="ko-tag"><span class="d" style="background:#f59f00"></span><b>Thin</b> — Tally two-stream extended</div><div class="ko-tag"><span class="d" style="background:#d63939"></span><b>New</b> — none. No new engines invented.</div></div><div class="text-secondary mt-2" style="font-size:.75rem">Reuse points named · table verified against the live repo.</div>'},
+    {id:'rules',name:'Operating rules',icon:'ti-gavel',answers:'Branching · DoD · file/lane ownership · test/CI · "don\'t invent engines"',
+      extra:'Injected via <span class="mono">get_working_agreement</span> · lease boundaries: <span class="mono">sso/entra</span>, <span class="mono">directory/sync</span>.'},
+    {id:'scope',name:'Scope breakdown',icon:'ti-list-check',answers:'A specific proposed task graph — approving releases Wave 1 only',
+      extra:'<span class="mono">propose_deliverable_breakdown</span> → 21 tasks across 4 milestones. Approve materializes <strong>Wave 1 (4 tasks)</strong>; Wave 2 stays blocked on deps.'}
+  ];
+  // seed state: vision+prd approved, arch is the frontier
+  var koState={ vision:{s:'ok',by:'you · Jul 13',v:'v2'}, prd:{s:'ok',by:'you · Jul 14',v:'v3'}, arch:{s:'now'}, rules:{s:'wait'}, scope:{s:'wait'} };
+  function frontier(){ for(var i=0;i<LADDER.length;i++){ if(koState[LADDER[i].id].s!=='ok') return i; } return -1; }
+  function buildAuthorized(){ return frontier()===-1; }
+  var SHORT={vision:'Vision',prd:'PRD',arch:'Architecture',rules:'Operating rules',scope:'Scope breakdown'};
+  var curSec='arch';
+  // the rail = compact stepper; click a gate to open its artifact section
+  function renderLadder(){
+    var fr=frontier();
+    document.getElementById('koLadder').innerHTML=LADDER.map(function(a,i){
+      var st=koState[a.id], cls,node,meta;
+      if(st.s==='ok'){ cls='done'; node='<i class="ti ti-check"></i>'; meta='Approved '+st.v; }
+      else if(i===fr){ cls=(st.s==='stale')?'stale':'now'; node=(i+1); meta=(st.s==='stale')?'Superseded':'Ready to approve'; }
+      else if(st.s==='stale'){ cls='stale'; node='<i class="ti ti-alert-triangle"></i>'; meta='Stale'; }
+      else { cls='blocked'; node='<i class="ti ti-lock" style="font-size:.625rem"></i>'; meta='Locked'; }
+      var loc=a.id==='scope'?' · in Plan':'';
+      return '<button class="rail-step '+cls+(a.id===curSec?' active':'')+'" data-gate="'+a.id+'"><span class="rn">'+node+'</span><span class="rt">'+SHORT[a.id]+'</span><span class="rm">'+meta+loc+'</span></button>';
+    }).join('');
+    document.querySelectorAll('#koLadder .rail-step').forEach(function(r){ r.addEventListener('click',function(){ showSection(r.dataset.gate); }); });
+    renderSwitchStates(fr); renderFooters(fr); syncVerdict();
+  }
+  function renderSwitchStates(fr){
+    ['vision','prd','arch','rules'].forEach(function(id){
+      var b=document.querySelector('#shapeSwitch button[data-sec="'+id+'"]'); if(!b) return;
+      var st=koState[id], i=LADDER.findIndex(function(a){return a.id===id;}), stEl=b.querySelector('.st');
+      b.classList.remove('done','now','stale');
+      if(st.s==='ok'){ b.classList.add('done'); stEl.innerHTML='<i class="ti ti-check"></i>'; }
+      else if(i===fr){ b.classList.add(st.s==='stale'?'stale':'now'); stEl.textContent=(i+1); }
+      else if(st.s==='stale'){ b.classList.add('stale'); stEl.textContent='!'; }
+      else { stEl.innerHTML='<i class="ti ti-lock" style="font-size:.625rem"></i>'; }
+    });
+  }
+  function renderFooters(fr){
+    ['vision','prd','arch','rules'].forEach(function(id){
+      var el=document.querySelector('.shape-foot[data-foot="'+id+'"]'); if(!el) return;
+      var st=koState[id], i=LADDER.findIndex(function(a){return a.id===id;});
+      el.className='shape-foot';
+      if(st.s==='ok'){ el.classList.add('done');
+        var edit=(id==='arch'||id==='prd')?' · <a href="#" data-edit="'+id+'" class="ko-edit">revise</a>':'';
+        el.innerHTML='<i class="ti ti-circle-check"></i><span>Approved '+st.v+' · '+st.by+edit+'</span>'; }
+      else if(i===fr){
+        if(id==='prd' && document.querySelectorAll('#gateList [data-gate]').length){
+          el.innerHTML='<i class="ti ti-help-circle" style="color:#f76707"></i><span class="text-secondary">Resolve the open questions above before this can be approved.</span>'; }
+        else { var stale=st.s==='stale';
+          el.innerHTML='<span class="text-secondary flex-fill">'+(stale?'Superseded — re-approve to restore build authorization.':'Reviewed it? Approve to unlock the next artifact.')+'</span><button class="btn btn-sm btn-primary" data-approve="'+id+'">'+(stale?'Re-approve':'Approve')+'</button>'; }
+      }
+      else if(st.s==='stale'){ el.classList.add('blocked'); el.innerHTML='<i class="ti ti-alert-triangle" style="color:#f76707"></i><span>Stale — re-approve '+(fr>-1?LADDER[fr].name:'upstream')+' first.</span>'; }
+      else { el.classList.add('blocked'); el.innerHTML='<i class="ti ti-lock"></i><span>Unlocks after '+LADDER[i-1].name+' is approved.</span>'; }
+    });
+    document.querySelectorAll('.shape-foot [data-approve]').forEach(function(b){ b.addEventListener('click',function(){ approve(b.dataset.approve); }); });
+    document.querySelectorAll('.shape-foot [data-edit]').forEach(function(b){ b.addEventListener('click',function(e){ e.preventDefault(); invalidate(b.dataset.edit); }); });
+  }
+  function showSection(id){
+    if(id==='scope'){ go('tab-plan'); toast('Scope breakdown is approved in Plan — the fifth gate.'); return; }
+    curSec=id;
+    document.querySelectorAll('.shape-sec').forEach(function(s){ s.classList.toggle('on', s.id==='sec-'+id); });
+    document.querySelectorAll('#shapeSwitch button').forEach(function(b){ b.classList.toggle('on', b.dataset.sec===id); });
+    document.querySelectorAll('#koLadder .rail-step').forEach(function(r){ r.classList.toggle('active', r.dataset.gate===id); });
+  }
+  document.querySelectorAll('#shapeSwitch button').forEach(function(b){ b.addEventListener('click',function(){ showSection(b.dataset.sec); }); });
+  function approve(id){ koState[id]={s:'ok',by:'you · now',v:(id==='arch'?'v3':id==='rules'?'v1':'v1')};
+    // unlock next
+    var fr=frontier(); if(fr>-1) koState[LADDER[fr].id].s= koState[LADDER[fr].id].s==='wait'?'now':koState[LADDER[fr].id].s;
+    // normalize: the new frontier becomes 'now'
+    var nf=frontier(); LADDER.forEach(function(a,i){ if(koState[a.id].s!=='ok'&&koState[a.id].s!=='stale') koState[a.id].s=(i===nf?'now':'wait'); });
+    var nm=LADDER.find(function(a){return a.id===id;}).name;
+    toast('Approved: '+nm+' — recorded with approver, timestamp & version hash');
+    renderLadder();
+    if(buildAuthorized()) toast('✓ Build authorized — Wave 1 is now claimable');
+  }
+  function invalidate(id){
+    // editing arch invalidates rules+scope; editing prd invalidates arch+rules+scope
+    var chain = id==='prd' ? ['arch','rules','scope'] : ['rules','scope'];
+    var hit=[];
+    chain.forEach(function(k){ if(koState[k].s==='ok'){ koState[k].s='stale'; hit.push(LADDER.find(function(a){return a.id===k;}).name); } });
+    // the edited artifact stays approved but bumps; frontier recomputed
+    var nf=frontier(); LADDER.forEach(function(a,i){ if(koState[a.id].s!=='ok'&&koState[a.id].s!=='stale') koState[a.id].s=(i===nf?'now':'wait'); });
+    renderLadder();
+    toast(hit.length? (LADDER.find(function(a){return a.id===id;}).name)+' revised → '+hit.join(' & ')+' now stale · build de-authorized until re-approved' : 'Revised — no downstream approvals affected');
+  }
+  function syncVerdict(){
+    var fr=frontier(), authed=buildAuthorized();
+    var remaining=LADDER.filter(function(a){ return koState[a.id].s!=='ok'; }).length;
+    var approvedN=5-remaining, next=fr>-1?LADDER[fr].name:'';
+    // scope gate in Plan (the 5th gate)
+    var sg=document.getElementById('scopeGate'),sgt=document.getElementById('scopeGateTitle'),sgs=document.getElementById('scopeGateSub'),sa=document.getElementById('scopeApprove');
+    if(sg){ var ss=koState.scope.s, scopeFrontier=(fr>-1&&LADDER[fr].id==='scope');
+      if(ss==='ok'){ sg.className='ko-verdict ok mb-3'; sgt.textContent='Scope breakdown approved — Wave 1 released'; sgs.innerHTML='4 tasks are claimable; Wave 2 unlocks on dependency. <code>claim_next</code> now serves this milestone.'; sa.disabled=true; sa.innerHTML='<i class="ti ti-check me-1"></i>Approved'; }
+      else if(scopeFrontier){ sg.className='ko-verdict blocked mb-3'; sgt.textContent='Scope breakdown — ready to approve'; sgs.innerHTML='All four Scope artifacts are green. Approving this graph materializes <strong>Wave 1 (4 tasks)</strong>; Wave 2 stays blocked on deps.'; sa.disabled=false; sa.innerHTML='<i class="ti ti-shield-check me-1"></i>Approve breakdown'; }
+      else { sg.className='ko-verdict blocked mb-3'; sgt.textContent='Scope breakdown — the fifth kickoff gate'; sgs.innerHTML='Approve the four Scope artifacts first — this stays locked until then. Nothing here is claimable yet.'; sa.disabled=true; sa.innerHTML='<i class="ti ti-lock me-1"></i>Locked'; } }
+    // nav item: plain count, not a coloured pill (kept minimal)
+    var nkb=document.getElementById('nav-kickoff-badge'); if(nkb){ nkb.textContent=authed?'✓':remaining+' left'; nkb.className='ms-auto small '+(authed?'text-green':'text-secondary'); }
+    // header status line
+    var st1=document.getElementById('koStatus'),stt=document.getElementById('koStatusText'),stc=document.getElementById('koStatusCount'),bar=document.getElementById('koBar');
+    if(bar) bar.style.width=(approvedN/5*100)+'%';
+    if(st1){ st1.classList.toggle('ok',authed);
+      st1.querySelector('i').className='ti '+(authed?'ti-lock-open':'ti-lock'); st1.querySelector('i').style.color=authed?'#2fb344':'#f76707';
+      stt.textContent=authed?'Build authorized':'Build blocked'; stt.style.color=authed?'#2fb344':'#f76707';
+      stc.textContent='· '+approvedN+' of 5 gates approved'; }
+    // verdict strip
+    var vc=document.getElementById('koVerdictCard'),vi=document.getElementById('koVerdictIcon'),vt=document.getElementById('koVerdictTitle'),vs=document.getElementById('koVerdictSub'),kk=document.getElementById('koKick');
+    vc.className='ko-verdict '+(authed?'ok':'blocked')+' mt-1';
+    if(authed){ vi.className='ti ti-lock-open'; vi.style.color='#2fb344';
+      vt.textContent='Build authorization: granted'; vt.className='fw-bold text-green';
+      vs.innerHTML='All 5 gates green. <code>claim_next</code> now serves Wave 1 (4 tasks); <code>merge_gate</code> re-checks on completion.';
+      kk.disabled=false; }
+    else { vi.className='ti ti-shield-lock'; vi.style.color='#f76707';
+      vt.textContent='Build authorization: blocked'; vt.className='fw-bold';
+      var stale=LADDER.some(function(a){return koState[a.id].s==='stale';});
+      vs.innerHTML=(stale?'A supersede left downstream gates stale. ':'')+remaining+' gate'+(remaining>1?'s':'')+' remain'+(remaining===1?'s':'')+' — next: <strong>'+next+'</strong>. <code>claim_next</code> excludes every implementation task.';
+      kk.disabled=true; }
+    // overview banner + top button
+    var okb=document.getElementById('ovKickoffBanner'),okm=document.getElementById('ovKickoffMsg'),okn=document.getElementById('ovKickoffNext');
+    var approved=5-remaining;
+    if(authed){ if(okb){ okb.style.borderColor='rgba(47,179,68,.4)'; okb.style.background='rgba(47,179,68,.07)'; } if(okm) okm.textContent='Kickoff complete — build authorized.'; if(okn) okn.innerHTML='Wave 1 is claimable. The kickoff record (vision · PRD · architecture · rules · scope) is on file.'; }
+    else { if(okb){ okb.style.borderColor='rgba(247,103,7,.4)'; okb.style.background='rgba(247,103,7,.07)'; } if(okm) okm.textContent='Build blocked — '+approved+' of 5 kickoff gates approved.'; if(okn) okn.textContent='Next: approve '+(fr>-1?LADDER[fr].name:'')+'. No implementation task can be claimed until the kickoff record is complete.'; }
+    // stepper: shape done when rules approved; scope done when scope approved; build now when authorized
+    setStep('scope', koState.rules.s==='ok'?(authed?'done':'now'):'');
+    setStep('shape', koState.rules.s==='ok'?'done':'now');
+    setStep('build', authed?'now':'');
+    // one CTA, one look — only the enabled state changes
+    var kf=document.getElementById('btn-kickoff');
+    if(kf){ kf.disabled=!authed; kf.title=authed?'Dispatch wave 1':'Blocked — '+remaining+' kickoff gate'+(remaining>1?'s':'')+' open'; }
+  }
+  function setStep(ph,state){ var el=document.querySelector('#ovStepper [data-ph="'+ph+'"]'); if(!el) return; el.classList.remove('now','done'); if(state) el.classList.add(state); }
+
+  function releaseWave(){
+    if(!buildAuthorized()) return;
+    go('tab-deliverable'); var kp=document.getElementById('koPhase'); if(kp) kp.textContent='build';
+    toast('⚡ Wave 1 released — 4 tasks claimable. Start Autopilot on the deliverable to drain them (task-first, UI-27)'); }
+  document.getElementById('koKick').addEventListener('click',releaseWave);
+  document.getElementById('scopeApprove').addEventListener('click',function(){ if(koState.scope.s!=='ok'&&frontier()>-1&&LADDER[frontier()].id==='scope') approve('scope'); });
+
+  // top-bar Kick off derives from the same gate (disabled while blocked)
+  function tryKickoff(){
+    if(!buildAuthorized()){ var fr=frontier(); toast('Kickoff blocked — approve '+(fr>-1?LADDER[fr].name:'the open gate')+' first. No build task is claimable yet.'); go('tab-scope'); if(fr>-1&&LADDER[fr].id!=='scope') showSection(LADDER[fr].id); return; }
+    releaseWave(); }
+  document.getElementById('btn-kickoff').addEventListener('click',tryKickoff);
+  function refreshGates(){}
+  ['sayGo','applyBtn','pushBack'].forEach(function(id){ var el=document.getElementById(id); if(el) el.addEventListener('click',function(){ toast(id==='sayGo'?'Taikun folds it into the artifact — versioned, approvals invalidate if upstream':'Recorded on the brief'); }); });
+  refreshGates(); renderLadder(); showSection('arch');
+
+  // ✦ UI-27 task-first autopilot: Start deliverable ⇄ Pause/Stop; tasks flip to "included"
+  var apOn=false, apPaused=false;
+  function apRender(){
+    var w=document.getElementById('apWords'),st=document.getElementById('apStart'),run=document.getElementById('apRun'),fl=document.getElementById('apState');
+    if(!w) return;
+    st.style.display=apOn?'none':''; run.style.display=apOn?'':'none';
+    if(!apOn){ w.innerHTML='<span class="sdot" style="background:#8b95a5"></span>autopilot: not started — drains only what you start'; }
+    else if(apPaused){ w.innerHTML='<span class="sdot" style="background:#f5b153"></span>autopilot: paused — scope kept, nothing dispatches'; }
+    else { w.innerHTML='<span class="sdot live" style="background:#2fb344"></span>autopilot: running · waiting for dependencies/capacity'; }
+    document.getElementById('apPause').innerHTML='<i class="ti ti-player-'+(apPaused?'play':'pause')+' me-1"></i>'+(apPaused?'Resume':'Pause');
+    document.querySelectorAll('.ap-cell').forEach(function(c){
+      var b=c.querySelector('[data-ap-task]');
+      if(apOn&&!apPaused){ if(b||c.dataset.apInc){ c.dataset.apInc='1'; c.innerHTML='<span class="stx small justify-content-end"><span class="sdot live" style="background:#2fb344"></span>included</span>'; } }
+      else if(c.dataset.apInc){ c.innerHTML='<button class="btn btn-sm btn-outline-secondary" data-ap-task=""><i class="ti ti-player-play me-1"></i>Start task</button>'; delete c.dataset.apInc; wireApTasks(); } });
+    if(fl) fl.innerHTML=apOn?'<span class="sdot'+(apPaused?'':' live')+'" style="background:'+(apPaused?'#f5b153':'#2fb344')+'"></span>1 scope '+(apPaused?'paused':'active')+' · M2 (deliverable) · started by you':'<span class="sdot" style="background:#8b95a5"></span>0 scopes active · start from a deliverable or task';
+  }
+  function wireApTasks(){ document.querySelectorAll('[data-ap-task]').forEach(function(b){ b.onclick=function(){ b.closest('.ap-cell').innerHTML='<span class="stx small justify-content-end"><span class="sdot live" style="background:#2fb344"></span>task scope active</span>'; toast('Task scope started — the daemon drains just this task; audited with an ui27 idempotency key'); }; }); }
+  var apS=document.getElementById('apStart'); if(apS){
+    apS.addEventListener('click',function(){ apOn=true; apPaused=false; apRender(); toast('Deliverable scope started — round-robin drain, ≤8 tasks per tick, blocking links only'); });
+    document.getElementById('apPause').addEventListener('click',function(){ apPaused=!apPaused; apRender(); toast(apPaused?'Scope paused — durable; resume any time':'Scope resumed'); });
+    document.getElementById('apStop').addEventListener('click',function(){ apOn=false; apPaused=false; apRender(); toast('Scope stopped — recorded; nothing new dispatches'); });
+    wireApTasks();
+  }
+
+  // "Open" buttons in Next actions jump straight to a node's task panel
+  document.querySelectorAll('[data-node-open]').forEach(function(b){ b.addEventListener('click',function(){ openNode(b.dataset.nodeOpen); }); });
+
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ closeSess(); if(typeof closeNode==='function') closeNode(); document.querySelectorAll('.tk-drop').forEach(function(x){ x.classList.remove('on'); }); } });
+})();
+</script>
+</body>
+</html>

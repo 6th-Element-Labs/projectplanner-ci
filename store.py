@@ -31,6 +31,7 @@ _EXPORT_MODULES: Tuple[str, ...] = (
     "switchboard.storage.repositories.external_effects",
     "switchboard.storage.repositories.activity",
     "switchboard.storage.repositories.autopilot_scopes",
+    "switchboard.storage.repositories.kickoff",
     "switchboard.storage.repositories.lifecycle_cleanup",
     "switchboard.storage.repositories.narration",
     "switchboard.storage.repositories.plan_chat",

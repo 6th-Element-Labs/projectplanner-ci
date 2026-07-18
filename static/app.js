@@ -3889,7 +3889,13 @@ const TeepPlan = {
             const dl = document.getElementById('am-deadline'); if (dl) dl.disabled = !amAck.checked;
         });
         const ackBell = document.getElementById('btn-ack-inbox');
-        if (ackBell) ackBell.addEventListener('click', () => this.openAckInbox());
+        // UI-29 follow-up: the bell opens the universal Needs-you queue (Inbox hub's
+        // default pane); the legacy ack modal stays as the no-bootstrap fallback.
+        if (ackBell) ackBell.addEventListener('click', () => {
+            const t = document.getElementById('toptab-inbox');
+            if (t && window.bootstrap) window.bootstrap.Tab.getOrCreateInstance(t).show();
+            else this.openAckInbox();
+        });
         const ackRefresh = document.getElementById('ack-inbox-refresh');
         if (ackRefresh) ackRefresh.addEventListener('click', () => this.loadAckInbox(true));
         // Prime the bell badge and keep it fresh (unacked required messages the operator sent).

@@ -1,0 +1,53 @@
+/* ============================================================================
+   taikun-scope.css — UI-28 slice 1: the Scope page (advisory) + house tokens.
+   Additive only: nothing here restyles an existing surface. The shared tokens
+   at the top are the house status language from the restyle wireframes
+   (docs/ui/switchboard-live-restyle.html); promote them into taikun-ui.css
+   when the page-by-page restyle lands.
+   Type sits on Tabler's own ladder: 1.5 / 1.25 / 1 / .875 / .75 / .625rem.
+   ============================================================================ */
+
+/* ── shared house tokens: dots + words instead of badge pills ── */
+.sdot{ display:inline-block; width:.55rem; height:.55rem; border-radius:50%; flex:0 0 auto; vertical-align:middle; }
+.sdot.live{ animation:sdot-pulse 1.6s ease-in-out infinite; }
+@keyframes sdot-pulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(192,57,43,.28);} 50%{ box-shadow:0 0 0 4px rgba(192,57,43,.10);} }
+.stx{ display:inline-flex; align-items:center; gap:.45rem; white-space:nowrap; }
+.tk-eyebrow{ font-size:.75rem; font-weight:500; text-transform:uppercase; letter-spacing:.04em; line-height:1rem; color:var(--tblr-secondary); }
+.tk-mono{ font-family:var(--tblr-font-monospace,ui-monospace,SFMono-Regular,Menlo,monospace); font-variant-numeric:tabular-nums; }
+
+/* ── the kickoff ladder rail ── */
+.scope-rail .rail-step{ display:flex; align-items:center; gap:.65rem; width:100%; text-align:left; border:0; background:transparent;
+  padding:.5rem .65rem; border-radius:.5rem; cursor:pointer; color:var(--tblr-body-color); }
+.scope-rail .rail-step:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.scope-rail .rail-step.active{ background:var(--tblr-bg-surface-secondary,#f6f7f9); box-shadow:inset 2.5px 0 0 var(--tblr-primary); }
+.scope-rail .rn{ width:1.5rem; height:1.5rem; border-radius:50%; display:grid; place-items:center; font-size:.75rem; font-weight:600;
+  border:1.5px solid var(--tblr-border-color); background:var(--tblr-bg-surface,#fff); flex:0 0 auto; }
+.scope-rail .rail-step.done .rn{ background:rgba(47,179,68,.12); border-color:transparent; color:#2fb344; }
+.scope-rail .rail-step.now .rn{ background:var(--tblr-primary); border-color:var(--tblr-primary); color:#fff; }
+.scope-rail .rail-step.stale .rn{ background:rgba(247,103,7,.12); border-color:transparent; color:#f76707; }
+.scope-rail .rail-step.blocked .rn{ color:var(--tblr-secondary); }
+.scope-rail .rt{ font-size:.875rem; font-weight:600; }
+.scope-rail .rm{ margin-left:auto; font-size:.75rem; color:var(--tblr-secondary); white-space:nowrap; }
+
+/* ── section switcher (Vision · PRD · Architecture · Rules) ── */
+.scope-switch{ display:flex; gap:.25rem; flex-wrap:wrap; }
+.scope-switch button{ display:inline-flex; align-items:center; gap:.45rem; border:1px solid transparent; background:transparent;
+  padding:.35rem .7rem; border-radius:.5rem; font-size:.875rem; font-weight:500; color:var(--tblr-secondary); cursor:pointer; }
+.scope-switch button:hover{ background:var(--tblr-bg-surface-secondary,#f6f7f9); }
+.scope-switch button.on{ background:var(--tblr-bg-surface,#fff); border-color:var(--tblr-border-color); color:var(--tblr-body-color);
+  box-shadow:0 1px 2px rgba(16,24,40,.05); }
+.scope-switch .st{ width:1.1rem; height:1.1rem; border-radius:50%; display:grid; place-items:center; font-size:.625rem; font-weight:600;
+  border:1px solid var(--tblr-border-color); background:var(--tblr-bg-surface,#fff); }
+.scope-switch button.done .st{ background:rgba(47,179,68,.12); border-color:transparent; color:#2fb344; }
+.scope-switch button.now .st{ background:var(--tblr-primary); border-color:var(--tblr-primary); color:#fff; }
+.scope-switch button.stale .st{ background:rgba(247,103,7,.12); border-color:transparent; color:#f76707; }
+
+.scope-sec{ display:none; } .scope-sec.on{ display:block; }
+.scope-foot{ display:flex; align-items:center; gap:.6rem; border-top:1px solid var(--tblr-border-color); padding-top:.75rem; margin-top:1rem;
+  font-size:.875rem; color:var(--tblr-body-color); }
+.scope-foot.done{ color:#2fb344; } .scope-foot.blocked{ color:var(--tblr-secondary); }
+
+/* ── verdict strip ── */
+.scope-verdict{ border:1px solid rgba(247,103,7,.35); background:rgba(247,103,7,.05); border-radius:.6rem; padding:.8rem 1rem;
+  display:flex; align-items:flex-start; gap:.7rem; }
+.scope-verdict.ok{ border-color:rgba(47,179,68,.35); background:rgba(47,179,68,.05); }

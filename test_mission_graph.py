@@ -67,11 +67,24 @@ try:
     ok(len(graph.get("edges") or []) == 3, "depends_on edges materialized")
     ok("DELIV-2" in graph.get("mermaid", "") and "flowchart LR" in graph.get("mermaid", ""),
        "mermaid flowchart LR emitted")
-    ok('subgraph ws_DELIV["DELIV"]' in graph.get("mermaid", ""),
-       "multi-task workstream is boxed into a subgraph")
-    ok("EXTERNAL-1" in graph.get("mermaid", "")
-       and "subgraph ws_EXTERNAL" not in graph.get("mermaid", ""),
-       "external/singleton workstream stays loose (no one-node box)")
+    # UI-32: flat flowchart LR is the default — no workstream boxes; the env
+    # escape hatch restores the boxed layout for deployments that want it.
+    ok("subgraph" not in graph.get("mermaid", ""),
+       "flat by default — no workstream subgraphs")
+    os.environ["PM_MISSION_GRAPH_SUBGRAPHS"] = "1"
+    try:
+        boxed = mission_graph.build_dependency_graph([
+            _link("DELIV-2", "foundation", status="Done", terminal=True),
+            _link("DELIV-3", "breakdown workflow", status="Done", terminal=True, depends_on=["DELIV-2"]),
+            _link("DELIV-7", "coordinator loop", status="Not Started",
+                  depends_on=["DELIV-3", "EXTERNAL-1"]),
+        ], deliverable_id="demo", project_id=HOME)
+        ok('subgraph ws_DELIV["DELIV"]' in boxed.get("mermaid", ""),
+           "PM_MISSION_GRAPH_SUBGRAPHS=1 restores workstream boxes")
+        ok("subgraph ws_EXTERNAL" not in boxed.get("mermaid", ""),
+           "external/singleton workstream stays loose (no one-node box)")
+    finally:
+        os.environ.pop("PM_MISSION_GRAPH_SUBGRAPHS", None)
     ok("<b>DELIV-2</b>" in graph.get("mermaid", ""),
        "node label puts the id in bold on its own line")
     ok(mission_graph._clean_title("FORGE-2", "FORGE-2: 20-symbol catalog") == "20-symbol catalog",

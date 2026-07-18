@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Workspace — chat-first scoping, brief as canvas</title>
+<style>
+/* The app. Slack-shaped: left rail (engagements, people), center chat
+   (where scoping actually happens), right canvas (the living brief).
+   Same taikun tokens. */
+*,*::before,*::after{ box-sizing:border-box; } body{ margin:0; }
+svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+:root{
+  --font:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --primary:#c0392b; --primary-rgb:192,57,43; --green:#2fb344; --green-rgb:47,179,68;
+  --orange:#f76707; --orange-rgb:247,103,7; --purple:#ae3ec9; --blue:#206bc4;
+  --ink:#1a2230; --ink-2:#5a6577; --ink-3:#8b95a5; --card:#fff; --canvas:#f8f9fb;
+  --hair:#e6e9ef; --hair-2:#eef0f4; --chip:#f1f3f6;
+  --rail:#221317; --rail-2:#2e181d; --rail-ink:rgba(255,255,255,.78); --rail-dim:rgba(255,255,255,.44);
+}
+body{ font-family:var(--font); color:var(--ink); background:var(--canvas); font-size:14.5px; line-height:1.5; -webkit-font-smoothing:antialiased; letter-spacing:-.008em; overflow:hidden; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+.app{ display:grid; grid-template-columns:264px minmax(0,1fr) 400px; height:100vh; }
+.app.nocanvas{ grid-template-columns:264px minmax(0,1fr) 0; }
+.app.nocanvas .canvas{ display:none; }
+
+/* ============ left rail ============ */
+.rail{ background:linear-gradient(180deg,var(--rail-2),var(--rail) 30%); color:var(--rail-ink); display:flex; flex-direction:column; overflow:hidden; }
+.ws{ display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid rgba(255,255,255,.08); }
+.ws .wlogo{ width:30px; height:30px; border-radius:9px; background:linear-gradient(150deg,var(--primary),#7d1d12); display:grid; place-items:center; color:#fff; flex:0 0 auto; }
+.ws .wlogo svg{ width:18px; height:18px; }
+.ws .wn{ font-weight:700; font-size:14px; color:#fff; } .ws .wd{ font-family:var(--mono); font-size:10px; color:var(--rail-dim); }
+.ws .new{ margin-left:auto; width:28px; height:28px; border-radius:8px; background:rgba(255,255,255,.1); display:grid; place-items:center; color:#fff; font-size:15px; font-weight:600; }
+.ws .new:hover{ background:rgba(255,255,255,.18); }
+.railscroll{ flex:1; overflow:auto; padding:10px 8px 12px; }
+.ritem{ display:flex; align-items:center; gap:9px; width:100%; text-align:left; padding:6px 10px; border-radius:8px; font-size:13.5px; color:var(--rail-ink); margin-bottom:1px; }
+.ritem:hover{ background:rgba(255,255,255,.07); }
+.ritem.on{ background:rgba(var(--primary-rgb),.32); color:#fff; font-weight:600; }
+.ritem svg{ width:15px; height:15px; opacity:.7; flex:0 0 auto; }
+.ritem .grow{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.rbadge{ font-size:10.5px; font-weight:700; background:var(--orange); color:#fff; border-radius:999px; padding:1px 7px; flex:0 0 auto; }
+.rbadge.red{ background:var(--primary); }
+.rsec{ font-family:var(--mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--rail-dim); font-weight:600; padding:16px 10px 6px; display:flex; align-items:center; }
+.rsec .add{ margin-left:auto; opacity:.6; font-size:13px; } .rsec .add:hover{ opacity:1; }
+.hashe{ font-family:var(--mono); font-size:13px; opacity:.55; width:15px; text-align:center; flex:0 0 auto; }
+.sub{ padding-left:22px; }
+.stat{ font-family:var(--mono); font-size:9.5px; color:var(--rail-dim); flex:0 0 auto; }
+.pdot2{ width:9px; height:9px; border-radius:50%; flex:0 0 auto; position:relative; }
+.pdot2.on{ background:#3ddc68; box-shadow:0 0 0 2.5px rgba(61,220,104,.18); }
+.pdot2.off{ border:2px solid var(--rail-dim); }
+.pav{ width:20px; height:20px; border-radius:6px; display:grid; place-items:center; color:#fff; font-size:8.5px; font-weight:700; flex:0 0 auto; }
+.me{ display:flex; align-items:center; gap:9px; padding:11px 16px; border-top:1px solid rgba(255,255,255,.08); }
+.me .pav{ width:28px; height:28px; border-radius:8px; font-size:11px; }
+.me .mn{ font-size:13px; font-weight:600; color:#fff; } .me .ms{ font-size:10.5px; color:var(--rail-dim); }
+
+/* ============ center: the channel ============ */
+.mid{ display:flex; flex-direction:column; min-width:0; background:var(--card); border-right:1px solid var(--hair); }
+.chead{ display:flex; align-items:center; gap:10px; padding:11px 18px; border-bottom:1px solid var(--hair); flex:0 0 auto; }
+.chead .cn{ font-weight:700; font-size:15px; display:flex; align-items:center; gap:7px; }
+.chead .cd{ font-size:12.5px; color:var(--ink-3); border-left:1px solid var(--hair); padding-left:10px; margin-left:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chead .grow{ flex:1; }
+.hbtn{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--ink-2); border:1px solid var(--hair); border-radius:8px; padding:5px 10px; white-space:nowrap; }
+.hbtn:hover{ background:var(--chip); } .hbtn svg{ width:13px; height:13px; }
+.hbtn.pri{ background:var(--primary); border-color:var(--primary); color:#fff; }
+.hbtn.pri:hover{ background:#a5281c; }
+.facepile{ display:flex; margin-right:2px; } .facepile .pav{ width:22px; height:22px; border-radius:7px; border:2px solid var(--card); font-size:9px; }
+.facepile .pav + .pav{ margin-left:-6px; }
+.chat{ flex:1; overflow:auto; padding:14px 0 6px; }
+.day{ display:flex; align-items:center; gap:12px; padding:8px 18px; }
+.day::before,.day::after{ content:''; flex:1; height:1px; background:var(--hair-2); }
+.day span{ font-size:11px; font-weight:600; color:var(--ink-3); border:1px solid var(--hair); border-radius:999px; padding:2px 10px; }
+.msg{ display:flex; gap:11px; padding:7px 18px; }
+.msg:hover{ background:color-mix(in srgb,var(--chip) 45%,transparent); }
+.msg .mav{ width:36px; height:36px; border-radius:9px; display:grid; place-items:center; color:#fff; font-weight:700; font-size:13px; flex:0 0 auto; margin-top:2px; }
+.msg .mb{ flex:1; min-width:0; }
+.msg .mh{ display:flex; align-items:baseline; gap:8px; }
+.msg .mn{ font-weight:700; font-size:14px; } .msg .mt{ font-family:var(--mono); font-size:10.5px; color:var(--ink-3); }
+.tag{ font-size:9.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; border-radius:5px; padding:1px 6px; }
+.tag.ai{ color:var(--primary); background:rgba(var(--primary-rgb),.09); }
+.tag.guest{ color:var(--blue); background:rgba(32,107,196,.09); }
+.msg .tx{ font-size:14px; line-height:1.55; margin-top:1px; } .msg .tx b{ font-weight:650; }
+.msg .tx .mention{ color:var(--primary); background:rgba(var(--primary-rgb),.08); border-radius:4px; padding:0 3px; font-weight:600; }
+.reacts{ display:flex; gap:5px; margin-top:6px; }
+.react{ font-size:11.5px; border:1px solid var(--hair); border-radius:999px; padding:2px 8px; background:var(--chip); color:var(--ink-2); font-weight:600; }
+.react.you{ border-color:rgba(var(--primary-rgb),.4); background:rgba(var(--primary-rgb),.06); color:var(--primary); }
+
+/* rich cards the AI posts into chat */
+.ccard{ border:1px solid var(--hair); border-radius:13px; margin-top:8px; max-width:520px; overflow:hidden; background:var(--card); box-shadow:0 1px 2px rgba(20,30,50,.05); }
+.ccard .ch{ display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--hair-2); font-size:12px; font-weight:650; }
+.ccard .ch .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; }
+.ccard .ch .grow{ flex:1; }
+.vchip{ font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:6px; padding:1px 7px; }
+.statrow{ display:grid; grid-template-columns:repeat(3,1fr); }
+.statrow > div{ padding:12px 14px; } .statrow > div + div{ border-left:1px solid var(--hair-2); }
+.statrow .n{ font-size:19px; font-weight:730; letter-spacing:-.02em; } .statrow .n small{ font-size:11.5px; font-weight:500; color:var(--ink-2); }
+.statrow .l{ font-family:var(--mono); font-size:9px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3); margin-top:1px; }
+.ccard .cfoot{ display:flex; align-items:center; gap:8px; padding:9px 14px; border-top:1px solid var(--hair-2); font-size:12px; color:var(--ink-3); }
+.ccard .cfoot .lnk{ font-weight:600; color:var(--primary); cursor:pointer; font-size:12.5px; }
+.redline{ font-size:13.5px; padding:12px 14px; }
+.redline s{ color:var(--ink-3); } .redline mark{ background:rgba(var(--green-rgb),.2); border-radius:3px; padding:0 3px; color:inherit; }
+.cact{ display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--hair-2); }
+.cact button{ flex:1; font-size:13px; font-weight:650; padding:9px; border-radius:9px; border:1px solid var(--hair); background:var(--card); color:var(--ink); }
+.cact .ap{ background:var(--primary); color:#fff; border-color:var(--primary); box-shadow:0 2px 10px rgba(var(--primary-rgb),.25); }
+.cact .ap:hover{ background:#a5281c; }
+.okline{ display:flex; align-items:center; gap:8px; padding:10px 14px; font-size:12.5px; color:var(--green); font-weight:600; }
+.quoteline{ border-left:3px solid var(--hair); padding:2px 0 2px 11px; margin-top:6px; font-size:13px; color:var(--ink-2); font-style:italic; }
+.quoteline .src{ font-style:normal; font-family:var(--mono); font-size:10.5px; color:var(--ink-3); display:block; margin-top:2px; }
+.typing{ display:flex; align-items:center; gap:10px; padding:6px 18px 10px 65px; font-size:12px; color:var(--ink-3); }
+.typing .dots i{ display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--ink-3); margin-right:3px; animation:ty 1.2s infinite; }
+.typing .dots i:nth-child(2){ animation-delay:.15s; } .typing .dots i:nth-child(3){ animation-delay:.3s; }
+@keyframes ty{ 0%,60%,100%{ opacity:.25; transform:translateY(0);} 30%{ opacity:1; transform:translateY(-2px);} }
+
+/* composer */
+.comp{ flex:0 0 auto; padding:0 18px 16px; }
+.compbox{ border:1px solid var(--hair); border-radius:13px; background:var(--card); box-shadow:0 1px 3px rgba(20,30,50,.06); overflow:hidden; }
+.compbox:focus-within{ border-color:rgba(var(--primary-rgb),.45); }
+.compin{ width:100%; border:0; outline:none; font:inherit; font-size:14px; color:var(--ink); padding:12px 14px 4px; background:none; }
+.compin::placeholder{ color:var(--ink-3); }
+.comptools{ display:flex; align-items:center; gap:2px; padding:6px 8px 8px; }
+.ct{ width:30px; height:30px; border-radius:8px; display:grid; place-items:center; color:var(--ink-3); font-size:14px; font-weight:600; }
+.ct:hover{ background:var(--chip); color:var(--ink-2); }
+.slash{ font-size:11.5px; color:var(--ink-3); margin-left:6px; }
+.slash b{ font-weight:600; color:var(--ink-2); }
+.sendb{ margin-left:auto; width:32px; height:32px; border-radius:9px; background:var(--primary); color:#fff; display:grid; place-items:center; }
+.sendb svg{ width:14px; height:14px; }
+.comphint{ font-size:11px; color:var(--ink-3); padding:6px 4px 0; text-align:center; }
+
+/* ============ right: the brief canvas ============ */
+.canvas{ background:var(--canvas); display:flex; flex-direction:column; min-width:0; overflow:hidden; }
+.canhead{ display:flex; align-items:center; gap:9px; padding:11px 16px; border-bottom:1px solid var(--hair); background:var(--card); flex:0 0 auto; }
+.canhead .t{ font-weight:700; font-size:13.5px; }
+.canhead .grow{ flex:1; }
+.canscroll{ flex:1; overflow:auto; padding:14px; }
+.doc{ background:var(--card); border:1px solid var(--hair); border-radius:14px; box-shadow:0 1px 2px rgba(20,30,50,.05); overflow:hidden; }
+.dsec{ padding:15px 17px; } .dsec + .dsec{ border-top:1px solid var(--hair-2); }
+.dsec .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:6px; }
+.dsec p{ margin:0; font-size:13px; line-height:1.6; } .dsec p b{ font-weight:650; }
+mark.hl{ background:linear-gradient(transparent 62%, rgba(var(--orange-rgb),.25) 62%); color:inherit; padding:0; }
+.cm{ background:rgba(var(--orange-rgb),.14); box-shadow:inset 0 -2px 0 rgba(var(--orange-rgb),.55); border-radius:2px; cursor:pointer; padding:0 1px; }
+.cm.res{ background:transparent; box-shadow:inset 0 -2px 0 var(--hair); }
+.dstat{ display:grid; grid-template-columns:repeat(3,1fr); }
+.dstat > div{ padding:12px 17px; } .dstat > div + div{ border-left:1px solid var(--hair-2); }
+.dstat .n{ font-size:17px; font-weight:730; letter-spacing:-.02em; } .dstat .n small{ font-size:11px; font-weight:500; color:var(--ink-2); }
+.dstat .l{ font-family:var(--mono); font-size:8.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); margin-top:1px; }
+.dl{ display:flex; gap:8px; font-size:12.5px; padding:4px 0; align-items:flex-start; }
+.dl .ck{ width:17px; height:17px; border-radius:50%; background:rgba(var(--green-rgb),.13); color:var(--green); display:grid; place-items:center; flex:0 0 auto; font-size:9px; margin-top:1px; }
+.mrow2{ display:flex; align-items:center; gap:8px; font-size:12.5px; padding:5px 0; border-top:1px solid var(--hair-2); }
+.mrow2:first-of-type{ border-top:0; }
+.pill{ font-size:10px; font-weight:700; padding:1px 7px; border-radius:999px; color:var(--purple); background:rgba(174,62,201,.1); font-family:var(--mono); }
+.kick{ display:flex; align-items:center; gap:9px; width:100%; justify-content:center; font-size:13.5px; font-weight:650; padding:12px; border-radius:12px; background:var(--primary); color:#fff; box-shadow:0 2px 12px rgba(var(--primary-rgb),.3); margin-top:12px; }
+.kick:hover{ background:#a5281c; } .kick svg{ width:15px; height:15px; }
+.kicknote{ text-align:center; font-size:10.5px; color:var(--ink-3); margin-top:7px; }
+.canfoot{ font-size:11px; color:var(--ink-3); text-align:center; padding:10px 0 2px; }
+.flash{ animation:flashbg 1.4s; } @keyframes flashbg{ 0%{ background:rgba(var(--green-rgb),.18);} 100%{ background:transparent;} }
+
+/* ============ login ============ */
+.login{ position:fixed; inset:0; z-index:100; background:radial-gradient(120% 130% at 75% 0%, #33191f 0%, #221317 50%, #150c0f 100%); display:grid; place-items:center; transition:opacity .35s, visibility .35s; }
+.login.off{ opacity:0; visibility:hidden; }
+.lcard{ width:min(400px,92vw); background:var(--card); border-radius:20px; padding:34px 34px 28px; box-shadow:0 40px 120px -20px rgba(0,0,0,.6); text-align:center; }
+.lcard .llogo{ width:46px; height:46px; border-radius:13px; background:linear-gradient(150deg,var(--primary),#7d1d12); display:grid; place-items:center; color:#fff; margin:0 auto 14px; }
+.lcard .llogo svg{ width:26px; height:26px; }
+.lcard h1{ font-size:20px; font-weight:740; letter-spacing:-.02em; margin:0 0 3px; }
+.lcard .lu{ font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-bottom:22px; }
+.lbtn{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%; padding:11px; border-radius:11px; border:1px solid var(--hair); font-weight:600; font-size:13.5px; margin-bottom:9px; color:var(--ink); }
+.lbtn:hover{ background:var(--chip); }
+.lbtn.pri{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.lfoot{ font-size:11px; color:var(--ink-3); margin-top:16px; }
+.gmark{ width:16px; height:16px; border-radius:4px; background:conic-gradient(from -45deg, #ea4335 110deg, #4285f4 90deg 180deg, #34a853 180deg 270deg, #fbbc05 270deg); flex:0 0 auto; }
+.toast{ position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(10px); background:var(--ink); color:#fff; font-size:13px; font-weight:600; padding:11px 18px; border-radius:11px; box-shadow:0 16px 44px -12px rgba(10,16,28,.55); opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:90; max-width:90vw; text-align:center; }
+.toast.on{ opacity:1; transform:translateX(-50%) translateY(0); }
+:focus-visible{ outline:2px solid var(--primary); outline-offset:2px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12c1.5 0 1.5-5 3-5s1.5 10 3 10 1.5-8 3-8 1.5 5 3 5 1.5-4 3-4 1.5 3 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="currentColor"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-3-6-7-2z" fill="currentColor"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3v4h4M9 12h6M9 16h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 4h16v16H4V4z M4 14h5l1.5 2.5h3L15 14h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<!-- ============ sign in ============ -->
+<div class="login" id="login">
+  <div class="lcard">
+    <div class="llogo"><svg><use href="#i-wave"/></svg></div>
+    <h1>Sign in to Switchboard</h1>
+    <div class="lu">plan.taikunai.com · Taikun</div>
+    <button class="lbtn" id="loginGo"><span class="gmark"></span>Continue with Google</button>
+    <button class="lbtn">Continue with Microsoft</button>
+    <button class="lbtn pri">Email &amp; password</button>
+    <div class="lfoot">One operator. A fleet of agents. Clients as guests.</div>
+  </div>
+</div>
+
+<div class="app" id="app">
+
+  <!-- ============ left rail ============ -->
+  <nav class="rail">
+    <div class="ws">
+      <span class="wlogo"><svg><use href="#i-wave"/></svg></span>
+      <div><div class="wn">Taikun</div><div class="wd">switchboard · pro</div></div>
+      <button class="new" title="New engagement">+</button>
+    </div>
+    <div class="railscroll">
+      <button class="ritem"><svg><use href="#i-inbox"/></svg><span class="grow">Needs you</span><span class="rbadge">3</span></button>
+      <button class="ritem"><svg><use href="#i-chart"/></svg><span class="grow">Tally — money &amp; proof</span></button>
+
+      <div class="rsec">Engagements<button class="add">+</button></div>
+      <button class="ritem"><span class="hashe">#</span><span class="grow">northwind-energy</span><span class="stat">build 68%</span></button>
+      <button class="ritem on sub" id="chScope"><span class="hashe">›</span><span class="grow">scope</span><span class="rbadge">2</span></button>
+      <button class="ritem sub"><span class="hashe">›</span><span class="grow">build</span><span class="stat">3 live</span></button>
+      <button class="ritem sub"><span class="hashe">›</span><span class="grow">results</span></button>
+      <button class="ritem"><span class="hashe">#</span><span class="grow">meridian-labs</span><span class="rbadge red">1</span></button>
+      <button class="ritem"><span class="hashe">#</span><span class="grow">atlas-freight</span><span class="stat">✓ shipped</span></button>
+
+      <div class="rsec">People<button class="add">+</button></div>
+      <button class="ritem"><span class="pav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span><span class="grow">Taikun</span><span class="pdot2 on"></span></button>
+      <button class="ritem"><span class="pav" style="background:#206bc4">J</span><span class="grow">Jordan · design</span><span class="pdot2 on"></span></button>
+      <button class="ritem"><span class="pav" style="background:#5a6577">AR</span><span class="grow">A. Reyes · Northwind</span><span class="pdot2 off"></span></button>
+
+      <div class="rsec">Agents · 3 working</div>
+      <button class="ritem"><span class="pav" style="background:linear-gradient(150deg,#c0392b,#8e2018)">A</span><span class="grow">Atlas · SEN-6</span><span class="stat">PR #412</span></button>
+      <button class="ritem"><span class="pav" style="background:linear-gradient(150deg,#206bc4,#16457f)">C</span><span class="grow">Codex · DATA-3</span><span class="stat">tests ✓</span></button>
+      <button class="ritem"><span class="pav" style="background:linear-gradient(150deg,#2fb344,#1c7a2d)">N</span><span class="grow">Nova · QA-2</span><span class="stat">e2e</span></button>
+    </div>
+    <div class="me"><span class="pav" style="background:#1a2230">S</span><div><div class="mn">Steve</div><div class="ms">operator · online</div></div></div>
+  </nav>
+
+  <!-- ============ center: #northwind-energy › scope ============ -->
+  <main class="mid">
+    <div class="chead">
+      <span class="cn"><span class="hashe" style="opacity:.45;width:auto">#</span>northwind-energy · scope</span>
+      <span class="cd">Shaping the SSO &amp; Identity brief — you, Taikun, Jordan + A. Reyes (guest)</span>
+      <span class="grow"></span>
+      <span class="facepile"><span class="pav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span><span class="pav" style="background:#1a2230">S</span><span class="pav" style="background:#206bc4">J</span><span class="pav" style="background:#5a6577">AR</span></span>
+      <button class="hbtn" id="canToggle"><svg><use href="#i-doc"/></svg>Brief <span class="vchip" id="vchipH">v7</span></button>
+      <button class="hbtn pri" id="kickH"><svg><use href="#i-bolt"/></svg>Kick off</button>
+    </div>
+
+    <div class="chat" id="chat">
+      <div class="day"><span>Today — brief v5 → v7</span></div>
+
+      <div class="msg">
+        <span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span>
+        <div class="mb">
+          <div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">9:02 AM</span></div>
+          <div class="tx">Morning. I re-read <b>discovery-call.vtt</b> overnight and re-priced the plan from the ledger — estimate moved <b>$3.6k → $3.4k</b> after re-sequencing. The brief is at <b>v6</b>. Two calls still need a human: <b>SCIM</b> (defer or include) and the <b>model tier</b> for identity work.</div>
+          <div class="reacts"><span class="react you">👍 2</span><span class="react">⚡ 1</span></div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <span class="mav" style="background:#206bc4">J</span>
+        <div class="mb">
+          <div class="mh"><span class="mn">Jordan</span><span class="mt">9:14 AM</span></div>
+          <div class="tx">Sign-in flow should match <b>system v3</b> — no new components for this one. <span class="mention">@Taikun</span> pin the fleet to it?</div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span>
+        <div class="mb">
+          <div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">9:14 AM</span></div>
+          <div class="tx">Pinned. Every task the fleet ships renders on <b>design system v3</b> — crit will grade against it. Logged as a constraint on the brief.</div>
+          <div class="ccard"><div class="okline"><svg style="width:13px"><use href="#i-check"/></svg>Constraint added — brief v6 → <b>v7</b> · "UI pinned to design system v3"</div></div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <span class="mav" style="background:#5a6577">AR</span>
+        <div class="mb">
+          <div class="mh"><span class="mn">A. Reyes</span><span class="tag guest">Northwind · guest</span><span class="mt">9:31 AM</span></div>
+          <div class="tx">Reviewed the draft with our ops lead. One concern — the <b>go-live date</b> is contractual with TotalEnergies. Nine days of build is fine, but what's the slack if something slips?</div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span>
+        <div class="mb">
+          <div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">9:32 AM</span></div>
+          <div class="tx">Fair question. The plan is <b>parity-first</b> — the riskiest proof runs in week 1, not at the end, so a slip surfaces in days, not at the deadline. From the call:</div>
+          <div class="quoteline">"we can't miss the TotalEnergies window — that date is fixed."<span class="src">discovery-call.vtt · 31:12 · A. Reyes</span></div>
+          <div class="tx" style="margin-top:6px">Current buffer: <b>4 business days</b> between projected ship and the contract date.</div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <span class="mav" style="background:#1a2230">S</span>
+        <div class="mb">
+          <div class="mh"><span class="mn">Steve</span><span class="mt">9:40 AM</span></div>
+          <div class="tx"><span class="mention">@Taikun</span> make it 2 weeks total — I want more buffer for Adriana.</div>
+        </div>
+      </div>
+
+      <div class="msg" id="diffMsg">
+        <span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span>
+        <div class="mb">
+          <div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">9:40 AM</span></div>
+          <div class="tx">Doable without cutting scope — parallelize <b>DATA-7</b> with INT-1/2 on one extra runner. Parity gate unchanged. Here's the re-plan as a redline:</div>
+          <div class="ccard" id="diffCard">
+            <div class="ch"><span class="k">Proposed change · edits the brief</span><span class="grow"></span><span class="vchip">v7 → v8</span></div>
+            <div class="redline"><s>~9 days · $3.4k · 3 waves</s> → <mark>~6 days · $3.7k · 2 waves</mark> · buffer becomes <b>7 days</b></div>
+            <div class="cact"><button id="pushBack">Push back</button><button class="ap" id="applyBtn">Apply → v8</button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="typing" id="typing" style="display:none"><span class="dots"><i></i><i></i><i></i></span>Taikun is re-checking the plan…</div>
+    </div>
+
+    <div class="comp">
+      <div class="compbox">
+        <input class="compin" id="compIn" placeholder="Message #northwind-energy · scope — @Taikun re-plans, redlines, and re-prices as you type">
+        <div class="comptools">
+          <button class="ct" title="Attach">+</button>
+          <button class="ct" title="Mention">@</button>
+          <button class="ct" title="Emoji">☺</button>
+          <span class="slash">try <b>/scope</b> · <b>/price</b> · <b>/plan</b> · <b>/deck</b></span>
+          <button class="sendb" id="sendBtn"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+      <div class="comphint">Chat is the tool — every applied change becomes a brief version. Nothing runs until you kick off.</div>
+    </div>
+  </main>
+
+  <!-- ============ right: the living brief ============ -->
+  <aside class="canvas" id="canvas">
+    <div class="canhead">
+      <svg style="width:15px;color:var(--ink-3)"><use href="#i-doc"/></svg>
+      <span class="t">The brief — SSO &amp; Identity</span>
+      <span class="vchip" id="vchipC">v7</span>
+      <span class="grow"></span>
+      <button class="hbtn" style="padding:4px 9px">Present deck</button>
+      <button class="hbtn" id="canClose" style="padding:4px 8px">✕</button>
+    </div>
+    <div class="canscroll">
+      <div class="doc">
+        <div class="dsec">
+          <div class="k">What we're doing, and why</div>
+          <p>This isn't a login problem — it's a <mark class="hl">go-live problem</mark>. Operators sign in with <b>Entra/SAML</b>, auto-provisioned, gated on <b>CI parity</b> from week one. <span class="cm res" title="thread · resolved v2">Okta stays as a silent fallback.</span></p>
+        </div>
+        <div class="dstat" id="dealRow">
+          <div><div class="n" id="dCost">$3.4k<small> est</small></div><div class="l">agent cost</div></div>
+          <div><div class="n" id="dDays">~9 days</div><div class="l">autopilot</div></div>
+          <div><div class="n" id="dBuf">4 days</div><div class="l">buffer to contract</div></div>
+        </div>
+        <div class="dsec">
+          <div class="k">How you'll know it's done</div>
+          <div class="dl"><span class="ck">✓</span><span>≥95% sign-in success · zero manual provisioning · MTTA ≤ 15m</span></div>
+          <div class="dl"><span class="ck">✓</span><span>CI parity green vs. Helm baseline · Okta fallback verified</span></div>
+          <div class="dl"><span class="ck">✓</span><span>Everything on <b>design system v3</b> · every task a merged PR</span></div>
+        </div>
+        <div class="dsec">
+          <div class="k">The plan · 21 tasks · <span id="dWaves">2 waves</span></div>
+          <div class="mrow2"><span class="pill">M1</span>Define shared contract · 3 tasks</div>
+          <div class="mrow2"><span class="pill">M2</span>Build core implementation · 9 tasks</div>
+          <div class="mrow2"><span class="pill">M3</span>Integrate cross-board · 5 tasks</div>
+          <div class="mrow2"><span class="pill">M4</span>Prove parity &amp; ship · 4 tasks</div>
+        </div>
+        <div class="dsec" style="font-size:11px;color:var(--ink-3)">Priced from <b style="color:var(--ink-2)">your ledger</b> — median of 14 similar shipped tasks · SOW $48k signed · every version above came from this chat.</div>
+      </div>
+      <button class="kick" id="kickC"><svg><use href="#i-bolt"/></svg>Kick off — dispatch wave 1</button>
+      <div class="kicknote">4 tasks start in parallel · you can steer or pause any agent mid-flight</div>
+      <div class="canfoot">This document rewrites itself as the chat decides things — v1 → v7 so far.</div>
+    </div>
+  </aside>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  // ===== login =====
+  var login=document.getElementById('login');
+  document.querySelectorAll('.lbtn').forEach(function(b){ b.addEventListener('click',function(){ login.classList.add('off'); }); });
+
+  var toastEl=document.getElementById('toast'), tmr=null;
+  function toast(m){ toastEl.textContent=m; toastEl.classList.add('on'); clearTimeout(tmr); tmr=setTimeout(function(){ toastEl.classList.remove('on'); },3400); }
+
+  // ===== canvas toggle =====
+  var app=document.getElementById('app');
+  document.getElementById('canToggle').addEventListener('click',function(){ app.classList.toggle('nocanvas'); });
+  document.getElementById('canClose').addEventListener('click',function(){ app.classList.add('nocanvas'); });
+
+  // ===== the apply moment: chat decision → document updates =====
+  var chat=document.getElementById('chat'), typing=document.getElementById('typing');
+  function aiMsg(html){
+    var d=document.createElement('div'); d.className='msg';
+    d.innerHTML='<span class="mav" style="background:linear-gradient(150deg,var(--primary),#7d1d12)">T</span><div class="mb"><div class="mh"><span class="mn">Taikun</span><span class="tag ai">AI</span><span class="mt">now</span></div>'+html+'</div>';
+    chat.insertBefore(d, typing); chat.scrollTop=chat.scrollHeight; return d;
+  }
+  function youMsg(text){
+    var d=document.createElement('div'); d.className='msg';
+    d.innerHTML='<span class="mav" style="background:#1a2230">S</span><div class="mb"><div class="mh"><span class="mn">Steve</span><span class="mt">now</span></div><div class="tx">'+text+'</div></div>';
+    chat.insertBefore(d, typing); chat.scrollTop=chat.scrollHeight;
+  }
+  function think(then){ typing.style.display='flex'; chat.scrollTop=chat.scrollHeight; setTimeout(function(){ typing.style.display='none'; then(); },900); }
+
+  var briefV=7;
+  function setV(){ document.getElementById('vchipH').textContent='v'+briefV; document.getElementById('vchipC').textContent='v'+briefV; }
+  document.getElementById('applyBtn').addEventListener('click',function(){
+    briefV=8; setV();
+    document.getElementById('diffCard').innerHTML='<div class="okline"><svg style="width:13px"><use href="#i-check"/></svg>Applied — brief v7 → <b>v8</b> · ~6 days · $3.7k · buffer 7 days</div>';
+    app.classList.remove('nocanvas');
+    document.getElementById('dCost').innerHTML='$3.7k<small> est</small>';
+    document.getElementById('dDays').textContent='~6 days';
+    document.getElementById('dBuf').textContent='7 days';
+    document.getElementById('dWaves').textContent='2 waves';
+    var row=document.getElementById('dealRow'); row.classList.add('flash'); setTimeout(function(){ row.classList.remove('flash'); },1400);
+    aiMsg('<div class="tx">Applied. The brief is at <b>v8</b> — Adriana\'s buffer is now <b>7 business days</b>. I\'ll re-present the kickoff deck from v8; nothing dispatches until you kick off.</div>');
+  });
+  document.getElementById('pushBack').addEventListener('click',function(){
+    document.getElementById('diffCard').innerHTML='<div class="okline" style="color:var(--ink-3)">Discarded — Taikun asked for the real constraint instead.</div>';
+    aiMsg('<div class="tx">Dropped it. What\'s the actual constraint — budget ceiling, or the date? I\'ll re-plan around whichever is load-bearing.</div>');
+  });
+
+  // ===== composer =====
+  var compIn=document.getElementById('compIn');
+  function send(){
+    var v=compIn.value.trim(); if(!v) return; compIn.value='';
+    youMsg(v.replace(/@taikun/ig,'<span class="mention">@Taikun</span>'));
+    var low=v.toLowerCase();
+    think(function(){
+      if(low.indexOf('scim')>-1){ aiMsg('<div class="tx"><b>SCIM</b> adds ~5 tasks and ~1 week; estimate ~$4.3k. Deferring keeps v1 tight — say <b>include</b> or <b>defer</b> and I\'ll fold it in as the next version.</div>'); }
+      else if(low.indexOf('/deck')>-1 || low.indexOf('deck')>-1){ aiMsg('<div class="tx">Kickoff deck rebuilt from brief v'+briefV+' — 6 slides, client-ready. It always matches the live brief.</div>'); }
+      else if(low.indexOf('/price')>-1 || low.indexOf('price')>-1 || low.indexOf('cost')>-1){ aiMsg('<div class="tx">21 tasks × the <b>median of your last 14 similar shipped tasks</b> ($162/outcome, each a merged PR) + the high-tier premium on identity work. Balanced tier would be ~$2.9k — but auth code is where careful pays.</div>'); }
+      else{ aiMsg('<div class="tx">Drafting that as a redline against brief v'+briefV+' — you\'ll get an Apply card here, and the document on the right updates the moment you accept.</div>'); }
+    });
+  }
+  document.getElementById('sendBtn').addEventListener('click',send);
+  compIn.addEventListener('keydown',function(e){ if(e.key==='Enter') send(); });
+
+  // ===== kickoff =====
+  function kick(){ toast('⚡ Wave 1 dispatched — SEN-7 · DATA-3 · QA-2 · parity gate in parallel. Watch them in #northwind-energy › build.'); }
+  document.getElementById('kickH').addEventListener('click',kick);
+  document.getElementById('kickC').addEventListener('click',kick);
+
+  // resolved-thread tap on the doc
+  document.querySelectorAll('.cm').forEach(function(c){ c.addEventListener('click',function(){ toast('Thread · resolved v2 — "Okta must stay" per the call at 12:40, folded into the plan.'); }); });
+})();
+</script>
+</body>
+</html>

@@ -704,9 +704,12 @@
                     securityLevel: 'strict',
                     theme: 'neutral',
                     layout,
+                    // UI-32: house type — nodes measured at 12px so the map reads
+                    // like the app, not a poster; spacing tightened to match.
+                    themeVariables: { fontSize: '12px', fontFamily: "'Inter Var','Inter',-apple-system,sans-serif" },
                     flowchart: {
                         useMaxWidth: false, htmlLabels: true, curve: 'linear',
-                        nodeSpacing: 45, rankSpacing: 70, padding: 14,
+                        nodeSpacing: 22, rankSpacing: 42, padding: 8,
                         subGraphTitleMargin: { top: 6, bottom: 10 },
                     },
                 });

@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Shaping on mobile — the brief reacts to your words</title>
+<style>
+*,*::before,*::after{ box-sizing:border-box; } body{ margin:0; } svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+:root{
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --primary:#c0392b; --primary-rgb:192,57,43; --green:#2fb344; --green-rgb:47,179,68; --orange:#f76707; --orange-rgb:247,103,7;
+  --ink:#1a2230; --ink-2:#5a6577; --ink-3:#8b95a5; --card:#fff; --hair:#e6e9ef; --hair-2:#eff1f4; --chip:#f1f3f6; --bg:#f8f9fb;
+}
+body{ font-family:var(--ui); background:#eef0f4; color:var(--ink); -webkit-font-smoothing:antialiased; letter-spacing:-.008em;
+  min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:16px; padding:26px 14px 44px; }
+.page-h{ text-align:center; max-width:560px; }
+.page-h .ey{ font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--primary); font-weight:600; }
+.page-h h1{ font-size:22px; font-weight:720; letter-spacing:-.02em; margin:6px 0 4px; }
+.page-h p{ color:var(--ink-2); font-size:13.5px; margin:0; }
+.mono{ font-family:var(--mono); }
+.phone{ width:378px; border-radius:52px; padding:11px; background:linear-gradient(160deg,#24262c,#0e0f12 60%); box-shadow:0 2px 6px rgba(16,24,40,.06),0 30px 70px -20px rgba(16,24,40,.5); }
+.screen{ position:relative; border-radius:42px; overflow:hidden; background:var(--bg); height:800px; display:flex; flex-direction:column; }
+.island{ position:absolute; top:11px; left:50%; transform:translateX(-50%); width:112px; height:30px; background:#000; border-radius:20px; z-index:40; }
+.sb{ height:50px; flex:0 0 auto; display:flex; align-items:flex-end; justify-content:space-between; padding:0 26px 7px; font-size:13px; font-weight:650; background:var(--card); }
+.top{ display:flex; align-items:center; gap:9px; padding:6px 16px 11px; background:var(--card); border-bottom:1px solid var(--hair); flex:0 0 auto; }
+.mk2{ width:28px; height:28px; border-radius:8px; background:linear-gradient(150deg,var(--primary),#8e2018); color:#fff; display:grid; place-items:center; font-weight:800; font-size:10.5px; flex:0 0 auto; }
+.top .t{ font-weight:700; font-size:14.5px; } .top .s{ font-family:var(--mono); font-size:10px; color:var(--ink-3); }
+.vchip{ font-family:var(--mono); font-size:10px; font-weight:700; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:6px; padding:1px 7px; margin-left:auto; }
+.receiptbar{ display:none; align-items:center; gap:7px; padding:8px 16px; background:rgba(var(--green-rgb),.09); border-bottom:1px solid var(--hair); font-size:11.5px; color:var(--green); font-weight:600; }
+.receiptbar.on{ display:flex; }
+.scroll{ flex:1; overflow:auto; padding:14px 16px 90px; scroll-behavior:smooth; }
+.needsh{ font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--orange); margin:2px 0 8px; }
+.call{ display:flex; flex-direction:column; gap:9px; background:var(--card); border:1px solid var(--hair); border-left:3px solid var(--orange); border-radius:12px; padding:12px 14px; margin-bottom:12px; }
+.call .q{ font-size:13px; } .call .q b{ font-weight:650; }
+.call .opts{ display:flex; gap:7px; } .opt{ flex:1; font-size:12.5px; font-weight:600; padding:8px; border-radius:9px; border:1px solid var(--hair); color:var(--ink-2); text-align:center; }
+.opt.pick{ background:var(--ink); color:var(--card); border-color:var(--ink); }
+.brief{ background:var(--card); border:1px solid var(--hair); border-radius:15px; box-shadow:0 1px 2px rgba(16,24,40,.04); overflow:hidden; }
+.sec{ position:relative; padding:15px 16px; } .sec + .sec{ border-top:1px solid var(--hair-2); }
+.sec .k{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:6px; }
+.sec p{ margin:0; font-size:13.5px; line-height:1.55; } .sec p b{ font-weight:650; }
+mark{ background:linear-gradient(transparent 62%, rgba(var(--orange-rgb),.25) 62%); color:inherit; padding:0; }
+.dots3{ position:absolute; top:12px; right:12px; width:26px; height:26px; border-radius:8px; display:grid; place-items:center; color:var(--ink-3); font-weight:800; letter-spacing:1px; font-size:13px; }
+.dots3:active{ background:var(--chip); }
+.deal{ display:grid; grid-template-columns:repeat(3,1fr); }
+.deal>div{ padding:13px 14px; } .deal>div+div{ border-left:1px solid var(--hair-2); }
+.deal .n{ font-size:17px; font-weight:730; letter-spacing:-.02em; } .deal .n small{ font-size:11px; font-weight:500; color:var(--ink-2); }
+.deal .l{ font-family:var(--mono); font-size:8.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); margin-top:2px; }
+.basis{ padding:0 16px 13px; font-size:11px; color:var(--ink-3); } .basis b{ color:var(--ink-2); }
+.done{ padding:13px 16px; display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--hair-2); }
+.done .c{ display:flex; gap:9px; font-size:13px; } .done .c .ck{ width:18px; height:18px; border-radius:50%; background:rgba(var(--green-rgb),.13); color:var(--green); display:grid; place-items:center; flex:0 0 auto; margin-top:1px; font-size:10px; }
+.redl s{ color:var(--ink-3); font-weight:400; } .redl mark{ background:rgba(var(--green-rgb),.22); border-radius:3px; }
+.flash{ animation:fb 1.4s; } @keyframes fb{ 0%{ background:rgba(var(--green-rgb),.18);} 100%{ background:transparent;} }
+/* composer */
+.dock{ position:absolute; left:0; right:0; bottom:0; background:color-mix(in srgb,var(--card) 94%,transparent); backdrop-filter:blur(10px); border-top:1px solid var(--hair); padding:9px 12px 22px; z-index:30; }
+.chips{ display:flex; gap:6px; margin-bottom:8px; overflow-x:auto; }
+.chip{ flex:0 0 auto; font-size:11.5px; font-weight:600; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:999px; padding:5px 12px; }
+.chip.hot{ color:var(--primary); border-color:rgba(var(--primary-rgb),.35); background:rgba(var(--primary-rgb),.05); }
+.cbox{ display:flex; gap:8px; align-items:center; }
+.in{ flex:1; background:var(--bg); border:1px solid var(--hair); border-radius:12px; padding:10px 13px; color:var(--ink-3); font-size:12.5px; }
+.snd{ width:36px; height:36px; border-radius:10px; background:var(--primary); color:#fff; display:grid; place-items:center; flex:0 0 auto; font-size:14px; }
+/* bottom sheets */
+.scrim{ position:absolute; inset:0; background:rgba(12,17,26,.38); opacity:0; pointer-events:none; transition:opacity .2s; z-index:45; }
+.scrim.on{ opacity:1; pointer-events:auto; }
+.bsheet{ position:absolute; left:0; right:0; bottom:0; background:var(--card); border-radius:22px 22px 0 0; box-shadow:0 -18px 50px -18px rgba(10,16,28,.5); transform:translateY(105%); transition:transform .24s; padding:14px 18px 30px; z-index:50; }
+.bsheet.on{ transform:none; }
+.grab{ width:44px; height:5px; border-radius:99px; background:var(--hair); margin:0 auto 14px; }
+.bsheet .bt{ font-weight:650; font-size:14px; margin-bottom:3px; } .bsheet .bq{ font-size:12px; color:var(--ink-3); font-style:italic; margin-bottom:12px; }
+.mrow{ display:flex; align-items:center; gap:11px; padding:13px 4px; font-size:14.5px; font-weight:600; border-top:1px solid var(--hair-2); }
+.mrow:first-of-type{ border-top:0; } .mrow .mi{ width:30px; height:30px; border-radius:9px; background:var(--chip); display:grid; place-items:center; font-size:14px; }
+.tmsg{ display:flex; gap:9px; font-size:13px; line-height:1.5; } .tmsg + .tmsg{ margin-top:9px; }
+.tav{ width:24px; height:24px; border-radius:7px; background:linear-gradient(150deg,var(--primary),#8e2018); color:#fff; display:grid; place-items:center; font-size:10px; font-weight:700; flex:0 0 auto; }
+.diffcard{ border:1px dashed var(--hair); background:var(--chip); border-radius:12px; padding:12px 13px; margin-top:12px; font-size:13px; }
+.diffcard .dh{ font-size:9.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--orange); margin-bottom:6px; }
+.diffcard s{ color:var(--ink-3); } .diffcard mark{ background:rgba(var(--green-rgb),.22); border-radius:3px; padding:0 2px; }
+.bigapply{ display:flex; gap:8px; margin-top:14px; }
+.bigapply button{ flex:1; font-size:14px; font-weight:650; padding:13px; border-radius:13px; border:1px solid var(--hair); background:var(--card); color:var(--ink); }
+.bigapply .ap{ background:var(--primary); color:#fff; border-color:var(--primary); box-shadow:0 2px 12px rgba(var(--primary-rgb),.3); }
+.homebar{ position:absolute; bottom:8px; left:50%; transform:translateX(-50%); width:128px; height:5px; border-radius:999px; background:#111; opacity:.22; z-index:60; }
+.hint{ text-align:center; color:var(--ink-3); font-size:12px; max-width:380px; } .hint b{ color:var(--primary); }
+/* collaboration parity with web */
+.seg{ display:flex; gap:2px; background:var(--chip); border-radius:10px; padding:3px; margin:10px 16px 0; flex:0 0 auto; }
+.seg button{ flex:1; font-size:12px; font-weight:650; padding:6px 0; border-radius:8px; color:var(--ink-3); }
+.seg button.on{ background:var(--card); color:var(--ink); box-shadow:0 1px 2px rgba(16,24,40,.08); }
+.seg button .ct{ font-size:10px; color:var(--orange); }
+.cm{ background:rgba(var(--orange-rgb),.14); box-shadow:inset 0 -2px 0 rgba(var(--orange-rgb),.55); border-radius:2px; padding:0 1px; }
+.cm.res{ background:transparent; box-shadow:inset 0 -2px 0 var(--hair); }
+.ed:focus{ outline:none; background:rgba(32,107,196,.05); box-shadow:inset 2.5px 0 0 #206bc4; border-radius:4px; }
+.sug ins{ text-decoration:none; background:rgba(var(--green-rgb),.16); box-shadow:inset 0 -2px 0 rgba(var(--green-rgb),.5); border-radius:2px; }
+.sugact{ display:inline-flex; gap:5px; margin-left:6px; vertical-align:middle; }
+.sugact button{ width:24px; height:24px; border-radius:7px; border:1px solid var(--hair); background:var(--card); font-size:11px; display:grid; place-items:center; box-shadow:0 1px 2px rgba(16,24,40,.06); }
+.sugact .ok{ color:var(--green); border-color:rgba(var(--green-rgb),.4); } .sugact .no{ color:var(--ink-3); }
+.trow{ display:block; width:100%; text-align:left; background:var(--card); border:1px solid var(--hair); border-radius:13px; padding:12px 14px; margin-bottom:9px; }
+.trow .qt{ font-size:13px; font-weight:650; display:flex; gap:8px; } .trow .qt .tdot{ width:7px; height:7px; border-radius:50%; background:var(--orange); flex:0 0 auto; margin-top:5px; }
+.trow.res .qt .tdot{ background:var(--green); }
+.trow .ms{ font-size:12px; color:var(--ink-2); margin-top:3px; padding-left:15px; }
+.trow .mt{ font-family:var(--mono); font-size:9.5px; color:var(--ink-3); margin-top:4px; padding-left:15px; }
+.vrow{ display:flex; gap:9px; padding:10px 2px; border-bottom:1px solid var(--hair-2); font-size:12.5px; align-items:flex-start; background:none; width:100%; text-align:left; }
+.vrow .vchip{ margin-left:0; flex:0 0 auto; margin-top:1px; }
+.tf{ display:flex; gap:8px; margin-top:14px; }
+.tf input{ flex:1; background:var(--bg); border:1px solid var(--hair); border-radius:11px; padding:10px 12px; font:inherit; font-size:13px; color:var(--ink); outline:none; min-width:0; }
+.tf button{ width:38px; height:38px; border-radius:11px; background:var(--primary); color:#fff; display:grid; place-items:center; flex:0 0 auto; }
+.pdot{ width:8px; height:8px; border-radius:50%; background:var(--green); position:absolute; right:-1px; bottom:-1px; border:2px solid var(--card); }
+.tstack{ position:relative; width:24px; height:24px; border-radius:7px; background:linear-gradient(150deg,var(--primary),#8e2018); color:#fff; display:grid; place-items:center; font-size:9.5px; font-weight:700; flex:0 0 auto; }
+</style>
+</head>
+<body>
+<div class="page-h">
+  <div class="ey">Switchboard mobile · the shaping loop</div>
+  <h1>The brief reacts to your words</h1>
+  <p>Tap text to edit it. Tap a highlight to open its thread. Tap <b>"make it 2 weeks"</b> — the number redlines, Apply floats above your thumb.</p>
+</div>
+
+<div class="phone"><div class="island"></div><div class="screen">
+  <div class="sb"><span>9:41</span><span style="font-family:var(--mono);font-size:11px;color:#8a95a3">●●●</span></div>
+  <div class="top"><span class="mk2">NE</span><div><div class="t">SSO &amp; Identity Platform</div><div class="s">Shape · from your discovery call</div></div><span class="tstack" title="Taikun is in the doc">T<span class="pdot"></span></span><span class="vchip" id="vchip">brief v7</span></div>
+  <div class="receiptbar" id="receiptBar">✓ Applied — brief v8 · compressed to ~6 days, +$0.3k <span style="margin-left:auto;color:var(--primary);font-weight:600" id="undoBtn">undo</span></div>
+  <div class="seg" id="seg">
+    <button class="on" data-tab="doc">Doc</button>
+    <button data-tab="threads">Threads <span class="ct" id="thCt">· 1</span></button>
+    <button data-tab="versions">Versions</button>
+  </div>
+
+  <div class="scroll" id="scroll">
+   <div id="tab-doc">
+    <div class="needsh">Needs you · 1</div>
+    <div class="call"><div class="q"><b>SCIM provisioning</b> — mentioned in passing. Adds ~5 tasks and a week.</div><div class="opts"><button class="opt pick">Defer</button><button class="opt">Include</button></div></div>
+
+    <div class="brief">
+      <div class="sec"><button class="dots3" data-menu="the framing">⋯</button>
+        <div class="k">What we're doing, and why · <span style="color:var(--ink-3);text-transform:none;letter-spacing:0">tap text to edit</span></div>
+        <p class="ed" contenteditable="true" spellcheck="false" data-sec="the framing">This isn't a login problem — it's a <mark>go-live problem</mark>. Sign in with <b>Entra/SAML</b>, auto-provisioned, gated on <b>CI parity</b> — proven from week one. <span class="cm res" data-th="okta">Okta stays as a silent fallback.</span></p>
+      </div>
+      <div class="deal" id="dealRow">
+        <div><div class="n" id="dealCost"><span class="cm" data-th="cost">$3.4k</span><small> est</small></div><div class="l">agent cost</div></div>
+        <div><div class="n" id="dealDays">~9 days</div><div class="l">autopilot</div></div>
+        <div><div class="n">21<small> tasks</small></div><div class="l">2 waves</div></div>
+      </div>
+      <div class="basis">Priced from <b>your ledger</b> — median of 14 similar shipped tasks. Not a vibe.</div>
+      <div class="done">
+        <div class="c"><span class="ck">✓</span><span><span class="ed" contenteditable="true" spellcheck="false" data-sec="acceptance">≥95% sign-in · zero manual provisioning</span><span class="sug" id="sugMtta"><ins>&nbsp;· MTTA ≤ 15m</ins></span><span class="sugact" id="sugAct"><button class="ok">✓</button><button class="no">✕</button></span></span></div>
+        <div class="c"><span class="ck">✓</span><span>Parity green · Okta fallback verified</span></div>
+        <div class="c"><span class="ck">✓</span><span>Every task merged &amp; tested — <b>done means merged</b></span></div>
+      </div>
+      <div class="sec"><button class="dots3" data-menu="the plan">⋯</button>
+        <div class="k">The plan · 4 milestones · 2 waves</div>
+        <p style="font-size:12.5px;color:var(--ink-2)">Contract → core build → integrate → prove parity &amp; ship. Wave 1 runs four tasks in parallel at kickoff; <b>SEN-6</b> is the keystone that opens wave 2.</p>
+      </div>
+    </div>
+    <div style="text-align:center;font-size:11.5px;color:var(--ink-3);margin-top:14px">Nothing runs until you kick off.</div>
+   </div>
+
+   <div id="tab-threads" style="display:none">
+    <button class="trow" data-th="cost"><span class="qt"><span class="tdot"></span>"Why $3.4k?" — on the estimate</span><span class="ms">Taikun: median of your last 14 shipped tasks + high-tier premium…</span><span class="mt">you · 14m · 2 replies</span></button>
+    <button class="trow res" data-th="okta"><span class="qt"><span class="tdot"></span>"Does Okta really have to stay?"</span><span class="ms">Resolved — fallback kept per the call at 12:40 · applied as v2.</span><span class="mt">resolved · v2</span></button>
+    <div style="text-align:center;font-size:11.5px;color:var(--ink-3);margin-top:10px">Highlighted text in the doc = a thread. Tap it there, or here.</div>
+   </div>
+
+   <div id="tab-versions" style="display:none">
+    <div class="vrow"><span class="vchip">v7</span><span>Tier call: <b>high-reasoning</b> for identity work. Ready for kickoff.</span></div>
+    <div class="vrow"><span class="vchip">v6</span><span>Re-priced from the ledger after re-sequencing — $3.6k → $3.4k.</span></div>
+    <div class="vrow"><span class="vchip">v5</span><span>You: "prove parity early" → parity gate pulled into wave 1.</span></div>
+    <div class="vrow"><span class="vchip">v4</span><span>Direction chosen: <b>Parity-First</b> · ADR recorded.</span></div>
+    <div class="vrow"><span class="vchip">v3</span><span>SCIM raised by Taikun → you deferred it. Logged as a decision.</span></div>
+    <div class="vrow"><span class="vchip">v2</span><span>You: "Okta must stay" → fallback folded into the plan (+1 task).</span></div>
+    <div class="vrow" style="border-bottom:0"><span class="vchip">v1</span><span>Assembled from <b>discovery-call.vtt</b> — outcome, constraints, plan, estimate.</span></div>
+    <div style="text-align:center;font-size:11.5px;color:var(--ink-3);margin-top:10px">Every version is one applied change — review diffs, not the whole doc.</div>
+   </div>
+  </div>
+
+  <!-- composer -->
+  <div class="dock">
+    <div class="chips">
+      <button class="chip hot" id="chipWeeks">make it 2 weeks</button>
+      <button class="chip" id="chipWhy">why $3.4k?</button>
+      <button class="chip">drop the fallback</button>
+    </div>
+    <div class="cbox"><div class="in">Change anything by saying it…</div><button class="snd">➤</button></div>
+  </div>
+
+  <!-- sheets -->
+  <div class="scrim" id="scrim"></div>
+  <div class="bsheet" id="bsMenu"><div class="grab"></div>
+    <div class="bt" id="menuTitle">This section</div><div class="bq">anchored to the brief · v7</div>
+    <div class="mrow" data-act="ask"><span class="mi">💬</span>Ask about this</div>
+    <div class="mrow" data-act="why"><span class="mi">🧭</span>Why is this here?</div>
+    <div class="mrow" data-act="change"><span class="mi">✏️</span>Change it</div>
+  </div>
+  <div class="bsheet" id="bsThread"><div class="grab"></div>
+    <div class="bt" id="thTitle">Why is this here?</div><div class="bq" id="thQuote">"the framing"</div>
+    <div id="thBody"></div>
+    <div class="tf"><input id="thReply" placeholder="Reply — Taikun answers in-thread"><button id="thSend">➤</button></div>
+  </div>
+  <div class="bsheet" id="bsDiff"><div class="grab"></div>
+    <div class="bt">Compress to 2 weeks</div><div class="bq">Taikun re-planned it live — nothing cut</div>
+    <div class="tmsg"><span class="tav">T</span><div>Parallelize <b>DATA-7</b> with INT-1/2 on one extra runner. Parity unchanged.</div></div>
+    <div class="diffcard"><div class="dh">Proposed · re-plan</div><div><s>~9 days · $3.4k</s> → <mark>~6 days · $3.7k</mark> · 3 waves → 2</div></div>
+    <div class="bigapply"><button id="diffBack">Push back</button><button class="ap" id="diffApply">Apply → v8</button></div>
+  </div>
+  <div class="homebar"></div>
+</div></div>
+<div class="hint">Same objects as web — threads, diff cards, versions — with thumb ergonomics: <b>everything answers in a bottom sheet</b>.</div>
+
+<script>
+(function(){
+  var scrim=document.getElementById('scrim');
+  function open(id){ closeAll(); scrim.classList.add('on'); document.getElementById(id).classList.add('on'); }
+  function closeAll(){ scrim.classList.remove('on'); document.querySelectorAll('.bsheet').forEach(function(s){ s.classList.remove('on'); }); }
+  scrim.addEventListener('click',closeAll);
+  // section menus
+  var menuCtx='';
+  document.querySelectorAll('.dots3').forEach(function(d){ d.addEventListener('click',function(){ menuCtx=d.dataset.menu;
+    document.getElementById('menuTitle').textContent='This section — '+menuCtx; open('bsMenu'); }); });
+  var REPLIES={
+    ask:'<div class="tmsg"><span class="tav">T</span><div>This traces to the <b>discovery call</b> and the signed SOW — it\'s load-bearing for the go-live date. Want it looser? I\'ll show you what it costs.</div></div>',
+    why:'<div class="tmsg"><span class="tav">T</span><div>Because of the client\'s constraint at 12:40 in the call — and it\'s wired into acceptance, so changing it changes what <b>done</b> means. Say the word and I\'ll draft the diff.</div></div>',
+    change:'<div class="tmsg"><span class="tav">T</span><div>Tell me the change in the composer — I\'ll come back with a redline you can apply with one tap.</div></div>'
+  };
+  document.querySelectorAll('#bsMenu .mrow').forEach(function(r){ r.addEventListener('click',function(){
+    document.getElementById('thTitle').textContent=r.textContent.trim();
+    document.getElementById('thQuote').textContent='"'+menuCtx+'" · anchored thread';
+    document.getElementById('thBody').innerHTML=REPLIES[r.dataset.act];
+    open('bsThread');
+  }); });
+  // why $3.4k chip
+  document.getElementById('chipWhy').addEventListener('click',function(){
+    document.getElementById('thTitle').textContent='Why $3.4k?';
+    document.getElementById('thQuote').textContent='"$3.4k est" · the estimate';
+    document.getElementById('thBody').innerHTML='<div class="tmsg"><span class="tav">T</span><div>21 tasks × the <b>median of your last 14 similar shipped tasks</b> ($162/outcome, each proven with a merged PR), plus the high-tier premium on identity work. Balanced tier would be ~$2.9k — but auth code is where careful pays.</div></div>';
+    open('bsThread');
+  });
+  // the reaction moment
+  var old=null;
+  document.getElementById('chipWeeks').addEventListener('click',function(){
+    var days=document.getElementById('dealDays');
+    old={d:days.innerHTML,c:document.getElementById('dealCost').innerHTML};
+    days.scrollIntoView({block:'center',behavior:'smooth'});
+    days.classList.add('redl'); days.innerHTML='<s>~9d</s> <mark>~6d</mark>';
+    setTimeout(function(){ open('bsDiff'); },500);
+  });
+  document.getElementById('diffApply').addEventListener('click',function(){
+    document.getElementById('dealDays').innerHTML='~6 days';
+    document.getElementById('dealCost').innerHTML='$3.7k<small> est</small>';
+    document.getElementById('vchip').textContent='brief v8';
+    var row=document.getElementById('dealRow'); row.classList.add('flash'); setTimeout(function(){ row.classList.remove('flash'); },1400);
+    document.getElementById('receiptBar').classList.add('on');
+    closeAll();
+  });
+  document.getElementById('diffBack').addEventListener('click',function(){
+    if(old){ document.getElementById('dealDays').innerHTML=old.d; document.getElementById('dealDays').classList.remove('redl'); document.getElementById('dealCost').innerHTML=old.c; }
+    closeAll();
+  });
+  document.getElementById('undoBtn').addEventListener('click',function(){
+    if(old){ document.getElementById('dealDays').innerHTML=old.d; document.getElementById('dealDays').classList.remove('redl'); document.getElementById('dealCost').innerHTML=old.c; }
+    document.getElementById('vchip').textContent='brief v7';
+    document.getElementById('receiptBar').classList.remove('on');
+  });
+  // needs-you quick resolve
+  document.querySelectorAll('.call .opt').forEach(function(b){ b.addEventListener('click',function(){ b.closest('.opts').querySelectorAll('.opt').forEach(function(x){ x.classList.toggle('pick',x===b); }); }); });
+
+  // ===== tabs: Doc · Threads · Versions =====
+  document.querySelectorAll('#seg button').forEach(function(b){ b.addEventListener('click',function(){
+    document.querySelectorAll('#seg button').forEach(function(x){ x.classList.toggle('on', x===b); });
+    ['doc','threads','versions'].forEach(function(t){ document.getElementById('tab-'+t).style.display = b.dataset.tab===t? '' : 'none'; });
+    document.getElementById('scroll').scrollTop=0;
+  }); });
+
+  // ===== tappable highlights + thread list → same thread sheet =====
+  var TH={
+    cost:{ t:'"Why $3.4k?" — open', q:'anchored to the estimate', b:'<div class="tmsg"><span class="tav" style="background:#1a2230">S</span><div>Why $3.4k?</div></div><div class="tmsg"><span class="tav">T</span><div>21 tasks × the <b>median of your last 14 similar shipped tasks</b> ($162/outcome, each a merged PR), plus the high-tier premium on identity work. Balanced tier ~$2.9k — but auth code is where careful pays.</div></div>' },
+    okta:{ t:'"Does Okta really have to stay?" — resolved · v2', q:'anchored to the framing', b:'<div class="tmsg"><span class="tav" style="background:#1a2230">S</span><div>Does Okta really have to stay?</div></div><div class="tmsg"><span class="tav">T</span><div>From the call at 12:40 — <b>"it has to stay as a fallback."</b> Folded into the plan (+1 task) and acceptance. Applied as <b>v2</b>.</div></div>' }
+  };
+  function openTh(k){ var t=TH[k]; document.getElementById('thTitle').textContent=t.t;
+    document.getElementById('thQuote').textContent=t.q; document.getElementById('thBody').innerHTML=t.b; open('bsThread'); }
+  document.querySelectorAll('.cm[data-th],[data-th].trow').forEach(function(el){ el.addEventListener('click',function(e){ e.stopPropagation(); openTh(el.dataset.th); }); });
+
+  // thread reply composer
+  document.getElementById('thSend').addEventListener('click',function(){
+    var inp=document.getElementById('thReply'), v=inp.value.trim(); if(!v) return; inp.value='';
+    var body=document.getElementById('thBody');
+    body.insertAdjacentHTML('beforeend','<div class="tmsg"><span class="tav" style="background:#1a2230">S</span><div>'+v+'</div></div>');
+    setTimeout(function(){ body.insertAdjacentHTML('beforeend','<div class="tmsg"><span class="tav">T</span><div>Noted — say "apply" and I\'ll draft it as a redline you can tap to accept.</div></div>'); },550);
+  });
+
+  // ===== tap-to-edit — version bumps in the receipt bar =====
+  var mv=7, rb=document.getElementById('receiptBar');
+  function bump(why){ mv++; document.getElementById('vchip').textContent='brief v'+mv;
+    rb.innerHTML='✓ Saved — brief v'+mv+' · '+why+' <span style="margin-left:auto;color:var(--primary);font-weight:600">undo</span>'; rb.classList.add('on');
+    setTimeout(function(){ rb.classList.remove('on'); },3600); }
+  document.querySelectorAll('.ed[contenteditable]').forEach(function(el){
+    el.addEventListener('focus',function(){ el._was=el.innerHTML; });
+    el.addEventListener('blur',function(){ if(el._was!==undefined && el._was!==el.innerHTML) bump('you edited '+(el.dataset.sec||'the brief')+' — plan re-checked'); el._was=undefined; });
+  });
+
+  // ===== inline suggestion — accept / reject =====
+  var act=document.getElementById('sugAct');
+  if(act){ act.querySelector('.ok').addEventListener('click',function(){ document.getElementById('sugMtta').outerHTML=' · MTTA ≤ 15m'; act.remove(); bump('MTTA accepted into acceptance'); });
+    act.querySelector('.no').addEventListener('click',function(){ document.getElementById('sugMtta').remove(); act.remove(); }); }
+})();
+</script>
+</body>
+</html>

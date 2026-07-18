@@ -131,6 +131,17 @@ def apply_schema(c):
         CREATE UNIQUE INDEX IF NOT EXISTS ux_autopilot_scopes_live_target
             ON autopilot_scopes(profile_id, scope_type, deliverable_id, task_project, task_id)
             WHERE status IN ('active', 'paused');
+        -- UI-30: the kickoff record — server-side Scope gate approvals. Advisory
+        -- until enforcement lands; an empty table means nothing is approved.
+        CREATE TABLE IF NOT EXISTS kickoff_gates (
+            gate        TEXT PRIMARY KEY,
+            status      TEXT NOT NULL DEFAULT 'pending',
+            version     INTEGER NOT NULL DEFAULT 0,
+            approved_by TEXT NOT NULL DEFAULT '',
+            approved_at REAL,
+            note        TEXT NOT NULL DEFAULT '',
+            updated_at  REAL NOT NULL DEFAULT 0
+        );
         -- BUG-47: ledger for numbered additive migrations (db/migrations.py). One row per
         -- applied migration name; the runner uses it to skip already-applied migrations
         -- instead of relying on catch-all exception swallowing to detect "already done".

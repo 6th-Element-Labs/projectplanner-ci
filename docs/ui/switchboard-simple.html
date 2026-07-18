@@ -1,0 +1,1017 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard · Simple — Shape · Watch · Collect</title>
+<style>
+/* The anti-wizard. Three moments, one living brief, rituals as defaults.
+   Same live-Switchboard tokens; radically less chrome. */
+*,*::before,*::after{ box-sizing:border-box; } body{ margin:0; }
+svg{ display:block; } svg:not([width]){ width:1em; height:1em; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+:root{
+  --font:'Inter Var','Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --primary:#c0392b; --primary-rgb:192,57,43; --green:#2fb344; --green-rgb:47,179,68;
+  --orange:#f76707; --orange-rgb:247,103,7; --purple:#ae3ec9; --blue:#206bc4;
+  --ink:#1a2230; --ink-2:#5a6577; --ink-3:#8b95a5; --card:#fff; --canvas:#f8f9fb;
+  --hair:#e6e9ef; --hair-2:#eef0f4; --chip:#f1f3f6; --shadow:0 1px 2px rgba(20,30,50,.04),0 1px 3px rgba(20,30,50,.05);
+}
+@media (prefers-color-scheme:dark){ :root{ --ink:#e9ecf1;--ink-2:#9aa3b1;--ink-3:#6b7482;--card:#171a20;--canvas:#101216;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.055);--chip:#1c2029;--shadow:0 1px 2px rgba(0,0,0,.4);} }
+:root[data-theme="dark"]{ --ink:#e9ecf1;--ink-2:#9aa3b1;--ink-3:#6b7482;--card:#171a20;--canvas:#101216;--hair:rgba(255,255,255,.09);--hair-2:rgba(255,255,255,.055);--chip:#1c2029;--shadow:0 1px 2px rgba(0,0,0,.4); }
+:root[data-theme="light"]{ --ink:#1a2230;--ink-2:#5a6577;--ink-3:#8b95a5;--card:#fff;--canvas:#f8f9fb;--hair:#e6e9ef;--hair-2:#eef0f4;--chip:#f1f3f6; }
+body{ font-family:var(--font); color:var(--ink); background:var(--canvas); font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; letter-spacing:-.008em; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+/* top bar — minimal */
+.top{ position:sticky; top:0; z-index:20; background:color-mix(in srgb,var(--canvas) 88%,transparent); backdrop-filter:blur(10px); border-bottom:1px solid var(--hair); }
+.top .in{ max-width:720px; margin:0 auto; padding:14px 22px; display:flex; align-items:center; gap:12px; }
+.mk{ width:26px; height:26px; display:grid; place-items:center; color:var(--primary); } .mk svg{ width:24px; height:24px; }
+.lk{ font-size:13px; font-weight:500; letter-spacing:.1em; } .lk b{ font-weight:400; color:var(--primary); margin-left:.3em; }
+.top .grow{ flex:1; }
+.moments{ display:flex; gap:2px; background:var(--chip); border-radius:10px; padding:3px; }
+.moments button{ font-size:13px; font-weight:600; padding:6px 14px; border-radius:8px; color:var(--ink-3); }
+.moments button.on{ background:var(--card); color:var(--ink); box-shadow:var(--shadow); }
+.tbtn{ width:32px; height:32px; border-radius:8px; display:grid; place-items:center; color:var(--ink-3); } .tbtn svg{ width:16px; height:16px; }
+
+.page{ max-width:720px; margin:0 auto; padding:34px 22px 120px; }
+.view.hidden{ display:none; }
+.eyebrow{ font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; }
+h1{ font-size:27px; font-weight:730; letter-spacing:-.03em; margin:6px 0 4px; }
+.sub{ color:var(--ink-2); font-size:15px; margin:0; }
+
+/* needs-you strip — the ONLY loud thing on the page */
+.needs{ margin:26px 0 8px; }
+.needs .h{ font-size:12px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--orange); margin-bottom:10px; display:flex; align-items:center; gap:7px; }
+.call{ display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--hair); border-left:3px solid var(--orange); border-radius:12px; padding:13px 16px; box-shadow:var(--shadow); }
+.call + .call{ margin-top:9px; }
+.call .q{ flex:1; font-size:14.5px; } .call .q b{ font-weight:650; }
+.call .opts{ display:flex; gap:7px; flex:0 0 auto; }
+.opt{ font-size:13px; font-weight:600; padding:7px 13px; border-radius:9px; border:1px solid var(--hair); color:var(--ink-2); background:var(--card); }
+.opt.pick{ background:var(--ink); color:var(--card); border-color:var(--ink); }
+.allquiet{ display:flex; align-items:center; gap:9px; color:var(--green); font-size:14px; font-weight:600; margin:26px 0 8px; }
+.allquiet svg{ width:17px; height:17px; }
+
+/* the living brief */
+.brief{ background:var(--card); border:1px solid var(--hair); border-radius:16px; box-shadow:var(--shadow); margin-top:18px; overflow:hidden; }
+.sec{ padding:22px 24px; } .sec + .sec{ border-top:1px solid var(--hair-2); }
+.sec .k{ font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin-bottom:8px; }
+.sec p{ margin:0; font-size:15.5px; line-height:1.6; } .sec p b{ font-weight:650; }
+mark{ background:linear-gradient(transparent 62%, rgba(247,103,7,.25) 62%); color:inherit; padding:0; }
+.deal{ display:grid; grid-template-columns:repeat(3,1fr); gap:0; }
+.deal > div{ padding:18px 24px; } .deal > div + div{ border-left:1px solid var(--hair-2); }
+.deal .n{ font-size:22px; font-weight:730; letter-spacing:-.02em; } .deal .n small{ font-size:13px; font-weight:500; color:var(--ink-2); }
+.deal .l{ font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); margin-top:2px; }
+.done{ display:flex; flex-direction:column; gap:10px; }
+.done .c{ display:flex; gap:11px; align-items:flex-start; font-size:15px; }
+.done .c .ck{ width:21px; height:21px; border-radius:50%; background:rgba(var(--green-rgb),.13); color:var(--green); display:grid; place-items:center; flex:0 0 auto; margin-top:2px; } .done .c .ck svg{ width:12px; height:12px; }
+.done .foot{ font-size:12.5px; color:var(--ink-3); margin-top:2px; }
+
+/* collapsed depth — native details */
+details{ border-top:1px solid var(--hair-2); }
+details summary{ list-style:none; cursor:pointer; display:flex; align-items:center; gap:11px; padding:16px 24px; font-size:14.5px; font-weight:600; color:var(--ink-2); }
+details summary::-webkit-details-marker{ display:none; }
+details summary .chev{ margin-left:auto; color:var(--ink-3); transition:transform .15s; } details[open] summary .chev{ transform:rotate(90deg); }
+details summary .note{ font-weight:400; color:var(--ink-3); font-size:13px; }
+details .body{ padding:2px 24px 20px; font-size:14px; color:var(--ink-2); line-height:1.6; }
+details .body .row{ display:flex; align-items:center; gap:9px; padding:7px 0; border-top:1px solid var(--hair-2); font-size:13.5px; } details .body .row:first-child{ border-top:0; }
+.pill{ font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; }
+.p-green{ color:var(--green); background:rgba(var(--green-rgb),.12); } .p-gray{ color:var(--ink-2); background:var(--chip); } .p-purple{ color:var(--purple); background:rgba(174,62,201,.11); }
+.icn{ width:18px; height:18px; color:var(--ink-3); flex:0 0 auto; }
+
+/* composer + kickoff — sticky, calm */
+.dock{ position:fixed; left:0; right:0; bottom:0; background:color-mix(in srgb,var(--canvas) 90%,transparent); backdrop-filter:blur(10px); border-top:1px solid var(--hair); }
+.dock .in{ max-width:720px; margin:0 auto; padding:13px 22px; display:flex; align-items:center; gap:11px; }
+.say{ flex:1; display:flex; align-items:center; gap:10px; background:var(--card); border:1px solid var(--hair); border-radius:12px; padding:11px 15px; color:var(--ink-3); font-size:14px; box-shadow:var(--shadow); }
+.say svg{ width:16px; height:16px; color:var(--primary); }
+.go{ display:inline-flex; align-items:center; gap:8px; font-size:14.5px; font-weight:650; padding:12px 20px; border-radius:12px; background:var(--primary); color:#fff; box-shadow:0 2px 12px rgba(var(--primary-rgb),.3); white-space:nowrap; }
+.go svg{ width:16px; height:16px; } .go:hover{ background:#a5281c; }
+.go[disabled]{ opacity:.45; box-shadow:none; cursor:not-allowed; }
+.dockhint{ text-align:center; font-size:11.5px; color:var(--ink-3); padding-bottom:9px; }
+
+/* watch */
+.big{ background:var(--card); border:1px solid var(--hair); border-radius:16px; box-shadow:var(--shadow); padding:22px 24px; margin-top:18px; }
+.bar{ height:9px; border-radius:999px; background:var(--chip); overflow:hidden; } .bar i{ display:block; height:100%; border-radius:999px; background:var(--green); }
+.lanes{ margin-top:20px; display:flex; flex-direction:column; gap:9px; }
+.lane{ display:grid; grid-template-columns:120px 1fr; align-items:center; gap:12px; }
+.lane .nm{ font-family:var(--mono); font-size:11.5px; color:var(--ink-2); text-align:right; }
+.lane .tr{ position:relative; height:16px; border-radius:5px; background:var(--chip); overflow:hidden; }
+.lane .tr i{ position:absolute; top:0; bottom:0; border-radius:5px; }
+.today{ position:relative; margin-top:6px; display:grid; grid-template-columns:120px 1fr; gap:12px; } .today .t{ position:relative; height:14px; }
+.today .t::before{ content:''; position:absolute; left:62%; top:-92px; bottom:14px; width:2px; background:var(--primary); opacity:.75; }
+.today .t span{ position:absolute; left:62%; transform:translateX(-50%); font-family:var(--mono); font-size:10px; color:var(--primary); font-weight:700; }
+.quiet{ display:flex; align-items:center; gap:10px; margin-top:20px; font-size:13.5px; color:var(--ink-2); }
+.quiet .dotp{ width:8px; height:8px; border-radius:50%; background:var(--green); }
+
+/* collect */
+.results{ display:grid; grid-template-columns:repeat(3,1fr); gap:11px; margin-top:18px; }
+.res{ background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:18px; box-shadow:var(--shadow); }
+.res .n{ font-size:24px; font-weight:740; letter-spacing:-.02em; } .res .n.green{ color:var(--green); }
+.res .l{ font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); margin-top:3px; }
+.autorow{ display:flex; align-items:center; gap:13px; background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:16px 18px; box-shadow:var(--shadow); margin-top:11px; }
+.autorow .ic{ width:36px; height:36px; border-radius:10px; display:grid; place-items:center; flex:0 0 auto; }
+.autorow .g{ flex:1; } .autorow .t{ font-weight:650; font-size:14.5px; } .autorow .d{ font-size:13px; color:var(--ink-2); }
+.lnk{ font-size:13.5px; font-weight:600; color:var(--primary); }
+
+/* selective magic — deck card, waves, live fleet, case-study cover */
+.deckcard{ display:flex; align-items:center; gap:16px; background:var(--card); border:1px solid var(--hair); border-radius:16px; padding:14px 18px 14px 14px; box-shadow:var(--shadow); margin-top:12px; }
+.minicover{ width:168px; aspect-ratio:16/9; flex:0 0 auto; border-radius:9px; overflow:hidden; background:radial-gradient(130% 150% at 80% 10%, #2a3550 0%, #141b28 55%, #0d1117 100%); color:#fff; padding:12px 13px; display:flex; flex-direction:column; justify-content:flex-end; box-shadow:0 6px 18px -8px rgba(20,30,50,.4); }
+.minicover .mc-k{ font-family:var(--mono); font-size:6.5px; letter-spacing:.12em; text-transform:uppercase; color:rgba(255,255,255,.5); }
+.minicover .mc-t{ font-size:13px; font-weight:740; letter-spacing:-.02em; line-height:1.1; margin-top:2px; }
+.minicover .mc-s{ font-size:7.5px; color:rgba(255,255,255,.6); margin-top:3px; }
+.minicover.cs .mc-n{ font-size:17px; font-weight:760; letter-spacing:-.02em; }
+.deckcard .g{ flex:1; } .deckcard .t{ font-weight:650; font-size:14.5px; } .deckcard .d{ font-size:13px; color:var(--ink-2); margin-top:2px; }
+.present{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; padding:8px 14px; border-radius:10px; border:1px solid var(--hair); color:var(--ink); background:var(--card); white-space:nowrap; }
+.present:hover{ background:var(--chip); }
+.wavebox{ margin-top:10px; }
+.waverow{ display:flex; align-items:center; gap:7px; flex-wrap:wrap; padding:6px 0; }
+.waverow .wl{ font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); width:52px; flex:0 0 auto; }
+.wt{ font-family:var(--mono); font-size:11px; font-weight:600; padding:3px 9px; border-radius:7px; background:var(--chip); color:var(--ink-2); }
+.wt.ghost{ opacity:.5; border:1px dashed var(--hair); background:transparent; }
+.keyline{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-2); padding:7px 0 2px; }
+.keyline .kpill{ font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--purple); background:rgba(174,62,201,.1); padding:2px 8px; border-radius:6px; }
+.fleet{ background:var(--card); border:1px solid var(--hair); border-radius:16px; box-shadow:var(--shadow); margin-top:12px; overflow:hidden; }
+.fleet .fh{ padding:14px 18px 4px; font-size:12px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); }
+.frow{ display:flex; align-items:center; gap:12px; padding:12px 18px; } .frow + .frow{ border-top:1px solid var(--hair-2); }
+.fav{ width:30px; height:30px; border-radius:9px; display:grid; place-items:center; color:#fff; font-size:12px; font-weight:700; flex:0 0 auto; }
+.frow .g{ flex:1; min-width:0; } .frow .t{ font-size:14px; font-weight:600; } .frow .d{ font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+.live{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; padding:3px 9px; border-radius:999px; }
+.l-red{ color:var(--primary); background:rgba(var(--primary-rgb),.08); } .l-red .dt{ width:6px; height:6px; border-radius:50%; background:var(--primary); animation:pulse 1.8s infinite; }
+
+/* sprinkle 2 — portfolio switcher, provenance, receipts, today-so-far */
+.eng{ position:relative; } .eng summary{ list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:600; padding:7px 12px; border:1px solid var(--hair); border-radius:10px; background:var(--card); box-shadow:var(--shadow); }
+.eng summary::-webkit-details-marker{ display:none; } .eng summary .chev{ color:var(--ink-3); width:14px; height:14px; }
+.eng .pop{ position:absolute; top:calc(100% + 7px); left:0; min-width:400px; background:var(--card); border:1px solid var(--hair); border-radius:13px; box-shadow:0 14px 38px -12px rgba(20,30,50,.28); padding:6px; z-index:40; }
+.eng .er .g{ white-space:nowrap; }
+.eng .er{ display:flex; align-items:center; gap:10px; padding:10px 11px; border-radius:9px; font-size:13.5px; } .eng .er:hover{ background:var(--chip); }
+.eng .er .dotm{ width:8px; height:8px; border-radius:50%; flex:0 0 auto; } .eng .er .g{ flex:1; } .eng .er .s{ font-size:11.5px; color:var(--ink-3); font-weight:400; }
+.eng .er b{ font-weight:640; }
+.basis{ padding:0 24px 16px; font-size:12px; color:var(--ink-3); }
+.basis b{ color:var(--ink-2); font-weight:600; }
+.receipt{ display:flex; align-items:center; justify-content:center; gap:8px; margin-top:14px; font-size:12.5px; color:var(--ink-3); }
+.receipt .ok{ width:16px; height:16px; border-radius:50%; background:rgba(var(--green-rgb),.13); color:var(--green); display:grid; place-items:center; } .receipt .ok svg{ width:10px; height:10px; }
+.receipt .undo{ color:var(--primary); font-weight:600; cursor:pointer; }
+.todayso{ margin-top:16px; border-top:1px solid var(--hair-2); padding-top:14px; display:flex; flex-direction:column; gap:10px; }
+.todayso .h{ font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; }
+.todayso .r{ display:flex; align-items:flex-start; gap:10px; font-size:13.5px; color:var(--ink-2); }
+.todayso .r .dotp{ width:8px; height:8px; border-radius:50%; background:var(--green); flex:0 0 auto; margin-top:6px; }
+.cav{ width:22px; height:22px; border-radius:50%; background:#1a2230; color:#fff; display:grid; place-items:center; font-size:9.5px; font-weight:700; flex:0 0 auto; }
+
+/* sprinkle 3 — the bet, the look, taste on file, try-the-prototype */
+.betline{ margin-top:13px; padding-top:13px; border-top:1px solid var(--hair-2); font-size:13.5px; color:var(--ink-2); line-height:1.55; }
+.betline b{ color:var(--ink); font-weight:650; }
+.lookrow{ display:flex; align-items:center; gap:9px; font-size:12.5px; color:var(--ink-2); flex-wrap:wrap; }
+.lookrow + .lookrow{ margin-top:8px; }
+.sw2{ width:14px; height:14px; border-radius:4px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.07); flex:0 0 auto; }
+.swset{ display:inline-flex; gap:4px; align-items:center; }
+.aa{ font-size:13px; font-weight:700; letter-spacing:-.02em; color:var(--ink); background:var(--chip); border-radius:4px; padding:0 5px; }
+.taste{ font-size:11px; font-weight:600; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:999px; padding:3px 10px; }
+.fleet .fh{ display:flex; align-items:center; } .fleet .fh .grow{ flex:1; }
+.fleet .fh .try{ font-size:12.5px; font-weight:600; color:var(--primary); text-transform:none; letter-spacing:0; }
+@keyframes pulse{ 0%{box-shadow:0 0 0 0 rgba(var(--primary-rgb),.45);} 70%{box-shadow:0 0 0 5px rgba(var(--primary-rgb),0);} }
+/* flesh-out — sheets, session panel, toast, resolvable calls */
+.sheetback{ position:fixed; inset:0; background:rgba(12,17,26,.44); backdrop-filter:blur(3px); z-index:60; opacity:0; pointer-events:none; transition:opacity .18s; } .sheetback.on{ opacity:1; pointer-events:auto; }
+.sheet{ position:fixed; z-index:61; top:50%; left:50%; width:min(780px,93vw); max-height:88vh; overflow:auto; background:var(--card); border:1px solid var(--hair); border-radius:18px; box-shadow:0 30px 80px -18px rgba(10,16,28,.5); opacity:0; pointer-events:none; transform:translate(-50%,-47%) scale(.98); transition:opacity .18s, transform .18s; } .sheet.on{ opacity:1; pointer-events:auto; transform:translate(-50%,-50%) scale(1); }
+.sheet__h{ position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:10px; padding:14px 20px; background:color-mix(in srgb,var(--card) 94%,transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--hair); font-weight:650; font-size:14.5px; }
+.xbtn{ margin-left:auto; width:30px; height:30px; border-radius:8px; display:grid; place-items:center; color:var(--ink-3); border:1px solid var(--hair); font-size:13px; } .xbtn:hover{ background:var(--chip); }
+.sheet__b{ padding:20px; }
+.side{ position:fixed; z-index:61; top:0; right:0; bottom:0; width:min(590px,96vw); background:var(--card); border-left:1px solid var(--hair); box-shadow:-24px 0 70px -24px rgba(10,16,28,.4); transform:translateX(103%); transition:transform .2s; display:flex; flex-direction:column; overflow:hidden; } .side.on{ transform:none; }
+.sessbody{ flex:1; overflow:auto; padding:16px 20px; }
+.toast{ position:fixed; left:50%; bottom:100px; transform:translateX(-50%) translateY(10px); background:var(--ink); color:var(--card); font-size:13.5px; font-weight:600; padding:12px 19px; border-radius:12px; box-shadow:0 16px 44px -12px rgba(10,16,28,.55); opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:70; max-width:90vw; text-align:center; } .toast.on{ opacity:1; transform:translateX(-50%) translateY(0); }
+.resolved{ display:flex; align-items:center; gap:10px; background:var(--card); border:1px solid var(--hair); border-radius:12px; padding:12px 16px; font-size:13.5px; color:var(--ink-2); box-shadow:var(--shadow); }
+.resolved .okc{ width:18px; height:18px; border-radius:50%; background:rgba(var(--green-rgb),.13); color:var(--green); display:grid; place-items:center; flex:0 0 auto; } .resolved .okc svg{ width:11px; height:11px; }
+.resolved .undo{ margin-left:auto; color:var(--primary); font-weight:600; cursor:pointer; font-size:12.5px; }
+.call + .resolved,.resolved + .call,.resolved + .resolved{ margin-top:9px; }
+.needs .h.quiet{ color:var(--green); }
+.slidebig{ aspect-ratio:16/9; border-radius:14px; overflow:hidden; background:radial-gradient(120% 150% at 80% 8%, #2a3550 0%, #141b28 55%, #0d1117 100%); color:#fff; padding:30px 32px; display:flex; flex-direction:column; justify-content:flex-end; }
+.slidebig .sk{ font-family:var(--mono); font-size:10px; letter-spacing:.13em; text-transform:uppercase; color:rgba(255,255,255,.55); } .slidebig h2{ font-size:29px; font-weight:760; letter-spacing:-.03em; margin:6px 0 4px; max-width:18ch; } .slidebig p{ margin:0; font-size:13.5px; color:rgba(255,255,255,.7); }
+.statgrid{ display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-top:18px; } .statgrid>div{ background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.13); border-radius:10px; padding:10px 12px; } .statgrid .k{ font-family:var(--mono); font-size:8.5px; letter-spacing:.06em; text-transform:uppercase; color:rgba(255,255,255,.55); } .statgrid .v{ font-size:19px; font-weight:740; margin-top:2px; }
+.liteslide{ border:1px solid var(--hair); border-radius:14px; padding:20px 22px; margin-top:14px; }
+.liteslide h3{ font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--primary); margin:0 0 12px; font-weight:600; }
+.pilg{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; } .pilg>div{ border:1px solid var(--hair); border-radius:11px; padding:13px; } .pilg .pt{ font-weight:650; font-size:13.5px; } .pilg .pd{ font-size:12px; color:var(--ink-2); margin-top:4px; line-height:1.45; }
+.browser{ border:1px solid var(--hair); border-radius:12px; overflow:hidden; } .browser .bbar{ display:flex; align-items:center; gap:7px; padding:9px 12px; background:var(--chip); border-bottom:1px solid var(--hair); } .browser .bd{ width:10px; height:10px; border-radius:50%; } .browser .burl{ flex:1; background:var(--card); border:1px solid var(--hair); border-radius:6px; padding:4px 10px; font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+.parea{ padding:38px; background:linear-gradient(160deg,#f8fafc,#eef2f7); display:flex; justify-content:center; }
+:root[data-theme="dark"] .parea{ background:linear-gradient(160deg,#1a2130,#131722); }
+.pcard{ width:300px; background:#fff; border:1px solid #e6e9ef; border-radius:16px; box-shadow:0 12px 30px -12px rgba(20,30,50,.25); padding:26px 24px; text-align:center; }
+.pcard .plg{ width:36px; height:36px; border-radius:10px; background:linear-gradient(150deg,#c0392b,#8e2018); color:#fff; display:grid; place-items:center; margin:0 auto 12px; font-weight:800; font-size:13px; }
+.pcard h4{ margin:0 0 3px; font-size:17px; font-weight:700; color:#1a2230; } .pcard .pp{ font-size:12px; color:#5a6577; margin:0 0 16px; }
+.sso{ display:flex; align-items:center; justify-content:center; gap:8px; width:100%; padding:10px; border-radius:10px; border:1px solid #e6e9ef; font-weight:600; font-size:13px; margin-bottom:8px; color:#1a2230; } .sso.pri{ background:#0f6cbd; color:#fff; border-color:#0f6cbd; }
+.sess{ padding:18px 20px; }
+.sess .si{ position:relative; padding:0 0 14px 20px; } .sess .si::before{ content:""; position:absolute; left:0; top:4px; width:9px; height:9px; border-radius:50%; background:var(--card); border:2px solid var(--ink-3); } .sess .si.ok::before{ background:var(--green); border-color:var(--green); } .sess .si.live::before{ background:var(--primary); border-color:var(--primary); }
+.sess .si::after{ content:""; position:absolute; left:4px; top:15px; bottom:2px; width:1.5px; background:var(--hair); } .sess .si:last-child::after{ display:none; }
+.sess .st{ font-size:13.5px; } .sess .st b{ font-weight:640; } .sess .sm{ font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:1px; }
+.dif{ font-family:var(--mono); font-size:12px; border:1px solid var(--hair); border-radius:10px; overflow:hidden; margin:6px 0 4px; } .dif div{ padding:2px 12px; } .dif .a{ background:rgba(var(--green-rgb),.1); color:var(--green); } .dif .d{ background:rgba(214,57,57,.08); color:#d63939; }
+.trm{ background:#0b0c0f; color:#d6d9df; border-radius:10px; padding:10px 13px; font-family:var(--mono); font-size:11.5px; line-height:1.55; } .trm .g{ color:#5fd38a; } .trm .m{ color:#6b7280; }
+.slbl{ font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin:14px 0 7px; }
+.qrow{ border-left:3px solid var(--hair); padding:6px 0 6px 14px; font-size:14.5px; font-weight:600; line-height:1.5; margin-top:16px; } .qrow .qw{ font-size:12px; color:var(--ink-2); font-weight:500; margin-top:5px; }
+/* the agent window — CLI in the browser */
+.cli{ background:#0d0f13; border:1px solid rgba(255,255,255,.07); border-radius:12px; padding:14px 16px; font-family:var(--mono); font-size:12px; line-height:1.78; color:#c9ced6; overflow-x:auto; }
+.cli .tm{ color:#525c6b; font-size:10px; letter-spacing:.05em; }
+.cli .as{ color:#e7ebf1; }
+.cli .tl{ color:#7cc4ff; }
+.cli .rs{ color:#8b95a5; padding-left:16px; }
+.cli .rs.ok{ color:#5fd38a; } .cli .rs.pr{ color:#f5b153; }
+.cli .ad{ color:#5fd38a; } .cli .de{ color:#ff8d84; }
+.cli .c-you{ color:#f0d264; margin-top:7px; }
+.cli .c-ack{ color:#5fd38a; padding-left:16px; }
+.steer{ background:var(--card); border-top:1px solid var(--hair); padding:12px 16px 14px; }
+.steer .chips2{ display:flex; gap:6px; margin-bottom:9px; flex-wrap:wrap; }
+.schip{ font-size:11.5px; font-weight:600; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:999px; padding:4px 11px; cursor:pointer; }
+.schip:hover{ color:var(--primary); border-color:rgba(var(--primary-rgb),.3); }
+.steer .cbox2{ display:flex; gap:8px; }
+.steer .in2{ flex:1; background:var(--canvas); border:1px solid var(--hair); border-radius:10px; padding:9px 12px; font-size:13px; color:var(--ink); font-family:var(--font); }
+.steer .in2::placeholder{ color:var(--ink-3); }
+.sndb{ width:38px; height:38px; border-radius:10px; background:var(--primary); color:#fff; display:grid; place-items:center; flex:0 0 auto; } .sndb svg{ width:16px; height:16px; }
+/* the shaping loop — threads, redlines, select-to-discuss */
+.page{ position:relative; }
+.sec{ position:relative; } .deal{ position:relative; }
+.gdot{ position:absolute; right:-42px; top:20px; width:26px; height:26px; border-radius:50%; background:var(--card); border:1px solid var(--hair); box-shadow:var(--shadow); display:grid; place-items:center; font-size:11.5px; font-weight:700; cursor:pointer; color:var(--ink-3); z-index:5; }
+.gdot.open{ color:var(--orange); border-color:rgba(var(--orange-rgb),.5); } .gdot.done{ color:var(--green); }
+.gdot:hover{ transform:scale(1.08); }
+@media(max-width:1020px){ .gdot{ display:none; } }
+.seltool{ position:fixed; z-index:66; display:none; gap:2px; background:var(--ink); border-radius:10px; padding:4px; box-shadow:0 10px 30px -8px rgba(10,16,28,.5); }
+.seltool.on{ display:flex; }
+.seltool button{ color:#fff; font-size:12px; font-weight:600; padding:6px 11px; border-radius:7px; } .seltool button:hover{ background:rgba(255,255,255,.16); }
+.thread{ position:absolute; z-index:65; width:min(420px,92vw); background:var(--card); border:1px solid var(--hair); border-radius:14px; box-shadow:0 20px 54px -16px rgba(10,16,28,.4); display:none; }
+.thread.on{ display:block; }
+.thread .th{ padding:11px 15px; border-bottom:1px solid var(--hair-2); font-size:12px; color:var(--ink-3); display:flex; gap:8px; align-items:center; }
+.thread .th .q{ flex:1; font-style:italic; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.thread .tb{ padding:13px 15px; font-size:13.5px; line-height:1.55; }
+.thread .tb b{ font-weight:650; }
+.tav{ width:22px; height:22px; border-radius:7px; background:linear-gradient(150deg,var(--primary),#8e2018); color:#fff; display:grid; place-items:center; font-size:9.5px; font-weight:700; flex:0 0 auto; }
+.diffcard{ border:1px dashed var(--hair); background:var(--chip); border-radius:11px; padding:11px 13px; margin-top:11px; font-size:13px; }
+.diffcard .dh{ font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--orange); margin-bottom:6px; }
+.diffcard s{ color:var(--ink-3); } .diffcard mark{ background:rgba(var(--green-rgb),.2); padding:0 2px; border-radius:3px; }
+.diffcard .da{ display:flex; gap:7px; margin-top:11px; } .diffcard .da button{ flex:1; font-size:12.5px; font-weight:600; padding:8px; border-radius:9px; border:1px solid var(--hair); background:var(--card); color:var(--ink); }
+.diffcard .da .apply{ background:var(--primary); color:#fff; border-color:var(--primary); }
+.redl s{ color:var(--ink-3); font-weight:400; } .redl mark{ background:rgba(var(--green-rgb),.2); border-radius:3px; }
+.flash{ animation:flashbg 1.4s; } @keyframes flashbg{ 0%{ background:rgba(var(--green-rgb),.2);} 100%{ background:transparent;} }
+.vchip{ font-family:var(--mono); font-size:11px; font-weight:700; color:var(--ink-2); background:var(--chip); border:1px solid var(--hair); border-radius:7px; padding:2px 8px; vertical-align:middle; }
+.vrow{ display:flex; gap:10px; padding:11px 0; border-bottom:1px solid var(--hair-2); font-size:13px; align-items:flex-start; }
+.vrow .vchip{ flex:0 0 auto; margin-top:1px; } .vrow .who{ margin-left:auto; flex:0 0 auto; }
+.sayin{ flex:1; background:none; border:0; outline:none; color:var(--ink); font:inherit; font-size:14px; min-width:0; }
+.sayin::placeholder{ color:var(--ink-3); }
+:focus-visible{ outline:2px solid var(--primary); outline-offset:2px; }
+
+/* ===== editor-grade shape: two-column layout with a thread rail ===== */
+.page.wide{ max-width:1080px; }
+.shapewrap{ display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:24px; align-items:start; }
+@media(max-width:1020px){ .shapewrap{ grid-template-columns:1fr; } .rail{ display:none; } }
+.rail{ position:sticky; top:80px; display:flex; flex-direction:column; gap:12px; }
+.railcard{ background:var(--card); border:1px solid var(--hair); border-radius:14px; box-shadow:var(--shadow); overflow:hidden; }
+.railh{ display:flex; align-items:center; gap:7px; padding:12px 14px 9px; font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); font-weight:600; }
+.railh .grow{ flex:1; }
+.trow{ display:block; width:100%; text-align:left; padding:11px 14px; border-top:1px solid var(--hair-2); cursor:pointer; }
+.trow:hover{ background:var(--chip); }
+.trow .qt{ font-size:12.5px; font-weight:600; display:flex; gap:7px; align-items:flex-start; line-height:1.4; }
+.trow .qt .tdot{ width:7px; height:7px; border-radius:50%; flex:0 0 auto; margin-top:5px; background:var(--orange); }
+.trow.res .qt .tdot{ background:var(--green); }
+.trow .ms{ font-size:12px; color:var(--ink-2); margin-top:3px; padding-left:14px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.trow.res .ms{ color:var(--ink-3); }
+.trow .mt{ font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-top:3px; padding-left:14px; }
+.pres{ display:flex; align-items:center; gap:9px; padding:10px 14px; border-top:1px solid var(--hair-2); font-size:12.5px; color:var(--ink-2); }
+.pres .pa{ width:22px; height:22px; border-radius:7px; display:grid; place-items:center; color:#fff; font-size:9.5px; font-weight:700; flex:0 0 auto; }
+.pres .st{ font-size:11px; color:var(--ink-3); }
+.pres .odot{ width:7px; height:7px; border-radius:50%; background:var(--green); margin-left:auto; flex:0 0 auto; }
+.kbd{ font-family:var(--mono); font-size:10px; font-weight:600; color:var(--ink-2); background:var(--card); border:1px solid var(--hair); border-bottom-width:2px; border-radius:5px; padding:1px 5px; white-space:nowrap; }
+.railfoot{ padding:10px 14px; border-top:1px solid var(--hair-2); font-size:11.5px; color:var(--ink-3); display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+
+/* doc top bar — presence, save state, mode */
+.docbar{ display:flex; align-items:center; gap:10px; padding:10px 24px; border-bottom:1px solid var(--hair-2); font-size:12px; color:var(--ink-3); }
+.avstack{ display:flex; } .avstack .pa{ width:22px; height:22px; border-radius:7px; display:grid; place-items:center; color:#fff; font-size:9.5px; font-weight:700; border:2px solid var(--card); }
+.avstack .pa + .pa{ margin-left:-6px; }
+.savestate{ margin-left:auto; display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10.5px; }
+.savestate .sdot{ width:6px; height:6px; border-radius:50%; background:var(--green); }
+
+/* comment highlights — visible anchors in the text, like Linear/Docs */
+.cm{ background:rgba(var(--orange-rgb),.14); box-shadow:inset 0 -2px 0 rgba(var(--orange-rgb),.55); border-radius:2px; cursor:pointer; padding:0 1px; transition:background .12s; }
+.cm:hover,.cm.active{ background:rgba(var(--orange-rgb),.26); }
+.cm.res{ background:transparent; box-shadow:inset 0 -2px 0 var(--hair); }
+.cm.res:hover{ background:var(--chip); }
+
+/* direct editing — click anywhere and type */
+.ed{ border-radius:6px; transition:background .12s, box-shadow .12s; }
+.ed:hover{ background:color-mix(in srgb,var(--chip) 55%,transparent); cursor:text; }
+.ed:focus{ outline:none; background:color-mix(in srgb,var(--chip) 45%,transparent); box-shadow:0 0 0 1px var(--hair), inset 2.5px 0 0 var(--blue); }
+.sec{ position:relative; }
+.edithint{ position:absolute; top:16px; right:20px; font-size:11px; font-weight:600; color:var(--ink-3); opacity:0; transition:opacity .12s; pointer-events:none; display:flex; gap:5px; align-items:center; }
+.sec:hover .edithint{ opacity:1; }
+
+/* live collaborator cursor */
+.lcur{ display:inline-block; width:2px; height:1.05em; background:var(--blue); vertical-align:text-bottom; margin:0 1px; position:relative; animation:blink 1.15s steps(2) infinite; }
+.lcur::after{ content:'Taikun'; position:absolute; top:-15px; left:-1px; font-size:8.5px; font-weight:700; background:var(--blue); color:#fff; padding:1px 5px; border-radius:3px; letter-spacing:.02em; font-family:var(--font); }
+@keyframes blink{ 50%{ opacity:0; } }
+
+/* inline suggestions — accept / reject in place */
+.sug{ border-radius:3px; }
+.sug ins{ text-decoration:none; background:rgba(var(--green-rgb),.16); box-shadow:inset 0 -2px 0 rgba(var(--green-rgb),.5); border-radius:2px; padding:0 1px; }
+.sug s{ color:var(--ink-3); background:rgba(214,57,57,.07); border-radius:2px; }
+.sugact{ display:inline-flex; align-items:center; gap:4px; margin-left:7px; vertical-align:middle; }
+.sugact .sl{ font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--green); margin-right:2px; }
+.sugact button{ width:21px; height:21px; border-radius:6px; border:1px solid var(--hair); background:var(--card); display:grid; place-items:center; font-size:10.5px; color:var(--ink-2); box-shadow:var(--shadow); }
+.sugact .sa-ok{ color:var(--green); border-color:rgba(var(--green-rgb),.4); } .sugact .sa-ok:hover{ background:rgba(var(--green-rgb),.12); }
+.sugact .sa-no:hover{ background:var(--chip); }
+
+/* thread panel — reply composer */
+.thread .tf{ display:flex; gap:7px; padding:11px 15px; border-top:1px solid var(--hair-2); }
+.thread .tf input{ flex:1; background:var(--canvas); border:1px solid var(--hair); border-radius:9px; padding:8px 11px; font:inherit; font-size:13px; color:var(--ink); outline:none; min-width:0; }
+.thread .tf input:focus{ border-color:rgba(var(--primary-rgb),.45); }
+.thread .tf button{ width:34px; height:34px; border-radius:9px; background:var(--primary); color:#fff; display:grid; place-items:center; flex:0 0 auto; } .thread .tf button svg{ width:14px; height:14px; }
+.thread .resline{ display:flex; align-items:center; gap:8px; padding:9px 15px; border-top:1px solid var(--hair-2); font-size:12px; color:var(--ink-2); }
+.thread .resline button{ margin-left:auto; font-size:12px; font-weight:600; color:var(--green); display:inline-flex; gap:5px; align-items:center; }
+.thread .resline button:hover{ text-decoration:underline; }
+
+/* ⌘K command palette */
+.pal{ position:fixed; z-index:82; top:14vh; left:50%; transform:translateX(-50%) scale(.985); width:min(600px,93vw); background:var(--card); border:1px solid var(--hair); border-radius:16px; box-shadow:0 32px 90px -18px rgba(10,16,28,.55); opacity:0; pointer-events:none; transition:opacity .13s, transform .13s; overflow:hidden; }
+.pal.on{ opacity:1; pointer-events:auto; transform:translateX(-50%) scale(1); }
+.pal .pin{ display:flex; align-items:center; gap:10px; padding:15px 18px; border-bottom:1px solid var(--hair-2); }
+.pal .pin svg{ width:16px; height:16px; color:var(--ink-3); flex:0 0 auto; }
+.pal .pin input{ flex:1; background:none; border:0; outline:none; font:inherit; font-size:15px; color:var(--ink); }
+.pal .plist{ max-height:46vh; overflow:auto; padding:6px; }
+.pal .pgroup{ font-family:var(--mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:600; padding:9px 12px 4px; }
+.pal .pi{ display:flex; align-items:center; gap:11px; width:100%; text-align:left; padding:9px 12px; border-radius:9px; font-size:13.5px; font-weight:550; }
+.pal .pi svg{ width:15px; height:15px; color:var(--ink-3); flex:0 0 auto; }
+.pal .pi .grow{ flex:1; } .pal .pi .hint{ font-size:11.5px; color:var(--ink-3); font-weight:400; }
+.pal .pi.sel{ background:var(--chip); } .pal .pi.sel svg{ color:var(--primary); }
+.pal .pfoot{ display:flex; gap:12px; padding:9px 16px; border-top:1px solid var(--hair-2); font-size:11px; color:var(--ink-3); }
+.pal .pfoot span{ display:inline-flex; gap:5px; align-items:center; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12c1.5 0 1.5-5 3-5s1.5 10 3 10 1.5-8 3-8 1.5 5 3 5 1.5-4 3-4 1.5 3 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-11h-6l1-7z" fill="currentColor"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" fill="currentColor"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 4v14M15 6v14" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3v4h4M9 12h6M9 16h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.6 6.3L21 10l-5 4.3L17.5 21 12 17.3 6.5 21 8 14.3 3 10l6.4-.7L12 3z" fill="currentColor"/></symbol>
+  <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M6 3h12v18l-2.5-1.5L13 21l-2.5-1.5L8 21l-2.5-1.5V3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 8h6M9 12h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-3-6-7-2z" fill="currentColor"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<header class="top"><div class="in">
+  <span class="mk"><svg viewBox="0 0 24 24"><use href="#i-wave"/></svg></span>
+  <span class="lk">TAIKUN<b>SWITCHBOARD</b></span>
+  <details class="eng">
+    <summary>Northwind Energy<svg class="chev"><use href="#i-chev"/></svg></summary>
+    <div class="pop">
+      <div class="er"><span class="dotm" style="background:var(--primary)"></span><span class="g"><b>Northwind Energy</b> <span class="s">· Build · 68% · this one</span></span></div>
+      <div class="er"><span class="dotm" style="background:var(--orange)"></span><span class="g"><b>Meridian Labs</b> <span class="s">· Shape · brief shaped on 2 Northwind precedents</span></span><span class="pill" style="color:var(--orange);background:rgba(var(--orange-rgb),.12)">1 needs you</span></div>
+      <div class="er"><span class="dotm" style="background:var(--green)"></span><span class="g"><b>Atlas Freight</b> <span class="s">· Collect · shipped, KPIs on watch</span></span></div>
+    </div>
+  </details>
+  <span class="grow"></span>
+  <nav class="moments" id="moments">
+    <button class="on" data-v="shape">Shape</button>
+    <button data-v="watch">Watch</button>
+    <button data-v="collect">Collect</button>
+  </nav>
+  <button class="tbtn" id="themeBtn"><svg><use href="#i-sun"/></svg></button>
+</div></header>
+
+<main class="page">
+
+  <!-- ============ SHAPE ============ -->
+  <section class="view" data-v="shape">
+    <div class="eyebrow">Northwind Energy · from your discovery call</div>
+    <h1>SSO &amp; Identity Platform <span class="vchip" id="vchip">brief v7</span> <span class="lnk" data-sheet="sd-shaping" style="font-size:12.5px;font-weight:600">what changed ›</span></h1>
+    <p class="sub">This document is live — click anywhere and type. Select text to comment (<span class="kbd">⌘⌥M</span>) or press <span class="kbd">⌘K</span> for everything else.</p>
+
+    <div class="shapewrap">
+    <div class="doccol">
+    <div class="needs">
+      <div class="h">Needs you · 2</div>
+      <div class="call">
+        <div class="q"><b>SCIM provisioning</b> — the client mentioned it in passing. It adds ~5 tasks and a week.</div>
+        <div class="opts"><button class="opt pick" data-r="SCIM deferred — v1 stays tight; parked for a later phase">Defer</button><button class="opt" data-r="SCIM included — +5 tasks and ~1 week folded into the plan; estimate now ~$4.3k">Include</button></div>
+      </div>
+      <div class="call">
+        <div class="q"><b>Model tier for identity work</b> — auth code is unforgiving.</div>
+        <div class="opts"><button class="opt" data-r="Balanced tier locked for identity work — estimate drops to ~$2.9k">Balanced</button><button class="opt pick" data-r="High-reasoning tier locked for identity work — auth code gets the careful model">High</button></div>
+      </div>
+    </div>
+
+    <div class="brief" id="briefCard">
+      <div class="docbar">
+        <span class="avstack"><span class="pa" style="background:linear-gradient(150deg,var(--primary),#8e2018)" title="Taikun — in the doc">T</span><span class="pa" style="background:#1a2230" title="You">S</span></span>
+        <span>Taikun is in the doc — re-checking the plan as you edit</span>
+        <span class="savestate" id="saveState"><span class="sdot"></span>Saved · just now</span>
+      </div>
+      <div class="sec">
+        <span class="edithint">✎ click to edit</span>
+        <div class="k">What we're doing, and why</div>
+        <p class="ed" contenteditable="true" spellcheck="false" data-sec="the framing">This isn't a login problem — it's a <mark>go-live problem</mark>. Pilot operators sign in with <b>Entra/SAML</b>, get auto-provisioned from the directory, and go-live is gated on <b>CI parity</b> — proven from week one, so the TotalEnergies date holds. <span class="cm res" data-th="okta">Okta stays as a silent fallback.</span></p>
+        <div class="betline"><b>The bet:</b> prove parity inside the window and Northwind becomes the flagship reference — miss it and this is a stalled pilot. Everything below is sequenced to win that bet. <span style="color:var(--ink-3)">Disagree? Edit it — the plan re-shapes.</span></div>
+      </div>
+      <div class="deal">
+        <div><div class="n" id="dealCost"><span class="cm" data-th="cost">$3.4k</span><small> est</small></div><div class="l">agent cost</div></div>
+        <div><div class="n" id="dealDays">~9 days</div><div class="l">on autopilot</div></div>
+        <div><div class="n">21<small> tasks</small></div><div class="l">2 parallel waves</div></div>
+      </div>
+      <div class="basis">Priced from <b>your ledger</b> — median of 14 similar shipped tasks, each proven with a merged PR. Not a vibe.</div>
+      <div class="sec">
+        <span class="edithint">✎ click to edit</span>
+        <div class="k">How you'll know it's done</div>
+        <div class="done">
+          <div class="c"><span class="ck"><svg><use href="#i-check"/></svg></span><span><span class="ed" contenteditable="true" spellcheck="false" data-sec="acceptance">≥95% sign-in success · zero manual provisioning</span><span class="sug" id="sugMtta"><ins>&nbsp;· MTTA ≤ 15m on auth alerts</ins></span><span class="sugact" id="sugMttaAct"><span class="sl">Taikun suggests</span><button class="sa-ok" title="Accept">✓</button><button class="sa-no" title="Reject">✕</button></span></span></div>
+          <div class="c"><span class="ck"><svg><use href="#i-check"/></svg></span><span class="ed" contenteditable="true" spellcheck="false" data-sec="acceptance">CI parity green vs. your Helm baseline · Okta fallback verified</span></div>
+          <div class="c"><span class="ck"><svg><use href="#i-check"/></svg></span><span>Every task backed by a merged, tested PR — <b>done means merged</b><span class="lcur"></span></span></div>
+          <div class="lookrow" style="margin-top:6px"><span class="swset"><span class="sw2" style="background:#c0392b"></span><span class="sw2" style="background:#1a2230"></span><span class="sw2" style="background:#2fb344"></span><span class="sw2" style="background:#f76707"></span><span class="sw2" style="background:#f1f3f6"></span></span><span class="aa">Aa</span><span>Built on <b style="color:var(--ink)">your design system v3</b> — everything the fleet ships matches it.</span></div>
+          <div class="lookrow"><span>Crit grades to your taste:</span><span class="taste">contrast is non-negotiable</span><span class="taste">motion on state change</span><span class="lnk" style="font-size:12px">add ›</span></div>
+          <div class="foot">Each milestone is played back to the client for sign-off before its invoice releases.</div>
+        </div>
+      </div>
+
+      <details>
+        <summary><svg class="icn"><use href="#i-target"/></svg>Direction — Parity-First <span class="note">· 2 alternatives considered</span><svg class="chev icn"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          Taikun explored three directions in parallel and picked the one that retires go-live risk earliest.
+          <div class="row" style="margin-top:10px"><span class="pill p-green">chosen</span><b style="color:var(--ink)">Parity-First</b> — parity gate runs from week 1 · lowest risk</div>
+          <div class="row"><span class="pill p-gray">passed</span>Invisible Sign-In — best UX, +2 tasks of fallback edge cases</div>
+          <div class="row"><span class="pill p-gray">passed</span>Directory-Native — cheapest, least differentiated</div>
+          <div class="row" style="border-top:0;padding-top:11px"><span class="lnk">Override the direction ›</span></div>
+        </div>
+      </details>
+      <details>
+        <summary><svg class="icn"><use href="#i-map"/></svg>The full plan <span class="note">· 4 milestones · 21 tasks · 2 waves</span><svg class="chev icn"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div class="row"><span class="pill p-purple">1</span>Define shared contract · 3 tasks</div>
+          <div class="row"><span class="pill p-purple">2</span>Build core implementation · 9 tasks</div>
+          <div class="row"><span class="pill p-purple">3</span>Integrate cross-board · 5 tasks</div>
+          <div class="row"><span class="pill p-purple">4</span>Prove parity &amp; ship · 4 tasks</div>
+          <div class="wavebox">
+            <div class="waverow"><span class="wl">Wave 1</span><span class="wt">SEN-7</span><span class="wt">DATA-3</span><span class="wt">QA-2</span><span class="wt">parity gate</span><span style="font-size:12px;color:var(--ink-3)">— in parallel at kickoff</span></div>
+            <div class="keyline"><span class="kpill">SEN-6</span>is the keystone — when it merges, 5 more tasks open on their own</div>
+            <div class="waverow"><span class="wl">Wave 2</span><span class="wt ghost">SEN-8</span><span class="wt ghost">SEN-9</span><span class="wt ghost">INT-1</span><span class="wt ghost">INT-2</span><span class="wt ghost">QA-3</span></div>
+          </div>
+          <div class="row" style="border-top:0;padding-top:11px"><span class="lnk">Edit the plan ›</span></div>
+        </div>
+      </details>
+      <details>
+        <summary><svg class="icn"><use href="#i-doc"/></svg>The paper trail <span class="note">· strategy POV · kickoff deck · SOW $48k (signed)</span><svg class="chev icn"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div class="row"><span class="lnk" data-sheet="sh-pov">Strategy POV — the full point of view ›</span></div>
+          <div class="row"><span class="lnk" data-sheet="sh-deck">Kickoff deck — 6 slides, client-ready ›</span></div>
+          <div class="row">SOW — $48,000 fixed · signed by A. Reyes · Jul 13</div>
+        </div>
+      </details>
+      <details>
+        <summary><svg class="icn"><use href="#i-eye"/></svg>Prototype first <span class="note">· recommended · ~$0.4k before the full build</span><svg class="chev icn"><use href="#i-chev"/></svg></summary>
+        <div class="body">A clickable sign-in flow lands here in a few hours. If the flow's wrong we learn it for $0.4k, not $3.4k. Turn off if you're confident.
+          <div class="row" style="border-top:0;padding-top:10px"><span class="lnk" data-sheet="sh-proto">Open the prototype ›</span></div>
+        </div>
+      </details>
+    </div>
+
+    <div class="deckcard">
+      <div class="minicover"><div class="mc-k">Kickoff brief · Northwind</div><div class="mc-t">SSO &amp; Identity Platform</div><div class="mc-s">Go-live insurance — proven at parity</div></div>
+      <div class="g"><div class="t">Client kickoff deck — ready to present</div><div class="d">6 slides, built from this brief. Challenge → what we'll build → proof → timeline. Updates itself when the brief changes.</div></div>
+      <button class="present" data-sheet="sh-deck">Present <svg style="width:14px"><use href="#i-chev"/></svg></button>
+    </div>
+
+    <div class="receipt"><span class="ok"><svg><use href="#i-check"/></svg></span>Applied 2m ago — "pull the parity gate into wave 1" · <span class="undo">undo</span></div>
+    </div><!-- /doccol -->
+
+    <aside class="rail">
+      <div class="railcard">
+        <div class="railh"><span class="grow">Threads</span><span id="railCount" class="pill" style="color:var(--orange);background:rgba(var(--orange-rgb),.12)">1 open</span></div>
+        <button class="trow" data-th="cost" id="trow-cost">
+          <span class="qt"><span class="tdot"></span>"Why $3.4k?" — on the estimate</span>
+          <span class="ms">Taikun: median of your last 14 shipped tasks, plus the high-tier premium…</span>
+          <span class="mt">you · 14m · 2 replies</span>
+        </button>
+        <button class="trow res" data-th="okta" id="trow-okta">
+          <span class="qt"><span class="tdot"></span>"Does Okta really have to stay?"</span>
+          <span class="ms">Resolved — fallback kept per the call at 12:40; folded into plan as v2.</span>
+          <span class="mt">resolved · v2</span>
+        </button>
+        <div class="railfoot">Select any text → <span class="kbd">⌘⌥M</span> to start a thread</div>
+      </div>
+      <div class="railcard">
+        <div class="railh">In this brief</div>
+        <div class="pres"><span class="pa" style="background:linear-gradient(150deg,var(--primary),#8e2018)">T</span><span>Taikun <span class="st">· editing acceptance</span></span><span class="odot"></span></div>
+        <div class="pres"><span class="pa" style="background:#1a2230">S</span><span>You <span class="st">· here now</span></span><span class="odot"></span></div>
+        <div class="pres" style="opacity:.6"><span class="pa" style="background:#5a6577">AR</span><span>A. Reyes <span class="st">· client · viewed 1h ago</span></span></div>
+      </div>
+      <div class="railcard">
+        <div class="railh">Suggestions</div>
+        <div class="pres" id="railSug"><span class="pa" style="background:linear-gradient(150deg,var(--primary),#8e2018)">T</span><span style="font-size:12px">Add <b>MTTA ≤ 15m</b> to acceptance <span class="st">· from the POV metrics</span></span></div>
+        <div class="railfoot"><span class="kbd">⌘K</span> for commands · <span class="kbd">Esc</span> closes anything</div>
+      </div>
+    </aside>
+    </div><!-- /shapewrap -->
+  </section>
+
+  <!-- ============ WATCH ============ -->
+  <section class="view hidden" data-v="watch">
+    <div class="eyebrow">Northwind Energy · day 6 of ~9</div>
+    <h1>Building — 68%, on track</h1>
+    <p class="sub">3 agents working. Taikun handles the routine; it will only ping you when a decision is genuinely yours.</p>
+
+    <div class="needs">
+      <div class="h">Needs you · 1</div>
+      <div class="call">
+        <div class="q"><b>SEN-4 was marked done without a merged PR.</b> I don't trust the checkbox.</div>
+        <div class="opts"><button class="opt pick" data-r="SEN-4 reopened → back to Ready, re-dispatched to Codex">Reopen it</button><button class="opt" data-r="SEN-4 left standing — noted in the decision log with your name on it">Let it stand</button></div>
+      </div>
+    </div>
+
+    <div class="big">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px"><b style="font-size:15px">Progress</b><span style="font-size:13px;color:var(--ink-2)">7 of 21 merged with proof · $3.1k spent — <b style="color:var(--green)">$2.4k proven</b> · pace says <b>~$3.3k at ship</b>, inside the estimate</span></div>
+      <div class="bar"><i style="width:68%"></i></div>
+      <div class="lanes">
+        <div class="lane"><span class="nm">contract</span><div class="tr"><i style="left:1%;width:19%;background:#4299e1"></i></div></div>
+        <div class="lane"><span class="nm">identity</span><div class="tr"><i style="left:19%;width:26%;background:#206bc4"></i><i style="left:45%;width:13%;background:#206bc4;opacity:.45"></i></div></div>
+        <div class="lane"><span class="nm">portal</span><div class="tr"><i style="left:44%;width:20%;background:#ae3ec9"></i></div></div>
+        <div class="lane"><span class="nm">parity &amp; ship</span><div class="tr"><i style="left:6%;width:15%;background:#f76707"></i><i style="left:78%;width:20%;background:#2fb344;opacity:.4"></i></div></div>
+      </div>
+      <div class="today"><span></span><div class="t"><span>today</span></div></div>
+      <div class="keyline" style="margin-top:14px"><span class="kpill" data-sheet="sd-session" data-sess="atlas" style="cursor:pointer">SEN-6</span>keystone in review — when it merges, 5 more tasks open on their own</div>
+      <div class="todayso">
+        <div class="h">Today so far</div>
+        <div class="r"><span class="dotp"></span><span>Atlas opened <b style="color:var(--ink)">PR #412</b> and the parity gate went green on first run. Crit has passed on all 7 merges — quality is running itself.</span></div>
+        <div class="r"><span class="cav">AR</span><span><b style="color:var(--ink)">A. Reyes</b> viewed the Milestone 1 playback and accepted it · releases the milestone invoice.</span></div>
+      </div>
+    </div>
+
+    <div class="fleet">
+      <div class="fh"><span class="grow">The fleet · 3 working</span><span class="try" data-sheet="sh-proto" style="cursor:pointer">Try the prototype they're building against ›</span></div>
+      <div class="frow"><span class="fav" style="background:linear-gradient(150deg,#c0392b,#8e2018)">A</span><div class="g"><div class="t">Atlas — wiring Entra app registration</div><div class="d">SEN-6 · PR #412 open · CI 3/4 green</div></div><span class="live l-red"><span class="dt"></span>live</span><span class="lnk" data-sheet="sd-session" data-sess="atlas" style="cursor:pointer">Watch ›</span></div>
+      <div class="frow"><span class="fav" style="background:linear-gradient(150deg,#206bc4,#16457f)">C</span><div class="g"><div class="t">Codex — directory attribute sync</div><div class="d">DATA-3 · tests green locally</div></div><span class="lnk" data-sheet="sd-session" data-sess="codex" style="cursor:pointer">Watch ›</span></div>
+      <div class="frow"><span class="fav" style="background:linear-gradient(150deg,#2fb344,#1c7a2d)">N</span><div class="g"><div class="t">Nova — e2e smoke on the sign-in flow</div><div class="d">QA-2 · running against the prototype</div></div><span class="lnk" data-sheet="sd-session" data-sess="nova" style="cursor:pointer">Watch ›</span></div>
+    </div>
+  </section>
+
+  <!-- ============ COLLECT ============ -->
+  <section class="view hidden" data-v="collect">
+    <div class="eyebrow">Northwind Energy · shipped Jul 27</div>
+    <h1>Delivered — and it moved the number</h1>
+    <p class="sub">Client accepted, invoice released. Everything below generated itself.</p>
+
+    <div class="results">
+      <div class="res"><div class="n green">97.4%</div><div class="l">SSO success · ≥95 target</div></div>
+      <div class="res"><div class="n">3 wks</div><div class="l">brief → shipped</div></div>
+      <div class="res"><div class="n green">93%</div><div class="l">margin · $48k for $3.4k</div></div>
+    </div>
+
+    <div class="autorow"><span class="ic" style="background:rgba(var(--green-rgb),.12);color:var(--green)"><svg style="width:18px"><use href="#i-receipt"/></svg></span><div class="g"><div class="t">Final invoice · $16,000 — released</div><div class="d">Client signed off on the last playback · Jul 27</div></div><span class="pill p-green">done</span></div>
+    <div class="deckcard">
+      <div class="minicover cs"><div class="mc-k">Case study · Identity · 2026</div><div class="mc-t">Sign-in that unblocked a flagship account in 3 weeks</div><div class="mc-s">97.4% SSO · $3.4k · 93% margin</div></div>
+      <div class="g"><div class="t">Case study — written, every number ledger-bound</div><div class="d">Challenge → approach → craft with merged-PR proof → results. This is what wins the next client.</div></div>
+      <button class="present" data-sheet="sh-case">Share <svg style="width:14px"><use href="#i-chev"/></svg></button>
+    </div>
+    <div class="autorow"><span class="ic" style="background:rgba(174,62,201,.11);color:var(--purple)"><svg style="width:18px"><use href="#i-spark"/></svg></span><div class="g"><div class="t">Logged to memory</div><div class="d">"Parity-first cut end-of-project risk · claude-code on identity, 3/3 clean" — the next engagement routes on this.</div></div><span class="pill p-gray">auto</span></div>
+    <div class="autorow"><span class="ic" style="background:rgba(32,107,196,.11);color:var(--blue)"><svg style="width:18px"><use href="#i-chart"/></svg></span><div class="g"><div class="t">Watching the numbers for 90 days</div><div class="d">2 of 3 KPIs at target. If one slips, you'll get one ping with a fix scoped.</div></div><span class="pill p-gray">auto</span></div>
+  </section>
+</main>
+
+<!-- dock -->
+<div class="dock" id="dock">
+  <div class="in">
+    <div class="say"><svg><use href="#i-spark"/></svg><input class="sayin" id="sayIn" placeholder='Change anything — try "make it 2 weeks", then hit Enter'></div>
+    <button class="go" id="goBtn"><svg><use href="#i-bolt"/></svg>Kick off</button>
+  </div>
+  <div class="dockhint" id="dockHint">Nothing runs until you kick off · you can change anything by just saying it</div>
+</div>
+
+
+<div class="thread" id="threadPanel"><div class="th"><span class="q" id="thQ"></span><button class="xbtn" id="thX" style="width:24px;height:24px;font-size:11px">✕</button></div><div class="tb" id="thB"></div><div class="tf" id="thF"><input id="thIn" placeholder="Reply — Taikun answers in-thread"><button id="thSend"><svg><use href="#i-send"/></svg></button></div></div>
+<div class="seltool" id="selTool"><button data-sel="comment">💬 Comment <span style="opacity:.55;font-size:10px">⌘⌥M</span></button><button data-sel="ask">Ask</button><button data-sel="change">Change</button><button data-sel="tighten">Tighten</button><button data-sel="task">→ Task</button></div>
+
+<div class="pal" id="pal">
+  <div class="pin"><svg><use href="#i-spark"/></svg><input id="palIn" placeholder="Type a command or search…"><span class="kbd">esc</span></div>
+  <div class="plist" id="palList"></div>
+  <div class="pfoot"><span><span class="kbd">↑↓</span> navigate</span><span><span class="kbd">↵</span> run</span><span><span class="kbd">⌘K</span> toggle</span></div>
+</div>
+
+<div class="side" id="sd-shaping">
+  <div class="sheet__h">Shaping thread <span style="font-weight:400;color:var(--ink-3);font-size:12.5px">· how this brief got here</span><button class="xbtn">✕</button></div>
+  <div class="sessbody">
+    <div class="slbl" style="margin-top:0">Versions</div>
+    <div class="vrow"><span class="vchip">v1</span><span>Assembled from <b>discovery-call.vtt</b> — outcome, constraints, plan, estimate. You watched it build and didn't interrupt.</span><span class="tav who">T</span></div>
+    <div class="vrow"><span class="vchip">v2</span><span>You: "Okta must stay as fallback" → constraint added, fallback path folded into the plan (+1 task).</span><span class="tav who" style="background:#1a2230">S</span></div>
+    <div class="vrow"><span class="vchip">v3</span><span>SCIM question raised by Taikun → you deferred it. Marked out-of-scope; logged as a decision.</span><span class="tav who" style="background:#1a2230">S</span></div>
+    <div class="vrow"><span class="vchip">v4</span><span>Direction chosen: <b>Parity-First</b> over Invisible Sign-In and Directory-Native. ADR recorded.</span><span class="tav who" style="background:#1a2230">S</span></div>
+    <div class="vrow"><span class="vchip">v5</span><span>You: "prove parity early" → parity gate pulled into wave 1; acceptance +Okta fallback e2e.</span><span class="tav who" style="background:#1a2230">S</span></div>
+    <div class="vrow"><span class="vchip">v6</span><span>Estimate re-priced from the ledger after re-sequencing — $3.6k → $3.4k.</span><span class="tav who">T</span></div>
+    <div class="vrow"><span class="vchip">v7</span><span>Tier call: <b>high-reasoning</b> for identity work. Ready for kickoff.</span><span class="tav who" style="background:#1a2230">S</span></div>
+    <div class="slbl">Open threads · 1</div>
+    <div class="vrow" style="border-bottom:0"><span class="gdot open" style="position:static;right:auto;top:auto">?</span><span>"Why $3.4k?" on the estimate — answered, waiting for you to resolve it.</span></div>
+    <div class="slbl" style="text-align:center;margin-top:18px">Every version is one applied change — review the diffs, not the whole doc.</div>
+  </div>
+</div>
+
+<div class="sheetback" id="sheetback"></div>
+<div class="toast" id="toast"></div>
+
+<div class="sheet" id="sh-deck">
+  <div class="sheet__h">Client kickoff deck <span style="font-weight:400;color:var(--ink-3);font-size:12.5px">· rebuilt from the brief 2m ago</span><button class="xbtn">✕</button></div>
+  <div class="sheet__b">
+    <div class="slidebig"><div class="sk">Kickoff brief · Northwind Energy</div><h2>SSO &amp; Identity Platform</h2><p>Go-live insurance — Entra/SAML, auto-provisioned, proven at parity.</p></div>
+    <div class="liteslide"><h3>02 · What we'll build</h3><div class="pilg">
+      <div><div class="pt">Entra / SAML</div><div class="pd">SSO on their Azure tenant — Okta as a silent fallback.</div></div>
+      <div><div class="pt">Auto-provision</div><div class="pd">Users from the directory. Zero manual ops.</div></div>
+      <div><div class="pt">CI-parity gate</div><div class="pd">Go-live blocked until proven at parity.</div></div>
+    </div></div>
+    <div class="liteslide"><h3>04 · How you'll know it's done</h3>
+      <div class="done"><div class="c"><span class="ck"><svg><use href="#i-check"/></svg></span><span>≥95% SSO · zero manual provisioning · MTTA ≤15m</span></div>
+      <div class="c"><span class="ck"><svg><use href="#i-check"/></svg></span><span>Parity green · Okta fallback verified · <b>done means merged</b></span></div></div>
+    </div>
+    <div class="slbl" style="text-align:center;margin-top:16px">+ challenge · plan · timeline · team — Present sends a link that always matches the live brief</div>
+  </div>
+</div>
+
+<div class="sheet" id="sh-pov">
+  <div class="sheet__h">Strategy POV <span style="font-weight:400;color:var(--ink-3);font-size:12.5px">· why this framing</span><button class="xbtn">✕</button></div>
+  <div class="sheet__b">
+    <p style="font-size:19px;font-weight:680;letter-spacing:-.02em;line-height:1.4;margin:2px 0 0">This isn't a login problem — it's a go-live problem. Every day without SSO is a day TotalEnergies can't onboard.</p>
+    <div class="slbl">Audience insight</div><p style="font-size:14px;color:var(--ink-2);margin:0">Pilot operators are field-first and low-patience — anything with friction gets worked around, which is exactly how manual provisioning crept in.</p>
+    <div class="slbl">Competitive teardown</div>
+    <div style="font-size:14px;color:var(--ink-2)">
+      <div class="lookrow">Okta-only shops — fast, but a dead end for the Entra-native buyer.</div>
+      <div class="lookrow">Full IdP rebuilds — "right", but months long; miss the window entirely.</div>
+      <div class="lookrow"><b style="color:var(--ink)">Our lane — Entra-native with Okta as a safety net, proven at parity. Fast and safe.</b></div>
+    </div>
+    <div class="slbl">Why now</div><p style="font-size:14px;color:var(--ink-2);margin:0">The TotalEnergies contract has a go-live date. Inside the window it's a flagship reference; outside it's a stalled pilot.</p>
+    <div class="slbl">The metrics that matter · seeded as live KPIs</div>
+    <div style="display:flex;gap:7px;flex-wrap:wrap"><span class="taste">≥95% SSO success</span><span class="taste">MTTA ≤ 15m</span><span class="taste">0 manual provisioning</span></div>
+  </div>
+</div>
+
+<div class="sheet" id="sh-proto">
+  <div class="sheet__h">Prototype · the sign-in flow <span style="font-weight:400;color:var(--ink-3);font-size:12.5px">· $0.4k, built on system v3</span><button class="xbtn">✕</button></div>
+  <div class="sheet__b">
+    <div class="browser"><div class="bbar"><span class="bd" style="background:#ef5350"></span><span class="bd" style="background:#fbc02d"></span><span class="bd" style="background:#66bb6a"></span><span class="burl">portal.northwind.io/sign-in</span></div>
+    <div class="parea"><div class="pcard"><div class="plg">NE</div><h4>Sign in</h4><p class="pp">to the Northwind ops portal</p><div class="sso pri">Continue with Microsoft</div><div class="sso">Use Okta instead</div><div style="font-size:10.5px;color:#8a95a3;margin-top:8px">No password. Provisioned from your directory.</div></div></div></div>
+    <div class="slbl" style="text-align:center;margin-top:14px">Approve it and the full build matches this flow exactly — the fleet is pinned to it</div>
+  </div>
+</div>
+
+<div class="sheet" id="sh-case">
+  <div class="sheet__h">Case study <span style="font-weight:400;color:var(--ink-3);font-size:12.5px">· every number ledger-bound</span><button class="xbtn">✕</button></div>
+  <div class="sheet__b">
+    <div class="slidebig"><div class="sk">Case study · Identity · 2026</div><h2>Sign-in that unblocked a flagship account in 3 weeks</h2><p>Entra/SAML SSO with auto-provisioning and Okta fallback — proven at CI parity.</p>
+      <div class="statgrid"><div><div class="k">SSO success</div><div class="v">97.4%</div></div><div><div class="k">Time to ship</div><div class="v">3 wks</div></div><div><div class="k">Delivered for</div><div class="v">$3.4k</div></div><div><div class="k">Margin</div><div class="v">93%</div></div></div>
+    </div>
+    <div class="slbl">The challenge</div><p style="font-size:14px;color:var(--ink-2);margin:0">Every account was provisioned by hand — the single thing blocking go-live with TotalEnergies. The fix was bounded; the risk was shipping late, or unproven.</p>
+    <div class="slbl">The craft · with proof</div>
+    <div style="font-size:13.5px;color:var(--ink-2)">
+      <div class="lookrow">✓ Entra registration + SAML handler — 9 PRs merged</div>
+      <div class="lookrow">✓ Directory sync · Okta fallback — 5 PRs merged</div>
+      <div class="lookrow">✓ CI-parity gate vs. Helm baseline — closure PASS</div>
+    </div>
+    <div class="qrow">"Can't-sign-in to shipped in three weeks — and it was green at parity before we even saw a demo."<div class="qw">— A. Reyes · Northwind Energy</div></div>
+  </div>
+</div>
+
+<div class="side" id="sd-session">
+  <div class="sheet__h"><span class="fav" id="sessAv" style="width:26px;height:26px;font-size:11px;background:linear-gradient(150deg,#c0392b,#8e2018)">A</span><div style="min-width:0"><div id="sessTitle" style="font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Atlas · SEN-6 — Wire Entra app registration</div><div id="sessSub" style="font-family:var(--mono);font-size:10.5px;color:var(--ink-3);font-weight:400">claude-code · sess_7fa1</div></div><span class="live l-red" id="sessLive" style="margin-left:auto;flex:0 0 auto"><span class="dt"></span>live</span><button class="xbtn">✕</button></div>
+  <div class="sessbody">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px" id="sessMeta"></div>
+    <div class="cli" id="sessStream"></div>
+    <div class="slbl" style="margin-top:12px;text-align:center">The agent's actual session — what you'd see in the CLI, in the browser.</div>
+  </div>
+  <div class="steer">
+    <div class="chips2"><span class="schip" data-steer="redirect">Redirect</span><span class="schip" data-steer="hold">Hold</span><span class="schip" data-steer="approve">Approve merge</span></div>
+    <div class="cbox2"><input class="in2" id="steerIn" placeholder="Steer Atlas — it hears you mid-flight, even on autopilot"><button class="sndb" id="steerSend"><svg><use href="#i-send"/></svg></button></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  document.getElementById('themeBtn').addEventListener('click',function(){ var c=root.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'); root.setAttribute('data-theme',c==='dark'?'light':'dark'); });
+  var sayIn=document.getElementById('sayIn'), goBtn=document.getElementById('goBtn'), dockHint=document.getElementById('dockHint');
+  var curView='shape';
+  var phrases={shape:['Change anything — try "make it 2 weeks", then hit Enter','Kick off','Nothing runs until you kick off · the doc is editable · select text to thread · ⌘K for commands'],
+               watch:['Drive the fleet — "pause identity", "show me Atlas", "why is SEN-4 flagged?"','Pause','It only pings you when a call is genuinely yours'],
+               collect:['Ask anything — "send the case study to…", "what did we learn?"','New engagement','The case study and precedents feed the next one']};
+  function setView(v){ curView=v;
+    document.querySelector('.page').classList.toggle('wide', v==='shape');
+    document.querySelectorAll('#moments button').forEach(function(x){ x.classList.toggle('on', x.dataset.v===v); });
+    document.querySelectorAll('.view').forEach(function(x){ x.classList.toggle('hidden', x.dataset.v!==v); });
+    var p=phrases[v]; sayIn.placeholder=p[0]; goBtn.innerHTML='<svg><use href="#i-bolt"/></svg>'+p[1]; dockHint.textContent=p[2];
+    window.scrollTo(0,0); hideThread(); hideSel(); hidePal();
+  }
+  document.querySelectorAll('#moments button').forEach(function(b){ b.addEventListener('click',function(){ setView(b.dataset.v); }); });
+  var toastEl=document.getElementById('toast'), tmr=null;
+  function toast(m){ toastEl.textContent=m; toastEl.classList.add('on'); clearTimeout(tmr); tmr=setTimeout(function(){ toastEl.classList.remove('on'); },3200); }
+  function refreshNeeds(){ document.querySelectorAll('.needs').forEach(function(n){ var c=n.querySelectorAll('.call').length; var h=n.querySelector('.h');
+    if(c>0){ h.textContent='Needs you · '+c; h.classList.remove('quiet'); } else { h.textContent='✓ All quiet — nothing needs you'; h.classList.add('quiet'); } }); }
+  document.querySelectorAll('.call .opt[data-r]').forEach(function(btn){ btn.addEventListener('click',function(){
+    var call=btn.closest('.call'); call.querySelectorAll('.opt').forEach(function(x){ x.classList.toggle('pick', x===btn); });
+    setTimeout(function(){
+      var div=document.createElement('div'); div.className='resolved';
+      div.innerHTML='<span class="okc"><svg><use href="#i-check"/></svg></span><span>'+btn.dataset.r+'</span><span class="undo">undo</span>';
+      call.replaceWith(div);
+      div.querySelector('.undo').addEventListener('click',function(){ div.replaceWith(call); refreshNeeds(); });
+      refreshNeeds();
+    },170);
+  }); });
+
+  // ===== version trail =====
+  var briefV=7;
+  function vbump(why){ briefV++; document.getElementById('vchip').textContent='brief v'+briefV; toast('Applied — brief v'+briefV+' · '+why); }
+
+  // ===== anchored threads — visible highlights + rail + reply composer =====
+  var panel=document.getElementById('threadPanel'), thQ=document.getElementById('thQ'), thB=document.getElementById('thB');
+  var thIn=document.getElementById('thIn'), curTh=null;
+  function showThreadAt(el, q, bodyHtml, focusReply){
+    thQ.textContent=q; thB.innerHTML=bodyHtml;
+    panel.classList.add('on');
+    document.querySelectorAll('.cm.active').forEach(function(c){ c.classList.remove('active'); });
+    if(el.classList && el.classList.contains('cm')) el.classList.add('active');
+    var r=el.getBoundingClientRect(), page=document.querySelector('.page').getBoundingClientRect();
+    var left=Math.min(Math.max(r.left-page.left-40, 0), page.width-440);
+    panel.style.left=left+'px';
+    panel.style.top=(r.bottom-page.top+10)+'px';
+    wireThread();
+    if(focusReply) setTimeout(function(){ thIn.focus(); },60);
+  }
+  function hideThread(){ panel.classList.remove('on'); curTh=null; document.querySelectorAll('.cm.active').forEach(function(c){ c.classList.remove('active'); }); }
+  document.getElementById('thX').addEventListener('click',hideThread);
+  function refreshRail(){ var open=document.querySelectorAll('.rail .trow:not(.res)').length;
+    var rc=document.getElementById('railCount'); if(rc) rc.textContent=open? open+' open' : 'all resolved';
+    if(rc && !open){ rc.style.color='var(--green)'; rc.style.background='rgba(var(--green-rgb),.12)'; } }
+  function resolveThread(key){
+    hideThread();
+    var c=document.querySelector('.cm[data-th="'+key+'"]'); if(c) c.classList.add('res');
+    var t=document.getElementById('trow-'+key);
+    if(t){ t.classList.add('res'); t.querySelector('.ms').textContent='Resolved — answer logged on the brief.'; t.querySelector('.mt').textContent='resolved · just now'; }
+    refreshRail(); toast('Thread resolved — collapsed with a summary in the rail');
+  }
+  function wireThread(){
+    var res=thB.querySelector('[data-resolve-th]');
+    if(res) res.addEventListener('click',function(){ resolveThread(res.dataset.resolveTh||'cost'); });
+    var ap=thB.querySelector('.diffcard .apply');
+    if(ap) ap.addEventListener('click',function(){ ap.closest('.diffcard').innerHTML='<div class="dh" style="color:var(--green)">Applied</div>'; applyTwoWeeks(); hideThread(); });
+    var pb=thB.querySelector('.diffcard .pushback');
+    if(pb) pb.addEventListener('click',function(){ hideThread(); revertTwoWeeks(); toast('Discarded — tell me the real constraint and I\'ll re-plan'); });
+  }
+  var THREADS={
+    okta:{ q:'"Okta stays as a silent fallback" — resolved · v2', b:'<div style="display:flex;gap:8px"><span class="tav" style="background:#1a2230">S</span><div>"Does Okta really have to stay?"</div></div><div style="display:flex;gap:8px;margin-top:8px"><span class="tav">T</span><div>From the call at 12:40 — <b>"we can\'t drop Okta yet, it has to stay as a fallback."</b> I folded the fallback path into the plan (+1 task) and added it to acceptance. Applied as <b>v2</b>.</div></div>' },
+    cost:{ q:'Open — "Why $3.4k?" on the estimate', b:'<div style="display:flex;gap:8px"><span class="tav" style="background:#1a2230">S</span><div>Why $3.4k?</div></div><div style="display:flex;gap:8px;margin-top:8px"><span class="tav">T</span><div>21 tasks × the <b>median cost of your last 14 similar shipped tasks</b> ($162/outcome, each proven with a merged PR), plus the high-tier premium on identity work you chose in v7. If we drop to balanced tier it\'s ~$2.9k — but auth code is where careful pays.</div></div><div style="margin-top:11px"><button class="present" data-resolve-th="cost" style="width:100%;justify-content:center">Got it — resolve thread</button></div>' }
+  };
+  function openTh(key, anchor){ curTh=key; var t=THREADS[key]; showThreadAt(anchor, t.q, t.b); }
+  document.addEventListener('click',function(e){ var c=e.target.closest('.cm[data-th]'); if(c && THREADS[c.dataset.th]){ e.stopPropagation(); e.preventDefault(); openTh(c.dataset.th, c); } }, true);
+  document.querySelectorAll('.rail .trow[data-th]').forEach(function(t){ t.addEventListener('click',function(){
+    var c=document.querySelector('.cm[data-th="'+t.dataset.th+'"]');
+    if(c){ c.scrollIntoView({block:'center',behavior:'smooth'}); setTimeout(function(){ openTh(t.dataset.th, c); },320); }
+  }); });
+  // reply composer — replying appends to the thread, Taikun answers in-thread
+  function sendReply(){ var v=thIn.value.trim(); if(!v || !panel.classList.contains('on')) return; thIn.value='';
+    thB.insertAdjacentHTML('beforeend','<div style="display:flex;gap:8px;margin-top:9px"><span class="tav" style="background:#1a2230">S</span><div>'+v+'</div></div>');
+    setTimeout(function(){ thB.insertAdjacentHTML('beforeend','<div style="display:flex;gap:8px;margin-top:9px"><span class="tav">T</span><div>Noted — I\'ll hold that constraint. If you want it in the brief, say "apply" and I\'ll draft the redline.</div></div>'); },550);
+    var t=curTh && document.getElementById('trow-'+curTh); if(t) t.querySelector('.ms').textContent='You: '+v;
+  }
+  document.getElementById('thSend').addEventListener('click',sendReply);
+  thIn.addEventListener('keydown',function(e){ if(e.key==='Enter') sendReply(); if(e.key==='Escape') hideThread(); e.stopPropagation(); });
+
+  // ===== select-to-discuss =====
+  var selTool=document.getElementById('selTool'), selText='';
+  function hideSel(){ selTool.classList.remove('on'); }
+  document.addEventListener('mouseup',function(e){
+    if(selTool.contains(e.target)) return;
+    setTimeout(function(){
+      var sel=window.getSelection(); var txt=sel? sel.toString().trim():'';
+      var brief=document.getElementById('briefCard');
+      if(txt.length>3 && brief && sel.anchorNode && brief.contains(sel.anchorNode)){
+        selText=txt;
+        var r=sel.getRangeAt(0).getBoundingClientRect();
+        selTool.style.left=Math.max(8,r.left+r.width/2-140)+'px';
+        selTool.style.top=(r.top-46)+'px';
+        selTool.classList.add('on');
+      } else hideSel();
+    },10);
+  });
+  var newThN=0;
+  function commentOnSelection(){
+    var sel=window.getSelection(); if(!sel || !sel.toString().trim()) return false;
+    var txt=sel.toString().trim(), short=txt.length>52? txt.slice(0,52)+'…' : txt;
+    var anchorEl=sel.anchorNode && sel.anchorNode.parentElement ? sel.anchorNode.parentElement : document.getElementById('briefCard');
+    var key='new'+(++newThN);
+    try{ var rng=sel.getRangeAt(0); var span=document.createElement('span'); span.className='cm'; span.dataset.th=key; rng.surroundContents(span); anchorEl=span;
+      span.addEventListener('click',function(e){ e.stopPropagation(); showThreadAt(span,'New thread — "'+short+'"', span._body||'', true); });
+    }catch(err){ /* selection crosses elements — anchor without wrapping */ }
+    sel.removeAllRanges(); hideSel();
+    showThreadAt(anchorEl,'New thread — "'+short+'"','<div style="font-size:12.5px;color:var(--ink-3)">Anchored to the highlighted text. Taikun and A. Reyes will see it here.</div>', true);
+    var rail=document.querySelector('.rail .railcard');
+    if(rail){ var b=document.createElement('button'); b.className='trow'; b.innerHTML='<span class="qt"><span class="tdot"></span>"'+short+'"</span><span class="ms">Just opened — no replies yet</span><span class="mt">you · now</span>';
+      rail.insertBefore(b, rail.querySelector('.railfoot')); refreshRail();
+      b.addEventListener('click',function(){ if(anchorEl.scrollIntoView) anchorEl.scrollIntoView({block:'center',behavior:'smooth'}); setTimeout(function(){ showThreadAt(anchorEl,'New thread — "'+short+'"','',true); },320); });
+    }
+    return true;
+  }
+  var SELREPLY={
+    ask:function(t){ return '<div style="display:flex;gap:8px"><span class="tav">T</span><div>That line traces to the <b>discovery call</b> and the signed SOW — it\'s load-bearing for the go-live date. Want me to loosen it, I\'ll show you what it costs.</div></div>'; },
+    change:function(t){ return '<div style="display:flex;gap:8px"><span class="tav">T</span><div>Here\'s the change as a redline:</div></div><div class="diffcard"><div class="dh">Proposed · edits the brief</div><div class="redl"><s>'+t+'</s> → <mark>'+t.split(' ').slice(0,4).join(' ')+' — reworked per your note</mark></div><div class="da"><button class="pushback">Push back</button><button class="apply">Apply → v8</button></div></div>'; },
+    tighten:function(t){ return '<div style="display:flex;gap:8px"><span class="tav">T</span><div>Tighter:</div></div><div class="diffcard"><div class="dh">Proposed · tighten</div><div class="redl"><s>'+t+'</s> → <mark>'+t.split(' ').slice(0,5).join(' ')+'.</mark></div><div class="da"><button class="pushback">Keep mine</button><button class="apply">Apply → v8</button></div></div>'; }
+  };
+  selTool.querySelectorAll('button').forEach(function(b){ b.addEventListener('click',function(){
+    var kind=b.dataset.sel;
+    if(kind==='comment'){ commentOnSelection(); return; }
+    if(kind==='task'){ hideSel(); window.getSelection().removeAllRanges(); vbump('"'+selText.split(' ').slice(0,5).join(' ')+'…" extracted as SEN-22 · Milestone 2 · 22 tasks now'); return; }
+    hideSel();
+    var short=selText.length>52? selText.slice(0,52)+'…' : selText;
+    var anchor=window.getSelection().anchorNode; var el=anchor && anchor.parentElement? anchor.parentElement: document.getElementById('briefCard');
+    showThreadAt(el, '"'+short+'"', SELREPLY[kind](short));
+  }); });
+
+  // ===== direct editing — the doc is the input =====
+  var saveState=document.getElementById('saveState'), saveTmr=null;
+  function savedPulse(){ if(!saveState) return;
+    saveState.innerHTML='<span class="sdot" style="background:var(--orange)"></span>Saving…';
+    clearTimeout(saveTmr); saveTmr=setTimeout(function(){ saveState.innerHTML='<span class="sdot"></span>Saved · just now'; },700); }
+  document.querySelectorAll('.ed[contenteditable]').forEach(function(el){
+    el.addEventListener('focus',function(){ el._was=el.innerHTML; });
+    el.addEventListener('input',savedPulse);
+    el.addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } e.stopPropagation(); });
+    el.addEventListener('blur',function(){
+      if(el._was!==undefined && el._was!==el.innerHTML){
+        vbump('you edited '+(el.dataset.sec||'the brief')+' — Taikun re-checked the plan, estimate holds');
+      }
+      el._was=undefined;
+    });
+  });
+
+  // ===== inline suggestions — accept / reject in place =====
+  (function(){ var sug=document.getElementById('sugMtta'), act=document.getElementById('sugMttaAct'); if(!sug) return;
+    act.querySelector('.sa-ok').addEventListener('click',function(){
+      sug.outerHTML=' · MTTA ≤ 15m on auth alerts'; act.remove();
+      var rs=document.getElementById('railSug'); if(rs) rs.innerHTML='<span class="pa" style="background:rgba(47,179,68,.9)">✓</span><span style="font-size:12px">MTTA accepted into acceptance <span class="st">· seeded as a live KPI</span></span>';
+      vbump('MTTA ≤ 15m accepted into acceptance');
+    });
+    act.querySelector('.sa-no').addEventListener('click',function(){
+      sug.remove(); act.remove();
+      var rs=document.getElementById('railSug'); if(rs) rs.innerHTML='<span class="pa" style="background:#5a6577">✕</span><span style="font-size:12px;color:var(--ink-3)">MTTA suggestion rejected — Taikun won\'t re-raise it</span>';
+      toast('Rejected — logged so Taikun doesn\'t re-suggest it');
+    });
+  })();
+
+  // ===== ⌘K command palette =====
+  var pal=document.getElementById('pal'), palIn=document.getElementById('palIn'), palList=document.getElementById('palList'), palSel=0;
+  var CMDS=[
+    {g:'Go to', l:'Shape — the living brief', h:'G then S', f:function(){ setView('shape'); }},
+    {g:'Go to', l:'Watch — the fleet, live', h:'G then W', f:function(){ setView('watch'); }},
+    {g:'Go to', l:'Collect — results & case study', h:'G then C', f:function(){ setView('collect'); }},
+    {g:'Brief', l:'Comment on selection', h:'⌘⌥M', f:function(){ if(!commentOnSelection()) toast('Select some text in the brief first'); }},
+    {g:'Brief', l:'What changed — version history', h:'v1…v7', f:function(){ openSheet('sd-shaping'); }},
+    {g:'Brief', l:'Propose: compress to 2 weeks', h:'re-plan', f:function(){ setView('shape'); proposeTwoWeeks(); }},
+    {g:'Brief', l:'Resolve open thread — "Why $3.4k?"', h:'', f:function(){ resolveThread('cost'); }},
+    {g:'Open', l:'Kickoff deck — 6 slides, client-ready', h:'', f:function(){ openSheet('sh-deck'); }},
+    {g:'Open', l:'Strategy POV', h:'', f:function(){ openSheet('sh-pov'); }},
+    {g:'Open', l:'Prototype — the sign-in flow', h:'$0.4k', f:function(){ openSheet('sh-proto'); }},
+    {g:'Run', l:'Kick off — dispatch wave 1', h:'21 tasks', f:function(){ goBtn.click(); }},
+    {g:'Run', l:'Toggle dark mode', h:'', f:function(){ document.getElementById('themeBtn').click(); }}
+  ];
+  function palRender(q){
+    var rows=CMDS.filter(function(c){ return !q || (c.g+' '+c.l).toLowerCase().indexOf(q)>-1; });
+    palSel=Math.min(palSel, Math.max(0,rows.length-1));
+    var html='', lastG='';
+    rows.forEach(function(c,i){ if(c.g!==lastG){ html+='<div class="pgroup">'+c.g+'</div>'; lastG=c.g; }
+      html+='<button class="pi'+(i===palSel?' sel':'')+'" data-i="'+i+'"><svg><use href="#i-'+(c.g==='Go to'?'chev':c.g==='Run'?'bolt':'spark')+'"/></svg><span class="grow">'+c.l+'</span><span class="hint">'+c.h+'</span></button>'; });
+    palList.innerHTML=html || '<div class="pgroup" style="padding:14px 12px">No match — try "deck", "weeks", "watch"…</div>';
+    palList.querySelectorAll('.pi').forEach(function(b){ b.addEventListener('click',function(){ palRun(rows[+b.dataset.i]); }); });
+    pal._rows=rows;
+  }
+  function palRun(c){ hidePal(); if(c) c.f(); }
+  function showPal(){ pal.classList.add('on'); palIn.value=''; palSel=0; palRender(''); setTimeout(function(){ palIn.focus(); },40); }
+  function hidePal(){ pal.classList.remove('on'); }
+  palIn.addEventListener('input',function(){ palSel=0; palRender(palIn.value.trim().toLowerCase()); });
+  palIn.addEventListener('keydown',function(e){
+    var rows=pal._rows||[];
+    if(e.key==='ArrowDown'){ e.preventDefault(); palSel=Math.min(palSel+1, rows.length-1); palRender(palIn.value.trim().toLowerCase()); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); palSel=Math.max(palSel-1,0); palRender(palIn.value.trim().toLowerCase()); }
+    else if(e.key==='Enter'){ e.preventDefault(); palRun(rows[palSel]); }
+    else if(e.key==='Escape'){ hidePal(); }
+    e.stopPropagation();
+  });
+  document.addEventListener('keydown',function(e){
+    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); pal.classList.contains('on')? hidePal() : showPal(); }
+    if((e.metaKey||e.ctrlKey) && e.altKey && (e.key.toLowerCase()==='m'||e.code==='KeyM')){ e.preventDefault(); if(!commentOnSelection()) toast('Select text in the brief, then ⌘⌥M starts a thread'); }
+  });
+
+  // ===== the document reacts to your words =====
+  var twoWeeksOld=null;
+  function proposeTwoWeeks(){
+    var days=document.getElementById('dealDays');
+    twoWeeksOld={days:days.innerHTML, cost:document.getElementById('dealCost').innerHTML};
+    days.scrollIntoView({block:'center',behavior:'smooth'});
+    days.classList.add('redl'); days.innerHTML='<s>~9 days</s> <mark>~6 days</mark>';
+    setTimeout(function(){
+      showThreadAt(days,'Proposed — compress to 2 weeks',
+        '<div style="display:flex;gap:8px"><span class="tav">T</span><div>Doable without cutting scope: parallelize <b>DATA-7</b> with INT-1/2 on one extra runner. Parity unchanged.</div></div>'+
+        '<div class="diffcard"><div class="dh">Proposed · re-plan</div><div class="redl"><s>~9 days · $3.4k</s> → <mark>~6 days · $3.7k</mark> · 3 waves → 2</div><div class="da"><button class="pushback">Push back</button><button class="apply">Apply → v8</button></div></div>');
+    },450);
+  }
+  function applyTwoWeeks(){ document.getElementById('dealDays').innerHTML='~6 days';
+    document.getElementById('dealCost').innerHTML='<span class="cm" data-th="cost">$3.7k</span><small> est</small>';
+    var d=document.getElementById('dealDays').closest('.deal'); d.classList.add('flash'); setTimeout(function(){ d.classList.remove('flash'); },1400);
+    vbump('compressed to ~6 days, +$0.3k'); }
+  function revertTwoWeeks(){ if(twoWeeksOld){ document.getElementById('dealDays').innerHTML=twoWeeksOld.days; document.getElementById('dealDays').classList.remove('redl'); document.getElementById('dealCost').innerHTML=twoWeeksOld.cost; } }
+  sayIn.addEventListener('keydown',function(e){ if(e.key!=='Enter') return;
+    var v=sayIn.value.trim().toLowerCase(); sayIn.value='';
+    if(curView!=='shape'){ toast('Steering the fleet — open a session to watch it land'); return; }
+    if(v.indexOf('week')>-1 || v.indexOf('2 w')>-1){ proposeTwoWeeks(); }
+    else if(v){ toast('Taikun is drafting that as a diff — try "make it 2 weeks" for the wired demo'); }
+  });
+  document.addEventListener('click',function(e){ if(panel.classList.contains('on') && !panel.contains(e.target) && !e.target.closest('.cm') && !e.target.closest('.trow') && !e.target.closest('.seltool')) hideThread(); });
+
+  // ===== the agent window =====
+  var SESS={
+    atlas:{ av:'A', bg:'linear-gradient(150deg,#c0392b,#8e2018)', live:true,
+      t:'Atlas · SEN-6 — Wire Entra app registration', sub:'claude-code · sess_7fa1 · started 09:38',
+      meta:['high tier','$1.10 so far','42k tokens','lease: sso/entra','pinned to system v3'],
+      ph:'Steer Atlas — it hears you mid-flight, even on autopilot',
+      html:'<div class="tm">09:38</div>'+
+        '<div class="tl">⏺ claim_next → SEN-6 · lease sso/entra · clean tree</div>'+
+        '<div class="as">Wiring the Entra app registration. Reading the directory module first.</div>'+
+        '<div class="tl">⏺ Read(directory/entra.py)</div><div class="rs">⎿ 214 lines</div>'+
+        '<div class="tl">⏺ Update(directory/entra.py)</div>'+
+        '<div class="ad">  + def resolve_entra_app(tenant_id: str) -&gt; AppReg:</div>'+
+        '<div class="ad">  +     return _graph.app_registrations.get(tenant_id)</div>'+
+        '<div class="de">  -     raise NotImplementedError</div>'+
+        '<div class="tl">⏺ Bash(pytest -q tests/test_entra.py)</div><div class="rs ok">⎿ ✓ 12 passed in 3.2s</div>'+
+        '<div class="as">Tests green. Opening the PR and running the parity gate.</div>'+
+        '<div class="tl">⏺ Bash(gh pr create --title "Wire Entra app registration")</div>'+
+        '<div class="rs pr">⎿ PR #412 opened · CI running · 3/4 checks green</div>'+
+        '<div class="tm">09:41 · now</div>' },
+    codex:{ av:'C', bg:'linear-gradient(150deg,#206bc4,#16457f)', live:false,
+      t:'Codex · DATA-3 — Directory attribute sync', sub:'codex-cli · sess_2be4 · started 09:36',
+      meta:['balanced tier','$0.60 so far','28k tokens','lease: directory/sync'],
+      ph:'Steer Codex — it hears you mid-flight, even on autopilot',
+      html:'<div class="tm">09:36</div>'+
+        '<div class="tl">⏺ claim_next → DATA-3 · lease directory/sync</div>'+
+        '<div class="as">Mapping directory attributes to the shared contract from M1.</div>'+
+        '<div class="tl">⏺ Read(directory/schema.py)</div><div class="rs">⎿ 96 lines · contract v1 pinned</div>'+
+        '<div class="tl">⏺ Update(directory/sync.py)</div>'+
+        '<div class="ad">  + FIELD_MAP = {"mail": "email", "employeeId": "well_id"}</div>'+
+        '<div class="tl">⏺ Bash(pytest -q tests/test_sync.py)</div><div class="rs ok">⎿ ✓ 8 passed in 1.9s</div>'+
+        '<div class="as">Mapping matches the contract. Adding pagination for large directories next.</div>'+
+        '<div class="tm">09:44 · now</div>' },
+    nova:{ av:'N', bg:'linear-gradient(150deg,#2fb344,#1c7a2d)', live:false,
+      t:'Nova · QA-2 — e2e smoke on the sign-in flow', sub:'cursor-agent · sess_9c11 · started 09:39',
+      meta:['cheap tier','$0.30 so far','11k tokens','runs vs. the prototype'],
+      ph:'Steer Nova — it hears you mid-flight, even on autopilot',
+      html:'<div class="tm">09:39</div>'+
+        '<div class="tl">⏺ claim_next → QA-2 · no file lease needed</div>'+
+        '<div class="as">Running the e2e smoke against the approved prototype flow.</div>'+
+        '<div class="tl">⏺ Bash(npx playwright test signin.spec.ts)</div>'+
+        '<div class="rs ok">⎿ ✓ 6 of 7 passed · retrying 1 flaky (network idle)</div>'+
+        '<div class="tl">⏺ Bash(npx playwright test signin.spec.ts --retries=1)</div>'+
+        '<div class="rs ok">⎿ ✓ 7 of 7 passed · flow matches the prototype exactly</div>'+
+        '<div class="as">Sign-in, fallback, and provisioning paths all green. Writing the report.</div>'+
+        '<div class="tm">09:47 · now</div>' }
+  };
+  function fillSess(k){ var d=SESS[k];
+    var av=document.getElementById('sessAv'); av.textContent=d.av; av.style.background=d.bg;
+    document.getElementById('sessTitle').textContent=d.t;
+    document.getElementById('sessSub').textContent=d.sub;
+    document.getElementById('sessLive').style.display=d.live?'':'none';
+    document.getElementById('sessMeta').innerHTML=d.meta.map(function(m){ return '<span class="taste">'+m+'</span>'; }).join('');
+    document.getElementById('sessStream').innerHTML=d.html;
+    document.getElementById('steerIn').placeholder=d.ph;
+  }
+  var STEERS={ redirect:['use the shared session_store, not a new table','acknowledged — refactoring against session_store'],
+               hold:['hold after the current test run','will pause at the next safe boundary; nothing killed mid-thought'],
+               approve:['approve merge of PR #412 once CI is green','merge queued behind CI · closure gate will stamp it'] };
+  function steer(text, ack){ var st=document.getElementById('sessStream');
+    st.insertAdjacentHTML('beforeend','<div class="c-you">&gt; '+text+'</div>');
+    st.parentElement.scrollTop=st.parentElement.scrollHeight;
+    setTimeout(function(){ st.insertAdjacentHTML('beforeend','<div class="c-ack">⎿ '+ack+'</div>');
+      st.parentElement.scrollTop=st.parentElement.scrollHeight; },600);
+  }
+  document.querySelectorAll('.schip').forEach(function(c){ c.addEventListener('click',function(){ var sv=STEERS[c.dataset.steer]; steer(sv[0],sv[1]); }); });
+  var sin=document.getElementById('steerIn');
+  function sendSteer(){ if(sin.value.trim()){ steer(sin.value.trim(),'acknowledged — adjusting course'); sin.value=''; } }
+  document.getElementById('steerSend').addEventListener('click',sendSteer);
+  sin.addEventListener('keydown',function(e){ if(e.key==='Enter') sendSteer(); });
+
+  // sheets & panels
+  var back=document.getElementById('sheetback');
+  function closeAll(){ back.classList.remove('on'); document.querySelectorAll('.sheet,.side').forEach(function(x){ x.classList.remove('on'); }); }
+  function openSheet(id){ closeAll(); back.classList.add('on'); document.getElementById(id).classList.add('on'); }
+  document.querySelectorAll('[data-sheet]').forEach(function(t){ t.addEventListener('click',function(e){ e.preventDefault(); e.stopPropagation();
+    if(t.dataset.sess) fillSess(t.dataset.sess);
+    openSheet(t.dataset.sheet); }); });
+  back.addEventListener('click',closeAll);
+  document.querySelectorAll('.xbtn').forEach(function(x){ if(x.id!=='thX') x.addEventListener('click',closeAll); });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ closeAll(); hideThread(); hideSel(); hidePal(); } });
+  goBtn.addEventListener('click',function(){
+    if(curView==='shape'){ setView('watch'); toast('⚡ Wave 1 dispatched — SEN-7 · DATA-3 · QA-2 · parity gate, running in parallel'); }
+    else if(curView==='watch'){ toast('Fleet will pause at the next safe boundary — nothing is killed mid-thought'); }
+    else { toast('New engagement — drop a transcript and Taikun shapes it like this one'); }
+  });
+  refreshNeeds(); refreshRail(); fillSess('atlas');
+  document.querySelector('.page').classList.add('wide');
+})();
+</script>
+</body>
+</html>
