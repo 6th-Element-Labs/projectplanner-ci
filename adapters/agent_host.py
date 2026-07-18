@@ -1517,6 +1517,8 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
             last = row
             metadata = row.get("metadata") or {}
             status = str(row.get("status") or "").lower()
+            phase = str(
+                metadata.get("credential_admission_phase") or "").lower()
             if (str(row.get("task_id") or "") == expected["task_id"]
                     and str(row.get("host_id") or "") == expected["host_id"]
                     and str(row.get("agent_id") or "") == expected["agent_id"]
@@ -1524,6 +1526,7 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
                     and str(metadata.get("wake_id") or "") == expected["wake_id"]
                     and row.get("claim_id")
                     and metadata.get("work_session_id")
+                    and phase == "claim_bound"
                     and not row.get("stale")
                     and status in {"ready", "running"}):
                 return {"bound": True, "session": row}
@@ -1531,6 +1534,36 @@ def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
             break
         sleep(min(1.0, max(0.0, deadline - monotonic())))
     return {"bound": False, "reason": "runner_bind_timeout", "session": last}
+
+
+def _enrich_bound_runner_record(rec, session):
+    """Combine worker authority with supervisor-local Watch/Chat transport.
+
+    The worker owns the claim, Work Session, phase, status, and workspace.  The
+    supervisor owns the PTY/log/stream process details.  Preserve the former
+    while adding the latter so the central row becomes both authoritative and
+    actually watchable from the web.
+    """
+    rec = dict(rec or {})
+    session = dict(session or {})
+    local_metadata = dict(rec.get("metadata") or {})
+    bound_metadata = dict(session.get("metadata") or {})
+    return {
+        **rec,
+        "agent_id": session.get("agent_id") or rec.get("agent_id"),
+        "runtime": session.get("runtime") or rec.get("runtime"),
+        "task_id": session.get("task_id") or rec.get("task_id"),
+        "claim_id": session.get("claim_id") or rec.get("claim_id"),
+        "status": session.get("status") or rec.get("status"),
+        "cwd": session.get("cwd") or rec.get("cwd"),
+        "control": {
+            **dict(session.get("control") or {}),
+            **dict(rec.get("control") or {}),
+        },
+        # Bound values win if the local launch record still contains preclaim
+        # metadata. Top-level PTY fields are folded in by register_runner_session.
+        "metadata": {**local_metadata, **bound_metadata},
+    }
 
 
 def _acquire_provider_lease(wake, inventory, runner_session_id):
@@ -1812,6 +1845,13 @@ def run_once(inventory):
                 runner_registration = register_runner_session(
                     failed_rec, claimed_wake, inventory)
             else:
+                # The child publishes the durable claim/Work Session tuple; the
+                # supervisor publishes the local PTY transport. Join them only
+                # after claim_bound readiness so complete_wake cannot race the
+                # child's final admission update.
+                runner_registration = register_runner_session(
+                    _enrich_bound_runner_record(rec, runner_registration),
+                    claimed_wake, inventory)
                 result_reason = "runner_bound"
         elif bind_required:
             result_reason = (rec or {}).get("reason") or "launch_failed"

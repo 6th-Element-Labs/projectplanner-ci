@@ -105,10 +105,13 @@ bound_row = {
     "claim_id": "taskclaim-ui29",
     "status": "running", "stale": False,
     "metadata": {"wake_id": "wake-ui29-bind",
-                 "work_session_id": "worksession-ui29"},
+                 "work_session_id": "worksession-ui29",
+                 "credential_admission_phase": "claim_bound"},
 }
 polls = iter([
-    {"sessions": [{**bound_row, "claim_id": ""}]},
+    {"sessions": [{**bound_row, "claim_id": "", "metadata": {
+        **bound_row["metadata"], "credential_admission_phase": "preclaim",
+    }}]},
     {"sessions": [bound_row]},
 ])
 original_try = agent_host._try
@@ -124,7 +127,7 @@ barrier = agent_host.wait_for_runner_binding(
 agent_host._try = original_try
 ok(barrier.get("bound") is True
    and (barrier.get("session") or {}).get("claim_id") == "taskclaim-ui29",
-   "Running waits for the exact non-null claim and Work Session bind")
+   "Running waits for the exact claim-bound claim and Work Session bind")
 
 
 # Sessions launched earlier in one poll are already present in the supervisor's

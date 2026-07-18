@@ -156,7 +156,8 @@ def check_agent_host_bootstrap_authority(
             if completion_phase not in allowed_phases:
                 reasons.append("runner_completion_phase_invalid")
             allowed_completion_statuses = (
-                {"exited", "failed", "completed", "cancelled", "killed"}
+                {"ready", "running", "exited", "failed", "completed",
+                 "cancelled", "killed"}
                 if claim_bound else {"exited", "failed"}
             )
             if runner_status not in allowed_completion_statuses:
