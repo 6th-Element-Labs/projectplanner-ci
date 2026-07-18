@@ -504,9 +504,12 @@
                     <span id="aiacct-${provider.id}-flash" class="small text-secondary ms-2"></span>`;
             }
 
-            const apiRow = apiCap ? `<div class="d-flex align-items-center mt-3 pt-3 border-top small">
-                <span class="text-secondary me-2">Direct API key</span>${this._settingsCo15StateBadge(apiConnection ? 'supported' : (apiCap.effective_state || 'unavailable'))}
-                <span class="text-secondary ms-2">${apiConnection ? 'configured, separately metered' : 'not yet self-service from Settings'}</span>
+            const apiRow = apiCap ? `<div class="mt-3 pt-3 border-top small">
+                <div class="d-flex align-items-center mb-2">
+                    <span class="text-secondary me-2">Direct API key</span>${this._settingsCo15StateBadge(apiConnection ? 'supported' : (apiCap.effective_state || 'unavailable'))}
+                    <span class="text-secondary ms-2">${apiConnection ? 'configured, separately metered' : 'not yet self-service from Settings'}</span>
+                </div>
+                ${apiConnection ? this._settingsAiAccountApiConnectionRows(apiConnection) : ''}
                 </div>` : '';
 
             return `<div class="card mb-3" id="settings-ai-account-${provider.id}">
@@ -540,6 +543,22 @@
                     <button type="button" class="btn btn-outline-warning btn-sm me-1" ${disabled ? 'disabled' : ''} data-set-action="ai-accounts-revoke:${this.esc(ref)}"><i class="ti ti-ban me-1" aria-hidden="true"></i>Revoke</button>
                     <button type="button" class="btn btn-outline-danger btn-sm" data-set-action="ai-accounts-delete:${this.esc(ref)}"><i class="ti ti-trash me-1" aria-hidden="true"></i>Delete</button>
                 </div>`;
+        },
+
+        _settingsAiAccountApiConnectionRows(c) {
+            const budget = c.budget_policy || {};
+            const state = c.lifecycle_state || 'unknown';
+            const stateCls = state === 'active' ? 'bg-green-lt'
+                : state === 'expired' ? 'bg-yellow-lt' : 'bg-red-lt';
+            return this._settingsRows([
+                ['Status', `<span class="badge ${stateCls}">${this.esc(state)}</span>`],
+                ['Execution connection', `<code>${this.esc(c.execution_connection_id || 'missing')}</code>`],
+                ['Billing account', `<code>${this.esc(c.billing_account_fingerprint || 'missing')}</code>`],
+                ['Budget', budget.budget_id
+                    ? `<code>${this.esc(budget.budget_id)}</code> · ${this.esc(budget.currency || '')} ${this.esc(String(budget.ceiling ?? ''))}`
+                    : '<span class="text-danger">missing</span>'],
+                ['Routing', '<span class="badge bg-purple-lt">explicit API only</span> <span class="text-secondary">no personal fallback</span>'],
+            ]);
         },
 
         // Recomputed at click time (not kept live-synced on every keystroke — this codebase's

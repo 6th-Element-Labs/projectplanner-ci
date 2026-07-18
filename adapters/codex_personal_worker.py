@@ -42,6 +42,8 @@ def _redacted_binding(body: dict[str, Any], claim_id: str, lease_id: str) -> dic
         "provider_account_attribution": _account_attribution(
             body["provider"], body["provider_account_id"]),
         "credential_reference": body["credential_reference"],
+        "execution_connection_id": body["execution_connection_id"],
+        "connection_kind": "personal_subscription",
         "credential_lease_id": lease_id,
         "project": body["project"],
         "task_id": body["task_id"],
@@ -78,6 +80,11 @@ def _lease_body(binding: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]
     values = {
         "project": binding.get("project") or os.environ.get("PM_PROJECT", "switchboard"),
         "credential_reference": binding.get("credential_reference"),
+        "execution_connection_id": (
+            binding.get("execution_connection_id")
+            or binding.get("credential_reference")
+        ),
+        "tenant_id": binding.get("tenant_id"),
         "user_id": binding.get("user_id"),
         "provider": binding.get("provider"),
         "provider_account_id": binding.get("provider_account_id"),
@@ -91,7 +98,7 @@ def _lease_body(binding: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]
     if not all(values.get(key) for key in (
             "project", "credential_reference", "user_id", "provider",
             "provider_account_id", "task_id", "host_id", "runner_session_id",
-            "work_session_id", "account_affinity_id")):
+            "work_session_id", "account_affinity_id", "execution_connection_id")):
         raise RuntimeError("CO runtime binding is incomplete")
     return values
 
@@ -99,6 +106,8 @@ def _lease_body(binding: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]
 def _register_bound_runner(task: dict[str, Any], body: dict[str, Any]) -> None:
     claim_id = str(task.get("claim_id") or task.get("id") or "")
     runtime_binding = _binding()
+    execution_connection_id = str(
+        body.get("execution_connection_id") or body.get("credential_reference") or "")
     result = sb._http("POST", "/ixp/v1/register_runner_session", {
         "project": body["project"],
         "runner_session_id": body["runner_session_id"],
@@ -122,6 +131,9 @@ def _register_bound_runner(task: dict[str, Any], body: dict[str, Any]) -> None:
             "wake_id": os.environ.get("PM_CO_WAKE_ID"),
             "work_session_id": body["work_session_id"],
             "credential_reference": body["credential_reference"],
+            "execution_connection_id": execution_connection_id,
+            "connection_kind": "personal_subscription",
+            "billing_mode": "chatgpt_subscription",
             "provider_account_id": body["provider_account_id"],
             "provider_account_attribution": _account_attribution(
                 body["provider"], body["provider_account_id"]),
@@ -147,6 +159,8 @@ def _terminalize_bound_runner(
 ) -> None:
     claim_id = str(task.get("claim_id") or task.get("id") or "")
     runtime_binding = _binding()
+    execution_connection_id = str(
+        body.get("execution_connection_id") or body.get("credential_reference") or "")
     result = sb._http("POST", "/ixp/v1/register_runner_session", {
         "project": body["project"],
         "runner_session_id": body["runner_session_id"],
@@ -170,6 +184,9 @@ def _terminalize_bound_runner(
             "wake_id": os.environ.get("PM_CO_WAKE_ID"),
             "work_session_id": body["work_session_id"],
             "credential_reference": body["credential_reference"],
+            "execution_connection_id": execution_connection_id,
+            "connection_kind": "personal_subscription",
+            "billing_mode": "chatgpt_subscription",
             "provider_account_id": body["provider_account_id"],
             "provider_account_attribution": _account_attribution(
                 body["provider"], body["provider_account_id"]),
@@ -206,6 +223,8 @@ def _smoke_command() -> list[str]:
 def run(task: dict[str, Any]) -> dict[str, Any]:
     binding = _binding()
     lease_body = _lease_body(binding, task)
+    lease_body.setdefault(
+        "execution_connection_id", lease_body.get("credential_reference"))
     project = lease_body["project"]
     claim_id = str(task.get("claim_id") or task.get("id") or "")
     wake_id = str(os.environ.get("PM_CO_WAKE_ID") or "")
@@ -265,9 +284,12 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
         runtime = ProviderRuntimeAuth(base_environment=os.environ)
         provider = str(lease_body["provider"])
         runtime_root = runtime._runtime_root(provider)
-        provider_env, _state = runtime._materialize(provider, credential, runtime_root)
+        provider_env, _state = runtime._materialize(
+            provider, credential, runtime_root, auth_mode="chatgpt_subscription")
         _refuse_metered_keys(provider_env)
-        preflight = runtime._preflight(provider, provider_env, workspace)
+        preflight = runtime._preflight(
+            provider, provider_env, workspace,
+            expected_auth_mode="chatgpt_subscription")
         credential = ""
         if not preflight.get("authenticated") or preflight.get("auth_mode") != "chatgpt_personal":
             raise RuntimeError("Codex personal-subscription preflight failed")
@@ -314,6 +336,8 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
                 "started": True,
                 "reason": "codex_personal_subscription_smoke_completed",
                 "provider": provider,
+                "execution_connection_id": lease_body["execution_connection_id"],
+                "connection_kind": "personal_subscription",
                 "auth_mode": preflight.get("auth_mode"),
                 "credential_values_redacted": True,
                 "metered_api_key_paths_absent": True,
@@ -328,6 +352,9 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
                 "schema": "switchboard.co11_codex_personal_smoke.v1",
                 "started": True,
                 "provider": provider,
+                "execution_connection_id": lease_body["execution_connection_id"],
+                "connection_kind": "personal_subscription",
+                "billing_mode": "chatgpt_subscription",
                 "auth_mode": preflight.get("auth_mode"),
                 "personal_subscription": True,
                 "api_key_fallback": False,
@@ -376,6 +403,8 @@ def run(task: dict[str, Any]) -> dict[str, Any]:
                     "result": {
                         "started": False,
                         "reason": "codex_personal_subscription_runtime_failed",
+                        "execution_connection_id": lease_body["execution_connection_id"],
+                        "connection_kind": "personal_subscription",
                         "credential_values_redacted": True,
                     },
                 })

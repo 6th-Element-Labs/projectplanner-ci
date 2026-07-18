@@ -412,6 +412,22 @@ class ProviderRuntimeAuth:
         validate_runtime: bool = True,
     ) -> dict[str, Any]:
         """Run one command and return only redacted provider/account provenance."""
+        selected_connection_id = str(
+            binding.get("execution_connection_id")
+            or binding.get("credential_reference") or ""
+        ).strip()
+        selected_connection_kind = str(
+            binding.get("connection_kind") or "").strip()
+        binding_receipt = {
+            "execution_connection_id": selected_connection_id,
+            "connection_kind": selected_connection_kind or "unknown",
+            "task_id": str(binding.get("task_id") or ""),
+            "claim_id": str(binding.get("claim_id") or ""),
+            "runner_session_id": str(binding.get("runner_session_id") or ""),
+            "work_session_id": str(binding.get("work_session_id") or ""),
+            "host_id": str(binding.get("host_id") or ""),
+            "wake_id": str(binding.get("wake_id") or ""),
+        }
         try:
             provider = normalize_provider(str(binding.get("provider") or ""))
             credential_principal = (
@@ -424,6 +440,7 @@ class ProviderRuntimeAuth:
                 "allowed": False,
                 "status": "denied",
                 "error_code": exc.code,
+                **binding_receipt,
             }
         lane_command = [str(item) for item in command]
         if not lane_command or any(not item or "\x00" in item for item in lane_command):
@@ -432,8 +449,11 @@ class ProviderRuntimeAuth:
                 "allowed": False,
                 "status": "denied",
                 "error_code": "provider_runtime_command_invalid",
+                **binding_receipt,
             }
 
+        connection: dict[str, Any] = {}
+        actual_connection_id = ""
         try:
             connection = self.repository.get_metadata(
                 str(binding.get("credential_reference") or ""),
@@ -449,6 +469,17 @@ class ProviderRuntimeAuth:
                 }),
                 operation="launch",
             )
+            actual_connection_id = str(
+                connection.get("execution_connection_id")
+                or connection.get("credential_reference") or ""
+            ).strip()
+            if (not selected_connection_id or not actual_connection_id
+                    or selected_connection_id != actual_connection_id):
+                auth_policy = {
+                    "allowed": False,
+                    "reason_code": "execution_connection_binding_mismatch",
+                    "auth_mode": "",
+                }
         except CredentialVaultError:
             auth_policy = {
                 "allowed": False,
@@ -477,6 +508,11 @@ class ProviderRuntimeAuth:
                 "error_code": str(
                     auth_policy.get("reason_code") or "provider_auth_policy_denied"),
                 "provider": provider,
+                **binding_receipt,
+                "bound_execution_connection_id": actual_connection_id,
+                "connection_kind": str(
+                    connection.get("connection_kind")
+                    or selected_connection_kind or "unknown"),
                 "lease_id": str(lease_id or ""),
                 "lease_state": lease_state,
             }
@@ -487,6 +523,14 @@ class ProviderRuntimeAuth:
             "allowed": False,
             "status": "denied",
             "provider": provider,
+            **binding_receipt,
+            "bound_execution_connection_id": actual_connection_id,
+            "connection_kind": str(
+                connection.get("connection_kind")
+                or selected_connection_kind or "unknown"),
+            "billing_account_fingerprint": connection.get(
+                "billing_account_fingerprint"),
+            "budget_policy": dict(connection.get("budget_policy") or {}),
             "customer_user_id": str(binding.get("user_id") or ""),
             "provider_account": _account_fingerprint(
                 provider, str(binding.get("provider_account_id") or "")),
@@ -494,8 +538,6 @@ class ProviderRuntimeAuth:
                 "principal_id": credential_principal.principal_id,
                 "principal_kind": credential_principal.principal_kind,
             },
-            "runner_session_id": str(binding.get("runner_session_id") or ""),
-            "work_session_id": str(binding.get("work_session_id") or ""),
             "lease_id": str(lease_id or ""),
             "residue_purged": False,
         }

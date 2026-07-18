@@ -106,6 +106,10 @@ class ProviderCapacityRepository:
             raise CredentialVaultError(exc.code, exc.message) from exc
         normalized = {
             "credential_reference": str(raw.get("credential_reference") or "").strip(),
+            "execution_connection_id": str(
+                raw.get("execution_connection_id")
+                or raw.get("credential_reference") or ""
+            ).strip(),
             "project_id": str(raw.get("project") or raw.get("project_id") or "").strip().lower(),
             "tenant_id": str(raw.get("tenant_id") or "").strip(),
             "user_id": str(raw.get("user_id") or "").strip(),
@@ -148,6 +152,8 @@ class ProviderCapacityRepository:
             and connection.get("user_id") == binding["user_id"]
             and connection.get("provider") == binding["provider"]
             and connection.get("provider_account_id") == binding["provider_account_id"]
+            and connection.get("credential_reference")
+            == binding.get("execution_connection_id")
             and binding["project_id"] in _json_list(connection.get("project_allowlist_json"))
         )
         if not exact:
@@ -174,6 +180,7 @@ class ProviderCapacityRepository:
         item = dict(row)
         return {
             "schema": PROVIDER_CAPACITY_ACCOUNT_SCHEMA,
+            "execution_connection_id": item.get("credential_reference"),
             "user_id": item.get("user_id"),
             "provider": item.get("provider"),
             "provider_account": account_fingerprint(
@@ -198,6 +205,7 @@ class ProviderCapacityRepository:
         return {
             "schema": PROVIDER_CAPACITY_CHECKPOINT_SCHEMA,
             "checkpoint_id": item.get("checkpoint_id"),
+            "execution_connection_id": item.get("credential_reference"),
             "provider": item.get("provider"),
             "provider_account": account_fingerprint(
                 str(item.get("provider") or ""),
@@ -439,6 +447,7 @@ class ProviderCapacityRepository:
         normalized = self._normalize_binding(
             binding, require_execution_binding=require_execution_binding)
         task = dict(task_policy or {})
+        connection: dict[str, Any] = {}
 
         def decision(allowed: bool, state: str, reason: str, **extra: Any) -> dict[str, Any]:
             return {
@@ -446,6 +455,9 @@ class ProviderCapacityRepository:
                 "allowed": allowed,
                 "state": state,
                 "reason_code": reason,
+                "execution_connection_id": normalized["execution_connection_id"],
+                "connection_kind": str(
+                    connection.get("connection_kind") or "personal_subscription"),
                 "provider": normalized["provider"],
                 "provider_account": account_fingerprint(
                     normalized["provider"], normalized["provider_account_id"]),

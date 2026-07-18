@@ -27,6 +27,11 @@ from .ownership import (
     policy_digest,
     require_secret_free_public_payload,
 )
+from .codex_conformance import (
+    CODEX_CONFORMANCE_ROW_SCHEMA,
+    CODEX_CONFORMANCE_SCHEMA,
+    evaluate_codex_conformance,
+)
 
 __all__ = [
     "CredentialPolicyError",
@@ -53,4 +58,7 @@ __all__ = [
     "ownership_proof",
     "policy_digest",
     "require_secret_free_public_payload",
+    "CODEX_CONFORMANCE_ROW_SCHEMA",
+    "CODEX_CONFORMANCE_SCHEMA",
+    "evaluate_codex_conformance",
 ]

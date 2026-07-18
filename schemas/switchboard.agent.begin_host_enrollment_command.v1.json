@@ -3,6 +3,13 @@
   "additionalProperties": false,
   "description": "Operator-authorized request for a short-lived bootstrap ceremony.",
   "properties": {
+    "lane_allowlist": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Lane Allowlist",
+      "type": "array"
+    },
     "owner_user_id": {
       "title": "Owner User Id",
       "type": "string"

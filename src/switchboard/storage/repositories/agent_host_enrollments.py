@@ -110,6 +110,7 @@ def begin_agent_host_enrollment(
     tenant_allowlist: Iterable[Any] | None = None,
     project_allowlist: Iterable[Any] | None = None,
     provider_allowlist: Iterable[Any] | None = None,
+    lane_allowlist: Iterable[Any] | None = None,
     package_version: str = "",
     ttl_seconds: int = 600,
     created_by_principal_id: str = "",
@@ -135,6 +136,8 @@ def begin_agent_host_enrollment(
     # project.  Silently storing a non-empty allowlist that omits it creates a
     # bootstrap which can be consumed but whose host can never register.
     projects = sorted(set([project, *_normalized_list(project_allowlist)]))
+    lanes = _normalized_list(lane_allowlist) or list(PERSONAL_EXECUTION_POLICY["lanes"])
+    execution_policy = {**PERSONAL_EXECUTION_POLICY, "lanes": lanes}
     with _conn(project) as connection:
         connection.execute(
             "INSERT INTO agent_host_enrollments("
@@ -155,7 +158,7 @@ def begin_agent_host_enrollment(
                     _normalized_list(provider_allowlist) or ["openai-codex"],
                     sort_keys=True,
                 ),
-                json.dumps(PERSONAL_EXECUTION_POLICY, sort_keys=True),
+                json.dumps(execution_policy, sort_keys=True),
                 hash_token(bootstrap_code),
                 now + ttl_seconds,
                 str(package_version or "").strip() or None,
@@ -175,6 +178,7 @@ def begin_agent_host_enrollment(
                     "enrollment_id": enrollment_id,
                     "owner_user_id": owner_user_id,
                     "requested_host_id": requested_host_id or None,
+                    "lanes": lanes,
                     "bootstrap_expires_at": now + ttl_seconds,
                 }, sort_keys=True),
                 now,

@@ -1856,6 +1856,13 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_TENANTS": ",".join(config.get("tenant_allowlist") or []),
         "PM_HOST_PROJECTS": ",".join(config.get("project_allowlist") or [config["project"]]),
         "PM_HOST_PROVIDERS": ",".join(config.get("provider_allowlist") or []),
+        # Enrollment is itself the server-attested trusted-private boundary: the
+        # host is user-owned, has an isolated native Codex auth root, and can only
+        # advertise the persisted server-issued policy.  Mark that boundary
+        # explicitly so provider-native connection binding does not downgrade a
+        # correctly enrolled host to the generic managed/user-owned class merely
+        # because it does not consume centrally leased credentials.
+        "PM_AUTH_HOST_CLASSES": "trusted_private_worker,user_owned_persistent",
         "PM_HOST_LOCAL_AUTH_AVAILABLE": "1" if local_auth.get("authenticated") else "0",
         "PM_HOST_LOCAL_AUTH_MODE": local_auth.get("auth_mode") or "unavailable",
         "PM_HOST_LOCAL_AUTH_ACCOUNT_PROOF": local_auth.get("account_fingerprint") or "",

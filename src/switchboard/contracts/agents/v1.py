@@ -224,6 +224,7 @@ class BeginHostEnrollmentCommand(VersionedModel):
     tenant_allowlist: list[str] = Field(default_factory=list)
     project_allowlist: list[str] = Field(default_factory=list)
     provider_allowlist: list[str] = Field(default_factory=list)
+    lane_allowlist: list[str] = Field(default_factory=list)
     package_version: str = ""
     ttl_seconds: int = 600
 
@@ -234,6 +235,7 @@ class BeginHostEnrollmentCommand(VersionedModel):
         return str(value or "").strip()
 
     @field_validator("tenant_allowlist", "project_allowlist", "provider_allowlist",
+                     "lane_allowlist",
                      mode="before")
     @classmethod
     def _coerce_allowlist(cls, value: Any) -> list[str]:

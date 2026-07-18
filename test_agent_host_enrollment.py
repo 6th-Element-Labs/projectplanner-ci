@@ -150,6 +150,7 @@ def begin(host_id: str):
         "tenant_allowlist": ["tenant-adapter18"],
         "project_allowlist": [PROJECT],
         "provider_allowlist": ["openai-codex"],
+        "lane_allowlist": ["ADAPTER"],
         "package_version": "0.2.0",
         "ttl_seconds": 300,
     })
@@ -322,6 +323,15 @@ try:
        and default_provider.json()["enrollment"]["provider_allowlist"]
        == ["openai-codex"],
        "default enrollment admits the personal Codex provider without caller overrides")
+    co_lane = client.post("/ixp/v1/agent-host-enrollments", json={
+        "project": PROJECT,
+        "owner_user_id": "user-adapter18",
+        "requested_host_id": "host/co16-personal",
+        "lane_allowlist": ["CO"],
+    })
+    ok(co_lane.status_code == 200
+       and co_lane.json()["enrollment"]["execution_policy"]["lanes"] == ["CO"],
+       "operator-authorized enrollment preserves the requested CO lane in server policy")
     mismatched_projects = client.post("/ixp/v1/agent-host-enrollments", json={
         "project": PROJECT,
         "owner_user_id": "user-adapter18",
@@ -1996,6 +2006,8 @@ try:
        and launched_env.get("PM_AGENT_WORK_MODULE") == "adapters.codex_local_worker:run"
        and launched_env.get("PM_CODEX_EXECUTABLE") == str(TEST_CODEX)
        and launched_env.get("PM_PERSONAL_AGENT_HOST_EXECUTION") == "1"
+       and launched_env.get("PM_AUTH_HOST_CLASSES")
+       == "trusted_private_worker,user_owned_persistent"
        and launched_env.get("PM_PERSONAL_WORKSPACE_ROOT") == str(linux_workspace_root)
        and launched_env.get("CODEX_HOME") == str(linux_codex_home.resolve())
        and launched_env.get("PM_AGENT_HOST_CODEX_HOME") == str(linux_codex_home.resolve())
