@@ -173,8 +173,14 @@
         const status = scope && scope.status;
         const last = (scope && scope.last_result) || {};
         const taskReceipts = (last.receipts || []).length;
+        const reason = last.waiting_reason || '';
         const stateLabel = status === 'paused' ? 'Paused'
-            : (last.status === 'waiting' ? 'Waiting for dependencies/capacity' : 'Autopilot running');
+            : (last.status === 'waiting'
+                ? (reason === 'no_eligible_host' ? 'Waiting for execution capacity' : 'Waiting for dependencies/policy')
+                : 'Autopilot running');
+        const waitingHelp = last.status === 'waiting' && reason === 'no_eligible_host'
+            ? `<span class="small text-warning"><i class="ti ti-alert-triangle me-1"></i>No matching Mac or AWS slot is live yet; queued AWS capacity may still be booting. <a href="#tab-fleet" data-autopilot-open-fleet>Open Fleet</a></span>`
+            : '';
         if (!scope) {
             return `<div class="d-flex flex-column align-items-end gap-1">
                 <button class="btn btn-primary" type="button" data-autopilot-action="start" data-autopilot-scope="deliverable">
@@ -187,7 +193,7 @@
                 <span class="badge bg-${status === 'paused' ? 'yellow' : 'green'}-lt"><span class="status-dot ${status === 'active' ? 'status-dot-animated ' : ''}bg-${status === 'paused' ? 'yellow' : 'green'} me-1"></span>${this.esc(stateLabel)}${taskReceipts ? ` · ${taskReceipts} this wave` : ''}</span>
                 <button class="btn btn-sm btn-outline-primary" type="button" data-autopilot-action="${status === 'paused' ? 'resume' : 'pause'}" data-autopilot-scope="deliverable"><i class="ti ti-${status === 'paused' ? 'player-play' : 'player-pause'} me-1"></i>${status === 'paused' ? 'Resume' : 'Pause'}</button>
                 <button class="btn btn-sm btn-outline-danger" type="button" data-autopilot-action="stop" data-autopilot-scope="deliverable"><i class="ti ti-player-stop me-1"></i>Stop</button>
-            </div><span id="mission-autopilot-flash" class="small text-secondary"></span></div>`;
+            </div>${waitingHelp}<span id="mission-autopilot-flash" class="small text-secondary"></span></div>`;
     },
 
     _taskAutopilotButtonHtml(taskId, taskProject, compact) {

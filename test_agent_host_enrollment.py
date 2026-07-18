@@ -1096,8 +1096,8 @@ try:
        and mac_config["provider_allowlist"] == ["openai-codex"]
        and mac_config["lanes"] == ["ADAPTER"]
        and mac_config["capabilities"] == ["docs", "github", "python", "tests"]
-       and mac_config["max_sessions"] == 1
-       and mac_config["personal_wakes_only"] is True
+       and mac_config["max_sessions"] == 8
+       and mac_config["personal_wakes_only"] is False
        and mac_config["platform"] == "darwin"
        and mac_config["service_path"] == str(mac_paths["service_path"])
        and mac_codex_home == (mac_paths["state_root"] / "codex-home").resolve()
@@ -1222,7 +1222,7 @@ try:
                     "provider_credential_exported": False,
                 },
             }],
-            "limits": {"max_sessions": 1},
+            "limits": {"max_sessions": 8},
             "capacity": {
                 "owner": {"user_id": "user-adapter18",
                     "tenant_allowlist": ["tenant-adapter18"],
@@ -2005,7 +2005,8 @@ try:
        and launched_env.get("PM_MCP_TOKEN")
        and launched_env.get("PM_AGENT_WORK_MODULE") == "adapters.codex_local_worker:run"
        and launched_env.get("PM_CODEX_EXECUTABLE") == str(TEST_CODEX)
-       and launched_env.get("PM_PERSONAL_AGENT_HOST_EXECUTION") == "1"
+       and launched_env.get("PM_PERSONAL_AGENT_HOST_EXECUTION") == "0"
+       and launched_env.get("PM_PERSONAL_AGENT_HOST_RECOVERY") == "1"
        and launched_env.get("PM_AUTH_HOST_CLASSES")
        == "trusted_private_worker,user_owned_persistent"
        and launched_env.get("PM_PERSONAL_WORKSPACE_ROOT") == str(linux_workspace_root)

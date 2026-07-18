@@ -229,6 +229,7 @@ WRITE_TOOLS = frozenset({
     "sweep_monitors", "unlink_task_from_deliverable",
     "update_deliverable_breakdown_proposal", "update_kpi_value",
     "update_mission_narrative", "update_project", "update_task", "update_work_session",
+    "update_agent_host_execution_policy",
     "verify_deliverable_closure", "verify_external_effect", "verify_offline_completion",
     "verify_outcome", "verify_project_consolidation", "verify_project_purge_intent",
     "verify_provider_connection",

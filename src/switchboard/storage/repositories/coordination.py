@@ -1474,7 +1474,9 @@ def claim_wake(host_id: str, wake_id: str, actor: str = "system",
             if not host_identity.get("allowed"):
                 return {"claimed": False, **host_identity, "host_id": host_id,
                         "wake_id": wake_id}
-            if host_identity.get("required") and not personal:
+            execution_policy = dict(host_identity.get("execution_policy") or {})
+            if (host_identity.get("required") and not personal
+                    and execution_policy.get("personal_wakes_only") is not False):
                 return {"claimed": False, "reason": "personal_host_execution_policy_denied",
                         "reason_codes": ["personal_wakes_only"],
                         "host_id": host_id, "wake_id": wake_id}
@@ -2794,6 +2796,7 @@ def _enrollment_inventory_error(identity: Dict[str, Any],
             "message": "host inventory or execution capability does not match server-issued enrollment policy",
             "required": True,
             "allowed": False,
+            "authoritative_execution_policy": execution,
         }
     return None
 
@@ -2849,7 +2852,11 @@ def register_host(inventory: Dict[str, Any], principal_id: str = "",
         if _store_facade()._sqlite_busy(exc):
             return _control_plane_unavailable("register_host", project, started_at, exc)
         raise
-    return _host_row(row, now=now)
+    result = _host_row(row, now=now)
+    if identity.get("required"):
+        result["authoritative_execution_policy"] = dict(
+            identity.get("execution_policy") or {})
+    return result
 
 
 def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
@@ -2896,7 +2903,11 @@ def heartbeat_host(host_id: str, active_sessions: Optional[int] = None,
         if _store_facade()._sqlite_busy(exc):
             return _control_plane_unavailable("heartbeat_host", project, started_at, exc)
         raise
-    return _host_row(row, now=now)
+    result = _host_row(row, now=now)
+    if identity.get("required"):
+        result["authoritative_execution_policy"] = dict(
+            identity.get("execution_policy") or {})
+    return result
 
 
 def list_agent_hosts(runtime: str = "", lane: str = "", capability: str = "",

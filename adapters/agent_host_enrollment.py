@@ -1273,7 +1273,8 @@ def _install_host_unlocked(*, bundle_dir: Path, public_key_path: Path, bootstrap
             "capabilities") or [])),
         "max_sessions": int((enrollment.get("execution_policy") or {}).get(
             "max_sessions") or 1),
-        "personal_wakes_only": True,
+        "personal_wakes_only": bool((enrollment.get("execution_policy") or {}).get(
+            "personal_wakes_only", True)),
         "owner_user_id": str(enrollment.get("owner_user_id") or ""),
         "tenant_allowlist": sorted(set(enrollment.get("tenant_allowlist") or [])),
         "project_allowlist": enrollment.get("project_allowlist") or [project],
@@ -1851,6 +1852,7 @@ def service_run(identity_path: Path, config_path: Path) -> None:
         "PM_HOST_CAPABILITIES": ",".join(config.get("capabilities") or []),
         "PM_HOST_MAX_SESSIONS": str(config.get("max_sessions") or 1),
         "PM_PERSONAL_AGENT_HOST_EXECUTION": "1" if config.get("personal_wakes_only") else "0",
+        "PM_PERSONAL_AGENT_HOST_RECOVERY": "1",
         "PM_PERSONAL_WORKSPACE_ROOT": config.get("workspace_root") or "",
         "PM_HOST_OWNER_USER_ID": config.get("owner_user_id") or "",
         "PM_HOST_TENANTS": ",".join(config.get("tenant_allowlist") or []),

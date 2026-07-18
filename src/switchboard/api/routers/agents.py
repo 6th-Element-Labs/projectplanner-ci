@@ -26,6 +26,7 @@ from switchboard.application.contracts.agents import (
     FinalizeHostEnrollmentCommand,
     RevokeHostIdentityCommand,
     RotateHostIdentityCommand,
+    UpdateHostExecutionPolicyCommand,
 )
 
 
@@ -181,6 +182,19 @@ def create_router(*, resolve_project: ProjectResolver,
         payload["project"] = project
         return control_plane_http(enrollment_command.revoke_mapping_result(
             payload, actor=auth.actor(principal)))
+
+    @router.post("/ixp/v1/agent-host-enrollments/execution-policy")
+    async def ixp_update_agent_host_execution_policy(
+            request: Request,
+            body: UpdateHostExecutionPolicyCommand = Body(...)):
+        payload = body.model_dump(by_alias=True)
+        project = resolve_body_project(payload)
+        principal = resolve_principal(
+            request, project, ("write:system",), dev_actor="agent-host-policy")
+        payload["project"] = project
+        return control_plane_http(
+            enrollment_command.update_execution_policy_mapping_result(
+                payload, actor=auth.actor(principal), principal_id=principal["id"]))
 
     @router.get("/ixp/v1/agent-host-enrollment")
     async def ixp_agent_host_enrollment_status(

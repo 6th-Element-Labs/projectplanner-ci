@@ -393,6 +393,79 @@ def heartbeat_capacity(inventory):
     return capacity
 
 
+def apply_authoritative_execution_policy(inventory, response):
+    """Hot-apply the authenticated server policy to one enrolled personal host.
+
+    The enrollment record is the durable authority.  Local installer environment
+    values are only bootstrap defaults, so an operator can broaden or tighten lane
+    scope and concurrency without rotating credentials or touching launchd.
+    """
+    policy = dict((response or {}).get("authoritative_execution_policy") or {})
+    if not policy:
+        return False
+    if policy.get("runtime") != "codex" or policy.get("allow_global_claim") is not False:
+        print("[agent_host] refused invalid authoritative execution policy", flush=True)
+        return False
+    try:
+        maximum = int(policy.get("max_sessions"))
+    except (TypeError, ValueError):
+        return False
+    if not 1 <= maximum <= 32:
+        return False
+    lane_mode = str(policy.get("lane_mode") or "explicit")
+    lanes = sorted({str(item).strip() for item in policy.get("lanes") or []
+                    if str(item).strip()})
+    if lane_mode not in {"explicit", "all_project_lanes"}:
+        return False
+    if lane_mode == "explicit" and not lanes:
+        return False
+    if lane_mode == "all_project_lanes":
+        lanes = []
+    runtimes = inventory.get("runtimes") or []
+    if len(runtimes) != 1 or runtimes[0].get("runtime") != "codex":
+        return False
+    runtime = runtimes[0]
+    before = json.dumps({
+        "lanes": runtime.get("lanes"),
+        "capabilities": runtime.get("capabilities"),
+        "policy": runtime.get("policy"),
+        "max_sessions": (inventory.get("limits") or {}).get("max_sessions"),
+    }, sort_keys=True, default=str)
+    host_policy = dict(runtime.get("policy") or {})
+    host_policy.update({
+        "mode": "project_wide" if lane_mode == "all_project_lanes" else "lane_scoped",
+        "allow_message_only": True,
+        "allow_work": bool(policy.get("allow_work")),
+        "allow_global_claim": False,
+        "allowed_lanes": lanes,
+        "lane_mode": lane_mode,
+    })
+    runtime.update({
+        "lanes": lanes,
+        "capabilities": list(policy.get("capabilities") or []),
+        "policy": host_policy,
+    })
+    runtime.setdefault("control", {})["host_policy"] = host_policy["mode"]
+    inventory["policy"] = host_policy
+    inventory.setdefault("limits", {})["max_sessions"] = maximum
+    capacity = inventory.setdefault("capacity", {})
+    capacity["headroom"] = max(0, maximum - active_session_count(inventory))
+    placement = capacity.setdefault("placement", {})
+    placement.setdefault("concurrency", {})["max_sessions"] = maximum
+    after = json.dumps({
+        "lanes": runtime.get("lanes"),
+        "capabilities": runtime.get("capabilities"),
+        "policy": runtime.get("policy"),
+        "max_sessions": inventory["limits"]["max_sessions"],
+    }, sort_keys=True, default=str)
+    changed = before != after
+    if changed:
+        print(
+            f"[agent_host] applied policy revision {policy.get('revision') or '?'}: "
+            f"lane_mode={lane_mode} max_sessions={maximum}", flush=True)
+    return changed
+
+
 def validate_personal_wake_binding(wake, inventory):
     """Fail closed when a personal-host wake opts into the exact-bind contract."""
     policy = (wake or {}).get("policy") or {}
@@ -491,7 +564,8 @@ def eligible_runtime(wake, inventory):
             if not rt_policy.get("allow_work"):
                 continue
             if want_lane:
-                if want_lane not in rt_lanes:
+                if (rt_policy.get("lane_mode") != "all_project_lanes"
+                        and want_lane not in rt_lanes):
                     continue
             elif not rt_policy.get("allow_global_claim"):
                 continue
@@ -1447,9 +1521,14 @@ def run_once(inventory):
         return handle_drain(drain_request, inventory)
     host_id = inventory["host_id"]
     capacity = heartbeat_capacity(inventory)
-    _try("POST", P_HEARTBEAT_HOST, {"project": PROJECT, "host_id": host_id,
-                                    "active_sessions": capacity["active_sessions"],
-                                    "capacity": capacity})
+    heartbeat = _try("POST", P_HEARTBEAT_HOST, {
+        "project": PROJECT, "host_id": host_id,
+        "active_sessions": capacity["active_sessions"], "capacity": capacity,
+    })
+    if apply_authoritative_execution_policy(inventory, heartbeat):
+        advertised = _try("POST", P_REGISTER_HOST, inventory)
+        apply_authoritative_execution_policy(inventory, advertised)
+        capacity = heartbeat_capacity(inventory)
     local_auth = capacity.get("local_auth")
     if isinstance(local_auth, dict) and local_auth.get("available") is not True:
         return {
@@ -1461,7 +1540,11 @@ def run_once(inventory):
             "auth_available": False,
         }
     recovery = None
-    if _truthy(os.environ.get("PM_PERSONAL_AGENT_HOST_EXECUTION")):
+    recovery_enabled = (
+        _truthy(os.environ.get("PM_PERSONAL_AGENT_HOST_RECOVERY"))
+        or _truthy(os.environ.get("PM_PERSONAL_AGENT_HOST_EXECUTION"))
+    )
+    if recovery_enabled:
         try:
             from codex_local_worker import resume_pending_postprocessing
             recovery = resume_pending_postprocessing()
@@ -1477,15 +1560,15 @@ def run_once(inventory):
         # checkpoint/claim completion. The daemon retries this durable receipt on
         # every poll; after the bounded deadline it is retained as an operator-visible
         # quarantine instead of permanently disabling unrelated host work.
-        if recovery.get("pending_count"):
-            return {
-                "host_id": host_id,
-                "pending": 0,
-                "acted": [],
-                "refused": [],
-                "runner_controls": [],
-                "postprocessing_recovery": recovery,
-            }
+    if recovery and recovery.get("pending_count"):
+        return {
+            "host_id": host_id,
+            "pending": 0,
+            "acted": [],
+            "refused": [],
+            "runner_controls": [],
+            "postprocessing_recovery": recovery,
+        }
     controls = handle_runner_controls(inventory)
     listed = _try("GET", f"{P_LIST_WAKES}?project={PROJECT}&status=pending") or {}
     wakes = wakes_bound_to_host(listed.get("wake_intents") or listed.get("wakes") or [])
@@ -1537,23 +1620,30 @@ def run_once(inventory):
         execution_binding = ((claimed_wake.get("policy") or {}).get(
             "execution_binding") or {})
         launch_env = ({
-            "PM_CO_ACCOUNT_BINDING_JSON": json.dumps(
-                (claimed_wake.get("policy") or {}).get("account_binding") or {},
-                sort_keys=True,
-            ),
-            "PM_CO_WAKE_ID": str(claimed_wake.get("wake_id") or wake_id or ""),
-            "PM_CO_HOST_ID": str(host_id or ""),
             "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
             "PM_AUTO_WORK_SESSION": "1",
             "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
-            "PM_PERSONAL_AGENT_HOST_EXECUTION": (
-                "1" if claimed_exact_binding.get("required") else "0"),
-            "PM_WORK_SESSION_ID": str(binding.get("work_session_id") or ""),
-            "PM_CLAIM_ID": str(binding.get("claim_id") or ""),
-            "PM_SOURCE_SHA": str(execution_binding.get("source_sha") or ""),
-            "PM_EXECUTION_CONNECTION_ID": str(
-                execution_binding.get("execution_connection_id") or ""),
-        } if binding else {})
+            "PM_PERSONAL_AGENT_HOST_EXECUTION": "0",
+        } if claimed_wake.get("task_id") else {})
+        if binding:
+            launch_env.update({
+                "PM_CO_ACCOUNT_BINDING_JSON": json.dumps(
+                    (claimed_wake.get("policy") or {}).get("account_binding") or {},
+                    sort_keys=True,
+                ),
+                "PM_CO_WAKE_ID": str(claimed_wake.get("wake_id") or wake_id or ""),
+                "PM_CO_HOST_ID": str(host_id or ""),
+                "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
+                "PM_AUTO_WORK_SESSION": "1",
+                "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
+                "PM_PERSONAL_AGENT_HOST_EXECUTION": (
+                    "1" if claimed_exact_binding.get("required") else "0"),
+                "PM_WORK_SESSION_ID": str(binding.get("work_session_id") or ""),
+                "PM_CLAIM_ID": str(binding.get("claim_id") or ""),
+                "PM_SOURCE_SHA": str(execution_binding.get("source_sha") or ""),
+                "PM_EXECUTION_CONNECTION_ID": str(
+                    execution_binding.get("execution_connection_id") or ""),
+            })
         rec = (launch(claimed_wake, inventory, runner_session_id=runner_session_id,
                       extra_env=launch_env)
                if runner_session_id else launch(claimed_wake, inventory))
@@ -1656,7 +1746,10 @@ def run(interval=10, once=False):
                            or bool(drain_request) != drain_advertised)
         if should_register:
             reg = _try("POST", P_REGISTER_HOST, advertised)
-            registered = bool(reg)
+            if apply_authoritative_execution_policy(inv, reg):
+                advertised = co_drain.inventory_for_drain(inv) if drain_request else inv
+                reg = _try("POST", P_REGISTER_HOST, advertised)
+            registered = bool(reg and not reg.get("error"))
             drain_advertised = bool(drain_request and reg)
             last_register_at = now
             print(f"[agent_host] registered {inv['host_id']} ({'ok' if reg else 'retrying'})",

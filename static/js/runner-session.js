@@ -62,6 +62,10 @@
                 taskId,
             ));
         });
+        body.querySelectorAll('[data-runner-watch-task]').forEach((btn) => {
+            btn.addEventListener('click', () => this.openRunnerSessionPanel(
+                btn.getAttribute('data-runner-watch-task') || taskId));
+        });
     },
 
     _runnerSessionRow(s) {
@@ -81,6 +85,8 @@
         const failure = env.failure_reason ? `<div class="text-danger small">${this.esc(env.failure_reason)}</div>` : '';
         const btn = (action, icon, label, color, disabled) =>
             `<button class="btn btn-sm btn-${color}" data-runner-id="${this.esc(s.runner_session_id)}" data-runner-action="${action}"${disabled ? ' disabled' : ''} title="${this.esc(label)}"><i class="ti ti-${icon}"></i></button>`;
+        const watch = s.task_id && !s.stale && s.status === 'running'
+            ? `<button class="btn btn-sm btn-azure" data-runner-watch-task="${this.esc(s.task_id)}" title="Watch / Chat"><i class="ti ti-terminal-2 me-1"></i>Watch</button>` : '';
         return `<tr>
             <td><div class="font-monospace small">${this.esc(s.runner_session_id)}</div><span class="badge bg-${statusColor}-lt">${this.esc(s.status || 'unknown')}${s.stale ? ' · stale' : ''}</span></td>
             <td>${this.esc(s.host_id || '—')}</td>
@@ -90,6 +96,7 @@
             <td><span class="badge bg-${statusColor}-lt">${this.esc(env.status || s.status || 'unknown')}</span>${uptime ? `<span class="text-secondary small ms-1">${this.esc(uptime)}</span>` : ''}${failure}${logTail}</td>
             <td class="text-secondary small">${this.esc(snapText)}</td>
             <td class="text-end"><div class="btn-list justify-content-end flex-nowrap">
+                ${watch}
                 ${btn('health', 'activity-heartbeat', 'Health', 'outline-secondary', !canHealth)}
                 ${btn('logs', 'file-text', 'Logs', 'outline-secondary', !canLogs)}
                 ${btn('snapshot', 'camera', 'Snapshot', 'outline-secondary', !canSnap)}

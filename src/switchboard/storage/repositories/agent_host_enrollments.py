@@ -30,14 +30,20 @@ _COMPLETION_RECOVERY_RE = re.compile(r"^ahr-[A-Za-z0-9_-]{32,}$")
 PERSONAL_EXECUTION_POLICY = {
     "schema": "switchboard.personal_agent_host_execution_policy.v1",
     "runtime": "codex",
-    "lanes": ["ADAPTER"],
+    # A personal Mac is an Autopilot execution substrate for its enrolled project.
+    # An empty lane list is deliberately paired with this explicit wildcard mode;
+    # it never means global cross-project work.
+    "lanes": [],
+    "lane_mode": "all_project_lanes",
     "capabilities": ["docs", "github", "python", "tests"],
     "allow_work": True,
     "allow_global_claim": False,
-    "max_sessions": 1,
+    "max_sessions": 8,
     "local_auth_required": True,
-    "personal_wakes_only": True,
+    "personal_wakes_only": False,
 }
+
+MAX_PERSONAL_HOST_SESSIONS = 32
 
 
 def _completion_recovery_token(
@@ -136,8 +142,12 @@ def begin_agent_host_enrollment(
     # project.  Silently storing a non-empty allowlist that omits it creates a
     # bootstrap which can be consumed but whose host can never register.
     projects = sorted(set([project, *_normalized_list(project_allowlist)]))
-    lanes = _normalized_list(lane_allowlist) or list(PERSONAL_EXECUTION_POLICY["lanes"])
-    execution_policy = {**PERSONAL_EXECUTION_POLICY, "lanes": lanes}
+    lanes = _normalized_list(lane_allowlist)
+    execution_policy = {
+        **PERSONAL_EXECUTION_POLICY,
+        "lanes": lanes,
+        "lane_mode": "explicit" if lanes else "all_project_lanes",
+    }
     with _conn(project) as connection:
         connection.execute(
             "INSERT INTO agent_host_enrollments("
@@ -458,6 +468,105 @@ def list_agent_host_enrollments(
     return [_public(row) for row in rows]
 
 
+def update_agent_host_execution_policy(
+    *,
+    host_id: str,
+    max_sessions: int,
+    lane_mode: str = "explicit",
+    lane_allowlist: Iterable[Any] | None = None,
+    actor: str = "system",
+    principal_id: str = "",
+    project: str = DEFAULT_PROJECT,
+) -> dict[str, Any]:
+    """Durably authorize one personal host's work scope and concurrency.
+
+    Enrollment is project-wide by default because starting Autopilot is the operator's
+    execution authorization. Scoped overrides remain explicit: an empty list can never
+    accidentally broaden a policy whose ``lane_mode`` is ``explicit``.
+    """
+    host_id = str(host_id or "").strip()
+    lane_mode = str(lane_mode or "explicit").strip().lower()
+    if not host_id:
+        return _error("host_id_required", "host_id is required")
+    if lane_mode not in {"explicit", "all_project_lanes"}:
+        return _error(
+            "invalid_lane_mode",
+            "lane_mode must be explicit or all_project_lanes",
+        )
+    try:
+        session_limit = int(max_sessions)
+    except (TypeError, ValueError):
+        return _error("invalid_max_sessions", "max_sessions must be an integer")
+    if not 1 <= session_limit <= MAX_PERSONAL_HOST_SESSIONS:
+        return _error(
+            "invalid_max_sessions",
+            f"max_sessions must be between 1 and {MAX_PERSONAL_HOST_SESSIONS}",
+        )
+    lanes = _normalized_list(lane_allowlist)
+    if lane_mode == "explicit" and not lanes:
+        return _error(
+            "lane_allowlist_required",
+            "lane_allowlist is required when lane_mode is explicit",
+        )
+    if lane_mode == "all_project_lanes":
+        lanes = []
+
+    now = time.time()
+    with _conn(project) as connection:
+        row = connection.execute(
+            "SELECT * FROM agent_host_enrollments WHERE project_id=? AND host_id=?",
+            (project, host_id),
+        ).fetchone()
+        if not row:
+            return _error("enrollment_not_found", "host enrollment not found")
+        enrollment = dict(row)
+        if enrollment.get("status") != _ACTIVE:
+            return _error("host_identity_revoked", "host identity is not active")
+        current = _public(row).get("execution_policy") or {}
+        updated_policy = {
+            **PERSONAL_EXECUTION_POLICY,
+            **current,
+            "runtime": "codex",
+            "allow_work": True,
+            "allow_global_claim": False,
+            "personal_wakes_only": False,
+            "local_auth_required": True,
+            "lane_mode": lane_mode,
+            "lanes": lanes,
+            "max_sessions": session_limit,
+            "revision": int(current.get("revision") or 0) + 1,
+            "authorized_at": now,
+            "authorized_by_principal_id": str(principal_id or "") or None,
+        }
+        connection.execute(
+            "UPDATE agent_host_enrollments SET execution_policy_json=?, updated_at=? "
+            "WHERE enrollment_id=?",
+            (json.dumps(updated_policy, sort_keys=True), now, enrollment["enrollment_id"]),
+        )
+        connection.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) VALUES (?,?,?,?,?)",
+            (
+                None,
+                actor,
+                "agent_host.execution_policy_updated",
+                json.dumps({
+                    "host_id": host_id,
+                    "lane_mode": lane_mode,
+                    "lanes": lanes,
+                    "max_sessions": session_limit,
+                    "revision": updated_policy["revision"],
+                    "credential_values_redacted": True,
+                }, sort_keys=True),
+                now,
+            ),
+        )
+        updated = connection.execute(
+            "SELECT * FROM agent_host_enrollments WHERE enrollment_id=?",
+            (enrollment["enrollment_id"],),
+        ).fetchone()
+    return {"updated": True, "enrollment": _public(updated)}
+
+
 def get_agent_host_rotation_recovery_principal(
     *, token: str, host_id: str, project: str = DEFAULT_PROJECT
 ) -> dict[str, Any] | None:
@@ -754,6 +863,7 @@ class AgentHostEnrollmentRepository:
     finalize = staticmethod(finalize_agent_host_enrollment)
     get = staticmethod(get_agent_host_enrollment)
     list = staticmethod(list_agent_host_enrollments)
+    update_execution_policy = staticmethod(update_agent_host_execution_policy)
     rotate = staticmethod(rotate_agent_host_identity)
     revoke = staticmethod(revoke_agent_host_identity)
     check_identity = staticmethod(check_agent_host_identity)
@@ -774,6 +884,7 @@ __all__ = [
     "finalize_agent_host_enrollment",
     "get_agent_host_enrollment",
     "list_agent_host_enrollments",
+    "update_agent_host_execution_policy",
     "get_agent_host_rotation_recovery_principal",
     "get_agent_host_revocation_recovery_principal",
     "rotate_agent_host_identity",

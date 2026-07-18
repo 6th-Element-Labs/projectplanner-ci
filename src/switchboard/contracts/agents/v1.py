@@ -16,6 +16,9 @@ COMPLETE_HOST_ENROLLMENT_COMMAND_SCHEMA = "switchboard.agent.complete_host_enrol
 FINALIZE_HOST_ENROLLMENT_COMMAND_SCHEMA = "switchboard.agent.finalize_host_enrollment_command.v1"
 ROTATE_HOST_IDENTITY_COMMAND_SCHEMA = "switchboard.agent.rotate_host_identity_command.v1"
 REVOKE_HOST_IDENTITY_COMMAND_SCHEMA = "switchboard.agent.revoke_host_identity_command.v1"
+UPDATE_HOST_EXECUTION_POLICY_COMMAND_SCHEMA = (
+    "switchboard.agent.update_host_execution_policy_command.v1"
+)
 
 
 def parse_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -249,6 +252,40 @@ class BeginHostEnrollmentCommand(VersionedModel):
             return min(900, max(60, int(value or 600)))
         except (TypeError, ValueError) as exc:
             raise ValueError("ttl_seconds must be an integer") from exc
+
+
+class UpdateHostExecutionPolicyCommand(VersionedModel):
+    """Operator authorization for personal-host lane scope and parallelism."""
+
+    SCHEMA: ClassVar[str] = UPDATE_HOST_EXECUTION_POLICY_COMMAND_SCHEMA
+    model_config = ConfigDict(frozen=True)
+
+    schema_id: str = Field(
+        default=UPDATE_HOST_EXECUTION_POLICY_COMMAND_SCHEMA, alias="schema")
+    project: str = Field(min_length=1, pattern=r".*\S.*")
+    host_id: str = Field(min_length=1, pattern=r"^host/.+")
+    max_sessions: int = Field(ge=1, le=32)
+    lane_mode: str = "explicit"
+    lane_allowlist: list[str] = Field(default_factory=list)
+
+    @field_validator("project", "host_id", "lane_mode", mode="before")
+    @classmethod
+    def _strip_policy_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("lane_mode")
+    @classmethod
+    def _valid_lane_mode(cls, value: str) -> str:
+        value = value.lower()
+        if value not in {"explicit", "all_project_lanes"}:
+            raise ValueError("lane_mode must be explicit or all_project_lanes")
+        return value
+
+    @field_validator("lane_allowlist", mode="before")
+    @classmethod
+    def _coerce_lane_allowlist(cls, value: Any) -> list[str]:
+        return [str(item).strip() for item in parse_json_list(
+            value, field_name="lane_allowlist") if str(item).strip()]
 
 
 class CompleteHostEnrollmentCommand(VersionedModel):

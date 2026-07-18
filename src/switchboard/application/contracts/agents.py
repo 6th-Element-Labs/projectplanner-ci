@@ -7,6 +7,7 @@ from switchboard.contracts.agents.v1 import (
     RegisterHostCommand,
     RevokeHostIdentityCommand,
     RotateHostIdentityCommand,
+    UpdateHostExecutionPolicyCommand,
     parse_json_list,
     parse_json_object,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "FinalizeHostEnrollmentCommand",
     "RotateHostIdentityCommand",
     "RevokeHostIdentityCommand",
+    "UpdateHostExecutionPolicyCommand",
     "parse_json_list",
     "parse_json_object",
 ]

@@ -162,6 +162,30 @@ def list_agent_host_enrollments(ctx: Context, project: str,
     return services.dumps(store.list_agent_host_enrollments(status=status, project=project))
 
 
+def update_agent_host_execution_policy(
+        host_id: str, max_sessions: int, ctx: Context, project: str,
+        lane_mode: str = "explicit", lane_allowlist: str = "") -> str:
+    """Authorize one enrolled personal host's lanes and parallel Codex sessions.
+
+    Use lane_mode='all_project_lanes' for project-wide Autopilot fanout. This is
+    operator-only, audited, and hot-applied by the host on its next heartbeat.
+    """
+    project = str(project or "").strip()
+    if not project:
+        raise ValueError("project required")
+    services = _services()
+    principal = services.require_write(ctx, project, ("write:system",))
+    return services.dumps(store.update_agent_host_execution_policy(
+        host_id=host_id,
+        max_sessions=max_sessions,
+        lane_mode=lane_mode,
+        lane_allowlist=store.coerce_csv_list(lane_allowlist),
+        actor=auth.actor(principal),
+        principal_id=principal["id"],
+        project=project,
+    ))
+
+
 
 def list_agent_hosts(project: str = "maxwell", runtime: str = "", lane: str = "",
                      capability: str = "", include_stale: bool = False) -> str:
@@ -215,6 +239,7 @@ def get_agent_state(task_id: str, project: str = "maxwell") -> str:
 AGENT_TOOL_NAMES = ("register_agent", "register_host", 'heartbeat', 'list_active_agents',
                     'heartbeat_host', 'list_agent_hosts', 'host_status',
                     'begin_agent_host_enrollment', 'list_agent_host_enrollments',
+                    'update_agent_host_execution_policy',
                     'set_agent_state', 'get_agent_state')
 
 

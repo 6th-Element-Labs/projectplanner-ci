@@ -1540,6 +1540,15 @@ const TeepPlan = {
         try {
             const q = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&include_stale=true`;
             hosts = (await (await fetch(`/ixp/v1/agent_hosts?${q}`)).json()).hosts || [];
+            if (this.isAdmin) {
+                await Promise.all(hosts.map(async (host) => {
+                    try {
+                        const eq = `project=${encodeURIComponent(window.PM_PROJECT || 'maxwell')}&host_id=${encodeURIComponent(host.host_id || '')}`;
+                        const res = await fetch(`/ixp/v1/agent-host-enrollment?${eq}`, { cache: 'no-store' });
+                        if (res.ok) host.enrollment = await res.json();
+                    } catch (e) { /* unenrolled legacy hosts have no editable policy */ }
+                }));
+            }
         } catch (e) { body.innerHTML = `<div class="text-danger small">Hosts unavailable: ${this.esc(e.message)}</div>`; return; }
         const live = hosts.filter((h) => !h.stale);
         if (count) { count.className = live.length ? 'badge bg-green-lt ms-2' : 'badge bg-secondary-lt ms-2'; count.textContent = `${live.length} live`; }
@@ -1549,6 +1558,8 @@ const TeepPlan = {
             <tbody>${hosts.map((h) => this._hostRow(h)).join('')}</tbody></table></div>`;
         body.querySelectorAll('[data-wake-runtimes]').forEach((b) =>
             b.addEventListener('click', () => this._openWakeModal(b.getAttribute('data-wake-runtimes'))));
+        body.querySelectorAll('[data-host-policy]').forEach((b) =>
+            b.addEventListener('click', () => this._configureHostPolicy(b.getAttribute('data-host-policy'))));
     },
     _hostRow(h) {
         const cap = h.capacity || {}; const lim = h.limits || {};
@@ -1558,13 +1569,50 @@ const TeepPlan = {
         const color = h.stale ? 'yellow' : 'green';
         const rnames = (h.runtimes || []).map((r) => (typeof r === 'string' ? r : (r && (r.runtime || r.name)) || '')).filter(Boolean);
         const runtimes = rnames.map((r) => `<span class="badge bg-secondary-lt me-1">${this.esc(r)}</span>`).join('') || '<span class="text-secondary">—</span>';
+        const policy = (h.enrollment || {}).execution_policy || {};
+        const laneText = policy.lane_mode === 'all_project_lanes'
+            ? 'all project lanes' : ((policy.lanes || []).join(', ') || 'not authorized');
+        const policyText = policy.max_sessions
+            ? `<div class="text-secondary small">Authorized: ${this.esc(laneText)} · ${this.esc(String(policy.max_sessions))} parallel</div>` : '';
+        const configure = this.isAdmin && h.enrollment && !h.enrollment.error
+            ? `<button class="btn btn-sm btn-outline-primary" data-host-policy="${this.esc(h.host_id || '')}"><i class="ti ti-adjustments me-1"></i>Concurrency</button>` : '';
         return `<tr>
-            <td><div class="font-monospace small">${this.esc(h.host_id || '')}</div><div class="text-secondary small">${this.esc(h.hostname || '')}</div></td>
+            <td><div class="font-monospace small">${this.esc(h.host_id || '')}</div><div class="text-secondary small">${this.esc(h.hostname || '')}</div>${policyText}</td>
             <td><span class="badge bg-${color}-lt">${h.stale ? 'stale' : 'live'}</span> <span class="text-secondary small">${this.esc(this._fleetAge(h.heartbeat_at))}</span></td>
             <td class="font-monospace small">${this.esc(String(active))} / ${this.esc(String(max))}</td>
             <td>${runtimes}</td>
-            <td class="text-end"><button class="btn btn-sm" data-wake-runtimes="${this.esc(rnames.join(','))}"><i class="ti ti-bell-z me-1"></i>Wake…</button></td>
+            <td class="text-end"><div class="btn-list justify-content-end">${configure}<button class="btn btn-sm" data-wake-runtimes="${this.esc(rnames.join(','))}"><i class="ti ti-bell-z me-1"></i>Wake…</button></div></td>
         </tr>`;
+    },
+    async _configureHostPolicy(hostId) {
+        const host = String(hostId || '').trim();
+        if (!host) return;
+        const rawMax = window.prompt('Maximum parallel Codex CLI sessions on this Mac (1–32):', '8');
+        if (rawMax == null) return;
+        const maxSessions = Number.parseInt(rawMax, 10);
+        if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 32) {
+            window.alert('Enter a whole number from 1 through 32.'); return;
+        }
+        const rawLanes = window.prompt('Type ALL for every task lane in this project, or a comma-separated lane allowlist:', 'ALL');
+        if (rawLanes == null) return;
+        const all = rawLanes.trim().toUpperCase() === 'ALL';
+        const lanes = all ? [] : rawLanes.split(',').map((v) => v.trim()).filter(Boolean);
+        if (!all && !lanes.length) { window.alert('Enter ALL or at least one lane.'); return; }
+        const scope = all ? 'every task lane in this project' : lanes.join(', ');
+        if (!window.confirm(`Authorize ${host} for ${maxSessions} parallel Codex sessions across ${scope}?`)) return;
+        try {
+            const res = await fetch('/ixp/v1/agent-host-enrollments/execution-policy', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    project: window.PM_PROJECT || 'maxwell', host_id: host,
+                    max_sessions: maxSessions,
+                    lane_mode: all ? 'all_project_lanes' : 'explicit', lane_allowlist: lanes,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) throw new Error(data.message || data.detail || data.error || `HTTP ${res.status}`);
+            await this._loadFleetHosts();
+        } catch (e) { window.alert(`Host authorization failed: ${e.message}`); }
     },
     async _loadWakeIntents() {
         const body = document.getElementById('fleet-wakes-body');
@@ -1617,6 +1665,8 @@ const TeepPlan = {
             <tbody>${sessions.map((s) => this._runnerSessionRow(s)).join('')}</tbody></table></div>`;
         body.querySelectorAll('[data-runner-action]').forEach((btn) =>
             btn.addEventListener('click', () => this._fleetRunnerAction(btn.getAttribute('data-runner-id'), btn.getAttribute('data-runner-action'))));
+        body.querySelectorAll('[data-runner-watch-task]').forEach((btn) =>
+            btn.addEventListener('click', () => this.openRunnerSessionPanel(btn.getAttribute('data-runner-watch-task'))));
     },
     _openWakeModal(runtimesCsv) {
         const rt = (runtimesCsv || '').split(',').filter(Boolean)[0] || '';

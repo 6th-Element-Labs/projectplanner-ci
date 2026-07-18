@@ -54,6 +54,7 @@ def _normalize_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "monitor_in_review": True,
         "worker_agent_id": "",
         "worker_wake_selector": {},
+        "worker_wake_policy": {},
         "allowed_lanes": [],
         "denied_lanes": [],
         "target_task_id": "",
@@ -65,6 +66,8 @@ def _normalize_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     base["worker_agent_id"] = (base.get("worker_agent_id") or "").strip()
     selector = base.get("worker_wake_selector")
     base["worker_wake_selector"] = selector if isinstance(selector, dict) else {}
+    wake_policy = base.get("worker_wake_policy")
+    base["worker_wake_policy"] = wake_policy if isinstance(wake_policy, dict) else {}
     lanes = base.get("allowed_lanes")
     if isinstance(lanes, str):
         lanes = lanes.split(",")
@@ -500,6 +503,17 @@ def run_coordinator_tick(
             selector.setdefault("deliverable_id", deliverable_id)
             selector.setdefault("task_id", dispatch.get("task_id"))
             selector.setdefault("project_id", dispatch.get("project_id"))
+            selector.setdefault("lane", dispatch.get("lane"))
+            selector.setdefault(
+                "agent_id",
+                f"{selector.get('runtime') or 'codex'}/{dispatch.get('task_id')}",
+            )
+            wake_policy = {
+                **pol["worker_wake_policy"],
+                "target_task_id": dispatch.get("task_id"),
+                "target_project_id": dispatch.get("project_id") or mission_project,
+            }
+            wake_policy.setdefault("mode", "claim_next")
             wake = store_mod.request_wake(
                 selector,
                 reason=f"Mission coordinator dispatch for {deliverable_id}",
@@ -507,7 +521,8 @@ def run_coordinator_tick(
                 task_id=dispatch.get("task_id") or "",
                 actor=actor,
                 project=mission_project,
-                idem_key=f"coord-wake-{deliverable_id}-{dispatch.get('task_id')}",
+                idem_key=f"coord-wake-v2-{deliverable_id}-{dispatch.get('task_id')}",
+                policy=wake_policy,
             )
             executed.append({
                 "kind": "request_wake",

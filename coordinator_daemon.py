@@ -58,8 +58,14 @@ class DaemonConfig:
     poll_seconds: int = 30
     heartbeat_seconds: int = 30
     lease_ttl_seconds: int = 120
-    max_deliverables_per_tick: int = 8
-    max_tasks_per_scope_tick: int = 8
+    # Batch enough selected work to cover the product's 60-deliverable fanout
+    # scenario in one sweep. Execution capacity and fleet budget controls remain
+    # the admission boundary; these are scheduling batch sizes, not concurrency
+    # limits.
+    max_deliverables_per_tick: int = 64
+    max_tasks_per_scope_tick: int = 64
+    elastic_runtime_config_ref: str = ""
+    elastic_allow_on_demand: bool = True
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "DaemonConfig":
@@ -83,9 +89,14 @@ class DaemonConfig:
                 int(env.get("PM_COORDINATOR_AUTOPILOT_LEASE_TTL_SECONDS", "120")),
             ),
             max_deliverables_per_tick=max(
-                1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES", "8"))),
+                1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_DELIVERABLES", "64"))),
             max_tasks_per_scope_tick=max(
-                1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE", "8"))),
+                1, int(env.get("PM_COORDINATOR_AUTOPILOT_MAX_TASKS_PER_SCOPE", "64"))),
+            elastic_runtime_config_ref=(
+                env.get("PM_COORDINATOR_AUTOPILOT_RUNTIME_CONFIG_REF")
+                or env.get("PM_CO_RUNTIME_CONFIG_REF") or "").strip(),
+            elastic_allow_on_demand=enabled_from_env(
+                "PM_COORDINATOR_AUTOPILOT_ALLOW_ON_DEMAND", True, env),
         )
 
 
@@ -340,7 +351,7 @@ class CoordinatorDaemon:
         for candidate in candidates:
             task_id = str(candidate.get("task_id") or "").upper()
             revision = self._candidate_revision(mission_status, candidate)
-            idem_key = f"ui27:{scope['scope_id']}:{task_id}:{revision}"
+            idem_key = f"ui28:{scope['scope_id']}:{task_id}:{revision}"
             policy = {
                 "auto_refresh_brief": not receipts,
                 "auto_claim": bool(self.config.act and self.config.worker_agent_id),
@@ -349,6 +360,7 @@ class CoordinatorDaemon:
                 "worker_wake_selector": ({"runtime": scope.get("runtime")
                                            or self.config.worker_runtime}
                                           if self.config.act else {}),
+                "worker_wake_policy": self._worker_wake_policy(),
                 "allowed_lanes": list(self.config.allowed_lanes),
                 "denied_lanes": list(denied_lanes),
                 "target_task_id": task_id,
@@ -373,19 +385,56 @@ class CoordinatorDaemon:
                 "error": result.get("error"),
                 "idem_key": idem_key,
             })
+        waiting_receipts = [
+            receipt for receipt in receipts
+            if receipt.get("status") == "wake_requested"
+            and "eligible_host_count" in (receipt.get("dispatch") or {})
+            and int((receipt.get("dispatch") or {}).get("eligible_host_count") or 0) == 0
+        ]
+        waiting_reason = (
+            "no_eligible_host" if waiting_receipts
+            else ("dependencies_or_policy" if not receipts else "")
+        )
         result = {
-            "status": "running" if receipts else "waiting",
+            "status": ("waiting" if not receipts or len(waiting_receipts) == len(receipts)
+                       else "running"),
             "scope_id": scope.get("scope_id"),
             "scope_type": scope.get("scope_type"),
             "deliverable_id": deliverable_id,
             "task_id": scope.get("task_id") or None,
             "candidate_count": len(candidates),
             "receipts": receipts,
+            "waiting_reason": waiting_reason or None,
         }
         self.store.update_autopilot_scope(
             scope["scope_id"], project=project, last_result=result,
             ticked_at=float(self.clock()))
         return result
+
+    def _worker_wake_policy(self) -> Dict[str, Any]:
+        """Use already-paid Macs first and burst to guarded AWS capacity."""
+        reference = self.config.elastic_runtime_config_ref
+        if not reference:
+            return {"mode": "claim_next"}
+        return {
+            "mode": "co_fleet",
+            "runtime_config_ref": reference,
+            "allow_on_demand": self.config.elastic_allow_on_demand,
+            "registration_timeout_s": 180,
+            "scheduler": {
+                "mode": "hybrid",
+                "prefer_persistent": True,
+                "allow_persistent": True,
+                "allow_ephemeral": True,
+                "burst_enabled": True,
+                "max_host_loss_reschedules": 3,
+            },
+            "placement": {
+                "canonical_repo": "6th-Element-Labs/projectplanner",
+                "session_policy": "code_strict",
+                "isolation": "task_worktree",
+            },
+        }
 
     def tick_project(self, project: str) -> Dict[str, Any]:
         if project not in self.config.projects:

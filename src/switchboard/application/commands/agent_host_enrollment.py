@@ -11,6 +11,7 @@ from switchboard.application.contracts.agents import (
     FinalizeHostEnrollmentCommand,
     RevokeHostIdentityCommand,
     RotateHostIdentityCommand,
+    UpdateHostExecutionPolicyCommand,
 )
 from switchboard.contracts import validation_error_message
 from switchboard.storage.repositories.agent_host_enrollments import (
@@ -19,6 +20,7 @@ from switchboard.storage.repositories.agent_host_enrollments import (
     finalize_agent_host_enrollment,
     revoke_agent_host_identity,
     rotate_agent_host_identity,
+    update_agent_host_execution_policy,
 )
 
 
@@ -109,10 +111,28 @@ def revoke_mapping_result(data: Mapping[str, Any], *, actor: str) -> dict[str, A
     )
 
 
+def update_execution_policy_mapping_result(
+        data: Mapping[str, Any], *, actor: str, principal_id: str) -> dict[str, Any]:
+    try:
+        command = UpdateHostExecutionPolicyCommand.model_validate(dict(data or {}))
+    except ValidationError as exc:
+        return _validation_error(exc)
+    return update_agent_host_execution_policy(
+        host_id=command.host_id,
+        max_sessions=command.max_sessions,
+        lane_mode=command.lane_mode,
+        lane_allowlist=command.lane_allowlist,
+        actor=actor,
+        principal_id=principal_id,
+        project=command.project,
+    )
+
+
 __all__ = [
     "begin_mapping_result",
     "complete_mapping_result",
     "finalize_mapping_result",
     "rotate_mapping_result",
     "revoke_mapping_result",
+    "update_execution_policy_mapping_result",
 ]

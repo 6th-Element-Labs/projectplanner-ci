@@ -310,12 +310,12 @@ try:
     widened_inventory.update({
         "runtimes": [{
             "runtime": "codex",
-            "lanes": ["ADAPTER"],
+            "lanes": [],
             "capabilities": ["docs", "github", "python", "tests"],
             "policy": {"allow_work": True, "allow_global_claim": False},
             "local_auth": local_auth_inventory,
         }],
-        "limits": {"max_sessions": 1},
+        "limits": {"max_sessions": 8},
     })
     widened_inventory["capacity"].update({
         "owner": {
@@ -383,9 +383,8 @@ try:
         actor=auth.actor(p), project=P)
     ok("host_enrollment_tenant_denied" in tenant_attack.get("reason_codes", [])
        and "personal_wake_owner_principal_denied" in owner_attack.get("reason_codes", [])
-       and generic_claim.get("reason") == "personal_host_execution_policy_denied"
-       and "personal_wakes_only" in generic_claim.get("reason_codes", []),
-       "personal auth is owner-bound and enrolled hosts reject generic execution")
+       and generic_claim.get("claimed") is True,
+       "personal auth stays owner-bound while enrolled Autopilot hosts accept exact generic work")
 
     bad_policy = personal_policy("worksession-unrelated")
     bad_wake = store.request_wake(
