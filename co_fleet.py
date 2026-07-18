@@ -369,10 +369,15 @@ import json, shlex, sys
 value = json.loads(sys.argv[1])
 allowed = {{
     "PM_BASE", "PM_PROJECT", "PM_MCP_TOKEN", "PM_AGENT_WORK_MODULE",
+    "PM_AGENT_WORK_MODULE_CODEX", "PM_AGENT_WORK_MODULE_CLAUDE_CODE",
+    "PM_AGENT_WORK_MODULE_CURSOR",
     "PM_VERIFY_COMPLETION_PUSH", "PM_WORK_SESSION_TEST_CMD", "AWS_REGION",
     "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST",
 }}
-missing = [key for key in ("PM_MCP_TOKEN", "PM_AGENT_WORK_MODULE") if not value.get(key)]
+missing = [key for key in ("PM_MCP_TOKEN",) if not value.get(key)]
+runtime_key = "PM_AGENT_WORK_MODULE_" + {values['runtime']}.upper().replace("-", "_")
+if not value.get(runtime_key) and not value.get("PM_AGENT_WORK_MODULE"):
+    missing.append(runtime_key)
 if missing:
     raise SystemExit("runtime config missing required worker fields: " + ", ".join(missing))
 forbidden = [key for key in (

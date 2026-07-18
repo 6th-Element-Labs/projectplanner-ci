@@ -420,7 +420,36 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
     head_sha = git("rev-parse", "HEAD")
     branch = git("branch", "--show-current")
     task_marker = str(task_id or "").strip().upper()
-    if task_marker.lower() not in branch.lower():
+    isolate = str(os.environ.get(
+        "PM_AGENT_HOST_ISOLATE_TASK_WORKSPACE") or "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+    workspace_path = source_path
+    worker_owned_workspace = False
+    if isolate:
+        runner_marker = str(os.environ.get("PM_RUNNER_SESSION_ID") or agent_id)
+        suffix = hashlib.sha256(
+            f"{task_marker}:{runner_marker}".encode()).hexdigest()[:10]
+        branch = f"codex/{task_marker}-autopilot-{suffix}"
+        workspace_root = os.path.abspath(os.environ.get("PM_WORKSPACE_ROOT") or os.path.join(
+            os.path.dirname(source_path), "switchboard-agent-workspaces"))
+        if workspace_root in {os.path.sep, os.path.expanduser("~")}:
+            raise RuntimeError("external workspace root is unsafe")
+        os.makedirs(workspace_root, mode=0o700, exist_ok=True)
+        workspace_path = os.path.join(workspace_root, f"{task_marker.lower()}-{suffix}")
+        if os.path.exists(workspace_path):
+            raise RuntimeError("isolated external workspace already exists")
+        created = subprocess.run(
+            ["git", "-C", source_path, "worktree", "add", "-b", branch,
+             workspace_path, head_sha],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        if created.returncode != 0:
+            raise RuntimeError(
+                "isolated external task worktree creation failed: "
+                + (created.stderr or "unknown git error")[-500:])
+        worker_owned_workspace = True
+    elif task_marker.lower() not in branch.lower():
         branch = f"codex/{task_marker}-byoa"
         switched = subprocess.run(
             ["git", "-C", source_path, "switch", "-c", branch],
@@ -439,7 +468,7 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
         "upstream": "origin/master",
         "base_sha": head_sha,
         "head_sha": head_sha,
-        "worktree_path": source_path,
+        "worktree_path": workspace_path,
         "storage_mode": "worktree",
         "status": "active",
         "dirty_status": "clean",
@@ -452,22 +481,63 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
             "head_sha": head_sha,
             "origin_fingerprint": hashlib.sha256(remote.encode()).hexdigest()[:16],
         },
-        "env": {"workspace_visibility": "worker_local"},
+        "env": {
+            "workspace_visibility": "worker_local",
+            "worker_owned_workspace": worker_owned_workspace,
+        },
     }
-    created = _http("POST", "/ixp/v1/work_sessions", payload,
-                    base=base, token=token, timeout=30)
+    try:
+        created = _http("POST", "/ixp/v1/work_sessions", payload,
+                        base=base, token=token, timeout=30)
+    except Exception:
+        if worker_owned_workspace:
+            cleanup_external_work_session({
+                "worker_owned_workspace": True,
+                "source_path": source_path,
+                "workspace_path": workspace_path,
+            })
+        raise
     session = created.get("work_session") or {}
     work_session_id = session.get("work_session_id")
     if not work_session_id:
+        if worker_owned_workspace:
+            cleanup_external_work_session({
+                "worker_owned_workspace": True,
+                "source_path": source_path,
+                "workspace_path": workspace_path,
+            })
         raise RuntimeError("external Work Session registration failed")
     return {
         "work_session_id": work_session_id,
-        "workspace_path": source_path,
+        "workspace_path": workspace_path,
+        "source_path": source_path,
+        "worker_owned_workspace": worker_owned_workspace,
         "branch": branch,
         "head_sha": head_sha,
         "profile": policy_profile or "code_strict",
         "external": True,
     }
+
+
+def cleanup_external_work_session(managed):
+    """Remove only an Agent Host workspace created for this exact runner."""
+    if not (managed or {}).get("worker_owned_workspace"):
+        return {"cleaned": False, "reason": "workspace_not_worker_owned"}
+    source_path = os.path.abspath(str(managed.get("source_path") or ""))
+    workspace_path = os.path.abspath(str(managed.get("workspace_path") or ""))
+    workspace_root = os.path.abspath(os.environ.get("PM_WORKSPACE_ROOT") or os.path.join(
+        os.path.dirname(source_path), "switchboard-agent-workspaces"))
+    if (not source_path or not workspace_path
+            or os.path.commonpath((workspace_root, workspace_path)) != workspace_root
+            or workspace_path == workspace_root):
+        return {"cleaned": False, "reason": "workspace_cleanup_boundary_denied"}
+    removed = subprocess.run(
+        ["git", "-C", source_path, "worktree", "remove", "--force", workspace_path],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    if removed.returncode != 0:
+        return {"cleaned": False, "reason": "git_worktree_remove_failed"}
+    return {"cleaned": True, "workspace_path": workspace_path}
 
 
 def archive_work_session_workspace(project, work_session_id, remove_workspace=True,
@@ -1413,6 +1483,7 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     expire_external_work_session(
                         project, managed["work_session_id"], agent_id,
                         base=base, token=token)
+                    cleanup_external_work_session(managed)
                 else:
                     archive_work_session_workspace(project, managed["work_session_id"],
                                                    remove_workspace=True, base=base, token=token)
@@ -1422,10 +1493,11 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
             managed and managed.get("bound_existing")
             and _personal_execution_enabled()
         )
-        personal_lifecycle = None
-        if personal_bound and isinstance(evidence, dict):
-            personal_lifecycle = evidence.pop(
+        execution_lifecycle = None
+        if isinstance(evidence, dict):
+            execution_lifecycle = evidence.pop(
                 _PERSONAL_EXECUTION_LIFECYCLE_KEY, None)
+        personal_lifecycle = execution_lifecycle if personal_bound else None
 
         def fail_personal_postprocessing(stage, detail="", **extra):
             reason = f"post_execution_validation_failed:{stage}"
@@ -1476,6 +1548,29 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     claim_id, agent_id, branch=managed.get("branch", ""),
                     head_sha=evidence.get("head_sha") or managed.get("head_sha", ""))
                 evidence = {**evidence, "executed_test_run": run}
+            if (execution_lifecycle
+                    and not _personal_test_run_succeeded(
+                        evidence.get("executed_test_run") or {})):
+                failed = execution_lifecycle.get("fail")
+                if callable(failed):
+                    failed("executed_tests_failed")
+                if not personal_bound:
+                    abandonment = abandon_claim(
+                        project, claim_id,
+                        f"executed tests failed for {task_id}",
+                        base=base, token=token)
+                    if managed.get("external"):
+                        expire_external_work_session(
+                            project, managed["work_session_id"], agent_id,
+                            base=base, token=token)
+                        cleanup_external_work_session(managed)
+                    return {
+                        "completed": completed,
+                        "stopped": f"executed_tests_failed:{task_id}",
+                        "abandonment": abandonment,
+                        "executed_test_run": evidence.get("executed_test_run"),
+                        "startup_inbox": startup_inbox,
+                    }
             if (personal_bound
                     and not _personal_test_run_succeeded(
                         evidence.get("executed_test_run") or {})):
@@ -1530,22 +1625,22 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     # gate's push-evidence presence check passes. Real push and
                     # remote verification are enabled via PM_VERIFY_COMPLETION_PUSH.
                     evidence["remote_ref"] = f"refs/heads/{evidence.get('branch', '')}"
-        if personal_bound and personal_lifecycle:
-            complete_execution = personal_lifecycle.get("complete")
+        if personal_bound and execution_lifecycle:
+            complete_execution = execution_lifecycle.get("complete")
             if callable(complete_execution):
                 try:
                     terminal = complete_execution(evidence)
                 except Exception as exc:
                     return {
                         "completed": completed,
-                        "stopped": f"personal_terminalization_error:{task_id}:{exc}",
+                        "stopped": f"execution_terminalization_error:{task_id}:{exc}",
                         "startup_inbox": startup_inbox,
                     }
                 if (isinstance(terminal, dict)
                         and terminal.get("status") not in {None, "completed"}):
                     return {
                         "completed": completed,
-                        "stopped": f"personal_terminalization_rejected:{task_id}",
+                        "stopped": f"execution_terminalization_rejected:{task_id}",
                         "terminalization": terminal,
                         "startup_inbox": startup_inbox,
                     }
@@ -1597,7 +1692,24 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                 return {"completed": completed,
                         "stopped": f"complete_unknown:{task_id}:{exc}",
                         "startup_inbox": startup_inbox}
-            raise
+            if execution_lifecycle:
+                failed = execution_lifecycle.get("fail")
+                if callable(failed):
+                    failed("claim_completion_error")
+            abandonment = abandon_claim(
+                project, claim_id, f"claim completion failed: {exc}",
+                base=base, token=token)
+            if managed and managed.get("external"):
+                expire_external_work_session(
+                    project, managed["work_session_id"], agent_id,
+                    base=base, token=token)
+                cleanup_external_work_session(managed)
+            return {
+                "completed": completed,
+                "stopped": f"complete_error:{task_id}:{exc}",
+                "abandonment": abandonment,
+                "startup_inbox": startup_inbox,
+            }
         if personal_bound and completion.get("outcome_unknown"):
             return {
                 "completed": completed,
@@ -1614,9 +1726,24 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     "complete_rejected",
                     str(completion.get("reason") or "server rejected completion"),
                     rejection=completion)
+            if execution_lifecycle:
+                failed = execution_lifecycle.get("fail")
+                if callable(failed):
+                    failed("claim_completion_rejected")
+            abandonment = abandon_claim(
+                project, claim_id,
+                f"claim completion rejected for {task_id}: "
+                f"{completion.get('reason')}",
+                base=base, token=token)
+            if managed and managed.get("external"):
+                expire_external_work_session(
+                    project, managed["work_session_id"], agent_id,
+                    base=base, token=token)
+                cleanup_external_work_session(managed)
             return {"completed": completed,
                     "stopped": f"complete_rejected:{task_id}:{completion.get('reason')}",
-                    "rejection": completion, "startup_inbox": startup_inbox}
+                    "rejection": completion, "abandonment": abandonment,
+                    "startup_inbox": startup_inbox}
         if personal_bound and isinstance(completion, dict) and completion.get("completed"):
             claim_completed = (personal_lifecycle or {}).get("claim_completed")
             if callable(claim_completed):
@@ -1626,6 +1753,28 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
                     return {
                         "completed": completed,
                         "stopped": f"completion_journal_error:{task_id}:{exc}",
+                        "startup_inbox": startup_inbox,
+                    }
+        if (not personal_bound and execution_lifecycle
+                and isinstance(completion, dict) and completion.get("completed")):
+            complete_execution = execution_lifecycle.get("complete")
+            if callable(complete_execution):
+                try:
+                    terminal = complete_execution(evidence)
+                except Exception as exc:
+                    return {
+                        "completed": completed,
+                        "stopped": f"runner_terminalization_error:{task_id}:{exc}",
+                        "completion": completion,
+                        "startup_inbox": startup_inbox,
+                    }
+                if (isinstance(terminal, dict)
+                        and terminal.get("status") not in {None, "completed"}):
+                    return {
+                        "completed": completed,
+                        "stopped": f"runner_terminalization_rejected:{task_id}",
+                        "terminalization": terminal,
+                        "completion": completion,
                         "startup_inbox": startup_inbox,
                     }
         if (managed and managed.get("bound_existing") and _personal_execution_enabled()
@@ -1651,6 +1800,8 @@ def run_session(project, agent_id, runtime, work_fn, lanes=None, base=None, toke
         elif managed and not managed.get("external"):
             archive_work_session_workspace(project, managed["work_session_id"],
                                            remove_workspace=True, base=base, token=token)
+        elif managed and managed.get("external"):
+            cleanup_external_work_session(managed)
         completed.append({"task_id": task_id, "evidence": evidence,
                           "managed": bool(managed), "completion": completion})
     return {"completed": completed, "stopped": "max_tasks", "startup_inbox": startup_inbox}

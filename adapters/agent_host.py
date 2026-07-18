@@ -663,7 +663,19 @@ def launch_command(wake, inventory, runner_session_id=""):
     agent_id = sel.get("agent_id") or sel.get("runtime") or "claude-code"
     lane = sel.get("lane") or ""
     runtime = sel.get("runtime") or eligible.get("runtime") or "claude-code"
-    work_mod = os.environ.get("PM_AGENT_WORK_MODULE", "")
+    runtime_key = re.sub(r"[^A-Z0-9]+", "_", str(runtime).upper()).strip("_")
+    work_mod = os.environ.get(f"PM_AGENT_WORK_MODULE_{runtime_key}", "").strip()
+    if not work_mod:
+        work_mod = os.environ.get("PM_AGENT_WORK_MODULE", "").strip()
+    runtime_markers = {
+        "codex": ("codex",),
+        "claude-code": ("claude",),
+        "cursor": ("cursor",),
+    }
+    markers = runtime_markers.get(str(runtime), ())
+    if work_mod and markers and not any(marker in work_mod.lower() for marker in markers):
+        raise ValueError(
+            f"work module {work_mod!r} does not match requested runtime {runtime!r}")
     mode = wake_mode(wake, inventory)
     if mode == "refused":
         raise ValueError("wake asks for global claim_next but host policy forbids global work")
@@ -1437,6 +1449,56 @@ def _register_preclaim_runner(wake, inventory, runner_session_id):
     }, wake, inventory)
 
 
+def wait_for_runner_binding(wake, inventory, runner_session_id, timeout_s=None,
+                            sleep=time.sleep, monotonic=time.monotonic):
+    """Wait until the child has published its exact claim + Work Session tuple.
+
+    Process liveness is not execution readiness.  Autopilot may report Running only
+    after the child owns the exact task and its Watch/Chat row is fully bound.
+    """
+    timeout_s = float(timeout_s if timeout_s is not None else os.environ.get(
+        "PM_AGENT_HOST_BIND_TIMEOUT_S", "90"))
+    deadline = monotonic() + max(0.0, timeout_s)
+    expected = {
+        "runner_session_id": str(runner_session_id or ""),
+        "task_id": str(wake.get("task_id") or ""),
+        "host_id": str(inventory.get("host_id") or ""),
+        "wake_id": str(wake.get("wake_id") or ""),
+        "agent_id": str((wake.get("selector") or {}).get("agent_id") or ""),
+        "runtime": str((wake.get("selector") or {}).get("runtime") or ""),
+    }
+    last = None
+    while monotonic() <= deadline:
+        query = urllib.parse.urlencode({
+            "project": PROJECT,
+            "task_id": expected["task_id"],
+            "host_id": expected["host_id"],
+            "include_stale": "false",
+        })
+        result = _try("GET", f"{P_LIST_RUNNERS}?{query}") or {}
+        sessions = result.get("sessions") or result.get("runner_sessions") or []
+        for row in sessions if isinstance(sessions, list) else []:
+            if str(row.get("runner_session_id") or "") != expected["runner_session_id"]:
+                continue
+            last = row
+            metadata = row.get("metadata") or {}
+            status = str(row.get("status") or "").lower()
+            if (str(row.get("task_id") or "") == expected["task_id"]
+                    and str(row.get("host_id") or "") == expected["host_id"]
+                    and str(row.get("agent_id") or "") == expected["agent_id"]
+                    and str(row.get("runtime") or "") == expected["runtime"]
+                    and str(metadata.get("wake_id") or "") == expected["wake_id"]
+                    and row.get("claim_id")
+                    and metadata.get("work_session_id")
+                    and not row.get("stale")
+                    and status in {"ready", "running"}):
+                return {"bound": True, "session": row}
+        if monotonic() >= deadline:
+            break
+        sleep(min(1.0, max(0.0, deadline - monotonic())))
+    return {"bound": False, "reason": "runner_bind_timeout", "session": last}
+
+
 def _acquire_provider_lease(wake, inventory, runner_session_id):
     binding = ((wake.get("policy") or {}).get("account_binding") or {})
     reference = str(binding.get("credential_reference") or "")
@@ -1576,7 +1638,11 @@ def run_once(inventory):
     refused = []
     cap = inventory["limits"]["max_sessions"]
     for w in wakes:
-        if active_session_count(inventory) + len(acted) >= cap:
+        # The supervisor list already includes sessions launched earlier in this
+        # tick. Adding len(acted) counts those children a second time (and also
+        # counts failed launches), which silently cuts usable fanout roughly in
+        # half. Treat the supervisor's live inventory as the capacity authority.
+        if active_session_count(inventory) >= cap:
             print("[agent_host] at capacity; leaving remaining wakes for other hosts", flush=True)
             break
         exact_binding = validate_personal_wake_binding(w, inventory)
@@ -1587,9 +1653,13 @@ def run_once(inventory):
             continue  # not ours — let an eligible host claim it (substrate records if none do)
         wake_id = w.get("wake_id")
         binding = ((w.get("policy") or {}).get("account_binding") or {})
+        bind_required = bool(
+            w.get("task_id")
+            and (w.get("policy") or {}).get("require_runner_bind") is True
+        )
         runner_session_id = ""
         preclaim_registration = None
-        if binding:
+        if binding or bind_required:
             runner_session_id = _runner_session_id_for_wake(w, host_id)
             preclaim_registration = _register_preclaim_runner(
                 w, inventory, runner_session_id)
@@ -1620,9 +1690,13 @@ def run_once(inventory):
         execution_binding = ((claimed_wake.get("policy") or {}).get(
             "execution_binding") or {})
         launch_env = ({
+            "PM_CO_WAKE_ID": str(claimed_wake.get("wake_id") or wake_id or ""),
+            "PM_CO_HOST_ID": str(host_id or ""),
             "PM_REMOTE_WORK_SESSION_REGISTRATION": "1",
             "PM_AUTO_WORK_SESSION": "1",
             "PM_WORK_SESSION_POLICY_PROFILE": "code_strict",
+            "PM_WORK_SESSION_SOURCE_PATH": str(inventory.get("repo_root") or ""),
+            "PM_AGENT_HOST_ISOLATE_TASK_WORKSPACE": "1",
             "PM_PERSONAL_AGENT_HOST_EXECUTION": "0",
         } if claimed_wake.get("task_id") else {})
         if binding:
@@ -1644,15 +1718,26 @@ def run_once(inventory):
                 "PM_EXECUTION_CONNECTION_ID": str(
                     execution_binding.get("execution_connection_id") or ""),
             })
-        rec = (launch(claimed_wake, inventory, runner_session_id=runner_session_id,
-                      extra_env=launch_env)
-               if runner_session_id else launch(claimed_wake, inventory))
+        try:
+            rec = (launch(claimed_wake, inventory, runner_session_id=runner_session_id,
+                          extra_env=launch_env)
+                   if runner_session_id else launch(claimed_wake, inventory))
+        except Exception as exc:
+            rec = {
+                "runner_session_id": runner_session_id or None,
+                "started": False,
+                "wake_mode": wake_mode(claimed_wake, inventory),
+                "reason": "runtime_launch_configuration_error",
+                "failure_class": "failed_gate",
+                "provider_error": str(exc)[:500],
+            }
         rec_mode = (rec or {}).get("wake_mode") or wake_mode(w, inventory)
         started = (confirm_closure_verified(rec) if rec_mode == "closure_verify"
                   else confirm_started(rec))
         # BYOA runners rebind this preclaim row themselves after claim_next has
         # produced the active task claim and Work Session. A generic post-launch
         # upsert here would race that update and erase the exact binding.
+        bound_result = None
         if binding and started:
             runner_registration = preclaim_registration
         elif binding:
@@ -1666,6 +1751,42 @@ def run_once(inventory):
                     **((rec or {}).get("metadata") or {}),
                     "credential_admission_phase": "preclaim_failed",
                     "failure_reason": "launch_failed",
+                },
+            }
+            runner_registration = register_runner_session(
+                failed_rec, claimed_wake, inventory)
+        elif bind_required and started:
+            bound_result = wait_for_runner_binding(
+                claimed_wake, inventory, runner_session_id)
+            runner_registration = (bound_result or {}).get("session")
+            if not (bound_result or {}).get("bound"):
+                started = False
+                result_reason = (bound_result or {}).get("reason") or "runner_bind_timeout"
+                supervisor_action("kill", runner_session_id, {"grace_seconds": 2.0})
+                failed_rec = {
+                    **(rec or {}),
+                    "runner_session_id": runner_session_id,
+                    "status": "failed",
+                    "metadata": {
+                        **((rec or {}).get("metadata") or {}),
+                        "credential_admission_phase": "preclaim_failed",
+                        "failure_reason": result_reason,
+                    },
+                }
+                runner_registration = register_runner_session(
+                    failed_rec, claimed_wake, inventory)
+            else:
+                result_reason = "runner_bound"
+        elif bind_required:
+            result_reason = (rec or {}).get("reason") or "launch_failed"
+            failed_rec = {
+                **(rec or {}),
+                "runner_session_id": runner_session_id,
+                "status": "failed",
+                "metadata": {
+                    **((rec or {}).get("metadata") or {}),
+                    "credential_admission_phase": "preclaim_failed",
+                    "failure_reason": result_reason,
                 },
             }
             runner_registration = register_runner_session(
@@ -1689,7 +1810,8 @@ def run_once(inventory):
                 else:
                     result_reason = "started"
             else:
-                result_reason = "started" if started else "launch_failed"
+                result_reason = ("started" if started else
+                                 (rec or {}).get("reason") or "launch_failed")
         usage_registration = report_cloud_usage(
             rec, claimed_wake) if started and rec.get("cloud_session") else None
         if binding:
@@ -1702,6 +1824,11 @@ def run_once(inventory):
                   "pid": (rec or {}).get("pid"),
                   "cwd": (rec or {}).get("cwd"),
                   "task_id": (rec or {}).get("task_id") or w.get("task_id"),
+                  "claim_id": ((runner_registration or {}).get("claim_id")
+                               if bind_required else (rec or {}).get("claim_id")),
+                  "work_session_id": (((runner_registration or {}).get("metadata") or {})
+                                      .get("work_session_id")
+                                      if bind_required else (rec or {}).get("work_session_id")),
                   "control": (rec or {}).get("control") or {},
                   "session_url": (rec or {}).get("session_url"),
                   "provider_session_id": (rec or {}).get("provider_session_id"),

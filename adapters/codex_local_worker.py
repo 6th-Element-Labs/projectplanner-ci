@@ -186,6 +186,7 @@ def _prompt(task: dict[str, Any], *, source_sha: str, wake_id: str,
 
 
 def _runner_record(values: dict[str, str], *, workspace: str, status: str) -> dict[str, Any]:
+    personal_bound = str(values.get("personal_bound") or "").strip() == "1"
     return {
         "project": os.environ.get("PM_PROJECT", "switchboard"),
         "runner_session_id": values["runner_session_id"],
@@ -206,7 +207,10 @@ def _runner_record(values: dict[str, str], *, workspace: str, status: str) -> di
             "source_sha": values["source_sha"],
             "execution_connection_id": values["execution_connection_id"],
             "credential_admission_phase": "claim_bound",
-            "auth_lane": "chatgpt_personal_host_local",
+            "auth_lane": (
+                "chatgpt_personal_host_local" if personal_bound
+                else "codex_host_local"
+            ),
         },
         "heartbeat_ttl_s": 180,
     }
@@ -317,6 +321,9 @@ def run(
             os.environ.get("PM_CO_ACCOUNT_BINDING_JSON") or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError("native Codex account binding is invalid") from exc
+    personal_bound = bool(account_binding)
+    wake_id = str(os.environ.get("PM_CO_WAKE_ID") or "").strip()
+    runner_session_id = str(os.environ.get("PM_RUNNER_SESSION_ID") or "").strip()
     values = {
         "task_id": str(task.get("task_id") or "").strip(),
         "claim_id": str(task.get("claim_id") or task.get("id") or "").strip(),
@@ -324,14 +331,20 @@ def run(
         "workspace": str(managed.get("workspace_path") or "").strip(),
         "host_id": str(os.environ.get("PM_CO_HOST_ID")
                        or os.environ.get("PM_HOST_ID") or "").strip(),
-        "runner_session_id": str(os.environ.get("PM_RUNNER_SESSION_ID") or "").strip(),
-        "wake_id": str(os.environ.get("PM_CO_WAKE_ID") or "").strip(),
-        "source_sha": str(os.environ.get("PM_SOURCE_SHA") or "").strip(),
+        "runner_session_id": runner_session_id,
+        "wake_id": wake_id,
+        "source_sha": str(
+            os.environ.get("PM_SOURCE_SHA") or managed.get("head_sha") or "").strip(),
         "execution_connection_id": str(
-            os.environ.get("PM_EXECUTION_CONNECTION_ID") or "").strip(),
+            os.environ.get("PM_EXECUTION_CONNECTION_ID")
+            or (f"host-local:{wake_id}:{runner_session_id}"
+                if wake_id and runner_session_id else "")).strip(),
         "agent_id": str(os.environ.get("PM_AGENT_ID") or "").strip(),
+        "personal_bound": "1" if personal_bound else "0",
     }
-    missing = sorted(key for key, value in values.items() if not value)
+    missing = sorted(
+        key for key, value in values.items()
+        if key != "personal_bound" and not value)
     if missing:
         raise RuntimeError("native Codex execution binding is incomplete: " + ",".join(missing))
     if not _SHA_RE.fullmatch(values["source_sha"]):
@@ -356,10 +369,10 @@ def run(
         "claim_id.environment": values["claim_id"],
         "work_session_id.environment": values["work_session_id"],
     }
-    mismatches = sorted(
+    mismatches = (sorted(
         key for key, value in relational.items()
         if str(value or "").strip() != relational_expected[key]
-    )
+    ) if personal_bound else [])
     if mismatches:
         raise RuntimeError(
             "native Codex relational binding mismatch: " + ",".join(mismatches))
@@ -502,6 +515,37 @@ def run(
         }
         lifecycle_lock = threading.Lock()
         lifecycle_state = {"terminal": ""}
+
+        if not personal_bound:
+            def finalize_host_local(
+                    succeeded: bool, reason: str = "",
+                    postprocessing_evidence: dict[str, Any] | None = None,
+            ) -> dict[str, Any]:
+                del postprocessing_evidence
+                with lifecycle_lock:
+                    desired = "completed" if succeeded else "failed"
+                    if lifecycle_state["terminal"] == desired:
+                        return {"status": desired, "idempotent": True}
+                    stop_heartbeat.set()
+                    if heartbeat_thread is not None:
+                        heartbeat_thread.join()
+                    _update_runner(
+                        http, values, workspace=workspace, status=desired)
+                    if not succeeded:
+                        _complete_wake(http, values, {
+                            "started": False,
+                            "reason": reason or "post_execution_validation_failed",
+                            "task_id": values["task_id"],
+                        })
+                    lifecycle_state["terminal"] = desired
+                    return {"status": desired}
+
+            evidence[_PERSONAL_EXECUTION_LIFECYCLE_KEY] = {
+                "complete": lambda postprocessing_evidence: finalize_host_local(
+                    True, postprocessing_evidence=postprocessing_evidence),
+                "fail": lambda reason="": finalize_host_local(False, reason),
+            }
+            return evidence
 
         recovery_path = _recovery_path(values)
 

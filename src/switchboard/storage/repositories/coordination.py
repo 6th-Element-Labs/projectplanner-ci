@@ -576,6 +576,7 @@ def deliver_coordination_escalation(plan: Dict[str, Any], *, actor: str,
 
 
 def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
+                      task_id: str = "", deliverable_id: str = "",
                       project: str = DEFAULT_PROJECT) -> List[Dict[str, Any]]:
     started_at = time.time()
     q = "SELECT * FROM wake_intents WHERE 1=1"
@@ -584,6 +585,8 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
         q += " AND status=?"; params.append(status)
     if host_id:
         q += " AND claimed_by_host=?"; params.append(host_id)
+    if task_id:
+        q += " AND task_id=?"; params.append(task_id)
     q += " ORDER BY requested_at"
     try:
         with _control_plane_conn(project) as c:
@@ -594,6 +597,12 @@ def list_wake_intents(status: str = "", host_id: str = "", runtime: str = "",
         raise
     if runtime:
         wakes = [w for w in wakes if (w.get("selector") or {}).get("runtime") == runtime]
+    if deliverable_id:
+        wakes = [
+            w for w in wakes
+            if str((w.get("selector") or {}).get("deliverable_id") or "")
+            == str(deliverable_id)
+        ]
     return wakes
 
 
@@ -1688,6 +1697,60 @@ def complete_wake(wake_id: str, runner_session_id: str = "",
                 return {"error": "wake not found", "wake_id": wake_id}
             wake = _wake_row(row)
             policy = dict(wake.get("policy") or {})
+            if success and policy.get("require_runner_bind") is True:
+                runner_row = c.execute(
+                    "SELECT * FROM runner_sessions WHERE runner_session_id=?",
+                    (runner_session_id,),
+                ).fetchone()
+                runner = dict(runner_row) if runner_row else {}
+                metadata = _json_obj(runner.get("metadata_json", "{}"), {})
+                claim_id = str(runner.get("claim_id") or "")
+                work_session_id = str(metadata.get("work_session_id") or "")
+                claim = c.execute(
+                    "SELECT id, task_id, agent_id, status, expires_at "
+                    "FROM task_claims WHERE id=?", (claim_id,),
+                ).fetchone() if claim_id else None
+                session = c.execute(
+                    "SELECT work_session_id, task_id, agent_id, claim_id, status "
+                    "FROM work_sessions WHERE work_session_id=?", (work_session_id,),
+                ).fetchone() if work_session_id else None
+                expected_task = str(wake.get("task_id") or "")
+                expected_host = str(wake.get("claimed_by_host") or "")
+                selector = dict(wake.get("selector") or {})
+                expected_agent = str(selector.get("agent_id") or "")
+                expected_runtime = str(selector.get("runtime") or "")
+                runner_live = bool(
+                    str(runner.get("status") or "").lower() in {"ready", "running"}
+                    and float(runner.get("heartbeat_at") or 0)
+                    + float(runner.get("heartbeat_ttl_s") or 60) > now
+                )
+                exact = bool(
+                    runner
+                    and str(runner.get("task_id") or "") == expected_task
+                    and str(runner.get("host_id") or "") == expected_host
+                    and str(runner.get("agent_id") or "") == expected_agent
+                    and str(runner.get("runtime") or "") == expected_runtime
+                    and str(metadata.get("wake_id") or "") == wake_id
+                    and runner_live
+                    and claim and str(claim["task_id"] or "") == expected_task
+                    and str(claim["agent_id"] or "") == expected_agent
+                    and str(claim["status"] or "") == "active"
+                    and float(claim["expires_at"] or 0) > now
+                    and session and str(session["task_id"] or "") == expected_task
+                    and str(session["claim_id"] or "") == claim_id
+                    and str(session["status"] or "") == "active"
+                    and str(session["agent_id"] or "") == expected_agent
+                )
+                if not exact:
+                    return {
+                        "completed": False,
+                        "reason": "runner_bind_incomplete",
+                        "error_code": "runner_bind_incomplete",
+                        "failure_class": "unbound_identity",
+                        "wake_id": wake_id,
+                        "runner_session_id": runner_session_id or None,
+                        "retryable": True,
+                    }
             personal = (policy.get("execution_mode") == "personal_agent_host"
                         or policy.get("require_exact_host_binding") is True)
             execution = dict(policy.get("execution_binding") or {})

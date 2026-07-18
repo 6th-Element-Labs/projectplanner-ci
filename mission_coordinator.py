@@ -512,18 +512,51 @@ def run_coordinator_tick(
                 **pol["worker_wake_policy"],
                 "target_task_id": dispatch.get("task_id"),
                 "target_project_id": dispatch.get("project_id") or mission_project,
+                "require_runner_bind": True,
             }
             wake_policy.setdefault("mode", "claim_next")
-            wake = store_mod.request_wake(
-                selector,
-                reason=f"Mission coordinator dispatch for {deliverable_id}",
-                source=actor,
-                task_id=dispatch.get("task_id") or "",
-                actor=actor,
-                project=mission_project,
-                idem_key=f"coord-wake-v2-{deliverable_id}-{dispatch.get('task_id')}",
-                policy=wake_policy,
-            )
+            prior_wakes = []
+            list_wakes = getattr(store_mod, "list_wake_intents", None)
+            if callable(list_wakes):
+                try:
+                    listed = list_wakes(
+                        project=mission_project,
+                        task_id=str(dispatch.get("task_id") or ""),
+                        deliverable_id=str(deliverable_id or ""),
+                    )
+                    prior_wakes = listed if isinstance(listed, list) else []
+                except Exception:
+                    prior_wakes = []
+            matching = [
+                row for row in prior_wakes
+                if str(row.get("task_id") or "") == str(dispatch.get("task_id") or "")
+                and str((row.get("selector") or {}).get("deliverable_id") or "")
+                == str(deliverable_id or "")
+            ]
+            active = [row for row in matching
+                      if str(row.get("status") or "") in {"pending", "claimed"}]
+            attempt = 1 + len([
+                row for row in matching
+                if str(row.get("status") or "")
+                in {"completed", "failed", "cancelled", "expired"}
+            ])
+            wake_policy["dispatch_attempt"] = attempt
+            if active:
+                wake = sorted(
+                    active, key=lambda row: float(row.get("requested_at") or 0))[-1]
+                wake = {**wake, "requested": False, "reason": "active_wake_exists"}
+            else:
+                wake = store_mod.request_wake(
+                    selector,
+                    reason=f"Mission coordinator dispatch for {deliverable_id}",
+                    source=actor,
+                    task_id=dispatch.get("task_id") or "",
+                    actor=actor,
+                    project=mission_project,
+                    idem_key=(f"coord-wake-v3-{deliverable_id}-"
+                              f"{dispatch.get('task_id')}-{attempt}"),
+                    policy=wake_policy,
+                )
             executed.append({
                 "kind": "request_wake",
                 "deliverable_id": deliverable_id,
