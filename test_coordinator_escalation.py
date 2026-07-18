@@ -149,6 +149,7 @@ try:
     store.link_task_to_deliverable(
         "esc-mission", "qa-esc-target", "RENDER-1",
         milestone_id=ms["milestones"][0]["id"],
+        data={"role": "contributes", "blocks_deliverable": True},
         actor="test", project="qa-esc-home",
     )
     store.set_agent_state("RENDER-1", "human_gate", {

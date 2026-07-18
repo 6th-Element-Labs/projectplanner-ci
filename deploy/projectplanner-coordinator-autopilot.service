@@ -1,0 +1,43 @@
+# /etc/systemd/system/projectplanner-coordinator-autopilot.service
+# COORD-8 durable deliverable-scoped autopilot. Ships disarmed by default.
+[Unit]
+Description=ProjectPlanner Switchboard deliverable autopilot coordinator
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Slice=projectplanner-batch.slice
+Type=simple
+Nice=5
+IOSchedulingClass=best-effort
+MemoryMax=256M
+User=projectplanner
+Group=projectplanner
+WorkingDirectory=/opt/projectplanner
+EnvironmentFile=/opt/projectplanner/.env
+Environment=PM_SQLITE_MMAP_BYTES=0
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PM_COORDINATOR_AUTOPILOT_PROJECTS=switchboard
+Environment=PM_COORDINATOR_AUTOPILOT_ACT=0
+RuntimeDirectory=projectplanner
+ExecStart=/opt/projectplanner/.venv/bin/python /opt/projectplanner/coordinator_daemon.py run
+Restart=always
+RestartSec=10s
+TimeoutStopSec=45s
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/projectplanner
+
+[Install]
+WantedBy=multi-user.target

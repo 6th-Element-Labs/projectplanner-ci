@@ -54,13 +54,137 @@ def _normalize_policy(policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "monitor_in_review": True,
         "worker_agent_id": "",
         "worker_wake_selector": {},
+        "allowed_lanes": [],
+        "denied_lanes": [],
+        "target_task_id": "",
+        "target_milestone_id": "",
     }
     if isinstance(policy, dict):
         base.update({k: v for k, v in policy.items() if k in base})
     base["worker_agent_id"] = (base.get("worker_agent_id") or "").strip()
     selector = base.get("worker_wake_selector")
     base["worker_wake_selector"] = selector if isinstance(selector, dict) else {}
+    lanes = base.get("allowed_lanes")
+    if isinstance(lanes, str):
+        lanes = lanes.split(",")
+    base["allowed_lanes"] = sorted({
+        str(lane).strip().upper() for lane in (lanes or []) if str(lane).strip()
+    })
+    denied = base.get("denied_lanes")
+    if isinstance(denied, str):
+        denied = denied.split(",")
+    base["denied_lanes"] = sorted({
+        str(lane).strip().upper() for lane in (denied or []) if str(lane).strip()
+    })
+    base["target_task_id"] = str(base.get("target_task_id") or "").strip().upper()
+    base["target_milestone_id"] = str(base.get("target_milestone_id") or "").strip()
     return base
+
+
+_NON_FLOW_LINK_ROLES = frozenset({
+    "foundation", "historical", "moved", "parked", "skipped",
+})
+
+
+def _explicit_target_actions(mission_status: Dict[str, Any],
+                             policy: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Opt one named nonblocking flow task/milestone into a tick.
+
+    Generic deliverable drain never reaches these links. Context roles and an
+    explicit ``dispatch_eligible=false`` remain fail-closed even when targeted.
+    """
+    target_task = policy.get("target_task_id") or ""
+    target_milestone = policy.get("target_milestone_id") or ""
+    if not target_task and not target_milestone:
+        return list(mission_status.get("next_actions") or [])
+    actions: List[Dict[str, Any]] = []
+    for link in mission_status.get("linked_tasks") or []:
+        task_id = str(link.get("task_id") or "").upper()
+        milestone_id = str(link.get("milestone_id") or "")
+        if target_task and task_id != target_task:
+            continue
+        if target_milestone and milestone_id != target_milestone:
+            continue
+        role = str(link.get("role") or "").strip().lower()
+        metadata = link.get("metadata") or {}
+        if role in _NON_FLOW_LINK_ROLES or metadata.get("dispatch_eligible") is False:
+            continue
+        detail = link.get("task_detail") or {}
+        if detail.get("error"):
+            continue
+        status = detail.get("status")
+        claims = detail.get("active_claims") or []
+        dependency = detail.get("dependency_state") or {}
+        lane = detail.get("workstream") or detail.get("_wsId")
+        common = {
+            "project_id": link.get("project_id"),
+            "task_id": detail.get("task_id") or task_id,
+            "title": detail.get("title"),
+            "milestone_id": link.get("milestone_id"),
+            "lane": lane,
+            "explicit_target": True,
+            "automatic": True,
+            "attention": False,
+            "delivery_impact": "none",
+        }
+        gate = detail.get("human_gate") or {}
+        if gate.get("blocked"):
+            actions.append({
+                **common, "action": "request_human_approval",
+                "owner_type": "project_owner", "attention": True,
+                "label": "Approve the explicitly targeted task",
+                "reason": gate.get("reason") or "Human gate blocked",
+            })
+        elif status == "Not Started" and dependency.get("ready") and not claims:
+            actions.append({
+                **common, "action": "claim_task", "owner_type": "agent",
+                "label": "Agent will claim the explicitly targeted task",
+                "reason": "Explicit task/milestone policy opt-in",
+            })
+        elif status == "In Progress" and not claims:
+            actions.append({
+                **common, "action": "resume_or_claim", "owner_type": "agent",
+                "label": "Agent will resume the explicitly targeted task",
+                "reason": "Explicit task/milestone policy opt-in",
+            })
+        elif status == "In Review":
+            actions.append({
+                **common, "action": "verify_merge_provenance",
+                "owner_type": "coordinator",
+                "label": "Coordinator will verify targeted merge provenance",
+                "reason": "Explicit task/milestone policy opt-in",
+            })
+    return actions
+
+
+def _scope_mission_status(mission_status: Dict[str, Any],
+                          policy: Dict[str, Any]) -> Dict[str, Any]:
+    scoped = dict(mission_status)
+    actions = _explicit_target_actions(mission_status, policy)
+    allowed_lanes = set(policy.get("allowed_lanes") or [])
+    denied_lanes = set(policy.get("denied_lanes") or [])
+    if allowed_lanes:
+        actions = [
+            action for action in actions
+            if str(action.get("lane") or "").strip().upper() in allowed_lanes
+        ]
+    if denied_lanes:
+        actions = [
+            action for action in actions
+            if not action.get("lane")
+            or str(action.get("lane")).strip().upper() not in denied_lanes
+        ]
+    scoped["next_actions"] = actions
+    scoped["coordinator_scope"] = {
+        "mode": ("explicit" if policy.get("target_task_id")
+                 or policy.get("target_milestone_id") else "deliverable"),
+        "allowed_lanes": sorted(allowed_lanes),
+        "denied_lanes": sorted(denied_lanes),
+        "target_task_id": policy.get("target_task_id") or None,
+        "target_milestone_id": policy.get("target_milestone_id") or None,
+        "candidate_count": len(actions),
+    }
+    return scoped
 
 
 def pick_coordinator_action(next_actions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -77,16 +201,20 @@ def coordinator_tick_plan(mission_status: Dict[str, Any],
                           policy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Pure plan: what the coordinator would do without side effects."""
     pol = _normalize_policy(policy)
+    mission_status = _scope_mission_status(mission_status, pol)
     progress = mission_status.get("progress") or {}
-    linked = int(progress.get("linked_task_count") or 0)
-    done_ratio = float(progress.get("done_with_proof_ratio") or 0.0)
-    if linked > 0 and done_ratio >= 1.0:
+    dispatch_scope = mission_status.get("dispatch_scope") or {}
+    linked = int(dispatch_scope.get(
+        "blocking_task_count", progress.get("linked_task_count") or 0))
+    done_ratio = float(dispatch_scope.get(
+        "blocking_done_with_proof_ratio", progress.get("done_with_proof_ratio") or 0.0))
+    selected = pick_coordinator_action(mission_status.get("next_actions") or [])
+    if linked > 0 and done_ratio >= 1.0 and not selected:
         return {
             "status": "mission_complete",
             "deliverable_id": mission_status.get("deliverable_id"),
             "reason": "All linked tasks have terminal Done provenance",
         }
-    selected = pick_coordinator_action(mission_status.get("next_actions") or [])
     if not selected:
         return {
             "status": "idle",
@@ -100,6 +228,7 @@ def coordinator_tick_plan(mission_status: Dict[str, Any],
         "deliverable_id": mission_status.get("deliverable_id"),
         "selected_action": selected,
         "auto_refresh_brief": bool(pol["auto_refresh_brief"]),
+        "scope": mission_status.get("coordinator_scope") or {},
     }
     if action in HUMAN_ESCALATION:
         plan["status"] = "human_required"
@@ -198,6 +327,10 @@ def _record_tick_decision(
             "monitor_in_review": bool(policy.get("monitor_in_review")),
             "worker_agent_id": policy.get("worker_agent_id") or "",
             "worker_wake_selector": policy.get("worker_wake_selector") or {},
+            "allowed_lanes": policy.get("allowed_lanes") or [],
+            "denied_lanes": policy.get("denied_lanes") or [],
+            "target_task_id": policy.get("target_task_id") or "",
+            "target_milestone_id": policy.get("target_milestone_id") or "",
         },
         "narrative_source_fingerprint": (
             (mission_status.get("mission_brief") or {}).get("source_fingerprint")
@@ -270,6 +403,7 @@ def run_coordinator_tick(
         import store as store_mod
 
     pol = _normalize_policy(policy)
+    mission_status = _scope_mission_status(mission_status, pol)
     deliverable_id = mission_status.get("deliverable_id") or ""
     plan = coordinator_tick_plan(mission_status, policy=pol)
     executed: List[Dict[str, Any]] = []
@@ -296,6 +430,7 @@ def run_coordinator_tick(
             if not brief_result.get("error"):
                 mission_status = brief_result.get("mission_status") or store_mod.get_mission_status(
                     project=mission_project, deliverable_id=deliverable_id)
+                mission_status = _scope_mission_status(mission_status, pol)
                 plan = coordinator_tick_plan(mission_status, policy=pol)
 
     result: Dict[str, Any] = {
@@ -336,7 +471,8 @@ def run_coordinator_tick(
                 project=mission_project,
                 deliverable_id=deliverable_id,
                 actor=actor,
-                idem_key=f"coord-{deliverable_id}-{dispatch.get('task_id')}-{int(now // 60)}",
+                idem_key=(f"{idem_key}:claim" if idem_key else
+                          f"coord-{deliverable_id}-{dispatch.get('task_id')}-{int(now // 60)}"),
             )
             executed.append({
                 "kind": "claim_next",

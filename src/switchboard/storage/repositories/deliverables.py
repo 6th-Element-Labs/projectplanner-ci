@@ -1903,6 +1903,10 @@ def _mission_blockers(deliverable: Dict[str, Any],
             "message": "Deliverable status is blocked",
         })
     for link in linked_tasks:
+        # Context/history rows and explicitly nonblocking links remain visible in
+        # the mission map but cannot make delivery red (COORD-8 scope hygiene).
+        if not _link_blocks_delivery(link):
+            continue
         detail = link.get("task_detail") or link.get("task") or {}
         if detail.get("error"):
             blockers.append({
@@ -2014,6 +2018,82 @@ def _task_blocks_others(detail: Dict[str, Any]) -> bool:
     return bool((detail.get("dependency_state") or {}).get("blocking"))
 
 
+_NON_FLOW_LINK_ROLES = frozenset({
+    "foundation", "historical", "moved", "parked", "skipped",
+})
+
+
+def _link_blocks_delivery(link: Dict[str, Any]) -> bool:
+    """Whether a link is part of the deliverable's terminal delivery contract.
+
+    Context/history rows stay visible in ``linked_tasks`` but must not turn a
+    deliverable red merely because the referenced work is old, parked, or moved.
+    """
+    role = str(link.get("role") or "").strip().lower()
+    return bool(link.get("blocks_deliverable")) and role not in _NON_FLOW_LINK_ROLES
+
+
+def _link_automatic_dispatch_eligible(link: Dict[str, Any]) -> bool:
+    """Fail-closed generic deliverable dispatch scope (COORD-8).
+
+    Blocking flow work is eligible by default. Nonblocking work requires the
+    explicit per-link ``metadata.dispatch_eligible=true`` opt-in. Context roles
+    and explicit false values are never generic automatic candidates.
+    """
+    role = str(link.get("role") or "").strip().lower()
+    metadata = link.get("metadata") or {}
+    if role in _NON_FLOW_LINK_ROLES or metadata.get("dispatch_eligible") is False:
+        return False
+    if _link_blocks_delivery(link):
+        return True
+    return metadata.get("dispatch_eligible") is True
+
+
+def _mission_dispatch_scope(linked_tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    blocking = blocking_done = automatic = 0
+    for link in linked_tasks:
+        detail = link.get("task_detail") or {}
+        blocks = _link_blocks_delivery(link)
+        eligible = _link_automatic_dispatch_eligible(link)
+        terminal = bool(
+            detail.get("status") == "Done"
+            and (detail.get("provenance") or {}).get("terminal")
+        )
+        blocking += int(blocks)
+        blocking_done += int(blocks and terminal)
+        automatic += int(eligible)
+        role = str(link.get("role") or "").strip().lower()
+        metadata = link.get("metadata") or {}
+        if role in _NON_FLOW_LINK_ROLES:
+            reason = f"context_role:{role}"
+        elif metadata.get("dispatch_eligible") is False:
+            reason = "dispatch_eligible_false"
+        elif not link.get("blocks_deliverable") and not eligible:
+            reason = "nonblocking_without_explicit_opt_in"
+        else:
+            reason = "automatic_flow" if eligible else "not_delivery_blocking"
+        rows.append({
+            "project_id": link.get("project_id"),
+            "task_id": link.get("task_id"),
+            "milestone_id": link.get("milestone_id"),
+            "role": link.get("role"),
+            "blocks_delivery": blocks,
+            "automatic_dispatch_eligible": eligible,
+            "reason": reason,
+        })
+    return {
+        "schema": "switchboard.deliverable_dispatch_scope.v1",
+        "blocking_task_count": blocking,
+        "blocking_done_with_proof_count": blocking_done,
+        "blocking_done_with_proof_ratio": (
+            blocking_done / blocking if blocking else 1.0
+        ),
+        "automatic_candidate_count": automatic,
+        "links": rows,
+    }
+
+
 def _mission_next_actions(deliverable: Dict[str, Any],
                           linked_tasks: List[Dict[str, Any]],
                           pending_proposal: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2026,69 +2106,84 @@ def _mission_next_actions(deliverable: Dict[str, Any],
             proposal_id=pending_proposal.get("id")))
     for link in linked_tasks:
         detail = link.get("task_detail") or {}
+        blocks_delivery = _link_blocks_delivery(link)
+        automatic_eligible = _link_automatic_dispatch_eligible(link)
+        link["dispatch_scope"] = {
+            "blocks_delivery": blocks_delivery,
+            "automatic_dispatch_eligible": automatic_eligible,
+        }
         if detail.get("error"):
-            actions.append(_action(
-                "repair_task_link", owner="coordinator", delivery_impact="at_risk",
-                label="Repair a broken task link", reason=detail.get("error"),
-                project_id=link.get("project_id"), task_id=link.get("task_id")))
+            if blocks_delivery:
+                actions.append(_action(
+                    "repair_task_link", owner="coordinator", delivery_impact="at_risk",
+                    label="Repair a broken task link", reason=detail.get("error"),
+                    project_id=link.get("project_id"), task_id=link.get("task_id")))
             continue
         status = detail.get("status")
         claims = detail.get("active_claims") or []
         dep = detail.get("dependency_state") or {}
         blocks = _task_blocks_others(detail)
-        if status == "Not Started" and dep.get("ready") and not claims:
+        lane = detail.get("workstream") or detail.get("_wsId")
+        if (automatic_eligible and status == "Not Started"
+                and dep.get("ready") and not claims):
             actions.append(_action(
                 "claim_task", owner="agent", automatic=True,
-                delivery_impact="blocking" if blocks else "none",
+                delivery_impact="blocking" if blocks_delivery or blocks else "none",
                 label="Agent will claim a ready task", reason="Ready and unclaimed",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
-                title=detail.get("title")))
-        elif status == "In Review":
+                title=detail.get("title"), lane=lane,
+                milestone_id=link.get("milestone_id")))
+        elif automatic_eligible and status == "In Review":
             actions.append(_action(
                 "verify_merge_provenance", owner="coordinator", automatic=True,
                 delivery_impact="none",
                 label="Coordinator will verify merge provenance",
                 reason="Awaiting merge/default-branch provenance for Done",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
-                title=detail.get("title")))
-        elif status == "In Progress" and not claims:
+                title=detail.get("title"), lane=lane,
+                milestone_id=link.get("milestone_id")))
+        elif automatic_eligible and status == "In Progress" and not claims:
             actions.append(_action(
                 "resume_or_claim", owner="agent", automatic=True,
-                delivery_impact="at_risk" if blocks else "none",
+                delivery_impact="at_risk" if blocks_delivery or blocks else "none",
                 label="Agent will resume dropped work",
                 reason="In progress without an active claim",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
-                title=detail.get("title")))
+                title=detail.get("title"), lane=lane,
+                milestone_id=link.get("milestone_id")))
         gate = detail.get("human_gate") or {}
-        if gate.get("blocked"):
+        if blocks_delivery and gate.get("blocked"):
             actions.append(_action(
                 "request_human_approval", owner="project_owner", attention=True,
                 delivery_impact="blocking",
                 label="Approve to unblock a gated task",
                 reason=gate.get("reason") or "Human gate blocked",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
-                title=detail.get("title")))
+                title=detail.get("title"), lane=lane,
+                milestone_id=link.get("milestone_id")))
         session_health = detail.get("session_health") or {}
         # A stale/unsafe Work Session is COORDINATOR housekeeping that resolves automatically. It only
         # touches delivery when the underlying task hasn't already merged — an unsafe session on an
         # In Review/Done task (the classic "old blocked session on shipped work") has no impact.
         terminal = status in ("In Review", "Done")
-        if session_health.get("status") == "unsafe":
+        if automatic_eligible and session_health.get("status") == "unsafe":
             actions.append(_action(
                 "repair_work_session", owner="coordinator", automatic=True,
                 delivery_impact="none" if terminal else "at_risk",
                 label="Coordinator will clean up an unsafe agent workspace",
                 reason=session_health.get("recommended_repair") or "Unsafe Work Session",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
-                title=detail.get("title")))
-        elif session_health.get("status") == "warning":
+                title=detail.get("title"), lane=lane,
+                milestone_id=link.get("milestone_id")))
+        elif automatic_eligible and session_health.get("status") == "warning":
             actions.append(_action(
                 "refresh_work_session_health", owner="coordinator", automatic=True,
                 delivery_impact="none",
                 label="Coordinator will refresh a Work Session's health",
                 reason=session_health.get("recommended_repair") or "Work Session warning",
                 project_id=link.get("project_id"), task_id=detail.get("task_id"),
-                title=detail.get("title")))
+                title=detail.get("title"), lane=lane,
+                milestone_id=link.get("milestone_id")))
     if not linked_tasks and not (deliverable.get("milestones") or []):
         actions.append(_action(
             "propose_breakdown", owner="coordinator", automatic=True, delivery_impact="at_risk",
@@ -2235,6 +2330,7 @@ def _build_mission_status(project: str = DEFAULT_PROJECT, deliverable_id: str = 
         "progress": deliverable.get("progress") or deliverable_progress(deliverable),
         "milestones": milestones,
         "linked_tasks": linked_tasks,
+        "dispatch_scope": _mission_dispatch_scope(linked_tasks),
         "blockers": blockers,
         "active_work": active_work,
         "done_with_proof": done_with_proof,

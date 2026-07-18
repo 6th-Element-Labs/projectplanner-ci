@@ -31,8 +31,14 @@ def check(cond, msg):
         _FAILURES.append(msg)
 
 
-def _link(task_id, detail, project="switchboard"):
-    return {"project_id": project, "task_id": task_id, "task_detail": {**detail, "task_id": task_id}}
+def _link(task_id, detail, project="switchboard", blocks=False):
+    # Attention-model fixtures are explicit automatic candidates. COORD-8 now
+    # excludes nonblocking links unless the link policy opts them in.
+    return {"project_id": project, "task_id": task_id,
+            "blocks_deliverable": bool(blocks),
+            "metadata": {"dispatch_eligible": True},
+            "role": "contributes",
+            "task_detail": {**detail, "task_id": task_id}}
 
 
 def _find(actions, action):
@@ -64,7 +70,8 @@ def test_human_decisions_flagged():
           "approve_breakdown is a human decision")
 
     gated = [_link("T-GATE", {"status": "In Progress", "active_claims": [{"agent_id": "x"}],
-                              "human_gate": {"blocked": True, "reason": "spend approval"}})]
+                              "human_gate": {"blocked": True, "reason": "spend approval"}},
+                   blocks=True)]
     ra = _find(store._mission_next_actions({}, gated, None), "request_human_approval")
     check(ra and ra["attention"] and ra["delivery_impact"] == "blocking",
           "request_human_approval is attention + blocking")
@@ -121,7 +128,7 @@ def test_harden36_stale_session_is_no_impact():
 
 def test_repair_task_link_needs_a_person():
     print("\n[6] a broken link is coordinator work that isn't automatic")
-    bad = [_link("T-BAD", {"error": "linked task not found"})]
+    bad = [_link("T-BAD", {"error": "linked task not found"}, blocks=True)]
     rl = _find(store._mission_next_actions({}, bad, None), "repair_task_link")
     check(rl and rl["owner_type"] == "coordinator" and not rl["automatic"] and rl["delivery_impact"] == "at_risk",
           "repair_task_link: coordinator, not automatic, at_risk")

@@ -57,10 +57,64 @@ try:
     milestone_id = ms["milestones"][0]["id"]
     store.link_task_to_deliverable(
         "coord-mission", "qa-coord-target", "RENDER-1", milestone_id=milestone_id,
+        data={"role": "contributes", "blocks_deliverable": True},
         actor="test", project="qa-coord-home",
     )
 
+    # COORD-8 mixed scope: only ready blocking flow work is selected by generic
+    # deliverable drain. Parked/context and nonblocking work stay visible.
+    store.create_task(
+        {"workstream_id": "VENDOR", "title": "Vendor gate", "status": "Blocked"},
+        actor="test", project="qa-coord-target",
+    )
+    for title in ("Ready parked task", "Ready nonblocking task", "Vendor follow-on"):
+        payload = {"workstream_id": "RENDER", "title": title}
+        if title == "Vendor follow-on":
+            payload["depends_on"] = ["VENDOR-1"]
+        store.create_task(payload, actor="test", project="qa-coord-target")
+    store.link_task_to_deliverable(
+        "coord-mission", "qa-coord-target", "RENDER-3", milestone_id=milestone_id,
+        data={"role": "parked", "blocks_deliverable": False,
+              "metadata": {"dispatch_eligible": True}},
+        actor="test", project="qa-coord-home")
+    store.link_task_to_deliverable(
+        "coord-mission", "qa-coord-target", "RENDER-4", milestone_id=milestone_id,
+        data={"role": "contributes", "blocks_deliverable": False},
+        actor="test", project="qa-coord-home")
+    store.link_task_to_deliverable(
+        "coord-mission", "qa-coord-target", "RENDER-5", milestone_id=milestone_id,
+        data={"role": "contributes", "blocks_deliverable": True},
+        actor="test", project="qa-coord-home")
+
     status = store.get_mission_status(project="qa-coord-home", deliverable_id="coord-mission")
+    generic_claims = [a.get("task_id") for a in status.get("next_actions") or []
+                      if a.get("action") in {"claim_task", "resume_or_claim"}]
+    ok(generic_claims == ["RENDER-1"],
+       "mixed deliverable selects only ready blocking flow work")
+    scope_rows = {row.get("task_id"): row for row in status["dispatch_scope"]["links"]}
+    ok(scope_rows["RENDER-3"]["reason"] == "context_role:parked"
+       and scope_rows["RENDER-4"]["reason"] == "nonblocking_without_explicit_opt_in",
+       "parked and unopted nonblocking links remain visible with exclusion reasons")
+    ok(not any(b.get("task_id") in {"RENDER-3", "RENDER-4"}
+               for b in status.get("blockers") or []),
+       "parked and nonblocking context links do not become delivery blockers")
+    explicit = mission_coordinator.coordinator_tick_plan(
+        status, policy={"target_task_id": "RENDER-4"})
+    parked = mission_coordinator.coordinator_tick_plan(
+        status, policy={"target_task_id": "RENDER-3"})
+    ok(explicit.get("status") == "dispatch_ready"
+       and explicit.get("dispatch", {}).get("task_id") == "RENDER-4",
+       "explicit task policy may opt a nonblocking flow task into dispatch")
+    ok(parked.get("status") == "idle",
+       "explicit targeting still cannot auto-dispatch a parked link")
+    lane_fail_closed = mission_coordinator.coordinator_tick_plan(
+        {"deliverable_id": "coord-mission", "progress": {}, "next_actions": [
+            {"action": "claim_task", "task_id": "NO-LANE"},
+        ]},
+        policy={"allowed_lanes": ["RENDER"]},
+    )
+    ok(lane_fail_closed.get("status") == "idle",
+       "lane allowlist fails closed when an action has no lane metadata")
     plan = mission_coordinator.coordinator_tick_plan(
         status, policy={"auto_claim": True, "worker_agent_id": "agent/worker"})
     ok(plan.get("status") == "dispatch_ready" and
