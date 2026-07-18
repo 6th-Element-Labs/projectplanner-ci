@@ -474,7 +474,22 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
     dirty = git("status", "--porcelain")
     if dirty:
         raise RuntimeError("external source_path is dirty")
-    head_sha = git("rev-parse", "HEAD")
+    fetched = subprocess.run(
+        ["git", "-C", source_path, "fetch", "--prune", "origin"],
+        capture_output=True, text=True, timeout=600, check=False,
+    )
+    if fetched.returncode != 0:
+        raise RuntimeError("external canonical origin fetch failed")
+    default_branch = str(
+        os.environ.get("PM_WORK_SESSION_DEFAULT_BRANCH") or "master").strip()
+    if (not default_branch
+            or subprocess.run(
+                ["git", "check-ref-format", "--branch", default_branch],
+                capture_output=True, text=True, timeout=30, check=False,
+            ).returncode != 0):
+        raise RuntimeError("external canonical default branch is invalid")
+    canonical_ref = f"origin/{default_branch}"
+    head_sha = git("rev-parse", canonical_ref)
     branch = git("branch", "--show-current")
     task_marker = str(task_id or "").strip().upper()
     isolate = str(os.environ.get(
@@ -509,7 +524,7 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
     elif task_marker.lower() not in branch.lower():
         branch = f"codex/{task_marker}-byoa"
         switched = subprocess.run(
-            ["git", "-C", source_path, "switch", "-c", branch],
+            ["git", "-C", source_path, "switch", "-c", branch, head_sha],
             capture_output=True, text=True, timeout=30, check=False,
         )
         if switched.returncode != 0:
@@ -522,7 +537,7 @@ def create_external_work_session(project, task_id, agent_id, runtime, source_pat
         "runtime": runtime,
         "repo_role": "canonical",
         "branch": branch,
-        "upstream": "origin/master",
+        "upstream": canonical_ref,
         "base_sha": head_sha,
         "head_sha": head_sha,
         "worktree_path": workspace_path,
@@ -1195,6 +1210,9 @@ def _materialize_personal_workspace(session, source_sha, workspace_root):
     branch = str(session.get("branch") or "").strip()
     if not branch or _personal_git(["check-ref-format", "--branch", branch]).returncode != 0:
         raise RuntimeError("personal Work Session branch is invalid")
+    default_branch = str(session.get("default_branch") or "master").strip()
+    if (_personal_git(["check-ref-format", "--branch", default_branch]).returncode != 0):
+        raise RuntimeError("personal Work Session default branch is invalid")
     clone_url, expected_identity = _personal_repo_clone_url(session.get("repo"))
     configured_root = str(workspace_root or "").strip()
     if not configured_root:
@@ -1248,9 +1266,19 @@ def _materialize_personal_workspace(session, source_sha, workspace_root):
     fetched = _personal_git(["-C", workspace, "fetch", "--prune", "origin"], timeout=600)
     if fetched.returncode != 0:
         raise RuntimeError("personal workspace fetch failed")
+    canonical_ref = f"refs/remotes/origin/{default_branch}"
+    canonical = _personal_git(
+        ["-C", workspace, "show-ref", "--verify", "--quiet", canonical_ref])
+    if canonical.returncode != 0:
+        raise RuntimeError("personal workspace canonical default branch is unavailable")
     commit = _personal_git(["-C", workspace, "cat-file", "-e", f"{source_sha}^{{commit}}"])
     if commit.returncode != 0:
         raise RuntimeError("personal workspace source SHA is not available from the canonical repo")
+    canonical_head = _personal_git(["-C", workspace, "rev-parse", canonical_ref])
+    if (canonical_head.returncode != 0
+            or (canonical_head.stdout or "").strip() != source_sha):
+        raise RuntimeError(
+            "personal workspace source SHA is not the fetched canonical default head")
     if not created:
         current = _personal_git(["-C", workspace, "rev-parse", "HEAD"])
         if current.returncode != 0 or (current.stdout or "").strip() != source_sha:

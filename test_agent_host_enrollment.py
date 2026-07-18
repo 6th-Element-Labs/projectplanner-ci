@@ -1544,7 +1544,9 @@ try:
           patch.object(complete_claim_command, "execute_mapping_result",
                        return_value={"completed": True}),
           patch.object(store, "abandon_claim", return_value={"abandoned": True}),
-          patch.object(work_session_commands, "update", return_value={"updated": True})):
+          patch.object(work_session_commands, "update", return_value={"updated": True}),
+          patch.object(store, "issue_work_session_mcp_token", return_value={
+              "issued": True, "token": "wst-exact-child"})):
         exact_claim_completion = client.post(
             "/txp/v1/complete_claim",
             headers={"Authorization": f"Bearer {initial_mac_token}"},
@@ -1577,6 +1579,24 @@ try:
                   "dirty_status": "clean", "conflict_marker_count": 0,
                   "personal_execution_binding": exact_binding},
         )
+        exact_mcp_token = client.post(
+            "/ixp/v1/work_sessions/worksession-exact/mcp_token",
+            headers={"Authorization": f"Bearer {initial_mac_token}"},
+            json={"project": PROJECT, "binding": {
+                key: exact_binding[key] for key in (
+                    "task_id", "claim_id", "work_session_id", "runner_session_id",
+                    "host_id", "agent_id", "wake_id", "source_sha",
+                    "execution_connection_id")}},
+        )
+        wrong_mcp_token = client.post(
+            "/ixp/v1/work_sessions/worksession-other/mcp_token",
+            headers={"Authorization": f"Bearer {initial_mac_token}"},
+            json={"project": PROJECT, "binding": {
+                key: exact_binding[key] for key in (
+                    "task_id", "claim_id", "work_session_id", "runner_session_id",
+                    "host_id", "agent_id", "wake_id", "source_sha",
+                    "execution_connection_id")}},
+        )
     ok(host_principal.get("scopes") == ["read", "write:agent_host"]
        and generic_wake_write.status_code == 403
        and generic_wake_completion.status_code == 403
@@ -1599,6 +1619,9 @@ try:
        and wrong_claim_completion.status_code == 403
        and exact_claim_abandon.status_code == 200
        and exact_session_checkpoint.status_code == 200
+       and exact_mcp_token.status_code == 200
+       and exact_mcp_token.json().get("token") == "wst-exact-child"
+       and wrong_mcp_token.status_code == 403
        and wrong_session_checkpoint.status_code == 403,
        "enrolled bearer is fenced to its host, runner identity, and exact terminal tuple")
 
@@ -2247,6 +2270,8 @@ try:
     def fake_local_control(method, path, body):
         ok(method == "POST", "native local worker uses authenticated state-changing calls")
         local_control_calls.append((path, dict(body)))
+        if path.endswith("/mcp_token"):
+            return {"issued": True, "token": "wst-local-worker"}
         if (path == "/ixp/v1/heartbeat_runner_session"
                 and not local_final_heartbeat_lost[0]):
             local_final_heartbeat_lost[0] = True
@@ -2263,6 +2288,8 @@ try:
     def fake_failed_local_control(method, path, body):
         ok(method == "POST", "failed native local worker uses authenticated writes")
         failed_local_control_calls.append((path, dict(body)))
+        if path.endswith("/mcp_token"):
+            return {"issued": True, "token": "wst-failed-local-worker"}
         if path == "/txp/v1/complete_wake":
             return {"status": "failed"}
         return {"runner_session_id": body["runner_session_id"], "status": body["status"]}
@@ -2428,6 +2455,7 @@ try:
        and "OPENAI_API_KEY" not in local_environment
        and "PM_MCP_TOKEN" not in local_environment
        and "SWITCHBOARD_TOKEN" not in local_environment
+       and local_environment.get("SWITCHBOARD_WORK_SESSION_TOKEN") == "wst-local-worker"
        and local_environment.get("CODEX_HOME") == str(linux_codex_home)
        and local_evidence["verification"]["host_coordination_credential_exported"] is False
        and any(path == "/ixp/v1/heartbeat_runner_session"

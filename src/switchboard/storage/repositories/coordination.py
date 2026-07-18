@@ -935,6 +935,7 @@ def check_personal_execution_authority(
     """
     action = str(action or "").strip()
     expected_terminal = {
+        "issue_mcp_token": "active",
         "checkpoint_work_session": "completed",
         "complete_claim": "completed",
         "abandon_claim": "failed",
@@ -1009,9 +1010,11 @@ def check_personal_execution_authority(
             reasons.append("wake_not_found")
         else:
             wake = _wake_row(wake_row)
+            expected_wake_status = (
+                "claimed" if action == "issue_mcp_token" else expected_terminal)
             if (wake.get("task_id") != supplied["task_id"]
                     or wake.get("claimed_by_host") != supplied["host_id"]
-                    or wake.get("status") != expected_terminal):
+                    or wake.get("status") != expected_wake_status):
                 reasons.append("wake_terminal_binding_mismatch")
 
         runner_row = c.execute(
@@ -1033,7 +1036,9 @@ def check_personal_execution_authority(
             ):
                 if str(metadata.get(field) or "") != supplied[field]:
                     reasons.append(f"runner_{field}_mismatch")
-            if str(runner.get("status") or "") != expected_terminal:
+            expected_runner_status = (
+                "running" if action == "issue_mcp_token" else expected_terminal)
+            if str(runner.get("status") or "") != expected_runner_status:
                 reasons.append("runner_terminal_status_mismatch")
 
         host = c.execute(

@@ -40,8 +40,11 @@ subprocess.run(["git", "-C", str(repo), "config", "user.name", "Switchboard Test
 subprocess.run(["git", "-C", str(repo), "add", "proof.txt"], check=True)
 subprocess.run(["git", "-C", str(repo), "commit", "-m", "base"], check=True,
                capture_output=True)
-subprocess.run(["git", "-C", str(repo), "remote", "add", "origin",
-                "git@github.com:6th-Element-Labs/projectplanner.git"], check=True)
+origin = tmp / "origin.git"
+subprocess.run(["git", "clone", "--bare", str(repo), str(origin)], check=True,
+               capture_output=True)
+subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(origin)],
+               check=True)
 
 calls = []
 real_http = sb._http

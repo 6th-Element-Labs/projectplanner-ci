@@ -702,6 +702,89 @@ def get_work_session(work_session_id: str, project: str = DEFAULT_PROJECT) -> Op
     return _work_session_row(row) if row else None
 
 
+def issue_work_session_mcp_token(
+        work_session_id: str, *, actor: str = "agent-host",
+        project: str = DEFAULT_PROJECT) -> Dict[str, Any]:
+    """Rotate and return a one-time MCP bearer for one active Work Session."""
+    now = time.time()
+    token = "wst-" + uuid.uuid4().hex
+    with _conn(project) as c:
+        row = c.execute(
+            "SELECT task_id, claim_id, agent_id, status, expires_at "
+            "FROM work_sessions WHERE work_session_id=?",
+            ((work_session_id or "").strip(),),
+        ).fetchone()
+        if not row:
+            return {"error": "work_session_not_found",
+                    "work_session_id": work_session_id}
+        expires_at = float(row["expires_at"] or (now + 2 * 60 * 60))
+        if row["status"] != "active" or expires_at <= now:
+            return {"error": "work_session_not_active",
+                    "work_session_id": work_session_id}
+        c.execute(
+            "UPDATE work_sessions SET session_token_hash=?, expires_at=?, "
+            "updated_at=?, updated_by=? "
+            "WHERE work_session_id=? AND status='active'",
+            (hash_token(token), expires_at, now, actor, work_session_id),
+        )
+        c.execute(
+            "INSERT INTO activity(task_id, actor, kind, payload, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (row["task_id"], actor, "work_session.mcp_token_issued",
+             json.dumps({
+                 "work_session_id": work_session_id,
+                 "claim_id": row["claim_id"],
+                 "agent_id": row["agent_id"],
+                 "token_returned_once": True,
+                 "credential_values_redacted": True,
+             }, sort_keys=True), now),
+        )
+    return {
+        "issued": True,
+        "work_session_id": work_session_id,
+        "task_id": row["task_id"],
+        "agent_id": row["agent_id"],
+        "expires_at": expires_at,
+        "token": token,
+        "token_returned_once": True,
+    }
+
+
+def get_principal_by_work_session_token_any_project(
+        token: str) -> Optional[Dict[str, Any]]:
+    """Resolve an active Work Session bearer as a read-only MCP principal."""
+    if not str(token or "").startswith("wst-"):
+        return None
+    digest = hash_token(token)
+    now = time.time()
+    for project in _store_facade().project_ids():
+        try:
+            with _conn(project, read_snapshot=True) as c:
+                row = c.execute(
+                    "SELECT work_session_id, task_id, claim_id, agent_id, expires_at "
+                    "FROM work_sessions WHERE session_token_hash=? AND status='active' "
+                    "AND expires_at>?",
+                    (digest, now),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            # A newly registered project may not have had its schema initialized
+            # yet; token resolution must continue to the remaining boards.
+            continue
+        if row:
+            return {
+                "id": f"work-session:{row['work_session_id']}",
+                "kind": "work_session",
+                "display_name": row["agent_id"] or row["work_session_id"],
+                "project": project,
+                "scopes": ["read"],
+                "work_session_id": row["work_session_id"],
+                "bound_task_id": row["task_id"],
+                "claim_id": row["claim_id"],
+                "session_expires_at": float(row["expires_at"]),
+            }
+    return None
+
+
 def list_work_sessions(project: str = DEFAULT_PROJECT, task_id: str = "",
                        agent_id: str = "", status: str = "",
                        repo_role: str = "", include_expired: bool = True) -> List[Dict[str, Any]]:
@@ -1718,6 +1801,8 @@ __all__ = [
     "work_session_contract",
     "create_work_session",
     "get_work_session",
+    "issue_work_session_mcp_token",
+    "get_principal_by_work_session_token_any_project",
     "list_work_sessions",
     "update_work_session",
     "get_work_session_health",

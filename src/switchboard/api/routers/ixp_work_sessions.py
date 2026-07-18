@@ -66,6 +66,15 @@ class PersonalPostprocessingStateBody(BaseModel):
         default_factory=PersonalPostprocessingEvidenceBody)
 
 
+class WorkSessionMCPTokenBody(BaseModel):
+    """Exact host-bound request for a one-time child MCP credential."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str
+    binding: PersonalExecutionBindingBody
+
+
 def _raise_work_session_error(result: dict) -> None:
     status = 404 if result.get("error") == "work_session_not_found" else 400
     raise HTTPException(status, result)
@@ -157,6 +166,27 @@ def create_router(*, resolve_project: ProjectResolver,
         if not health:
             raise HTTPException(404, "work_session_not_found")
         return health
+
+    @router.post("/ixp/v1/work_sessions/{work_session_id}/mcp_token")
+    async def ixp_issue_work_session_mcp_token(
+            work_session_id: str, request: Request,
+            body: WorkSessionMCPTokenBody = Body(...)):
+        """Return one temporary MCP bearer to the exact bound Agent Host."""
+        payload = body.model_dump()
+        project = resolve_body_project(payload)
+        principal = resolve_agent_host_principal(
+            resolve_principal, request, project,
+            dev_actor=body.binding.host_id or "work-session-mcp")
+        binding = body.binding.model_dump()
+        if str(binding.get("work_session_id") or "") != work_session_id:
+            raise HTTPException(403, "personal execution Work Session target mismatch")
+        require_personal_execution_authority(
+            principal, binding, "issue_mcp_token", project)
+        result = store.issue_work_session_mcp_token(
+            work_session_id, actor=auth.actor(principal), project=project)
+        if result.get("error"):
+            _raise_work_session_error(result)
+        return result
 
     @router.get("/ixp/v1/session_health")
     async def ixp_session_health(project: str = Query(...),

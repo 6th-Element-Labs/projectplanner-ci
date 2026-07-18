@@ -247,6 +247,9 @@ FIXED_AUTHORIZATION_PROJECTS = {
     "move_task": "switchboard",
 }
 DISCOVERY_TOOLS = frozenset({"list_projects"})
+WORK_SESSION_BOOT_TOOLS = frozenset({
+    "prepare_agent_session", "get_working_agreement", "get_project_contract", "get_task",
+})
 
 
 def declaration_for(tool_name: str) -> ToolAccessDeclaration:
@@ -291,6 +294,18 @@ class MCPAuthorizationGuard:
             bound.apply_defaults()
             requested = str(bound.arguments.get(declaration.project_argument) or "").strip()
             principal_hint = _transport_principal.get()
+            work_session_principal = (principal_hint or {}).get("kind") == "work_session"
+            if (work_session_principal
+                    and function.__name__ not in WORK_SESSION_BOOT_TOOLS):
+                raise ValueError(
+                    "forbidden: Work Session token is limited to MCP session boot")
+            if work_session_principal and "task_id" in bound.arguments:
+                requested_task = str(bound.arguments.get("task_id") or "").strip().upper()
+                bound_task = str(
+                    (principal_hint or {}).get("bound_task_id") or "").strip().upper()
+                if requested_task and requested_task != bound_task:
+                    raise ValueError(
+                        "forbidden: Work Session token is bound to another task")
             binding = str((principal_hint or {}).get("project") or "").strip()
             selected = requested
             if declaration.fixed_authorization_project:

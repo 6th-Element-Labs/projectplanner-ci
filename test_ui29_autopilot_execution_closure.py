@@ -78,6 +78,17 @@ subprocess.run(["git", "-C", str(source), "commit", "-m", "base"], check=True,
                stdout=subprocess.DEVNULL)
 subprocess.run(["git", "-C", str(source), "remote", "add", "origin",
                 str(source_origin)], check=True)
+subprocess.run(["git", "-C", str(source), "push", "origin", "master"], check=True,
+               stdout=subprocess.DEVNULL)
+canonical_source_head = subprocess.run(
+    ["git", "-C", str(source), "rev-parse", "origin/master"], check=True,
+    capture_output=True, text=True).stdout.strip()
+subprocess.run(["git", "-C", str(source), "switch", "-c", "stale-local"],
+               check=True, stdout=subprocess.DEVNULL)
+(source / "README").write_text("stale local branch\n", encoding="utf-8")
+subprocess.run(["git", "-C", str(source), "add", "README"], check=True)
+subprocess.run(["git", "-C", str(source), "commit", "-m", "stale local"],
+               check=True, stdout=subprocess.DEVNULL)
 original_http = switchboard_core._http
 switchboard_core._http = lambda *_args, **_kwargs: {
     "work_session": {"work_session_id": "worksession-ui29-local"}}
@@ -89,10 +100,14 @@ os.environ.update({
 managed = switchboard_core.create_external_work_session(
     "switchboard", "UI-29", "codex/UI-29", "codex", str(source))
 switchboard_core._http = original_http
+managed_head = subprocess.run(
+    ["git", "-C", managed["workspace_path"], "rev-parse", "HEAD"], check=True,
+    capture_output=True, text=True).stdout.strip()
 ok(managed["workspace_path"] != str(source)
    and Path(managed["workspace_path"]).is_dir()
-   and managed["worker_owned_workspace"] is True,
-   "each generic wake gets a runner-isolated task worktree")
+   and managed["worker_owned_workspace"] is True
+   and managed_head == canonical_source_head,
+   "each generic wake starts in an isolated worktree at fetched origin/master")
 cleaned = switchboard_core.cleanup_external_work_session(managed)
 ok(cleaned.get("cleaned") is True and not Path(managed["workspace_path"]).exists(),
    "Agent Host removes only its owned task worktree")

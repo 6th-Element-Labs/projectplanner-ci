@@ -169,22 +169,46 @@ def _git(workspace: str, *args: str) -> str:
 def _prompt(task: dict[str, Any], *, source_sha: str, wake_id: str,
             execution_connection_id: str) -> str:
     task_id = str(task.get("task_id") or "")
-    description = str(task.get("description") or "").strip()
-    title = str(task.get("title") or "").strip()
-    return (
-        "You are the native Codex implementation worker for a task already claimed "
-        "and bound by Switchboard. Work only in the current managed workspace. "
-        "Do not claim or complete another task. The task and lifecycle binding below "
-        "are authoritative; do not call Switchboard, its MCP server, or lifecycle "
-        "endpoints from this child. Implement the task, run the required tests, commit "
-        "the intended changes, and push the current task branch. Leave the worktree "
-        "clean before exiting.\n\n"
-        f"Task: {task_id} {title}\n"
-        f"Exact source SHA: {source_sha}\n"
-        f"Wake: {wake_id}\n"
-        f"Execution connection: {execution_connection_id}\n\n"
-        f"Task description:\n{description}"
+    task_record = task.get("task") if isinstance(task.get("task"), dict) else {}
+    deliverable = task.get("deliverable") or task_record.get("deliverable") or {}
+    deliverable_id = str(
+        task.get("deliverable_id") or task_record.get("deliverable_id")
+        or (deliverable.get("id") if isinstance(deliverable, dict) else deliverable)
+        or "").strip()
+    project = str(os.environ.get("PM_PROJECT") or "switchboard").strip()
+    # Switchboard owns the assignment and exposes it through the preloaded MCP
+    # server.  Keeping the launch command this small makes the same boot contract
+    # work for one task, deliverable fan-out, and concurrent cross-board runs.
+    scope = f" for deliverable {deliverable_id}" if deliverable_id else ""
+    return f"Do {task_id}{scope} in project {project} via Switchboard."
+
+
+def _work_session_mcp_bootstrap(
+        http: Callable[..., dict[str, Any]], values: dict[str, str]) -> tuple[str, list[str]]:
+    """Issue the child-only bearer and return one-run Codex MCP overrides."""
+    binding = _recovery_binding(values)
+    result = http(
+        "POST",
+        f"/ixp/v1/work_sessions/{values['work_session_id']}/mcp_token",
+        {"project": os.environ.get("PM_PROJECT", "switchboard"),
+         "binding": binding},
     )
+    token = str(result.get("token") or "").strip()
+    if (result.get("issued") is not True or not token.startswith("wst-")):
+        raise RuntimeError("native Codex Work Session MCP bootstrap was denied")
+    base = str(os.environ.get("PM_BASE") or "https://plan.taikunai.com").rstrip("/")
+    parsed = urllib.parse.urlsplit(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("native Codex Switchboard MCP endpoint is invalid")
+    endpoint = base + "/mcp"
+    overrides = [
+        f'mcp_servers.taikun_plan.url={json.dumps(endpoint)}',
+        'mcp_servers.taikun_plan.bearer_token_env_var="SWITCHBOARD_WORK_SESSION_TOKEN"',
+        "mcp_servers.taikun_plan.required=true",
+        ('mcp_servers.taikun_plan.enabled_tools=["prepare_agent_session",'
+         '"get_working_agreement","get_project_contract","get_task"]'),
+    ]
+    return token, overrides
 
 
 def _runner_record(values: dict[str, str], *, workspace: str, status: str) -> dict[str, Any]:
@@ -483,26 +507,6 @@ def run(
     environment = os.environ.copy()
     for key in _METERED_PROVIDER_ENV | _COORDINATION_CREDENTIAL_ENV:
         environment.pop(key, None)
-    command = [
-        executable,
-        "exec",
-        "--ephemeral",
-        "-s",
-        "workspace-write",
-        "-c",
-        "sandbox_workspace_write.network_access=true",
-        "-c",
-        'approval_policy="never"',
-        "-C",
-        workspace,
-        *[value for directory in git_dirs for value in ("--add-dir", directory)],
-        _prompt(
-            task,
-            source_sha=values["source_sha"],
-            wake_id=values["wake_id"],
-            execution_connection_id=values["execution_connection_id"],
-        ),
-    ]
     stop_heartbeat = threading.Event()
     heartbeat_errors: list[Exception] = []
 
@@ -520,6 +524,31 @@ def run(
     try:
         _update_runner(http, values, workspace=workspace, status="running")
         runner_registered = True
+        mcp_overrides: list[str] = []
+        if personal_bound:
+            child_token, mcp_overrides = _work_session_mcp_bootstrap(http, values)
+            environment["SWITCHBOARD_WORK_SESSION_TOKEN"] = child_token
+        command = [
+            executable,
+            "exec",
+            "--ephemeral",
+            "-s",
+            "workspace-write",
+            "-c",
+            "sandbox_workspace_write.network_access=true",
+            "-c",
+            'approval_policy="never"',
+            *[value for override in mcp_overrides for value in ("-c", override)],
+            "-C",
+            workspace,
+            *[value for directory in git_dirs for value in ("--add-dir", directory)],
+            _prompt(
+                task,
+                source_sha=values["source_sha"],
+                wake_id=values["wake_id"],
+                execution_connection_id=values["execution_connection_id"],
+            ),
+        ]
         heartbeat_thread = threading.Thread(
             target=heartbeat_loop,
             name=f"switchboard-heartbeat-{values['runner_session_id']}",

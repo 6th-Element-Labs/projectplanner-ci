@@ -279,6 +279,11 @@ def principal_for_token_any_project(token: str) -> Optional[Dict[str, Any]]:
     except Exception:
         principal = None
     if not principal:
+        try:
+            principal = store.get_principal_by_work_session_token_any_project(token)
+        except Exception:
+            principal = None
+    if not principal:
         principal = _env_principal(token, "*")
     if not principal:
         return None
